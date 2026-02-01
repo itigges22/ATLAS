@@ -41,8 +41,8 @@ check_prerequisites() {
 
     # Check system memory
     SYS_MEM=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ $SYS_MEM -lt 24 ]]; then
-        log_warn "System has ${SYS_MEM}GB RAM. 32GB+ recommended."
+    if [[ $SYS_MEM -lt 16 ]]; then
+        log_warn "System has ${SYS_MEM}GB RAM. 16GB+ recommended."
     fi
 
     # Validate config

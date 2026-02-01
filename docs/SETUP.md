@@ -12,12 +12,12 @@ This guide covers installation and configuration of ATLAS on a fresh system.
 
 ### Hardware Requirements
 
-| Component | Minimum | Recommended | Notes |
-|-----------|---------|-------------|-------|
-| GPU | 8GB VRAM | 16GB+ VRAM | NVIDIA only |
-| RAM | 16GB | 32GB | For K3s + services |
-| Storage | 50GB SSD | 200GB+ SSD | Models + vector DB |
-| CPU | 4 cores | 8+ cores | Embedding service CPU-bound |
+| Component | Minimum | Notes |
+|-----------|---------|-------|
+| GPU | 8GB VRAM | NVIDIA only, 16GB+ for larger models |
+| RAM | 12GB | 16GB+ for comfortable headroom |
+| Storage | 50GB SSD | Models are 8-15GB each |
+| CPU | 4 cores | Embedding service is CPU-bound |
 
 #### Tested Configurations
 

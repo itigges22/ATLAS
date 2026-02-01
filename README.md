@@ -26,7 +26,7 @@ Self-hosted AI coding agent infrastructure running entirely on consumer hardware
 </p>
 
 <p align="center">
-  <b>Host:</b> 4 vCPU (AMD RYZEN 5 2600) • 12GB DDR4 RAM • 200GB SSD • RHEL 9
+  <b>Host:</b> 4 vCPU (AMD RYZEN 5 2600) • 12GB DDR4 RAM • 150GB SSD • RHEL 9
 </p>
 
 ---
@@ -140,7 +140,7 @@ cp atlas.conf.example atlas.conf && ./scripts/install.sh
 kubectl get pods  # Verify all services running
 ```
 
-> **Requirements:** K3s, NVIDIA GPU (16GB VRAM), 4+ vCPU, 12GB+ RAM, 200GB SSD, CUDA 12.8
+> **Requirements:** K3s, NVIDIA GPU (8GB+ VRAM), 4+ vCPU, 12GB+ RAM, 50GB+ SSD
 
 ---
 
