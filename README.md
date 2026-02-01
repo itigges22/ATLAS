@@ -1,6 +1,6 @@
 <div align="center">
 
-# ATLAS
+# A.T.L.A.S
 
 **Adaptive Test-time Learning and Autonomous Specialization**
 
@@ -141,6 +141,22 @@ kubectl get pods  # Verify all services running
 ```
 
 > **Requirements:** K3s, NVIDIA GPU (16GB VRAM), 4+ vCPU, 12GB+ RAM, 200GB SSD, CUDA 12.8
+
+---
+
+## Recommended Client
+
+ATLAS exposes an **OpenAI-compatible API**, so it works with any client that supports the OpenAI protocol.
+
+**Recommended:** [OpenCode](https://github.com/itigges22/opencode) — A terminal-based AI coding agent optimized for ATLAS.
+
+```bash
+git clone https://github.com/itigges22/opencode.git && cd opencode
+bun install
+bun run dev
+```
+
+**Alternatives:** [Cursor](https://cursor.sh), [Continue](https://continue.dev), [aider](https://aider.chat), or any OpenAI-compatible client.
 
 ---
 
