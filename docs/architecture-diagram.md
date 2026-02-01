@@ -30,19 +30,30 @@ flowchart TB
         trainer["Nightly Trainer<br/>LoRA Fine-tune"]
         lora[("Adapters<br/>Hot-swap")]
     end
+    %% Gateway flow
     client -->|"request"| proxy
     proxy -.->|"validate key"| portal
     proxy -->|"chat/completions"| rag
+
+    %% RAG API calls llama-server for inference
     rag -->|"inference"| llama
     rag -->|"embed query"| embed
     embed -->|"search vectors"| qdrant
+
+    %% Task submission to Redis
     rag -->|"submit task"| redis
     redis -->|"poll result"| rag
+
+    %% Ralph Loop: Task Worker flow
     redis -->|"pull task"| worker
-    worker -->|"test code"| sandbox
     worker -->|"generate code"| llama
+    worker -->|"test code"| sandbox
     worker -->|"result + training"| redis
+
+    %% Monitoring
     redis -->|"metrics"| dash
+
+    %% Learning pipeline
     redis -.->|"training data"| trainer
     trainer -->|"fine-tune"| lora
     lora -.->|"load LoRA"| llama
