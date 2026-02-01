@@ -21,8 +21,7 @@ This guide covers installation and configuration of ATLAS on a fresh system.
 
 #### Tested Configurations
 
-- **Development**: RTX 4060 Ti (16GB), 32GB RAM, 256GB NVMe
-- **Production**: RTX 5060 Ti (16GB), 64GB RAM, 1TB NVMe
+- RYZEN 5 2600 (4 vCPU), RTX 5060 Ti (16GB), 12GB DDR4 RAM, 150GB SSD
 
 ### NVIDIA Drivers (Required)
 
