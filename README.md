@@ -26,7 +26,7 @@ Self-hosted AI coding agent infrastructure running entirely on consumer hardware
 </p>
 
 <p align="center">
-  <b>Host:</b> 4 vCPU (AMD RYZEN 5 2600 (AM4) • 12GB DDR4 RAM • 200GB SSD • RHEL 9
+  <b>Host:</b> 4 vCPU (AMD RYZEN 5 2600) • NVIDIA 5060ti 16GB • 12GB DDR4 RAM • 200GB SSD • RHEL 9
 </p>
 
 ---
