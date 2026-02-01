@@ -13,6 +13,41 @@ GREEN="${GREEN:-\033[0;32m}"
 YELLOW="${YELLOW:-\033[1;33m}"
 NC="${NC:-\033[0m}"
 
+# Setup kubeconfig - try multiple locations
+# Checks that files are both present AND readable by current user
+setup_kubeconfig() {
+    # If KUBECONFIG is already set, valid, AND readable, use it
+    if [[ -n "${KUBECONFIG:-}" ]] && [[ -f "$KUBECONFIG" ]] && [[ -r "$KUBECONFIG" ]]; then
+        export KUBECONFIG
+        return 0
+    fi
+
+    # Try config value from atlas.conf (if already loaded) - must be readable
+    # Skip if set to "auto" (meaning use auto-detection)
+    if [[ -n "${ATLAS_KUBECONFIG:-}" ]] && [[ "$ATLAS_KUBECONFIG" != "auto" ]] && [[ -f "$ATLAS_KUBECONFIG" ]] && [[ -r "$ATLAS_KUBECONFIG" ]]; then
+        export KUBECONFIG="$ATLAS_KUBECONFIG"
+        return 0
+    fi
+
+    # Try common locations in order of preference
+    # User's config first (most likely to be readable), then system locations
+    local locations=(
+        "$HOME/.kube/config"
+        "/etc/rancher/k3s/k3s.yaml"
+        "/etc/kubernetes/admin.conf"
+    )
+
+    for loc in "${locations[@]}"; do
+        if [[ -f "$loc" ]] && [[ -r "$loc" ]]; then
+            export KUBECONFIG="$loc"
+            return 0
+        fi
+    done
+
+    # No readable kubeconfig found
+    return 1
+}
+
 # Load config file
 load_config() {
     local config_file="${ATLAS_CONFIG_FILE:-$K8S_DIR/atlas.conf}"
@@ -54,6 +89,9 @@ load_config() {
 
     # Also export K8S_DIR for scripts
     export K8S_DIR
+
+    # Try to setup kubeconfig (non-fatal if not found)
+    setup_kubeconfig || true
 }
 
 # Validate required config
