@@ -54,10 +54,73 @@ check_prerequisites() {
     log_info "Prerequisites check passed"
 }
 
+# Detect current installation state
+detect_existing_setup() {
+    echo ""
+    log_info "Detecting existing setup..."
+
+    SKIP_K3S=false
+    SKIP_GPU=false
+    SKIP_NAMESPACE=false
+
+    # Check K3s
+    if command -v k3s &> /dev/null && systemctl is-active --quiet k3s 2>/dev/null; then
+        log_info "  [FOUND] K3s is installed and running"
+        SKIP_K3S=true
+    else
+        log_info "  [MISSING] K3s - will install"
+    fi
+
+    # Check GPU availability (either via device plugin or GPU operator)
+    if kubectl get nodes -o json 2>/dev/null | grep -q '"nvidia.com/gpu"'; then
+        log_info "  [FOUND] GPU available in cluster (nvidia.com/gpu)"
+        SKIP_GPU=true
+
+        # Identify which method is providing GPU access
+        if kubectl get ds -n kube-system nvidia-device-plugin-daemonset &>/dev/null; then
+            log_info "         (via NVIDIA device plugin)"
+        elif kubectl get namespace gpu-operator &>/dev/null; then
+            log_info "         (via NVIDIA GPU Operator)"
+        fi
+    else
+        log_info "  [MISSING] GPU not visible to cluster - will configure"
+    fi
+
+    # Check namespace
+    if kubectl get namespace "$ATLAS_NAMESPACE" &>/dev/null; then
+        log_info "  [FOUND] Namespace '$ATLAS_NAMESPACE' exists"
+        SKIP_NAMESPACE=true
+    else
+        log_info "  [MISSING] Namespace '$ATLAS_NAMESPACE' - will create"
+    fi
+
+    # Check if ATLAS services are already running
+    RUNNING_PODS=$(kubectl get pods -n "$ATLAS_NAMESPACE" --field-selector=status.phase=Running 2>/dev/null | grep -c Running || echo "0")
+    if [[ "$RUNNING_PODS" -gt 0 ]]; then
+        log_info "  [FOUND] $RUNNING_PODS ATLAS pod(s) already running"
+        log_info "         (kubectl apply will update existing deployments)"
+    fi
+
+    echo ""
+}
+
 # Install K3s
 install_k3s() {
+    if [[ "$SKIP_K3S" == "true" ]]; then
+        log_info "Skipping K3s installation (already running)"
+        return
+    fi
+
     if command -v k3s &> /dev/null; then
-        log_info "K3s already installed"
+        log_info "K3s binary found, checking status..."
+        if systemctl is-active --quiet k3s 2>/dev/null; then
+            log_info "K3s already running"
+            return
+        fi
+        log_info "K3s installed but not running, starting..."
+        systemctl start k3s
+        sleep 10
+        kubectl wait --for=condition=Ready nodes --all --timeout=120s
         return
     fi
 
@@ -72,11 +135,30 @@ install_k3s() {
     log_info "K3s installed successfully"
 }
 
-# Install NVIDIA GPU Operator
+# Check if GPU is already available in cluster
+check_gpu_available() {
+    kubectl get nodes -o json 2>/dev/null | grep -q '"nvidia.com/gpu"'
+}
+
+# Install NVIDIA GPU Operator (or skip if GPU already available)
 install_gpu_operator() {
+    # Skip if detection already found GPU
+    if [[ "$SKIP_GPU" == "true" ]]; then
+        log_info "Skipping GPU setup (already available in cluster)"
+        return
+    fi
+
+    # Double-check GPU availability
+    if check_gpu_available; then
+        log_info "GPU already available in cluster (nvidia.com/gpu detected)"
+        log_info "Skipping GPU Operator installation"
+        return
+    fi
+
+    # Check if GPU Operator is already installed
     if kubectl get namespace gpu-operator &> /dev/null; then
         log_info "GPU Operator namespace exists, checking status..."
-        if kubectl get pods -n gpu-operator | grep -q "Running"; then
+        if kubectl get pods -n gpu-operator 2>/dev/null | grep -q "Running"; then
             log_info "GPU Operator already running"
             return
         fi
@@ -103,7 +185,7 @@ install_gpu_operator() {
     # Wait for GPU to be available
     log_info "Waiting for GPU to be available in cluster..."
     for i in {1..30}; do
-        if kubectl get nodes -o json | grep -q "nvidia.com/gpu"; then
+        if check_gpu_available; then
             log_info "GPU available in cluster"
             return
         fi
@@ -149,12 +231,9 @@ build_images() {
 deploy_manifests() {
     log_info "Deploying ATLAS services..."
 
-    # Deploy Atlas infrastructure first (Redis is dependency)
-    log_info "Deploying Atlas infrastructure..."
-    kubectl apply -f "$K8S_DIR/atlas/manifests/redis-deployment.yaml"
-
-    # Deploy core infrastructure
-    log_info "Deploying core infrastructure..."
+    # Deploy infrastructure first (Redis is dependency)
+    log_info "Deploying infrastructure..."
+    kubectl apply -f "$K8S_DIR/manifests/redis-deployment.yaml"
     kubectl apply -f "$K8S_DIR/manifests/qdrant-deployment.yaml"
     kubectl apply -f "$K8S_DIR/manifests/embedding-deployment.yaml"
 
@@ -173,13 +252,13 @@ deploy_manifests() {
 
     # Deploy Atlas services
     log_info "Deploying Atlas services..."
-    kubectl apply -f "$K8S_DIR/atlas/manifests/sandbox-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/atlas/manifests/task-worker-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/atlas/manifests/dashboard-deployment.yaml"
+    kubectl apply -f "$K8S_DIR/manifests/sandbox-deployment.yaml"
+    kubectl apply -f "$K8S_DIR/manifests/task-worker-deployment.yaml"
+    kubectl apply -f "$K8S_DIR/manifests/dashboard-deployment.yaml"
 
     # Apply training CronJob if enabled
     if [[ "$ATLAS_ENABLE_TRAINING" == "true" ]]; then
-        kubectl apply -f "$K8S_DIR/atlas/manifests/training-cronjob.yaml" || true
+        kubectl apply -f "$K8S_DIR/manifests/training-cronjob.yaml" || true
     fi
 
     log_info "Manifests deployed"
@@ -215,6 +294,34 @@ main() {
     echo ""
 
     check_prerequisites
+    detect_existing_setup
+
+    # Show summary of what will happen
+    echo "Installation plan:"
+    if [[ "$SKIP_K3S" == "true" ]]; then
+        echo "  - K3s:          SKIP (already running)"
+    else
+        echo "  - K3s:          INSTALL"
+    fi
+    if [[ "$SKIP_GPU" == "true" ]]; then
+        echo "  - GPU setup:    SKIP (already available)"
+    else
+        echo "  - GPU setup:    INSTALL (GPU Operator via Helm)"
+    fi
+    echo "  - Build images: RUN"
+    echo "  - Deploy:       RUN (kubectl apply - safe to re-run)"
+    echo ""
+
+    # Give user a chance to abort
+    if [[ "${ATLAS_AUTO_CONFIRM:-false}" != "true" ]]; then
+        read -p "Continue with installation? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Nn]$ ]]; then
+            log_info "Installation cancelled"
+            exit 0
+        fi
+    fi
+
     install_k3s
     install_gpu_operator
     setup_namespace

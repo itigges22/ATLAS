@@ -17,9 +17,10 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Model URLs (Hugging Face)
-QWEN3_14B_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/qwen3-14b-q4_k_m.gguf"
-QWEN3_14B_Q6_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/qwen3-14b-q6_k.gguf"
-QWEN3_1_5B_URL="https://huggingface.co/Qwen/Qwen3-1.5B-GGUF/resolve/main/qwen3-1.5b-q4_k_m.gguf"
+# Note: Filenames are case-sensitive on Hugging Face
+QWEN3_14B_Q4_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf"
+QWEN3_14B_Q6_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q6_K.gguf"
+QWEN3_0_6B_URL="https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"
 
 download_model() {
     local url="$1"
@@ -88,7 +89,7 @@ main() {
         MAIN_MODEL_FILE="Qwen3-14B-Q6_K.gguf"
     else
         log_info "Using Q4_K_M quantization for ${GPU_MEM}MB VRAM"
-        MAIN_MODEL_URL="$QWEN3_14B_URL"
+        MAIN_MODEL_URL="$QWEN3_14B_Q4_URL"
         MAIN_MODEL_FILE="Qwen3-14B-Q4_K_M.gguf"
     fi
 
@@ -97,7 +98,7 @@ main() {
 
     # Download draft model for speculative decoding (if enabled)
     if [[ "$ATLAS_ENABLE_SPECULATIVE" == "true" ]] && [[ -n "$ATLAS_DRAFT_MODEL" ]]; then
-        download_model "$QWEN3_1_5B_URL" "$ATLAS_DRAFT_MODEL"
+        download_model "$QWEN3_0_6B_URL" "Qwen3-0.6B-Q8_0.gguf"
     else
         log_info "Speculative decoding disabled, skipping draft model"
     fi
@@ -114,7 +115,8 @@ main() {
     fi
 
     if [[ "$ATLAS_ENABLE_SPECULATIVE" == "true" ]] && [[ -n "$ATLAS_DRAFT_MODEL" ]]; then
-        if verify_model "$ATLAS_MODELS_DIR/$ATLAS_DRAFT_MODEL" 1000000000; then
+        # Qwen3-0.6B-Q8_0 is ~639MB
+        if verify_model "$ATLAS_MODELS_DIR/$ATLAS_DRAFT_MODEL" 500000000; then
             log_info "Draft model verified: $ATLAS_DRAFT_MODEL"
         else
             log_warn "Draft model verification failed (speculative decoding may not work)"
