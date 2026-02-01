@@ -148,7 +148,7 @@ kubectl get pods  # Verify all services running
 
 ATLAS exposes an **OpenAI-compatible API**, so it works with any client that supports the OpenAI protocol.
 
-**Recommended:** [OpenCode](https://github.com/itigges22/opencode) — A terminal-based AI coding agent optimized for ATLAS.
+**Recommended:** [OpenCode Fork](https://github.com/itigges22/opencode) — A terminal-based AI coding agent based on Opencode, forked and optimized for ATLAS.
 
 ```bash
 git clone https://github.com/itigges22/opencode.git && cd opencode
