@@ -36,10 +36,10 @@ Self-hosted AI coding agent infrastructure running entirely on consumer hardware
 <div align="center">
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4A90D9', 'primaryTextColor': '#fff', 'primaryBorderColor': '#2E5A8B', 'lineColor': '#5C6BC0', 'secondaryColor': '#E8EAF6', 'tertiaryColor': '#fff'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2196F3', 'primaryTextColor': '#fff', 'primaryBorderColor': '#1565C0', 'lineColor': '#455A64', 'secondaryColor': '#E3F2FD', 'tertiaryColor': '#ECEFF1'}}}%%
 flowchart TB
     subgraph external[" "]
-        client(["🖥️ Client<br/>OpenCode / API"])
+        client(["Client<br/>OpenCode / API"])
     end
     subgraph gateway["Gateway"]
         proxy["LLM Proxy :8000<br/>Auth • Rate Limit"]
@@ -79,13 +79,19 @@ flowchart TB
     redis -.->|"training data"| trainer
     trainer -->|"fine-tune"| lora
     lora -.->|"load LoRA"| llama
-    classDef gpu fill:#76B900,stroke:#4a7200,color:#fff
-    classDef storage fill:#4A90D9,stroke:#2E5A8B,color:#fff
-    classDef process fill:#E67E22,stroke:#a85a16,color:#fff
-    classDef learn fill:#9B59B6,stroke:#6c3d80,color:#fff
+    classDef client fill:#37474F,stroke:#263238,color:#fff
+    classDef gateway fill:#607D8B,stroke:#455A64,color:#fff
+    classDef core fill:#2196F3,stroke:#1565C0,color:#fff
+    classDef gpu fill:#4CAF50,stroke:#2E7D32,color:#fff
+    classDef storage fill:#00BCD4,stroke:#00838F,color:#fff
+    classDef process fill:#FF9800,stroke:#E65100,color:#fff
+    classDef learn fill:#9C27B0,stroke:#6A1B9A,color:#fff
+    class client client
+    class proxy,portal gateway
+    class rag core
     class llama,embed gpu
     class qdrant,redis storage
-    class worker,sandbox process
+    class worker,sandbox,dash process
     class trainer,lora learn
 ```
 
