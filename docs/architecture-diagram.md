@@ -1,25 +1,6 @@
-# ATLAS
+# ATLAS Architecture Diagram
 
-**Adaptive Test-time Learning and Autonomous Specialization**
-
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
-[![K3s](https://img.shields.io/badge/kubernetes-K3s-326CE5.svg)](https://k3s.io/)
-[![GPU](https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-76B900.svg)](#hardware)
-
-Self-hosted AI coding agent infrastructure running entirely on consumer hardware.
-
-## What This Demonstrates
-
-| Capability | Details |
-|------------|---------|
-| **Full RAG Pipeline** | 100GB vector storage, semantic code search |
-| **99.5% Success Rate** | Ralph Loop retry algorithm (p=0.65, k=5) |
-| **Continuous Learning** | Nightly LoRA fine-tuning from successful tasks |
-| **Multi-Tenant MaaS** | Web portal with API keys, usage tracking |
-| **All on Consumer GPU** | Single RTX 5060 Ti (16GB VRAM) |
-
-## Architecture
+This document contains the full architecture diagram for ATLAS in Mermaid format.
 
 ```mermaid
 flowchart TB
@@ -108,41 +89,28 @@ flowchart TB
     class trainer,lora learning
 ```
 
-## Quick Start
+## Component Summary
 
-```bash
-git clone https://github.com/yourusername/atlas.git && cd atlas
-cp atlas.conf.example atlas.conf  # Configure MODEL_PATH
-./scripts/install.sh
-kubectl get pods  # Verify all services running
-```
+| Layer | Components | Purpose |
+|-------|------------|---------|
+| **Client** | OpenCode, API Clients | External interface |
+| **Gateway** | LLM Proxy, API Portal | Auth, rate limiting, user management |
+| **Inference** | llama-server, Embedding Service | GPU inference, vectorization |
+| **Orchestration** | RAG API | Context retrieval, request routing |
+| **Storage** | Qdrant, Redis | Vectors, queues, metrics |
+| **Processing** | Task Worker, Sandbox, Dashboard | Ralph Loop, isolated execution, monitoring |
+| **Learning** | Trainer, LoRA Adapters | Continuous improvement |
 
-## Hardware
+## Port Reference
 
-Tested and running on:
-- **GPU**: NVIDIA RTX 5060 Ti (16GB VRAM)
-- **Host**: RHEL 9 VM, 32GB RAM
-- **Cluster**: K3s v1.28+
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Architecture Deep Dive](docs/ARCHITECTURE.md) | Full system design, data flows, algorithms |
-| [Configuration Guide](docs/CONFIGURATION.md) | All configuration options explained |
-| [Setup Guide](docs/SETUP.md) | Step-by-step installation |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
-
-## Benchmarks
-
-*Coming soon* — Performance metrics comparing consumer vs enterprise hardware.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
-
-## License
-
-Apache License 2.0 — see [LICENSE](LICENSE) for details.
-
-Copyright 2025 Isaac Tigges
+| Service | Port | Protocol |
+|---------|------|----------|
+| LLM Proxy | 8000 | HTTP |
+| API Portal | 3000 | HTTP |
+| llama-server | 8000 | HTTP |
+| Embedding Service | 8080 | HTTP |
+| RAG API | 8001 | HTTP |
+| Qdrant | 6333/6334 | HTTP/gRPC |
+| Redis | 6379 | Redis |
+| Sandbox | 8020 | HTTP |
+| Dashboard | 3001 | HTTP |

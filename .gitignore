@@ -23,6 +23,7 @@ FINAL_CLEANUP.md
 *Claude*
 .claude/
 claude-*/
+CLAUDE.md
 
 # ----- Python -----
 __pycache__/
@@ -105,3 +106,9 @@ htmlcov/
 *.tar
 *.tar.gz
 *.zip
+
+# Binaries
+bin/
+*.exe
+*-darwin-*
+*-linux-*

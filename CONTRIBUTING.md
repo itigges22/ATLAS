@@ -2,10 +2,6 @@
 
 Thank you for your interest in contributing to ATLAS! This document provides guidelines for contributing to the project.
 
-## Code of Conduct
-
-Be respectful and constructive in all interactions. We welcome contributors of all experience levels.
-
 ## How to Contribute
 
 ### Reporting Issues
