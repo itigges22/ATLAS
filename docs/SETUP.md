@@ -10,9 +10,23 @@ This guide covers installation and configuration of ATLAS on a fresh system.
 - Ubuntu 22.04+ also supported
 - 64-bit x86_64 architecture
 
-### NVIDIA Drivers
+### Hardware Requirements
 
-ATLAS requires NVIDIA GPU drivers for inference acceleration.
+| Component | Minimum | Recommended | Notes |
+|-----------|---------|-------------|-------|
+| GPU | 8GB VRAM | 16GB+ VRAM | NVIDIA only |
+| RAM | 16GB | 32GB | For K3s + services |
+| Storage | 50GB SSD | 200GB+ SSD | Models + vector DB |
+| CPU | 4 cores | 8+ cores | Embedding service CPU-bound |
+
+#### Tested Configurations
+
+- **Development**: RTX 4060 Ti (16GB), 32GB RAM, 256GB NVMe
+- **Production**: RTX 5060 Ti (16GB), 64GB RAM, 1TB NVMe
+
+### NVIDIA Drivers (Required)
+
+ATLAS requires NVIDIA GPU drivers. This is the only prerequisite you **must** install manually.
 
 ```bash
 # Check if NVIDIA driver is installed
@@ -25,9 +39,117 @@ sudo dnf install -y nvidia-driver nvidia-driver-cuda
 sudo reboot
 ```
 
-### Container Runtime
+Once `nvidia-smi` shows your GPU, you're ready to proceed.
 
-ATLAS uses Podman for building containers and K3s for orchestration.
+---
+
+## Installation Options
+
+After installing NVIDIA drivers, you have two options:
+
+| Option | Best For | What It Does |
+|--------|----------|--------------|
+| **Quick Install** | Most users | Automated script handles everything |
+| **Manual Install** | Advanced users | Full control over each component |
+
+---
+
+## Option 1: Quick Install (Recommended)
+
+The install script automates K3s, GPU Operator, and all ATLAS services.
+
+### Step 1: Clone Repository
+
+```bash
+git clone https://github.com/yourusername/atlas.git
+cd atlas
+```
+
+### Step 2: Configure
+
+```bash
+# Copy example configuration
+cp atlas.conf.example atlas.conf
+
+# Edit configuration
+vim atlas.conf
+```
+
+Key settings to review:
+
+```bash
+# Where your models are stored (directory path)
+ATLAS_MODELS_DIR="/home/yourusername/models"
+
+# Model filename (must exist in ATLAS_MODELS_DIR)
+ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
+
+# GPU layers to offload (99 = all layers to GPU)
+ATLAS_GPU_LAYERS=99
+
+# Context window size (tokens)
+ATLAS_CONTEXT_LENGTH=16384
+```
+
+See [Configuration Reference](#configuration-reference) for all options.
+
+### Step 3: Download Models
+
+```bash
+# Create models directory
+mkdir -p ~/models
+
+# Option A: Use the download script (auto-selects best quantization for your GPU)
+./scripts/download-models.sh
+
+# Option B: Manual download with huggingface-cli
+huggingface-cli download Qwen/Qwen3-14B-GGUF qwen3-14b-q4_k_m.gguf --local-dir ~/models
+```
+
+### Step 4: Run Installer
+
+```bash
+sudo ./scripts/install.sh
+```
+
+The installer will:
+1. Check prerequisites (NVIDIA driver, GPU memory, system memory)
+2. Install K3s (if not already installed)
+3. Install NVIDIA GPU Operator via Helm
+4. Build container images for all services
+5. Deploy services to K3s
+6. Wait for all pods to be ready
+
+### Step 5: Verify Installation
+
+```bash
+./scripts/verify-install.sh
+
+# Or manually check pods
+kubectl get pods -n atlas
+```
+
+Expected output:
+```
+NAME                                READY   STATUS    RESTARTS   AGE
+llama-server-xxx                    1/1     Running   0          2m
+qdrant-xxx                          1/1     Running   0          2m
+embedding-service-xxx               1/1     Running   0          2m
+rag-api-xxx                         1/1     Running   0          2m
+api-portal-xxx                      1/1     Running   0          2m
+redis-xxx                           1/1     Running   0          2m
+task-worker-xxx                     1/1     Running   0          2m
+sandbox-xxx                         1/1     Running   0          2m
+dashboard-xxx                       1/1     Running   0          2m
+```
+
+---
+
+## Option 2: Manual Install
+
+Use this if you want full control over K3s and GPU configuration, or if the automated installer doesn't work for your environment.
+
+### Step 1: Install Container Runtime
 
 ```bash
 # Install Podman (RHEL/Rocky)
@@ -37,9 +159,7 @@ sudo dnf install -y podman
 podman --version
 ```
 
-### NVIDIA Container Toolkit
-
-The container toolkit enables GPU access from containers:
+### Step 2: Install NVIDIA Container Toolkit
 
 ```bash
 # Add NVIDIA container toolkit repo (RHEL/Rocky)
@@ -54,7 +174,7 @@ nvidia-ctk --version
 ls -la /usr/bin/nvidia-container-runtime
 ```
 
-### K3s
+### Step 3: Install K3s
 
 ```bash
 # Install K3s
@@ -73,11 +193,9 @@ export KUBECONFIG=~/.kube/config
 kubectl get nodes
 ```
 
-### Configure K3s Containerd for NVIDIA GPU
+### Step 4: Configure K3s Containerd for NVIDIA GPU
 
-**This is critical.** K3s uses its own bundled containerd, and the NVIDIA device plugin
-cannot access the GPU without proper containerd configuration. The `nvidia-ctk runtime configure`
-command does NOT work with K3s's containerd - you must create a custom template.
+**This is critical.** K3s uses its own bundled containerd, and the NVIDIA device plugin cannot access the GPU without proper containerd configuration. The `nvidia-ctk runtime configure` command does NOT work with K3s's containerd - you must create a custom template.
 
 K3s uses containerd config **version 3** format. Create the template file:
 
@@ -162,7 +280,7 @@ sudo systemctl restart k3s
 kubectl get nodes -w
 ```
 
-### NVIDIA Device Plugin
+### Step 5: Install NVIDIA Device Plugin
 
 Once containerd is configured, deploy the device plugin:
 
@@ -180,7 +298,7 @@ kubectl logs -n kube-system -l name=nvidia-device-plugin-ds | grep -i nvml
 kubectl get nodes -o json | jq '.items[].status.allocatable["nvidia.com/gpu"]'
 ```
 
-### Verify GPU Access from Containers
+### Step 6: Verify GPU Access from Containers
 
 Before proceeding with ATLAS installation, verify end-to-end GPU access:
 
@@ -213,110 +331,107 @@ kubectl delete pod gpu-test
 
 If `nvidia-smi` runs successfully inside the container, your GPU setup is complete.
 
-## Hardware Requirements
-
-| Component | Minimum | Recommended | Notes |
-|-----------|---------|-------------|-------|
-| GPU | 8GB VRAM | 16GB+ VRAM | NVIDIA only |
-| RAM | 16GB | 32GB | For K3s + services |
-| Storage | 50GB SSD | 200GB+ SSD | Models + vector DB |
-| CPU | 4 cores | 8+ cores | Embedding service CPU-bound |
-
-### Tested Configurations
-
-- **Development**: RTX 4060 Ti (16GB), 32GB RAM, 256GB NVMe
-- **Production**: RTX 5060 Ti (16GB), 64GB RAM, 1TB NVMe
-
-## Installation
-
-### Step 1: Clone Repository
+### Step 7: Clone and Configure ATLAS
 
 ```bash
 git clone https://github.com/yourusername/atlas.git
 cd atlas
-```
 
-### Step 2: Configure Installation
-
-```bash
-# Copy example configuration
+# Copy and edit configuration
 cp atlas.conf.example atlas.conf
-
-# Edit configuration
 vim atlas.conf
 ```
 
-Required settings:
-```ini
-# Path to your GGUF model file
-MODEL_PATH=/path/to/your/model.gguf
-
-# GPU layers to offload (use 99 for full GPU)
-GPU_LAYERS=99
-
-# Context size (match your model's training context)
-CONTEXT_SIZE=16384
-```
-
-### Step 3: Download Model
-
-ATLAS works with any GGUF-format model. Recommended models:
+### Step 8: Build and Deploy
 
 ```bash
-# Create models directory
-mkdir -p ~/models
+# Build container images
+./scripts/build-containers.sh
 
-# Example: Download Qwen model (requires huggingface-cli)
-huggingface-cli download Qwen/Qwen3-14B-GGUF qwen3-14b-q4_k_m.gguf --local-dir ~/models
+# Generate Kubernetes manifests from config
+./scripts/generate-manifests.sh
+
+# Deploy to cluster
+kubectl apply -f manifests/
+kubectl apply -f atlas/manifests/
+
+# Verify
+kubectl get pods -n atlas
 ```
 
-Update `MODEL_PATH` in atlas.conf:
-```ini
-MODEL_PATH=/home/yourusername/models/qwen3-14b-q4_k_m.gguf
-```
+---
 
-### Step 4: Run Installer
+## Configuration Reference
+
+All configuration is in `atlas.conf`. Key settings:
+
+### Storage Paths
 
 ```bash
-./scripts/install.sh
+# Where models are stored (directory)
+ATLAS_MODELS_DIR="/home/yourusername/models"
+
+# Where persistent data is stored
+ATLAS_DATA_DIR="/home/yourusername/data"
+
+# Training data directory
+ATLAS_TRAINING_DIR="/home/yourusername/data/training"
+
+# LoRA adapters directory
+ATLAS_LORA_DIR="/home/yourusername/models/lora"
 ```
 
-The installer will:
-1. Build container images for all services
-2. Generate Kubernetes manifests from your configuration
-3. Deploy services to K3s
-4. Wait for all pods to be ready
-
-### Step 5: Verify Installation
+### Model Configuration
 
 ```bash
-# Check all pods are running
-kubectl get pods
+# Main model filename (must exist in ATLAS_MODELS_DIR)
+ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
 
-# Expected output:
-# NAME                                READY   STATUS    RESTARTS   AGE
-# llama-server-xxx                    1/1     Running   0          2m
-# qdrant-xxx                          1/1     Running   0          2m
-# embedding-service-xxx               1/1     Running   0          2m
-# rag-api-xxx                         1/1     Running   0          2m
-# api-portal-xxx                      1/1     Running   0          2m
-# redis-xxx                           1/1     Running   0          2m
-# task-worker-xxx                     1/1     Running   0          2m
-# sandbox-xxx                         1/1     Running   0          2m
-# dashboard-xxx                       1/1     Running   0          2m
+# Draft model for speculative decoding (leave empty to disable)
+ATLAS_DRAFT_MODEL="Qwen3-0.6B-Q8_0.gguf"
+
+# Context window size (tokens)
+ATLAS_CONTEXT_LENGTH=16384
+
+# GPU layers to offload (99 = all layers)
+ATLAS_GPU_LAYERS=99
+
+# Parallel inference slots (increase if you have more VRAM)
+ATLAS_PARALLEL_SLOTS=1
+
+# Flash attention (recommended for better performance)
+ATLAS_FLASH_ATTENTION=true
 ```
 
-Test the API:
+### Network Configuration
+
 ```bash
-# Test LLM health
-curl http://localhost:8000/health
+# Kubernetes namespace for all ATLAS services
+ATLAS_NAMESPACE="atlas"
 
-# Test embedding service
-curl http://localhost:8080/health
-
-# Test RAG API
-curl http://localhost:8001/health
+# External NodePorts (how you access services from outside the cluster)
+ATLAS_API_PORTAL_NODEPORT=30000
+ATLAS_LLM_PROXY_NODEPORT=30080
+ATLAS_RAG_API_NODEPORT=31144
+ATLAS_DASHBOARD_NODEPORT=30001
 ```
+
+See `atlas.conf` for all available options.
+
+---
+
+## Available Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/install.sh` | Full automated installation (K3s + GPU Operator + ATLAS) |
+| `scripts/download-models.sh` | Download recommended models for your GPU |
+| `scripts/build-containers.sh` | Build all container images |
+| `scripts/generate-manifests.sh` | Generate K8s manifests from atlas.conf |
+| `scripts/verify-install.sh` | Verify installation health |
+| `scripts/uninstall.sh` | Remove ATLAS from cluster |
+
+---
 
 ## Post-Installation
 
@@ -324,7 +439,7 @@ curl http://localhost:8001/health
 
 The API Portal is accessible at:
 ```
-http://your-server-ip:3000
+http://your-server-ip:30000
 ```
 
 1. Create an account (first user is auto-promoted to admin)
@@ -335,28 +450,34 @@ http://your-server-ip:3000
 
 Connection string format:
 ```
-http://your-server-ip:8001|sk-your-api-key-here
+http://your-server-ip:31144|sk-your-api-key-here
 ```
 
 ### Enable HTTPS (Recommended)
 
 For production use, configure HTTPS via Cloudflare Tunnel or reverse proxy.
 
+---
+
 ## Updating
 
 ```bash
-# Pull latest changes
 cd atlas
 git pull
 
-# Re-run installer
-./scripts/install.sh
+# Re-run installer (will rebuild and redeploy)
+sudo ./scripts/install.sh
 ```
+
+---
 
 ## Uninstalling
 
 ```bash
-# Delete all ATLAS deployments
+# Use the uninstall script
+./scripts/uninstall.sh
+
+# Or manually:
 kubectl delete -f manifests/
 kubectl delete -f atlas/manifests/
 
@@ -371,6 +492,8 @@ podman rmi localhost/dashboard:latest
 # Remove data (optional - destructive!)
 rm -rf /data/projects /data/qdrant
 ```
+
+---
 
 ## Next Steps
 
