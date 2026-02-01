@@ -52,7 +52,7 @@ flowchart TB
     end
     subgraph data["Storage"]
         qdrant[("Qdrant<br/>100GB Vectors")]
-        redis[("Redis<br/>Queues • Cache")]
+        redis[("Redis<br/>Queues • Metrics")]
     end
     subgraph atlas["Task Processing"]
         worker["Task Worker<br/>Ralph Loop<br/>99.5% Success"]
@@ -63,20 +63,22 @@ flowchart TB
         trainer["Nightly Trainer<br/>LoRA Fine-tune"]
         lora[("Adapters<br/>Hot-swap")]
     end
-    client --> proxy
-    proxy <-.-> portal
-    proxy --> rag
-    rag --> llama
-    rag --> embed
-    embed --> qdrant
-    rag <--> redis
-    redis --> worker
-    worker --> sandbox
-    worker -.-> llama
-    redis --> dash
-    redis -.-> trainer
-    trainer --> lora
-    lora -.-> llama
+    client -->|"request"| proxy
+    proxy -.->|"validate key"| portal
+    proxy -->|"chat/completions"| rag
+    rag -->|"inference"| llama
+    rag -->|"embed query"| embed
+    embed -->|"search vectors"| qdrant
+    rag -->|"submit task"| redis
+    redis -->|"poll result"| rag
+    redis -->|"pull task"| worker
+    worker -->|"test code"| sandbox
+    worker -->|"generate code"| llama
+    worker -->|"result + training"| redis
+    redis -->|"metrics"| dash
+    redis -.->|"training data"| trainer
+    trainer -->|"fine-tune"| lora
+    lora -.->|"load LoRA"| llama
     classDef gpu fill:#76B900,stroke:#4a7200,color:#fff
     classDef storage fill:#4A90D9,stroke:#2E5A8B,color:#fff
     classDef process fill:#E67E22,stroke:#a85a16,color:#fff
