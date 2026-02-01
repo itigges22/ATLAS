@@ -57,6 +57,8 @@ After installing NVIDIA drivers, you have two options:
 
 The install script automates K3s, GPU Operator, and all ATLAS services.
 
+> **Note:** The install script is safe to run even if you already have K3s or GPU configured manually. It detects existing setups and skips components that are already working.
+
 ### Step 1: Clone Repository
 
 ```bash
@@ -341,21 +343,38 @@ cp atlas.conf.example atlas.conf
 vim atlas.conf
 ```
 
-### Step 8: Build and Deploy
+### Step 8: Download Models
+
+```bash
+# Create models directory (should match ATLAS_MODELS_DIR in atlas.conf)
+mkdir -p ~/models
+
+# Download models (auto-selects best quantization for your GPU)
+./scripts/download-models.sh
+```
+
+### Step 9: Build and Deploy
 
 ```bash
 # Build container images
 ./scripts/build-containers.sh
 
-# Generate Kubernetes manifests from config
-./scripts/generate-manifests.sh
+# Create namespace
+kubectl create namespace atlas
 
-# Deploy to cluster
+# Deploy all services
 kubectl apply -f manifests/
-kubectl apply -f atlas/manifests/
 
-# Verify
-kubectl get pods -n atlas
+# Verify pods are starting
+kubectl get pods -n atlas -w
+```
+
+Wait for all pods to show `Running` status (this may take a few minutes on first deploy as images are pulled).
+
+### Step 10: Verify Installation
+
+```bash
+./scripts/verify-install.sh
 ```
 
 ---

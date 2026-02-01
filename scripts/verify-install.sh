@@ -16,6 +16,8 @@ PASSED=0
 FAILED=0
 WARNINGS=0
 
+# Note: setup_kubeconfig is defined in lib/config.sh and called during load_config
+
 check_pass() {
     echo -e "  ${GREEN}✓${NC} $1"
     PASSED=$((PASSED + 1))
@@ -144,14 +146,50 @@ main() {
     echo "  Models dir:  $ATLAS_MODELS_DIR"
     echo ""
 
-    # Kubernetes checks
+    # Check kubeconfig
     echo "Kubernetes Cluster:"
+    if [[ -z "${KUBECONFIG:-}" ]]; then
+        check_fail "No kubeconfig found"
+        echo ""
+        echo -e "${YELLOW}NOTE:${NC} Could not find a kubeconfig file."
+        echo ""
+        echo "Tried locations:"
+        echo "  - \$KUBECONFIG environment variable"
+        echo "  - \$ATLAS_KUBECONFIG from atlas.conf (${ATLAS_KUBECONFIG:-not set})"
+        echo "  - ~/.kube/config"
+        echo "  - /etc/rancher/k3s/k3s.yaml"
+        echo ""
+        echo "Solutions:"
+        echo "  1. Set KUBECONFIG: export KUBECONFIG=~/.kube/config"
+        echo "  2. Copy K3s config: sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config"
+        echo "                      sudo chown \$(id -u):\$(id -g) ~/.kube/config"
+        echo "  3. Set ATLAS_KUBECONFIG in atlas.conf"
+        echo "  4. Run as root: sudo ./scripts/verify-install.sh"
+        echo ""
+        exit 1
+    fi
+
+    # Show which kubeconfig we're using
+    check_pass "Using kubeconfig: $KUBECONFIG"
+
+    # Try to connect
     if kubectl cluster-info > /dev/null 2>&1; then
         check_pass "Cluster is accessible"
     else
         check_fail "Cannot connect to cluster"
         echo ""
-        echo "VERIFICATION FAILED - Cluster not accessible"
+        echo -e "${YELLOW}NOTE:${NC} Found kubeconfig at $KUBECONFIG but cannot connect."
+        echo ""
+        echo "Possible causes:"
+        echo "  - K3s/Kubernetes is not running: sudo systemctl status k3s"
+        echo "  - Kubeconfig has wrong permissions: ls -la $KUBECONFIG"
+        echo "  - Cluster address is incorrect in kubeconfig"
+        echo ""
+        echo "Try:"
+        echo "  - Check K3s status: sudo systemctl status k3s"
+        echo "  - Test manually: kubectl get nodes"
+        echo "  - Check kubeconfig: cat $KUBECONFIG | head -20"
+        echo ""
         exit 1
     fi
 
