@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox
+  labels:
+    app: sandbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sandbox
+  template:
+    metadata:
+      labels:
+        app: sandbox
+    spec:
+      containers:
+      - name: sandbox
+        image: ${ATLAS_REGISTRY}/sandbox:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: Never
+        ports:
+        - containerPort: ${ATLAS_SANDBOX_PORT}
+        env:
+        - name: MAX_EXECUTION_TIME
+          value: "${ATLAS_SANDBOX_TIMEOUT}"
+        - name: MAX_MEMORY_MB
+          value: "512"
+        securityContext:
+          runAsNonRoot: false
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: sandbox-workspace
+          mountPath: /tmp/sandbox
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_SANDBOX_PORT}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_SANDBOX_PORT}
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: sandbox-workspace
+        emptyDir:
+          sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox
+spec:
+  type: NodePort
+  selector:
+    app: sandbox
+  ports:
+  - port: ${ATLAS_SANDBOX_PORT}
+    targetPort: ${ATLAS_SANDBOX_PORT}
+    nodePort: ${ATLAS_SANDBOX_NODEPORT}

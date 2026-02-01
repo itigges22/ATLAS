@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-portal
+  labels:
+    app: api-portal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-portal
+  template:
+    metadata:
+      labels:
+        app: api-portal
+    spec:
+      containers:
+      - name: api-portal
+        image: localhost/api-portal:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 3000
+        env:
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: atlas-secrets
+              key: jwt-secret
+        - name: JWT_EXPIRY_HOURS
+          value: "24"
+        - name: DEFAULT_RATE_LIMIT
+          value: "1000"
+        - name: LLAMA_URL
+          value: "http://llama-service:8000"
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          limits:
+            memory: 2Gi
+            cpu: 2
+          requests:
+            memory: 512Mi
+            cpu: 0.5
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: api-portal-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: api-portal-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-portal
+spec:
+  selector:
+    app: api-portal
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30000
+  type: NodePort

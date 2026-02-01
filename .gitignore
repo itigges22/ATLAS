@@ -1,0 +1,107 @@
+# ===========================================
+# ATLAS .gitignore
+# ===========================================
+
+# ----- User Configuration -----
+atlas.conf
+.jwt_secret
+*.local.conf
+*.local
+
+# ----- Development Task Files -----
+TASK*.md
+FIX_*.md
+IMPLEMENT_*.md
+ADD_*.md
+CREATE_*.md
+AUDIT*.md
+*AUDIT*.md
+FINAL_CLEANUP.md
+
+# ----- AI/Assistant Related (should not exist) -----
+*claude*
+*Claude*
+.claude/
+claude-*/
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+.mypy_cache/
+.ruff_cache/
+
+# ----- Node.js -----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ----- IDE -----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ----- Logs -----
+*.log
+logs/
+*_test_run.txt
+*_output.txt
+
+# ----- Models (too large for git) -----
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# ----- Data directories -----
+data/
+training_data/
+projects/
+
+# ----- Secrets -----
+*.pem
+*.key
+*.crt
+.env
+.env.*
+secrets/
+*secret*
+
+# ----- Temporary files -----
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# ----- Test artifacts -----
+.coverage
+coverage.xml
+junit.xml
+test-results/
+htmlcov/
+
+# ----- Build artifacts -----
+*.tar
+*.tar.gz
+*.zip

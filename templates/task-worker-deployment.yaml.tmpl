@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: task-worker
+  labels:
+    app: task-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: task-worker
+  template:
+    metadata:
+      labels:
+        app: task-worker
+    spec:
+      containers:
+      - name: task-worker
+        image: ${ATLAS_REGISTRY}/task-worker:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: Never
+        env:
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "${ATLAS_REDIS_PORT}"
+        - name: RAG_API_URL
+          value: "http://rag-api:${ATLAS_RAG_API_PORT}"
+        - name: LLAMA_URL
+          value: "http://llama-service:${ATLAS_LLAMA_PORT}"
+        - name: SANDBOX_URL
+          value: "http://sandbox:${ATLAS_SANDBOX_PORT}"
+        - name: TASK_TIMEOUT
+          value: "${ATLAS_TASK_TIMEOUT}"
+        - name: RALPH_MAX_RETRIES
+          value: "${ATLAS_RALPH_MAX_RETRIES}"
+        - name: RALPH_BASE_TEMP
+          value: "${ATLAS_RALPH_BASE_TEMP}"
+        - name: RALPH_TEMP_INCREMENT
+          value: "${ATLAS_RALPH_TEMP_INCREMENT}"
+        - name: RALPH_MAX_TEMP
+          value: "${ATLAS_RALPH_MAX_TEMP}"
+        - name: LOG_LEVEL
+          value: "${ATLAS_LOG_LEVEL}"
+        resources:
+          limits:
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+          requests:
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-worker
+spec:
+  selector:
+    app: task-worker
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP

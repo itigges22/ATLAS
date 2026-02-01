@@ -1,0 +1,234 @@
+#!/bin/bash
+#===========================================
+# ATLAS Configuration
+#===========================================
+# Copy this file to atlas.conf and customize.
+# All values have sensible defaults.
+#
+# Usage:
+#   cp atlas.conf.example atlas.conf
+#   vim atlas.conf  # edit as needed
+#   ./scripts/install.sh
+#===========================================
+
+#-------------------------------------------
+# Network Configuration
+#-------------------------------------------
+# Node IP address (set to "auto" to detect, or specify manually)
+ATLAS_NODE_IP="auto"
+
+# Kubernetes namespace for all ATLAS services
+ATLAS_NAMESPACE="atlas"
+
+# External NodePorts (how you access services from outside the cluster)
+ATLAS_API_PORTAL_NODEPORT=30000
+ATLAS_LLM_PROXY_NODEPORT=30080
+ATLAS_RAG_API_NODEPORT=31144
+ATLAS_DASHBOARD_NODEPORT=30001
+ATLAS_LLAMA_NODEPORT=32735
+ATLAS_QDRANT_NODEPORT=30633
+ATLAS_QDRANT_GRPC_NODEPORT=30634
+ATLAS_EMBEDDING_NODEPORT=30808
+ATLAS_SANDBOX_NODEPORT=30820
+
+# Internal service ports (usually don't change these)
+ATLAS_REDIS_PORT=6379
+ATLAS_QDRANT_PORT=6333
+ATLAS_QDRANT_GRPC_PORT=6334
+ATLAS_EMBEDDING_PORT=8080
+ATLAS_LLAMA_PORT=8000
+ATLAS_RAG_API_PORT=8001
+ATLAS_API_PORTAL_PORT=3000
+ATLAS_SANDBOX_PORT=8020
+ATLAS_DASHBOARD_PORT=3001
+ATLAS_LLM_PROXY_PORT=8000
+
+#-------------------------------------------
+# Storage Paths
+#-------------------------------------------
+# Where models are stored
+ATLAS_MODELS_DIR="/root/models"
+
+# Where persistent data is stored
+ATLAS_DATA_DIR="/root/data"
+
+# Training data directory
+ATLAS_TRAINING_DIR="/root/data/training"
+
+# LoRA adapters directory
+ATLAS_LORA_DIR="/root/models/lora"
+
+# Projects storage (for RAG)
+ATLAS_PROJECTS_DIR="/root/data/projects"
+
+#-------------------------------------------
+# Persistent Volume Sizes
+#-------------------------------------------
+ATLAS_PVC_QDRANT_SIZE="50Gi"
+ATLAS_PVC_REDIS_SIZE="5Gi"
+ATLAS_PVC_PROJECTS_SIZE="20Gi"
+ATLAS_PVC_API_PORTAL_SIZE="5Gi"
+
+#-------------------------------------------
+# Model Configuration
+#-------------------------------------------
+# Main model filename (must exist in ATLAS_MODELS_DIR)
+ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
+
+# Draft model for speculative decoding (leave empty to disable)
+ATLAS_DRAFT_MODEL="Qwen3-0.6B-Q8_0.gguf"
+
+# Context window size (tokens)
+ATLAS_CONTEXT_LENGTH=16384
+
+# GPU layers to offload (99 = all layers)
+ATLAS_GPU_LAYERS=99
+
+# Parallel inference slots (increase if you have more VRAM)
+ATLAS_PARALLEL_SLOTS=1
+
+# Flash attention (recommended for better performance)
+ATLAS_FLASH_ATTENTION=true
+
+#-------------------------------------------
+# Resource Limits
+#-------------------------------------------
+# GPU memory to request/limit
+ATLAS_LLAMA_GPU_MEMORY="14Gi"
+
+# CPU limits per service
+ATLAS_LLAMA_CPU_LIMIT="4"
+ATLAS_LLAMA_CPU_REQUEST="2"
+ATLAS_LLAMA_MEMORY_LIMIT="16Gi"
+ATLAS_LLAMA_MEMORY_REQUEST="8Gi"
+
+# Other services (lighter weight)
+ATLAS_SERVICE_CPU_LIMIT="2"
+ATLAS_SERVICE_CPU_REQUEST="0.5"
+ATLAS_SERVICE_MEMORY_LIMIT="2Gi"
+ATLAS_SERVICE_MEMORY_REQUEST="512Mi"
+
+#-------------------------------------------
+# Authentication & Security
+#-------------------------------------------
+# JWT secret (CHANGE THIS IN PRODUCTION)
+# Leave as "auto" to generate random secret at install
+ATLAS_JWT_SECRET="auto"
+
+# JWT token expiry (hours)
+ATLAS_JWT_EXPIRY_HOURS=24
+
+# First admin user email (leave empty for first-registered-is-admin)
+ATLAS_ADMIN_EMAIL=""
+
+# Default rate limit for new API keys (requests per minute)
+ATLAS_DEFAULT_RATE_LIMIT=1000
+
+# API key hash algorithm
+ATLAS_KEY_HASH_ALGORITHM="sha256"
+
+#-------------------------------------------
+# Feature Flags
+#-------------------------------------------
+# Enable speculative decoding (requires draft model)
+ATLAS_ENABLE_SPECULATIVE=true
+
+# Enable continuous learning (nightly training)
+ATLAS_ENABLE_TRAINING=true
+
+# Enable RAG (codebase context)
+ATLAS_ENABLE_RAG=true
+
+# Enable provenance tracking
+ATLAS_ENABLE_PROVENANCE=true
+
+# Enable real-time dashboard
+ATLAS_ENABLE_DASHBOARD=true
+
+#-------------------------------------------
+# Timeouts (seconds)
+#-------------------------------------------
+ATLAS_LLM_TIMEOUT=120
+ATLAS_SANDBOX_TIMEOUT=60
+ATLAS_TASK_TIMEOUT=300
+ATLAS_EMBEDDING_TIMEOUT=30
+ATLAS_HEALTH_CHECK_TIMEOUT=10
+
+#-------------------------------------------
+# RAG Configuration
+#-------------------------------------------
+# Maximum context budget (tokens)
+ATLAS_RAG_CONTEXT_BUDGET=8000
+
+# Number of chunks to retrieve
+ATLAS_RAG_TOP_K=20
+
+# Chunk size (lines)
+ATLAS_RAG_CHUNK_SIZE=100
+
+# Chunk overlap (lines)
+ATLAS_RAG_CHUNK_OVERLAP=20
+
+# Maximum files per project
+ATLAS_RAG_MAX_FILES=10000
+
+#-------------------------------------------
+# Training Configuration
+#-------------------------------------------
+# Minimum rating to include in training data
+ATLAS_TRAINING_MIN_RATING=4
+
+# Validation pass threshold (percentage)
+ATLAS_TRAINING_VALIDATION_THRESHOLD=66
+
+# LoRA rank
+ATLAS_LORA_RANK=8
+
+# LoRA alpha
+ATLAS_LORA_ALPHA=16
+
+# Training schedule (cron format)
+ATLAS_TRAINING_SCHEDULE="0 2 * * *"
+
+#-------------------------------------------
+# Ralph Loop Configuration
+#-------------------------------------------
+# Maximum retry attempts
+ATLAS_RALPH_MAX_RETRIES=5
+
+# Base temperature
+ATLAS_RALPH_BASE_TEMP=0.7
+
+# Temperature increment per retry
+ATLAS_RALPH_TEMP_INCREMENT=0.1
+
+# Maximum temperature
+ATLAS_RALPH_MAX_TEMP=1.2
+
+#-------------------------------------------
+# Logging
+#-------------------------------------------
+# Log level (DEBUG, INFO, WARNING, ERROR)
+ATLAS_LOG_LEVEL="INFO"
+
+# Enable request logging
+ATLAS_LOG_REQUESTS=true
+
+#-------------------------------------------
+# URLs (for external access, optional)
+#-------------------------------------------
+# Set these if using reverse proxy/ingress
+ATLAS_EXTERNAL_URL=""
+ATLAS_API_EXTERNAL_URL=""
+
+#-------------------------------------------
+# Advanced (usually don't change)
+#-------------------------------------------
+# Container registry (for pre-built images)
+ATLAS_REGISTRY="localhost"
+
+# Image tag
+ATLAS_IMAGE_TAG="latest"
+
+# K3s config path
+ATLAS_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"

@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-api
+  labels:
+    app: rag-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-api
+  template:
+    metadata:
+      labels:
+        app: rag-api
+    spec:
+      containers:
+      - name: rag-api
+        image: localhost/rag-api:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8001
+        env:
+        - name: QDRANT_URL
+          value: "http://qdrant:6333"
+        - name: EMBEDDING_URL
+          value: "http://embedding-service:8080"
+        - name: LLAMA_URL
+          value: "http://llama-service:8000"
+        - name: API_PORTAL_URL
+          value: "http://api-portal:3000"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: CONTEXT_BUDGET
+          value: "8000"
+        - name: TOP_K
+          value: "20"
+        - name: CHUNK_SIZE
+          value: "100"
+        - name: CHUNK_OVERLAP
+          value: "20"
+        - name: MAX_FILES
+          value: "10000"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: ENABLE_PROVENANCE
+          value: "true"
+        resources:
+          limits:
+            memory: 2Gi
+            cpu: 2
+          requests:
+            memory: 512Mi
+            cpu: 0.5
+        volumeMounts:
+        - name: projects
+          mountPath: /data/projects
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: projects
+        hostPath:
+          path: /home/nobase/data/projects
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-api
+spec:
+  selector:
+    app: rag-api
+  ports:
+  - port: 8001
+    targetPort: 8001
+    nodePort: 31144
+  type: NodePort

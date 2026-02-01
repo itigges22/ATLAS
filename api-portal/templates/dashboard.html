@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-gray-100">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-gray-900">{{ settings.app_name }}</h1>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="userDisplay" class="text-gray-600"></span>
+                    <button onclick="Auth.logout()" class="text-gray-600 hover:text-gray-900">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <!-- Usage Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-sm font-medium text-gray-500">Total Requests</h3>
+                <p id="totalRequests" class="text-2xl font-bold text-gray-900">-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-sm font-medium text-gray-500">Total Tokens</h3>
+                <p id="totalTokens" class="text-2xl font-bold text-gray-900">-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-sm font-medium text-gray-500">Requests Today</h3>
+                <p id="requestsToday" class="text-2xl font-bold text-gray-900">-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-sm font-medium text-gray-500">Tokens Today</h3>
+                <p id="tokensToday" class="text-2xl font-bold text-gray-900">-</p>
+            </div>
+        </div>
+
+        <!-- API Keys Section -->
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                <h2 class="text-lg font-medium text-gray-900">API Keys</h2>
+                <button onclick="showCreateModal()" class="bg-primary text-white px-4 py-2 rounded-md hover:bg-secondary transition">
+                    + New API Key
+                </button>
+            </div>
+
+            <div id="apiKeysList" class="divide-y divide-gray-200">
+                <div class="px-6 py-4 text-center text-gray-500">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Available Models -->
+        <div class="bg-white rounded-lg shadow mt-8">
+            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                <h2 class="text-lg font-medium text-gray-900">Available Models</h2>
+                <div class="flex items-center space-x-2">
+                    <span id="serverStatus" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600">Checking...</span>
+                    <button onclick="refreshModels()" class="text-primary hover:text-secondary text-sm">Refresh</button>
+                </div>
+            </div>
+            <div id="modelsList" class="divide-y divide-gray-200">
+                <div class="px-6 py-4 text-center text-gray-500">Loading models...</div>
+            </div>
+        </div>
+
+        <!-- Quick Start Guide -->
+        <div class="bg-white rounded-lg shadow mt-8">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <h2 class="text-lg font-medium text-gray-900">Quick Start</h2>
+            </div>
+            <div class="px-6 py-4">
+                <p class="text-gray-600 mb-4">To use OpenCode with this server:</p>
+                <ol class="list-decimal list-inside space-y-2 text-gray-600">
+                    <li>Create an API key above</li>
+                    <li>In OpenCode, run <code class="bg-gray-100 px-2 py-1 rounded">/connect</code></li>
+                    <li>Select "Self-Hosted LLM"</li>
+                    <li>Enter: <code id="connectionString" class="bg-gray-100 px-2 py-1 rounded"></code></li>
+                </ol>
+                <button onclick="copyConnectionString()" class="mt-4 text-primary hover:text-secondary">Copy connection string</button>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- Create API Key Modal -->
+<div id="createModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <h3 class="text-lg font-medium">Create New API Key</h3>
+        </div>
+        <form id="createKeyForm" class="p-6 space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Name</label>
+                <input type="text" id="keyName" required placeholder="e.g., Development, Production"
+                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Rate Limit (requests/minute)</label>
+                <input type="number" id="keyRateLimit" value="100" min="1" max="10000"
+                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Expires In (days, optional)</label>
+                <input type="number" id="keyExpires" min="1" max="365" placeholder="Leave empty for no expiration"
+                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+            </div>
+            <div class="flex justify-end space-x-3 pt-4">
+                <button type="button" onclick="hideCreateModal()" class="px-4 py-2 text-gray-600 hover:text-gray-900">Cancel</button>
+                <button type="submit" class="bg-primary text-white px-4 py-2 rounded-md hover:bg-secondary">Create Key</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Show New Key Modal -->
+<div id="showKeyModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <h3 class="text-lg font-medium text-green-600">API Key Created!</h3>
+        </div>
+        <div class="p-6">
+            <p class="text-gray-600 mb-4">Copy your API key now. You won't be able to see it again!</p>
+            <div class="bg-gray-100 p-4 rounded-lg font-mono text-sm break-all" id="newKeyDisplay"></div>
+            <div class="flex justify-end space-x-3 pt-4">
+                <button onclick="copyNewKey()" class="text-primary hover:text-secondary">Copy Key</button>
+                <button onclick="hideShowKeyModal()" class="bg-primary text-white px-4 py-2 rounded-md hover:bg-secondary">Done</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let newApiKey = '';
+
+    // Check auth
+    if (!Auth.isLoggedIn()) {
+        window.location.href = '/login';
+    }
+
+    // Display user info
+    const user = Auth.getUser();
+    if (user) {
+        document.getElementById('userDisplay').textContent = user.username;
+    }
+
+    // Load data
+    loadUsageStats();
+    loadApiKeys();
+    loadModels();
+    updateConnectionString();
+
+    async function loadUsageStats() {
+        try {
+            const response = await api('/api/usage');
+            const data = await response.json();
+
+            document.getElementById('totalRequests').textContent = data.total_requests.toLocaleString();
+            document.getElementById('totalTokens').textContent = (data.total_tokens_input + data.total_tokens_output).toLocaleString();
+            document.getElementById('requestsToday').textContent = data.requests_today.toLocaleString();
+            document.getElementById('tokensToday').textContent = data.tokens_today.toLocaleString();
+        } catch (err) {
+            console.error('Failed to load usage stats:', err);
+        }
+    }
+
+    async function loadApiKeys() {
+        try {
+            const response = await api('/api/keys');
+            const data = await response.json();
+
+            const container = document.getElementById('apiKeysList');
+
+            if (data.keys.length === 0) {
+                container.innerHTML = '<div class="px-6 py-8 text-center text-gray-500">No API keys yet. Create one to get started!</div>';
+                return;
+            }
+
+            container.innerHTML = data.keys.map(key => `
+                <div class="px-6 py-4 flex items-center justify-between">
+                    <div>
+                        <div class="font-medium text-gray-900">${key.name}</div>
+                        <div class="text-sm text-gray-500">
+                            <code class="bg-gray-100 px-2 py-0.5 rounded">${key.key_prefix}</code>
+                            <span class="ml-2">Rate: ${key.rate_limit}/min</span>
+                            ${key.expires_at ? `<span class="ml-2">Expires: ${new Date(key.expires_at).toLocaleDateString()}</span>` : ''}
+                            ${key.last_used_at ? `<span class="ml-2">Last used: ${new Date(key.last_used_at).toLocaleString()}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="px-2 py-1 text-xs rounded ${key.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                            ${key.is_active ? 'Active' : 'Disabled'}
+                        </span>
+                        <button onclick="toggleKey(${key.id})" class="text-gray-600 hover:text-gray-900 px-2">
+                            ${key.is_active ? 'Disable' : 'Enable'}
+                        </button>
+                        <button onclick="deleteKey(${key.id})" class="text-red-600 hover:text-red-900 px-2">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        } catch (err) {
+            console.error('Failed to load API keys:', err);
+        }
+    }
+
+    function showCreateModal() {
+        document.getElementById('createModal').classList.remove('hidden');
+    }
+
+    function hideCreateModal() {
+        document.getElementById('createModal').classList.add('hidden');
+        document.getElementById('createKeyForm').reset();
+    }
+
+    function hideShowKeyModal() {
+        document.getElementById('showKeyModal').classList.add('hidden');
+        loadApiKeys();
+        // Update connection string with the new key
+        if (newApiKey) {
+            const serverUrl = window.location.origin.replace(':3000', ':31144');
+            document.getElementById('connectionString').textContent = `${serverUrl}|${newApiKey}`;
+        }
+    }
+
+    document.getElementById('createKeyForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        try {
+            const response = await api('/api/keys', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: document.getElementById('keyName').value,
+                    rate_limit: parseInt(document.getElementById('keyRateLimit').value),
+                    expires_days: document.getElementById('keyExpires').value ? parseInt(document.getElementById('keyExpires').value) : null
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.detail || 'Failed to create key');
+            }
+
+            newApiKey = data.key;
+            document.getElementById('newKeyDisplay').textContent = data.key;
+            hideCreateModal();
+            document.getElementById('showKeyModal').classList.remove('hidden');
+        } catch (err) {
+            alert(err.message);
+        }
+    });
+
+    async function toggleKey(keyId) {
+        try {
+            await api(`/api/keys/${keyId}/toggle`, { method: 'PATCH' });
+            loadApiKeys();
+        } catch (err) {
+            alert('Failed to toggle key');
+        }
+    }
+
+    async function deleteKey(keyId) {
+        if (!confirm('Are you sure you want to delete this API key?')) return;
+
+        try {
+            await api(`/api/keys/${keyId}`, { method: 'DELETE' });
+            loadApiKeys();
+        } catch (err) {
+            alert('Failed to delete key');
+        }
+    }
+
+    function copyNewKey() {
+        navigator.clipboard.writeText(newApiKey);
+        alert('API key copied to clipboard!');
+    }
+
+    async function loadModels() {
+        try {
+            // Fetch models from /v1/models endpoint
+            const response = await fetch('/v1/models');
+            const data = await response.json();
+
+            const container = document.getElementById('modelsList');
+            const statusEl = document.getElementById('serverStatus');
+
+            if (data.data && data.data.length > 0) {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'px-2 py-1 text-xs rounded bg-green-100 text-green-800';
+
+                container.innerHTML = data.data.map(model => `
+                    <div class="px-6 py-4 flex items-center justify-between">
+                        <div>
+                            <div class="font-medium text-gray-900">${model.name || model.id}</div>
+                            <div class="text-sm text-gray-500">
+                                <code class="bg-gray-100 px-2 py-0.5 rounded">${model.id}</code>
+                                <span class="ml-2">Context: ${(model.context_length || 8192).toLocaleString()} tokens</span>
+                                <span class="ml-2">Max output: ${(model.max_output || 4096).toLocaleString()} tokens</span>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                statusEl.textContent = 'No models';
+                statusEl.className = 'px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-800';
+                container.innerHTML = '<div class="px-6 py-8 text-center text-gray-500">No models available. Check server connection.</div>';
+            }
+        } catch (err) {
+            console.error('Failed to load models:', err);
+            const statusEl = document.getElementById('serverStatus');
+            statusEl.textContent = 'Disconnected';
+            statusEl.className = 'px-2 py-1 text-xs rounded bg-red-100 text-red-800';
+            document.getElementById('modelsList').innerHTML = '<div class="px-6 py-8 text-center text-red-500">Failed to load models</div>';
+        }
+    }
+
+    async function refreshModels() {
+        document.getElementById('serverStatus').textContent = 'Refreshing...';
+        document.getElementById('serverStatus').className = 'px-2 py-1 text-xs rounded bg-blue-100 text-blue-800';
+        await loadModels();
+    }
+
+    function updateConnectionString() {
+        // Generate the connection string format: SERVER_URL|API_KEY
+        const serverUrl = window.location.origin.replace(':3000', ':31144');
+        document.getElementById('connectionString').textContent = `${serverUrl}|YOUR_API_KEY`;
+    }
+
+    function copyConnectionString() {
+        const serverUrl = window.location.origin.replace(':3000', ':31144');
+        const str = `${serverUrl}|YOUR_API_KEY`;
+        navigator.clipboard.writeText(str);
+        alert('Connection string copied! Replace YOUR_API_KEY with your actual key.');
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#6366f1',
+                        secondary: '#4f46e5'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {% block content %}{% endblock %}
+
+    <script>
+        // Global auth helper
+        const Auth = {
+            getToken() {
+                return localStorage.getItem('token');
+            },
+            setToken(token) {
+                localStorage.setItem('token', token);
+            },
+            clearToken() {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+            },
+            getUser() {
+                const user = localStorage.getItem('user');
+                return user ? JSON.parse(user) : null;
+            },
+            setUser(user) {
+                localStorage.setItem('user', JSON.stringify(user));
+            },
+            isLoggedIn() {
+                return !!this.getToken();
+            },
+            logout() {
+                this.clearToken();
+                window.location.href = '/login';
+            }
+        };
+
+        // API helper
+        async function api(endpoint, options = {}) {
+            const token = Auth.getToken();
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
+            const response = await fetch(endpoint, {
+                ...options,
+                headers
+            });
+
+            if (response.status === 401) {
+                Auth.logout();
+                throw new Error('Unauthorized');
+            }
+
+            return response;
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

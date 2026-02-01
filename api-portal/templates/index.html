@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="gradient-bg min-h-screen flex items-center justify-center">
+    <div class="text-center text-white p-8">
+        <h1 class="text-5xl font-bold mb-4">{{ settings.app_name }}</h1>
+        <p class="text-xl mb-8 opacity-90">Manage your API keys for self-hosted LLM access</p>
+
+        <div class="space-x-4">
+            <a href="/login" class="bg-white text-primary px-8 py-3 rounded-lg font-semibold hover:bg-gray-100 transition inline-block">
+                Login
+            </a>
+            <a href="/register" class="bg-transparent border-2 border-white px-8 py-3 rounded-lg font-semibold hover:bg-white hover:text-primary transition inline-block">
+                Register
+            </a>
+        </div>
+
+        <div class="mt-16 grid md:grid-cols-3 gap-8 max-w-4xl mx-auto">
+            <div class="bg-white/10 backdrop-blur rounded-lg p-6">
+                <div class="text-4xl mb-4">🔑</div>
+                <h3 class="text-xl font-semibold mb-2">API Keys</h3>
+                <p class="opacity-80">Generate and manage multiple API keys for different applications</p>
+            </div>
+            <div class="bg-white/10 backdrop-blur rounded-lg p-6">
+                <div class="text-4xl mb-4">📊</div>
+                <h3 class="text-xl font-semibold mb-2">Usage Tracking</h3>
+                <p class="opacity-80">Monitor your token usage and API request statistics</p>
+            </div>
+            <div class="bg-white/10 backdrop-blur rounded-lg p-6">
+                <div class="text-4xl mb-4">⚡</div>
+                <h3 class="text-xl font-semibold mb-2">Rate Limits</h3>
+                <p class="opacity-80">Configure custom rate limits for each API key</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Redirect to dashboard if already logged in
+    if (Auth.isLoggedIn()) {
+        window.location.href = '/dashboard';
+    }
+</script>
+{% endblock %}

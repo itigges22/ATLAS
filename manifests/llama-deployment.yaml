@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-server
+  labels:
+    app: llama-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llama-server
+  template:
+    metadata:
+      labels:
+        app: llama-server
+    spec:
+      runtimeClassName: nvidia
+      containers:
+      - name: llama
+        image: localhost/llama-server:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MODEL_PATH
+          value: "/models/Qwen3-14B-Q4_K_M.gguf"
+        - name: CONTEXT_LENGTH
+          value: "16384"
+        - name: GPU_LAYERS
+          value: "99"
+        - name: PARALLEL_SLOTS
+          value: "1"
+        - name: DRAFT_MODEL
+          value: "/models/Qwen3-0.6B-Q8_0.gguf"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: 16Gi
+            cpu: 4
+          requests:
+            memory: 8Gi
+            cpu: 2
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        - name: lora
+          mountPath: /models/lora
+      volumes:
+      - name: models
+        hostPath:
+          path: /home/nobase/models
+          type: Directory
+      - name: lora
+        hostPath:
+          path: /home/nobase/models/lora
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-service
+spec:
+  selector:
+    app: llama-server
+  ports:
+  - port: 8000
+    targetPort: 8000
+    nodePort: 32735
+  type: NodePort

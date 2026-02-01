@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-api
+  labels:
+    app: rag-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-api
+  template:
+    metadata:
+      labels:
+        app: rag-api
+    spec:
+      containers:
+      - name: rag-api
+        image: ${ATLAS_REGISTRY}/rag-api:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: Never
+        ports:
+        - containerPort: ${ATLAS_RAG_API_PORT}
+        env:
+        - name: QDRANT_URL
+          value: "http://qdrant:${ATLAS_QDRANT_PORT}"
+        - name: EMBEDDING_URL
+          value: "http://embedding-service:${ATLAS_EMBEDDING_PORT}"
+        - name: LLAMA_URL
+          value: "http://llama-service:${ATLAS_LLAMA_PORT}"
+        - name: API_PORTAL_URL
+          value: "http://api-portal:${ATLAS_API_PORTAL_PORT}"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "${ATLAS_REDIS_PORT}"
+        - name: CONTEXT_BUDGET
+          value: "${ATLAS_RAG_CONTEXT_BUDGET}"
+        - name: TOP_K
+          value: "${ATLAS_RAG_TOP_K}"
+        - name: CHUNK_SIZE
+          value: "${ATLAS_RAG_CHUNK_SIZE}"
+        - name: CHUNK_OVERLAP
+          value: "${ATLAS_RAG_CHUNK_OVERLAP}"
+        - name: MAX_FILES
+          value: "${ATLAS_RAG_MAX_FILES}"
+        - name: LOG_LEVEL
+          value: "${ATLAS_LOG_LEVEL}"
+        - name: ENABLE_PROVENANCE
+          value: "${ATLAS_ENABLE_PROVENANCE}"
+        resources:
+          limits:
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+          requests:
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+        volumeMounts:
+        - name: projects
+          mountPath: /data/projects
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_RAG_API_PORT}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_RAG_API_PORT}
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: projects
+        hostPath:
+          path: ${ATLAS_PROJECTS_DIR}
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-api
+spec:
+  selector:
+    app: rag-api
+  ports:
+  - port: ${ATLAS_RAG_API_PORT}
+    targetPort: ${ATLAS_RAG_API_PORT}
+    nodePort: ${ATLAS_RAG_API_NODEPORT}
+  type: NodePort

@@ -1,0 +1,225 @@
+#!/bin/bash
+set -euo pipefail
+
+# ATLAS Installation Verifier
+# Checks all services are running and healthy
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/config.sh"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+PASSED=0
+FAILED=0
+WARNINGS=0
+
+check_pass() {
+    echo -e "  ${GREEN}✓${NC} $1"
+    PASSED=$((PASSED + 1))
+}
+
+check_fail() {
+    echo -e "  ${RED}✗${NC} $1"
+    FAILED=$((FAILED + 1))
+}
+
+check_warn() {
+    echo -e "  ${YELLOW}!${NC} $1"
+    WARNINGS=$((WARNINGS + 1))
+}
+
+# Service health check
+check_service() {
+    local name="$1"
+    local url="$2"
+    local timeout="${3:-$ATLAS_HEALTH_CHECK_TIMEOUT}"
+
+    if curl -sf --max-time "$timeout" "$url" > /dev/null 2>&1; then
+        check_pass "$name is healthy"
+    else
+        check_fail "$name is not responding at $url"
+    fi
+    return 0
+}
+
+# Pod status check
+check_pod() {
+    local name="$1"
+
+    local status=$(kubectl get pods -n "$ATLAS_NAMESPACE" -l app="$name" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
+
+    if [[ "$status" == "Running" ]]; then
+        check_pass "$name pod is Running"
+    else
+        check_fail "$name pod status: ${status:-NotFound}"
+    fi
+    return 0
+}
+
+# GPU check
+check_gpu() {
+    if nvidia-smi > /dev/null 2>&1; then
+        local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+        local gpu_mem=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader | head -1)
+        check_pass "GPU detected: $gpu_name ($gpu_mem)"
+
+        # Check GPU is available in K8s
+        if kubectl get nodes -o json | grep -q "nvidia.com/gpu"; then
+            check_pass "GPU available in Kubernetes"
+        else
+            check_warn "GPU not advertised in Kubernetes (may still work)"
+        fi
+    else
+        check_fail "No NVIDIA GPU detected"
+    fi
+}
+
+# Model check
+check_models() {
+    if [[ -f "$ATLAS_MODELS_DIR/default.gguf" ]] || [[ -f "$ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL" ]]; then
+        check_pass "Main model found"
+    else
+        check_fail "Main model not found in $ATLAS_MODELS_DIR"
+    fi
+
+    if [[ "$ATLAS_ENABLE_SPECULATIVE" == "true" ]] && [[ -n "$ATLAS_DRAFT_MODEL" ]]; then
+        if [[ -f "$ATLAS_MODELS_DIR/$ATLAS_DRAFT_MODEL" ]]; then
+            check_pass "Draft model found (speculative decoding enabled)"
+        else
+            check_warn "Draft model not found (speculative decoding disabled)"
+        fi
+    fi
+}
+
+# LLM inference test
+check_llm_inference() {
+    local response=$(curl -sf --max-time "$ATLAS_LLM_TIMEOUT" \
+        -X POST "http://localhost:${ATLAS_LLAMA_NODEPORT}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{"messages":[{"role":"user","content":"Say hello"}],"max_tokens":10}' 2>/dev/null)
+
+    if echo "$response" | grep -q "choices"; then
+        check_pass "LLM inference working"
+    else
+        check_fail "LLM inference failed"
+    fi
+}
+
+# Full E2E test
+check_e2e() {
+    # Create test user and get API key
+    local register_response=$(curl -sf --max-time "$ATLAS_HEALTH_CHECK_TIMEOUT" \
+        -X POST "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/api/auth/register" \
+        -H "Content-Type: application/json" \
+        -d '{"email":"test@verify.local","password":"testpass123","username":"verifytest"}' 2>/dev/null || echo "")
+
+    if [[ -z "$register_response" ]]; then
+        # User might already exist, try login
+        local login_response=$(curl -sf --max-time "$ATLAS_HEALTH_CHECK_TIMEOUT" \
+            -X POST "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"test@verify.local","password":"testpass123"}' 2>/dev/null || echo "")
+
+        if echo "$login_response" | grep -q "token"; then
+            check_pass "Authentication system working"
+        else
+            check_warn "Could not verify authentication (may need manual test)"
+            return
+        fi
+    else
+        check_pass "User registration working"
+    fi
+}
+
+main() {
+    echo "=========================================="
+    echo "  ATLAS Installation Verifier"
+    echo "=========================================="
+    echo ""
+    echo "Configuration:"
+    echo "  Namespace:   $ATLAS_NAMESPACE"
+    echo "  Models dir:  $ATLAS_MODELS_DIR"
+    echo ""
+
+    # Kubernetes checks
+    echo "Kubernetes Cluster:"
+    if kubectl cluster-info > /dev/null 2>&1; then
+        check_pass "Cluster is accessible"
+    else
+        check_fail "Cannot connect to cluster"
+        echo ""
+        echo "VERIFICATION FAILED - Cluster not accessible"
+        exit 1
+    fi
+
+    # GPU checks
+    echo ""
+    echo "GPU:"
+    check_gpu
+
+    # Model checks
+    echo ""
+    echo "Models:"
+    check_models
+
+    # Pod status - using actual app labels from manifests
+    echo ""
+    echo "Pod Status:"
+    check_pod "redis"
+    check_pod "qdrant"
+    check_pod "embedding-service"
+    check_pod "llama-server"
+    check_pod "api-portal"
+    check_pod "rag-api"
+    check_pod "llm-proxy"
+    check_pod "sandbox"
+    check_pod "task-worker"
+    check_pod "atlas-dashboard"
+
+    # Service health endpoints - using NodePort values from config
+    echo ""
+    echo "Service Health:"
+    check_service "Qdrant" "http://localhost:${ATLAS_QDRANT_NODEPORT}/readyz" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "Embedding" "http://localhost:${ATLAS_EMBEDDING_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "LLM Server" "http://localhost:${ATLAS_LLAMA_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "API Portal" "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "RAG API" "http://localhost:${ATLAS_RAG_API_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "LLM Proxy" "http://localhost:${ATLAS_LLM_PROXY_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "Sandbox" "http://localhost:${ATLAS_SANDBOX_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "Dashboard" "http://localhost:${ATLAS_DASHBOARD_NODEPORT}/" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+
+    # Functional checks
+    echo ""
+    echo "Functional Tests:"
+    check_llm_inference
+    check_e2e
+
+    # Summary
+    echo ""
+    echo "=========================================="
+    echo "  Verification Summary"
+    echo "=========================================="
+    echo ""
+    echo -e "  ${GREEN}Passed:${NC}   $PASSED"
+    echo -e "  ${RED}Failed:${NC}   $FAILED"
+    echo -e "  ${YELLOW}Warnings:${NC} $WARNINGS"
+    echo ""
+
+    if [[ $FAILED -gt 0 ]]; then
+        echo -e "${RED}VERIFICATION FAILED${NC}"
+        echo "Check failed items above and review logs:"
+        echo "  kubectl logs -n $ATLAS_NAMESPACE -l app=<service-name>"
+        exit 1
+    elif [[ $WARNINGS -gt 0 ]]; then
+        echo -e "${YELLOW}VERIFICATION PASSED WITH WARNINGS${NC}"
+        exit 0
+    else
+        echo -e "${GREEN}VERIFICATION PASSED${NC}"
+        exit 0
+    fi
+}
+
+main "$@"

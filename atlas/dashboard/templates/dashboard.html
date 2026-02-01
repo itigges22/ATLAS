@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATLAS Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold">ATLAS Dashboard</h1>
+            <button onclick="location.reload()" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">
+                Refresh
+            </button>
+        </div>
+
+        <!-- Queue Status -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-gray-800 rounded-lg p-6">
+                <div class="text-gray-400 text-sm">P0 (Interactive)</div>
+                <div class="text-3xl font-bold text-red-400">{{ queue_stats.p0 }}</div>
+                <div class="text-gray-500 text-xs">waiting</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-6">
+                <div class="text-gray-400 text-sm">P1 (Fire-forget)</div>
+                <div class="text-3xl font-bold text-yellow-400">{{ queue_stats.p1 }}</div>
+                <div class="text-gray-500 text-xs">waiting</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-6">
+                <div class="text-gray-400 text-sm">P2 (Batch)</div>
+                <div class="text-3xl font-bold text-blue-400">{{ queue_stats.p2 }}</div>
+                <div class="text-gray-500 text-xs">waiting</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-6">
+                <div class="text-gray-400 text-sm">Today's Success Rate</div>
+                <div class="text-3xl font-bold text-green-400">
+                    {% if daily_stats.tasks_total %}
+                        {{ "%.1f"|format(daily_stats.tasks_success|int / daily_stats.tasks_total|int * 100) }}%
+                    {% else %}
+                        N/A
+                    {% endif %}
+                </div>
+                <div class="text-gray-500 text-xs">
+                    {{ daily_stats.tasks_success|default(0) }}/{{ daily_stats.tasks_total|default(0) }} tasks
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">Weekly Trend</h2>
+                <canvas id="weeklyChart"></canvas>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">Today's Stats</h2>
+                <div class="space-y-4">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Total Tasks</span>
+                        <span class="font-mono">{{ daily_stats.tasks_total|default(0) }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Total Tokens</span>
+                        <span class="font-mono">{{ daily_stats.total_tokens|default(0)|int }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Avg Attempts/Task</span>
+                        <span class="font-mono">
+                            {% if daily_stats.tasks_total %}
+                                {{ "%.2f"|format(daily_stats.total_attempts|float / daily_stats.tasks_total|int) }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Avg Duration</span>
+                        <span class="font-mono">
+                            {% if daily_stats.tasks_total %}
+                                {{ "%.1f"|format(daily_stats.total_duration_ms|float / daily_stats.tasks_total|int / 1000) }}s
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Tasks -->
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h2 class="text-xl font-semibold mb-4">Recent Tasks</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="text-gray-400 text-left">
+                            <th class="pb-2">Status</th>
+                            <th class="pb-2">Type</th>
+                            <th class="pb-2">Attempts</th>
+                            <th class="pb-2">Duration</th>
+                            <th class="pb-2">Completed</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in recent_tasks %}
+                        <tr class="border-t border-gray-700">
+                            <td class="py-2">
+                                {% if task.success %}
+                                    <span class="text-green-400">OK</span>
+                                {% else %}
+                                    <span class="text-red-400">FAIL</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-2 font-mono text-sm">{{ task.type }}</td>
+                            <td class="py-2">{{ task.attempts }}</td>
+                            <td class="py-2">{{ "%.1f"|format((task.duration_ms or 0) / 1000) }}s</td>
+                            <td class="py-2 text-gray-400 text-sm">{{ task.completed_at[:19] if task.completed_at else 'N/A' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="py-4 text-center text-gray-500">No tasks yet</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Weekly trend chart
+        const ctx = document.getElementById('weeklyChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: {{ weekly_trend|map(attribute='date')|list|tojson }},
+                datasets: [
+                    {
+                        label: 'Success',
+                        data: {{ weekly_trend|map(attribute='success')|list|tojson }},
+                        backgroundColor: 'rgba(34, 197, 94, 0.8)',
+                    },
+                    {
+                        label: 'Failed',
+                        data: [
+                            {% for d in weekly_trend %}
+                                {{ d.total - d.success }}{% if not loop.last %},{% endif %}
+                            {% endfor %}
+                        ],
+                        backgroundColor: 'rgba(239, 68, 68, 0.8)',
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true }
+                }
+            }
+        });
+
+        // Auto-refresh every 30 seconds
+        setTimeout(() => location.reload(), 30000);
+    </script>
+</body>
+</html>

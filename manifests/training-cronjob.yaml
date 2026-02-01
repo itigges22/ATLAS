@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: atlas-nightly-training
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 43200
+      template:
+        spec:
+          containers:
+          - name: trainer
+            image: localhost/atlas-trainer:latest
+            imagePullPolicy: Never
+            env:
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: TRAINING_MIN_RATING
+              value: "4"
+            - name: VALIDATION_THRESHOLD
+              value: "66"
+            - name: LORA_RANK
+              value: "8"
+            - name: LORA_ALPHA
+              value: "16"
+            - name: LOG_LEVEL
+              value: "INFO"
+            resources:
+              requests:
+                memory: "8Gi"
+                cpu: "2"
+              limits:
+                memory: "12Gi"
+                cpu: "4"
+            volumeMounts:
+            - name: training-data
+              mountPath: /data/training
+            - name: lora-adapters
+              mountPath: /models/lora
+          volumes:
+          - name: training-data
+            hostPath:
+              path: /home/nobase/data/training
+              type: DirectoryOrCreate
+          - name: lora-adapters
+            hostPath:
+              path: /home/nobase/models/lora
+              type: DirectoryOrCreate
+          restartPolicy: OnFailure

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-server
+  labels:
+    app: llama-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llama-server
+  template:
+    metadata:
+      labels:
+        app: llama-server
+    spec:
+      runtimeClassName: nvidia
+      containers:
+      - name: llama
+        image: ${ATLAS_REGISTRY}/llama-server:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: Never
+        ports:
+        - containerPort: ${ATLAS_LLAMA_PORT}
+        env:
+        - name: MODEL_PATH
+          value: "/models/${ATLAS_MAIN_MODEL}"
+        - name: CONTEXT_LENGTH
+          value: "${ATLAS_CONTEXT_LENGTH}"
+        - name: GPU_LAYERS
+          value: "${ATLAS_GPU_LAYERS}"
+        - name: PARALLEL_SLOTS
+          value: "${ATLAS_PARALLEL_SLOTS}"
+        - name: DRAFT_MODEL
+          value: "/models/${ATLAS_DRAFT_MODEL}"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: ${ATLAS_LLAMA_MEMORY_LIMIT}
+            cpu: ${ATLAS_LLAMA_CPU_LIMIT}
+          requests:
+            memory: ${ATLAS_LLAMA_MEMORY_REQUEST}
+            cpu: ${ATLAS_LLAMA_CPU_REQUEST}
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        - name: lora
+          mountPath: /models/lora
+      volumes:
+      - name: models
+        hostPath:
+          path: ${ATLAS_MODELS_DIR}
+          type: Directory
+      - name: lora
+        hostPath:
+          path: ${ATLAS_LORA_DIR}
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-service
+spec:
+  selector:
+    app: llama-server
+  ports:
+  - port: ${ATLAS_LLAMA_PORT}
+    targetPort: ${ATLAS_LLAMA_PORT}
+    nodePort: ${ATLAS_LLAMA_NODEPORT}
+  type: NodePort

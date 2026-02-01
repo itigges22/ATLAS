@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: atlas-nightly-training
+spec:
+  schedule: "${ATLAS_TRAINING_SCHEDULE}"
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 43200
+      template:
+        spec:
+          containers:
+          - name: trainer
+            image: ${ATLAS_REGISTRY}/atlas-trainer:${ATLAS_IMAGE_TAG}
+            imagePullPolicy: Never
+            env:
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "${ATLAS_REDIS_PORT}"
+            - name: TRAINING_MIN_RATING
+              value: "${ATLAS_TRAINING_MIN_RATING}"
+            - name: VALIDATION_THRESHOLD
+              value: "${ATLAS_TRAINING_VALIDATION_THRESHOLD}"
+            - name: LORA_RANK
+              value: "${ATLAS_LORA_RANK}"
+            - name: LORA_ALPHA
+              value: "${ATLAS_LORA_ALPHA}"
+            - name: LOG_LEVEL
+              value: "${ATLAS_LOG_LEVEL}"
+            resources:
+              requests:
+                memory: "8Gi"
+                cpu: "2"
+              limits:
+                memory: "12Gi"
+                cpu: "4"
+            volumeMounts:
+            - name: training-data
+              mountPath: /data/training
+            - name: lora-adapters
+              mountPath: /models/lora
+          volumes:
+          - name: training-data
+            hostPath:
+              path: ${ATLAS_TRAINING_DIR}
+              type: DirectoryOrCreate
+          - name: lora-adapters
+            hostPath:
+              path: ${ATLAS_LORA_DIR}
+              type: DirectoryOrCreate
+          restartPolicy: OnFailure

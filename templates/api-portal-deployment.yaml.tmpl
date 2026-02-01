@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-portal
+  labels:
+    app: api-portal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-portal
+  template:
+    metadata:
+      labels:
+        app: api-portal
+    spec:
+      containers:
+      - name: api-portal
+        image: ${ATLAS_REGISTRY}/api-portal:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: Never
+        ports:
+        - containerPort: ${ATLAS_API_PORTAL_PORT}
+        env:
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: atlas-secrets
+              key: jwt-secret
+        - name: JWT_EXPIRY_HOURS
+          value: "${ATLAS_JWT_EXPIRY_HOURS}"
+        - name: DEFAULT_RATE_LIMIT
+          value: "${ATLAS_DEFAULT_RATE_LIMIT}"
+        - name: LLAMA_URL
+          value: "http://llama-service:${ATLAS_LLAMA_PORT}"
+        - name: LOG_LEVEL
+          value: "${ATLAS_LOG_LEVEL}"
+        resources:
+          limits:
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+          requests:
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_API_PORTAL_PORT}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_API_PORTAL_PORT}
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: api-portal-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: api-portal-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: ${ATLAS_PVC_API_PORTAL_SIZE}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-portal
+spec:
+  selector:
+    app: api-portal
+  ports:
+  - port: ${ATLAS_API_PORTAL_PORT}
+    targetPort: ${ATLAS_API_PORTAL_PORT}
+    nodePort: ${ATLAS_API_PORTAL_NODEPORT}
+  type: NodePort
