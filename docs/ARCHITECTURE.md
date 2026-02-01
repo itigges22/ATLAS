@@ -37,9 +37,9 @@ ATLAS is a self-hosted Kubernetes-based AI coding agent infrastructure designed 
 | Component | Minimum | Tested Configuration |
 |-----------|---------|---------------------|
 | GPU | 8GB VRAM | RTX 5060 Ti 16GB |
-| RAM | 16GB | 32GB |
-| Storage | 50GB SSD | 200GB+ SSD |
-| CPU | 4 cores | 8 cores |
+| RAM | 12GB | 12GB DDR4 |
+| Storage | 50GB SSD | 150GB SSD |
+| CPU | 4 cores | Ryzen 5 2600 |
 
 ---
 
