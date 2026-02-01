@@ -37,10 +37,27 @@ sudo dnf install -y podman
 podman --version
 ```
 
+### NVIDIA Container Toolkit
+
+The container toolkit enables GPU access from containers:
+
+```bash
+# Add NVIDIA container toolkit repo (RHEL/Rocky)
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | \
+  sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo
+
+# Install the toolkit
+sudo dnf install -y nvidia-container-toolkit
+
+# Verify installation
+nvidia-ctk --version
+ls -la /usr/bin/nvidia-container-runtime
+```
+
 ### K3s
 
 ```bash
-# Install K3s with NVIDIA GPU support
+# Install K3s
 curl -sfL https://get.k3s.io | sh -
 
 # Configure kubectl
@@ -49,22 +66,152 @@ sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown $(id -u):$(id -g) ~/.kube/config
 chmod 600 ~/.kube/config
 
-# Set the env var
+# Set the env var (add to ~/.bashrc for persistence)
 export KUBECONFIG=~/.kube/config
 
 # Verify
 kubectl get nodes
 ```
 
+### Configure K3s Containerd for NVIDIA GPU
+
+**This is critical.** K3s uses its own bundled containerd, and the NVIDIA device plugin
+cannot access the GPU without proper containerd configuration. The `nvidia-ctk runtime configure`
+command does NOT work with K3s's containerd - you must create a custom template.
+
+K3s uses containerd config **version 3** format. Create the template file:
+
+```bash
+sudo tee /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl << 'EOF'
+version = 3
+
+[plugins.'io.containerd.cri.v1.images']
+  snapshotter = "{{ .NodeConfig.AgentConfig.Snapshotter }}"
+
+[plugins.'io.containerd.cri.v1.runtime']
+  device_ownership_from_security_context = true
+{{ if .NodeConfig.AgentConfig.Systemd }}
+  systemd_cgroup = true
+{{ end }}
+{{ if .PrivateRegistryConfig }}
+{{ if .PrivateRegistryConfig.Mirrors }}
+[plugins.'io.containerd.cri.v1.images'.registry]
+{{ range $k, $v := .PrivateRegistryConfig.Mirrors }}
+[plugins.'io.containerd.cri.v1.images'.registry.mirrors."{{ $k }}"]
+  endpoint = [{{ range $i, $j := $v.Endpoints }}{{ if $i }}, {{ end }}{{ printf "%q" . }}{{ end }}]
+{{ if $v.Rewrites }}
+[plugins.'io.containerd.cri.v1.images'.registry.mirrors."{{ $k }}".rewrite]
+{{ range $pattern, $replace := $v.Rewrites }}
+  "{{ $pattern }}" = "{{ $replace }}"
+{{ end }}
+{{ end }}
+{{ end }}
+{{ end }}
+{{ range $k, $v := .PrivateRegistryConfig.Configs }}
+{{ if $v.Auth }}
+[plugins.'io.containerd.cri.v1.images'.registry.configs."{{ $k }}".auth]
+  {{ if $v.Auth.Username }}username = {{ printf "%q" $v.Auth.Username }}{{ end }}
+  {{ if $v.Auth.Password }}password = {{ printf "%q" $v.Auth.Password }}{{ end }}
+  {{ if $v.Auth.Auth }}auth = {{ printf "%q" $v.Auth.Auth }}{{ end }}
+  {{ if $v.Auth.IdentityToken }}identity_token = {{ printf "%q" $v.Auth.IdentityToken }}{{ end }}
+{{ end }}
+{{ if $v.TLS }}
+[plugins.'io.containerd.cri.v1.images'.registry.configs."{{ $k }}".tls]
+  {{ if $v.TLS.CAFile }}ca_file = "{{ $v.TLS.CAFile }}"{{ end }}
+  {{ if $v.TLS.CertFile }}cert_file = "{{ $v.TLS.CertFile }}"{{ end }}
+  {{ if $v.TLS.KeyFile }}key_file = "{{ $v.TLS.KeyFile }}"{{ end }}
+  {{ if $v.TLS.InsecureSkipVerify }}insecure_skip_verify = true{{ end }}
+{{ end }}
+{{ end }}
+{{ end }}
+
+[plugins.'io.containerd.cri.v1.runtime'.cni]
+  bin_dir = "{{ .NodeConfig.AgentConfig.CNIBinDir }}"
+  conf_dir = "{{ .NodeConfig.AgentConfig.CNIConfDir }}"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd]
+  default_runtime_name = "nvidia"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'runc']
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'runc'.options]
+  SystemdCgroup = {{ .NodeConfig.AgentConfig.Systemd }}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'nvidia']
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'nvidia'.options]
+  BinaryName = "/usr/bin/nvidia-container-runtime"
+  SystemdCgroup = {{ .NodeConfig.AgentConfig.Systemd }}
+EOF
+```
+
+**Important notes:**
+- The template uses Go templating to include K3s's required variables (CNI paths, etc.)
+- The `default_runtime_name = "nvidia"` sets NVIDIA as the default container runtime
+- Without the CNI configuration, the node will go NotReady
+- The template path must be `/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl`
+
+Restart K3s to apply the configuration:
+
+```bash
+sudo systemctl restart k3s
+
+# Wait for node to be Ready
+kubectl get nodes -w
+```
+
 ### NVIDIA Device Plugin
+
+Once containerd is configured, deploy the device plugin:
 
 ```bash
 # Install NVIDIA device plugin for Kubernetes
-kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.0/nvidia-device-plugin.yml
+kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.1/deployments/static/nvidia-device-plugin.yml
 
-# Verify GPU is available
+# Wait for the plugin pod to be ready
+kubectl -n kube-system wait --for=condition=Ready pod -l name=nvidia-device-plugin-ds --timeout=120s
+
+# Verify plugin can see the GPU (should show "found NVML library")
+kubectl logs -n kube-system -l name=nvidia-device-plugin-ds | grep -i nvml
+
+# Verify GPU is allocatable (should return "1" or more)
 kubectl get nodes -o json | jq '.items[].status.allocatable["nvidia.com/gpu"]'
 ```
+
+### Verify GPU Access from Containers
+
+Before proceeding with ATLAS installation, verify end-to-end GPU access:
+
+```bash
+# Create a test pod
+cat <<'TESTEOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-test
+spec:
+  restartPolicy: Never
+  containers:
+  - name: gpu-test
+    image: nvcr.io/nvidia/cuda:12.6.0-base-ubi9
+    command: ["nvidia-smi"]
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+TESTEOF
+
+# Wait for completion and check output
+sleep 30
+kubectl logs gpu-test
+
+# You should see nvidia-smi output showing your GPU
+# Clean up
+kubectl delete pod gpu-test
+```
+
+If `nvidia-smi` runs successfully inside the container, your GPU setup is complete.
 
 ## Hardware Requirements
 
