@@ -14,9 +14,12 @@ flowchart TB
     end
     subgraph core["Core Services"]
         rag["RAG API :8001<br/>Orchestration"]
-        llama["llama-server :8000<br/>Qwen3-14B • GPU"]
         embed["Embeddings :8080<br/>MiniLM-L6-v2"]
     end
+
+    %% Central inference engine - outside subgraphs for central positioning
+    llama["llama-server :8000<br/>Qwen3-14B • GPU"]
+
     subgraph data["Storage"]
         qdrant[("Qdrant<br/>100GB Vectors")]
         redis[("Redis<br/>Queues • Metrics")]
