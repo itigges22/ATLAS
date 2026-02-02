@@ -62,7 +62,7 @@ The install script automates K3s, GPU Operator, and all ATLAS services.
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/atlas.git
+git clone https://github.com/itigges22/atlas.git
 cd atlas
 ```
 
