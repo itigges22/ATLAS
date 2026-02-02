@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM docker.io/python:3.11-slim
 
 WORKDIR /app
 
@@ -9,7 +9,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY src/ ./src/
 COPY templates/ ./templates/
-COPY public/ ./public/
 
 # Create data directory for SQLite
 RUN mkdir -p /app/data

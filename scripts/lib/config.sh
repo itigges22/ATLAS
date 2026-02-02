@@ -2,6 +2,9 @@
 # ATLAS Config Loader
 # Source this in scripts: source "$SCRIPT_DIR/lib/config.sh"
 
+# Ensure common paths are in PATH (K3s installs to /usr/local/bin)
+export PATH="/usr/local/bin:$PATH"
+
 # Get paths relative to this library file
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _SCRIPTS_DIR="$(dirname "$_LIB_DIR")"

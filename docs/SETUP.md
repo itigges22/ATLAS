@@ -121,6 +121,8 @@ The installer will:
 5. Deploy services to K3s
 6. Wait for all pods to be ready
 
+> **First Build Time:** The initial build takes **1-2 hours** because it downloads large CUDA images (~8GB) and compiles llama.cpp from source. Subsequent builds are much faster since layers are cached.
+
 ### Step 5: Verify Installation
 
 ```bash
@@ -356,18 +358,28 @@ mkdir -p ~/models
 ### Step 9: Build and Deploy
 
 ```bash
-# Build container images
+# Build container images (takes 1-2 hours on first run)
 ./scripts/build-containers.sh
 
 # Create namespace
 kubectl create namespace atlas
 
-# Deploy all services
-kubectl apply -f manifests/
+# Process manifest templates with your config values
+# This substitutes paths from atlas.conf into the manifests
+source scripts/lib/config.sh
+export ${!ATLAS_@}
+for tmpl in templates/*.yaml.tmpl; do
+    envsubst < "$tmpl" > "manifests/$(basename "$tmpl" .tmpl)"
+done
+
+# Deploy all services to atlas namespace
+kubectl apply -n atlas -f manifests/
 
 # Verify pods are starting
 kubectl get pods -n atlas -w
 ```
+
+> **First Build Time:** The initial build takes **1-2 hours** because it downloads large CUDA images (~8GB) and compiles llama.cpp from source. Subsequent builds are much faster since layers are cached.
 
 Wait for all pods to show `Running` status (this may take a few minutes on first deploy as images are pulled).
 

@@ -3,6 +3,7 @@ set -euo pipefail
 
 # ATLAS Container Builder
 # Builds all container images and imports to K3s
+# Note: Importing to K3s requires sudo (will prompt if not root)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/config.sh"
@@ -62,7 +63,13 @@ import_to_k3s() {
         return 0
     fi
 
-    $runtime save "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" | k3s ctr images import -
+    # K3s containerd socket requires root access
+    # Use full path since sudo doesn't inherit PATH
+    if [[ $EUID -eq 0 ]]; then
+        $runtime save "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" | /usr/local/bin/k3s ctr images import -
+    else
+        $runtime save "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" | sudo /usr/local/bin/k3s ctr images import -
+    fi
 
     log_info "$name imported to K3s"
 }
@@ -118,6 +125,9 @@ main() {
     # Import to K3s
     echo ""
     echo "Importing to K3s..."
+    if [[ $EUID -ne 0 ]]; then
+        log_warn "K3s import requires sudo - you may be prompted for your password"
+    fi
     for entry in "${CORE_IMAGES[@]}"; do
         name="${entry%%:*}"
         import_to_k3s "$name" "$RUNTIME"
@@ -134,7 +144,11 @@ main() {
     echo "=========================================="
     echo ""
     echo "Images built and imported:"
-    k3s ctr images list 2>/dev/null | grep "$ATLAS_REGISTRY" || echo "  (use 'k3s ctr images list' to verify)"
+    if [[ $EUID -eq 0 ]]; then
+        /usr/local/bin/k3s ctr images list 2>/dev/null | grep "$ATLAS_REGISTRY" || echo "  (use 'sudo k3s ctr images list' to verify)"
+    else
+        sudo /usr/local/bin/k3s ctr images list 2>/dev/null | grep "$ATLAS_REGISTRY" || echo "  (use 'sudo k3s ctr images list' to verify)"
+    fi
     echo ""
 }
 

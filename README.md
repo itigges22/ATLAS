@@ -135,7 +135,7 @@ flowchart TB
 ## Quick Start
 
 ```bash
-git clone https://github.com/yourusername/atlas.git && cd atlas
+git clone https://github.com/itigges22/atlas.git && cd atlas
 cp atlas.conf.example atlas.conf && ./scripts/install.sh
 kubectl get pods  # Verify all services running
 ```

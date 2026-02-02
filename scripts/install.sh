@@ -17,6 +17,124 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Validate paths in configuration
+validate_paths() {
+    local errors=0
+
+    log_info "Validating configuration paths..."
+
+    # Check ATLAS_MODELS_DIR
+    if [[ ! -d "$ATLAS_MODELS_DIR" ]]; then
+        log_error "ATLAS_MODELS_DIR does not exist: $ATLAS_MODELS_DIR"
+        log_error "  Please create the directory or update atlas.conf"
+        log_error "  Example: mkdir -p $ATLAS_MODELS_DIR"
+        errors=$((errors + 1))
+    fi
+
+    # Check for main model file
+    if [[ -n "$ATLAS_MAIN_MODEL" ]]; then
+        if [[ ! -f "$ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL" ]] && [[ ! -f "$ATLAS_MODELS_DIR/default.gguf" ]]; then
+            log_error "Main model not found: $ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL"
+            log_error "  Download with: ./scripts/download-models.sh"
+            log_error "  Or update ATLAS_MAIN_MODEL in atlas.conf"
+            errors=$((errors + 1))
+        fi
+    fi
+
+    # Check ATLAS_LORA_DIR (create if missing, it's optional)
+    if [[ ! -d "$ATLAS_LORA_DIR" ]]; then
+        log_warn "ATLAS_LORA_DIR does not exist, creating: $ATLAS_LORA_DIR"
+        mkdir -p "$ATLAS_LORA_DIR" 2>/dev/null || {
+            log_error "Failed to create ATLAS_LORA_DIR: $ATLAS_LORA_DIR"
+            errors=$((errors + 1))
+        }
+    fi
+
+    # Check for placeholder paths that weren't updated
+    if [[ "$ATLAS_MODELS_DIR" == *"yourusername"* ]] || [[ "$ATLAS_MODELS_DIR" == *"nobase"* ]]; then
+        log_error "ATLAS_MODELS_DIR contains placeholder path: $ATLAS_MODELS_DIR"
+        log_error "  Please update atlas.conf with your actual path"
+        log_error "  Example: ATLAS_MODELS_DIR=\"/home/$(logname)/models\""
+        errors=$((errors + 1))
+    fi
+
+    if [[ $errors -gt 0 ]]; then
+        log_error "Path validation failed with $errors error(s)"
+        log_error "Please fix the above issues in atlas.conf and re-run"
+        return 1
+    fi
+
+    log_info "Path validation passed"
+    return 0
+}
+
+# Detect hardware and auto-configure resources
+detect_hardware() {
+    log_info "Detecting hardware configuration..."
+
+    # Detect CPU cores
+    local cpu_cores=$(nproc)
+    log_info "  CPU cores: $cpu_cores"
+
+    # Detect system memory (in GB)
+    local sys_mem_gb=$(free -g | awk '/^Mem:/{print $2}')
+    log_info "  System RAM: ${sys_mem_gb}GB"
+
+    # Detect GPU memory (in MB)
+    local gpu_mem_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+    local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    log_info "  GPU: $gpu_name (${gpu_mem_mb}MB VRAM)"
+
+    # Calculate recommended resource limits based on hardware
+    # Reserve 1 CPU for system, distribute rest among services
+    local available_cpu=$((cpu_cores - 1))
+    if [[ $available_cpu -lt 2 ]]; then
+        available_cpu=2
+    fi
+
+    # LLM server gets 25% of available CPU (min 0.5, max 2)
+    local llama_cpu_req=$(echo "scale=1; $available_cpu * 0.25" | bc)
+    if (( $(echo "$llama_cpu_req < 0.5" | bc -l) )); then
+        llama_cpu_req="0.5"
+    elif (( $(echo "$llama_cpu_req > 2" | bc -l) )); then
+        llama_cpu_req="2"
+    fi
+
+    # Other services share remaining CPU (min 0.25 each)
+    local service_cpu_req=$(echo "scale=2; ($available_cpu - $llama_cpu_req) / 8" | bc)
+    if (( $(echo "$service_cpu_req < 0.25" | bc -l) )); then
+        service_cpu_req="0.25"
+    elif (( $(echo "$service_cpu_req > 0.5" | bc -l) )); then
+        service_cpu_req="0.5"
+    fi
+
+    # Memory allocation (LLM needs most for model loading)
+    local llama_mem_req="8Gi"
+    local llama_mem_limit="16Gi"
+    if [[ $sys_mem_gb -lt 16 ]]; then
+        llama_mem_req="4Gi"
+        llama_mem_limit="8Gi"
+        log_warn "Low system RAM detected. Reducing LLM memory allocation."
+    fi
+
+    # Export detected values for template processing
+    export DETECTED_CPU_CORES=$cpu_cores
+    export DETECTED_SYS_MEM_GB=$sys_mem_gb
+    export DETECTED_GPU_MEM_MB=$gpu_mem_mb
+
+    log_info "  Recommended LLM CPU request: $llama_cpu_req"
+    log_info "  Recommended service CPU request: $service_cpu_req"
+
+    # Check if current config exceeds hardware
+    local total_cpu_requests=$(echo "$ATLAS_LLAMA_CPU_REQUEST + ($ATLAS_SERVICE_CPU_REQUEST * 8)" | bc 2>/dev/null || echo "0")
+    if (( $(echo "$total_cpu_requests > $available_cpu" | bc -l 2>/dev/null || echo "0") )); then
+        log_warn "Config requests ${total_cpu_requests} CPUs but only ${available_cpu} available"
+        log_warn "Consider updating atlas.conf:"
+        log_warn "  ATLAS_LLAMA_CPU_REQUEST=\"$llama_cpu_req\""
+        log_warn "  ATLAS_SERVICE_CPU_REQUEST=\"$service_cpu_req\""
+    fi
+}
+
 # Check prerequisites
 check_prerequisites() {
     log_info "Checking prerequisites..."
@@ -33,6 +151,9 @@ check_prerequisites() {
         exit 1
     fi
 
+    # Detect and display hardware
+    detect_hardware
+
     # Check GPU memory
     GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
     if [[ $GPU_MEM -lt 15000 ]]; then
@@ -45,13 +166,43 @@ check_prerequisites() {
         log_warn "System has ${SYS_MEM}GB RAM. 16GB+ recommended."
     fi
 
-    # Validate config
+    # Validate paths
+    if ! validate_paths; then
+        exit 1
+    fi
+
+    # Validate config (ports, etc.)
     if ! validate_config; then
         log_error "Configuration validation failed"
         exit 1
     fi
 
     log_info "Prerequisites check passed"
+}
+
+# Check if all required images exist in K3s
+check_images_exist() {
+    local required_images=(
+        "llama-server"
+        "rag-api"
+        "api-portal"
+        "embedding-service"
+        "llm-proxy"
+        "sandbox"
+        "task-worker"
+        "atlas-dashboard"
+    )
+
+    # Get list of images once (requires root for k3s ctr)
+    local images_list
+    images_list=$(/usr/local/bin/k3s ctr images list 2>/dev/null) || return 1
+
+    for img in "${required_images[@]}"; do
+        if ! echo "$images_list" | grep -q "localhost/$img:latest"; then
+            return 1
+        fi
+    done
+    return 0
 }
 
 # Detect current installation state
@@ -95,10 +246,20 @@ detect_existing_setup() {
     fi
 
     # Check if ATLAS services are already running
-    RUNNING_PODS=$(kubectl get pods -n "$ATLAS_NAMESPACE" --field-selector=status.phase=Running 2>/dev/null | grep -c Running || echo "0")
+    RUNNING_PODS=$(kubectl get pods -n "$ATLAS_NAMESPACE" --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+    RUNNING_PODS=${RUNNING_PODS:-0}
     if [[ "$RUNNING_PODS" -gt 0 ]]; then
         log_info "  [FOUND] $RUNNING_PODS ATLAS pod(s) already running"
         log_info "         (kubectl apply will update existing deployments)"
+    fi
+
+    # Check if container images are already in K3s
+    SKIP_BUILD=false
+    if check_images_exist 2>/dev/null; then
+        log_info "  [FOUND] Container images already in K3s"
+        SKIP_BUILD=true
+    else
+        log_info "  [MISSING] Container images - will build"
     fi
 
     echo ""
@@ -220,6 +381,13 @@ setup_namespace() {
 
 # Build container images
 build_images() {
+    # Check if images already exist in K3s
+    if [[ "${FORCE_BUILD:-false}" != "true" ]] && check_images_exist; then
+        log_info "All container images already exist in K3s - skipping build"
+        log_info "  (use FORCE_BUILD=true to rebuild)"
+        return 0
+    fi
+
     log_info "Building container images..."
 
     "$SCRIPT_DIR/build-containers.sh"
@@ -227,15 +395,43 @@ build_images() {
     log_info "Container images built"
 }
 
+# Process templates with environment variable substitution
+process_templates() {
+    log_info "Processing manifest templates..."
+
+    local template_dir="$K8S_DIR/templates"
+    local manifest_dir="$K8S_DIR/manifests"
+
+    # Ensure manifests directory exists
+    mkdir -p "$manifest_dir"
+
+    # Export all ATLAS_ variables for envsubst
+    export "${!ATLAS_@}"
+
+    # Process each template file
+    for tmpl in "$template_dir"/*.yaml.tmpl; do
+        if [[ -f "$tmpl" ]]; then
+            local filename=$(basename "$tmpl" .tmpl)
+            log_info "  Processing $filename..."
+            envsubst < "$tmpl" > "$manifest_dir/$filename"
+        fi
+    done
+
+    log_info "Templates processed"
+}
+
 # Deploy manifests
 deploy_manifests() {
     log_info "Deploying ATLAS services..."
 
+    # Process templates first to substitute config values
+    process_templates
+
     # Deploy infrastructure first (Redis is dependency)
     log_info "Deploying infrastructure..."
-    kubectl apply -f "$K8S_DIR/manifests/redis-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/manifests/qdrant-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/manifests/embedding-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/redis-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/qdrant-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/embedding-deployment.yaml"
 
     # Wait for dependencies
     log_info "Waiting for infrastructure services..."
@@ -245,20 +441,20 @@ deploy_manifests() {
 
     # Deploy main services
     log_info "Deploying main services..."
-    kubectl apply -f "$K8S_DIR/manifests/llama-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/manifests/api-portal-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/manifests/rag-api-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/manifests/llm-proxy-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/llama-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/api-portal-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/rag-api-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/llm-proxy-deployment.yaml"
 
     # Deploy Atlas services
     log_info "Deploying Atlas services..."
-    kubectl apply -f "$K8S_DIR/manifests/sandbox-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/manifests/task-worker-deployment.yaml"
-    kubectl apply -f "$K8S_DIR/manifests/dashboard-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/sandbox-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/task-worker-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/dashboard-deployment.yaml"
 
     # Apply training CronJob if enabled
     if [[ "$ATLAS_ENABLE_TRAINING" == "true" ]]; then
-        kubectl apply -f "$K8S_DIR/manifests/training-cronjob.yaml" || true
+        kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/training-cronjob.yaml" || true
     fi
 
     log_info "Manifests deployed"
@@ -308,7 +504,11 @@ main() {
     else
         echo "  - GPU setup:    INSTALL (GPU Operator via Helm)"
     fi
-    echo "  - Build images: RUN"
+    if [[ "$SKIP_BUILD" == "true" ]]; then
+        echo "  - Build images: SKIP (already in K3s)"
+    else
+        echo "  - Build images: RUN"
+    fi
     echo "  - Deploy:       RUN (kubectl apply - safe to re-run)"
     echo ""
 
