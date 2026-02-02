@@ -337,7 +337,7 @@ If `nvidia-smi` runs successfully inside the container, your GPU setup is comple
 ### Step 7: Clone and Configure ATLAS
 
 ```bash
-git clone https://github.com/yourusername/atlas.git
+git clone https://github.com/itigges22/atlas.git
 cd atlas
 
 # Copy and edit configuration
