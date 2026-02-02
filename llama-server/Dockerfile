@@ -9,6 +9,7 @@ FROM nvidia/cuda:12.8.0-runtime-rockylinux9
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 RUN mkdir -p /models /templates
+COPY templates/ /templates/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 EXPOSE 8000
