@@ -112,3 +112,7 @@ bin/
 *.exe
 *-darwin-*
 *-linux-*
+
+# ----- Benchmark -----
+benchmark/datasets/.cache/
+benchmark/results/
