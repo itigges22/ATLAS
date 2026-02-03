@@ -1,0 +1,1406 @@
+{
+  "version": "1.0",
+  "description": "ATLAS V1 Custom Benchmark Tasks - 100 coding tasks across 6 categories",
+  "tasks": [
+    {
+      "task_id": "ALGO_001",
+      "category": "algorithm",
+      "difficulty": "easy",
+      "prompt": "Write a function `binary_search(arr, target)` that performs binary search on a sorted list and returns the index of the target element, or -1 if not found.",
+      "entry_point": "binary_search",
+      "canonical_solution": "def binary_search(arr, target):\n    left, right = 0, len(arr) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1",
+      "test_code": "assert binary_search([1, 2, 3, 4, 5], 3) == 2\nassert binary_search([1, 2, 3, 4, 5], 1) == 0\nassert binary_search([1, 2, 3, 4, 5], 5) == 4\nassert binary_search([1, 2, 3, 4, 5], 6) == -1\nassert binary_search([], 1) == -1\nassert binary_search([1], 1) == 0",
+      "tags": [
+        "binary-search",
+        "array",
+        "search"
+      ]
+    },
+    {
+      "task_id": "ALGO_002",
+      "category": "algorithm",
+      "difficulty": "easy",
+      "prompt": "Write a function `bubble_sort(arr)` that sorts a list of integers in ascending order using bubble sort. Return the sorted list.",
+      "entry_point": "bubble_sort",
+      "canonical_solution": "def bubble_sort(arr):\n    arr = arr.copy()\n    n = len(arr)\n    for i in range(n):\n        for j in range(0, n - i - 1):\n            if arr[j] > arr[j + 1]:\n                arr[j], arr[j + 1] = arr[j + 1], arr[j]\n    return arr",
+      "test_code": "assert bubble_sort([64, 34, 25, 12, 22, 11, 90]) == [11, 12, 22, 25, 34, 64, 90]\nassert bubble_sort([5, 1, 4, 2, 8]) == [1, 2, 4, 5, 8]\nassert bubble_sort([]) == []\nassert bubble_sort([1]) == [1]\nassert bubble_sort([2, 1]) == [1, 2]",
+      "tags": [
+        "sorting",
+        "bubble-sort",
+        "array"
+      ]
+    },
+    {
+      "task_id": "ALGO_003",
+      "category": "algorithm",
+      "difficulty": "easy",
+      "prompt": "Write a function `find_max(arr)` that finds and returns the maximum element in a list. Return None for empty lists.",
+      "entry_point": "find_max",
+      "canonical_solution": "def find_max(arr):\n    if not arr:\n        return None\n    max_val = arr[0]\n    for x in arr[1:]:\n        if x > max_val:\n            max_val = x\n    return max_val",
+      "test_code": "assert find_max([1, 5, 3, 9, 2]) == 9\nassert find_max([-1, -5, -3]) == -1\nassert find_max([42]) == 42\nassert find_max([]) is None\nassert find_max([0, 0, 0]) == 0",
+      "tags": [
+        "array",
+        "search",
+        "basic"
+      ]
+    },
+    {
+      "task_id": "ALGO_004",
+      "category": "algorithm",
+      "difficulty": "easy",
+      "prompt": "Write a function `reverse_list(arr)` that reverses a list in-place and returns it.",
+      "entry_point": "reverse_list",
+      "canonical_solution": "def reverse_list(arr):\n    left, right = 0, len(arr) - 1\n    while left < right:\n        arr[left], arr[right] = arr[right], arr[left]\n        left += 1\n        right -= 1\n    return arr",
+      "test_code": "assert reverse_list([1, 2, 3, 4, 5]) == [5, 4, 3, 2, 1]\nassert reverse_list([1]) == [1]\nassert reverse_list([]) == []\nassert reverse_list([1, 2]) == [2, 1]",
+      "tags": [
+        "array",
+        "two-pointer",
+        "basic"
+      ]
+    },
+    {
+      "task_id": "ALGO_005",
+      "category": "algorithm",
+      "difficulty": "easy",
+      "prompt": "Write a function `is_palindrome(s)` that checks if a string is a palindrome (ignoring case and non-alphanumeric characters).",
+      "entry_point": "is_palindrome",
+      "canonical_solution": "def is_palindrome(s):\n    cleaned = ''.join(c.lower() for c in s if c.isalnum())\n    return cleaned == cleaned[::-1]",
+      "test_code": "assert is_palindrome('A man, a plan, a canal: Panama') == True\nassert is_palindrome('race a car') == False\nassert is_palindrome('') == True\nassert is_palindrome('a') == True\nassert is_palindrome('Madam') == True",
+      "tags": [
+        "string",
+        "palindrome",
+        "basic"
+      ]
+    },
+    {
+      "task_id": "ALGO_006",
+      "category": "algorithm",
+      "difficulty": "easy",
+      "prompt": "Write a function `fibonacci(n)` that returns the nth Fibonacci number (0-indexed, where fib(0)=0, fib(1)=1).",
+      "entry_point": "fibonacci",
+      "canonical_solution": "def fibonacci(n):\n    if n <= 0:\n        return 0\n    if n == 1:\n        return 1\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b",
+      "test_code": "assert fibonacci(0) == 0\nassert fibonacci(1) == 1\nassert fibonacci(2) == 1\nassert fibonacci(10) == 55\nassert fibonacci(20) == 6765",
+      "tags": [
+        "dynamic-programming",
+        "math",
+        "basic"
+      ]
+    },
+    {
+      "task_id": "ALGO_007",
+      "category": "algorithm",
+      "difficulty": "easy",
+      "prompt": "Write a function `two_sum(nums, target)` that returns indices of two numbers that add up to target. Assume exactly one solution exists.",
+      "entry_point": "two_sum",
+      "canonical_solution": "def two_sum(nums, target):\n    seen = {}\n    for i, num in enumerate(nums):\n        complement = target - num\n        if complement in seen:\n            return [seen[complement], i]\n        seen[num] = i\n    return []",
+      "test_code": "assert two_sum([2, 7, 11, 15], 9) == [0, 1]\nassert two_sum([3, 2, 4], 6) == [1, 2]\nassert two_sum([3, 3], 6) == [0, 1]",
+      "tags": [
+        "hash-table",
+        "array",
+        "two-sum"
+      ]
+    },
+    {
+      "task_id": "ALGO_008",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `merge_sorted_arrays(arr1, arr2)` that merges two sorted arrays into one sorted array.",
+      "entry_point": "merge_sorted_arrays",
+      "canonical_solution": "def merge_sorted_arrays(arr1, arr2):\n    result = []\n    i = j = 0\n    while i < len(arr1) and j < len(arr2):\n        if arr1[i] <= arr2[j]:\n            result.append(arr1[i])\n            i += 1\n        else:\n            result.append(arr2[j])\n            j += 1\n    result.extend(arr1[i:])\n    result.extend(arr2[j:])\n    return result",
+      "test_code": "assert merge_sorted_arrays([1, 3, 5], [2, 4, 6]) == [1, 2, 3, 4, 5, 6]\nassert merge_sorted_arrays([], [1, 2]) == [1, 2]\nassert merge_sorted_arrays([1, 2], []) == [1, 2]\nassert merge_sorted_arrays([], []) == []",
+      "tags": [
+        "merge",
+        "sorting",
+        "array"
+      ]
+    },
+    {
+      "task_id": "ALGO_009",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `quick_sort(arr)` that sorts a list using quicksort algorithm. Return the sorted list.",
+      "entry_point": "quick_sort",
+      "canonical_solution": "def quick_sort(arr):\n    if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quick_sort(left) + middle + quick_sort(right)",
+      "test_code": "assert quick_sort([3, 6, 8, 10, 1, 2, 1]) == [1, 1, 2, 3, 6, 8, 10]\nassert quick_sort([]) == []\nassert quick_sort([1]) == [1]\nassert quick_sort([5, 4, 3, 2, 1]) == [1, 2, 3, 4, 5]",
+      "tags": [
+        "sorting",
+        "quicksort",
+        "recursion"
+      ]
+    },
+    {
+      "task_id": "ALGO_010",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `max_subarray_sum(arr)` that finds the contiguous subarray with the largest sum and returns that sum (Kadane's algorithm).",
+      "entry_point": "max_subarray_sum",
+      "canonical_solution": "def max_subarray_sum(arr):\n    if not arr:\n        return 0\n    max_sum = current_sum = arr[0]\n    for num in arr[1:]:\n        current_sum = max(num, current_sum + num)\n        max_sum = max(max_sum, current_sum)\n    return max_sum",
+      "test_code": "assert max_subarray_sum([-2, 1, -3, 4, -1, 2, 1, -5, 4]) == 6\nassert max_subarray_sum([1]) == 1\nassert max_subarray_sum([-1, -2, -3]) == -1\nassert max_subarray_sum([5, 4, -1, 7, 8]) == 23",
+      "tags": [
+        "dynamic-programming",
+        "kadane",
+        "array"
+      ]
+    },
+    {
+      "task_id": "ALGO_011",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `longest_common_prefix(strs)` that finds the longest common prefix among a list of strings.",
+      "entry_point": "longest_common_prefix",
+      "canonical_solution": "def longest_common_prefix(strs):\n    if not strs:\n        return ''\n    prefix = strs[0]\n    for s in strs[1:]:\n        while not s.startswith(prefix):\n            prefix = prefix[:-1]\n            if not prefix:\n                return ''\n    return prefix",
+      "test_code": "assert longest_common_prefix(['flower', 'flow', 'flight']) == 'fl'\nassert longest_common_prefix(['dog', 'racecar', 'car']) == ''\nassert longest_common_prefix(['']) == ''\nassert longest_common_prefix(['a']) == 'a'\nassert longest_common_prefix([]) == ''",
+      "tags": [
+        "string",
+        "prefix",
+        "array"
+      ]
+    },
+    {
+      "task_id": "ALGO_012",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `valid_parentheses(s)` that checks if a string of parentheses '()[]{}' is valid.",
+      "entry_point": "valid_parentheses",
+      "canonical_solution": "def valid_parentheses(s):\n    stack = []\n    mapping = {')': '(', ']': '[', '}': '{'}\n    for char in s:\n        if char in mapping:\n            if not stack or stack.pop() != mapping[char]:\n                return False\n        else:\n            stack.append(char)\n    return len(stack) == 0",
+      "test_code": "assert valid_parentheses('()') == True\nassert valid_parentheses('()[]{}') == True\nassert valid_parentheses('(]') == False\nassert valid_parentheses('([)]') == False\nassert valid_parentheses('{[]}') == True\nassert valid_parentheses('') == True",
+      "tags": [
+        "stack",
+        "string",
+        "parentheses"
+      ]
+    },
+    {
+      "task_id": "ALGO_013",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `sliding_window_max(nums, k)` that returns the maximum element in each sliding window of size k.",
+      "entry_point": "sliding_window_max",
+      "canonical_solution": "def sliding_window_max(nums, k):\n    if not nums or k <= 0:\n        return []\n    if k >= len(nums):\n        return [max(nums)]\n    result = []\n    for i in range(len(nums) - k + 1):\n        result.append(max(nums[i:i+k]))\n    return result",
+      "test_code": "assert sliding_window_max([1, 3, -1, -3, 5, 3, 6, 7], 3) == [3, 3, 5, 5, 6, 7]\nassert sliding_window_max([1], 1) == [1]\nassert sliding_window_max([1, -1], 1) == [1, -1]\nassert sliding_window_max([], 3) == []",
+      "tags": [
+        "sliding-window",
+        "array",
+        "deque"
+      ]
+    },
+    {
+      "task_id": "ALGO_014",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `count_inversions(arr)` that counts the number of inversions in an array (pairs where i < j but arr[i] > arr[j]).",
+      "entry_point": "count_inversions",
+      "canonical_solution": "def count_inversions(arr):\n    count = 0\n    for i in range(len(arr)):\n        for j in range(i + 1, len(arr)):\n            if arr[i] > arr[j]:\n                count += 1\n    return count",
+      "test_code": "assert count_inversions([2, 4, 1, 3, 5]) == 3\nassert count_inversions([1, 2, 3, 4, 5]) == 0\nassert count_inversions([5, 4, 3, 2, 1]) == 10\nassert count_inversions([]) == 0\nassert count_inversions([1]) == 0",
+      "tags": [
+        "array",
+        "counting",
+        "inversions"
+      ]
+    },
+    {
+      "task_id": "ALGO_015",
+      "category": "algorithm",
+      "difficulty": "medium",
+      "prompt": "Write a function `rotate_array(arr, k)` that rotates an array to the right by k steps. Return the rotated array.",
+      "entry_point": "rotate_array",
+      "canonical_solution": "def rotate_array(arr, k):\n    if not arr:\n        return arr\n    k = k % len(arr)\n    return arr[-k:] + arr[:-k]",
+      "test_code": "assert rotate_array([1, 2, 3, 4, 5, 6, 7], 3) == [5, 6, 7, 1, 2, 3, 4]\nassert rotate_array([1, 2], 3) == [2, 1]\nassert rotate_array([], 1) == []\nassert rotate_array([1], 0) == [1]",
+      "tags": [
+        "array",
+        "rotation",
+        "modulo"
+      ]
+    },
+    {
+      "task_id": "ALGO_016",
+      "category": "algorithm",
+      "difficulty": "hard",
+      "prompt": "Write a function `lcs_length(s1, s2)` that returns the length of the longest common subsequence of two strings.",
+      "entry_point": "lcs_length",
+      "canonical_solution": "def lcs_length(s1, s2):\n    m, n = len(s1), len(s2)\n    dp = [[0] * (n + 1) for _ in range(m + 1)]\n    for i in range(1, m + 1):\n        for j in range(1, n + 1):\n            if s1[i-1] == s2[j-1]:\n                dp[i][j] = dp[i-1][j-1] + 1\n            else:\n                dp[i][j] = max(dp[i-1][j], dp[i][j-1])\n    return dp[m][n]",
+      "test_code": "assert lcs_length('ABCDGH', 'AEDFHR') == 3\nassert lcs_length('AGGTAB', 'GXTXAYB') == 4\nassert lcs_length('', 'ABC') == 0\nassert lcs_length('ABC', 'ABC') == 3",
+      "tags": [
+        "dynamic-programming",
+        "string",
+        "subsequence"
+      ]
+    },
+    {
+      "task_id": "ALGO_017",
+      "category": "algorithm",
+      "difficulty": "hard",
+      "prompt": "Write a function `knapsack_01(weights, values, capacity)` that solves the 0/1 knapsack problem and returns the maximum value.",
+      "entry_point": "knapsack_01",
+      "canonical_solution": "def knapsack_01(weights, values, capacity):\n    n = len(weights)\n    dp = [[0] * (capacity + 1) for _ in range(n + 1)]\n    for i in range(1, n + 1):\n        for w in range(capacity + 1):\n            if weights[i-1] <= w:\n                dp[i][w] = max(dp[i-1][w], dp[i-1][w-weights[i-1]] + values[i-1])\n            else:\n                dp[i][w] = dp[i-1][w]\n    return dp[n][capacity]",
+      "test_code": "assert knapsack_01([10, 20, 30], [60, 100, 120], 50) == 220\nassert knapsack_01([1, 2, 3], [6, 10, 12], 5) == 22\nassert knapsack_01([], [], 10) == 0\nassert knapsack_01([5], [10], 4) == 0",
+      "tags": [
+        "dynamic-programming",
+        "knapsack",
+        "optimization"
+      ]
+    },
+    {
+      "task_id": "ALGO_018",
+      "category": "algorithm",
+      "difficulty": "hard",
+      "prompt": "Write a function `edit_distance(s1, s2)` that computes the minimum edit distance (Levenshtein distance) between two strings.",
+      "entry_point": "edit_distance",
+      "canonical_solution": "def edit_distance(s1, s2):\n    m, n = len(s1), len(s2)\n    dp = [[0] * (n + 1) for _ in range(m + 1)]\n    for i in range(m + 1):\n        dp[i][0] = i\n    for j in range(n + 1):\n        dp[0][j] = j\n    for i in range(1, m + 1):\n        for j in range(1, n + 1):\n            if s1[i-1] == s2[j-1]:\n                dp[i][j] = dp[i-1][j-1]\n            else:\n                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])\n    return dp[m][n]",
+      "test_code": "assert edit_distance('kitten', 'sitting') == 3\nassert edit_distance('', 'abc') == 3\nassert edit_distance('abc', 'abc') == 0\nassert edit_distance('horse', 'ros') == 3",
+      "tags": [
+        "dynamic-programming",
+        "string",
+        "edit-distance"
+      ]
+    },
+    {
+      "task_id": "ALGO_019",
+      "category": "algorithm",
+      "difficulty": "hard",
+      "prompt": "Write a function `coin_change(coins, amount)` that returns the minimum number of coins needed to make up the amount, or -1 if impossible.",
+      "entry_point": "coin_change",
+      "canonical_solution": "def coin_change(coins, amount):\n    dp = [float('inf')] * (amount + 1)\n    dp[0] = 0\n    for coin in coins:\n        for x in range(coin, amount + 1):\n            dp[x] = min(dp[x], dp[x - coin] + 1)\n    return dp[amount] if dp[amount] != float('inf') else -1",
+      "test_code": "assert coin_change([1, 2, 5], 11) == 3\nassert coin_change([2], 3) == -1\nassert coin_change([1], 0) == 0\nassert coin_change([1, 2, 5], 100) == 20",
+      "tags": [
+        "dynamic-programming",
+        "coins",
+        "optimization"
+      ]
+    },
+    {
+      "task_id": "ALGO_020",
+      "category": "algorithm",
+      "difficulty": "hard",
+      "prompt": "Write a function `longest_increasing_subsequence(arr)` that returns the length of the longest increasing subsequence.",
+      "entry_point": "longest_increasing_subsequence",
+      "canonical_solution": "def longest_increasing_subsequence(arr):\n    if not arr:\n        return 0\n    n = len(arr)\n    dp = [1] * n\n    for i in range(1, n):\n        for j in range(i):\n            if arr[j] < arr[i]:\n                dp[i] = max(dp[i], dp[j] + 1)\n    return max(dp)",
+      "test_code": "assert longest_increasing_subsequence([10, 9, 2, 5, 3, 7, 101, 18]) == 4\nassert longest_increasing_subsequence([0, 1, 0, 3, 2, 3]) == 4\nassert longest_increasing_subsequence([7, 7, 7, 7, 7]) == 1\nassert longest_increasing_subsequence([]) == 0",
+      "tags": [
+        "dynamic-programming",
+        "subsequence",
+        "array"
+      ]
+    },
+    {
+      "task_id": "DATA_001",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "prompt": "Write a function `parse_json_safe(json_str)` that parses a JSON string and returns the parsed object, or None if parsing fails.",
+      "entry_point": "parse_json_safe",
+      "canonical_solution": "import json\ndef parse_json_safe(json_str):\n    try:\n        return json.loads(json_str)\n    except (json.JSONDecodeError, TypeError):\n        return None",
+      "test_code": "assert parse_json_safe('{\"name\": \"test\"}') == {'name': 'test'}\nassert parse_json_safe('[1, 2, 3]') == [1, 2, 3]\nassert parse_json_safe('invalid') is None\nassert parse_json_safe('') is None\nassert parse_json_safe(None) is None",
+      "tags": [
+        "json",
+        "parsing",
+        "error-handling"
+      ]
+    },
+    {
+      "task_id": "DATA_002",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "prompt": "Write a function `validate_email(email)` that returns True if the email is valid (contains @ and domain with .).",
+      "entry_point": "validate_email",
+      "canonical_solution": "import re\ndef validate_email(email):\n    if not email or not isinstance(email, str):\n        return False\n    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'\n    return bool(re.match(pattern, email))",
+      "test_code": "assert validate_email('test@example.com') == True\nassert validate_email('user.name@domain.org') == True\nassert validate_email('invalid') == False\nassert validate_email('@domain.com') == False\nassert validate_email('') == False\nassert validate_email(None) == False",
+      "tags": [
+        "validation",
+        "email",
+        "regex"
+      ]
+    },
+    {
+      "task_id": "DATA_003",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "prompt": "Write a function `flatten_list(nested)` that flattens a nested list into a single-level list.",
+      "entry_point": "flatten_list",
+      "canonical_solution": "def flatten_list(nested):\n    result = []\n    for item in nested:\n        if isinstance(item, list):\n            result.extend(flatten_list(item))\n        else:\n            result.append(item)\n    return result",
+      "test_code": "assert flatten_list([[1, 2], [3, [4, 5]]]) == [1, 2, 3, 4, 5]\nassert flatten_list([1, [2, [3, [4]]]]) == [1, 2, 3, 4]\nassert flatten_list([]) == []\nassert flatten_list([1, 2, 3]) == [1, 2, 3]",
+      "tags": [
+        "list",
+        "recursion",
+        "flatten"
+      ]
+    },
+    {
+      "task_id": "DATA_004",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "prompt": "Write a function `remove_duplicates(arr)` that removes duplicates from a list while preserving order.",
+      "entry_point": "remove_duplicates",
+      "canonical_solution": "def remove_duplicates(arr):\n    seen = set()\n    result = []\n    for item in arr:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result",
+      "test_code": "assert remove_duplicates([1, 2, 2, 3, 1, 4]) == [1, 2, 3, 4]\nassert remove_duplicates([]) == []\nassert remove_duplicates([1, 1, 1]) == [1]\nassert remove_duplicates(['a', 'b', 'a']) == ['a', 'b']",
+      "tags": [
+        "list",
+        "duplicates",
+        "set"
+      ]
+    },
+    {
+      "task_id": "DATA_005",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "prompt": "Write a function `normalize_string(s)` that normalizes a string by lowercasing and removing extra whitespace.",
+      "entry_point": "normalize_string",
+      "canonical_solution": "def normalize_string(s):\n    if not s:\n        return ''\n    return ' '.join(s.lower().split())",
+      "test_code": "assert normalize_string('  Hello   World  ') == 'hello world'\nassert normalize_string('TEST') == 'test'\nassert normalize_string('') == ''\nassert normalize_string('   ') == ''\nassert normalize_string('No  Extra   Spaces') == 'no extra spaces'",
+      "tags": [
+        "string",
+        "normalization",
+        "whitespace"
+      ]
+    },
+    {
+      "task_id": "DATA_006",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "prompt": "Write a function `validate_phone(phone)` that validates a US phone number (10 digits, optionally with dashes/spaces/parentheses).",
+      "entry_point": "validate_phone",
+      "canonical_solution": "import re\ndef validate_phone(phone):\n    if not phone:\n        return False\n    digits = re.sub(r'[^0-9]', '', phone)\n    return len(digits) == 10",
+      "test_code": "assert validate_phone('123-456-7890') == True\nassert validate_phone('(123) 456-7890') == True\nassert validate_phone('1234567890') == True\nassert validate_phone('123-456-789') == False\nassert validate_phone('') == False",
+      "tags": [
+        "validation",
+        "phone",
+        "regex"
+      ]
+    },
+    {
+      "task_id": "DATA_007",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "prompt": "Write a function `group_by_key(items, key)` that groups a list of dicts by a specified key.",
+      "entry_point": "group_by_key",
+      "canonical_solution": "def group_by_key(items, key):\n    result = {}\n    for item in items:\n        k = item.get(key)\n        if k not in result:\n            result[k] = []\n        result[k].append(item)\n    return result",
+      "test_code": "data = [{'type': 'a', 'val': 1}, {'type': 'b', 'val': 2}, {'type': 'a', 'val': 3}]\nresult = group_by_key(data, 'type')\nassert len(result['a']) == 2\nassert len(result['b']) == 1\nassert group_by_key([], 'key') == {}",
+      "tags": [
+        "grouping",
+        "dictionary",
+        "list"
+      ]
+    },
+    {
+      "task_id": "DATA_008",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "prompt": "Write a function `csv_to_dicts(csv_string)` that parses a CSV string (with header row) into a list of dictionaries.",
+      "entry_point": "csv_to_dicts",
+      "canonical_solution": "def csv_to_dicts(csv_string):\n    if not csv_string.strip():\n        return []\n    lines = csv_string.strip().split('\\n')\n    if len(lines) < 2:\n        return []\n    headers = lines[0].split(',')\n    result = []\n    for line in lines[1:]:\n        values = line.split(',')\n        result.append(dict(zip(headers, values)))\n    return result",
+      "test_code": "csv = 'name,age\\nAlice,30\\nBob,25'\nresult = csv_to_dicts(csv)\nassert result == [{'name': 'Alice', 'age': '30'}, {'name': 'Bob', 'age': '25'}]\nassert csv_to_dicts('') == []\nassert csv_to_dicts('header') == []",
+      "tags": [
+        "csv",
+        "parsing",
+        "dictionary"
+      ]
+    },
+    {
+      "task_id": "DATA_009",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "prompt": "Write a function `deep_get(obj, path, default=None)` that gets a nested value from a dict using dot notation path.",
+      "entry_point": "deep_get",
+      "canonical_solution": "def deep_get(obj, path, default=None):\n    keys = path.split('.')\n    current = obj\n    for key in keys:\n        if isinstance(current, dict) and key in current:\n            current = current[key]\n        else:\n            return default\n    return current",
+      "test_code": "data = {'a': {'b': {'c': 1}}}\nassert deep_get(data, 'a.b.c') == 1\nassert deep_get(data, 'a.b') == {'c': 1}\nassert deep_get(data, 'x.y.z') is None\nassert deep_get(data, 'x.y.z', 'default') == 'default'",
+      "tags": [
+        "dictionary",
+        "nested",
+        "path"
+      ]
+    },
+    {
+      "task_id": "DATA_010",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "prompt": "Write a function `validate_schema(data, schema)` that validates a dict against a schema dict (schema values are types).",
+      "entry_point": "validate_schema",
+      "canonical_solution": "def validate_schema(data, schema):\n    if not isinstance(data, dict) or not isinstance(schema, dict):\n        return False\n    for key, expected_type in schema.items():\n        if key not in data:\n            return False\n        if not isinstance(data[key], expected_type):\n            return False\n    return True",
+      "test_code": "schema = {'name': str, 'age': int}\nassert validate_schema({'name': 'Alice', 'age': 30}, schema) == True\nassert validate_schema({'name': 'Alice', 'age': '30'}, schema) == False\nassert validate_schema({'name': 'Alice'}, schema) == False\nassert validate_schema({}, {}) == True",
+      "tags": [
+        "validation",
+        "schema",
+        "dictionary"
+      ]
+    },
+    {
+      "task_id": "DATA_011",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "prompt": "Write a function `merge_dicts_deep(dict1, dict2)` that deep merges two dictionaries, with dict2 values taking precedence.",
+      "entry_point": "merge_dicts_deep",
+      "canonical_solution": "def merge_dicts_deep(dict1, dict2):\n    result = dict1.copy()\n    for key, value in dict2.items():\n        if key in result and isinstance(result[key], dict) and isinstance(value, dict):\n            result[key] = merge_dicts_deep(result[key], value)\n        else:\n            result[key] = value\n    return result",
+      "test_code": "d1 = {'a': 1, 'b': {'c': 2}}\nd2 = {'b': {'d': 3}, 'e': 4}\nresult = merge_dicts_deep(d1, d2)\nassert result == {'a': 1, 'b': {'c': 2, 'd': 3}, 'e': 4}\nassert merge_dicts_deep({}, {'a': 1}) == {'a': 1}",
+      "tags": [
+        "dictionary",
+        "merge",
+        "recursion"
+      ]
+    },
+    {
+      "task_id": "DATA_012",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "prompt": "Write a function `aggregate_sum(items, key, value)` that sums values grouped by a key field.",
+      "entry_point": "aggregate_sum",
+      "canonical_solution": "def aggregate_sum(items, key, value):\n    result = {}\n    for item in items:\n        k = item.get(key)\n        v = item.get(value, 0)\n        result[k] = result.get(k, 0) + v\n    return result",
+      "test_code": "data = [{'cat': 'A', 'val': 10}, {'cat': 'B', 'val': 20}, {'cat': 'A', 'val': 5}]\nresult = aggregate_sum(data, 'cat', 'val')\nassert result == {'A': 15, 'B': 20}\nassert aggregate_sum([], 'cat', 'val') == {}",
+      "tags": [
+        "aggregation",
+        "grouping",
+        "sum"
+      ]
+    },
+    {
+      "task_id": "DATA_013",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "prompt": "Write a function `transform_keys(obj, transformer)` that applies a transformer function to all keys in a nested dict.",
+      "entry_point": "transform_keys",
+      "canonical_solution": "def transform_keys(obj, transformer):\n    if isinstance(obj, dict):\n        return {transformer(k): transform_keys(v, transformer) for k, v in obj.items()}\n    elif isinstance(obj, list):\n        return [transform_keys(item, transformer) for item in obj]\n    return obj",
+      "test_code": "data = {'firstName': 'John', 'nested': {'lastName': 'Doe'}}\nresult = transform_keys(data, str.lower)\nassert result == {'firstname': 'John', 'nested': {'lastname': 'Doe'}}\nassert transform_keys({}, str.upper) == {}",
+      "tags": [
+        "dictionary",
+        "transformation",
+        "recursion"
+      ]
+    },
+    {
+      "task_id": "DATA_014",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "prompt": "Write a function `fill_missing(data, defaults)` that fills missing keys in data with values from defaults.",
+      "entry_point": "fill_missing",
+      "canonical_solution": "def fill_missing(data, defaults):\n    result = defaults.copy()\n    result.update(data)\n    return result",
+      "test_code": "data = {'a': 1}\ndefaults = {'a': 0, 'b': 2, 'c': 3}\nassert fill_missing(data, defaults) == {'a': 1, 'b': 2, 'c': 3}\nassert fill_missing({}, defaults) == defaults\nassert fill_missing(data, {}) == data",
+      "tags": [
+        "dictionary",
+        "defaults",
+        "merge"
+      ]
+    },
+    {
+      "task_id": "DATA_015",
+      "category": "data_processing",
+      "difficulty": "hard",
+      "prompt": "Write a function `diff_dicts(dict1, dict2)` that returns the differences between two dicts as {'added': {}, 'removed': {}, 'changed': {}}.",
+      "entry_point": "diff_dicts",
+      "canonical_solution": "def diff_dicts(dict1, dict2):\n    added = {k: v for k, v in dict2.items() if k not in dict1}\n    removed = {k: v for k, v in dict1.items() if k not in dict2}\n    changed = {k: {'old': dict1[k], 'new': dict2[k]} for k in dict1 if k in dict2 and dict1[k] != dict2[k]}\n    return {'added': added, 'removed': removed, 'changed': changed}",
+      "test_code": "d1 = {'a': 1, 'b': 2, 'c': 3}\nd2 = {'a': 1, 'b': 5, 'd': 4}\nresult = diff_dicts(d1, d2)\nassert result['added'] == {'d': 4}\nassert result['removed'] == {'c': 3}\nassert result['changed'] == {'b': {'old': 2, 'new': 5}}",
+      "tags": [
+        "dictionary",
+        "diff",
+        "comparison"
+      ]
+    },
+    {
+      "task_id": "DATA_016",
+      "category": "data_processing",
+      "difficulty": "hard",
+      "prompt": "Write a function `json_path_query(data, path)` that queries JSON data using a simple JSONPath-like syntax (supports . and [n] notation).",
+      "entry_point": "json_path_query",
+      "canonical_solution": "import re\ndef json_path_query(data, path):\n    parts = re.findall(r'[^.\\[\\]]+|\\[\\d+\\]', path)\n    current = data\n    for part in parts:\n        if part.startswith('[') and part.endswith(']'):\n            idx = int(part[1:-1])\n            if isinstance(current, list) and 0 <= idx < len(current):\n                current = current[idx]\n            else:\n                return None\n        elif isinstance(current, dict) and part in current:\n            current = current[part]\n        else:\n            return None\n    return current",
+      "test_code": "data = {'users': [{'name': 'Alice'}, {'name': 'Bob'}]}\nassert json_path_query(data, 'users[0].name') == 'Alice'\nassert json_path_query(data, 'users[1].name') == 'Bob'\nassert json_path_query(data, 'users[2].name') is None\nassert json_path_query(data, 'invalid') is None",
+      "tags": [
+        "json",
+        "query",
+        "path"
+      ]
+    },
+    {
+      "task_id": "DATA_017",
+      "category": "data_processing",
+      "difficulty": "hard",
+      "prompt": "Write a function `validate_url(url)` that validates a URL and returns True if it has a valid format (scheme, host, optional port/path).",
+      "entry_point": "validate_url",
+      "canonical_solution": "from urllib.parse import urlparse\ndef validate_url(url):\n    try:\n        result = urlparse(url)\n        return all([result.scheme in ('http', 'https'), result.netloc])\n    except Exception:\n        return False",
+      "test_code": "assert validate_url('https://example.com') == True\nassert validate_url('http://localhost:8080/path') == True\nassert validate_url('ftp://example.com') == False\nassert validate_url('not-a-url') == False\nassert validate_url('') == False",
+      "tags": [
+        "validation",
+        "url",
+        "parsing"
+      ]
+    },
+    {
+      "task_id": "DATA_018",
+      "category": "data_processing",
+      "difficulty": "hard",
+      "prompt": "Write a function `serialize_with_types(obj)` that serializes an object to JSON-compatible dict, preserving type info for datetime and custom objects.",
+      "entry_point": "serialize_with_types",
+      "canonical_solution": "from datetime import datetime, date\ndef serialize_with_types(obj):\n    if isinstance(obj, datetime):\n        return {'__type__': 'datetime', 'value': obj.isoformat()}\n    elif isinstance(obj, date):\n        return {'__type__': 'date', 'value': obj.isoformat()}\n    elif isinstance(obj, dict):\n        return {k: serialize_with_types(v) for k, v in obj.items()}\n    elif isinstance(obj, (list, tuple)):\n        return [serialize_with_types(item) for item in obj]\n    return obj",
+      "test_code": "from datetime import datetime, date\ndt = datetime(2024, 1, 15, 10, 30)\nresult = serialize_with_types({'created': dt, 'name': 'test'})\nassert result['created']['__type__'] == 'datetime'\nassert result['name'] == 'test'\nassert serialize_with_types([1, 2, 3]) == [1, 2, 3]",
+      "tags": [
+        "serialization",
+        "json",
+        "types"
+      ]
+    },
+    {
+      "task_id": "DATA_019",
+      "category": "data_processing",
+      "difficulty": "hard",
+      "prompt": "Write a function `pivot_table(data, index, columns, values, aggfunc='sum')` that creates a simple pivot table from a list of dicts.",
+      "entry_point": "pivot_table",
+      "canonical_solution": "def pivot_table(data, index, columns, values, aggfunc='sum'):\n    result = {}\n    for item in data:\n        row_key = item.get(index)\n        col_key = item.get(columns)\n        val = item.get(values, 0)\n        if row_key not in result:\n            result[row_key] = {}\n        if col_key not in result[row_key]:\n            result[row_key][col_key] = []\n        result[row_key][col_key].append(val)\n    for row in result:\n        for col in result[row]:\n            vals = result[row][col]\n            if aggfunc == 'sum':\n                result[row][col] = sum(vals)\n            elif aggfunc == 'count':\n                result[row][col] = len(vals)\n            elif aggfunc == 'mean':\n                result[row][col] = sum(vals) / len(vals) if vals else 0\n    return result",
+      "test_code": "data = [{'region': 'A', 'product': 'X', 'sales': 10}, {'region': 'A', 'product': 'Y', 'sales': 20}, {'region': 'B', 'product': 'X', 'sales': 15}]\nresult = pivot_table(data, 'region', 'product', 'sales')\nassert result['A']['X'] == 10\nassert result['A']['Y'] == 20\nassert result['B']['X'] == 15",
+      "tags": [
+        "pivot",
+        "aggregation",
+        "data-analysis"
+      ]
+    },
+    {
+      "task_id": "DATA_020",
+      "category": "data_processing",
+      "difficulty": "hard",
+      "prompt": "Write a function `deduplicate_by(items, key_func)` that removes duplicates based on a key function, keeping the first occurrence.",
+      "entry_point": "deduplicate_by",
+      "canonical_solution": "def deduplicate_by(items, key_func):\n    seen = set()\n    result = []\n    for item in items:\n        key = key_func(item)\n        if key not in seen:\n            seen.add(key)\n            result.append(item)\n    return result",
+      "test_code": "data = [{'id': 1, 'name': 'a'}, {'id': 2, 'name': 'b'}, {'id': 1, 'name': 'c'}]\nresult = deduplicate_by(data, lambda x: x['id'])\nassert len(result) == 2\nassert result[0]['name'] == 'a'\nassert deduplicate_by([], lambda x: x) == []",
+      "tags": [
+        "deduplication",
+        "list",
+        "functional"
+      ]
+    },
+    {
+      "task_id": "API_001",
+      "category": "api_integration",
+      "difficulty": "easy",
+      "prompt": "Write a function `retry_with_backoff(func, max_retries=3, base_delay=1.0)` that retries a function with exponential backoff. Return the result or raise the last exception.",
+      "entry_point": "retry_with_backoff",
+      "canonical_solution": "import time\ndef retry_with_backoff(func, max_retries=3, base_delay=1.0):\n    last_exception = None\n    for attempt in range(max_retries):\n        try:\n            return func()\n        except Exception as e:\n            last_exception = e\n            if attempt < max_retries - 1:\n                time.sleep(base_delay * (2 ** attempt))\n    raise last_exception",
+      "test_code": "call_count = 0\ndef failing_then_success():\n    global call_count\n    call_count += 1\n    if call_count < 3:\n        raise ValueError('fail')\n    return 'success'\ncall_count = 0\nassert retry_with_backoff(failing_then_success, max_retries=5, base_delay=0.01) == 'success'\nassert call_count == 3",
+      "tags": [
+        "retry",
+        "backoff",
+        "error-handling"
+      ]
+    },
+    {
+      "task_id": "API_002",
+      "category": "api_integration",
+      "difficulty": "easy",
+      "prompt": "Write a function `rate_limiter(max_calls, period_seconds)` that returns a decorator which limits function calls to max_calls per period.",
+      "entry_point": "rate_limiter",
+      "canonical_solution": "import time\nfrom functools import wraps\ndef rate_limiter(max_calls, period_seconds):\n    calls = []\n    def decorator(func):\n        @wraps(func)\n        def wrapper(*args, **kwargs):\n            now = time.time()\n            calls[:] = [t for t in calls if now - t < period_seconds]\n            if len(calls) >= max_calls:\n                raise Exception('Rate limit exceeded')\n            calls.append(now)\n            return func(*args, **kwargs)\n        return wrapper\n    return decorator",
+      "test_code": "@rate_limiter(2, 1.0)\ndef test_func():\n    return 'ok'\nassert test_func() == 'ok'\nassert test_func() == 'ok'\ntry:\n    test_func()\n    assert False, 'Should have raised'\nexcept Exception as e:\n    assert 'Rate limit' in str(e)",
+      "tags": [
+        "rate-limiting",
+        "decorator",
+        "api"
+      ]
+    },
+    {
+      "task_id": "API_003",
+      "category": "api_integration",
+      "difficulty": "easy",
+      "prompt": "Write a function `create_api_response(data=None, error=None, status=200)` that creates a standardized API response dict with keys: success, data, error, status.",
+      "entry_point": "create_api_response",
+      "canonical_solution": "def create_api_response(data=None, error=None, status=200):\n    return {\n        'success': error is None,\n        'data': data,\n        'error': error,\n        'status': status\n    }",
+      "test_code": "resp = create_api_response(data={'id': 1})\nassert resp['success'] == True\nassert resp['data'] == {'id': 1}\nassert resp['status'] == 200\nerr_resp = create_api_response(error='Not found', status=404)\nassert err_resp['success'] == False\nassert err_resp['error'] == 'Not found'",
+      "tags": [
+        "api",
+        "response",
+        "formatting"
+      ]
+    },
+    {
+      "task_id": "API_004",
+      "category": "api_integration",
+      "difficulty": "easy",
+      "prompt": "Write a function `validate_api_key(key, valid_keys)` that validates an API key against a set of valid keys. Return True if valid.",
+      "entry_point": "validate_api_key",
+      "canonical_solution": "def validate_api_key(key, valid_keys):\n    if not key or not isinstance(key, str):\n        return False\n    return key in valid_keys",
+      "test_code": "valid = {'key1', 'key2', 'key3'}\nassert validate_api_key('key1', valid) == True\nassert validate_api_key('invalid', valid) == False\nassert validate_api_key('', valid) == False\nassert validate_api_key(None, valid) == False",
+      "tags": [
+        "api",
+        "authentication",
+        "validation"
+      ]
+    },
+    {
+      "task_id": "API_005",
+      "category": "api_integration",
+      "difficulty": "easy",
+      "prompt": "Write a function `paginate(items, page, per_page)` that returns a dict with 'items' (page slice), 'total', 'page', 'per_page', 'pages'.",
+      "entry_point": "paginate",
+      "canonical_solution": "def paginate(items, page, per_page):\n    total = len(items)\n    pages = (total + per_page - 1) // per_page if per_page > 0 else 0\n    start = (page - 1) * per_page\n    end = start + per_page\n    return {\n        'items': items[start:end],\n        'total': total,\n        'page': page,\n        'per_page': per_page,\n        'pages': pages\n    }",
+      "test_code": "items = list(range(25))\nresult = paginate(items, 1, 10)\nassert result['items'] == list(range(10))\nassert result['total'] == 25\nassert result['pages'] == 3\nresult2 = paginate(items, 3, 10)\nassert result2['items'] == list(range(20, 25))",
+      "tags": [
+        "pagination",
+        "api",
+        "list"
+      ]
+    },
+    {
+      "task_id": "API_006",
+      "category": "api_integration",
+      "difficulty": "medium",
+      "prompt": "Write a function `batch_requests(items, batch_size, processor)` that processes items in batches, calling processor(batch) for each batch. Return list of all results.",
+      "entry_point": "batch_requests",
+      "canonical_solution": "def batch_requests(items, batch_size, processor):\n    results = []\n    for i in range(0, len(items), batch_size):\n        batch = items[i:i + batch_size]\n        batch_results = processor(batch)\n        results.extend(batch_results if isinstance(batch_results, list) else [batch_results])\n    return results",
+      "test_code": "def double_batch(batch):\n    return [x * 2 for x in batch]\nitems = [1, 2, 3, 4, 5]\nresult = batch_requests(items, 2, double_batch)\nassert result == [2, 4, 6, 8, 10]\nassert batch_requests([], 2, double_batch) == []",
+      "tags": [
+        "batching",
+        "api",
+        "processing"
+      ]
+    },
+    {
+      "task_id": "API_007",
+      "category": "api_integration",
+      "difficulty": "medium",
+      "prompt": "Write a function `timeout_handler(func, timeout_seconds, default=None)` that runs a function with a timeout, returning default if it times out.",
+      "entry_point": "timeout_handler",
+      "canonical_solution": "import threading\ndef timeout_handler(func, timeout_seconds, default=None):\n    result = [default]\n    def target():\n        result[0] = func()\n    thread = threading.Thread(target=target)\n    thread.start()\n    thread.join(timeout_seconds)\n    return result[0]",
+      "test_code": "def quick_func():\n    return 'done'\nassert timeout_handler(quick_func, 1.0) == 'done'\nassert timeout_handler(quick_func, 1.0, 'default') == 'done'",
+      "tags": [
+        "timeout",
+        "threading",
+        "error-handling"
+      ]
+    },
+    {
+      "task_id": "API_008",
+      "category": "api_integration",
+      "difficulty": "medium",
+      "prompt": "Write a class `CircuitBreaker` with methods `call(func)`, `is_open`, and constructor taking `failure_threshold` and `reset_timeout`. Open circuit after threshold failures.",
+      "entry_point": "CircuitBreaker",
+      "canonical_solution": "import time\nclass CircuitBreaker:\n    def __init__(self, failure_threshold=3, reset_timeout=30):\n        self.failure_threshold = failure_threshold\n        self.reset_timeout = reset_timeout\n        self.failures = 0\n        self.last_failure_time = None\n        self.state = 'closed'\n    \n    @property\n    def is_open(self):\n        if self.state == 'open':\n            if time.time() - self.last_failure_time > self.reset_timeout:\n                self.state = 'half-open'\n                return False\n            return True\n        return False\n    \n    def call(self, func):\n        if self.is_open:\n            raise Exception('Circuit is open')\n        try:\n            result = func()\n            self.failures = 0\n            self.state = 'closed'\n            return result\n        except Exception as e:\n            self.failures += 1\n            self.last_failure_time = time.time()\n            if self.failures >= self.failure_threshold:\n                self.state = 'open'\n            raise",
+      "test_code": "cb = CircuitBreaker(failure_threshold=2, reset_timeout=0.1)\ncall_count = 0\ndef failing():\n    global call_count\n    call_count += 1\n    raise ValueError('fail')\ntry:\n    cb.call(failing)\nexcept: pass\ntry:\n    cb.call(failing)\nexcept: pass\nassert cb.is_open == True\nassert call_count == 2",
+      "tags": [
+        "circuit-breaker",
+        "resilience",
+        "pattern"
+      ]
+    },
+    {
+      "task_id": "API_009",
+      "category": "api_integration",
+      "difficulty": "medium",
+      "prompt": "Write a function `cache_with_ttl(ttl_seconds)` that returns a decorator caching function results for ttl_seconds.",
+      "entry_point": "cache_with_ttl",
+      "canonical_solution": "import time\nfrom functools import wraps\ndef cache_with_ttl(ttl_seconds):\n    cache = {}\n    def decorator(func):\n        @wraps(func)\n        def wrapper(*args):\n            now = time.time()\n            if args in cache:\n                result, timestamp = cache[args]\n                if now - timestamp < ttl_seconds:\n                    return result\n            result = func(*args)\n            cache[args] = (result, now)\n            return result\n        return wrapper\n    return decorator",
+      "test_code": "call_count = 0\n@cache_with_ttl(1.0)\ndef expensive(x):\n    global call_count\n    call_count += 1\n    return x * 2\nassert expensive(5) == 10\nassert expensive(5) == 10\nassert call_count == 1",
+      "tags": [
+        "caching",
+        "ttl",
+        "decorator"
+      ]
+    },
+    {
+      "task_id": "API_010",
+      "category": "api_integration",
+      "difficulty": "medium",
+      "prompt": "Write a function `validate_request(data, required_fields, optional_fields=None)` that validates request data, returning (True, data) or (False, error_message).",
+      "entry_point": "validate_request",
+      "canonical_solution": "def validate_request(data, required_fields, optional_fields=None):\n    if not isinstance(data, dict):\n        return False, 'Data must be a dictionary'\n    missing = [f for f in required_fields if f not in data]\n    if missing:\n        return False, f'Missing required fields: {\", \".join(missing)}'\n    allowed = set(required_fields) | set(optional_fields or [])\n    unknown = [f for f in data if f not in allowed]\n    if unknown:\n        return False, f'Unknown fields: {\", \".join(unknown)}'\n    return True, data",
+      "test_code": "valid, result = validate_request({'name': 'test', 'age': 25}, ['name'], ['age'])\nassert valid == True\nvalid, error = validate_request({'age': 25}, ['name'], ['age'])\nassert valid == False\nassert 'Missing' in error",
+      "tags": [
+        "validation",
+        "request",
+        "api"
+      ]
+    },
+    {
+      "task_id": "API_011",
+      "category": "api_integration",
+      "difficulty": "hard",
+      "prompt": "Write a function `cors_headers(origin, allowed_origins, allowed_methods=['GET', 'POST'])` that returns CORS headers dict if origin is allowed, else empty dict.",
+      "entry_point": "cors_headers",
+      "canonical_solution": "def cors_headers(origin, allowed_origins, allowed_methods=None):\n    if allowed_methods is None:\n        allowed_methods = ['GET', 'POST']\n    if origin not in allowed_origins and '*' not in allowed_origins:\n        return {}\n    return {\n        'Access-Control-Allow-Origin': origin,\n        'Access-Control-Allow-Methods': ', '.join(allowed_methods),\n        'Access-Control-Allow-Headers': 'Content-Type, Authorization'\n    }",
+      "test_code": "headers = cors_headers('https://example.com', ['https://example.com'])\nassert headers['Access-Control-Allow-Origin'] == 'https://example.com'\nheaders = cors_headers('https://evil.com', ['https://example.com'])\nassert headers == {}\nheaders = cors_headers('https://any.com', ['*'])\nassert 'Access-Control-Allow-Origin' in headers",
+      "tags": [
+        "cors",
+        "security",
+        "headers"
+      ]
+    },
+    {
+      "task_id": "API_012",
+      "category": "api_integration",
+      "difficulty": "hard",
+      "prompt": "Write a function `content_negotiation(accept_header, available_types)` that returns the best matching content type or None.",
+      "entry_point": "content_negotiation",
+      "canonical_solution": "def content_negotiation(accept_header, available_types):\n    if not accept_header:\n        return available_types[0] if available_types else None\n    accepts = []\n    for part in accept_header.split(','):\n        parts = part.strip().split(';')\n        media_type = parts[0].strip()\n        q = 1.0\n        for param in parts[1:]:\n            if param.strip().startswith('q='):\n                try:\n                    q = float(param.strip()[2:])\n                except ValueError:\n                    pass\n        accepts.append((media_type, q))\n    accepts.sort(key=lambda x: x[1], reverse=True)\n    for media_type, _ in accepts:\n        if media_type in available_types:\n            return media_type\n        if media_type == '*/*' and available_types:\n            return available_types[0]\n    return None",
+      "test_code": "assert content_negotiation('application/json', ['application/json', 'text/html']) == 'application/json'\nassert content_negotiation('text/html, application/json;q=0.9', ['application/json', 'text/html']) == 'text/html'\nassert content_negotiation('text/plain', ['application/json']) is None\nassert content_negotiation('*/*', ['application/json']) == 'application/json'",
+      "tags": [
+        "content-negotiation",
+        "http",
+        "headers"
+      ]
+    },
+    {
+      "task_id": "API_013",
+      "category": "api_integration",
+      "difficulty": "hard",
+      "prompt": "Write a function `version_api(version, handlers)` that returns a decorator routing to versioned handlers based on version string (e.g., 'v1', 'v2').",
+      "entry_point": "version_api",
+      "canonical_solution": "def version_api(version, handlers):\n    def decorator(func):\n        def wrapper(*args, **kwargs):\n            handler = handlers.get(version)\n            if handler:\n                return handler(*args, **kwargs)\n            return func(*args, **kwargs)\n        return wrapper\n    return decorator",
+      "test_code": "def v1_handler(x):\n    return f'v1: {x}'\ndef v2_handler(x):\n    return f'v2: {x}'\nhandlers = {'v1': v1_handler, 'v2': v2_handler}\n@version_api('v1', handlers)\ndef default_handler(x):\n    return f'default: {x}'\nassert default_handler('test') == 'v1: test'",
+      "tags": [
+        "versioning",
+        "api",
+        "decorator"
+      ]
+    },
+    {
+      "task_id": "API_014",
+      "category": "api_integration",
+      "difficulty": "hard",
+      "prompt": "Write a function `health_check(checks)` that runs a dict of check_name -> check_func and returns {'status': 'healthy'|'unhealthy', 'checks': {...}}.",
+      "entry_point": "health_check",
+      "canonical_solution": "def health_check(checks):\n    results = {}\n    all_healthy = True\n    for name, check_func in checks.items():\n        try:\n            result = check_func()\n            results[name] = {'status': 'pass' if result else 'fail', 'error': None}\n            if not result:\n                all_healthy = False\n        except Exception as e:\n            results[name] = {'status': 'fail', 'error': str(e)}\n            all_healthy = False\n    return {'status': 'healthy' if all_healthy else 'unhealthy', 'checks': results}",
+      "test_code": "checks = {\n    'db': lambda: True,\n    'cache': lambda: True\n}\nresult = health_check(checks)\nassert result['status'] == 'healthy'\nchecks['failing'] = lambda: False\nresult = health_check(checks)\nassert result['status'] == 'unhealthy'",
+      "tags": [
+        "health-check",
+        "monitoring",
+        "api"
+      ]
+    },
+    {
+      "task_id": "API_015",
+      "category": "api_integration",
+      "difficulty": "hard",
+      "prompt": "Write a function `webhook_signature(payload, secret, algorithm='sha256')` that generates an HMAC signature for webhook verification.",
+      "entry_point": "webhook_signature",
+      "canonical_solution": "import hmac\nimport hashlib\ndef webhook_signature(payload, secret, algorithm='sha256'):\n    if isinstance(payload, str):\n        payload = payload.encode('utf-8')\n    if isinstance(secret, str):\n        secret = secret.encode('utf-8')\n    hash_func = getattr(hashlib, algorithm)\n    signature = hmac.new(secret, payload, hash_func).hexdigest()\n    return f'{algorithm}={signature}'",
+      "test_code": "sig = webhook_signature('test payload', 'secret123')\nassert sig.startswith('sha256=')\nassert len(sig) > 10\nsig2 = webhook_signature('test payload', 'secret123')\nassert sig == sig2",
+      "tags": [
+        "webhook",
+        "signature",
+        "security"
+      ]
+    },
+    {
+      "task_id": "TEST_001",
+      "category": "test_generation",
+      "difficulty": "easy",
+      "prompt": "Write a function `generate_unit_tests(func_name, test_cases)` that generates pytest test code for given test cases (list of (input, expected) tuples).",
+      "entry_point": "generate_unit_tests",
+      "canonical_solution": "def generate_unit_tests(func_name, test_cases):\n    lines = []\n    for i, (input_val, expected) in enumerate(test_cases):\n        lines.append(f'def test_{func_name}_{i}():')\n        lines.append(f'    assert {func_name}({repr(input_val)}) == {repr(expected)}')\n        lines.append('')\n    return '\\n'.join(lines)",
+      "test_code": "result = generate_unit_tests('add', [(1, 2), (3, 6)])\nassert 'def test_add_0' in result\nassert 'assert add(1) == 2' in result",
+      "tags": [
+        "testing",
+        "code-generation",
+        "pytest"
+      ]
+    },
+    {
+      "task_id": "TEST_002",
+      "category": "test_generation",
+      "difficulty": "easy",
+      "prompt": "Write a function `create_mock(return_value=None, side_effect=None)` that creates a simple mock object with call tracking.",
+      "entry_point": "create_mock",
+      "canonical_solution": "class SimpleMock:\n    def __init__(self, return_value=None, side_effect=None):\n        self.return_value = return_value\n        self.side_effect = side_effect\n        self.calls = []\n    def __call__(self, *args, **kwargs):\n        self.calls.append((args, kwargs))\n        if self.side_effect:\n            if isinstance(self.side_effect, Exception):\n                raise self.side_effect\n            return self.side_effect(*args, **kwargs)\n        return self.return_value\n    @property\n    def call_count(self):\n        return len(self.calls)\n\ndef create_mock(return_value=None, side_effect=None):\n    return SimpleMock(return_value, side_effect)",
+      "test_code": "mock = create_mock(return_value=42)\nassert mock() == 42\nassert mock(1, 2) == 42\nassert mock.call_count == 2\nassert mock.calls[1] == ((1, 2), {})",
+      "tags": [
+        "mock",
+        "testing",
+        "stub"
+      ]
+    },
+    {
+      "task_id": "TEST_003",
+      "category": "test_generation",
+      "difficulty": "easy",
+      "prompt": "Write a function `assert_raises(exception_type, func, *args, **kwargs)` that asserts a function raises the expected exception.",
+      "entry_point": "assert_raises",
+      "canonical_solution": "def assert_raises(exception_type, func, *args, **kwargs):\n    try:\n        func(*args, **kwargs)\n        return False\n    except exception_type:\n        return True\n    except Exception:\n        return False",
+      "test_code": "def raise_value_error():\n    raise ValueError('test')\nassert assert_raises(ValueError, raise_value_error) == True\nassert assert_raises(TypeError, raise_value_error) == False\nassert assert_raises(ValueError, lambda: None) == False",
+      "tags": [
+        "testing",
+        "assertion",
+        "exception"
+      ]
+    },
+    {
+      "task_id": "TEST_004",
+      "category": "test_generation",
+      "difficulty": "easy",
+      "prompt": "Write a function `generate_boundary_tests(func_name, param_name, min_val, max_val)` that generates boundary test cases.",
+      "entry_point": "generate_boundary_tests",
+      "canonical_solution": "def generate_boundary_tests(func_name, param_name, min_val, max_val):\n    tests = [\n        (min_val, f'test_{func_name}_at_minimum'),\n        (max_val, f'test_{func_name}_at_maximum'),\n        (min_val - 1, f'test_{func_name}_below_minimum'),\n        (max_val + 1, f'test_{func_name}_above_maximum'),\n        ((min_val + max_val) // 2, f'test_{func_name}_middle_value')\n    ]\n    return tests",
+      "test_code": "tests = generate_boundary_tests('validate_age', 'age', 0, 120)\nassert len(tests) == 5\nassert tests[0] == (0, 'test_validate_age_at_minimum')\nassert tests[1] == (120, 'test_validate_age_at_maximum')",
+      "tags": [
+        "testing",
+        "boundary",
+        "test-generation"
+      ]
+    },
+    {
+      "task_id": "TEST_005",
+      "category": "test_generation",
+      "difficulty": "easy",
+      "prompt": "Write a function `parametrize_tests(test_func, params)` that runs a test function with multiple parameter sets and returns results.",
+      "entry_point": "parametrize_tests",
+      "canonical_solution": "def parametrize_tests(test_func, params):\n    results = []\n    for param_set in params:\n        try:\n            if isinstance(param_set, tuple):\n                test_func(*param_set)\n            else:\n                test_func(param_set)\n            results.append(('pass', param_set, None))\n        except AssertionError as e:\n            results.append(('fail', param_set, str(e)))\n        except Exception as e:\n            results.append(('error', param_set, str(e)))\n    return results",
+      "test_code": "def test_add(a, b, expected):\n    assert a + b == expected\nresults = parametrize_tests(test_add, [(1, 2, 3), (2, 2, 4), (1, 1, 3)])\nassert results[0][0] == 'pass'\nassert results[1][0] == 'pass'\nassert results[2][0] == 'fail'",
+      "tags": [
+        "testing",
+        "parametrize",
+        "test-runner"
+      ]
+    },
+    {
+      "task_id": "TEST_006",
+      "category": "test_generation",
+      "difficulty": "medium",
+      "prompt": "Write a function `generate_test_fixture(setup_code, teardown_code)` that returns a context manager for test fixtures.",
+      "entry_point": "generate_test_fixture",
+      "canonical_solution": "from contextlib import contextmanager\ndef generate_test_fixture(setup_code, teardown_code):\n    @contextmanager\n    def fixture():\n        setup_result = setup_code()\n        try:\n            yield setup_result\n        finally:\n            teardown_code(setup_result)\n    return fixture",
+      "test_code": "state = {'setup': False, 'teardown': False}\ndef setup():\n    state['setup'] = True\n    return {'resource': 'test'}\ndef teardown(resource):\n    state['teardown'] = True\nfixture = generate_test_fixture(setup, teardown)\nwith fixture() as resource:\n    assert state['setup'] == True\n    assert resource == {'resource': 'test'}\nassert state['teardown'] == True",
+      "tags": [
+        "testing",
+        "fixture",
+        "context-manager"
+      ]
+    },
+    {
+      "task_id": "TEST_007",
+      "category": "test_generation",
+      "difficulty": "medium",
+      "prompt": "Write a function `spy_on(obj, method_name)` that wraps a method to track calls while preserving original behavior.",
+      "entry_point": "spy_on",
+      "canonical_solution": "def spy_on(obj, method_name):\n    original = getattr(obj, method_name)\n    calls = []\n    def wrapper(*args, **kwargs):\n        calls.append({'args': args, 'kwargs': kwargs})\n        result = original(*args, **kwargs)\n        calls[-1]['result'] = result\n        return result\n    setattr(obj, method_name, wrapper)\n    wrapper.calls = calls\n    wrapper.restore = lambda: setattr(obj, method_name, original)\n    return wrapper",
+      "test_code": "class Calculator:\n    def add(self, a, b):\n        return a + b\ncalc = Calculator()\nspy = spy_on(calc, 'add')\nassert calc.add(1, 2) == 3\nassert len(spy.calls) == 1\nassert spy.calls[0]['result'] == 3",
+      "tags": [
+        "testing",
+        "spy",
+        "mock"
+      ]
+    },
+    {
+      "task_id": "TEST_008",
+      "category": "test_generation",
+      "difficulty": "medium",
+      "prompt": "Write a function `generate_property_test(property_func, generator, num_tests=100)` that runs property-based tests with random inputs.",
+      "entry_point": "generate_property_test",
+      "canonical_solution": "import random\ndef generate_property_test(property_func, generator, num_tests=100):\n    failures = []\n    for i in range(num_tests):\n        test_input = generator()\n        try:\n            if not property_func(test_input):\n                failures.append(test_input)\n        except Exception as e:\n            failures.append((test_input, str(e)))\n    return {'passed': num_tests - len(failures), 'failed': len(failures), 'failures': failures}",
+      "test_code": "def is_sorted_after_sort(lst):\n    sorted_lst = sorted(lst)\n    return sorted_lst == list(sorted(sorted_lst))\ndef random_list():\n    return [random.randint(0, 100) for _ in range(random.randint(0, 10))]\nimport random\nresult = generate_property_test(is_sorted_after_sort, random_list, num_tests=50)\nassert result['failed'] == 0",
+      "tags": [
+        "testing",
+        "property-based",
+        "random"
+      ]
+    },
+    {
+      "task_id": "TEST_009",
+      "category": "test_generation",
+      "difficulty": "medium",
+      "prompt": "Write a function `coverage_tracker()` that returns a decorator tracking which lines of a function are executed.",
+      "entry_point": "coverage_tracker",
+      "canonical_solution": "import sys\ndef coverage_tracker():\n    covered_lines = set()\n    def trace(frame, event, arg):\n        if event == 'line':\n            covered_lines.add((frame.f_code.co_filename, frame.f_lineno))\n        return trace\n    def decorator(func):\n        def wrapper(*args, **kwargs):\n            old_trace = sys.gettrace()\n            sys.settrace(trace)\n            try:\n                return func(*args, **kwargs)\n            finally:\n                sys.settrace(old_trace)\n        wrapper.covered_lines = covered_lines\n        return wrapper\n    return decorator",
+      "test_code": "tracker = coverage_tracker()\n@tracker\ndef simple_func(x):\n    if x > 0:\n        return 'positive'\n    return 'non-positive'\nsimple_func(1)\nassert len(simple_func.covered_lines) > 0",
+      "tags": [
+        "testing",
+        "coverage",
+        "tracing"
+      ]
+    },
+    {
+      "task_id": "TEST_010",
+      "category": "test_generation",
+      "difficulty": "medium",
+      "prompt": "Write a function `test_runner(test_funcs)` that runs test functions and returns a summary dict with passed/failed counts and details.",
+      "entry_point": "test_runner",
+      "canonical_solution": "def test_runner(test_funcs):\n    results = {'passed': 0, 'failed': 0, 'errors': 0, 'details': []}\n    for func in test_funcs:\n        try:\n            func()\n            results['passed'] += 1\n            results['details'].append({'name': func.__name__, 'status': 'passed'})\n        except AssertionError as e:\n            results['failed'] += 1\n            results['details'].append({'name': func.__name__, 'status': 'failed', 'error': str(e)})\n        except Exception as e:\n            results['errors'] += 1\n            results['details'].append({'name': func.__name__, 'status': 'error', 'error': str(e)})\n    return results",
+      "test_code": "def test_pass():\n    assert True\ndef test_fail():\n    assert False\nresults = test_runner([test_pass, test_fail])\nassert results['passed'] == 1\nassert results['failed'] == 1",
+      "tags": [
+        "testing",
+        "runner",
+        "framework"
+      ]
+    },
+    {
+      "task_id": "TEST_011",
+      "category": "test_generation",
+      "difficulty": "hard",
+      "prompt": "Write a function `async_test_wrapper(async_func)` that wraps an async test function to run it synchronously.",
+      "entry_point": "async_test_wrapper",
+      "canonical_solution": "import asyncio\ndef async_test_wrapper(async_func):\n    def wrapper(*args, **kwargs):\n        loop = asyncio.new_event_loop()\n        try:\n            return loop.run_until_complete(async_func(*args, **kwargs))\n        finally:\n            loop.close()\n    return wrapper",
+      "test_code": "async def async_add(a, b):\n    return a + b\nsync_add = async_test_wrapper(async_add)\nassert sync_add(1, 2) == 3",
+      "tags": [
+        "testing",
+        "async",
+        "wrapper"
+      ]
+    },
+    {
+      "task_id": "TEST_012",
+      "category": "test_generation",
+      "difficulty": "hard",
+      "prompt": "Write a function `snapshot_test(func, inputs, snapshot_file)` that compares function output to a saved snapshot, updating if needed.",
+      "entry_point": "snapshot_test",
+      "canonical_solution": "import json\nimport os\ndef snapshot_test(func, inputs, snapshot_file):\n    result = func(*inputs) if isinstance(inputs, tuple) else func(inputs)\n    result_json = json.dumps(result, sort_keys=True, default=str)\n    if os.path.exists(snapshot_file):\n        with open(snapshot_file, 'r') as f:\n            saved = f.read()\n        if saved == result_json:\n            return {'status': 'match', 'result': result}\n        return {'status': 'mismatch', 'expected': json.loads(saved), 'actual': result}\n    with open(snapshot_file, 'w') as f:\n        f.write(result_json)\n    return {'status': 'created', 'result': result}",
+      "test_code": "import tempfile\nimport os\ndef identity(x):\n    return x\nsnapshot_path = tempfile.mktemp(suffix='.json')\nresult = snapshot_test(identity, ({'test': 1},), snapshot_path)\nassert result['status'] == 'created'\nresult = snapshot_test(identity, ({'test': 1},), snapshot_path)\nassert result['status'] == 'match'\nif os.path.exists(snapshot_path):\n    os.unlink(snapshot_path)",
+      "tags": [
+        "testing",
+        "snapshot",
+        "regression"
+      ]
+    },
+    {
+      "task_id": "TEST_013",
+      "category": "test_generation",
+      "difficulty": "hard",
+      "prompt": "Write a function `mutation_test(func, test_func, mutations)` that applies mutations to a function and checks if tests catch them.",
+      "entry_point": "mutation_test",
+      "canonical_solution": "def mutation_test(func, test_func, mutations):\n    results = {'killed': 0, 'survived': 0, 'details': []}\n    for mutation_name, mutated_func in mutations.items():\n        try:\n            test_func(mutated_func)\n            results['survived'] += 1\n            results['details'].append({'mutation': mutation_name, 'status': 'survived'})\n        except (AssertionError, Exception):\n            results['killed'] += 1\n            results['details'].append({'mutation': mutation_name, 'status': 'killed'})\n    results['score'] = results['killed'] / len(mutations) if mutations else 0\n    return results",
+      "test_code": "def add(a, b):\n    return a + b\ndef test_add(func):\n    assert func(1, 2) == 3\nmutations = {\n    'subtract': lambda a, b: a - b,\n    'multiply': lambda a, b: a * b\n}\nresult = mutation_test(add, test_add, mutations)\nassert result['killed'] == 2\nassert result['score'] == 1.0",
+      "tags": [
+        "testing",
+        "mutation",
+        "quality"
+      ]
+    },
+    {
+      "task_id": "TEST_014",
+      "category": "test_generation",
+      "difficulty": "hard",
+      "prompt": "Write a function `integration_test_sequence(steps)` that runs ordered test steps, stopping on first failure and cleaning up.",
+      "entry_point": "integration_test_sequence",
+      "canonical_solution": "def integration_test_sequence(steps):\n    completed = []\n    results = {'status': 'passed', 'completed': [], 'failed_at': None, 'error': None}\n    for step in steps:\n        try:\n            step['run']()\n            completed.append(step)\n            results['completed'].append(step['name'])\n        except Exception as e:\n            results['status'] = 'failed'\n            results['failed_at'] = step['name']\n            results['error'] = str(e)\n            break\n    for step in reversed(completed):\n        if 'cleanup' in step:\n            try:\n                step['cleanup']()\n            except:\n                pass\n    return results",
+      "test_code": "steps = [\n    {'name': 'step1', 'run': lambda: None, 'cleanup': lambda: None},\n    {'name': 'step2', 'run': lambda: None}\n]\nresult = integration_test_sequence(steps)\nassert result['status'] == 'passed'\nassert result['completed'] == ['step1', 'step2']",
+      "tags": [
+        "testing",
+        "integration",
+        "sequence"
+      ]
+    },
+    {
+      "task_id": "TEST_015",
+      "category": "test_generation",
+      "difficulty": "hard",
+      "prompt": "Write a function `fuzz_test(func, input_generator, validator, iterations=100)` that generates random inputs and validates outputs.",
+      "entry_point": "fuzz_test",
+      "canonical_solution": "def fuzz_test(func, input_generator, validator, iterations=100):\n    results = {'passed': 0, 'failed': 0, 'errors': 0, 'failing_inputs': []}\n    for _ in range(iterations):\n        test_input = input_generator()\n        try:\n            output = func(test_input)\n            if validator(test_input, output):\n                results['passed'] += 1\n            else:\n                results['failed'] += 1\n                results['failing_inputs'].append({'input': test_input, 'output': output})\n        except Exception as e:\n            results['errors'] += 1\n            results['failing_inputs'].append({'input': test_input, 'error': str(e)})\n    return results",
+      "test_code": "import random\ndef sort_func(lst):\n    return sorted(lst)\ndef gen():\n    return [random.randint(0, 100) for _ in range(random.randint(0, 20))]\ndef valid(inp, out):\n    return out == sorted(inp)\nresult = fuzz_test(sort_func, gen, valid, iterations=50)\nassert result['failed'] == 0\nassert result['errors'] == 0",
+      "tags": [
+        "testing",
+        "fuzzing",
+        "random"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_001",
+      "category": "refactoring",
+      "difficulty": "easy",
+      "prompt": "Refactor this function to use list comprehension:\n```python\ndef get_even_numbers(numbers):\n    result = []\n    for n in numbers:\n        if n % 2 == 0:\n            result.append(n)\n    return result\n```\nWrite a function `get_even_numbers(numbers)` using list comprehension.",
+      "entry_point": "get_even_numbers",
+      "canonical_solution": "def get_even_numbers(numbers):\n    return [n for n in numbers if n % 2 == 0]",
+      "test_code": "assert get_even_numbers([1, 2, 3, 4, 5, 6]) == [2, 4, 6]\nassert get_even_numbers([1, 3, 5]) == []\nassert get_even_numbers([]) == []\nassert get_even_numbers([2, 4, 6]) == [2, 4, 6]",
+      "tags": [
+        "refactoring",
+        "list-comprehension",
+        "simplify"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_002",
+      "category": "refactoring",
+      "difficulty": "easy",
+      "prompt": "Refactor to use guard clauses instead of nested ifs:\n```python\ndef process_order(order):\n    if order is not None:\n        if order.get('status') == 'pending':\n            if order.get('items'):\n                return 'processing'\n    return 'invalid'\n```\nWrite a function `process_order(order)` using guard clauses.",
+      "entry_point": "process_order",
+      "canonical_solution": "def process_order(order):\n    if order is None:\n        return 'invalid'\n    if order.get('status') != 'pending':\n        return 'invalid'\n    if not order.get('items'):\n        return 'invalid'\n    return 'processing'",
+      "test_code": "assert process_order({'status': 'pending', 'items': [1]}) == 'processing'\nassert process_order(None) == 'invalid'\nassert process_order({'status': 'completed', 'items': [1]}) == 'invalid'\nassert process_order({'status': 'pending', 'items': []}) == 'invalid'",
+      "tags": [
+        "refactoring",
+        "guard-clause",
+        "conditionals"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_003",
+      "category": "refactoring",
+      "difficulty": "easy",
+      "prompt": "Refactor to replace magic numbers with named constants:\n```python\ndef calculate_shipping(weight):\n    if weight <= 5:\n        return weight * 2.5\n    elif weight <= 20:\n        return weight * 4.0\n    else:\n        return weight * 6.0 + 10\n```\nWrite a function `calculate_shipping(weight)` with named constants.",
+      "entry_point": "calculate_shipping",
+      "canonical_solution": "LIGHT_RATE = 2.5\nMEDIUM_RATE = 4.0\nHEAVY_RATE = 6.0\nHEAVY_SURCHARGE = 10\nLIGHT_THRESHOLD = 5\nMEDIUM_THRESHOLD = 20\n\ndef calculate_shipping(weight):\n    if weight <= LIGHT_THRESHOLD:\n        return weight * LIGHT_RATE\n    elif weight <= MEDIUM_THRESHOLD:\n        return weight * MEDIUM_RATE\n    else:\n        return weight * HEAVY_RATE + HEAVY_SURCHARGE",
+      "test_code": "assert calculate_shipping(3) == 7.5\nassert calculate_shipping(10) == 40.0\nassert calculate_shipping(25) == 160.0",
+      "tags": [
+        "refactoring",
+        "magic-numbers",
+        "constants"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_004",
+      "category": "refactoring",
+      "difficulty": "easy",
+      "prompt": "Refactor to use dictionary mapping instead of if-elif chain:\n```python\ndef get_day_name(day_num):\n    if day_num == 1:\n        return 'Monday'\n    elif day_num == 2:\n        return 'Tuesday'\n    # ... etc\n```\nWrite a function `get_day_name(day_num)` using a dictionary.",
+      "entry_point": "get_day_name",
+      "canonical_solution": "def get_day_name(day_num):\n    days = {\n        1: 'Monday', 2: 'Tuesday', 3: 'Wednesday',\n        4: 'Thursday', 5: 'Friday', 6: 'Saturday', 7: 'Sunday'\n    }\n    return days.get(day_num, 'Invalid')",
+      "test_code": "assert get_day_name(1) == 'Monday'\nassert get_day_name(7) == 'Sunday'\nassert get_day_name(0) == 'Invalid'\nassert get_day_name(8) == 'Invalid'",
+      "tags": [
+        "refactoring",
+        "dictionary",
+        "mapping"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_005",
+      "category": "refactoring",
+      "difficulty": "easy",
+      "prompt": "Refactor to use f-strings instead of format/concat:\n```python\ndef format_greeting(name, age, city):\n    return 'Hello, ' + name + '! You are ' + str(age) + ' years old and live in ' + city + '.'\n```\nWrite a function `format_greeting(name, age, city)` using f-strings.",
+      "entry_point": "format_greeting",
+      "canonical_solution": "def format_greeting(name, age, city):\n    return f'Hello, {name}! You are {age} years old and live in {city}.'",
+      "test_code": "assert format_greeting('Alice', 30, 'NYC') == 'Hello, Alice! You are 30 years old and live in NYC.'\nassert format_greeting('Bob', 25, 'LA') == 'Hello, Bob! You are 25 years old and live in LA.'",
+      "tags": [
+        "refactoring",
+        "f-string",
+        "string"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_006",
+      "category": "refactoring",
+      "difficulty": "medium",
+      "prompt": "Refactor to extract a helper function from this duplicate code:\n```python\ndef process_users(users):\n    active = []\n    for u in users:\n        if u['status'] == 'active' and u['age'] >= 18:\n            active.append(u['name'])\n    inactive = []\n    for u in users:\n        if u['status'] == 'inactive' and u['age'] >= 18:\n            inactive.append(u['name'])\n    return active, inactive\n```\nWrite a function `process_users(users)` with extracted helper.",
+      "entry_point": "process_users",
+      "canonical_solution": "def filter_users(users, status):\n    return [u['name'] for u in users if u['status'] == status and u['age'] >= 18]\n\ndef process_users(users):\n    return filter_users(users, 'active'), filter_users(users, 'inactive')",
+      "test_code": "users = [\n    {'name': 'A', 'status': 'active', 'age': 25},\n    {'name': 'B', 'status': 'inactive', 'age': 30},\n    {'name': 'C', 'status': 'active', 'age': 15}\n]\nactive, inactive = process_users(users)\nassert active == ['A']\nassert inactive == ['B']",
+      "tags": [
+        "refactoring",
+        "extract-function",
+        "duplication"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_007",
+      "category": "refactoring",
+      "difficulty": "medium",
+      "prompt": "Refactor using dataclass instead of dict:\n```python\ndef create_person(name, age, email):\n    return {'name': name, 'age': age, 'email': email}\n```\nWrite a `Person` dataclass and `create_person(name, age, email)` function.",
+      "entry_point": "create_person",
+      "canonical_solution": "from dataclasses import dataclass\n\n@dataclass\nclass Person:\n    name: str\n    age: int\n    email: str\n\ndef create_person(name, age, email):\n    return Person(name=name, age=age, email=email)",
+      "test_code": "p = create_person('Alice', 30, 'alice@test.com')\nassert p.name == 'Alice'\nassert p.age == 30\nassert p.email == 'alice@test.com'",
+      "tags": [
+        "refactoring",
+        "dataclass",
+        "type-safety"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_008",
+      "category": "refactoring",
+      "difficulty": "medium",
+      "prompt": "Refactor to use enumerate instead of manual index tracking:\n```python\ndef find_index(items, target):\n    i = 0\n    for item in items:\n        if item == target:\n            return i\n        i += 1\n    return -1\n```\nWrite a function `find_index(items, target)` using enumerate.",
+      "entry_point": "find_index",
+      "canonical_solution": "def find_index(items, target):\n    for i, item in enumerate(items):\n        if item == target:\n            return i\n    return -1",
+      "test_code": "assert find_index(['a', 'b', 'c'], 'b') == 1\nassert find_index(['a', 'b', 'c'], 'd') == -1\nassert find_index([], 'a') == -1",
+      "tags": [
+        "refactoring",
+        "enumerate",
+        "pythonic"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_009",
+      "category": "refactoring",
+      "difficulty": "medium",
+      "prompt": "Refactor to use context manager for resource handling:\n```python\ndef read_file_lines(path):\n    f = open(path, 'r')\n    try:\n        lines = f.readlines()\n    finally:\n        f.close()\n    return lines\n```\nWrite a function `read_file_lines(path)` using 'with' statement.",
+      "entry_point": "read_file_lines",
+      "canonical_solution": "def read_file_lines(path):\n    with open(path, 'r') as f:\n        return f.readlines()",
+      "test_code": "import tempfile\nimport os\nwith tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:\n    f.write('line1\\nline2\\n')\n    path = f.name\nlines = read_file_lines(path)\nassert lines == ['line1\\n', 'line2\\n']\nos.unlink(path)",
+      "tags": [
+        "refactoring",
+        "context-manager",
+        "resources"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_010",
+      "category": "refactoring",
+      "difficulty": "medium",
+      "prompt": "Refactor to simplify boolean expression:\n```python\ndef is_valid(value):\n    if value is not None and value != '' and value != 0:\n        return True\n    else:\n        return False\n```\nWrite a function `is_valid(value)` with simplified boolean.",
+      "entry_point": "is_valid",
+      "canonical_solution": "def is_valid(value):\n    return bool(value)",
+      "test_code": "assert is_valid('hello') == True\nassert is_valid(42) == True\nassert is_valid(None) == False\nassert is_valid('') == False\nassert is_valid(0) == False",
+      "tags": [
+        "refactoring",
+        "boolean",
+        "simplify"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_011",
+      "category": "refactoring",
+      "difficulty": "hard",
+      "prompt": "Refactor to use composition instead of inheritance:\n```python\nclass Animal:\n    def speak(self): pass\nclass Dog(Animal):\n    def speak(self): return 'Woof'\n```\nWrite classes using composition: `SpeakBehavior` and `Dog` with `speak_behavior` attribute.",
+      "entry_point": "Dog",
+      "canonical_solution": "class SpeakBehavior:\n    def __init__(self, sound):\n        self.sound = sound\n    def speak(self):\n        return self.sound\n\nclass Dog:\n    def __init__(self):\n        self.speak_behavior = SpeakBehavior('Woof')\n    def speak(self):\n        return self.speak_behavior.speak()",
+      "test_code": "dog = Dog()\nassert dog.speak() == 'Woof'\nassert hasattr(dog, 'speak_behavior')",
+      "tags": [
+        "refactoring",
+        "composition",
+        "inheritance"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_012",
+      "category": "refactoring",
+      "difficulty": "hard",
+      "prompt": "Refactor to introduce a parameter object for this function:\n```python\ndef send_email(to, cc, bcc, subject, body, attachments, reply_to, priority):\n    pass\n```\nCreate an `EmailParams` dataclass and `send_email(params)` function.",
+      "entry_point": "send_email",
+      "canonical_solution": "from dataclasses import dataclass, field\nfrom typing import List, Optional\n\n@dataclass\nclass EmailParams:\n    to: str\n    subject: str\n    body: str\n    cc: Optional[str] = None\n    bcc: Optional[str] = None\n    attachments: List[str] = field(default_factory=list)\n    reply_to: Optional[str] = None\n    priority: str = 'normal'\n\ndef send_email(params):\n    return {'to': params.to, 'subject': params.subject, 'body': params.body, 'priority': params.priority}",
+      "test_code": "params = EmailParams(to='test@test.com', subject='Hi', body='Hello')\nresult = send_email(params)\nassert result['to'] == 'test@test.com'\nassert result['priority'] == 'normal'",
+      "tags": [
+        "refactoring",
+        "parameter-object",
+        "dataclass"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_013",
+      "category": "refactoring",
+      "difficulty": "hard",
+      "prompt": "Refactor long method by decomposing into smaller functions:\n```python\ndef process_data(data):\n    # validate\n    if not data: return None\n    # transform\n    transformed = [x.upper() for x in data]\n    # filter\n    filtered = [x for x in transformed if len(x) > 2]\n    # aggregate\n    return {'count': len(filtered), 'items': filtered}\n```\nWrite `process_data(data)` with extracted `validate`, `transform`, `filter_items`, `aggregate` functions.",
+      "entry_point": "process_data",
+      "canonical_solution": "def validate(data):\n    return data is not None and len(data) > 0\n\ndef transform(data):\n    return [x.upper() for x in data]\n\ndef filter_items(data):\n    return [x for x in data if len(x) > 2]\n\ndef aggregate(data):\n    return {'count': len(data), 'items': data}\n\ndef process_data(data):\n    if not validate(data):\n        return None\n    transformed = transform(data)\n    filtered = filter_items(transformed)\n    return aggregate(filtered)",
+      "test_code": "result = process_data(['ab', 'abc', 'abcd'])\nassert result['count'] == 2\nassert result['items'] == ['ABC', 'ABCD']\nassert process_data([]) is None\nassert process_data(None) is None",
+      "tags": [
+        "refactoring",
+        "decompose",
+        "extract-method"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_014",
+      "category": "refactoring",
+      "difficulty": "hard",
+      "prompt": "Refactor error handling using custom exceptions:\n```python\ndef divide(a, b):\n    if b == 0:\n        return {'error': 'division by zero'}\n    if not isinstance(a, (int, float)):\n        return {'error': 'invalid type for a'}\n    return {'result': a / b}\n```\nWrite with custom exceptions `DivisionByZeroError`, `InvalidTypeError`.",
+      "entry_point": "divide",
+      "canonical_solution": "class DivisionByZeroError(Exception):\n    pass\n\nclass InvalidTypeError(Exception):\n    pass\n\ndef divide(a, b):\n    if not isinstance(a, (int, float)):\n        raise InvalidTypeError('invalid type for a')\n    if b == 0:\n        raise DivisionByZeroError('division by zero')\n    return a / b",
+      "test_code": "assert divide(10, 2) == 5.0\ntry:\n    divide(10, 0)\n    assert False\nexcept DivisionByZeroError:\n    pass\ntry:\n    divide('a', 2)\n    assert False\nexcept InvalidTypeError:\n    pass",
+      "tags": [
+        "refactoring",
+        "exceptions",
+        "error-handling"
+      ]
+    },
+    {
+      "task_id": "REFACTOR_015",
+      "category": "refactoring",
+      "difficulty": "hard",
+      "prompt": "Refactor to use strategy pattern for different calculation methods:\n```python\ndef calculate_tax(income, method):\n    if method == 'simple':\n        return income * 0.2\n    elif method == 'progressive':\n        if income <= 50000:\n            return income * 0.1\n        return 5000 + (income - 50000) * 0.3\n```\nWrite with strategy pattern: `TaxCalculator` class with `register_strategy` and `calculate`.",
+      "entry_point": "TaxCalculator",
+      "canonical_solution": "class TaxCalculator:\n    def __init__(self):\n        self._strategies = {}\n    \n    def register_strategy(self, name, strategy):\n        self._strategies[name] = strategy\n    \n    def calculate(self, income, method):\n        if method not in self._strategies:\n            raise ValueError(f'Unknown method: {method}')\n        return self._strategies[method](income)\n\ndef simple_tax(income):\n    return income * 0.2\n\ndef progressive_tax(income):\n    if income <= 50000:\n        return income * 0.1\n    return 5000 + (income - 50000) * 0.3",
+      "test_code": "calc = TaxCalculator()\ncalc.register_strategy('simple', lambda i: i * 0.2)\ncalc.register_strategy('progressive', lambda i: i * 0.1 if i <= 50000 else 5000 + (i - 50000) * 0.3)\nassert calc.calculate(100000, 'simple') == 20000\nassert calc.calculate(50000, 'progressive') == 5000",
+      "tags": [
+        "refactoring",
+        "strategy-pattern",
+        "design-pattern"
+      ]
+    },
+    {
+      "task_id": "BUG_001",
+      "category": "bug_fixing",
+      "difficulty": "easy",
+      "prompt": "Fix the off-by-one error:\n```python\ndef get_last_n(items, n):\n    return items[len(items) - n - 1:]\n```\nWrite the corrected `get_last_n(items, n)` function.",
+      "entry_point": "get_last_n",
+      "canonical_solution": "def get_last_n(items, n):\n    return items[len(items) - n:] if n > 0 else []",
+      "test_code": "assert get_last_n([1, 2, 3, 4, 5], 2) == [4, 5]\nassert get_last_n([1, 2, 3], 3) == [1, 2, 3]\nassert get_last_n([1, 2, 3], 0) == []\nassert get_last_n([], 2) == []",
+      "tags": [
+        "bug-fix",
+        "off-by-one",
+        "slice"
+      ]
+    },
+    {
+      "task_id": "BUG_002",
+      "category": "bug_fixing",
+      "difficulty": "easy",
+      "prompt": "Fix the None reference error:\n```python\ndef get_user_name(user):\n    return user['profile']['name']\n```\nWrite `get_user_name(user)` that handles None/missing keys safely, returning None.",
+      "entry_point": "get_user_name",
+      "canonical_solution": "def get_user_name(user):\n    if user is None:\n        return None\n    profile = user.get('profile')\n    if profile is None:\n        return None\n    return profile.get('name')",
+      "test_code": "assert get_user_name({'profile': {'name': 'Alice'}}) == 'Alice'\nassert get_user_name({'profile': {}}) is None\nassert get_user_name({}) is None\nassert get_user_name(None) is None",
+      "tags": [
+        "bug-fix",
+        "null-reference",
+        "safe-access"
+      ]
+    },
+    {
+      "task_id": "BUG_003",
+      "category": "bug_fixing",
+      "difficulty": "easy",
+      "prompt": "Fix the incorrect boolean logic:\n```python\ndef can_vote(age, is_citizen):\n    return age >= 18 or is_citizen\n```\nWrite corrected `can_vote(age, is_citizen)` - must be 18+ AND citizen.",
+      "entry_point": "can_vote",
+      "canonical_solution": "def can_vote(age, is_citizen):\n    return age >= 18 and is_citizen",
+      "test_code": "assert can_vote(21, True) == True\nassert can_vote(21, False) == False\nassert can_vote(17, True) == False\nassert can_vote(17, False) == False",
+      "tags": [
+        "bug-fix",
+        "boolean-logic",
+        "operator"
+      ]
+    },
+    {
+      "task_id": "BUG_004",
+      "category": "bug_fixing",
+      "difficulty": "easy",
+      "prompt": "Fix the missing return statement:\n```python\ndef is_even(n):\n    if n % 2 == 0:\n        return True\n```\nWrite corrected `is_even(n)` that returns False for odd numbers.",
+      "entry_point": "is_even",
+      "canonical_solution": "def is_even(n):\n    if n % 2 == 0:\n        return True\n    return False",
+      "test_code": "assert is_even(2) == True\nassert is_even(3) == False\nassert is_even(0) == True\nassert is_even(-4) == True",
+      "tags": [
+        "bug-fix",
+        "missing-return",
+        "control-flow"
+      ]
+    },
+    {
+      "task_id": "BUG_005",
+      "category": "bug_fixing",
+      "difficulty": "easy",
+      "prompt": "Fix the wrong comparison operator:\n```python\ndef find_item(items, target):\n    for item in items:\n        if item = target:\n            return True\n    return False\n```\nWrite corrected `find_item(items, target)` using == for comparison.",
+      "entry_point": "find_item",
+      "canonical_solution": "def find_item(items, target):\n    for item in items:\n        if item == target:\n            return True\n    return False",
+      "test_code": "assert find_item([1, 2, 3], 2) == True\nassert find_item([1, 2, 3], 4) == False\nassert find_item([], 1) == False",
+      "tags": [
+        "bug-fix",
+        "operator",
+        "comparison"
+      ]
+    },
+    {
+      "task_id": "BUG_006",
+      "category": "bug_fixing",
+      "difficulty": "medium",
+      "prompt": "Fix the mutable default argument bug:\n```python\ndef append_to_list(item, lst=[]):\n    lst.append(item)\n    return lst\n```\nWrite corrected `append_to_list(item, lst=None)`.",
+      "entry_point": "append_to_list",
+      "canonical_solution": "def append_to_list(item, lst=None):\n    if lst is None:\n        lst = []\n    lst.append(item)\n    return lst",
+      "test_code": "assert append_to_list(1) == [1]\nassert append_to_list(2) == [2]\nassert append_to_list(3, [1, 2]) == [1, 2, 3]",
+      "tags": [
+        "bug-fix",
+        "mutable-default",
+        "python-gotcha"
+      ]
+    },
+    {
+      "task_id": "BUG_007",
+      "category": "bug_fixing",
+      "difficulty": "medium",
+      "prompt": "Fix the infinite loop:\n```python\ndef count_down(n):\n    while n > 0:\n        print(n)\n    return 'done'\n```\nWrite corrected `count_down(n)` that decrements n and returns list of values.",
+      "entry_point": "count_down",
+      "canonical_solution": "def count_down(n):\n    result = []\n    while n > 0:\n        result.append(n)\n        n -= 1\n    return result",
+      "test_code": "assert count_down(3) == [3, 2, 1]\nassert count_down(1) == [1]\nassert count_down(0) == []",
+      "tags": [
+        "bug-fix",
+        "infinite-loop",
+        "decrement"
+      ]
+    },
+    {
+      "task_id": "BUG_008",
+      "category": "bug_fixing",
+      "difficulty": "medium",
+      "prompt": "Fix the incorrect recursion base case:\n```python\ndef factorial(n):\n    return n * factorial(n - 1)\n```\nWrite corrected `factorial(n)` with proper base case.",
+      "entry_point": "factorial",
+      "canonical_solution": "def factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)",
+      "test_code": "assert factorial(0) == 1\nassert factorial(1) == 1\nassert factorial(5) == 120\nassert factorial(3) == 6",
+      "tags": [
+        "bug-fix",
+        "recursion",
+        "base-case"
+      ]
+    },
+    {
+      "task_id": "BUG_009",
+      "category": "bug_fixing",
+      "difficulty": "medium",
+      "prompt": "Fix the scope error:\n```python\ndef counter():\n    count = 0\n    def increment():\n        count += 1\n        return count\n    return increment\n```\nWrite corrected `counter()` using nonlocal.",
+      "entry_point": "counter",
+      "canonical_solution": "def counter():\n    count = 0\n    def increment():\n        nonlocal count\n        count += 1\n        return count\n    return increment",
+      "test_code": "c = counter()\nassert c() == 1\nassert c() == 2\nassert c() == 3",
+      "tags": [
+        "bug-fix",
+        "scope",
+        "closure"
+      ]
+    },
+    {
+      "task_id": "BUG_010",
+      "category": "bug_fixing",
+      "difficulty": "medium",
+      "prompt": "Fix the incorrect exception handling:\n```python\ndef safe_divide(a, b):\n    try:\n        return a / b\n    except:\n        return 0\n```\nWrite corrected `safe_divide(a, b)` that only catches ZeroDivisionError.",
+      "entry_point": "safe_divide",
+      "canonical_solution": "def safe_divide(a, b):\n    try:\n        return a / b\n    except ZeroDivisionError:\n        return 0",
+      "test_code": "assert safe_divide(10, 2) == 5.0\nassert safe_divide(10, 0) == 0\ntry:\n    safe_divide('a', 2)\n    assert False\nexcept TypeError:\n    pass",
+      "tags": [
+        "bug-fix",
+        "exception",
+        "specific-catch"
+      ]
+    },
+    {
+      "task_id": "BUG_011",
+      "category": "bug_fixing",
+      "difficulty": "hard",
+      "prompt": "Fix the string formatting bug:\n```python\ndef format_price(price):\n    return 'Price: $' + price\n```\nWrite corrected `format_price(price)` that formats float to 2 decimal places.",
+      "entry_point": "format_price",
+      "canonical_solution": "def format_price(price):\n    return f'Price: ${price:.2f}'",
+      "test_code": "assert format_price(10) == 'Price: $10.00'\nassert format_price(10.5) == 'Price: $10.50'\nassert format_price(10.999) == 'Price: $11.00'",
+      "tags": [
+        "bug-fix",
+        "formatting",
+        "type-conversion"
+      ]
+    },
+    {
+      "task_id": "BUG_012",
+      "category": "bug_fixing",
+      "difficulty": "hard",
+      "prompt": "Fix the wrong data type comparison:\n```python\ndef find_by_id(items, id):\n    for item in items:\n        if item['id'] == id:\n            return item\n    return None\n```\nWrite corrected `find_by_id(items, id)` that handles string/int id comparison.",
+      "entry_point": "find_by_id",
+      "canonical_solution": "def find_by_id(items, id):\n    for item in items:\n        if str(item.get('id')) == str(id):\n            return item\n    return None",
+      "test_code": "items = [{'id': 1, 'name': 'a'}, {'id': '2', 'name': 'b'}]\nassert find_by_id(items, 1)['name'] == 'a'\nassert find_by_id(items, '1')['name'] == 'a'\nassert find_by_id(items, 2)['name'] == 'b'\nassert find_by_id(items, 3) is None",
+      "tags": [
+        "bug-fix",
+        "type-coercion",
+        "comparison"
+      ]
+    },
+    {
+      "task_id": "BUG_013",
+      "category": "bug_fixing",
+      "difficulty": "hard",
+      "prompt": "Fix the missing edge case handling:\n```python\ndef average(numbers):\n    return sum(numbers) / len(numbers)\n```\nWrite corrected `average(numbers)` that handles empty list.",
+      "entry_point": "average",
+      "canonical_solution": "def average(numbers):\n    if not numbers:\n        return 0\n    return sum(numbers) / len(numbers)",
+      "test_code": "assert average([1, 2, 3]) == 2.0\nassert average([10]) == 10.0\nassert average([]) == 0\nassert average([0, 0, 0]) == 0",
+      "tags": [
+        "bug-fix",
+        "edge-case",
+        "division"
+      ]
+    },
+    {
+      "task_id": "BUG_014",
+      "category": "bug_fixing",
+      "difficulty": "hard",
+      "prompt": "Fix the incorrect algorithm termination:\n```python\ndef binary_search(arr, target):\n    left, right = 0, len(arr)\n    while left < right:\n        mid = (left + right) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            left = mid\n        else:\n            right = mid\n    return -1\n```\nWrite corrected `binary_search(arr, target)`.",
+      "entry_point": "binary_search",
+      "canonical_solution": "def binary_search(arr, target):\n    left, right = 0, len(arr) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1",
+      "test_code": "assert binary_search([1, 2, 3, 4, 5], 3) == 2\nassert binary_search([1, 2, 3, 4, 5], 1) == 0\nassert binary_search([1, 2, 3, 4, 5], 5) == 4\nassert binary_search([1, 2, 3, 4, 5], 6) == -1\nassert binary_search([], 1) == -1",
+      "tags": [
+        "bug-fix",
+        "algorithm",
+        "binary-search"
+      ]
+    },
+    {
+      "task_id": "BUG_015",
+      "category": "bug_fixing",
+      "difficulty": "hard",
+      "prompt": "Fix the list modification during iteration bug:\n```python\ndef remove_evens(numbers):\n    for n in numbers:\n        if n % 2 == 0:\n            numbers.remove(n)\n    return numbers\n```\nWrite corrected `remove_evens(numbers)` that safely removes even numbers.",
+      "entry_point": "remove_evens",
+      "canonical_solution": "def remove_evens(numbers):\n    return [n for n in numbers if n % 2 != 0]",
+      "test_code": "assert remove_evens([1, 2, 3, 4, 5, 6]) == [1, 3, 5]\nassert remove_evens([2, 4, 6]) == []\nassert remove_evens([1, 3, 5]) == [1, 3, 5]\nassert remove_evens([]) == []",
+      "tags": [
+        "bug-fix",
+        "iteration",
+        "list-modification"
+      ]
+    }
+  ]
+}
