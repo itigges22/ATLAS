@@ -127,6 +127,10 @@ class PassAtKResult:
         targets = {
             "humaneval": {"pass@1": 0.65, "pass@5": 0.95, "pass@20": 0.995},
             "mbpp": {"pass@1": 0.70, "pass@5": 0.95, "pass@20": 0.995},
+            "humaneval_plus": {"pass@1": 0.60, "pass@5": 0.90, "pass@20": 0.99},
+            "mbpp_plus": {"pass@1": 0.60, "pass@5": 0.90, "pass@20": 0.99},
+            "livecodebench": {"pass@1": 0.20, "pass@5": 0.50},
+            "scicode": {"pass@1": 0.10, "pass@5": 0.30},
             "custom": {"pass@1": 0.65, "pass@5": 0.95, "pass@20": 0.995},
         }
         dataset_targets = targets.get(self.dataset.lower(), targets["custom"])
@@ -281,12 +285,15 @@ def compare_with_baseline(
     """
     if baseline_pass1 is None:
         # Use Qwen3-14B baselines from config
-        if result.dataset == "humaneval":
-            baseline_pass1 = config.qwen3_14b_baselines.get("humaneval_pass1", 0.67)
-        elif result.dataset == "mbpp":
-            baseline_pass1 = config.qwen3_14b_baselines.get("mbpp_pass1", 0.72)
-        else:
-            baseline_pass1 = 0.0
+        baselines = config.qwen3_14b_baselines
+        key = f"{result.dataset}_pass1"
+        baseline_pass1 = baselines.get(key, 0.0)
+        # Fallback for legacy dataset names
+        if baseline_pass1 == 0.0:
+            if result.dataset == "humaneval":
+                baseline_pass1 = baselines.get("humaneval_pass1", 0.67)
+            elif result.dataset == "mbpp":
+                baseline_pass1 = baselines.get("mbpp_pass1", 0.734)
 
     diff = result.pass_at_1 - baseline_pass1
     diff_str = f"+{diff:.1%}" if diff >= 0 else f"{diff:.1%}"

@@ -172,8 +172,12 @@ class BenchmarkConfig:
     def qwen3_14b_baselines(self) -> dict:
         """Published Qwen3-14B baseline scores."""
         return {
-            "humaneval_pass1": 0.67,  # ~65-70%
-            "mbpp_pass1": 0.72,  # ~70-75%
+            "humaneval_pass1": 0.67,       # ~65-70%
+            "mbpp_pass1": 0.734,           # 73.4% per tech report (3-shot)
+            "humaneval_plus_pass1": 0.61,  # EvalPlus leaderboard estimate
+            "mbpp_plus_pass1": 0.65,       # EvalPlus leaderboard estimate
+            "livecodebench_pass1": 0.20,   # Placeholder — will update after first run
+            "scicode_pass1": 0.10,         # Placeholder — will update after first run
         }
 
     def ensure_directories(self) -> None:

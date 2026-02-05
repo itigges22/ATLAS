@@ -155,8 +155,13 @@ class BaseDataset(ABC):
                 raise ValueError(f"Task {task.task_id} missing prompt")
             if not task.entry_point:
                 raise ValueError(f"Task {task.task_id} missing entry_point")
-            if not task.test_code:
-                raise ValueError(f"Task {task.task_id} missing test_code")
+            # stdio tasks use test_inputs/test_outputs instead of test_code
+            if task.eval_mode == "stdio":
+                if not task.test_inputs or not task.test_outputs:
+                    raise ValueError(f"Task {task.task_id} missing test_inputs/test_outputs for stdio mode")
+            else:
+                if not task.test_code:
+                    raise ValueError(f"Task {task.task_id} missing test_code")
             # Canonical solution can be empty for some evaluation modes
         return True
 

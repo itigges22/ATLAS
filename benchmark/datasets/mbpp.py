@@ -1,24 +1,32 @@
 """
 MBPP (Mostly Basic Python Programming) dataset loader.
 
-Downloads and parses the MBPP-S (sanitized) benchmark.
+Downloads and parses the MBPP-S (sanitized) benchmark using the canonical
+3-shot prompt format from the original paper.
 """
 
 import json
 import urllib.request
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
 from .base import BaseDataset
 from ..models import BenchmarkTask
 
 
+# Canonical 3-shot prompt pool task IDs (from original MBPP paper)
+PROMPT_POOL_IDS = {2, 3, 4}
+
+
 class MBPPDataset(BaseDataset):
     """
-    MBPP benchmark dataset (sanitized version).
+    MBPP benchmark dataset (sanitized version) with 3-shot prompting.
 
     MBPP-S consists of ~397 crowd-sourced Python programming problems
     with task descriptions, test cases, and reference solutions.
+
+    Uses the canonical 3-shot format: tasks 2, 3, 4 as few-shot examples
+    followed by the target task description and tests.
 
     Source: https://github.com/google-research/google-research/tree/master/mbpp
     """
@@ -26,13 +34,6 @@ class MBPPDataset(BaseDataset):
     # MBPP sanitized dataset URL
     DOWNLOAD_URL = "https://raw.githubusercontent.com/google-research/google-research/master/mbpp/mbpp.jsonl"
     FILENAME = "mbpp.jsonl"
-
-    # Task IDs for the sanitized split (MBPP-S)
-    # These are the standard evaluation set
-    SANITIZED_IDS = set(range(11, 511))  # Tasks 11-510 are the main benchmark
-    # Actually MBPP-S uses a specific subset, typically 374 tasks
-    # We'll use the test split which is tasks 11-510 (500 tasks)
-    # But filter to only valid/sanitized ones
 
     @property
     def name(self) -> str:
@@ -42,9 +43,11 @@ class MBPPDataset(BaseDataset):
     @property
     def expected_count(self) -> int:
         """Expected number of tasks in MBPP-S."""
-        # MBPP has 974 total, but MBPP-S (sanitized test set) has ~397-500
-        # We'll accept a range since the exact count depends on filtering
-        return 500  # Standard test split
+        return 500  # Standard test split (tasks 11-510)
+
+    def __init__(self, cache_dir: Path = None):
+        super().__init__(cache_dir=cache_dir)
+        self._prompt_pool: Dict[int, dict] = {}  # Tasks 2/3/4 for 3-shot examples
 
     def download(self) -> Path:
         """
@@ -96,6 +99,9 @@ class MBPPDataset(BaseDataset):
         """
         Parse the MBPP dataset file.
 
+        Captures tasks 2/3/4 for the 3-shot prompt pool, then converts
+        tasks 11-510 as the evaluation set.
+
         Args:
             filepath: Path to mbpp.jsonl
 
@@ -111,6 +117,11 @@ class MBPPDataset(BaseDataset):
 
                 data = json.loads(line)
                 task_id = data.get("task_id", 0)
+
+                # Capture prompt pool tasks (2, 3, 4) for 3-shot examples
+                if task_id in PROMPT_POOL_IDS:
+                    self._prompt_pool[task_id] = data
+                    continue
 
                 # Only include test split (tasks 11-510)
                 if task_id < 11 or task_id > 510:
@@ -136,8 +147,8 @@ class MBPPDataset(BaseDataset):
         code = data["code"]  # Reference solution
         test_list = data.get("test_list", [])
 
-        # Construct prompt from task description
-        prompt = self._construct_prompt(text, code)
+        # Construct 3-shot prompt
+        prompt = self._construct_prompt(text, test_list)
 
         # Extract entry point from the reference code
         entry_point = self._extract_entry_point(code)
@@ -156,30 +167,56 @@ class MBPPDataset(BaseDataset):
             tags=self._extract_tags(text, code)
         )
 
-    def _construct_prompt(self, text: str, code: str) -> str:
+    def _format_example(self, data: dict) -> str:
         """
-        Construct a code generation prompt from MBPP task data.
+        Format a single 3-shot example in canonical MBPP format.
+
+        Args:
+            data: Raw task data with text, test_list, and code fields.
+
+        Returns:
+            Formatted example string with [BEGIN]/[DONE] delimiters.
+        """
+        desc = data["text"]
+        tests = "\n".join(data.get("test_list", []))
+        code = data["code"]
+        return (
+            f"You are an expert Python programmer, and here is your task: "
+            f"{desc} Your code should pass these tests:\n\n{tests}\n"
+            f"[BEGIN]\n{code}\n[DONE]"
+        )
+
+    def _construct_prompt(self, text: str, test_list: List[str]) -> str:
+        """
+        Construct a 3-shot prompt in the canonical MBPP format.
+
+        Three examples (tasks 2/3/4) with [BEGIN]/[DONE] delimiters,
+        followed by the actual task (without delimiters) for the model
+        to complete.
 
         Args:
             text: Task description
-            code: Reference solution (for extracting function signature)
+            test_list: List of test assertion strings for the task
 
         Returns:
-            Formatted prompt string.
+            Formatted 3-shot prompt string.
         """
-        # Extract function signature from reference code
-        signature = self._extract_signature(code)
+        parts = []
 
-        instruction = (
-            "Write a Python function to solve the following task. "
-            "Return ONLY the function implementation (no explanation, no markdown).\n\n"
-            f"Task: {text}\n\n"
+        # Add 3-shot examples in order (tasks 2, 3, 4)
+        for tid in sorted(PROMPT_POOL_IDS):
+            if tid in self._prompt_pool:
+                parts.append(self._format_example(self._prompt_pool[tid]))
+
+        # Add the actual task (no [BEGIN]/[DONE] — model should generate the code)
+        tests_str = "\n".join(test_list)
+        parts.append(
+            f"You are an expert Python programmer, and here is your task: "
+            f"{text} Your code should pass these tests:\n\n{tests_str}\n"
+            f"[BEGIN]\n"
         )
 
-        if signature:
-            instruction += f"Function signature:\n{signature}\n"
-
-        return instruction
+        return "\n\n".join(parts)
 
     def _extract_signature(self, code: str) -> str:
         """

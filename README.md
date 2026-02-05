@@ -202,8 +202,10 @@ Each retry accumulates error context, guiding away from previous failures.
 | Benchmark | pass@1 | Qwen3-14B Baseline | Δ |
 |-----------|--------|-------------------|---|
 | HumanEval | 99.4% | 67.0% | +32.4% |
-| MBPP | 55.4% | 72.0% | -16.6% |
+| MBPP* | 55.4% | 72.0% | -16.6% |
 | Custom | 66.0% | N/A | — |
+
+_*V1 MBPP used zero-shot prompt; baseline is 3-shot. See note below._
 
 ### Pass@20 (averaged across 3 runs)
 
@@ -227,7 +229,7 @@ _Bottom: cost comparison (left) and custom benchmark pass@k runs (right)._
 
 **Performance:** 1,600–2,400 tasks/hr throughput, <2s median time-to-solution, 67–82x cheaper than Claude Sonnet/GPT-4o, $0.000025–$0.001 per successful task, ~0.55 kWh total energy (~$0.07).
 
-> **Note:** HumanEval results likely reflect training data contamination in Qwen3-14B—MBPP (unseen data) is the more honest signal for novel problem-solving capability. V2 will use unsaturated benchmarks.
+> **Note:** HumanEval results likely reflect training data contamination in Qwen3-14B. MBPP scored 55.4% using a non-standard zero-shot prompt (published baseline of 73.4% uses 3-shot). V2 fixes the MBPP prompt to canonical 3-shot format and adds unsaturated benchmarks (LiveCodeBench, SciCode, EvalPlus variants).
 
 [Full benchmark report](benchmark/benchmark_report_20260204_140715.md)
 
@@ -235,11 +237,27 @@ _Bottom: cost comparison (left) and custom benchmark pass@k runs (right)._
 
 ## V2 Roadmap
 
-V2 focuses on adding intelligent reasoning and routing to the frozen model architecture, replacing blind retries with informed decisions.
+V2 focuses on two fronts: rigorous benchmarking on unsaturated evaluations, and intelligent reasoning/routing to replace blind retries with informed decisions.
+
+### Benchmark Suite (Implemented)
+
+V1 benchmarks revealed two problems: HumanEval is saturated (99.4% likely reflects training contamination) and MBPP used a non-standard zero-shot prompt (55.4% vs 73.4% published 3-shot baseline). V2 expands from 3 benchmarks to 7 and fixes the MBPP prompt format.
+
+| Benchmark | Tasks | Type | Status |
+|-----------|-------|------|--------|
+| HumanEval | 164 | Function completion | Kept from V1 |
+| MBPP (3-shot) | 500 | Function completion | Fixed prompt format |
+| HumanEval+ (EvalPlus) | 164 | 80x more tests | New |
+| MBPP+ (EvalPlus) | 378 | Augmented tests, 3-shot | New |
+| LiveCodeBench | ~880 | Competitive programming (stdin/stdout) | New — primary |
+| SciCode | ~338 | Scientific computing sub-steps | New |
+| Custom | 50 | Domain-specific | Kept from V1 |
+
+### Architecture
 
 | Component | Purpose |
 |-----------|---------|
-| Geometric Lens | Lyapunov cost field over embedding space—makes bug-prone code paths geometrically expensive before generation |
+| Geometric Lens | Lyapunov cost field over embedding space — makes bug-prone code paths geometrically expensive before generation |
 | PageIndex RAG | AST-aware tree-structured retrieval replacing Qdrant flat vector search |
 | Pattern Cache | Explicit success/failure memory with Ebbinghaus decay for temporal relevance |
 | SVM Classifier | Lightweight routing classifier consuming signals from all V2 components |

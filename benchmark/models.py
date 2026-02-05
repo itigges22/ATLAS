@@ -52,10 +52,13 @@ class BenchmarkTask:
     category: str = "humaneval"
     difficulty: str = "medium"
     tags: List[str] = field(default_factory=list)
+    eval_mode: str = "function"  # "function" (concat code+tests) or "stdio" (stdin/stdout)
+    test_inputs: List[str] = field(default_factory=list)   # stdin inputs for stdio mode
+    test_outputs: List[str] = field(default_factory=list)  # expected stdout for stdio mode
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        d = {
             "task_id": self.task_id,
             "prompt": self.prompt,
             "canonical_solution": self.canonical_solution,
@@ -63,8 +66,15 @@ class BenchmarkTask:
             "entry_point": self.entry_point,
             "category": self.category,
             "difficulty": self.difficulty,
-            "tags": self.tags
+            "tags": self.tags,
         }
+        if self.eval_mode != "function":
+            d["eval_mode"] = self.eval_mode
+        if self.test_inputs:
+            d["test_inputs"] = self.test_inputs
+        if self.test_outputs:
+            d["test_outputs"] = self.test_outputs
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "BenchmarkTask":
@@ -77,7 +87,10 @@ class BenchmarkTask:
             entry_point=data["entry_point"],
             category=data.get("category", "humaneval"),
             difficulty=data.get("difficulty", "medium"),
-            tags=data.get("tags", [])
+            tags=data.get("tags", []),
+            eval_mode=data.get("eval_mode", "function"),
+            test_inputs=data.get("test_inputs", []),
+            test_outputs=data.get("test_outputs", []),
         )
 
 

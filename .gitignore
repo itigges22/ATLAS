@@ -17,6 +17,7 @@ CREATE_*.md
 AUDIT*.md
 *AUDIT*.md
 FINAL_CLEANUP.md
+DELETE_BEFORE_PUSH/
 
 # ----- AI/Assistant Related (should not exist) -----
 *claude*
@@ -115,3 +116,4 @@ bin/
 
 # ----- Benchmark -----
 benchmark/datasets/.cache/
+benchmark/results/

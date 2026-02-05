@@ -5,13 +5,6 @@ Handles sending prompts to the LLM, extracting code from responses,
 and executing code in isolated sandboxes with resource limits.
 """
 
-"""
-Benchmark code execution runner.
-
-Handles sending prompts to the LLM, extracting code from responses,
-and executing code in isolated sandboxes with resource limits.
-"""
-
 import json
 import os
 import re
@@ -72,6 +65,13 @@ def extract_code(response: str) -> str:
     # before the actual code output
     think_pattern = r'<think>.*?</think>'
     response = re.sub(think_pattern, '', response, flags=re.DOTALL).strip()
+
+    # Try MBPP [BEGIN]...[DONE] delimiters first
+    begin_done_pattern = r'\[BEGIN\]\s*\n(.*?)(?:\[DONE\]|$)'
+    begin_matches = re.findall(begin_done_pattern, response, re.DOTALL)
+    if begin_matches:
+        # Return the last match (the model's answer, not the few-shot examples)
+        return begin_matches[-1].strip()
 
     # Try to extract from markdown code blocks
     # Pattern for ```python ... ``` or ```py ... ```
@@ -215,6 +215,103 @@ def execute_code(
             os.unlink(temp_path)
         except OSError:
             pass
+
+
+def execute_code_stdio(
+    code: str,
+    test_inputs: List[str],
+    test_outputs: List[str],
+    timeout_sec: int = 30,
+    memory_mb: int = 512
+) -> Tuple[bool, str, str, float]:
+    """
+    Execute code with stdin/stdout test cases (for competitive-programming style problems).
+
+    Writes code to a temp file, runs it once per test case with stdin piped in,
+    and compares stdout to expected output.
+
+    Args:
+        code: The generated code to execute
+        test_inputs: List of stdin input strings
+        test_outputs: List of expected stdout strings
+        timeout_sec: Execution timeout per test case in seconds
+        memory_mb: Memory limit in megabytes
+
+    Returns:
+        Tuple of (all_passed, combined_stdout, combined_stderr, total_exec_time_ms)
+    """
+    if not test_inputs or not test_outputs:
+        return False, "", "No test cases provided for stdio evaluation", 0.0
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(code)
+        temp_path = f.name
+
+    all_passed = True
+    combined_stdout = []
+    combined_stderr = []
+    total_time_ms = 0.0
+
+    try:
+        for i, (inp, expected) in enumerate(zip(test_inputs, test_outputs)):
+            try:
+                start_time = time.time()
+
+                result = subprocess.run(
+                    ['python3', temp_path],
+                    input=inp,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                    preexec_fn=_make_preexec_fn(memory_mb, timeout_sec),
+                    env={
+                        **os.environ,
+                        'PYTHONDONTWRITEBYTECODE': '1',
+                        'PYTHONUNBUFFERED': '1',
+                    },
+                )
+
+                exec_time_ms = (time.time() - start_time) * 1000
+                total_time_ms += exec_time_ms
+
+                actual = result.stdout.strip()
+                expected_clean = expected.strip()
+
+                if result.returncode != 0:
+                    all_passed = False
+                    combined_stderr.append(
+                        f"Test {i+1}: runtime error (exit {result.returncode})\n{result.stderr}"
+                    )
+                elif actual != expected_clean:
+                    all_passed = False
+                    combined_stderr.append(
+                        f"Test {i+1}: wrong answer\n"
+                        f"  Expected: {expected_clean[:200]}\n"
+                        f"  Got:      {actual[:200]}"
+                    )
+                combined_stdout.append(actual)
+
+            except subprocess.TimeoutExpired:
+                all_passed = False
+                combined_stderr.append(f"Test {i+1}: timed out after {timeout_sec}s")
+                total_time_ms += timeout_sec * 1000
+
+            except Exception as e:
+                all_passed = False
+                combined_stderr.append(f"Test {i+1}: {str(e)}")
+
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+    return (
+        all_passed,
+        "\n---\n".join(combined_stdout),
+        "\n".join(combined_stderr),
+        total_time_ms
+    )
 
 
 class BenchmarkRunner:
@@ -399,13 +496,22 @@ class BenchmarkRunner:
                 # Extract code
                 generated_code = extract_code(response)
 
-                # Execute with tests
-                passed, stdout, stderr, exec_time = execute_code(
-                    generated_code,
-                    task.test_code,
-                    timeout_sec=self.timeout_sec,
-                    memory_mb=self.memory_mb
-                )
+                # Execute with tests — branch on eval mode
+                if task.eval_mode == "stdio":
+                    passed, stdout, stderr, exec_time = execute_code_stdio(
+                        generated_code,
+                        task.test_inputs,
+                        task.test_outputs,
+                        timeout_sec=self.timeout_sec,
+                        memory_mb=self.memory_mb
+                    )
+                else:
+                    passed, stdout, stderr, exec_time = execute_code(
+                        generated_code,
+                        task.test_code,
+                        timeout_sec=self.timeout_sec,
+                        memory_mb=self.memory_mb
+                    )
 
                 # Record attempt
                 attempt = AttemptResult(
@@ -481,16 +587,29 @@ class BenchmarkRunner:
         try:
             assert task.prompt, "Missing prompt"
             assert task.entry_point, "Missing entry_point"
-            assert task.test_code, "Missing test_code"
+            if task.eval_mode == "stdio":
+                assert task.test_inputs and task.test_outputs, \
+                    "Missing test_inputs/test_outputs for stdio mode"
+            else:
+                assert task.test_code, "Missing test_code"
 
             # Try running canonical solution with tests
             if task.canonical_solution:
-                passed, stdout, stderr, exec_time = execute_code(
-                    task.canonical_solution,
-                    task.test_code,
-                    timeout_sec=self.timeout_sec,
-                    memory_mb=self.memory_mb
-                )
+                if task.eval_mode == "stdio":
+                    passed, stdout, stderr, exec_time = execute_code_stdio(
+                        task.canonical_solution,
+                        task.test_inputs,
+                        task.test_outputs,
+                        timeout_sec=self.timeout_sec,
+                        memory_mb=self.memory_mb
+                    )
+                else:
+                    passed, stdout, stderr, exec_time = execute_code(
+                        task.canonical_solution,
+                        task.test_code,
+                        timeout_sec=self.timeout_sec,
+                        memory_mb=self.memory_mb
+                    )
 
                 attempt = AttemptResult(
                     task_id=task.task_id,
