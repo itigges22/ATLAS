@@ -12,12 +12,17 @@
 #
 # Usage: ./scripts/run_full_benchmarks.sh
 #
-# Estimated runtime: ~28 hours
-#   - HumanEval pass@1: ~45 min
-#   - MBPP pass@1: ~1.5 hrs
-#   - Custom pass@1: ~27 min
-#   - HumanEval pass@k (20 attempts × 3 runs): ~15 hrs
-#   - Custom pass@k (20 attempts × 3 runs): ~10 hrs
+# Estimated runtime: ~100-120 hours (4-5 days)
+#   - HumanEval pass@1 (164 tasks): ~1-1.5 hrs
+#   - MBPP pass@1 (500 tasks): ~3-4 hrs
+#   - Custom pass@1 (100 tasks): ~30-45 min
+#   - HumanEval pass@k (20 attempts × 3 runs): ~60-70 hrs
+#   - Custom pass@k (20 attempts × 3 runs): ~35-40 hrs
+#
+# To view in another terminal or VNC:
+#   tail -f $RUN_DIR/full_benchmark.log
+#   # Or watch the latest benchmark log:
+#   tail -f $(ls -t benchmark/results/full_run_*/full_benchmark.log | head -1)
 #
 
 set -e
@@ -48,7 +53,11 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 RED='\033[0;31m'
 BOLD='\033[1m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
+
+# ── Verbosity ─────────────────────────────────────────────────
+VERBOSE=true
 
 # ── Signal Handling ───────────────────────────────────────────
 INTERRUPTED=0
@@ -108,6 +117,45 @@ log_section() {
     echo "================================================================================" >> "$LOG_FILE"
     echo "  $1" >> "$LOG_FILE"
     echo "================================================================================" >> "$LOG_FILE"
+}
+
+log_verbose() {
+    if [[ "$VERBOSE" == "true" ]]; then
+        local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+        echo -e "${MAGENTA}${msg}${NC}"
+        echo "$msg" >> "$LOG_FILE"
+    fi
+}
+
+# Show system stats (GPU temp, utilization, etc.)
+show_system_stats() {
+    if command -v nvidia-smi &> /dev/null; then
+        local gpu_info=$(nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,power.draw,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null)
+        if [[ -n "$gpu_info" ]]; then
+            IFS=',' read -r temp util power mem_used mem_total <<< "$gpu_info"
+            echo -e "${MAGENTA}  GPU: ${temp}°C | ${util}% util | ${power}W | ${mem_used}/${mem_total} MiB VRAM${NC}"
+        fi
+    fi
+}
+
+# Show progress for a running phase
+show_phase_progress() {
+    local output_dir="$1"
+    local total_tasks="$2"
+    local phase_name="$3"
+
+    if [[ -d "$output_dir" ]]; then
+        local completed=$(ls "$output_dir"/result_*.json 2>/dev/null | wc -l)
+        local passed=$(grep -l '"passed": true' "$output_dir"/result_*.json 2>/dev/null | wc -l || echo 0)
+        local failed=$((completed - passed))
+        local pct=$((completed * 100 / total_tasks))
+        local pass_rate=0
+        if [[ $completed -gt 0 ]]; then
+            pass_rate=$((passed * 100 / completed))
+        fi
+        echo -e "${CYAN}  Progress: ${completed}/${total_tasks} (${pct}%) | Pass: ${passed} | Fail: ${failed} | Rate: ${pass_rate}%${NC}"
+        show_system_stats
+    fi
 }
 
 # Initialize crash log as JSON array
@@ -191,6 +239,7 @@ run_phase() {
     local command="$2"
     local checkpoint="$3"
     local output_dir="$4"
+    local total_tasks="${5:-100}"  # Default estimate
     local retry_count=0
     local last_stderr=""
 
@@ -202,22 +251,56 @@ run_phase() {
 
     while [[ $retry_count -lt $MAX_RETRIES ]]; do
         log "▶ Running $phase_name (attempt $((retry_count + 1))/$MAX_RETRIES)"
+        log_verbose "Command: $command --resume"
+        log_verbose "Output dir: $output_dir"
+        show_system_stats
+
         local start_time=$(date +%s)
         local tasks_before=$(count_results "$output_dir")
 
-        # Run with resume flag, capture stderr
+        # Create output directory
+        mkdir -p "$output_dir"
+
+        # Run with resume flag - show output in real-time with tee
         local stderr_file=$(mktemp)
-        if eval "$command --resume" 2>"$stderr_file"; then
+        local exit_code=0
+
+        if [[ "$VERBOSE" == "true" ]]; then
+            # Verbose mode: show real-time output
+            echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"
+            eval "$command --resume" 2>&1 | tee -a "$LOG_FILE" &
+            local pid=$!
+
+            # Monitor progress while running
+            while kill -0 $pid 2>/dev/null; do
+                sleep 30
+                echo ""
+                log_verbose "── Status Update ──"
+                show_phase_progress "$output_dir" "$total_tasks" "$phase_name"
+            done
+
+            wait $pid
+            exit_code=$?
+            echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"
+        else
+            # Quiet mode: capture stderr only
+            eval "$command --resume" 2>"$stderr_file"
+            exit_code=$?
+        fi
+
+        if [[ $exit_code -eq 0 ]]; then
             touch "$checkpoint"
-            log_success "$phase_name complete"
+            local tasks_after=$(count_results "$output_dir")
+            local passed=$(grep -l '"passed": true' "$output_dir"/result_*.json 2>/dev/null | wc -l || echo 0)
+            log_success "$phase_name complete ($tasks_after tasks, $passed passed)"
+            show_system_stats
             rm -f "$stderr_file"
             return 0
         else
-            local exit_code=$?
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
             local tasks_after=$(count_results "$output_dir")
-            local tasks_remaining=$((tasks_after > 0 ? 100 - tasks_after : 0))  # Estimate
+            local tasks_remaining=$((total_tasks - tasks_after))
 
             last_stderr=$(tail -c 500 "$stderr_file" 2>/dev/null || echo "")
             rm -f "$stderr_file"
@@ -229,6 +312,8 @@ run_phase() {
             log_crash_event "$phase_name" "$retry_count" "$exit_code" "$duration" "$last_stderr" "$tasks_after" "$tasks_remaining"
 
             log_warn "$phase_name crashed (attempt $retry_count/$MAX_RETRIES, exit code $exit_code)"
+            log_verbose "Tasks completed before crash: $tasks_after"
+            log_verbose "Last error: ${last_stderr:0:200}"
 
             if [[ $retry_count -lt $MAX_RETRIES ]]; then
                 log "  Waiting 30s before retry..."
@@ -501,6 +586,22 @@ log_section "ATLAS V1 Full Benchmark Suite"
 log "Date: $(date)"
 log "Run directory: $RUN_DIR"
 log "Report will be saved to: $REPORT_FILE"
+log ""
+log "Configuration:"
+log "  - Pass@1: HumanEval (164), MBPP (500), Custom (100)"
+log "  - Pass@k: k=$PASS_K_ATTEMPTS, runs=$PASS_K_RUNS"
+log "  - Max retries per phase: $MAX_RETRIES"
+log "  - Verbose mode: $VERBOSE"
+log ""
+
+# Show initial system stats
+log "System Status:"
+show_system_stats
+if command -v free &> /dev/null; then
+    mem_info=$(free -h | grep Mem | awk '{print $3 "/" $2}')
+    echo -e "${MAGENTA}  RAM: $mem_info${NC}"
+fi
+log ""
 
 SUITE_START=$(date +%s)
 
@@ -508,42 +609,47 @@ SUITE_START=$(date +%s)
 
 log_section "Phase 1: Pass@1 Benchmarks"
 
-# HumanEval pass@1
+# HumanEval pass@1 (164 tasks)
 run_phase "HumanEval pass@1" \
     "python3 -m benchmark.cli --humaneval --k 1 --output '$RUN_DIR/pass1/humaneval'" \
     "$RUN_DIR/.checkpoint_humaneval_pass1" \
-    "$RUN_DIR/pass1/humaneval"
+    "$RUN_DIR/pass1/humaneval" \
+    164
 
-# MBPP pass@1
+# MBPP pass@1 (500 tasks)
 run_phase "MBPP pass@1" \
     "python3 -m benchmark.cli --mbpp --k 1 --output '$RUN_DIR/pass1/mbpp'" \
     "$RUN_DIR/.checkpoint_mbpp_pass1" \
-    "$RUN_DIR/pass1/mbpp"
+    "$RUN_DIR/pass1/mbpp" \
+    500
 
-# Custom pass@1
+# Custom pass@1 (100 tasks)
 run_phase "Custom pass@1" \
     "python3 -m benchmark.cli --custom --k 1 --output '$RUN_DIR/pass1/custom'" \
     "$RUN_DIR/.checkpoint_custom_pass1" \
-    "$RUN_DIR/pass1/custom"
+    "$RUN_DIR/pass1/custom" \
+    100
 
 # ── Pass@k Benchmarks ─────────────────────────────────────────
 
 log_section "Phase 2: Pass@k Benchmarks (k=$PASS_K_ATTEMPTS, $PASS_K_RUNS runs each)"
 
-# HumanEval pass@k (3 runs)
+# HumanEval pass@k (3 runs, 164 tasks each)
 for run in $(seq 1 $PASS_K_RUNS); do
     run_phase "HumanEval pass@$PASS_K_ATTEMPTS (run $run)" \
         "python3 -m benchmark.cli --humaneval --k $PASS_K_ATTEMPTS --output '$RUN_DIR/passk/humaneval_run$run'" \
         "$RUN_DIR/.checkpoint_humaneval_passk_run$run" \
-        "$RUN_DIR/passk/humaneval_run$run"
+        "$RUN_DIR/passk/humaneval_run$run" \
+        164
 done
 
-# Custom pass@k (3 runs)
+# Custom pass@k (3 runs, 100 tasks each)
 for run in $(seq 1 $PASS_K_RUNS); do
     run_phase "Custom pass@$PASS_K_ATTEMPTS (run $run)" \
         "python3 -m benchmark.cli --custom --k $PASS_K_ATTEMPTS --output '$RUN_DIR/passk/custom_run$run'" \
         "$RUN_DIR/.checkpoint_custom_passk_run$run" \
-        "$RUN_DIR/passk/custom_run$run"
+        "$RUN_DIR/passk/custom_run$run" \
+        100
 done
 
 # ── Generate Report ───────────────────────────────────────────

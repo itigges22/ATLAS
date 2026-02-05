@@ -60,6 +60,7 @@ def extract_code(response: str) -> str:
     - Markdown code blocks (```python ... ```)
     - Plain code blocks (``` ... ```)
     - Raw code without blocks
+    - Qwen3 <think>...</think> blocks (stripped before extraction)
 
     Args:
         response: Raw LLM response text
@@ -67,6 +68,11 @@ def extract_code(response: str) -> str:
     Returns:
         Extracted Python code
     """
+    # Strip Qwen3 thinking blocks first - they can consume tokens
+    # before the actual code output
+    think_pattern = r'<think>.*?</think>'
+    response = re.sub(think_pattern, '', response, flags=re.DOTALL).strip()
+
     # Try to extract from markdown code blocks
     # Pattern for ```python ... ``` or ```py ... ```
     pattern = r'```(?:python|py)?\s*\n(.*?)```'
@@ -269,7 +275,7 @@ class BenchmarkRunner:
         self,
         prompt: str,
         temperature: float = 0.0,
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
         error_context: str = None
     ) -> Tuple[str, int, float]:
         """
