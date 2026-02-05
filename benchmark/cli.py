@@ -7,6 +7,10 @@ Main entry point for running benchmarks and analyzing results.
 Usage:
     atlas benchmark --humaneval [--dry-run] [--k K] [--runs N]
     atlas benchmark --mbpp [--dry-run] [--k K] [--runs N]
+    atlas benchmark --humaneval-plus [--dry-run] [--k K] [--runs N]
+    atlas benchmark --mbpp-plus [--dry-run] [--k K] [--runs N]
+    atlas benchmark --livecodebench [--dry-run] [--k K] [--runs N]
+    atlas benchmark --scicode [--dry-run] [--k K] [--runs N]
     atlas benchmark --custom [--dry-run] [--k K] [--runs N]
     atlas benchmark --all [--dry-run] [--k K] [--runs N]
     atlas benchmark analyze --input DIR --output DIR
@@ -29,7 +33,11 @@ from typing import List, Optional, Set, Dict, Any
 from .config import config
 from .models import BenchmarkTask, TaskResult, BenchmarkRun
 from .runner import run_benchmark, run_benchmark_dry
-from .datasets import HumanEvalDataset, MBPPDataset
+from .datasets import (
+    HumanEvalDataset, MBPPDataset,
+    HumanEvalPlusDataset, MBPPPlusDataset,
+    LiveCodeBenchDataset, SciCodeDataset,
+)
 from .analysis import calculate_pass_at_k, CostAnalyzer, collect_hardware_info
 from .analysis.hardware_info import hardware_info_to_markdown
 from .analysis.pass_at_k import compare_with_baseline
@@ -214,6 +222,22 @@ def run_benchmark_suite(
         tasks = list(dataset)
     elif dataset_name == "mbpp":
         dataset = MBPPDataset()
+        dataset.load()
+        tasks = list(dataset)
+    elif dataset_name == "humaneval_plus":
+        dataset = HumanEvalPlusDataset()
+        dataset.load()
+        tasks = list(dataset)
+    elif dataset_name == "mbpp_plus":
+        dataset = MBPPPlusDataset()
+        dataset.load()
+        tasks = list(dataset)
+    elif dataset_name == "livecodebench":
+        dataset = LiveCodeBenchDataset()
+        dataset.load()
+        tasks = list(dataset)
+    elif dataset_name == "scicode":
+        dataset = SciCodeDataset()
         dataset.load()
         tasks = list(dataset)
     elif dataset_name == "custom":
@@ -468,12 +492,15 @@ Examples:
 """
     )
 
-    # Dataset selection (mutually exclusive)
-    dataset_group = parser.add_mutually_exclusive_group()
-    dataset_group.add_argument("--humaneval", action="store_true", help="Run HumanEval benchmark")
-    dataset_group.add_argument("--mbpp", action="store_true", help="Run MBPP benchmark")
-    dataset_group.add_argument("--custom", action="store_true", help="Run custom benchmark")
-    dataset_group.add_argument("--all", action="store_true", help="Run all benchmarks")
+    # Dataset selection (multiple allowed)
+    parser.add_argument("--humaneval", action="store_true", help="Run HumanEval benchmark")
+    parser.add_argument("--mbpp", action="store_true", help="Run MBPP benchmark (3-shot)")
+    parser.add_argument("--humaneval-plus", action="store_true", help="Run HumanEval+ (EvalPlus) benchmark")
+    parser.add_argument("--mbpp-plus", action="store_true", help="Run MBPP+ (EvalPlus) benchmark")
+    parser.add_argument("--livecodebench", action="store_true", help="Run LiveCodeBench benchmark")
+    parser.add_argument("--scicode", action="store_true", help="Run SciCode benchmark")
+    parser.add_argument("--custom", action="store_true", help="Run custom benchmark")
+    parser.add_argument("--all", action="store_true", help="Run all benchmarks")
 
     # Run options
     parser.add_argument("--dry-run", action="store_true", help="Validate without LLM calls")
@@ -509,15 +536,28 @@ Examples:
 
     # Determine which datasets to run
     datasets = []
-    if args.humaneval:
-        datasets.append("humaneval")
-    elif args.mbpp:
-        datasets.append("mbpp")
-    elif args.custom:
-        datasets.append("custom")
-    elif args.all:
-        datasets.extend(["humaneval", "mbpp", "custom"])
+    if args.all:
+        datasets.extend([
+            "humaneval", "mbpp", "humaneval_plus", "mbpp_plus",
+            "livecodebench", "scicode", "custom",
+        ])
     else:
+        if args.humaneval:
+            datasets.append("humaneval")
+        if args.mbpp:
+            datasets.append("mbpp")
+        if args.humaneval_plus:
+            datasets.append("humaneval_plus")
+        if args.mbpp_plus:
+            datasets.append("mbpp_plus")
+        if args.livecodebench:
+            datasets.append("livecodebench")
+        if args.scicode:
+            datasets.append("scicode")
+        if args.custom:
+            datasets.append("custom")
+
+    if not datasets:
         parser.print_help()
         return
 
