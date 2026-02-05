@@ -229,7 +229,7 @@ _Bottom: cost comparison (left) and custom benchmark pass@k runs (right)._
 
 > **Note:** HumanEval results likely reflect training data contamination in Qwen3-14B—MBPP (unseen data) is the more honest signal for novel problem-solving capability. V2 will use unsaturated benchmarks.
 
-[Full benchmark report](benchmark/results/benchmark_report_20260204_140715.md)
+[Full benchmark report](benchmark/result/benchmark_report_20260204_140715.md)
 
 ---
 
