@@ -212,6 +212,19 @@ Each retry accumulates error context, guiding away from previous failures.
 | HumanEval | 99.8% | 100% | 100% |
 | Custom | 77.4% | 85.9% | 90.3% |
 
+<div align="center">
+
+_Top: pass@1 vs baseline (left) and pass@k curves across benchmarks (right)._
+_Bottom: cost comparison (left) and custom benchmark pass@k runs (right)._
+
+| Pass@1 Comparison | Pass@k Curves |
+|---|---|
+| ![Pass@1 Comparison](docs/images/pass1_comparison.png) | ![Pass@k Curves](docs/images/passk_curves.png) |
+| Cost Comparison | Custom Pass@k Runs |
+| ![Cost Comparison](docs/images/cost_comparison.png) | ![Custom Pass@k Runs](docs/images/custom_passk_runs.png) |
+
+</div>
+
 **Performance:** 1,600–2,400 tasks/hr throughput, <2s median time-to-solution, 67–82x cheaper than Claude Sonnet/GPT-4o, $0.000025–$0.001 per successful task, ~0.55 kWh total energy (~$0.07).
 
 > **Note:** HumanEval results likely reflect training data contamination in Qwen3-14B—MBPP (unseen data) is the more honest signal for novel problem-solving capability. V2 will use unsaturated benchmarks.
