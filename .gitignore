@@ -115,4 +115,3 @@ bin/
 
 # ----- Benchmark -----
 benchmark/datasets/.cache/
-benchmark/results/
