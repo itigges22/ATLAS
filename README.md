@@ -193,9 +193,44 @@ Each retry accumulates error context, guiding away from previous failures.
 
 ---
 
-## Benchmarks
+## V1 Benchmark Results
 
-*Coming soon* — Consumer vs enterprise hardware comparisons.
+**Run:** 12h 9m, zero crashes, zero retries. Qwen3-14B-Q4_K_M on RTX 5060 Ti (11W draw).
+
+### Pass@1
+
+| Benchmark | pass@1 | Qwen3-14B Baseline | Δ |
+|-----------|--------|-------------------|---|
+| HumanEval | 99.4% | 67.0% | +32.4% |
+| MBPP | 55.4% | 72.0% | -16.6% |
+| Custom | 66.0% | N/A | — |
+
+### Pass@20 (averaged across 3 runs)
+
+| Benchmark | pass@1 | pass@5 | pass@20 |
+|-----------|--------|--------|---------|
+| HumanEval | 99.8% | 100% | 100% |
+| Custom | 77.4% | 85.9% | 90.3% |
+
+**Performance:** 1,600–2,400 tasks/hr throughput, <2s median time-to-solution, 67–82x cheaper than Claude Sonnet/GPT-4o, $0.000025–$0.001 per successful task, ~0.55 kWh total energy (~$0.07).
+
+> **Note:** HumanEval results likely reflect training data contamination in Qwen3-14B—MBPP (unseen data) is the more honest signal for novel problem-solving capability. V2 will use unsaturated benchmarks.
+
+[Full benchmark report](benchmark/results/benchmark_report_20260204_140715.md)
+
+---
+
+## V2 Roadmap
+
+V2 focuses on adding intelligent reasoning and routing to the frozen model architecture, replacing blind retries with informed decisions.
+
+| Component | Purpose |
+|-----------|---------|
+| Geometric Lens | Lyapunov cost field over embedding space—makes bug-prone code paths geometrically expensive before generation |
+| PageIndex RAG | AST-aware tree-structured retrieval replacing Qdrant flat vector search |
+| Pattern Cache | Explicit success/failure memory with Ebbinghaus decay for temporal relevance |
+| SVM Classifier | Lightweight routing classifier consuming signals from all V2 components |
+| Confidence Router | Orchestration layer that intelligently allocates retry budgets based on task difficulty |
 
 ---
 
