@@ -1,297 +1,360 @@
-# ATLAS Troubleshooting Guide
+# ATLAS V2 Troubleshooting Guide
 
-This guide covers common issues and their solutions.
+This guide covers common issues and their solutions for the V2 deployment.
+
+---
 
 ## Quick Diagnostics
 
 ```bash
 # Check pod status
-kubectl get pods
+kubectl get pods -n atlas
 
 # Check pod events
-kubectl describe pod <pod-name>
+kubectl describe pod <pod-name> -n atlas
 
 # View pod logs
-kubectl logs <pod-name>
+kubectl logs <pod-name> -n atlas
 
 # Follow logs in real-time
-kubectl logs -f <pod-name>
+kubectl logs -f <pod-name> -n atlas
 
 # Check service endpoints
-kubectl get svc
+kubectl get svc -n atlas
 
 # Check persistent volumes
-kubectl get pvc
+kubectl get pvc -n atlas
 ```
 
-## Common Issues
+---
 
-### Installation Issues
+## V2-Specific Issues
 
-#### Installer fails with "command not found"
+### mlock Failure
 
-**Symptom**: `./scripts/install.sh: command not found`
+**Symptom:** llama-server logs report `Cannot allocate memory` when the `--mlock` flag is active. The specific failure is a buffer allocation of approximately 437 MB.
 
-**Solution**:
+**Root cause:** The Proxmox VM has a memlock ulimit lower than the model weight buffer size. The `--mlock` flag tells the OS to pin model weights in RAM to prevent paging to swap, but the kernel refuses the allocation when it exceeds the configured ulimit.
+
+**Impact:** Model weights are not pinned in RAM. Under heavy memory pressure, the OS may page model data to swap, causing severe latency spikes during inference.
+
+**Fix:** Increase the memlock ulimit in the VM:
+
 ```bash
-# Make script executable
-chmod +x scripts/install.sh
+echo "* soft memlock unlimited" >> /etc/security/limits.conf
+echo "* hard memlock unlimited" >> /etc/security/limits.conf
+```
 
-# Or run directly
+Then restart the VM for the change to take effect.
+
+**Workaround:** Accept the risk. With 14GB RAM and the 8.38 GiB model weights fully offloaded to GPU (`--ngl 99`), the host-side memory footprint is modest. Page faults are unlikely unless the system is under heavy memory pressure from other processes.
+
+---
+
+### Speculative Decoding Slot 1 Failure
+
+**Symptom:** Slot 0 works normally with speculative decoding. Slot 1 fails with `failed to create draft context` in the llama-server logs.
+
+**Root cause:** Insufficient free VRAM to allocate a second draft model KV cache. After loading the main model, the draft model, and the slot 0 KV caches, only approximately 2,217 MiB of VRAM remains -- not enough for a second draft KV cache.
+
+**Impact:** Roughly 50% of concurrent requests (those routed to slot 1) do not benefit from speculative decoding. These requests complete slightly slower but are otherwise functional.
+
+**Workaround:** None currently available. Resolving this would require a GPU with more than 16GB VRAM, or reducing `--ctx-size` to lower the KV cache memory footprint per slot.
+
+---
+
+### Dashboard Crash-Loop
+
+**Symptom:** The atlas-dashboard deployment is in CrashLoopBackOff with a high restart count.
+
+**Context:** The dashboard accumulated 373 restarts over 16 days before being scaled to 0 replicas. It is non-essential for benchmark workloads.
+
+**To investigate:**
+
+```bash
+kubectl logs deployment/atlas-dashboard -n atlas --previous
+```
+
+**To re-enable:**
+
+```bash
+kubectl scale deployment atlas-dashboard -n atlas --replicas=1
+```
+
+**To disable again:**
+
+```bash
+kubectl scale deployment atlas-dashboard -n atlas --replicas=0
+```
+
+---
+
+### Per-Slot Context Truncation
+
+**Symptom:** llama-server logs contain the warning `n_ctx_seq (20480) < n_ctx_train (40960)`.
+
+**Root cause:** The `--ctx-size 40960` setting is divided equally across `--parallel 2` slots, giving each slot 20,480 tokens of context. The model was trained with a 40,960-token context window, so the server warns that each slot has less context than the model was trained for.
+
+**Impact:** Each individual request is limited to approximately 20,000 tokens of context (prompt + generation), not the full 40,960. This is sufficient for most benchmark tasks and RAG queries but will truncate very long prompts.
+
+**Workaround:** To give a single slot the full 40,960 context, set `ATLAS_PARALLEL_SLOTS=1`. This eliminates concurrent request handling but removes the context split.
+
+---
+
+### GPU Memory Pressure
+
+**Symptom:** Inference becomes slow, requests time out, or CUDA out-of-memory errors appear.
+
+**Monitor VRAM usage:**
+
+```bash
+kubectl exec deployment/llama-server -n atlas -- nvidia-smi
+```
+
+Typical V2 VRAM usage with Qwen3-14B-Q4_K_M + Qwen3-0.6B-Q8_0 draft + 2 slots:
+
+```
+Memory: ~13,635 / 16,311 MiB (83.6%)
+```
+
+There is little headroom. Do not attempt to load additional models or increase context length without first checking available VRAM.
+
+**Mitigation options:**
+
+1. Reduce context length: `ATLAS_CONTEXT_LENGTH=32768` (saves ~1-2 GB)
+2. Reduce to 1 parallel slot: `ATLAS_PARALLEL_SLOTS=1` (saves one KV cache allocation)
+3. Disable speculative decoding: unset `DRAFT_MODEL` (saves ~600 MiB)
+4. Use a more aggressively quantized model (Q3_K_M instead of Q4_K_M)
+
+---
+
+## Installation Issues
+
+### Installer fails with "command not found"
+
+**Symptom:** `./scripts/install.sh: command not found`
+
+**Solution:**
+
+```bash
+chmod +x scripts/install.sh
 bash scripts/install.sh
 ```
 
-#### "atlas.conf not found"
+### "atlas.conf not found"
 
-**Symptom**: Installer complains about missing configuration
+**Symptom:** Installer complains about missing configuration.
 
-**Solution**:
+**Solution:**
+
 ```bash
-# Copy example configuration
 cp atlas.conf.example atlas.conf
-
-# Edit with your settings
 vim atlas.conf
 ```
 
-#### kubectl not configured
+### kubectl not configured
 
-**Symptom**: `KUBECONFIG not set` or connection refused
+**Symptom:** `KUBECONFIG not set` or connection refused.
 
-**Solution**:
+**Solution:**
+
 ```bash
-# Copy K3s config
 mkdir -p ~/.kube
 sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown $(id -u):$(id -g) ~/.kube/config
 chmod 600 ~/.kube/config
-
-# Or set KUBECONFIG
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+export KUBECONFIG=~/.kube/config
 ```
 
 ---
 
-### GPU Issues
+## GPU Issues
 
-#### GPU not detected
+### GPU not detected
 
-**Symptom**: `nvidia.com/gpu: 0` in node resources
+**Symptom:** `nvidia.com/gpu: 0` in node allocatable resources.
 
-**Causes and Solutions**:
+**Check each layer of the stack:**
 
-1. **NVIDIA driver not installed**
+1. **NVIDIA driver:**
    ```bash
-   # Check driver
    nvidia-smi
-
-   # Install driver (RHEL/Rocky)
-   sudo dnf install -y nvidia-driver nvidia-driver-cuda
-   sudo reboot
+   # If missing: sudo dnf install -y nvidia-driver nvidia-driver-cuda && sudo reboot
    ```
 
-2. **NVIDIA device plugin not installed**
+2. **NVIDIA device plugin:**
    ```bash
-   # Install device plugin
-   kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.0/nvidia-device-plugin.yml
-
-   # Verify
    kubectl get pods -n kube-system | grep nvidia
+   # If missing:
+   kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.1/deployments/static/nvidia-device-plugin.yml
    ```
 
-3. **Container runtime not configured for GPU**
+3. **Containerd NVIDIA runtime:**
    ```bash
-   # For containerd (K3s default), check config
-   sudo cat /etc/containerd/config.toml
-
-   # Ensure nvidia runtime is configured
+   # Verify the containerd config template exists
+   ls /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
    ```
+   See [SETUP.md](SETUP.md) for the full containerd template.
 
-#### CUDA out of memory
+### CUDA out of memory
 
-**Symptom**: `CUDA error: out of memory`
+**Symptom:** `CUDA error: out of memory`
 
-**Solutions**:
+**Solutions in order of impact:**
 
-1. **Reduce GPU layers**
-   ```bash
-   # In atlas.conf
-   ATLAS_GPU_LAYERS=80  # Reduce from 99
-   ```
-
-2. **Use smaller model or quantization**
-   ```bash
-   # Use Q4 instead of Q6
-   ATLAS_MAIN_MODEL="model-q4_k_m.gguf"
-   ```
-
-3. **Disable speculative decoding**
-   ```bash
-   ATLAS_DRAFT_MODEL=""
-   ATLAS_ENABLE_SPECULATIVE=false
-   ```
-
-4. **Reduce context length**
-   ```bash
-   ATLAS_CONTEXT_LENGTH=8192  # Reduce from 16384
-   ```
+1. Reduce GPU layers: `ATLAS_GPU_LAYERS=80`
+2. Use a smaller quantization: switch from Q4_K_M to Q3_K_M
+3. Disable speculative decoding: `ATLAS_DRAFT_MODEL=""`
+4. Reduce context length: `ATLAS_CONTEXT_LENGTH=16384`
+5. Reduce parallel slots: `ATLAS_PARALLEL_SLOTS=1`
 
 ---
 
-### Service Issues
+## Service Issues
 
-#### Pod stuck in Pending
+### Pod stuck in Pending
 
-**Symptom**: Pod shows `Pending` status indefinitely
+**Symptom:** Pod shows `Pending` status indefinitely.
 
-**Check events**:
+**Debug:**
+
 ```bash
-kubectl describe pod <pod-name>
+kubectl describe pod <pod-name> -n atlas
 ```
 
-**Common causes**:
+**Common causes:**
 
-1. **Insufficient resources**
-   - Reduce resource requests in atlas.conf
-   - Check node capacity: `kubectl describe node`
+1. **Insufficient resources:** Reduce resource requests in atlas.conf. Check node capacity with `kubectl describe node`.
+2. **PVC not bound:** Check `kubectl get pvc -n atlas`. If Pending, verify the storage class exists: `kubectl get sc`.
+3. **GPU not available:** See [GPU not detected](#gpu-not-detected).
 
-2. **PVC not bound**
-   ```bash
-   kubectl get pvc
-   # If PVC is Pending, check storage class
-   kubectl get sc
-   ```
+### Pod in CrashLoopBackOff
 
-3. **Missing GPU resource**
-   - See [GPU not detected](#gpu-not-detected)
+**Symptom:** Pod repeatedly crashes and restarts.
 
-#### Pod in CrashLoopBackOff
+**Debug:**
 
-**Symptom**: Pod repeatedly crashes and restarts
-
-**Debug steps**:
 ```bash
-# Check logs
-kubectl logs <pod-name>
-
-# Check previous container logs
-kubectl logs <pod-name> --previous
-
-# Check events
-kubectl describe pod <pod-name>
+kubectl logs <pod-name> -n atlas
+kubectl logs <pod-name> -n atlas --previous
+kubectl describe pod <pod-name> -n atlas
 ```
 
-**Common causes**:
+**Common causes:**
 
-1. **Model file not found**
-   - Verify model path in atlas.conf
-   - Check hostPath mount exists
+1. **Model file not found:** Verify the model path matches atlas.conf and the hostPath mount exists on disk.
+2. **Configuration error:** Check for typos in atlas.conf or invalid YAML in manifests.
+3. **Port conflict:** Check if the NodePort is already in use by another service.
 
-2. **Configuration error**
-   - Check for typos in atlas.conf
-   - Validate JSON/YAML syntax in manifests
+### Service returning 502/503
 
-3. **Port conflict**
-   - Check if port is already in use
-   - Change NodePort values in atlas.conf
+**Symptom:** API calls return bad gateway or service unavailable.
 
-#### Service returning 502/503
+**Debug:**
 
-**Symptom**: API returns bad gateway or service unavailable
+```bash
+# Check if pods are ready
+kubectl get pods -n atlas
 
-**Solutions**:
+# Test health endpoint from inside the cluster
+kubectl exec -it <pod-name> -n atlas -- curl localhost:8000/health
 
-1. **Service not ready**
-   ```bash
-   # Wait for all pods to be ready
-   kubectl get pods -w
-   ```
+# Verify service endpoints are populated
+kubectl get endpoints -n atlas
+```
 
-2. **Health check failing**
-   ```bash
-   # Check health endpoint directly
-   kubectl exec -it <pod-name> -- curl localhost:8000/health
-   ```
-
-3. **Wrong service port**
-   ```bash
-   # Verify service endpoints
-   kubectl get endpoints
-   ```
+**Common cause:** llama-server takes 30-60 seconds to load the model on startup. The first request after a pod restart will be slow (cold KV cache warmup).
 
 ---
 
-### Model Issues
+## Model Issues
 
-#### Model fails to load
+### Model fails to load
 
-**Symptom**: `error loading model` in llama-server logs
+**Symptom:** `error loading model` in llama-server logs.
 
-**Solutions**:
+**Check:**
 
-1. **Verify model file**
-   ```bash
-   # Check file exists and is readable
-   ls -la /path/to/model.gguf
+```bash
+# Verify file exists on the host
+ls -la /opt/atlas/models/Qwen3-14B-Q4_K_M.gguf  # adjust to your ATLAS_MODELS_DIR
 
-   # Check file size (should be several GB)
-   du -h /path/to/model.gguf
-   ```
+# Verify file is visible inside the pod
+kubectl exec deployment/llama-server -n atlas -- ls -la /models/
 
-2. **Verify mount in pod**
-   ```bash
-   kubectl exec -it llama-server-xxx -- ls -la /models/
-   ```
+# Verify filename matches config
+grep ATLAS_MAIN_MODEL atlas.conf
+```
 
-3. **Check model filename matches config**
-   ```bash
-   grep ATLAS_MAIN_MODEL atlas.conf
-   ```
+### Slow inference
 
-#### Slow inference
+**Symptom:** Responses take significantly longer than expected.
 
-**Symptom**: Responses take too long
+**Possible causes and solutions:**
 
-**Solutions**:
-
-1. **Enable flash attention**
-   ```bash
-   ATLAS_FLASH_ATTENTION=true
-   ```
-
-2. **Increase GPU layers**
-   ```bash
-   ATLAS_GPU_LAYERS=99
-   ```
-
-3. **Use speculative decoding**
-   ```bash
-   ATLAS_DRAFT_MODEL="smaller-model.gguf"
-   ATLAS_ENABLE_SPECULATIVE=true
-   ```
-
-4. **Reduce context length if not needed**
-   ```bash
-   ATLAS_CONTEXT_LENGTH=8192
-   ```
+1. **Cold KV cache:** The first request after model load is always slow. Send a warmup request before benchmarking.
+2. **Flash attention disabled:** Ensure `ATLAS_FLASH_ATTENTION=true`.
+3. **Partial GPU offload:** Set `ATLAS_GPU_LAYERS=99` to offload all layers.
+4. **Speculative decoding not active:** Check llama-server logs for `Speculative decoding enabled`. If slot 1 shows draft context failure, only slot 0 gets spec decode benefit.
+5. **Qwen3 thinking mode:** At temperature=0, Qwen3 engages thinking mode with `<think>` tags that consume 8000+ tokens before generating the actual answer. Use the `/nothink` template mode or set `max_tokens` to at least 16384.
 
 ---
 
-### Memory Issues
+## RAG Issues
 
-#### Node running out of memory
+### Project sync fails
 
-**Symptom**: Pods evicted, OOMKilled
+**Symptom:** Error during codebase sync to PageIndex.
 
-**Solutions**:
+**Debug:**
 
-1. **Reduce memory requests**
+```bash
+# Check rag-api logs
+kubectl logs deployment/rag-api -n atlas
+
+# Verify llama-server is healthy (needed for tree search and embeddings)
+curl http://localhost:32735/health
+```
+
+**Common causes:**
+
+1. **llama-server not ready:** PageIndex tree search requires the LLM for summarization. Wait for llama-server to finish loading.
+2. **Project too large:** Reduce project size or increase `MAX_FILES`.
+3. **Disk full:** Check available space on the projects volume.
+
+### Poor retrieval quality
+
+**Symptom:** Retrieved context is not relevant to the query.
+
+**Solutions:**
+
+1. **Increase TOP_K:** Set `TOP_K=30` in the rag-api deployment to retrieve more candidates.
+2. **Re-sync project:** Delete the project and re-upload to rebuild the PageIndex tree and BM25 index.
+3. **Check routing:** If `ROUTING_ENABLED=true`, the confidence router may be selecting FAST_PATH (k=1) for queries that need more context. Check `route_decisions.jsonl` telemetry.
+
+---
+
+## Memory Issues
+
+### Node running out of memory
+
+**Symptom:** Pods evicted or OOMKilled.
+
+**Solutions:**
+
+1. **Reduce memory requests:**
    ```bash
    ATLAS_LLAMA_MEMORY_REQUEST="4Gi"
    ATLAS_SERVICE_MEMORY_REQUEST="256Mi"
    ```
 
-2. **Enable swap (not recommended for production)**
+2. **Disable unused services:**
+   ```bash
+   ATLAS_ENABLE_DASHBOARD=false
+   ATLAS_ENABLE_TRAINING=false
+   ```
+
+3. **Enable swap (not recommended for production):**
    ```bash
    sudo fallocate -l 8G /swapfile
    sudo chmod 600 /swapfile
@@ -299,172 +362,69 @@ kubectl describe pod <pod-name>
    sudo swapon /swapfile
    ```
 
-3. **Disable unused services**
-   ```bash
-   ATLAS_ENABLE_DASHBOARD=false
-   ATLAS_ENABLE_TRAINING=false
-   ```
-
-#### Qdrant running out of storage
-
-**Symptom**: Vector indexing fails
-
-**Solutions**:
-
-1. **Increase PVC size**
-   ```bash
-   ATLAS_PVC_QDRANT_SIZE="100Gi"
-   ```
-
-2. **Clean old projects**
-   ```bash
-   # Delete old vector collections
-   curl -X DELETE http://localhost:6333/collections/old_project
-   ```
-
 ---
 
-### Network Issues
+## Network Issues
 
-#### Cannot connect to service
+### Cannot connect to service
 
-**Symptom**: Connection refused or timeout
+**Symptom:** Connection refused or timeout when accessing a NodePort.
 
-**Debug steps**:
+**Debug:**
+
 ```bash
-# Check service exists
-kubectl get svc
+# Check services exist
+kubectl get svc -n atlas
 
-# Check endpoints exist
-kubectl get endpoints <service-name>
+# Check endpoints are populated
+kubectl get endpoints -n atlas
 
-# Test from inside cluster
-kubectl run test --rm -it --image=busybox -- wget -qO- http://service:port/health
+# Test from inside the cluster
+kubectl run test --rm -it --image=busybox -n atlas -- wget -qO- http://rag-api:8001/health
 
 # Check firewall
 sudo firewall-cmd --list-all
 ```
 
-#### NodePort not accessible
+### NodePort not accessible
 
-**Symptom**: Cannot reach service from outside cluster
+**Symptom:** Cannot reach service from outside the cluster.
 
-**Solutions**:
+**Solutions:**
 
-1. **Open firewall port**
+1. **Open firewall port:**
    ```bash
-   sudo firewall-cmd --permanent --add-port=30000/tcp
+   sudo firewall-cmd --permanent --add-port=32735/tcp
+   sudo firewall-cmd --permanent --add-port=31144/tcp
    sudo firewall-cmd --reload
    ```
 
-2. **Check correct IP**
+2. **Verify correct IP:**
    ```bash
    kubectl get nodes -o wide
    ```
 
-3. **Verify NodePort service**
+3. **Verify NodePort assignment:**
    ```bash
-   kubectl get svc -o wide
+   kubectl get svc -n atlas -o wide
    ```
 
 ---
 
-### Authentication Issues
+## Collecting Logs
 
-#### Invalid API key
-
-**Symptom**: 401 Unauthorized
-
-**Solutions**:
-
-1. **Verify key in database**
-   - Log into API Portal
-   - Check key is active (not revoked)
-   - Check key hasn't expired
-
-2. **Check rate limit not exceeded**
-   - View usage in dashboard
-   - Wait for rate limit window to reset
-
-3. **Verify key format**
-   - Keys should start with `sk-`
-   - Check for trailing whitespace
-
-#### JWT expired
-
-**Symptom**: Session expired, logged out
-
-**Solutions**:
-
-1. **Increase expiry**
-   ```bash
-   ATLAS_JWT_EXPIRY_HOURS=168  # 1 week
-   ```
-
-2. **Re-login to get new token**
-
----
-
-### RAG Issues
-
-#### Project sync fails
-
-**Symptom**: Error during codebase sync
-
-**Solutions**:
-
-1. **Check embedding service**
-   ```bash
-   curl http://localhost:8080/health
-   ```
-
-2. **Check Qdrant**
-   ```bash
-   curl http://localhost:6333/health
-   ```
-
-3. **Reduce project size**
-   - Exclude large directories
-   - Use .gitignore patterns
-
-#### Poor retrieval quality
-
-**Symptom**: Retrieved context not relevant
-
-**Solutions**:
-
-1. **Increase top-k**
-   ```bash
-   ATLAS_RAG_TOP_K=30
-   ```
-
-2. **Adjust chunk size**
-   ```bash
-   ATLAS_RAG_CHUNK_SIZE=80
-   ATLAS_RAG_CHUNK_OVERLAP=30
-   ```
-
-3. **Re-sync project**
-   - Delete project and re-upload
-
----
-
-## Getting Logs
-
-### All pod logs
+### Per-service logs
 
 ```bash
 # Current logs
-kubectl logs <pod-name>
+kubectl logs deployment/llama-server -n atlas
+kubectl logs deployment/rag-api -n atlas
 
-# Previous container logs (after restart)
-kubectl logs <pod-name> --previous
+# Previous container logs (after a restart)
+kubectl logs deployment/llama-server -n atlas --previous
 
-# Follow logs
-kubectl logs -f <pod-name>
-
-# Logs from all pods with label
-kubectl logs -l app=rag-api
+# Follow logs in real-time
+kubectl logs -f deployment/rag-api -n atlas
 ```
 
 ### System logs
@@ -473,30 +433,29 @@ kubectl logs -l app=rag-api
 # K3s logs
 sudo journalctl -u k3s
 
-# containerd logs
-sudo journalctl -u containerd
-
-# NVIDIA driver logs
+# NVIDIA driver messages
 dmesg | grep nvidia
 ```
 
-### Export logs for debugging
+### Export all logs for debugging
 
 ```bash
-# Export all ATLAS logs
-for pod in $(kubectl get pods -o name); do
-  kubectl logs $pod > logs/$(basename $pod).log
+mkdir -p logs
+for pod in $(kubectl get pods -n atlas -o name); do
+  kubectl logs -n atlas $pod > logs/$(basename $pod).log 2>&1
 done
 ```
 
+---
+
 ## Getting Help
 
-If you can't resolve an issue:
+If you cannot resolve an issue:
 
-1. Check existing GitHub issues
+1. Check existing GitHub issues.
 2. Open a new issue with:
-   - ATLAS version/commit
-   - Output of `kubectl get pods`
+   - ATLAS version or commit hash (`git rev-parse HEAD`)
+   - Output of `kubectl get pods -n atlas`
    - Relevant pod logs
-   - Your atlas.conf (remove secrets)
-   - Steps to reproduce
+   - Your `atlas.conf` (remove any secrets)
+   - Steps to reproduce the problem

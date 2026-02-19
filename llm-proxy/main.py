@@ -26,7 +26,7 @@ _key_cache_ttl = 60  # seconds
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     redis_client.ping()
-except:
+except Exception:
     redis_client = None
     print("Warning: Redis not available, metrics will not be logged")
 
@@ -279,7 +279,7 @@ async def chat_completions(request: Request, authorization: str = Header(None)):
                                     if line.startswith('data: ') and 'usage' in line:
                                         data = json.loads(line[6:])
                                         tokens = data.get('usage', {}).get('total_tokens', 0)
-                            except:
+                            except Exception:
                                 pass
                 duration_ms = int((time.time() - start) * 1000)
                 log_metrics("chat_stream", model, tokens, True, duration_ms)

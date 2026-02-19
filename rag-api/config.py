@@ -14,25 +14,11 @@ class LlamaConfig(BaseModel):
     base_url: str = "http://llama-service:8000"
 
 
-class QdrantConfig(BaseModel):
-    host: str = "qdrant"
-    port: int = 6333
-
-
-class EmbeddingConfig(BaseModel):
-    base_url: str = "http://embedding-service:8080"
-
-
 class LimitsConfig(BaseModel):
     max_files: int = 10000
     max_loc: int = 500000
     max_size_mb: int = 100
     project_ttl_hours: int = 24
-
-
-class ChunkingConfig(BaseModel):
-    max_chunk_lines: int = 100
-    overlap_lines: int = 20
 
 
 class RetrievalConfig(BaseModel):
@@ -43,10 +29,7 @@ class RetrievalConfig(BaseModel):
 class Config(BaseModel):
     server: ServerConfig = ServerConfig()
     llama: LlamaConfig = LlamaConfig()
-    qdrant: QdrantConfig = QdrantConfig()
-    embedding: EmbeddingConfig = EmbeddingConfig()
     limits: LimitsConfig = LimitsConfig()
-    chunking: ChunkingConfig = ChunkingConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     api_portal_url: str = os.environ.get("API_PORTAL_URL", "http://api-portal:3000")
 
@@ -65,8 +48,11 @@ def load_api_keys() -> Dict[str, dict]:
     if os.path.exists(keys_path):
         with open(keys_path) as f:
             return json.load(f)
-    # Default key for development
-    return {"sk-dev-key": {"user": "dev", "rate_limit": 1000}}
+    import logging
+    logging.getLogger(__name__).warning(
+        "No API key file found. Set ATLAS_API_KEY_FILE or create /app/config/api_keys.json"
+    )
+    return {}
 
 
 config = load_config()

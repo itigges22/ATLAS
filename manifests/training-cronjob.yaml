@@ -43,10 +43,12 @@ spec:
           volumes:
           - name: training-data
             hostPath:
-              path: /home/nobase/data/training
+              # CHANGE THIS: Set to your ATLAS training data directory (see docs/SETUP.md)
+              path: /opt/atlas/data/training
               type: DirectoryOrCreate
           - name: lora-adapters
             hostPath:
-              path: /home/nobase/models/lora
+              # CHANGE THIS: Set to your model directory + /lora (see docs/SETUP.md)
+              path: /opt/atlas/models/lora
               type: DirectoryOrCreate
           restartPolicy: OnFailure

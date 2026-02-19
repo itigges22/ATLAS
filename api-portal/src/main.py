@@ -47,7 +47,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 try:
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     redis_client.ping()
-except:
+except Exception:
     redis_client = None
     print("Warning: Redis not available for metrics")
 

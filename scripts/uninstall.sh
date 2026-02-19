@@ -81,10 +81,9 @@ remove_atlas_services() {
     kubectl delete -f "$K8S_DIR/atlas/manifests/" -n "$ATLAS_NAMESPACE" 2>/dev/null || true
     kubectl delete -f "$K8S_DIR/manifests/" -n "$ATLAS_NAMESPACE" 2>/dev/null || true
 
+    # V1 components (Qdrant, embedding-service) removed in V2
     # Delete any remaining resources by label
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=redis 2>/dev/null || true
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=qdrant 2>/dev/null || true
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=embedding-service 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=llama-server 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=api-portal 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=rag-api 2>/dev/null || true
@@ -94,7 +93,7 @@ remove_atlas_services() {
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=atlas-dashboard 2>/dev/null || true
 
     # Delete services
-    kubectl delete service -n "$ATLAS_NAMESPACE" redis qdrant embedding-service llama-server api-portal rag-api llm-proxy sandbox task-worker atlas-dashboard 2>/dev/null || true
+    kubectl delete service -n "$ATLAS_NAMESPACE" redis llama-server api-portal rag-api llm-proxy sandbox task-worker atlas-dashboard 2>/dev/null || true
 
     # Delete secrets
     kubectl delete secret -n "$ATLAS_NAMESPACE" atlas-secrets 2>/dev/null || true
@@ -104,7 +103,6 @@ remove_atlas_services() {
 
     if [[ "$REMOVE_DATA" == true ]]; then
         log_info "Removing persistent volume claims..."
-        kubectl delete pvc -n "$ATLAS_NAMESPACE" qdrant-storage 2>/dev/null || true
         kubectl delete pvc -n "$ATLAS_NAMESPACE" redis-storage 2>/dev/null || true
         kubectl delete pvc -n "$ATLAS_NAMESPACE" api-portal-data 2>/dev/null || true
     fi
@@ -120,7 +118,8 @@ remove_atlas_services() {
 remove_container_images() {
     log_info "Removing container images..."
 
-    IMAGES="llama-server rag-api api-portal embedding-service sandbox task-worker atlas-dashboard atlas-trainer llm-proxy"
+    # V1 components (Qdrant, embedding-service) removed in V2
+    IMAGES="llama-server rag-api api-portal sandbox task-worker atlas-dashboard atlas-trainer llm-proxy"
 
     for img in $IMAGES; do
         k3s ctr images rm "${ATLAS_REGISTRY}/$img:${ATLAS_IMAGE_TAG}" 2>/dev/null || true

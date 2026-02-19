@@ -1,79 +1,68 @@
-# ATLAS Architecture Diagram
+# ATLAS V2 Architecture Diagram
 
 <div align="center">
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2196F3', 'primaryTextColor': '#212121', 'primaryBorderColor': '#1565C0', 'lineColor': '#455A64', 'secondaryColor': '#E3F2FD', 'tertiaryColor': '#ECEFF1', 'edgeLabelBackground': '#ECEFF1'}}}%%
 flowchart TB
-    subgraph external[" "]
-        client(["Client<br/>OpenCode / API"])
-    end
-    subgraph gateway["Gateway"]
-        proxy["LLM Proxy :8000<br/>Auth • Rate Limit"]
-        portal["API Portal :3000<br/>Users • Keys"]
-    end
-    subgraph core["Core Services"]
-        rag["RAG API :8001<br/>Orchestration"]
-        embed["Embeddings :8080<br/>MiniLM-L6-v2"]
-    end
+  subgraph Input
+    Problem[Coding Problem]
+  end
 
-    %% Central inference engine - outside subgraphs for central positioning
-    llama["llama-server :8000<br/>Qwen3-14B • GPU"]
+  subgraph Routing["Confidence Router"]
+    SC[Signal Collector<br/>4 signals: cache, retrieval,<br/>complexity, geometric energy]
+    DE[Difficulty Estimator<br/>Weights: 0.30 / 0.25 / 0.20 / 0.25]
+    TS[Thompson Sampling<br/>Beta posteriors per bin x route<br/>Cost-weighted selection]
+    AK[Adaptive-k Selection<br/>CACHE_HIT k=0 / FAST k=1<br/>STANDARD k=5 / HARD k=20]
+  end
 
-    subgraph data["Storage"]
-        qdrant[("Qdrant<br/>100GB Vectors")]
-        redis[("Redis<br/>Queues • Metrics")]
-    end
-    subgraph atlas["Task Processing"]
-        worker["Task Worker<br/>Ralph Loop<br/>99.5% Success"]
-        sandbox["Sandbox :8020<br/>pytest • pylint"]
-        dash["Dashboard :3001<br/>Monitoring"]
-    end
-    subgraph learn["Learning"]
-        trainer["Nightly Trainer<br/>LoRA Fine-tune"]
-        lora[("Adapters<br/>Hot-swap")]
-    end
-    %% Gateway flow
-    client -->|"request"| proxy
-    proxy -.->|"validate key"| portal
-    proxy -->|"chat/completions"| rag
+  subgraph Generation["Best-of-K Pipeline"]
+    LS[llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B Draft<br/>2 parallel slots]
+    PC[Pattern Cache<br/>Redis + Ebbinghaus Decay<br/>STM / LTM tiers]
+  end
 
-    %% RAG API calls llama-server for inference
-    rag -->|"inference"| llama
-    rag -->|"embed query"| embed
-    embed -->|"search vectors"| qdrant
+  subgraph Evaluation["Candidate Selection"]
+    GL[Geometric Lens<br/>Cost Field C x 2.7M params<br/>Metric Tensor G x 5.2M params<br/>Val AUC: 0.968]
+    SB[Sandbox<br/>Code Execution + Testing<br/>Energy-sorted early exit]
+  end
 
-    %% Task submission to Redis
-    rag -->|"submit task"| redis
-    redis -->|"poll result"| rag
+  subgraph Knowledge["Context Retrieval"]
+    PI[PageIndex RAG<br/>AST Tree Index + BM25<br/>LLM-guided Tree Search]
+  end
 
-    %% Ralph Loop: Task Worker flow
-    redis -->|"pull task"| worker
-    worker -->|"generate code"| llama
-    worker -->|"test code"| sandbox
-    worker -->|"result + training"| redis
+  subgraph Feedback["Continuous Learning"]
+    FR[Feedback Recorder<br/>Thompson state updates]
+    RT[Lens Retrain<br/>BCE on pass/fail embeddings<br/>Hot-reload weights]
+  end
 
-    %% Monitoring
-    redis -->|"metrics"| dash
+  Problem --> SC
+  PC -.->|pattern cache score| SC
+  PI -.->|retrieval confidence| SC
+  GL -.->|geometric energy| SC
+  SC --> DE
+  DE --> TS
+  TS --> AK
+  AK -->|k candidates + temperature| LS
+  PC -.->|strategy hints| LS
+  PI -.->|relevant context| LS
+  LS -->|k candidates| GL
+  GL -->|sorted by energy| SB
+  SB -->|result + feedback| FR
+  SB -->|pass/fail embeddings| RT
+  FR -.->|update Beta posteriors| TS
+  RT -.->|retrained C x| GL
+  SB -->|pattern write| PC
 
-    %% Learning pipeline
-    redis -.->|"training data"| trainer
-    trainer -->|"fine-tune"| lora
-    lora -.->|"load LoRA"| llama
-    classDef client fill:#37474F,stroke:#263238,color:#fff
-    classDef gateway fill:#607D8B,stroke:#455A64,color:#fff
-    classDef core fill:#2196F3,stroke:#1565C0,color:#fff
-    classDef gpu fill:#4CAF50,stroke:#2E7D32,color:#fff
-    classDef storage fill:#00BCD4,stroke:#00838F,color:#fff
-    classDef process fill:#FF9800,stroke:#E65100,color:#fff
-    classDef learn fill:#9C27B0,stroke:#6A1B9A,color:#fff
-    class client client
-    class proxy,portal gateway
-    class rag core
-    class llama,embed gpu
-    class qdrant,redis storage
-    class worker,sandbox,dash process
-    class trainer,lora learn
+  style GL fill:#2d5016,color:#fff
+  style LS fill:#1a3a5c,color:#fff
+  style DE fill:#5c3a1a,color:#fff
+  style SC fill:#5c3a1a,color:#fff
+  style TS fill:#5c3a1a,color:#fff
+  style AK fill:#5c3a1a,color:#fff
+  style PC fill:#1a3a5c,color:#fff
+  style PI fill:#1a3a5c,color:#fff
+  style SB fill:#2d5016,color:#fff
+  style FR fill:#4a1a5c,color:#fff
+  style RT fill:#4a1a5c,color:#fff
 ```
 
 </div>
@@ -82,50 +71,50 @@ flowchart TB
 
 | Layer | Service | Port | Technology | Purpose |
 |-------|---------|------|------------|---------|
-| **Gateway** | LLM Proxy | 8000 | FastAPI | Auth, rate limiting, routing |
-| | API Portal | 3000 | FastAPI + SQLite | User/key management, usage tracking |
-| **Core** | RAG API | 8001 | FastAPI | Project sync, chunking, orchestration |
-| | llama-server | 8000 | llama.cpp + CUDA | GPU inference (Qwen3-14B) |
-| | Embeddings | 8080 | sentence-transformers | Text → 384-dim vectors |
-| **Storage** | Qdrant | 6333/6334 | Qdrant | Vector DB, HNSW indexing |
-| | Redis | 6379 | Redis | Task queues, metrics, cache |
-| **Processing** | Task Worker | — | Python | Ralph Loop execution |
-| | Sandbox | 8020 | FastAPI | Isolated pytest/pylint |
-| | Dashboard | 3001 | FastAPI + Jinja2 | Real-time monitoring |
-| **Learning** | Trainer | — | PyTorch + PEFT | Nightly LoRA fine-tuning |
+| **Core** | rag-api | 8001 (NodePort 31144) | FastAPI | Orchestration: routing, RAG, cache, lens |
+| | llama-server | 8000 (NodePort 32735) | llama.cpp + CUDA | GPU inference (Qwen3-14B-Q4_K_M + 0.6B draft) |
+| **Storage** | Redis | 6379 | Redis | Pattern cache, Thompson state, task queue |
+| **Intelligence** | Confidence Router | (in rag-api) | Thompson Sampling | 4-signal difficulty estimation, adaptive-k |
+| | Geometric Lens | (in rag-api) | PyTorch (CPU) | Energy-based candidate scoring, 7.9M params |
+| | Pattern Cache | (in rag-api) | Redis-backed | Ebbinghaus-decay STM/LTM pattern memory |
+| | PageIndex | (in rag-api) | tree-sitter + BM25 | AST-aware code retrieval with LLM tree search |
+| **Execution** | Sandbox | (in benchmark) | subprocess | Isolated code execution and testing |
 
 ## Data Flows
 
-### Chat Completion
+### Routing Decision
 ```
-Client → LLM Proxy → RAG API → Embeddings → Qdrant
-                         ↓
-                    llama-server → Response
+Query
+ -> Signal Collector (pattern_cache_score, retrieval_confidence, query_complexity, geometric_energy)
+ -> Difficulty Estimator (weighted sum -> D(x) in [0,1])
+ -> Thompson Sampling (Beta posteriors, cost-weighted efficiency)
+ -> Route Selection (CACHE_HIT / FAST_PATH / STANDARD / HARD_PATH)
+ -> Adaptive-k (k=0 / k=1 / k=5 / k=20)
 ```
 
-### Task Processing (Ralph Loop)
+### Best-of-K Generation
 ```
-Client → RAG API → Redis Queue
-                       ↓
-               Task Worker ⟷ Sandbox
-                   ↓
-              llama-server
-                   ↓
-              Success → Training Data
+Task + k value
+ -> llama-server (k candidates at temperature 0.6-0.8, pipelined via ThreadPool)
+ -> Geometric Lens (score each candidate, sort by energy)
+ -> Sandbox (try in energy order, early exit on first PASS)
+ -> Result + feedback
 ```
 
 ### Continuous Learning
 ```
-Redis (completions) → Trainer → LoRA Adapter → llama-server
-                                    ↑
-                            Hot-swap via symlink
+Sandbox results (pass/fail + code embeddings)
+ -> Lens Retrain (BCE loss, epoch-based)
+ -> Hot-reload C(x) weights into rag-api
+ -> Thompson Sampling feedback (update Beta posteriors)
+ -> Pattern Cache write (extract + store successful patterns)
 ```
 
 ## Color Legend
 
 | Color | Meaning |
 |-------|---------|
-| 🟢 Green | GPU-accelerated services |
-| 🔵 Blue | Persistent storage |
-| 🟠 Orange | Task processing |
-| 🟣 Purple | Learning pipeline |
+| Dark green | Evaluation (Lens + Sandbox) |
+| Dark blue | Generation and retrieval (llama-server, PageIndex, Pattern Cache) |
+| Dark brown | Routing (Signal Collector, Difficulty Estimator, Thompson, Adaptive-k) |
+| Dark purple | Feedback and learning (Feedback Recorder, Lens Retrain) |

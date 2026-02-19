@@ -13,7 +13,7 @@ import subprocess
 import pytest
 
 # Add rag-api to path for imports
-sys.path.insert(0, "/home/nobase/k8s/rag-api")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "rag-api"))
 
 
 class TestProvenanceImport:

@@ -18,6 +18,12 @@ AUDIT*.md
 *AUDIT*.md
 FINAL_CLEANUP.md
 DELETE_BEFORE_PUSH/
+/plans/
+
+# ----- AI/Assistant Implementation Prompts -----
+# Design docs (*-design.md) are kept; implementation prompt files are excluded.
+docs/plans/2026-02-16-best-of-k.md
+docs/plans/2026-02-16-geo-learning.md
 
 # ----- AI/Assistant Related (should not exist) -----
 *claude*
@@ -114,6 +120,22 @@ bin/
 *-darwin-*
 *-linux-*
 
+# ----- Development artifacts -----
+validation_results.json
+validate_geometric_lens.py
+v2_verification_report.md
+
+# ----- V1 vestiges (embedding-service replaced by llama-server --embeddings) -----
+embedding-service/
+
+# ----- V1 manifest templates (Qdrant and embedding-service removed in V2) -----
+templates/qdrant-deployment.yaml.tmpl
+templates/embedding-deployment.yaml.tmpl
+
+# ----- Local data (not for git — user provides their own models) -----
+models/
+
 # ----- Benchmark -----
 benchmark/datasets/.cache/
 benchmark/results/
+benchmark/result/

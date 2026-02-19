@@ -33,7 +33,12 @@ class LiveCodeBenchDataset(BaseDataset):
     """
 
     ROWS_API = "https://datasets-server.huggingface.co/rows"
-    DATASET_ID = "livecodebench/code_generation_lite"
+    # Primary source is livecodebench/code_generation_lite, but it has known
+    # loading issues. Fall back to the bzantium mirror per AA methodology.
+    DATASET_IDS = [
+        "livecodebench/code_generation_lite",
+        "bzantium/livecodebench",
+    ]
     CONFIG = "release_v5"
     FILENAME = "livecodebench_v5.jsonl"
 
@@ -70,39 +75,42 @@ class LiveCodeBenchDataset(BaseDataset):
         if filepath.exists():
             return filepath
 
-        print(f"Downloading LiveCodeBench (release_v5) from HuggingFace...")
-        rows = []
+        # Try each dataset source in order
+        for dataset_id in self.DATASET_IDS:
+            print(f"Downloading LiveCodeBench (release_v5) from {dataset_id}...")
+            rows = []
 
-        # Fetch in batches of 100 — LCB v5 has ~880 problems
-        offset = 0
-        while True:
-            url = (
-                f"{self.ROWS_API}?dataset={self.DATASET_ID}"
-                f"&config={self.CONFIG}&split=test&offset={offset}&length=100"
-            )
-            req = urllib.request.Request(url)
-            try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    data = json.loads(resp.read().decode('utf-8'))
-                    batch = data.get("rows", [])
-                    rows.extend(batch)
-                    if len(batch) < 100:
+            offset = 0
+            while True:
+                url = (
+                    f"{self.ROWS_API}?dataset={dataset_id}"
+                    f"&config={self.CONFIG}&split=test&offset={offset}&length=100"
+                )
+                req = urllib.request.Request(url)
+                try:
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        data = json.loads(resp.read().decode('utf-8'))
+                        batch = data.get("rows", [])
+                        rows.extend(batch)
+                        if len(batch) < 100:
+                            break
+                        offset += 100
+                except Exception as e:
+                    if rows:
+                        print(f"Warning: partial download ({len(rows)} rows at offset {offset}): {e}")
                         break
-                    offset += 100
-            except Exception as e:
-                if rows:
-                    # Got partial data, proceed with what we have
-                    print(f"Warning: partial download ({len(rows)} rows, error at offset {offset}): {e}")
+                    print(f"  Failed: {e}")
+                    rows = []
                     break
-                raise RuntimeError(f"Failed to download LiveCodeBench (offset={offset}): {e}")
 
-        # Write to cache as JSONL — one row per line
-        with open(filepath, 'w', encoding='utf-8') as f:
-            for row in rows:
-                f.write(json.dumps(row.get("row", row)) + "\n")
+            if rows:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    for row in rows:
+                        f.write(json.dumps(row.get("row", row)) + "\n")
+                print(f"Downloaded {len(rows)} tasks to {filepath}")
+                return filepath
 
-        print(f"Downloaded {len(rows)} tasks to {filepath}")
-        return filepath
+        raise RuntimeError("Failed to download LiveCodeBench from any source")
 
     def _parse(self, filepath: Path) -> List[BenchmarkTask]:
         """Parse the cached LiveCodeBench JSONL file."""
@@ -179,25 +187,29 @@ class LiveCodeBenchDataset(BaseDataset):
         self, question: str, starter_code: str, has_starter: bool
     ) -> str:
         """
-        Build a LiveCodeBench-style prompt.
+        Build a LiveCodeBench prompt using Artificial Analysis methodology.
 
-        For function-completion problems: includes starter code and asks to complete.
-        For full-script problems: asks for a complete stdin/stdout Python script.
+        For function-completion problems: includes starter code with format instructions.
+        For stdin/stdout problems: instructs to read from stdin and write to stdout.
         """
         if has_starter:
             return (
-                "Solve the following programming problem in Python.\n"
-                "Complete the given function. Read input from stdin and print output to stdout.\n\n"
-                f"Problem:\n{question}\n\n"
-                f"Starter code:\n{starter_code}\n\n"
-                "Return ONLY the complete Python code (no explanation, no markdown).\n"
+                f"### Question:\n{question}\n\n"
+                f"### Format: You will use the following starter code to write the "
+                f"solution to the problem and enclose your code within delimiters.\n"
+                f"```python\n{starter_code}\n```\n\n"
+                f"### Answer: (use the provided format with backticks)\n"
             )
         else:
             return (
-                "Solve the following programming problem in Python.\n"
-                "Write a complete program that reads from stdin and prints to stdout.\n\n"
-                f"Problem:\n{question}\n\n"
-                "Return ONLY the complete Python code (no explanation, no markdown).\n"
+                f"### Question:\n{question}\n\n"
+                f"### Format: Read the inputs from stdin solve the problem and write "
+                f"the answer to stdout (do not directly test on the sample inputs). "
+                f"Enclose your code within delimiters as follows. Ensure that when the "
+                f"python program runs, it reads the inputs, runs the algorithm and "
+                f"writes output to STDOUT.\n"
+                f"```python\n# YOUR CODE HERE\n```\n\n"
+                f"### Answer: (use the provided format with backticks)\n"
             )
 
     def _extract_test_cases(self, data: dict):

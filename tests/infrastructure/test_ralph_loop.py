@@ -5,12 +5,15 @@ Validates retry logic, temperature escalation,
 error accumulation, and success criteria.
 """
 
+import os
 import sys
 import time
 import pytest
 
 # Add atlas task-worker to path for imports
-sys.path.insert(0, "/home/nobase/k8s/atlas/task-worker")
+# NOTE: task-worker lives outside this repo at the deployment path;
+# these tests require the task-worker source to be available.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "task-worker"))
 
 
 class TestRalphLoopImport:

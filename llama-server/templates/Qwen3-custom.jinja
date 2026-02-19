@@ -1,4 +1,4 @@
-{%- set default_system = "You are a coding assistant. Keep thinking under 20 words." %}
+{%- set default_system = "You are an expert programmer. Think step by step when solving problems." %}
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
     {{- default_system + '\n\n' }}
@@ -82,5 +82,5 @@
     {%- endif %}
 {%- endfor %}
 {%- if add_generation_prompt %}
-    {{- '<|im_start|>assistant\n' }}
+    {{- '<|im_start|>assistant\n<think>\n' }}
 {%- endif %}

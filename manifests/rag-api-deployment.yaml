@@ -20,11 +20,9 @@ spec:
         imagePullPolicy: Never
         ports:
         - containerPort: 8001
+        # V2: Qdrant/embedding-service removed. RAG uses
+        # PageIndex (tree index + LLM reasoning) and llama-server --embeddings endpoint.
         env:
-        - name: QDRANT_URL
-          value: "http://qdrant:6333"
-        - name: EMBEDDING_URL
-          value: "http://embedding-service:8080"
         - name: LLAMA_URL
           value: "http://llama-service:8000"
         - name: API_PORTAL_URL
@@ -37,22 +35,24 @@ spec:
           value: "8000"
         - name: TOP_K
           value: "20"
-        - name: CHUNK_SIZE
-          value: "100"
-        - name: CHUNK_OVERLAP
-          value: "20"
         - name: MAX_FILES
           value: "10000"
         - name: LOG_LEVEL
           value: "INFO"
         - name: ENABLE_PROVENANCE
           value: "true"
+        - name: RETRIEVAL_MODE
+          value: "pageindex"
+        - name: ROUTING_ENABLED
+          value: "true"
+        - name: GEOMETRIC_LENS_ENABLED
+          value: "true"
         resources:
           limits:
-            memory: 2Gi
+            memory: 3Gi
             cpu: 2
           requests:
-            memory: 512Mi
+            memory: 1Gi
             cpu: 0.5
         volumeMounts:
         - name: projects
@@ -72,7 +72,8 @@ spec:
       volumes:
       - name: projects
         hostPath:
-          path: /home/nobase/data/projects
+          # CHANGE THIS: Set to your ATLAS data directory (see docs/SETUP.md)
+          path: /opt/atlas/data/projects
           type: DirectoryOrCreate
 ---
 apiVersion: v1

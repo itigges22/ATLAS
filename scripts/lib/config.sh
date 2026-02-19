@@ -108,9 +108,7 @@ validate_config() {
         "$ATLAS_RAG_API_NODEPORT"
         "$ATLAS_DASHBOARD_NODEPORT"
         "$ATLAS_LLAMA_NODEPORT"
-        "$ATLAS_QDRANT_NODEPORT"
-        "$ATLAS_QDRANT_GRPC_NODEPORT"
-        "$ATLAS_EMBEDDING_NODEPORT"
+        # V1 components (Qdrant, embedding-service) removed in V2
         "$ATLAS_SANDBOX_NODEPORT"
     )
 

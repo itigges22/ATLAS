@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 ATLAS V1 Benchmark Infrastructure — Deep Verification Script
-Run from: /home/isaac/ATLAS
-Usage:    python verify_benchmarks.py
+Run from: the ATLAS repo root
+Usage:    python scripts/validate_benchmarks.py
 """
 
 import json
@@ -236,7 +236,7 @@ def verify_custom_tasks():
         finally:
             try:
                 os.unlink(tmp.name)
-            except:
+            except Exception:
                 pass
 
     check(f"Canonical solutions pass own tests",
@@ -340,7 +340,7 @@ def verify_mutation_testing():
         finally:
             try:
                 os.unlink(tmp.name)
-            except:
+            except Exception:
                 pass
 
     detection_rate = (caught / len(tasks)) * 100 if tasks else 0
@@ -503,7 +503,7 @@ def verify_runner_isolation():
                     execute_fn = getattr(mod, fn_name)
                     execute_name = f"{module_name}.{fn_name}"
                     break
-            except:
+            except Exception:
                 pass
 
         if execute_fn is None:
@@ -517,7 +517,7 @@ def verify_runner_isolation():
                             execute_fn = obj
                             execute_name = f"benchmark.runner.{name}"
                             break
-            except:
+            except Exception:
                 pass
 
         if execute_fn is None:
@@ -831,7 +831,7 @@ def main():
     # Verify we're in the right directory
     if not os.path.isdir("benchmark"):
         print(f"\n{RED}ERROR: 'benchmark/' directory not found.{RESET}")
-        print(f"Run this script from /home/isaac/ATLAS")
+        print(f"Run this script from the ATLAS repo root directory.")
         sys.exit(1)
 
     start = time.time()
