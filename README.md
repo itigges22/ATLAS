@@ -142,10 +142,6 @@ scripts/         -- Installation and management scripts
 tests/           -- Test suite
 ```
 
-## Known Issues (V2)
-
-- Per-slot context is 20,480 tokens (40,960 / 2 parallel slots) — inherent to running 2 parallel slots for Best-of-K pipelining
-
 ## V3 Roadmap
 
 V3 targets 70%+ LiveCodeBench through diversity-driven generation, adaptive compute allocation, and novel inference-time theory formation. The core thesis: a frozen model with the right selection and routing infrastructure can match models 10x its size.
