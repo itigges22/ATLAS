@@ -4,6 +4,11 @@
 
 ```mermaid
 flowchart TB
+  subgraph MaaS["MaaS Layer (API + Auth)"]
+    AP[api-portal<br/>User registration, JWT auth<br/>API key mgmt, /v1/models<br/>Port 3000 / NodePort 30000]
+    LP[llm-proxy<br/>Reverse proxy to llama-server<br/>API key validation + rate limiting<br/>Port 8000 / NodePort 30080]
+  end
+
   subgraph Input
     Problem[Coding Problem]
   end
@@ -16,17 +21,21 @@ flowchart TB
   end
 
   subgraph Generation["Best-of-K Pipeline"]
-    LS[llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B Draft<br/>2 parallel slots]
+    LS[llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B-Q8_0 Draft<br/>2 parallel slots, KV cache q4_0]
     PC[Pattern Cache<br/>Redis + Ebbinghaus Decay<br/>STM / LTM tiers]
   end
 
   subgraph Evaluation["Candidate Selection"]
-    GL[Geometric Lens<br/>Cost Field C x 2.7M params<br/>Metric Tensor G x 5.2M params<br/>Val AUC: 0.968]
-    SB[Sandbox<br/>Code Execution + Testing<br/>Energy-sorted early exit]
+    GL[Geometric Lens<br/>Cost Field C x 2.7M params<br/>Metric Tensor G x 5.2M params]
+    SB[Sandbox<br/>K8s service, port 8020<br/>Isolated code execution + testing<br/>Energy-sorted early exit]
   end
 
   subgraph Knowledge["Context Retrieval"]
     PI[PageIndex RAG<br/>AST Tree Index + BM25<br/>LLM-guided Tree Search]
+  end
+
+  subgraph Workers["Async Processing"]
+    TW[task-worker<br/>Polls Redis queues<br/>Runs ralph-loop<br/>Calls sandbox over HTTP]
   end
 
   subgraph Feedback["Continuous Learning"]
@@ -34,17 +43,34 @@ flowchart TB
     RT[Lens Retrain<br/>BCE on pass/fail embeddings<br/>Hot-reload weights]
   end
 
+  subgraph Storage
+    RD[(Redis<br/>Pattern cache, Thompson state<br/>Task queue, rate limits, metrics)]
+  end
+
+  %% MaaS layer flows
+  LP -->|validate key| AP
+  AP -->|read usage metrics| RD
+  AP -->|model discovery| LS
+  LP -->|proxy requests| LS
+
+  %% Interactive RAG flow: rag-api validates keys via api-portal
+  PI -.->|validate key| AP
+
+  %% Routing decision flow
   Problem --> SC
-  PC -.->|pattern cache score| SC
+  PC -.->|pattern cache score<br/>interactive RAG flow only| SC
   PI -.->|retrieval confidence| SC
   GL -.->|geometric energy| SC
   SC --> DE
   DE --> TS
   TS --> AK
   AK -->|k candidates + temperature| LS
-  PC -.->|strategy hints| LS
+  PC -.->|strategy hints<br/>interactive RAG flow only| LS
   PI -.->|relevant context| LS
+
+  %% Evaluation flow
   LS -->|k candidates| GL
+  GL -->|extract embedding| LS
   GL -->|sorted by energy| SB
   SB -->|result + feedback| FR
   SB -->|pass/fail embeddings| RT
@@ -52,6 +78,13 @@ flowchart TB
   RT -.->|retrained C x| GL
   SB -->|pattern write| PC
 
+  %% Task worker flow
+  TW -->|poll tasks| RD
+  TW -->|generate code| LS
+  TW -->|execute code| SB
+
+  style AP fill:#5c1a3a,color:#fff
+  style LP fill:#5c1a3a,color:#fff
   style GL fill:#2d5016,color:#fff
   style LS fill:#1a3a5c,color:#fff
   style DE fill:#5c3a1a,color:#fff
@@ -63,26 +96,33 @@ flowchart TB
   style SB fill:#2d5016,color:#fff
   style FR fill:#4a1a5c,color:#fff
   style RT fill:#4a1a5c,color:#fff
+  style TW fill:#3a3a3a,color:#fff
+  style RD fill:#8b0000,color:#fff
 ```
 
 </div>
 
 ## Service Summary
 
-| Layer | Service | Port | Technology | Purpose |
-|-------|---------|------|------------|---------|
-| **Core** | rag-api | 8001 (NodePort 31144) | FastAPI | Orchestration: routing, RAG, cache, lens |
-| | llama-server | 8000 (NodePort 32735) | llama.cpp + CUDA | GPU inference (Qwen3-14B-Q4_K_M + 0.6B draft) |
-| **Storage** | Redis | 6379 | Redis | Pattern cache, Thompson state, task queue |
-| **Intelligence** | Confidence Router | (in rag-api) | Thompson Sampling | 4-signal difficulty estimation, adaptive-k |
-| | Geometric Lens | (in rag-api) | PyTorch (CPU) | Energy-based candidate scoring, 7.9M params |
-| | Pattern Cache | (in rag-api) | Redis-backed | Ebbinghaus-decay STM/LTM pattern memory |
-| | PageIndex | (in rag-api) | tree-sitter + BM25 | AST-aware code retrieval with LLM tree search |
-| **Execution** | Sandbox | (in benchmark) | subprocess | Isolated code execution and testing |
+| Layer           | Service                | K8s Service Name       | Port                   | Technology              | Purpose                                                                 |
+|-----------------|------------------------|------------------------|------------------------|-------------------------|-------------------------------------------------------------------------|
+| **MaaS**        | api-portal             | api-portal             | 3000 (NodePort 30000)  | FastAPI                 | User registration/login (JWT), API key mgmt (sk-llm-*), /v1/models      |
+|                 | llm-proxy              | llm-proxy              | 8000 (NodePort 30080)  | FastAPI                 | Reverse proxy to llama-server with API key validation + rate limiting    |
+| **Core**        | rag-api                | rag-api                | 8001 (NodePort 31144)  | FastAPI                 | Orchestration: routing, RAG, cache, lens, key validation via api-portal  |
+|                 | llama-server           | llama-service          | 8000 (NodePort 32735)  | llama.cpp + CUDA        | GPU inference (Qwen3-14B-Q4_K_M + 0.6B-Q8_0 draft, KV cache q4_0)      |
+| **Execution**   | sandbox                | sandbox                | 8020 (NodePort 30820)  | K8s service             | Isolated code execution and testing (HTTP API)                           |
+|                 | task-worker            | task-worker             | 8080 (ClusterIP)       | Python                  | Async task processor: polls Redis queues, runs ralph-loop, calls sandbox |
+| **Storage**     | Redis                  | redis                  | 6379                   | Redis                   | Pattern cache, Thompson state, task queue, rate limits, usage metrics    |
+| **Intelligence**| Confidence Router      | (in rag-api)           | --                     | Thompson Sampling       | 4-signal difficulty estimation, adaptive-k                               |
+|                 | Geometric Lens         | (in rag-api)           | --                     | PyTorch (CPU)           | Energy-based candidate scoring, 7.9M params                             |
+|                 | Pattern Cache          | (in rag-api)           | --                     | Redis-backed            | Ebbinghaus-decay STM/LTM pattern memory                                  |
+|                 | PageIndex              | (in rag-api)           | --                     | tree-sitter + BM25      | AST-aware code retrieval with LLM tree search                            |
+| **Dashboard**   | atlas-dashboard        | atlas-dashboard        | 3001 (NodePort 30001)  | Web UI                  | Monitoring dashboard (currently scaled to 0)                             |
+| **Training**    | atlas-nightly-training | (CronJob)              | --                     | CronJob, 02:00 daily    | Nightly LoRA fine-tuning from accumulated training examples              |
 
 ## Data Flows
 
-### Routing Decision
+### Routing Decision (interactive RAG flow)
 ```
 Query
  -> Signal Collector (pattern_cache_score, retrieval_confidence, query_complexity, geometric_energy)
@@ -95,10 +135,39 @@ Query
 ### Best-of-K Generation
 ```
 Task + k value
- -> llama-server (k candidates at temperature 0.6-0.8, pipelined via ThreadPool)
- -> Geometric Lens (score each candidate, sort by energy)
+ -> llama-server (k candidates, temperature varies by mode:
+      k=1: 0.0, mcq/ifbench: 0.3, code k<=5: 0.6, code k>5: 0.8)
+ -> Geometric Lens (extract 5120-dim embedding via llama-server /embedding,
+      score each candidate through C(x), sort by energy)
  -> Sandbox (try in energy order, early exit on first PASS)
  -> Result + feedback
+```
+Note: In benchmark mode, best-of-k calls llama-server directly (_call_llm).
+Pattern Cache strategy hints and pattern_cache_score are only used in the
+interactive RAG flow, not the benchmark pipeline.
+
+### Task Worker (production async flow)
+```
+User request via api-portal
+ -> Task queued in Redis
+ -> task-worker polls Redis, picks up task
+ -> (optional) Retrieve RAG context from rag-api
+ -> Generate code via llama-server (direct, bypasses llm-proxy auth)
+ -> Execute + test via sandbox service (HTTP POST to sandbox:8020)
+ -> Store result in Redis, publish completion
+ -> Store successful completions for nightly training
+```
+
+### MaaS Authentication
+```
+External user
+ -> llm-proxy (Bearer sk-llm-* key in Authorization header)
+ -> llm-proxy validates key with api-portal /api/validate-key
+ -> Rate limit check via Redis sliding window
+ -> Proxy request to llama-server
+
+Internal services (rag-api, task-worker)
+ -> Call llama-server directly (bypass llm-proxy, no auth needed)
 ```
 
 ### Continuous Learning
@@ -118,3 +187,6 @@ Sandbox results (pass/fail + code embeddings)
 | Dark blue | Generation and retrieval (llama-server, PageIndex, Pattern Cache) |
 | Dark brown | Routing (Signal Collector, Difficulty Estimator, Thompson, Adaptive-k) |
 | Dark purple | Feedback and learning (Feedback Recorder, Lens Retrain) |
+| Dark rose | MaaS layer (API Portal, LLM Proxy) |
+| Dark grey | Async workers (Task Worker) |
+| Dark red | Storage (Redis) |

@@ -3,6 +3,7 @@ kind: CronJob
 metadata:
   name: atlas-nightly-training
 spec:
+  suspend: true
   schedule: "0 2 * * *"
   jobTemplate:
     spec:

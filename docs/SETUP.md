@@ -64,6 +64,9 @@ At minimum, set the following:
 # Directory containing the two GGUF files
 ATLAS_MODELS_DIR="/home/yourusername/models"
 
+# Directory for persistent data (indexes, training data, projects)
+ATLAS_DATA_DIR="/opt/atlas/data"
+
 # Main model filename
 ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
 
@@ -93,9 +96,11 @@ The installer will:
 1. Check prerequisites (NVIDIA driver, GPU VRAM, system RAM).
 2. Install K3s if not already present.
 3. Install the NVIDIA GPU Operator via Helm.
-4. Build container images for all services.
-5. Deploy services to K3s in the `atlas` namespace.
-6. Wait for all pods to reach Running status.
+4. Create namespace and secrets.
+5. Build container images for all services.
+6. Process manifest templates (substitute config values).
+7. Deploy services to K3s in the `atlas` namespace.
+8. Wait for all pods to reach Running status.
 
 The first build takes 1-2 hours because it downloads CUDA base images (~8GB) and compiles llama.cpp from source. Subsequent builds use cached layers and complete much faster.
 
@@ -122,9 +127,12 @@ llama-server-xxx               1/1     Running   0          5m
 rag-api-xxx                    1/1     Running   0          5m
 redis-xxx                      1/1     Running   0          5m
 sandbox-xxx                    1/1     Running   0          5m
+task-worker-xxx                1/1     Running   0          5m
+api-portal-xxx                 1/1     Running   0          5m    (MaaS — optional)
+llm-proxy-xxx                  1/1     Running   0          5m    (MaaS — optional)
 ```
 
-The dashboard deployment exists but is currently scaled to 0 replicas (non-essential for benchmarks). Qdrant and embedding-service pods are no longer part of V2.
+The MaaS services (api-portal, llm-proxy) provide multi-user API access and are optional for single-user or benchmark-only deployments. The atlas-dashboard deployment exists but is currently scaled to 0 replicas (non-essential for benchmarks).
 
 ### Health Checks
 
@@ -134,6 +142,15 @@ curl http://localhost:32735/health
 
 # rag-api health
 curl http://localhost:31144/health
+
+# api-portal health
+curl http://localhost:30000/health
+
+# llm-proxy health
+curl http://localhost:30080/health
+
+# sandbox health
+curl http://localhost:30820/health
 ```
 
 ### Run the V2 Benchmark
@@ -148,6 +165,23 @@ Expected results on RTX 5060 Ti with Qwen3-14B-Q4_K_M:
 |--------|---------------|
 | LiveCodeBench pass@1 | 36-41% |
 | Throughput | ~109 tasks/hr |
+
+---
+
+## Feature Flags
+
+The rag-api deployment supports these runtime feature flags, set as environment variables in `manifests/rag-api-deployment.yaml`:
+
+| Variable | Default (code) | Default (manifest) | Description |
+|----------|----------------|---------------------|-------------|
+| `ROUTING_ENABLED` | `"true"` | `"true"` | Enables the Confidence Router (Thompson Sampling route selection) |
+| `GEOMETRIC_LENS_ENABLED` | `"false"` | `"true"` | Enables Geometric Lens energy scoring for candidate selection |
+
+To disable a feature, edit the manifest and re-apply:
+
+```bash
+kubectl apply -n atlas -f manifests/rag-api-deployment.yaml
+```
 
 ---
 
