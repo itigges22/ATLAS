@@ -101,7 +101,7 @@ main() {
         "sandbox:$K8S_DIR/atlas/sandbox"
         "task-worker:$K8S_DIR/atlas/task-worker"
         "atlas-dashboard:$K8S_DIR/atlas/dashboard"
-        "atlas-trainer:$K8S_DIR/atlas/trainer"
+        # atlas-trainer: V1 LoRA training, moved to atlas/v1_archived/ (V2 uses frozen model)
     )
 
     # Build all core images

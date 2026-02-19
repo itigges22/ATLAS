@@ -14,12 +14,11 @@ ATLAS achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single c
 
 | Benchmark | Score | Tasks | Notes |
 |-----------|-------|-------|-------|
-| LiveCodeBench v5 | 36-41% pass@1 | 599 | k=3, Geometric Lens selection, epoch 0-3 |
+| LiveCodeBench v5 | 36-41% pass@1 | 599 evals / ~600 problems | k=3, Geometric Lens selection, 4 epochs (100+200+200+99) |
 | GPQA Diamond | 47.0% | 198 | k=5, multiple-choice knowledge reasoning |
-| SciCode (sub-problems) | 14.7% | ~340 | Cross-domain scientific coding |
-| SciCode (main problems) | 5.0% | ~80 | Multi-step scientific problem solving |
+| SciCode (sub-problems) | 14.7% | 341 | Cross-domain scientific coding |
 
-**Lens Val AUC:** 0.968 at epoch 3. **Selection efficiency:** 100% (188/188 -- never missed a passing candidate).
+**Lens Val AUC:** 0.968 at epoch 3. **Selection accuracy:** 100% (188/188 tasks where at least one candidate passed -- the Lens always picked a passing candidate).
 
 **Hardware:** RTX 5060 Ti 16GB VRAM. Total cost: ~$500 GPU.
 **Runtime:** 109 tasks/hr aggregate throughput on V2 benchmark.
@@ -70,11 +69,15 @@ flowchart TB
 
 Full architecture details: [docs/architecture-diagram.md](docs/architecture-diagram.md) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
+### API Portal
+
+The system includes an API Portal (`api-portal` service, port 3000, NodePort 30000) for multi-user access. It provides user registration and login with JWT authentication, API key management (`sk-llm-*` keys), and an OpenAI-compatible `/v1/models` endpoint. The `rag-api` validates API keys against the portal on every `/v1/*` request. A web UI is included for key management.
+
 ## The Geometric Lens
 
-The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to a scalar energy: passing code concentrates near energy 5.00, failing code near 14.04 (training targets were 2.0/25.0; measured outputs converged to 5.00/14.04). A metric tensor G(x) defines a Riemannian geometry over embedding space, enabling gradient-based correction via the update rule dx = -alpha * G^{-1} * grad(C). The theoretical foundation follows Blondel et al. on implicit differentiation through optimization layers.
+The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to a scalar energy: passing code concentrates near energy 5.00, failing code near 14.04 (training targets were 2.0/25.0; measured outputs converged to 5.00/14.04). A metric tensor G(x) defines a Riemannian geometry over embedding space, enabling gradient-based correction via the update rule dx = -alpha * G^{-1} * grad(C). The theoretical framing draws on Riemannian geometry and energy-based models; the implementation uses standard PyTorch autograd gradient descent.
 
-In practice, this means: the model generates, the Lens evaluates. 100% selection efficiency means every improvement in candidate diversity translates directly into accuracy -- the Lens never misses a passing candidate when one exists. The Lens retrains on each benchmark run's pass/fail data, so the system improves continuously without changing the frozen LLM weights.
+In practice, the model generates k candidates and the Lens picks the best one. Two metrics measure the Lens: **selection accuracy** (when at least one candidate passes, does the Lens pick a passer?) and **correction rate** (does the metric tensor reduce energy for failing embeddings?). 100% selection accuracy means the Lens never misses a passing candidate when one exists. The Lens retrains on each benchmark run's pass/fail data, so the system improves continuously without changing the frozen LLM weights.
 
 ## Quick Start
 
@@ -91,7 +94,7 @@ In practice, this means: the model generates, the Lens evaluates. 100% selection
 
 3. **Install dependencies**
    ```bash
-   ./scripts/install.sh
+   sudo ./scripts/install.sh
    ```
 
 4. **Verify installation**
@@ -110,21 +113,22 @@ See [docs/SETUP.md](docs/SETUP.md) for full installation instructions.
 
 | Resource | Minimum | Tested |
 |----------|---------|--------|
-| Python | 3.10+ | 3.10 |
+| Python | 3.10+ | 3.11 |
 | GPU VRAM | 16 GB | RTX 5060 Ti 16 GB |
-| System RAM | 14 GB | 32 GB |
-| Storage | ~20 GB | SSD recommended |
+| System RAM | 14 GB | 16 GB |
+| Storage | ~20 GB | 150 GB SSD |
 | OS | RHEL 9 / Ubuntu 24 | RHEL 9 (Proxmox VM) |
 
 ## Project Structure
 
 ```
+api-portal/      -- API key management portal (JWT auth, web UI)
 benchmark/       -- V2 benchmark suite (LCB, GPQA, SciCode, Custom, IFBench)
 docs/            -- Architecture, setup, configuration, troubleshooting
 manifests/       -- K3s deployment manifests
 rag-api/         -- Core API: Geometric Lens, router, RAG, cache
 llama-server/    -- llama.cpp server container
-sandbox/         -- Isolated code execution environment
+atlas/sandbox/   -- Isolated code execution environment
 scripts/         -- Installation and management scripts
 tests/           -- Test suite
 ```
