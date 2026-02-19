@@ -31,6 +31,7 @@ SANDBOX_URL = os.getenv("SANDBOX_URL", "http://sandbox:8020")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))
 # Use direct llama access to bypass API auth for internal worker
 USE_DIRECT_LLAMA = os.getenv("USE_DIRECT_LLAMA", "true").lower() == "true"
+LLAMA_MODEL = os.getenv("LLAMA_MODEL", "Qwen3-14B-Q4_K_M.gguf")
 
 class TaskWorker:
     def __init__(self):
@@ -139,7 +140,12 @@ class TaskWorker:
         if context.get("rag_context"):
             messages.append({
                 "role": "system",
-                "content": f"You are a coding assistant. Use this context from the codebase:\n\n{context['rag_context']}"
+                "content": f"You are a coding assistant. Use this context from the codebase:\n\n{context['rag_context']}\n/nothink"
+            })
+        else:
+            messages.append({
+                "role": "system",
+                "content": "You are a coding assistant. /nothink"
             })
 
         messages.append({
@@ -153,7 +159,7 @@ class TaskWorker:
         response = requests.post(
             f"{api_url}/v1/chat/completions",
             json={
-                "model": "Qwen3-14B.Q6_K.gguf",
+                "model": LLAMA_MODEL,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": 2048

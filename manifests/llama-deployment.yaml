@@ -1,3 +1,14 @@
+# Verified against live pod config — V2 benchmark run v2_run_20260217_125310
+#
+# KNOWN ISSUE: --mlock fails ("Cannot allocate memory" for 437 MB buffer).
+# Needs memlock ulimit increase in Proxmox VM. Weights not pinned in RAM.
+#
+# KNOWN ISSUE: Speculative decoding partially broken. Slot 0 works, slot 1
+# fails with "failed to create draft context" (insufficient VRAM for 2nd
+# draft KV cache — only 2,217 MiB free). ~50% of requests get no spec decode.
+#
+# KNOWN ISSUE: --ctx-size 40960 with --parallel 2 = 20480 tokens per slot.
+# Server logs: "n_ctx_seq (20480) < n_ctx_train (40960)".
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,6 +17,8 @@ metadata:
     app: llama-server
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: llama-server
@@ -25,13 +38,28 @@ spec:
         - name: MODEL_PATH
           value: "/models/Qwen3-14B-Q4_K_M.gguf"
         - name: CONTEXT_LENGTH
-          value: "16384"
+          value: "40960"
         - name: GPU_LAYERS
           value: "99"
         - name: PARALLEL_SLOTS
-          value: "1"
+          value: "2"
         - name: DRAFT_MODEL
           value: "/models/Qwen3-0.6B-Q8_0.gguf"
+        # PCIe transfer optimization: enable pinned (page-locked) host memory
+        - name: GGML_CUDA_NO_PINNED
+          value: "0"
+        # Reduce CUDA context switch overhead
+        - name: CUDA_DEVICE_MAX_CONNECTIONS
+          value: "1"
+        # Faster CUDA module startup
+        - name: CUDA_MODULE_LOADING
+          value: "LAZY"
+        # KV cache quantization (reduces VRAM usage for KV cache)
+        - name: KV_CACHE_TYPE
+          value: "q4_0"
+        # Custom Jinja chat template (mounted via ConfigMap)
+        - name: CHAT_TEMPLATE
+          value: "Qwen3-custom.jinja"
         resources:
           limits:
             nvidia.com/gpu: 1
@@ -45,15 +73,30 @@ spec:
           mountPath: /models
         - name: lora
           mountPath: /models/lora
+        - name: entrypoint
+          mountPath: /entrypoint.sh
+          subPath: entrypoint.sh
+        - name: templates
+          mountPath: /templates
       volumes:
       - name: models
         hostPath:
-          path: /home/nobase/models
+          # CHANGE THIS: Set to your model directory (see docs/SETUP.md)
+          path: /opt/atlas/models
           type: Directory
       - name: lora
         hostPath:
-          path: /home/nobase/models/lora
+          # CHANGE THIS: Set to your model directory + /lora (see docs/SETUP.md)
+          path: /opt/atlas/models/lora
           type: DirectoryOrCreate
+      - name: entrypoint
+        configMap:
+          name: llama-entrypoint
+          defaultMode: 0755
+      - name: templates
+        configMap:
+          name: llama-templates
+          defaultMode: 0644
 ---
 apiVersion: v1
 kind: Service

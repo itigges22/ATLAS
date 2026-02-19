@@ -27,6 +27,8 @@ spec:
           value: "http://rag-api:8001"
         - name: LLAMA_URL
           value: "http://llama-service:8000"
+        - name: LLAMA_MODEL
+          value: "Qwen3-14B-Q4_K_M.gguf"
         - name: SANDBOX_URL
           value: "http://sandbox:8020"
         - name: TASK_TIMEOUT

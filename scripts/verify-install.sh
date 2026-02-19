@@ -204,11 +204,10 @@ main() {
     check_models
 
     # Pod status - using actual app labels from manifests
+    # V1 components (Qdrant, embedding-service) removed in V2
     echo ""
     echo "Pod Status:"
     check_pod "redis"
-    check_pod "qdrant"
-    check_pod "embedding-service"
     check_pod "llama-server"
     check_pod "api-portal"
     check_pod "rag-api"
@@ -220,8 +219,6 @@ main() {
     # Service health endpoints - using NodePort values from config
     echo ""
     echo "Service Health:"
-    check_service "Qdrant" "http://localhost:${ATLAS_QDRANT_NODEPORT}/readyz" "$ATLAS_HEALTH_CHECK_TIMEOUT"
-    check_service "Embedding" "http://localhost:${ATLAS_EMBEDDING_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "LLM Server" "http://localhost:${ATLAS_LLAMA_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "API Portal" "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "RAG API" "http://localhost:${ATLAS_RAG_API_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"

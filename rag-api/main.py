@@ -5,7 +5,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, AsyncGenerator
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -17,15 +17,22 @@ import redis
 import httpx
 from config import config
 from storage import project_store, ProjectMetadata
-from chunker import chunk_project_files, count_lines
-from vector_store import vector_store
-from rag import rag_enhanced_completion, simple_completion, forward_to_llama_stream
+from rag import (
+    rag_enhanced_completion, simple_completion, forward_to_llama_stream,
+    invalidate_cache,
+    write_pattern_async, record_pattern_outcome,
+    record_route_feedback, is_routing_enabled,
+)
+from indexer.tree_builder import build_tree_from_files
+from indexer.bm25_index import BM25Index
+from indexer.summarizer import summarize_tree, collect_summaries
+from indexer.persistence import save_index, load_index, delete_index
 
 # Redis for task queue
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-except:
+except Exception:
     redis_client = None
 
 # Configure logging
@@ -41,11 +48,16 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     logger.info("RAG API starting up")
     logger.info(f"Llama server: {config.llama.base_url}")
-    logger.info(f"Qdrant: {config.qdrant.host}:{config.qdrant.port}")
-    logger.info(f"Embedding: {config.embedding.base_url}")
 
     # Cleanup expired projects on startup
     project_store.cleanup_expired()
+
+    # Load seed persistent patterns into Pattern Cache
+    try:
+        from cache.seed_patterns import load_seed_patterns
+        await load_seed_patterns()
+    except Exception as e:
+        logger.warning(f"Failed to load seed patterns: {e}")
 
     yield
 
@@ -59,10 +71,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS
+# CORS — configurable via CORS_ORIGINS env var (comma-separated)
+_cors_origins_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080")
+_cors_origins = [origin.strip() for origin in _cors_origins_raw.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -212,7 +227,7 @@ async def sync_project(
     # Validate limits
     files = [{"path": f.path, "content": f.content} for f in request.files]
     total_files = len(files)
-    total_loc = count_lines(files)
+    total_loc = sum(f["content"].count("\n") + 1 for f in files)
     total_size = sum(len(f["content"].encode()) for f in files)
 
     if total_files > config.limits.max_files:
@@ -245,21 +260,53 @@ async def sync_project(
             message="Project hash matches, no sync needed"
         )
 
-    # Chunk the files
-    chunks = chunk_project_files(
-        project_id=project_id,
-        files=files,
-        max_chunk_lines=config.chunking.max_chunk_lines,
-        overlap_lines=config.chunking.overlap_lines,
-        use_ast_chunking=True
-    )
+    indexed = 0
 
-    # Index chunks
+    # PageIndex tree building
     try:
-        indexed = await vector_store.index_chunks(project_id, chunks)
+        # Load existing index for incremental re-summarization
+        old_file_hashes = {}
+        existing_summaries = {}
+        existing = load_index(project_id)
+        if existing:
+            old_tree, _ = existing
+            old_file_hashes = old_tree.file_hashes
+            existing_summaries = collect_summaries(old_tree.root)
+
+        # Build tree from files
+        tree_index = build_tree_from_files(
+            project_id=project_id,
+            files=files,
+            project_name=request.project_name,
+        )
+
+        # Generate LLM summaries (bottom-up)
+        await summarize_tree(
+            root=tree_index.root,
+            llama_url=config.llama.base_url,
+            existing_summaries=existing_summaries,
+            file_hashes=tree_index.file_hashes,
+            old_file_hashes=old_file_hashes,
+        )
+
+        # Build BM25 index
+        bm25_index = BM25Index()
+        bm25_index.build_from_tree(tree_index)
+
+        # Persist to disk
+        save_index(project_id, tree_index, bm25_index)
+
+        # Invalidate in-memory cache
+        invalidate_cache(project_id)
+
+        indexed = tree_index.root.node_count()
+        logger.info(
+            f"PageIndex built for {project_id}: {indexed} nodes, "
+            f"{bm25_index.num_docs} BM25 docs"
+        )
     except Exception as e:
-        logger.error(f"Failed to index chunks: {e}")
-        raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
+        logger.error(f"Failed to build PageIndex: {e}")
+        raise HTTPException(status_code=500, detail=f"PageIndex build failed: {str(e)}")
 
     # Save project metadata
     project_store.create_project(
@@ -333,8 +380,9 @@ async def delete_project(
     api_key: str = Depends(verify_api_key)
 ):
     """Delete a project."""
-    # Delete from vector store
-    vector_store.delete_collection(project_id)
+    # Delete PageIndex data
+    delete_index(project_id)
+    invalidate_cache(project_id)
 
     # Delete from file store
     deleted = project_store.delete_project(project_id)
@@ -558,6 +606,319 @@ async def get_queue_stats(api_key: str = Depends(verify_api_key)):
             redis_client.llen("tasks:p2")
         ])
     }
+
+
+# ──────────────────────────────────────────────────────────────
+# Pattern Cache: Write Path + Monitoring Endpoints
+# ──────────────────────────────────────────────────────────────
+
+class PatternWriteRequest(BaseModel):
+    query: str
+    solution: str
+    retry_count: int = 1
+    max_retries: int = 5
+    error_context: Optional[str] = None
+    source_files: List[str] = []
+    active_pattern_ids: List[str] = []
+    success: bool = True
+
+
+@app.post("/v1/patterns/write")
+async def write_pattern(
+    request: PatternWriteRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Write path: Extract and store a pattern from a successful task completion.
+    This is called after a task passes tests.
+    Runs async — returns immediately, extraction happens in background.
+    """
+    import asyncio
+
+    if not request.success:
+        # Record failure outcome for any active patterns
+        if request.active_pattern_ids:
+            asyncio.create_task(
+                record_pattern_outcome(request.active_pattern_ids, success=False)
+            )
+        return {"status": "recorded_failure"}
+
+    # Fire-and-forget: extract pattern in background
+    asyncio.create_task(
+        write_pattern_async(
+            query=request.query,
+            solution=request.solution,
+            retry_count=request.retry_count,
+            max_retries=request.max_retries,
+            error_context=request.error_context,
+            source_files=request.source_files,
+            active_pattern_ids=request.active_pattern_ids,
+        )
+    )
+
+    # Record success outcome for active patterns
+    if request.active_pattern_ids:
+        asyncio.create_task(
+            record_pattern_outcome(request.active_pattern_ids, success=True)
+        )
+
+    return {"status": "accepted", "message": "Pattern extraction started in background"}
+
+
+@app.get("/internal/cache/stats")
+async def cache_stats():
+    """Get Pattern Cache statistics — size, hit rate, tier distribution, top patterns."""
+    from cache.pattern_store import get_pattern_store
+
+    store = get_pattern_store()
+    stats = store.get_stats()
+
+    # Add top patterns by score
+    if stats.get("available"):
+        top_stm = store.get_stm_patterns(limit=5)
+        top_ltm = store.get_ltm_patterns(limit=5)
+
+        stats["top_stm"] = [
+            {"id": p.id, "type": p.type.value, "summary": p.summary[:80],
+             "access_count": p.access_count, "surprise": p.surprise_score}
+            for p in top_stm
+        ]
+        stats["top_ltm"] = [
+            {"id": p.id, "type": p.type.value, "summary": p.summary[:80],
+             "access_count": p.access_count, "surprise": p.surprise_score}
+            for p in top_ltm
+        ]
+
+    return stats
+
+
+@app.post("/internal/cache/flush")
+async def flush_cache():
+    """Clear the entire pattern cache (for testing/reset)."""
+    from cache.pattern_store import get_pattern_store
+
+    store = get_pattern_store()
+    store.flush()
+
+    # Reload seed patterns
+    try:
+        from cache.seed_patterns import load_seed_patterns
+        await load_seed_patterns()
+    except Exception as e:
+        logger.warning(f"Failed to reload seed patterns after flush: {e}")
+
+    return {"status": "flushed"}
+
+
+@app.post("/internal/cache/consolidate")
+async def trigger_consolidation():
+    """Manually trigger STM → LTM consolidation."""
+    from cache.consolidator import run_consolidation
+
+    await run_consolidation()
+    return {"status": "consolidation_complete"}
+
+
+# ──────────────────────────────────────────────────────────────
+# Confidence Router: Internal Monitoring Endpoints
+# ──────────────────────────────────────────────────────────────
+
+@app.get("/internal/router/stats")
+async def router_stats():
+    """Get Confidence Router statistics — Thompson state, route distribution, difficulty histogram."""
+    if not is_routing_enabled():
+        return {"enabled": False, "message": "Routing is disabled (ROUTING_ENABLED=false)"}
+
+    try:
+        import redis as redis_lib
+        from router.route_selector import get_all_thompson_states
+        from router.feedback_recorder import get_routing_stats
+
+        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+        r = redis_lib.from_url(redis_url, decode_responses=True)
+
+        thompson = get_all_thompson_states(r)
+        stats = get_routing_stats(r)
+
+        return {
+            "enabled": True,
+            "thompson_state": thompson,
+            "aggregate_stats": stats,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get router stats: {e}")
+        return {"enabled": True, "error": str(e)}
+
+
+@app.post("/internal/router/reset")
+async def router_reset():
+    """Reset Thompson Sampling state for recalibration."""
+    if not is_routing_enabled():
+        return {"status": "skipped", "message": "Routing is disabled"}
+
+    try:
+        import redis as redis_lib
+        from router.route_selector import reset_thompson_state
+        from router.feedback_recorder import reset_stats
+
+        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+        r = redis_lib.from_url(redis_url, decode_responses=True)
+
+        reset_thompson_state(r)
+        reset_stats(r)
+
+        return {"status": "reset", "message": "Thompson state and stats reset to uniform priors"}
+    except Exception as e:
+        logger.error(f"Failed to reset router: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+@app.post("/internal/router/feedback")
+async def router_feedback(
+    route: str,
+    difficulty_bin: str,
+    success: bool,
+):
+    """Manually record a routing outcome for Thompson Sampling."""
+    try:
+        record_route_feedback(route, difficulty_bin, success)
+        return {"status": "recorded"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+# ──────────────────────────────────────────────────────────────
+# Geometric Lens: Internal Monitoring Endpoints
+# ──────────────────────────────────────────────────────────────
+
+@app.get("/internal/lens/stats")
+async def lens_stats():
+    """Get Geometric Lens status — model info, enabled state."""
+    try:
+        from geometric_lens.service import get_model_info
+        return get_model_info()
+    except Exception as e:
+        return {"loaded": False, "enabled": False, "error": str(e)}
+
+
+@app.api_route("/internal/lens/evaluate", methods=["GET", "POST"])
+async def lens_evaluate(request: Request, query: str = None):
+    """Evaluate a query through the Geometric Lens (for testing).
+
+    Accepts GET with ?query= param or POST with JSON {"query": "..."}.
+    """
+    if request.method == "POST":
+        body = await request.json()
+        query = body.get("query", body.get("text", ""))
+    if not query:
+        raise HTTPException(status_code=422, detail="Missing 'query' parameter")
+    try:
+        from geometric_lens.service import evaluate_and_correct, get_geometric_energy, is_enabled
+        if not is_enabled():
+            return {"enabled": False, "message": "Geometric Lens disabled"}
+
+        energy_before, energy_after, corrected = evaluate_and_correct(query)
+        normalized = get_geometric_energy(query)
+
+        return {
+            "enabled": True,
+            "energy_before": energy_before,
+            "energy_after": energy_after,
+            "energy_normalized": normalized,
+            "corrected": corrected is not None,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+class LensScoreTextRequest(BaseModel):
+    text: str
+
+
+@app.post("/internal/lens/score-text")
+async def lens_score_text(request: LensScoreTextRequest):
+    """Score a text string through the Geometric Lens. Returns raw and normalized energy."""
+    try:
+        import geometric_lens.service as lens_service
+        from geometric_lens.embedding_extractor import extract_embedding
+
+        if not lens_service.is_enabled():
+            return {"energy": 0.0, "normalized": 0.5, "enabled": False}
+
+        if not lens_service._ensure_models_loaded():
+            return {"energy": 0.0, "normalized": 0.5, "error": "models_not_loaded"}
+
+        import torch
+
+        emb = extract_embedding(request.text)
+        x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
+
+        with torch.no_grad():
+            energy = lens_service._cost_field(x).item()
+
+        # Normalize to [0,1]: PASS ~5.00 -> ~0.1, FAIL ~14.04 -> ~0.9
+        # Training targets were 2.0/25.0; measured outputs converged to 5.00/14.04
+        normalized = 1.0 / (1.0 + 2.718 ** (-(energy - 9.5) / 3.0))
+        normalized = min(1.0, max(0.0, normalized))
+
+        return {"energy": energy, "normalized": normalized, "enabled": True}
+    except Exception as e:
+        logger.error(f"Lens score-text failed: {e}")
+        return {"energy": 0.0, "normalized": 0.5, "error": str(e)}
+
+
+class LensRetrainRequest(BaseModel):
+    training_data: List[Dict]
+    epochs: int = 50
+
+
+@app.post("/internal/lens/retrain")
+async def lens_retrain(request: LensRetrainRequest):
+    """Retrain C(x) on accumulated pass/fail embeddings from benchmark execution."""
+    try:
+        from geometric_lens.training import retrain_cost_field_bce
+        from geometric_lens.service import reload_weights
+        import os
+
+        embeddings = [d["embedding"] for d in request.training_data]
+        labels = [d["label"] for d in request.training_data]
+
+        save_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "geometric_lens", "models", "cost_field.pt"
+        )
+
+        metrics = retrain_cost_field_bce(
+            embeddings=embeddings,
+            labels=labels,
+            epochs=request.epochs,
+            save_path=save_path,
+        )
+
+        # Remove non-serializable 'model' key from metrics
+        metrics.pop("model", None)
+
+        # Hot-reload if retrain succeeded and wasn't skipped
+        if not metrics.get("skipped", False):
+            reload_result = reload_weights()
+            metrics["reload_status"] = reload_result.get("status", "unknown")
+
+        return {"status": "ok", "metrics": metrics}
+    except Exception as e:
+        logger.error(f"Lens retrain failed: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+@app.post("/internal/lens/reload")
+async def lens_reload():
+    """Reload Geometric Lens weights from disk after retraining."""
+    try:
+        from geometric_lens.service import reload_weights
+        result = reload_weights()
+        return {"status": result.get("status", "unknown"), **result}
+    except Exception as e:
+        logger.error(f"Lens reload failed: {e}")
+        return {"status": "error", "error": str(e)}
 
 
 if __name__ == "__main__":

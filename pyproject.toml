@@ -1,0 +1,11 @@
+[project]
+name = "atlas"
+version = "2.0.0"
+description = "Adaptive Test-time Learning and Autonomous Specialization"
+license = "LicenseRef-ATLAS-Source-Available-1.0"
+requires-python = ">=3.10"
+authors = [{name = "Isaac"}]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+collect_ignore = ["tests/v1_archived"]

@@ -182,11 +182,11 @@ check_prerequisites() {
 
 # Check if all required images exist in K3s
 check_images_exist() {
+    # V1 components (Qdrant, embedding-service) removed in V2
     local required_images=(
         "llama-server"
         "rag-api"
         "api-portal"
-        "embedding-service"
         "llm-proxy"
         "sandbox"
         "task-worker"
@@ -427,17 +427,15 @@ deploy_manifests() {
     # Process templates first to substitute config values
     process_templates
 
+    # V1 components (Qdrant, embedding-service) removed in V2
+
     # Deploy infrastructure first (Redis is dependency)
     log_info "Deploying infrastructure..."
     kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/redis-deployment.yaml"
-    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/qdrant-deployment.yaml"
-    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/embedding-deployment.yaml"
 
     # Wait for dependencies
     log_info "Waiting for infrastructure services..."
     kubectl wait --for=condition=Ready pod -l app=redis -n "$ATLAS_NAMESPACE" --timeout=120s || true
-    kubectl wait --for=condition=Ready pod -l app=qdrant -n "$ATLAS_NAMESPACE" --timeout=120s || true
-    kubectl wait --for=condition=Ready pod -l app=embedding-service -n "$ATLAS_NAMESPACE" --timeout=120s || true
 
     # Deploy main services
     log_info "Deploying main services..."
@@ -465,7 +463,8 @@ wait_for_services() {
     log_info "Waiting for all services to be ready..."
 
     # Service names as defined in deployments
-    SERVICES="redis qdrant embedding-service llama-server api-portal rag-api llm-proxy sandbox task-worker atlas-dashboard"
+    # V1 components (Qdrant, embedding-service) removed in V2
+    SERVICES="redis llama-server api-portal rag-api llm-proxy sandbox task-worker atlas-dashboard"
 
     for svc in $SERVICES; do
         log_info "Waiting for $svc..."

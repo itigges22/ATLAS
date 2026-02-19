@@ -5,10 +5,12 @@ Downloads SciCode from the HuggingFace rows API. SciCode tests scientific
 computing abilities by decomposing problems into sub-steps, where each step
 builds on previous ground-truth solutions.
 
-IMPORTANT: SciCode tests use numpy (np.allclose). The execution environment
-must have numpy installed for tests to pass.
+Target values for test assertions are stored in a separate HDF5 file
+(test_data.h5) from the official SciCode repo. The file must be downloaded
+from Google Drive and placed in the cache directory.
 
 Source: https://huggingface.co/datasets/SciCode1/SciCode
+HDF5 targets: https://drive.google.com/drive/folders/1W5GZW6_bdiDAiipuFMqdUhvUaHIj6-pR
 """
 
 import json
@@ -16,7 +18,7 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseDataset
 from ..models import BenchmarkTask
@@ -32,6 +34,82 @@ def _check_numpy_available() -> bool:
         return result.returncode == 0
     except Exception:
         return False
+
+
+def _load_h5_targets(h5_path: Path) -> Dict[str, List[Any]]:
+    """Load all target values from the SciCode test_data.h5 file.
+
+    Returns a dict mapping step_id (e.g. '77.1') to a list of target values,
+    one per test case.
+    """
+    import h5py
+    import numpy as np
+
+    targets = {}
+    with h5py.File(h5_path, 'r') as f:
+        for step_id in f.keys():
+            step_group = f[step_id]
+            step_targets = []
+            # Tests are named test1, test2, ... in order
+            test_keys = sorted(step_group.keys(), key=lambda k: int(k.replace('test', '')))
+            for tk in test_keys:
+                test_group = step_group[tk]
+                var_keys = sorted(test_group.keys())
+                if len(var_keys) == 1:
+                    ds = test_group[var_keys[0]]
+                    if isinstance(ds, h5py.Dataset):
+                        val = ds[()]
+                        if isinstance(val, bytes):
+                            step_targets.append(val.decode('utf-8'))
+                        else:
+                            step_targets.append(val)
+                    elif isinstance(ds, h5py.Group):
+                        # Could be a list or sparse matrix — skip for now
+                        step_targets.append(None)
+                else:
+                    # Multiple variables — return as tuple
+                    var_vals = []
+                    for vk in var_keys:
+                        ds = test_group[vk]
+                        if isinstance(ds, h5py.Dataset):
+                            val = ds[()]
+                            if isinstance(val, bytes):
+                                var_vals.append(val.decode('utf-8'))
+                            else:
+                                var_vals.append(val)
+                        else:
+                            var_vals.append(None)
+                    step_targets.append(tuple(var_vals))
+            targets[step_id] = step_targets
+    return targets
+
+
+def _serialize_target(val) -> str:
+    """Serialize a target value as a Python expression string.
+
+    Handles numpy arrays, scalars, tuples, and strings.
+    """
+    import numpy as np
+
+    if val is None:
+        return "None"
+    if isinstance(val, str):
+        return repr(val)
+    if isinstance(val, np.ndarray):
+        # Use full precision repr
+        return "np.array(%s, dtype=np.%s)" % (
+            np.array2string(val, separator=', ', threshold=10000, max_line_width=10000),
+            val.dtype,
+        )
+    if isinstance(val, (np.integer, np.floating, np.complexfloating)):
+        return repr(val.item())
+    if isinstance(val, tuple):
+        parts = [_serialize_target(v) for v in val]
+        if len(parts) == 1:
+            return "(%s,)" % parts[0]
+        return "(%s)" % ", ".join(parts)
+    # Fallback: use repr
+    return repr(val)
 
 
 class SciCodeDataset(BaseDataset):
@@ -53,6 +131,8 @@ class SciCodeDataset(BaseDataset):
     FILENAME_TEST = "scicode_test.jsonl"
     FILENAME_VALIDATION = "scicode_validation.jsonl"
     FILENAME_COMBINED = "scicode_combined.jsonl"
+    H5_SUBDIR = "SciCode_test"
+    H5_FILENAME = "test_data.h5"
 
     @property
     def name(self) -> str:
@@ -74,6 +154,18 @@ class SciCodeDataset(BaseDataset):
                 "SciCode tests use np.allclose() and WILL FAIL without numpy.\n"
                 "Install numpy in the execution environment to run SciCode properly."
             )
+
+        # Load target values from HDF5 (required for test assertions)
+        h5_path = self.cache_dir / self.H5_SUBDIR / self.H5_FILENAME
+        if h5_path.exists():
+            self._targets = _load_h5_targets(h5_path)
+            print(f"  Loaded {len(self._targets)} step targets from {h5_path.name}")
+        else:
+            print(
+                f"WARNING: {h5_path} not found. SciCode tests will FAIL.\n"
+                f"Download test_data.h5 from Google Drive into {h5_path.parent}/"
+            )
+            self._targets = {}
 
         filepath = self.download()
         self._tasks = self._parse(filepath)
@@ -195,9 +287,11 @@ class SciCodeDataset(BaseDataset):
                 step_desc, function_header, step_num
             )
 
-            # Build test code
+            # Build test code (with target values from HDF5)
+            step_number = step.get("step_number", f"{problem_id}.{step_num}")
+            step_targets = self._targets.get(str(step_number), [])
             test_code = self._build_step_test_code(
-                required_deps, prior_ground_truth, test_cases
+                required_deps, prior_ground_truth, test_cases, step_targets
             )
 
             # Extract entry point from function header
@@ -274,9 +368,14 @@ class SciCodeDataset(BaseDataset):
         self,
         required_deps: str,
         prior_ground_truth: List[str],
-        test_cases: str,
+        test_cases,
+        step_targets: List[Any] = None,
     ) -> str:
-        """Build test code for a single sub-step."""
+        """Build test code for a single sub-step.
+
+        Injects pre-computed target values from HDF5 before each test case
+        so that ``assert np.allclose(func(args), target)`` works.
+        """
         parts = []
 
         if required_deps:
@@ -285,7 +384,17 @@ class SciCodeDataset(BaseDataset):
         parts.extend(prior_ground_truth)
 
         if test_cases:
-            parts.append(test_cases)
+            if isinstance(test_cases, list):
+                # Inject target = <value> before each test case
+                tc_parts = []
+                for idx, tc in enumerate(test_cases):
+                    if step_targets and idx < len(step_targets):
+                        target_val = step_targets[idx]
+                        tc_parts.append("target = %s" % _serialize_target(target_val))
+                    tc_parts.append(str(tc))
+                parts.append("\n".join(tc_parts))
+            else:
+                parts.append(str(test_cases))
 
         return "\n\n".join(parts)
 
@@ -317,7 +426,10 @@ class SciCodeDataset(BaseDataset):
         if required_deps:
             test_code_parts.append(required_deps)
         if test_cases:
-            test_code_parts.append(test_cases)
+            if isinstance(test_cases, list):
+                test_code_parts.append("\n".join(str(tc) for tc in test_cases))
+            else:
+                test_code_parts.append(str(test_cases))
         test_code = "\n\n".join(test_code_parts)
 
         entry_point = self._extract_entry_point(code)

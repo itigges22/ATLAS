@@ -2,8 +2,13 @@ fastapi==0.109.0
 uvicorn==0.27.0
 pydantic==2.5.3
 httpx==0.26.0
-qdrant-client==1.7.0
 pyyaml==6.0.1
 python-multipart==0.0.6
+# tiktoken: unused in V2 (was used for V1 chunking token counting). Retained as
+# it is a transitive dependency that may be needed by future features.
 tiktoken==0.5.2
 redis>=5.0.0
+tree-sitter>=0.23.0
+tree-sitter-python>=0.23.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.10.0

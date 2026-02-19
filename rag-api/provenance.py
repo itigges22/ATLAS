@@ -140,7 +140,7 @@ def _check_merged_via_pr(commit_sha: str, repo_root: Path) -> bool:
             text=True
         )
         return len(result.stdout.strip()) > 0
-    except:
+    except Exception:
         return False
 
 def _default_provenance() -> Dict:
@@ -184,7 +184,7 @@ def calculate_quality_score(file_path: Path) -> float:
         complexity_score = max(0, 1 - (lines / 1000))  # Penalize >1000 lines
         scores.append(complexity_score)
         weights.append(0.2)
-    except:
+    except Exception:
         pass
 
     if not scores:
@@ -205,6 +205,6 @@ def run_lint_check(file_path: Path) -> Optional[float]:
         match = re.search(r'rated at ([\d.]+)/10', result.stdout)
         if match:
             return float(match.group(1))
-    except:
+    except Exception:
         pass
     return None

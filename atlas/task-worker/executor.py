@@ -96,5 +96,5 @@ class SandboxExecutor:
         try:
             response = requests.get(f"{self.sandbox_url}/health", timeout=5)
             return response.ok
-        except:
+        except Exception:
             return False

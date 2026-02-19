@@ -20,11 +20,9 @@ spec:
         imagePullPolicy: Never
         ports:
         - containerPort: ${ATLAS_RAG_API_PORT}
+        # V2: Qdrant/embedding-service removed. RAG uses
+        # PageIndex (tree index + LLM reasoning) and llama-server --embeddings endpoint.
         env:
-        - name: QDRANT_URL
-          value: "http://qdrant:${ATLAS_QDRANT_PORT}"
-        - name: EMBEDDING_URL
-          value: "http://embedding-service:${ATLAS_EMBEDDING_PORT}"
         - name: LLAMA_URL
           value: "http://llama-service:${ATLAS_LLAMA_PORT}"
         - name: API_PORTAL_URL
@@ -37,16 +35,18 @@ spec:
           value: "${ATLAS_RAG_CONTEXT_BUDGET}"
         - name: TOP_K
           value: "${ATLAS_RAG_TOP_K}"
-        - name: CHUNK_SIZE
-          value: "${ATLAS_RAG_CHUNK_SIZE}"
-        - name: CHUNK_OVERLAP
-          value: "${ATLAS_RAG_CHUNK_OVERLAP}"
         - name: MAX_FILES
           value: "${ATLAS_RAG_MAX_FILES}"
         - name: LOG_LEVEL
           value: "${ATLAS_LOG_LEVEL}"
         - name: ENABLE_PROVENANCE
           value: "${ATLAS_ENABLE_PROVENANCE}"
+        - name: RETRIEVAL_MODE
+          value: "pageindex"
+        - name: ROUTING_ENABLED
+          value: "true"
+        - name: GEOMETRIC_LENS_ENABLED
+          value: "true"
         resources:
           limits:
             memory: ${ATLAS_SERVICE_MEMORY_LIMIT}

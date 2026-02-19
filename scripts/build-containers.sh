@@ -88,11 +88,11 @@ main() {
     log_info "Using container runtime: $RUNTIME"
 
     # Core services (in k8s root)
+    # V1 components (Qdrant, embedding-service) removed in V2
     declare -a CORE_IMAGES=(
         "llama-server:$K8S_DIR/llama-server"
         "rag-api:$K8S_DIR/rag-api"
         "api-portal:$K8S_DIR/api-portal"
-        "embedding-service:$K8S_DIR/embedding-service"
         "llm-proxy:$K8S_DIR/llm-proxy"
     )
 

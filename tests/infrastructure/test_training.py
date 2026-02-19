@@ -3,6 +3,11 @@ Tests for Training infrastructure.
 
 Validates training data export, LoRA adapter management,
 and hot-swap mechanism.
+
+NOTE: These tests verify deployment-specific infrastructure at absolute paths
+on the ATLAS server. They are not portable and will fail on machines with a
+different directory layout. Set ATLAS_DEPLOY_ROOT to override the default base
+path (e.g., ATLAS_DEPLOY_ROOT=/home/youruser).
 """
 
 import os
@@ -13,6 +18,9 @@ import time
 import pytest
 import redis
 
+# Base path for deployment-specific infrastructure checks
+_DEPLOY_ROOT = os.environ.get("ATLAS_DEPLOY_ROOT", "/opt/atlas")
+
 
 class TestTrainingDirectories:
     """Test training directory structure."""
@@ -21,14 +29,14 @@ class TestTrainingDirectories:
         """Training data directory should exist or be creatable."""
         # Check both possible locations
         paths = [
-            "/home/nobase/data/training",
+            f"{_DEPLOY_ROOT}/data/training",
             "/data/training",
             "/root/data/training"
         ]
         exists = any(os.path.isdir(p) or os.path.exists(p) for p in paths)
         if not exists:
             # Create it
-            training_path = "/home/nobase/data/training"
+            training_path = f"{_DEPLOY_ROOT}/data/training"
             os.makedirs(training_path, exist_ok=True)
             exists = os.path.isdir(training_path)
         assert exists, f"Training directory should exist or be creatable at one of: {paths}"
@@ -36,14 +44,14 @@ class TestTrainingDirectories:
     def test_lora_adapter_directory_exists(self):
         """LoRA adapter directory should exist or be creatable."""
         paths = [
-            "/home/nobase/models/lora",
+            f"{_DEPLOY_ROOT}/models/lora",
             "/models/lora",
             "/root/models/lora"
         ]
         exists = any(os.path.isdir(p) or os.path.exists(p) for p in paths)
         if not exists:
             # Create it
-            lora_path = "/home/nobase/models/lora"
+            lora_path = f"{_DEPLOY_ROOT}/models/lora"
             os.makedirs(lora_path, exist_ok=True)
             exists = os.path.isdir(lora_path)
         assert exists, f"LoRA adapter directory should exist or be creatable at one of: {paths}"
@@ -55,8 +63,8 @@ class TestTrainingScripts:
     def test_export_script_exists(self):
         """export_training_data.py should exist."""
         paths = [
-            "/home/nobase/k8s/atlas/trainer/training/export_training_data.py",
-            "/home/nobase/k8s/atlas/trainer/export_training_data.py"
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/training/export_training_data.py",
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/export_training_data.py"
         ]
         exists = any(os.path.isfile(p) for p in paths)
         assert exists, f"Export script should exist at one of: {paths}"
@@ -64,8 +72,8 @@ class TestTrainingScripts:
     def test_train_script_exists(self):
         """train_lora.py should exist."""
         paths = [
-            "/home/nobase/k8s/atlas/trainer/training/train_lora.py",
-            "/home/nobase/k8s/atlas/trainer/train_lora.py"
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/training/train_lora.py",
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/train_lora.py"
         ]
         exists = any(os.path.isfile(p) for p in paths)
         assert exists, f"Train script should exist at one of: {paths}"
@@ -73,8 +81,8 @@ class TestTrainingScripts:
     def test_validate_script_exists(self):
         """validate_adapter.py should exist."""
         paths = [
-            "/home/nobase/k8s/atlas/trainer/training/validate_adapter.py",
-            "/home/nobase/k8s/atlas/trainer/validate_adapter.py"
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/training/validate_adapter.py",
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/validate_adapter.py"
         ]
         exists = any(os.path.isfile(p) for p in paths)
         assert exists, f"Validate script should exist at one of: {paths}"
@@ -82,8 +90,8 @@ class TestTrainingScripts:
     def test_nightly_script_exists(self):
         """nightly_train.sh should exist."""
         paths = [
-            "/home/nobase/k8s/atlas/trainer/training/nightly_train.sh",
-            "/home/nobase/k8s/atlas/trainer/nightly_train.sh"
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/training/nightly_train.sh",
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/nightly_train.sh"
         ]
         exists = any(os.path.isfile(p) for p in paths)
         assert exists, f"Nightly script should exist at one of: {paths}"
@@ -254,15 +262,15 @@ class TestTrainingCronJob:
 
     def test_cronjob_manifest_exists(self):
         """CronJob manifest should exist."""
-        path = "/home/nobase/k8s/atlas/manifests/training-cronjob.yaml"
+        path = f"{_DEPLOY_ROOT}/k8s/atlas/manifests/training-cronjob.yaml"
         assert os.path.isfile(path), f"CronJob manifest should exist at {path}"
 
     def test_validation_threshold_documented(self):
         """Validation threshold (66%) should be documented or configurable."""
         # Check if validate script has threshold
         paths = [
-            "/home/nobase/k8s/atlas/trainer/training/validate_adapter.py",
-            "/home/nobase/k8s/atlas/trainer/validate_adapter.py"
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/training/validate_adapter.py",
+            f"{_DEPLOY_ROOT}/k8s/atlas/trainer/validate_adapter.py"
         ]
 
         for path in paths:

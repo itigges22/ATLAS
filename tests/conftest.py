@@ -36,8 +36,6 @@ if IN_CLUSTER:
     RAG_API_URL = os.environ.get("RAG_API_URL", "http://rag-api:8001")
     LLAMA_URL = os.environ.get("LLAMA_URL", "http://llama-service:8000")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://llm-proxy:8000")
-    EMBEDDING_URL = os.environ.get("EMBEDDING_URL", "http://embedding-service:8080")
-    QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://atlas-dashboard:3001")
 else:
@@ -46,8 +44,6 @@ else:
     RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
     LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://localhost:30080")
-    EMBEDDING_URL = os.environ.get("EMBEDDING_URL", "http://localhost:30808")
-    QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:30633")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://localhost:30820")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:30001")
 
@@ -132,19 +128,6 @@ def llm_proxy_client() -> Generator[httpx.Client, None, None]:
     with httpx.Client(base_url=LLM_PROXY_URL, timeout=LLM_TIMEOUT) as client:
         yield client
 
-
-@pytest.fixture(scope="session")
-def embedding_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for Embedding service."""
-    with httpx.Client(base_url=EMBEDDING_URL, timeout=DEFAULT_TIMEOUT) as client:
-        yield client
-
-
-@pytest.fixture(scope="session")
-def qdrant_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for Qdrant vector database."""
-    with httpx.Client(base_url=QDRANT_URL, timeout=DEFAULT_TIMEOUT) as client:
-        yield client
 
 
 @pytest.fixture(scope="session")
@@ -358,25 +341,6 @@ def cleanup_redis_keys(redis_client: redis.Redis) -> Generator[list, None, None]
     for key in keys_to_cleanup:
         try:
             redis_client.delete(key)
-        except Exception:
-            pass
-
-
-@pytest.fixture(scope="function")
-def cleanup_qdrant_collections(qdrant_client: httpx.Client) -> Generator[list, None, None]:
-    """
-    Fixture to track and clean up Qdrant collections created during tests.
-
-    Yields a list that tests can append collection names to for automatic cleanup.
-    """
-    collections_to_cleanup = []
-
-    yield collections_to_cleanup
-
-    # Cleanup all tracked collections
-    for collection in collections_to_cleanup:
-        try:
-            qdrant_client.delete(f"/collections/{collection}")
         except Exception:
             pass
 

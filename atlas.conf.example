@@ -26,16 +26,10 @@ ATLAS_LLM_PROXY_NODEPORT=30080
 ATLAS_RAG_API_NODEPORT=31144
 ATLAS_DASHBOARD_NODEPORT=30001
 ATLAS_LLAMA_NODEPORT=32735
-ATLAS_QDRANT_NODEPORT=30633
-ATLAS_QDRANT_GRPC_NODEPORT=30634
-ATLAS_EMBEDDING_NODEPORT=30808
 ATLAS_SANDBOX_NODEPORT=30820
 
 # Internal service ports (usually don't change these)
 ATLAS_REDIS_PORT=6379
-ATLAS_QDRANT_PORT=6333
-ATLAS_QDRANT_GRPC_PORT=6334
-ATLAS_EMBEDDING_PORT=8080
 ATLAS_LLAMA_PORT=8000
 ATLAS_RAG_API_PORT=8001
 ATLAS_API_PORTAL_PORT=3000
@@ -46,25 +40,24 @@ ATLAS_LLM_PROXY_PORT=8000
 #-------------------------------------------
 # Storage Paths
 #-------------------------------------------
-# Where models are stored
-ATLAS_MODELS_DIR="/root/models"
+# CHANGE THIS: Where models are stored (see docs/SETUP.md)
+ATLAS_MODELS_DIR="/opt/atlas/models"
 
-# Where persistent data is stored
-ATLAS_DATA_DIR="/root/data"
+# CHANGE THIS: Where persistent data is stored
+ATLAS_DATA_DIR="/opt/atlas/data"
 
 # Training data directory
-ATLAS_TRAINING_DIR="/root/data/training"
+ATLAS_TRAINING_DIR="/opt/atlas/data/training"
 
 # LoRA adapters directory
-ATLAS_LORA_DIR="/root/models/lora"
+ATLAS_LORA_DIR="/opt/atlas/models/lora"
 
 # Projects storage (for RAG)
-ATLAS_PROJECTS_DIR="/root/data/projects"
+ATLAS_PROJECTS_DIR="/opt/atlas/data/projects"
 
 #-------------------------------------------
 # Persistent Volume Sizes
 #-------------------------------------------
-ATLAS_PVC_QDRANT_SIZE="50Gi"
 ATLAS_PVC_REDIS_SIZE="5Gi"
 ATLAS_PVC_PROJECTS_SIZE="20Gi"
 ATLAS_PVC_API_PORTAL_SIZE="5Gi"
@@ -78,14 +71,14 @@ ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
 # Draft model for speculative decoding (leave empty to disable)
 ATLAS_DRAFT_MODEL="Qwen3-0.6B-Q8_0.gguf"
 
-# Context window size (tokens)
-ATLAS_CONTEXT_LENGTH=16384
+# Context window size (tokens) — V2 default is 40960
+ATLAS_CONTEXT_LENGTH=40960
 
 # GPU layers to offload (99 = all layers)
 ATLAS_GPU_LAYERS=99
 
-# Parallel inference slots (increase if you have more VRAM)
-ATLAS_PARALLEL_SLOTS=1
+# Parallel inference slots (2 for V2 with 16GB VRAM)
+ATLAS_PARALLEL_SLOTS=2
 
 # Flash attention (recommended for better performance)
 ATLAS_FLASH_ATTENTION=true
@@ -151,7 +144,6 @@ ATLAS_ENABLE_DASHBOARD=true
 ATLAS_LLM_TIMEOUT=120
 ATLAS_SANDBOX_TIMEOUT=60
 ATLAS_TASK_TIMEOUT=300
-ATLAS_EMBEDDING_TIMEOUT=30
 ATLAS_HEALTH_CHECK_TIMEOUT=10
 
 #-------------------------------------------
@@ -160,14 +152,8 @@ ATLAS_HEALTH_CHECK_TIMEOUT=10
 # Maximum context budget (tokens)
 ATLAS_RAG_CONTEXT_BUDGET=8000
 
-# Number of chunks to retrieve
+# Number of results to retrieve
 ATLAS_RAG_TOP_K=20
-
-# Chunk size (lines)
-ATLAS_RAG_CHUNK_SIZE=100
-
-# Chunk overlap (lines)
-ATLAS_RAG_CHUNK_OVERLAP=20
 
 # Maximum files per project
 ATLAS_RAG_MAX_FILES=10000

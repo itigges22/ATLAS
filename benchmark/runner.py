@@ -66,6 +66,11 @@ def extract_code(response: str) -> str:
     think_pattern = r'<think>.*?</think>'
     response = re.sub(think_pattern, '', response, flags=re.DOTALL).strip()
 
+    # Safety net: strip unclosed <think> tags (edge case where
+    # --reasoning-format deepseek doesn't fully strip thinking)
+    if '<think>' in response and '</think>' not in response:
+        response = response[:response.index('<think>')].strip()
+
     # Try MBPP [BEGIN]...[DONE] delimiters first
     begin_done_pattern = r'\[BEGIN\]\s*\n(.*?)(?:\[DONE\]|$)'
     begin_matches = re.findall(begin_done_pattern, response, re.DOTALL)
@@ -372,8 +377,11 @@ class BenchmarkRunner:
         self,
         prompt: str,
         temperature: float = 0.0,
-        max_tokens: int = 8192,
-        error_context: str = None
+        max_tokens: int = 16384,
+        error_context: str = None,
+        seed: int = None,
+        cache_prompt: bool = True,
+        think: bool = False
     ) -> Tuple[str, int, float]:
         """
         Call the LLM API with retry logic.
@@ -383,6 +391,9 @@ class BenchmarkRunner:
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             error_context: Previous error for ralph-loop retry
+            seed: Random seed for reproducible but diverse generation
+            cache_prompt: Enable KV cache reuse for shared prompt prefixes
+            think: Enable thinking mode (True) or suppress with /nothink (False)
 
         Returns:
             Tuple of (response_text, tokens_generated, inference_time_ms)
@@ -397,6 +408,12 @@ class BenchmarkRunner:
         else:
             full_prompt = prompt
 
+        # When think=False, append /nothink to suppress Qwen3 thinking mode.
+        # When think=True, let the model think naturally — reasoning goes to
+        # reasoning_content field (separated by --reasoning-format deepseek).
+        if not think:
+            full_prompt += "\n/nothink"
+
         messages = [
             {"role": "user", "content": full_prompt}
         ]
@@ -406,8 +423,11 @@ class BenchmarkRunner:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "stream": False
+            "stream": False,
+            "cache_prompt": cache_prompt,
         }
+        if seed is not None:
+            request_body["seed"] = seed
 
         last_error = None
         for attempt in range(self.max_retries):
@@ -428,7 +448,7 @@ class BenchmarkRunner:
                         data=json.dumps(request_body).encode('utf-8'),
                         headers={'Content-Type': 'application/json'}
                     )
-                    with urllib.request.urlopen(req, timeout=120) as resp:
+                    with urllib.request.urlopen(req, timeout=600) as resp:
                         data = json.loads(resp.read().decode('utf-8'))
 
                 inference_time_ms = (time.time() - start_time) * 1000
@@ -464,7 +484,9 @@ class BenchmarkRunner:
         task: BenchmarkTask,
         k: int = 1,
         temperature: float = None,
-        use_ralph_loop: bool = False
+        use_ralph_loop: bool = False,
+        max_tokens: int = 16384,
+        think: bool = False
     ) -> TaskResult:
         """
         Run a benchmark task with k attempts.
@@ -474,6 +496,8 @@ class BenchmarkRunner:
             k: Number of attempts
             temperature: Sampling temperature (default: 0 for k=1, 0.8 otherwise)
             use_ralph_loop: Whether to feed errors back for retries
+            max_tokens: Maximum tokens for LLM generation
+            think: Enable thinking mode for this task
 
         Returns:
             TaskResult with all attempts
@@ -490,7 +514,9 @@ class BenchmarkRunner:
                 response, tokens, inference_time = self._call_llm(
                     task.prompt,
                     temperature=temperature,
-                    error_context=error_context if use_ralph_loop else None
+                    max_tokens=max_tokens,
+                    error_context=error_context if use_ralph_loop else None,
+                    think=think
                 )
 
                 # Extract code
