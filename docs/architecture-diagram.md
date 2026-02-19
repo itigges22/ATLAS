@@ -118,7 +118,7 @@ flowchart TB
 |                 | Pattern Cache          | (in rag-api)           | --                     | Redis-backed            | Ebbinghaus-decay STM/LTM pattern memory                                  |
 |                 | PageIndex              | (in rag-api)           | --                     | tree-sitter + BM25      | AST-aware code retrieval with LLM tree search                            |
 | **Dashboard**   | atlas-dashboard        | atlas-dashboard        | 3001 (NodePort 30001)  | Web UI                  | Monitoring dashboard (queue stats, daily metrics, weekly trend)          |
-| **Training**    | atlas-nightly-training | (CronJob)              | --                     | CronJob, 02:00 daily    | Nightly LoRA fine-tuning from accumulated training examples              |
+| **Training**    | atlas-nightly-training | (CronJob, suspended)   | --                     | CronJob, suspended       | LoRA fine-tuning (V1 artifact, suspended — V2 uses frozen model)         |
 
 ## Data Flows
 
@@ -155,7 +155,7 @@ User request via api-portal
  -> Generate code via llama-server (direct, bypasses llm-proxy auth)
  -> Execute + test via sandbox service (HTTP POST to sandbox:8020)
  -> Store result in Redis, publish completion
- -> Store successful completions for nightly training
+ -> Store result in Redis, publish completion
 ```
 
 ### MaaS Authentication
