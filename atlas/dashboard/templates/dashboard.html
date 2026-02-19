@@ -70,7 +70,7 @@
                         <span class="text-gray-400">Avg Attempts/Task</span>
                         <span class="font-mono">
                             {% if daily_stats.tasks_total %}
-                                {{ "%.2f"|format(daily_stats.total_attempts|float / daily_stats.tasks_total|int) }}
+                                {{ "%.2f"|format(daily_stats.total_attempts|default(0)|float / daily_stats.tasks_total|int) }}
                             {% else %}
                                 N/A
                             {% endif %}
@@ -80,7 +80,7 @@
                         <span class="text-gray-400">Avg Duration</span>
                         <span class="font-mono">
                             {% if daily_stats.tasks_total %}
-                                {{ "%.1f"|format(daily_stats.total_duration_ms|float / daily_stats.tasks_total|int / 1000) }}s
+                                {{ "%.1f"|format(daily_stats.total_duration_ms|default(0)|float / daily_stats.tasks_total|int / 1000) }}s
                             {% else %}
                                 N/A
                             {% endif %}

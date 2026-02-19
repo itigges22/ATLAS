@@ -117,7 +117,7 @@ flowchart TB
 |                 | Geometric Lens         | (in rag-api)           | --                     | PyTorch (CPU)           | Energy-based candidate scoring, 7.9M params                             |
 |                 | Pattern Cache          | (in rag-api)           | --                     | Redis-backed            | Ebbinghaus-decay STM/LTM pattern memory                                  |
 |                 | PageIndex              | (in rag-api)           | --                     | tree-sitter + BM25      | AST-aware code retrieval with LLM tree search                            |
-| **Dashboard**   | atlas-dashboard        | atlas-dashboard        | 3001 (NodePort 30001)  | Web UI                  | Monitoring dashboard (currently scaled to 0)                             |
+| **Dashboard**   | atlas-dashboard        | atlas-dashboard        | 3001 (NodePort 30001)  | Web UI                  | Monitoring dashboard (queue stats, daily metrics, weekly trend)          |
 | **Training**    | atlas-nightly-training | (CronJob)              | --                     | CronJob, 02:00 daily    | Nightly LoRA fine-tuning from accumulated training examples              |
 
 ## Data Flows

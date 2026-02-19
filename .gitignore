@@ -19,11 +19,7 @@ AUDIT*.md
 FINAL_CLEANUP.md
 DELETE_BEFORE_PUSH/
 /plans/
-
-# ----- AI/Assistant Implementation Prompts -----
-# Design docs (*-design.md) are kept; implementation prompt files are excluded.
-docs/plans/2026-02-16-best-of-k.md
-docs/plans/2026-02-16-geo-learning.md
+docs/plans/
 
 # ----- AI/Assistant Related (should not exist) -----
 *claude*
