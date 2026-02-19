@@ -30,62 +30,43 @@ kubectl get pvc -n atlas
 
 ## V2-Specific Issues
 
-### mlock Failure
+### mlock Failure (Resolved)
 
-**Symptom:** llama-server logs report `Cannot allocate memory` when the `--mlock` flag is active. The specific failure is a buffer allocation of approximately 437 MB.
+**Symptom:** llama-server logs report `Cannot allocate memory` when the `--mlock` flag is active.
 
-**Root cause:** The Proxmox VM has a memlock ulimit lower than the model weight buffer size. The `--mlock` flag tells the OS to pin model weights in RAM to prevent paging to swap, but the kernel refuses the allocation when it exceeds the configured ulimit.
-
-**Impact:** Model weights are not pinned in RAM. Under heavy memory pressure, the OS may page model data to swap, causing severe latency spikes during inference.
-
-**Fix:** Increase the memlock ulimit in the VM:
+**Fix (applied):** Create a systemd override for K3s to set unlimited memlock:
 
 ```bash
-echo "* soft memlock unlimited" >> /etc/security/limits.conf
-echo "* hard memlock unlimited" >> /etc/security/limits.conf
+sudo mkdir -p /etc/systemd/system/k3s.service.d
+cat << 'EOF' | sudo tee /etc/systemd/system/k3s.service.d/memlock.conf
+[Service]
+LimitMEMLOCK=infinity
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart k3s
 ```
 
-Then restart the VM for the change to take effect.
-
-**Workaround:** Accept the risk. With 14GB RAM and the 8.38 GiB model weights fully offloaded to GPU (`--ngl 99`), the host-side memory footprint is modest. Page faults are unlikely unless the system is under heavy memory pressure from other processes.
+If you see this error on a fresh install, apply the override above and restart K3s.
 
 ---
 
-### Speculative Decoding Slot 1 Failure
+### Speculative Decoding Slot 1 Failure (Resolved)
 
-**Symptom:** Slot 0 works normally with speculative decoding. Slot 1 fails with `failed to create draft context` in the llama-server logs.
+**Symptom:** Slot 0 works with speculative decoding but slot 1 fails with `failed to create draft context`.
 
-**Root cause:** Insufficient free VRAM to allocate a second draft model KV cache. After loading the main model, the draft model, and the slot 0 KV caches, only approximately 2,217 MiB of VRAM remains -- not enough for a second draft KV cache.
+**Root cause:** The draft model KV cache was using f16 (2,240 MiB per slot), leaving insufficient VRAM for a second draft context.
 
-**Impact:** Roughly 50% of concurrent requests (those routed to slot 1) do not benefit from speculative decoding. These requests complete slightly slower but are otherwise functional.
+**Fix (applied):** The entrypoint now passes `-ctkd q4_0 -ctvd q4_0` to quantize the draft KV cache, reducing it from 2,240 MiB to 630 MiB per slot. Both slots now initialize with speculative decoding.
 
-**Workaround:** None currently available. Resolving this would require a GPU with more than 16GB VRAM, or reducing `--ctx-size` to lower the KV cache memory footprint per slot.
+If you see this error, ensure `KV_CACHE_TYPE` is set in the llama-server deployment (the entrypoint applies it to both main and draft KV caches via `-ctk`/`-ctv`/`-ctkd`/`-ctvd`).
 
 ---
 
-### Dashboard Crash-Loop
+### Dashboard Not Loading (Resolved)
 
-**Symptom:** The atlas-dashboard deployment is in CrashLoopBackOff with a high restart count.
+**Symptom:** The atlas-dashboard deployment crashes with a Jinja2 `UndefinedError` on `daily_stats.total_attempts`.
 
-**Context:** The dashboard accumulated 373 restarts over 16 days before being scaled to 0 replicas. It is non-essential for benchmark workloads.
-
-**To investigate:**
-
-```bash
-kubectl logs deployment/atlas-dashboard -n atlas --previous
-```
-
-**To re-enable:**
-
-```bash
-kubectl scale deployment atlas-dashboard -n atlas --replicas=1
-```
-
-**To disable again:**
-
-```bash
-kubectl scale deployment atlas-dashboard -n atlas --replicas=0
-```
+**Fix (applied):** Added `|default(0)` filters to the dashboard template for Redis hash fields that may not exist when no tasks have run that day.
 
 ---
 

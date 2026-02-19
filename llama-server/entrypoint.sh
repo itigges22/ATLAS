@@ -14,7 +14,7 @@ CTX_LENGTH="${CONTEXT_LENGTH:-65536}"
 
 # KV cache quantization (default q4_0)
 KV_CACHE_TYPE="${KV_CACHE_TYPE:-q4_0}"
-KV_FLAGS="-ctk $KV_CACHE_TYPE -ctv $KV_CACHE_TYPE"
+KV_FLAGS="-ctk $KV_CACHE_TYPE -ctv $KV_CACHE_TYPE -ctkd $KV_CACHE_TYPE -ctvd $KV_CACHE_TYPE"
 
 # Template (default custom — supports both think and nothink modes)
 TEMPLATE="${CHAT_TEMPLATE:-Qwen3-custom.jinja}"

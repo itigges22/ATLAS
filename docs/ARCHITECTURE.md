@@ -39,7 +39,7 @@ ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generati
   |       result (pass/fail)                                    |
   |                                                             |
   |  +-------------+                                            |
-  |  |  dashboard  |  (scaled to 0)                             |
+  |  |  dashboard  |  monitoring UI                              |
   |  +-------------+                                            |
   +-------------------------------------------------------------+
 ```
@@ -66,7 +66,7 @@ ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generati
 | api-portal | User authentication, API key management, JWT issuance |
 | llm-proxy | Rate-limited OpenAI-compatible proxy in front of llama-server |
 | task-worker | Async task execution with Ralph Loop retry logic |
-| dashboard | Monitoring UI (scaled to 0 by default) |
+| dashboard | Monitoring UI (queue stats, daily metrics, weekly trend) |
 | atlas-nightly-training | CronJob for nightly LoRA fine-tuning (runs if ATLAS_ENABLE_TRAINING=true) |
 
 ### NodePorts

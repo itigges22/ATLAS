@@ -135,10 +135,7 @@ tests/           -- Test suite
 
 ## Known Issues (V2)
 
-- Speculative decoding partially broken (slot 1 fails, ~50% of requests unaffected)
-- mlock fails (model weights not pinned in RAM)
-- Per-slot context is 20,480 tokens (40,960 / 2 parallel slots)
-- Dashboard crash-loops (scaled to 0, non-essential for benchmarks)
+- Per-slot context is 20,480 tokens (40,960 / 2 parallel slots) — inherent to running 2 parallel slots for Best-of-K pipelining
 
 ## V3 Roadmap
 

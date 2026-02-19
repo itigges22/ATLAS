@@ -132,7 +132,7 @@ api-portal-xxx                 1/1     Running   0          5m    (MaaS — opti
 llm-proxy-xxx                  1/1     Running   0          5m    (MaaS — optional)
 ```
 
-The MaaS services (api-portal, llm-proxy) provide multi-user API access and are optional for single-user or benchmark-only deployments. The atlas-dashboard deployment exists but is currently scaled to 0 replicas (non-essential for benchmarks).
+The MaaS services (api-portal, llm-proxy) provide multi-user API access and are optional for single-user or benchmark-only deployments.
 
 ### Health Checks
 
