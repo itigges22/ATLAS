@@ -169,7 +169,8 @@ def _best_of_k_section(run_dir) -> str:
     section += "|--------|-------|\n"
     section += f"| Tasks with >= 1 pass candidate | {bok.get('tasks_with_pass_candidate', 0)}/{bok['total_tasks']} ({bok.get('oracle_pass_rate', 0)*100:.1f}%) |\n"
     section += f"| Lens picked a passer | {bok.get('lens_picked_passer', 0)}/{bok.get('tasks_with_pass_candidate', 0)} |\n"
-    section += f"| Selection accuracy | {bok.get('selection_accuracy', 0)*100:.1f}% |\n"
+    section += f"| First-pick accuracy | {bok.get('first_pick_accuracy', 0)*100:.1f}% ({bok.get('first_pick_passed', 0)}/{bok.get('tasks_with_pass_candidate', 0)}) |\n"
+    section += f"| Avg sandbox calls | {bok.get('avg_sandbox_calls', 0):.2f} |\n"
 
     # Table 2: Effective pass@1 vs Oracle pass@k
     section += "\n### Effective pass@1 vs Oracle pass@k\n\n"

@@ -18,7 +18,16 @@ ATLAS achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single c
 | GPQA Diamond | 47.0% | 198 | k=5, multiple-choice knowledge reasoning |
 | SciCode (sub-problems) | 14.7% | 341 | Cross-domain scientific coding |
 
-**Lens Val AUC:** 0.968 at epoch 3. **Selection accuracy:** 100% (188/188 tasks where at least one candidate passed -- the Lens always picked a passing candidate).
+**Lens learning curve (LiveCodeBench, k=3):**
+
+| Epoch | Tasks | Pass Rate | First-Pick Accuracy | Energy Gap (pass vs fail) |
+|-------|-------|-----------|---------------------|---------------------------|
+| 0 (baseline, no Lens) | 100 | 36.0% | n/a | n/a |
+| 1 (1st retrain) | 200 | 38.0% | 82.9% | 5.3 |
+| 2 (2nd retrain) | 200 | 35.5% | 78.9% | 11.5 |
+| 3 (3rd retrain) | 99 | 41.4% | 78.0% | 11.3 |
+
+First-pick accuracy = how often the Lens's lowest-energy candidate actually passes. The energy gap between pass and fail candidates doubled after retraining (5.3 to 11.3), showing the Lens learned to separate passing from failing code. Val AUC reached 0.968 at epoch 3.
 
 **Hardware:** RTX 5060 Ti 16GB VRAM. Total cost: ~$500 GPU.
 **Runtime:** 109 tasks/hr aggregate throughput on V2 benchmark.
@@ -77,7 +86,7 @@ The system includes an API Portal (`api-portal` service, port 3000, NodePort 300
 
 The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to a scalar energy: passing code concentrates near energy 5.00, failing code near 14.04 (training targets were 2.0/25.0; measured outputs converged to 5.00/14.04). A metric tensor G(x) defines a Riemannian geometry over embedding space, enabling gradient-based correction via the update rule dx = -alpha * G^{-1} * grad(C). The theoretical framing draws on Riemannian geometry and energy-based models; the implementation uses standard PyTorch autograd gradient descent.
 
-In practice, the model generates k candidates and the Lens picks the best one. Two metrics measure the Lens: **selection accuracy** (when at least one candidate passes, does the Lens pick a passer?) and **correction rate** (does the metric tensor reduce energy for failing embeddings?). 100% selection accuracy means the Lens never misses a passing candidate when one exists. The Lens retrains on each benchmark run's pass/fail data, so the system improves continuously without changing the frozen LLM weights.
+In practice, the model generates k candidates, the Lens scores each one, and the sandbox tests them in energy order (lowest first), stopping at the first pass. **First-pick accuracy** measures how often the lowest-energy candidate is a passer: ~80% on LiveCodeBench after retraining, with an average of 1.3 sandbox calls per task. The Lens retrains on each epoch's pass/fail data — the energy gap between passing and failing code doubled from 5.3 to 11.3 over three retraining rounds, all without changing the frozen LLM weights.
 
 ## Quick Start
 
