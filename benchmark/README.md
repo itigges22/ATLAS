@@ -20,7 +20,7 @@ Config: See `config.py` for parameters.
 | LiveCodeBench v5 | 599 | 36-41% | k=3, Geometric Lens selection |
 | GPQA Diamond | 198 | 47.0% | k=5, MCQ |
 | Custom | 100 | 53-55% | k=1 |
-| SciCode | ~80 | 14.7% sub / 5.0% main | k=1 |
+| SciCode | 341 | 14.7% sub-problems | k=1 |
 
 Run ID: `v2_run_20260217_125310`
 Hardware: RTX 5060 Ti 16GB VRAM

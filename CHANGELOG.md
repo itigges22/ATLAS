@@ -13,23 +13,26 @@
 - Added KV cache quantization (q4_0)
 
 ### Benchmark Results (Run ID: v2_run_20260217_125310)
-- LiveCodeBench: 36-41% pass@1 (across Lens training epochs)
-- GPQA Diamond: 47.0%
-- SciCode: 14.7% sub-problems, 5.0% main problems
-- Geometric Lens: 0.968 Val AUC, 100% selection efficiency (188/188)
+- LiveCodeBench: 36-41% pass@1 (across Lens training epochs, k=3)
+- GPQA Diamond: 47.0% (k=5)
+- SciCode: 14.7% sub-problems (341 tasks, k=1)
+- Geometric Lens: 0.968 Val AUC, ~80% first-pick accuracy (151/188)
 - Throughput: 109 tasks/hr on RTX 5060 Ti 16GB
 
 ### Removed
 - Qdrant vector database
 - MiniLM-L6-v2 embedding service
-- LoRA nightly training pipeline
+- LoRA nightly training pipeline (moved to v1_archived/, CronJob suspended)
 - V1 benchmark suite (HumanEval, MBPP, Custom)
 
-### Known Issues
+### Fixed Post-Release
+- mlock allocation failure — added LimitMEMLOCK=infinity systemd override for K3s
+- Speculative decode slot 1 failure — quantized draft KV cache to q4_0 (-ctkd/-ctvd)
+- Dashboard crash-loop — fixed missing Jinja2 default filters
+
+### Notes
 - IFBench evaluation incomplete (excluded from results)
 - All results from single benchmark run (variance unknown)
-- mlock allocation fails on current kernel config
-- Speculative decode slot 1 failure (non-blocking)
 
 ## [1.0.0] - 2026-02-04
 
