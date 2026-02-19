@@ -127,7 +127,12 @@ class BestOfKTracker:
         n_has_pass = len(has_pass_events)
 
         lens_picked_passer = sum(1 for e in has_pass_events if e["selected_passed"])
+        # NOTE: selection_accuracy is always 1.0 because the sandbox tries
+        # candidates in energy order and early-exits on first pass. The more
+        # meaningful metric is first_pick_accuracy (did rank-0 candidate pass).
         selection_accuracy = lens_picked_passer / max(n_has_pass, 1)
+        first_pick_passed = sum(1 for e in has_pass_events if e["sandbox_calls"] == 1)
+        first_pick_accuracy = first_pick_passed / max(n_has_pass, 1)
         oracle_pass_rate = n_has_pass / max(n, 1)
         effective_pass_rate = sum(1 for e in self.events if e["selected_passed"]) / max(n, 1)
 
@@ -155,6 +160,8 @@ class BestOfKTracker:
             "tasks_with_pass_candidate": n_has_pass,
             "lens_picked_passer": lens_picked_passer,
             "selection_accuracy": selection_accuracy,
+            "first_pick_accuracy": first_pick_accuracy,
+            "first_pick_passed": first_pick_passed,
             "oracle_pass_rate": oracle_pass_rate,
             "effective_pass_rate": effective_pass_rate,
             "avg_sandbox_calls": avg_sandbox_calls,

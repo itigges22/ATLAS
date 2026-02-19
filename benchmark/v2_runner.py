@@ -769,7 +769,8 @@ def run_lcb_learning_epochs(runner, tasks):
         bok_tracker.save_summary()
         summary = bok_tracker.get_summary()
         if summary:
-            print(f"  SELECTION: accuracy={summary.get('selection_accuracy', 0)*100:.1f}%, "
+            print(f"  SELECTION: first_pick={summary.get('first_pick_accuracy', 0)*100:.1f}%, "
+                  f"avg_sandbox_calls={summary.get('avg_sandbox_calls', 0):.2f}, "
                   f"effective_pass@1={summary.get('effective_pass_rate', 0)*100:.1f}%, "
                   f"oracle_pass@k={summary.get('oracle_pass_rate', 0)*100:.1f}%")
 
