@@ -117,7 +117,7 @@ The speculative decode draft model is partially broken in current deployment. It
 --mlock                   # FAILED (insufficient privileges)
 ```
 
-**VRAM Budget**: 12,235 / 16,311 MiB (75.0%). See Section 4 for breakdown.
+**VRAM Budget**: 12,951 / 16,311 MiB (79.4%). See Section 4 for breakdown.
 
 **Throughput**: 109 tasks/hr (V2 benchmark aggregate across all datasets).
 
@@ -309,14 +309,15 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 | GPQA Diamond | 198 | 47.0% | k=5, MCQ format |
 | IFBench | 300 | excluded | k=5, instruction following (see note) |
 | Custom | 100 | 53--55% | k=1, real-world tasks |
-| SciCode | ~80 | 14.7% sub / 5.0% main | k=1, scientific computing |
+| SciCode | 341 | 14.7% sub-problems | k=1, scientific computing |
 
 ### Geometric Lens Verification
 
 | Metric | Value |
 |--------|-------|
 | Validation AUC | 0.968 (Epoch 3) |
-| Selection efficiency | 100% (188/188 correct selections) |
+| First-pick accuracy | ~80% (151/188 lowest-energy candidate passed) |
+| Avg sandbox calls | 1.30 per task (energy-sorted early exit) |
 | PASS energy (mean) | 5.00 |
 | FAIL energy (mean) | 14.04 |
 | Energy separation | 9.04 |
@@ -340,12 +341,13 @@ Total available: 16,311 MiB (RTX 5060 Ti 16GB).
 | Model weights (Q4_K_M) | ~8,380 MiB |
 | KV cache (2 slots x 20480 ctx x q4_0) | ~1,800 MiB |
 | Draft model (Qwen3-0.6B-Q8_0) | ~610 MiB |
-| CUDA overhead | ~1,445 MiB |
-| **Total** | **~12,235 MiB (75.0%)** |
+| Draft KV cache (2 slots x q4_0) | ~1,260 MiB |
+| CUDA overhead | ~901 MiB |
+| **Total** | **~12,951 MiB (79.4%)** |
 
-KV cache size depends on quantization method and context window. With q4_0 at 40960 context (2 slots x 20480): ~1,800 MiB.
+KV cache size depends on quantization method and context window. With q4_0 at 40960 context (2 slots x 20480): ~1,800 MiB. Draft KV also uses q4_0 (`-ctkd`/`-ctvd` flags) to fit both slot contexts in VRAM.
 
-Headroom: ~4,076 MiB. Sufficient for inference but does not permit increasing slot count or context size significantly without evicting the draft model.
+Headroom: ~3,360 MiB. Sufficient for inference but does not permit increasing slot count or context size significantly without evicting the draft model.
 
 ---
 

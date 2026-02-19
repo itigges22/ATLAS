@@ -95,7 +95,7 @@ kubectl exec deployment/llama-server -n atlas -- nvidia-smi
 Typical V2 VRAM usage with Qwen3-14B-Q4_K_M + Qwen3-0.6B-Q8_0 draft + 2 slots:
 
 ```
-Memory: ~13,635 / 16,311 MiB (83.6%)
+Memory: ~12,951 / 16,311 MiB (79.4%)
 ```
 
 There is little headroom. Do not attempt to load additional models or increase context length without first checking available VRAM.
