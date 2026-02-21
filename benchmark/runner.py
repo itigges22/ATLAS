@@ -349,7 +349,7 @@ class BenchmarkRunner:
             max_retries: Max retries for LLM connection failures
             retry_delay: Delay between retries in seconds
         """
-        self.llm_url = llm_url or config.llama_api_url
+        self.llm_url = llm_url or config.llama_url
         self.timeout_sec = timeout_sec or config.default_timeout_seconds
         self.memory_mb = memory_mb or config.default_memory_limit_mb
         self.max_retries = max_retries
@@ -373,6 +373,24 @@ class BenchmarkRunner:
         if self.client is not None:
             self.client.close()
 
+    # System prompt baked into ChatML — matches Qwen3-custom.jinja template.
+    _SYSTEM_PROMPT = "You are an expert programmer. Respond directly and concisely. /nothink"
+
+    def _format_chatml(self, user_content: str) -> str:
+        """Format a user message as a ChatML prompt for the /completion endpoint.
+
+        Uses the /completion endpoint instead of /v1/chat/completions because
+        llama.cpp's chat endpoint has a bug where speculative decoding gets 0%
+        draft acceptance (token mismatch between main and draft model in the
+        chat template processing path). The raw /completion endpoint works
+        correctly and achieves full spec decode throughput.
+        """
+        return (
+            f"<|im_start|>system\n{self._SYSTEM_PROMPT}<|im_end|>\n"
+            f"<|im_start|>user\n{user_content}<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+
     def _call_llm(
         self,
         prompt: str,
@@ -393,38 +411,31 @@ class BenchmarkRunner:
             error_context: Previous error for ralph-loop retry
             seed: Random seed for reproducible but diverse generation
             cache_prompt: Enable KV cache reuse for shared prompt prefixes
-            think: Enable thinking mode (True) or suppress with /nothink (False)
+            think: Unused (thinking is always disabled)
 
         Returns:
             Tuple of (response_text, tokens_generated, inference_time_ms)
         """
         # Build the full prompt with error context if provided
         if error_context:
-            full_prompt = (
+            user_content = (
                 f"{prompt}\n\n"
                 f"Previous attempt failed with error:\n{error_context}\n\n"
                 f"Please fix the code and try again."
             )
         else:
-            full_prompt = prompt
+            user_content = prompt
 
-        # When think=False, append /nothink to suppress Qwen3 thinking mode.
-        # When think=True, let the model think naturally — reasoning goes to
-        # reasoning_content field (separated by --reasoning-format deepseek).
-        if not think:
-            full_prompt += "\n/nothink"
-
-        messages = [
-            {"role": "user", "content": full_prompt}
-        ]
+        # Format as ChatML for the raw /completion endpoint
+        formatted_prompt = self._format_chatml(user_content)
 
         request_body = {
-            "model": "qwen3-14b",  # Model name doesn't matter for local llama-server
-            "messages": messages,
+            "prompt": formatted_prompt,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "n_predict": max_tokens,
             "stream": False,
             "cache_prompt": cache_prompt,
+            "stop": ["<|im_end|>", "<|im_start|>"],
         }
         if seed is not None:
             request_body["seed"] = seed
@@ -436,7 +447,7 @@ class BenchmarkRunner:
 
                 if HAS_HTTPX and self.client is not None:
                     response = self.client.post(
-                        f"{self.llm_url}/chat/completions",
+                        f"{self.llm_url}/completion",
                         json=request_body
                     )
                     response.raise_for_status()
@@ -444,7 +455,7 @@ class BenchmarkRunner:
                 else:
                     # Fall back to urllib
                     req = urllib.request.Request(
-                        f"{self.llm_url}/chat/completions",
+                        f"{self.llm_url}/completion",
                         data=json.dumps(request_body).encode('utf-8'),
                         headers={'Content-Type': 'application/json'}
                     )
@@ -453,8 +464,12 @@ class BenchmarkRunner:
 
                 inference_time_ms = (time.time() - start_time) * 1000
 
-                content = data["choices"][0]["message"]["content"]
-                tokens = data.get("usage", {}).get("completion_tokens", 0)
+                content = data.get("content", "")
+                tokens = data.get("tokens_predicted", 0)
+
+                # Strip empty think blocks that Qwen3 may emit despite /nothink
+                # (e.g. "<think>\n\n</think>\n\n" — 4 tokens, harmless)
+                content = re.sub(r'^<think>\s*</think>\s*', '', content)
 
                 return content, tokens, inference_time_ms
 

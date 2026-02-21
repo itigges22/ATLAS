@@ -121,7 +121,7 @@ validation_results.json
 validate_geometric_lens.py
 v2_verification_report.md
 
-# ----- V1 vestiges (embedding-service replaced by llama-server --embeddings) -----
+# ----- V1 vestiges (embedding-service replaced; V2.5 uses nomic-embed sidecar) -----
 embedding-service/
 
 # ----- V1 manifest templates (Qdrant and embedding-service removed in V2) -----
@@ -135,3 +135,8 @@ models/
 benchmark/datasets/.cache/
 benchmark/results/
 benchmark/result/
+v2_5_results/
+V2_5_RALPH_LOOP_PROMPT.md
+
+# ----- Telemetry -----
+*.jsonl

@@ -8,7 +8,8 @@ import urllib.error
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-EMBEDDING_DIM = 5120
+# Embedding dimension is model-dependent (768 for nomic-embed-text-v1.5,
+# 5120 for Qwen3-14B). Not used functionally — kept for documentation.
 
 
 # --- Embedding extraction -----------------------------------------------------

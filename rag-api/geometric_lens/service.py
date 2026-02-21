@@ -41,9 +41,8 @@ def _ensure_models_loaded():
 
         models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
         cost_path = os.path.join(models_dir, "cost_field.pt")
-        metric_path = os.path.join(models_dir, "metric_tensor.pt")
 
-        if not os.path.exists(cost_path) or not os.path.exists(metric_path):
+        if not os.path.exists(cost_path):
             logger.warning(f"Geometric Lens model files not found in {models_dir}")
             return False
 

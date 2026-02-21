@@ -371,15 +371,26 @@ def save_models(cost_field, metric_tensor, save_dir=None):
     return cost_path, metric_path
 
 
-def load_models(save_dir=None, dim=5120):
-    """Load trained model weights."""
+def load_models(save_dir=None, dim=None):
+    """Load trained model weights.
+
+    If dim is None, infers from saved weights. Falls back to EMBEDDING_DIM
+    env var (default 768).
+    """
     if save_dir is None:
         save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
+    cost_path = os.path.join(save_dir, "cost_field.pt")
+    if dim is None:
+        if os.path.exists(cost_path):
+            sd = torch.load(cost_path, map_location="cpu", weights_only=True)
+            dim = sd["net.0.weight"].shape[1]  # first Linear's input dim
+        else:
+            dim = int(os.environ.get("EMBEDDING_DIM", "768"))
 
     cost_field = CostField(input_dim=dim)
     metric_tensor = MetricTensor(input_dim=dim)
 
-    cost_path = os.path.join(save_dir, "cost_field.pt")
     metric_path = os.path.join(save_dir, "metric_tensor.pt")
 
     if os.path.exists(cost_path):
