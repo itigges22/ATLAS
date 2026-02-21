@@ -59,7 +59,7 @@ ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generati
 
 | Pod | Purpose |
 |-----|---------|
-| llama-server | GPU inference (Qwen3-14B), embeddings |
+| llama-server | GPU inference (Qwen3-14B) + embedding sidecar (nomic-embed-text-v1.5) |
 | rag-api | Orchestration, routing, PageIndex, Geometric Lens |
 | redis | Pattern Cache, Thompson Sampling state, AOF persistence |
 | sandbox | Isolated code execution and test validation |
@@ -74,6 +74,7 @@ ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generati
 | Service | NodePort |
 |---------|----------|
 | llama-server | 32735 |
+| llama-embed-service | 32736 |
 | rag-api | 31144 |
 | api-portal | 30000 |
 | llm-proxy | 30080 |
@@ -95,29 +96,27 @@ GPU-accelerated LLM inference via llama.cpp, serving OpenAI-compatible API endpo
 | Qwen3-14B-Q4_K_M | GGUF (4.87 BPW) | 8.38 GiB |
 | Qwen3-0.6B-Q8_0 (draft) | GGUF | 610 MiB |
 
-The speculative decode draft model is partially broken in current deployment. It is loaded but acceptance rates are low.
+Speculative decoding is active with ~80% token acceptance rate. Throughput: ~100 tok/s.
 
-**Verified Flag List**:
+**V2.5 Note**: As of V2.5, embeddings are served by a dedicated sidecar (nomic-embed-text-v1.5, port 8001) instead of the main model. The `--embeddings` flag was removed from Server A because it forces `n_batch=512`, breaking speculative decoding. See [ARCHITECTURE_V2_5.md](ARCHITECTURE_V2_5.md) for details.
+
+**Verified Flag List** (Server A -- generation):
 
 ```
---ctx-size 40960          # 20480 per slot
+--ctx-size 16384          # 2 parallel slots
 --parallel 2
 --cont-batching
 --flash-attn
 --no-mmap
---jinja
 --cache-type-k q4_0
 --cache-type-v q4_0
---reasoning-format deepseek
---embeddings
 --draft-max 16
---draft-min 5
---draft-p-min 0.9
+--draft-min 1
 --ngl 99
---mlock                   # FAILED (insufficient privileges)
+--mlock
 ```
 
-**VRAM Budget**: 12,951 / 16,311 MiB (79.4%). See Section 4 for breakdown.
+**VRAM Budget**: ~12,720 / 16,311 MiB (78%). See Section 4 for breakdown.
 
 **Throughput**: 109 tasks/hr (V2 benchmark aggregate across all datasets).
 
@@ -175,7 +174,7 @@ Energy values are raw model outputs (not normalized). Training targets: PASS=2.0
 
 **Weights**: `rag-api/geometric_lens/models/cost_field.pt`, `metric_tensor.pt`. Baked into the container image. PyTorch CPU only (torch 2.10.0+cpu).
 
-**Embedding Source**: llama-server `--embeddings` flag enables the `/embedding` endpoint, which returns per-token 5120-dimensional vectors, mean-pooled to a single vector per input.
+**Embedding Source**: As of V2.5, embeddings come from a dedicated nomic-embed-text-v1.5 sidecar (768-dim). In V2, the main llama-server's `--embeddings` flag provided 5120-dim Qwen3-14B self-embeddings, but this was incompatible with speculative decoding. The Lens MLP input layer adapts automatically on retrain.
 
 **Environment**: `GEOMETRIC_LENS_ENABLED` env var. Models loaded lazily on first use.
 
@@ -336,18 +335,17 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 
 Total available: 16,311 MiB (RTX 5060 Ti 16GB).
 
-| Component | Size |
+As of V2.5, measured via `nvidia-smi` with both servers running:
+
+| Component | VRAM |
 |-----------|------|
-| Model weights (Q4_K_M) | ~8,380 MiB |
-| KV cache (2 slots x 20480 ctx x q4_0) | ~1,800 MiB |
-| Draft model (Qwen3-0.6B-Q8_0) | ~610 MiB |
-| Draft KV cache (2 slots x q4_0) | ~1,260 MiB |
-| CUDA overhead | ~901 MiB |
-| **Total** | **~12,951 MiB (79.4%)** |
+| Server A (Qwen3-14B + draft + KV cache) | ~12,420 MiB |
+| Server B (nomic-embed-text-v1.5 Q8_0 sidecar) | ~300 MiB |
+| **Total** | **~12,720 MiB (78%)** |
 
-KV cache size depends on quantization method and context window. With q4_0 at 40960 context (2 slots x 20480): ~1,800 MiB. Draft KV also uses q4_0 (`-ctkd`/`-ctvd` flags) to fit both slot contexts in VRAM.
+Headroom: ~3,590 MiB. The embed sidecar adds only ~300 MiB while enabling speculative decoding (~100 tok/s vs ~38 tok/s in V2).
 
-Headroom: ~3,360 MiB. Sufficient for inference but does not permit increasing slot count or context size significantly without evicting the draft model.
+See [ARCHITECTURE_V2_5.md](ARCHITECTURE_V2_5.md) for the full two-server architecture details.
 
 ---
 
@@ -394,7 +392,7 @@ The following V1 components were removed and replaced:
 | V1 Component | V2 Replacement | Reason |
 |-------------|----------------|--------|
 | Qdrant vector database | PageIndex (AST tree + BM25) | Structural code understanding, lower resource usage |
-| Dedicated embedding service | llama-server `--embeddings` | Single model serves both inference and embeddings |
+| Dedicated embedding service | llama-server `--embeddings` (V2), then nomic-embed-text-v1.5 sidecar (V2.5) | V2 used self-embeddings; V2.5 uses dedicated embed model to enable spec decode |
 | Chunking pipeline (`rag-api/chunker.py`) | AST-based tree indexing | Chunk boundaries are semantic (functions, classes) rather than arbitrary token windows |
 
 Removed manifests: `embedding-deployment.yaml`, `qdrant-deployment.yaml`.

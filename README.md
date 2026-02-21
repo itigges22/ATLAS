@@ -35,6 +35,14 @@ First-pick accuracy = how often the Lens's lowest-energy candidate actually pass
 
 All results from a single benchmark run. Not averaged across multiple runs. Variance unknown. LCB "36-41%" reflects epoch 0 to epoch 3 of Geometric Lens retraining on 100-200 task batches, not a confidence interval.
 
+## V2.5 Ablation Study
+
+A systematic ablation (2026-02-21) tested whether the Geometric Lens C(x) energy scoring provides real candidate selection value beyond diversity. **Result: Lens scoring is statistically indistinguishable from random selection** -- energy-sorted candidates achieve 37.7% pass@1 vs 37.1% for random ordering (0.6pp gap within the 3.4pp seed-to-seed variance, mean 36.0% +/- 1.7% across 3 seeds). The Best-of-K diversity benefit (generating 3 candidates at temp=0.6) accounts for nearly all improvement.
+
+The study also discovered that llama.cpp's `--embeddings` flag was silently breaking speculative decoding (forcing n_batch=512, causing 0% draft token acceptance). This led to a two-server sidecar architecture: generation with spec decode (~100 tok/s) on the main server, embeddings via a lightweight nomic-embed-text-v1.5 sidecar (~300 MiB VRAM). C(x) energy does correlate with task difficulty (58.5% vs 18.9% pass rate across energy tiers) and will be repurposed for difficulty-adaptive routing in V3.
+
+Full results: [docs/V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) | Architecture change: [docs/ARCHITECTURE_V2_5.md](docs/ARCHITECTURE_V2_5.md)
+
 ## Architecture Overview
 
 ```mermaid

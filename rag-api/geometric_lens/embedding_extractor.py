@@ -8,41 +8,50 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_DIM = 5120  # Qwen3-14B verified dimension
 
+def _get_embed_url() -> str:
+    """Return the URL for the embedding server.
 
-def _get_llama_url() -> str:
-    return os.environ.get("LLAMA_URL", "http://llama-service:8000")
+    Uses LLAMA_EMBED_URL if set, otherwise falls back to LLAMA_URL.
+    """
+    return os.environ.get(
+        "LLAMA_EMBED_URL",
+        os.environ.get("LLAMA_URL", "http://llama-service:8000"),
+    )
 
 
 def extract_embedding(text: str) -> List[float]:
-    """Extract a mean-pooled embedding vector from llama-server.
+    """Extract an embedding vector from llama-server.
 
-    Uses the /embedding endpoint which returns per-token embeddings
-    (pooling=none), then applies mean pooling to get a single vector.
+    Handles both pooled responses (flat list) from models like nomic-embed
+    and per-token responses (nested list) that need mean pooling.
 
     Returns:
-        List of floats with length EMBEDDING_DIM (5120).
+        List of floats with model-native dimensionality.
     """
-    url = f"{_get_llama_url()}/embedding"
+    url = f"{_get_embed_url()}/embedding"
     payload = json.dumps({"content": text}).encode()
     req = Request(url, data=payload, headers={"Content-Type": "application/json"})
 
-    with urlopen(req, timeout=30) as resp:
+    with urlopen(req, timeout=120) as resp:
         data = json.loads(resp.read())
 
-    # Response: [{"index": 0, "embedding": [[tok1_dim0, ...], [tok2_dim0, ...], ...]}]
-    per_token = data[0]["embedding"]
+    # Response: [{"index": 0, "embedding": <flat list or nested list>}]
+    raw = data[0]["embedding"]
+
+    # Pooled: flat list of floats (e.g. nomic-embed-text)
+    if not isinstance(raw[0], list):
+        return raw
+
+    # Per-token: mean-pool across tokens
+    per_token = raw
     n_tokens = len(per_token)
 
     if n_tokens == 0:
         raise ValueError("No token embeddings returned")
 
     dim = len(per_token[0])
-    if dim != EMBEDDING_DIM:
-        logger.warning(f"Expected dim {EMBEDDING_DIM}, got {dim}")
 
-    # Mean pooling across tokens
     pooled = [0.0] * dim
     for tok_emb in per_token:
         for i, v in enumerate(tok_emb):

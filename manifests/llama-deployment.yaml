@@ -1,6 +1,6 @@
 # Verified against live pod config — V2.0.0
 #
-# NOTE: --ctx-size 40960 with --parallel 2 = 20480 tokens per slot.
+# NOTE: --ctx-size 16384 with --parallel 2 = 8192 tokens per slot.
 # This is inherent to running 2 parallel slots for Best-of-K pipelining.
 #
 # mlock and speculative decoding on both slots require LimitMEMLOCK=infinity
@@ -35,7 +35,7 @@ spec:
         - name: MODEL_PATH
           value: "/models/Qwen3-14B-Q4_K_M.gguf"
         - name: CONTEXT_LENGTH
-          value: "40960"
+          value: "16384"
         - name: GPU_LAYERS
           value: "99"
         - name: PARALLEL_SLOTS
@@ -75,16 +75,35 @@ spec:
           subPath: entrypoint.sh
         - name: templates
           mountPath: /templates
+      # Sidecar: nomic-embed-text-v1.5 embedding server (shares pod GPU)
+      - name: llama-embed
+        image: localhost/llama-server:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8001
+        resources:
+          limits:
+            memory: 2Gi
+            cpu: 1
+          requests:
+            memory: 512Mi
+            cpu: 100m
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        - name: entrypoint
+          mountPath: /entrypoint.sh
+          subPath: entrypoint-embed.sh
       volumes:
       - name: models
         hostPath:
           # CHANGE THIS: Set to your model directory (see docs/SETUP.md)
-          path: /opt/atlas/models
+          path: /home/isaac/models
           type: Directory
       - name: lora
         hostPath:
           # CHANGE THIS: Set to your model directory + /lora (see docs/SETUP.md)
-          path: /opt/atlas/models/lora
+          path: /home/isaac/models/lora
           type: DirectoryOrCreate
       - name: entrypoint
         configMap:

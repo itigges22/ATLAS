@@ -1,0 +1,15 @@
+# Embedding service — routes to sidecar container in llama-server pod
+# The Deployment has been removed; the embed server now runs as a sidecar
+# in the llama-server pod (see llama-deployment.yaml)
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-embed-service
+spec:
+  selector:
+    app: llama-server
+  ports:
+  - port: 8000
+    targetPort: 8001
+    nodePort: 32736
+  type: NodePort

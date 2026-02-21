@@ -25,6 +25,8 @@ spec:
         env:
         - name: LLAMA_URL
           value: "http://llama-service:8000"
+        - name: LLAMA_EMBED_URL
+          value: "http://llama-embed-service:8000"
         - name: API_PORTAL_URL
           value: "http://api-portal:3000"
         - name: REDIS_HOST

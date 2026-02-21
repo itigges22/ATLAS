@@ -21,7 +21,8 @@ flowchart TB
   end
 
   subgraph Generation["Best-of-K Pipeline"]
-    LS[llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B-Q8_0 Draft<br/>2 parallel slots, KV cache q4_0]
+    LS[llama-server Server A<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B-Q8_0 Draft<br/>Spec decode ON, embeddings OFF<br/>Port 8000 / NodePort 32735]
+    EM[llama-server Server B<br/>nomic-embed-text-v1.5 Q8_0<br/>Embeddings ON, 768-dim<br/>Port 8001 / NodePort 32736]
     PC[Pattern Cache<br/>Redis + Ebbinghaus Decay<br/>STM / LTM tiers]
   end
 
@@ -70,7 +71,7 @@ flowchart TB
 
   %% Evaluation flow
   LS -->|k candidates| GL
-  GL -->|extract embedding| LS
+  GL -->|extract embedding| EM
   GL -->|sorted by energy| SB
   SB -->|result + feedback| FR
   SB -->|pass/fail embeddings| RT
@@ -97,6 +98,7 @@ flowchart TB
   style FR fill:#4a1a5c,color:#fff
   style RT fill:#4a1a5c,color:#fff
   style TW fill:#3a3a3a,color:#fff
+  style EM fill:#1a3a5c,color:#fff
   style RD fill:#8b0000,color:#fff
 ```
 
@@ -109,7 +111,8 @@ flowchart TB
 | **MaaS**        | api-portal             | api-portal             | 3000 (NodePort 30000)  | FastAPI                 | User registration/login (JWT), API key mgmt (sk-llm-*), /v1/models      |
 |                 | llm-proxy              | llm-proxy              | 8000 (NodePort 30080)  | FastAPI                 | Reverse proxy to llama-server with API key validation + rate limiting    |
 | **Core**        | rag-api                | rag-api                | 8001 (NodePort 31144)  | FastAPI                 | Orchestration: routing, RAG, cache, lens, key validation via api-portal  |
-|                 | llama-server           | llama-service          | 8000 (NodePort 32735)  | llama.cpp + CUDA        | GPU inference (Qwen3-14B-Q4_K_M + 0.6B-Q8_0 draft, KV cache q4_0)      |
+|                 | llama-server (Server A)| llama-service          | 8000 (NodePort 32735)  | llama.cpp + CUDA        | GPU inference (Qwen3-14B + 0.6B draft, spec decode ON, embeddings OFF)  |
+|                 | llama-embed (Server B) | llama-embed-service    | 8001 (NodePort 32736)  | llama.cpp + CUDA        | Embedding sidecar (nomic-embed-text-v1.5, 768-dim, embeddings ON)       |
 | **Execution**   | sandbox                | sandbox                | 8020 (NodePort 30820)  | K8s service             | Isolated code execution and testing (HTTP API)                           |
 |                 | task-worker            | task-worker             | 8080 (ClusterIP)       | Python                  | Async task processor: polls Redis queues, runs ralph-loop, calls sandbox |
 | **Storage**     | Redis                  | redis                  | 6379                   | Redis                   | Pattern cache, Thompson state, task queue, rate limits, usage metrics    |
@@ -135,9 +138,9 @@ Query
 ### Best-of-K Generation
 ```
 Task + k value
- -> llama-server (k candidates, temperature varies by mode:
+ -> llama-server Server A (k candidates, temperature varies by mode:
       k=1: 0.0, mcq/ifbench: 0.3, code k<=5: 0.6, code k>5: 0.8)
- -> Geometric Lens (extract 5120-dim embedding via llama-server /embedding,
+ -> Geometric Lens (extract 768-dim embedding via Server B /embedding,
       score each candidate through C(x), sort by energy)
  -> Sandbox (try in energy order, early exit on first PASS)
  -> Result + feedback
