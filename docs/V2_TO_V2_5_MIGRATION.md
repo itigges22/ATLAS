@@ -43,32 +43,29 @@ llama.cpp's `--embeddings` flag forces `n_batch = n_ubatch = 512` on the main mo
 
 Separate embedding extraction from generation by running two llama-server processes as containers in the same K3s pod.
 
-```
-                        llama-server Pod (GPU shared)
-  +-------------------------------------------------------------------+
-  |                                                                   |
-  |  Server A: Generation                Server B: Embeddings         |
-  |  +--------------------------+       +------------------------+    |
-  |  | Qwen3-14B-Q4_K_M        |       | nomic-embed-text-v1.5  |    |
-  |  | + Qwen3-0.6B-Q8_0 draft |       | Q8_0 quantization      |    |
-  |  |                          |       |                        |    |
-  |  | Spec decode: ON          |       | Spec decode: OFF       |    |
-  |  | Embeddings: OFF          |       | Embeddings: ON         |    |
-  |  | Context: 16384           |       | Context: 2048          |    |
-  |  | KV cache: q4_0           |       | Dims: 768              |    |
-  |  | Port: 8000               |       | Port: 8001             |    |
-  |  +--------------------------+       +------------------------+    |
-  |                                                                   |
-  |  nvidia.com/gpu: 1 (shared by both containers)                    |
-  +-------------------------------------------------------------------+
+```mermaid
+flowchart TB
+  subgraph Pod["llama-server Pod (nvidia.com/gpu: 1, shared)"]
+    subgraph ServerA["Server A: Generation (port 8000)"]
+      A1[Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B-Q8_0 draft]
+      A2[Spec decode: ON<br/>Embeddings: OFF<br/>Context: 16384<br/>KV cache: q4_0]
+    end
+    subgraph ServerB["Server B: Embeddings (port 8001)"]
+      B1[nomic-embed-text-v1.5<br/>Q8_0 quantization]
+      B2[Spec decode: OFF<br/>Embeddings: ON<br/>Context: 2048<br/>Dims: 768]
+    end
+  end
 
-  K3s Services:
-    llama-service       (NodePort 32735) -> port 8000 (Server A)
-    llama-embed-service (NodePort 32736) -> port 8001 (Server B)
+  SvcA[llama-service<br/>NodePort 32735] -->|port 8000| A1
+  SvcB[llama-embed-service<br/>NodePort 32736] -->|port 8001| B1
 
-  rag-api routing:
-    LLAMA_URL       = http://llama-service:8000       (generation)
-    LLAMA_EMBED_URL = http://llama-embed-service:8000 (embeddings)
+  RAG[rag-api] -->|LLAMA_URL| SvcA
+  RAG -->|LLAMA_EMBED_URL| SvcB
+
+  style ServerA fill:#1a3a5c,color:#fff
+  style ServerB fill:#2d5016,color:#fff
+  style Pod fill:#0d1b2a,color:#fff
+  style RAG fill:#5c3a1a,color:#fff
 ```
 
 ### Server A: Generation (port 8000, NodePort 32735)
