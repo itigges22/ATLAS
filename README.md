@@ -89,7 +89,7 @@ flowchart TB
   style DE fill:#5c3a1a,color:#fff
 ```
 
-Full architecture details: [docs/architecture-diagram.md](docs/architecture-diagram.md) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+Full architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ### API Portal
 
