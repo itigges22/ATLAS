@@ -8,52 +8,138 @@ Detailed architecture companion to the README. Describes the system as currently
 
 ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generation. It runs a local Qwen3-14B model on consumer hardware (single 16GB GPU) under K3s, combining retrieval-augmented generation, energy-based verification, and adaptive routing to maximize pass rates within a fixed VRAM budget.
 
-### Data Flow
+### System Diagram
 
-```
-                         K3s Cluster
-  +-------------------------------------------------------------+
-  |                                                             |
-  |  problem                                                    |
-  |    |                                                        |
-  |    v                                                        |
-  |  +-------------+    prompt    +---------------+             |
-  |  |   rag-api   | ----------> | llama-server  |             |
-  |  | (router,    | <---------- | (Qwen3-14B)   |             |
-  |  |  PageIndex, |  completion | :8000          |             |
-  |  |  lens)      |             | NodePort:32735 |             |
-  |  | :8001       |             +---------------+             |
-  |  | NodePort:   |                                            |
-  |  |  31144      |                                            |
-  |  +------+------+                                            |
-  |         |                                                   |
-  |         | code candidate                                    |
-  |         v                                                   |
-  |  +-------------+         +----------+                       |
-  |  |   sandbox   |         |  redis   |                       |
-  |  | (exec+test) |         | (cache,  |                       |
-  |  | :8020       |         |  state)  |                       |
-  |  +------+------+         +----------+                       |
-  |         |                                                   |
-  |         v                                                   |
-  |       result (pass/fail)                                    |
-  |                                                             |
-  |  +-------------+                                            |
-  |  |  dashboard  |  monitoring UI                              |
-  |  +-------------+                                            |
-  +-------------------------------------------------------------+
+```mermaid
+flowchart TB
+  subgraph MaaS["MaaS Layer (API + Auth)"]
+    AP[api-portal<br/>User registration, JWT auth<br/>API key mgmt, /v1/models<br/>Port 3000 / NodePort 30000]
+    LP[llm-proxy<br/>Reverse proxy to llama-server<br/>API key validation + rate limiting<br/>Port 8000 / NodePort 30080]
+  end
+
+  subgraph Input
+    Problem[Coding Problem]
+  end
+
+  subgraph Routing["Confidence Router"]
+    SC[Signal Collector<br/>4 signals: cache, retrieval,<br/>complexity, geometric energy]
+    DE[Difficulty Estimator<br/>Weights: 0.30 / 0.25 / 0.20 / 0.25]
+    TS[Thompson Sampling<br/>Beta posteriors per bin x route<br/>Cost-weighted selection]
+    AK[Adaptive-k Selection<br/>CACHE_HIT k=0 / FAST k=1<br/>STANDARD k=5 / HARD k=20]
+  end
+
+  subgraph Generation["Best-of-K Pipeline"]
+    LS[llama-server Server A<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B-Q8_0 Draft<br/>Spec decode ON, embeddings OFF<br/>Port 8000 / NodePort 32735]
+    EM[llama-server Server B<br/>nomic-embed-text-v1.5 Q8_0<br/>Embeddings ON, 768-dim<br/>Port 8001 / NodePort 32736]
+    PC[Pattern Cache<br/>Redis + Ebbinghaus Decay<br/>STM / LTM tiers]
+  end
+
+  subgraph Evaluation["Candidate Selection"]
+    GL[Geometric Lens<br/>C x Cost Field ~0.5M params<br/>G x Metric Tensor ~0.8M params DORMANT]
+    SB[Sandbox<br/>K8s service, port 8020<br/>Isolated code execution + testing<br/>Energy-sorted early exit]
+  end
+
+  subgraph Knowledge["Context Retrieval"]
+    PI[PageIndex RAG<br/>AST Tree Index + BM25<br/>LLM-guided Tree Search]
+  end
+
+  subgraph Workers["Async Processing"]
+    TW[task-worker<br/>Polls Redis queues<br/>Runs ralph-loop<br/>Calls sandbox over HTTP]
+  end
+
+  subgraph Feedback["Continuous Learning"]
+    FR[Feedback Recorder<br/>Thompson state updates]
+    RT[Lens Retrain<br/>BCE on pass/fail embeddings<br/>Hot-reload weights]
+  end
+
+  subgraph Storage
+    RD[(Redis<br/>Pattern cache, Thompson state<br/>Task queue, rate limits, metrics)]
+  end
+
+  %% MaaS layer flows
+  LP -->|validate key| AP
+  AP -->|read usage metrics| RD
+  AP -->|model discovery| LS
+  LP -->|proxy requests| LS
+
+  %% Interactive RAG flow: rag-api validates keys via api-portal
+  PI -.->|validate key| AP
+
+  %% Routing decision flow
+  Problem --> SC
+  PC -.->|pattern cache score<br/>interactive RAG flow only| SC
+  PI -.->|retrieval confidence| SC
+  GL -.->|geometric energy| SC
+  SC --> DE
+  DE --> TS
+  TS --> AK
+  AK -->|k candidates + temperature| LS
+  PC -.->|strategy hints<br/>interactive RAG flow only| LS
+  PI -.->|relevant context| LS
+
+  %% Evaluation flow
+  LS -->|k candidates| GL
+  GL -->|extract embedding| EM
+  GL -->|sorted by energy| SB
+  SB -->|result + feedback| FR
+  SB -->|pass/fail embeddings| RT
+  FR -.->|update Beta posteriors| TS
+  RT -.->|retrained C x| GL
+  SB -->|pattern write| PC
+
+  %% Task worker flow
+  TW -->|poll tasks| RD
+  TW -->|generate code| LS
+  TW -->|execute code| SB
+
+  style AP fill:#5c1a3a,color:#fff
+  style LP fill:#5c1a3a,color:#fff
+  style GL fill:#2d5016,color:#fff
+  style LS fill:#1a3a5c,color:#fff
+  style DE fill:#5c3a1a,color:#fff
+  style SC fill:#5c3a1a,color:#fff
+  style TS fill:#5c3a1a,color:#fff
+  style AK fill:#5c3a1a,color:#fff
+  style PC fill:#1a3a5c,color:#fff
+  style PI fill:#1a3a5c,color:#fff
+  style SB fill:#2d5016,color:#fff
+  style FR fill:#4a1a5c,color:#fff
+  style RT fill:#4a1a5c,color:#fff
+  style TW fill:#3a3a3a,color:#fff
+  style EM fill:#1a3a5c,color:#fff
+  style RD fill:#8b0000,color:#fff
 ```
 
-### Control Flow (Best-of-K Pipeline)
+### Color Legend
 
-```
-  router                         generation           lens scoring        selection
-    |                                |                      |                 |
-    v                                v                      v                 v
-  4 signals --> difficulty D(x) --> k candidates --> score C(x) each --> sort by energy
-  (cache, retrieval,                (parallel,        (cost field MLP)    --> sandbox lowest
-   complexity, energy)               staggered)                            --> early exit on pass
-```
+| Color | Meaning |
+|-------|---------|
+| Dark green | Evaluation (Lens + Sandbox) |
+| Dark blue | Generation and retrieval (llama-server, PageIndex, Pattern Cache) |
+| Dark brown | Routing (Signal Collector, Difficulty Estimator, Thompson, Adaptive-k) |
+| Dark purple | Feedback and learning (Feedback Recorder, Lens Retrain) |
+| Dark rose | MaaS layer (API Portal, LLM Proxy) |
+| Dark grey | Async workers (Task Worker) |
+| Dark red | Storage (Redis) |
+
+### Service Summary
+
+| Layer           | Service                | K8s Service Name       | Port                   | Technology              | Purpose                                                                 |
+|-----------------|------------------------|------------------------|------------------------|-------------------------|-------------------------------------------------------------------------|
+| **MaaS**        | api-portal             | api-portal             | 3000 (NodePort 30000)  | FastAPI                 | User registration/login (JWT), API key mgmt (sk-llm-*), /v1/models      |
+|                 | llm-proxy              | llm-proxy              | 8000 (NodePort 30080)  | FastAPI                 | Reverse proxy to llama-server with API key validation + rate limiting    |
+| **Core**        | rag-api                | rag-api                | 8001 (NodePort 31144)  | FastAPI                 | Orchestration: routing, RAG, cache, lens, key validation via api-portal  |
+|                 | llama-server (Server A)| llama-service          | 8000 (NodePort 32735)  | llama.cpp + CUDA        | GPU inference (Qwen3-14B + 0.6B draft, spec decode ON, embeddings OFF)  |
+|                 | llama-embed (Server B) | llama-embed-service    | 8001 (NodePort 32736)  | llama.cpp + CUDA        | Embedding sidecar (nomic-embed-text-v1.5, 768-dim, embeddings ON)       |
+| **Execution**   | sandbox                | sandbox                | 8020 (NodePort 30820)  | K8s service             | Isolated code execution and testing (HTTP API)                           |
+|                 | task-worker            | task-worker             | 8080 (ClusterIP)       | Python                  | Async task processor: polls Redis queues, runs ralph-loop, calls sandbox |
+| **Storage**     | Redis                  | redis                  | 6379                   | Redis                   | Pattern cache, Thompson state, task queue, rate limits, usage metrics    |
+| **Intelligence**| Confidence Router      | (in rag-api)           | --                     | Thompson Sampling       | 4-signal difficulty estimation, adaptive-k                               |
+|                 | Geometric Lens         | (in rag-api)           | --                     | PyTorch (CPU)           | Energy-based candidate scoring, ~1.3M params                            |
+|                 | Pattern Cache          | (in rag-api)           | --                     | Redis-backed            | Ebbinghaus-decay STM/LTM pattern memory                                  |
+|                 | PageIndex              | (in rag-api)           | --                     | tree-sitter + BM25      | AST-aware code retrieval with LLM tree search                            |
+| **Dashboard**   | atlas-dashboard        | atlas-dashboard        | 3001 (NodePort 30001)  | Web UI                  | Monitoring dashboard (queue stats, daily metrics, weekly trend)          |
+| **Training**    | atlas-nightly-training | (CronJob, suspended)   | --                     | CronJob, suspended       | LoRA fine-tuning (V1 artifact, suspended -- V2 uses frozen model)        |
 
 ### K3s Pods
 
@@ -83,9 +169,78 @@ ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generati
 
 ---
 
-## 2. Components
+## 2. Data Flows
 
-### 2.1 llama-server (Inference Engine)
+### Routing Decision (interactive RAG flow)
+
+```mermaid
+flowchart LR
+  Q[Query] --> SC[Signal Collector]
+  SC --> DE[Difficulty Estimator]
+  DE --> TS[Thompson Sampling]
+  TS --> RS[Route Selection]
+  RS --> AK[Adaptive-k]
+
+  PC[Pattern Cache] -.->|s_p| SC
+  PI[PageIndex] -.->|r_c| SC
+  QC[Query Analysis] -.->|q_c| SC
+  GL[Geometric Lens] -.->|g_e| SC
+
+  AK -->|k=0| CH[CACHE_HIT]
+  AK -->|k=1| FP[FAST_PATH]
+  AK -->|k=5| ST[STANDARD]
+  AK -->|k=20| HP[HARD_PATH]
+
+  style SC fill:#5c3a1a,color:#fff
+  style DE fill:#5c3a1a,color:#fff
+  style TS fill:#5c3a1a,color:#fff
+  style RS fill:#5c3a1a,color:#fff
+  style AK fill:#5c3a1a,color:#fff
+```
+
+### Best-of-K Pipeline
+
+```mermaid
+sequenceDiagram
+  participant R as Router
+  participant LS as Server A (Generation)
+  participant EM as Server B (Embeddings)
+  participant GL as Geometric Lens
+  participant SB as Sandbox
+
+  R->>LS: Generate k candidates (temperature varies by mode)
+  Note over LS: k=1: temp 0.0<br/>mcq/ifbench: 0.3<br/>code k≤5: 0.6<br/>code k>5: 0.8
+  LS-->>GL: k code candidates
+  GL->>EM: Extract 768-dim embedding per candidate
+  EM-->>GL: Embeddings
+  GL->>GL: Score C(x) each, sort by energy (ascending)
+  loop For each candidate (lowest energy first)
+    GL->>SB: Test candidate
+    SB-->>GL: pass/fail
+    Note over GL,SB: Early exit on first PASS
+  end
+  SB-->>R: Result + feedback
+```
+
+Note: In benchmark mode, best-of-k calls llama-server directly (`_call_llm`). Pattern Cache strategy hints and `pattern_cache_score` are only used in the interactive RAG flow, not the benchmark pipeline.
+
+### MaaS Authentication
+
+External users authenticate via API keys through `llm-proxy`, which validates against `api-portal`. Internal services (rag-api, task-worker) call llama-server directly, bypassing `llm-proxy` (no auth needed).
+
+### Task Worker (production async flow)
+
+User request via api-portal → task queued in Redis → task-worker polls and picks up task → (optional) retrieve RAG context from rag-api → generate code via llama-server (direct, bypasses llm-proxy auth) → execute + test via sandbox service → store result in Redis, publish completion.
+
+### Continuous Learning
+
+Sandbox results (pass/fail + code embeddings) feed into: Lens Retrain (BCE loss, epoch-based) → hot-reload C(x) weights into rag-api. Thompson Sampling feedback updates Beta posteriors. Pattern Cache extracts and stores successful patterns.
+
+---
+
+## 3. Components
+
+### 3.1 llama-server (Inference Engine)
 
 GPU-accelerated LLM inference via llama.cpp, serving OpenAI-compatible API endpoints.
 
@@ -116,7 +271,7 @@ Embeddings are served by a dedicated sidecar (nomic-embed-text-v1.5, port 8001) 
 --mlock
 ```
 
-**VRAM Budget**: ~12,720 / 16,311 MiB (78%). See Section 4 for breakdown.
+**VRAM Budget**: ~12,720 / 16,311 MiB (78%). See Section 5 for breakdown.
 
 **Throughput**: 109 tasks/hr (V2 benchmark aggregate across all datasets).
 
@@ -127,7 +282,7 @@ Embeddings are served by a dedicated sidecar (nomic-embed-text-v1.5, port 8001) 
 - First request after model load is slow (cold KV cache); warm up before benchmarking.
 - Qwen3-14B thinking mode: at temperature=0, model uses `<think>` tags consuming 8000+ tokens. Must set max_tokens >= 16384 or use `/nothink`.
 
-### 2.2 Geometric Lens (Energy-Based Verifier)
+### 3.2 Geometric Lens (Energy-Based Verifier)
 
 An energy-based model that scores code generation candidates, enabling the best-of-K selection pipeline to pick the most likely correct candidate before running expensive sandbox tests.
 
@@ -181,7 +336,7 @@ The V2.5 ablation study ([V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md)) found
 
 **Environment**: `GEOMETRIC_LENS_ENABLED` env var. Models loaded lazily on first use.
 
-### 2.3 Confidence Router
+### 3.3 Confidence Router
 
 Adaptive per-task routing that decides how many candidates (k) to generate based on estimated problem difficulty. Uses Thompson Sampling (Bayesian bandit) with Redis-backed Beta(alpha, beta) posteriors, updated with real outcomes.
 
@@ -214,7 +369,7 @@ D(x) = 0.30 * (1 - s_p) + 0.25 * (1 - r_c) + 0.20 * q_c + 0.25 * g_e
 
 **Location**: `rag-api/router/` -- signal_collector, difficulty_estimator, route_selector, feedback_recorder, fallback_chain.
 
-### 2.4 Best-of-K Selection Pipeline
+### 3.4 Best-of-K Selection Pipeline
 
 The selection pipeline generates k candidates in parallel, scores them with the Geometric Lens, and tests them in the sandbox in energy-sorted order with early exit on first pass.
 
@@ -242,7 +397,7 @@ The selection pipeline generates k candidates in parallel, scores them with the 
 5. Run sandbox tests in sorted order.
 6. Early exit: return the first candidate that passes all tests.
 
-### 2.5 PageIndex RAG
+### 3.5 PageIndex RAG
 
 Replaced V1's Qdrant vector database with AST-aware retrieval.
 
@@ -265,7 +420,7 @@ Replaced V1's Qdrant vector database with AST-aware retrieval.
 
 **Provides**: `retrieval_confidence` signal to the Confidence Router.
 
-### 2.6 Pattern Cache (Redis)
+### 3.6 Pattern Cache (Redis)
 
 Stores problem-to-strategy patterns for cache routing, implementing Ebbinghaus memory decay.
 
@@ -280,7 +435,7 @@ Patterns accessed frequently are promoted from STM to LTM. Unused patterns decay
 
 Also serves as the backend for Thompson Sampling router state (Beta distribution parameters per route).
 
-### 2.7 Sandbox
+### 3.7 Sandbox
 
 Isolated code execution environment providing ground-truth pass/fail signals. This is the objective verification layer -- the model cannot corrupt this signal.
 
@@ -295,7 +450,7 @@ Isolated code execution environment providing ground-truth pass/fail signals. Th
 
 ---
 
-## 3. V2 Benchmark Results
+## 4. V2 Benchmark Results
 
 Run ID: `v2_run_20260217_125310`
 Hardware: RTX 5060 Ti 16GB VRAM
@@ -334,7 +489,7 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 
 ---
 
-## 4. VRAM Budget
+## 5. VRAM Budget
 
 Total available: 16,311 MiB (RTX 5060 Ti 16GB).
 
@@ -352,7 +507,7 @@ See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for the full two-server m
 
 ---
 
-## 5. MaaS Layer (Optional)
+## 6. MaaS Layer (Optional)
 
 ATLAS includes an optional Model-as-a-Service layer for external API access to the model. These services are not required for benchmarking or internal use.
 
@@ -388,7 +543,7 @@ LoRA fine-tuning cronjob. Currently suspended (`suspend: true`). V2 uses a froze
 
 ---
 
-## 6. Removed in V2
+## 7. Removed in V2
 
 The following V1 components were removed and replaced:
 
