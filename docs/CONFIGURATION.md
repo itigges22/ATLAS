@@ -476,7 +476,7 @@ Set in `manifests/llama-deployment.yaml`:
 | `GPU_LAYERS` | `99` | Number of layers offloaded to GPU |
 | `PARALLEL_SLOTS` | `2` | Number of parallel inference slots |
 | `DRAFT_MODEL` | `/models/Qwen3-0.6B-Q8_0.gguf` | Full path to draft model; unset to disable speculative decoding |
-| `ENABLE_EMBEDDINGS` | `true` | Enable the `/embedding` endpoint for V2 geometric lens |
+| `ENABLE_EMBEDDINGS` | `true` | Enable the `/embedding` endpoint (V2 legacy; V2.5+ uses nomic-embed-text-v1.5 sidecar on Server B instead) |
 | `KV_CACHE_TYPE` | `q4_0` | KV cache quantization type (q4_0, q8_0, f16) |
 | `CHAT_TEMPLATE` | `Qwen3-custom.jinja` | Jinja2 chat template filename |
 | `GGML_CUDA_NO_PINNED` | `0` | Set to 0 to enable pinned host memory for PCIe transfers |
@@ -493,7 +493,7 @@ Set in `manifests/rag-api-deployment.yaml`:
 | `REDIS_HOST` | `redis` | Redis hostname for caching and Thompson Sampling posteriors |
 | `REDIS_PORT` | `6379` | Redis port |
 | `ROUTING_ENABLED` | `true` | Enable the confidence router (Thompson Sampling route selection). When false, all queries use the STANDARD route |
-| `GEOMETRIC_LENS_ENABLED` | `true` | Enable geometric lens correction (MLP-based energy field for embedding quality estimation). Requires `--embeddings` on llama-server |
+| `GEOMETRIC_LENS_ENABLED` | `true` | Enable geometric lens correction (MLP-based energy field for embedding quality estimation). Uses nomic-embed-text-v1.5 sidecar (V2.5+); V2.5.1 may change embedding source to self-embeddings |
 | `CONTEXT_BUDGET` | `8000` | Maximum tokens of retrieved context per query |
 | `TOP_K` | `20` | Number of code snippets returned by the hybrid retriever |
 | `MAX_FILES` | `10000` | Maximum files per indexed project |

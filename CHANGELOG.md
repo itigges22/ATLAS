@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.5.1] - Planned
+
+### Investigation: Embedding Source Hypothesis
+- **Blocking dependency for V3 Phase 4 strategy**
+- V2.5 ablation found C(x) ≈ random for candidate selection under 768-dim nomic embeddings
+- Hypothesis: discrimination was lost when embedding source switched from Qwen3-14B self-embeddings (5120-dim) to nomic-embed-text-v1.5 (768-dim) in V2.5 — NOT a fundamental Lens failure
+- Confirmation ablation planned: re-run V2.5 methodology with original self-embeddings
+- If confirmed: restore self-embeddings without breaking spec decode (hidden state extraction, post-generation embedding, draft model embeddings, or hybrid approach)
+- Success criteria: selection accuracy > random + 5pp; spec decode ≥80 tok/s; VRAM ≤16 GiB
+
+## [2.5.0] - 2026-02-21
+
+### Ablation Study
+- Systematic ablation of Geometric Lens, router, and infrastructure components
+- Finding: C(x) energy scoring ≈ random for candidate selection under nomic embeddings (37.7% vs 37.1%, within 3.4pp seed variance) — under investigation by V2.5.1
+- Finding: C(x) energy strongly correlates with task difficulty (58.5% vs 18.9% pass rate across tiers)
+- Finding: G(x) metric tensor confirmed dormant (5.2M params, zero impact)
+- Finding: Pattern cache bypassed entirely by benchmark runner
+
+### Architecture Change
+- Discovered `--embeddings` flag breaks speculative decoding (forces n_batch=512)
+- Migrated to two-server sidecar architecture: generation + spec decode on Server A, embeddings via nomic-embed-text-v1.5 on Server B
+- Recovered ~2.6x generation throughput (~38 tok/s → ~100 tok/s)
+- Net VRAM delta: approximately -230 MiB (sidecar cheaper than --embeddings overhead)
+
 ## [2.0.0] - 2026-02-18
 
 ### Architecture Changes

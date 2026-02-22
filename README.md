@@ -36,16 +36,20 @@ Single run, not averaged. LCB range reflects epoch 0-3 of Lens retraining, not a
 
 First-pick accuracy = how often the Lens's lowest-energy candidate actually passes. The energy gap between pass and fail candidates doubled after retraining (5.3 to 11.3), showing the Lens learned to separate passing from failing code. Val AUC reached 0.968 at epoch 3.
 
-**Caveat**: The V2.5 ablation study found that while C(x) learns real energy separation, this does not translate to statistically significant candidate selection improvement (37.7% vs 37.1% random, within seed variance). Most tasks are all-pass or all-fail across k=3 candidates, so ordering has limited effect. The pass rate improvement across epochs is primarily driven by Best-of-K diversity, not Lens ranking.
+**Caveat**: The V2.5 ablation study found that while C(x) learns real energy separation, this did not translate to statistically significant candidate selection improvement under 768-dim nomic embeddings (37.7% vs 37.1% random, within seed variance). Most tasks are all-pass or all-fail across k=3 candidates, so ordering has limited effect. The pass rate improvement across epochs is primarily driven by Best-of-K diversity, not Lens ranking.
+
+> **V2.5.1 Investigation**: This result may be an artifact of switching from Qwen3-14B self-embeddings (5120-dim) to nomic-embed-text-v1.5 (768-dim) in V2.5, not a fundamental Lens failure. Self-embeddings encode the model's internal confidence; external embeddings encode only surface semantics. V2.5.1 will run a confirmation ablation with original self-embeddings to test this hypothesis. See [V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) for details.
 
 </details>
 
 <details>
 <summary><b>V2.5 Ablation Study</b></summary>
 
-A systematic ablation (2026-02-21) tested whether the Geometric Lens C(x) energy scoring provides real candidate selection value beyond diversity. **Result: Lens scoring is statistically indistinguishable from random selection** -- energy-sorted candidates achieve 37.7% pass@1 vs 37.1% for random ordering (0.6pp gap within the 3.4pp seed-to-seed variance, mean 36.0% +/- 1.7% across 3 seeds). The Best-of-K diversity benefit (generating 3 candidates at temp=0.6) accounts for nearly all improvement.
+A systematic ablation (2026-02-21) tested whether the Geometric Lens C(x) energy scoring provides real candidate selection value beyond diversity. **Result: Under 768-dim nomic embeddings, Lens scoring is statistically indistinguishable from random selection** -- energy-sorted candidates achieve 37.7% pass@1 vs 37.1% for random ordering (0.6pp gap within the 3.4pp seed-to-seed variance, mean 36.0% +/- 1.7% across 3 seeds). The Best-of-K diversity benefit (generating 3 candidates at temp=0.6) accounts for nearly all improvement.
 
-The study also discovered that llama.cpp's `--embeddings` flag was silently breaking speculative decoding (forcing n_batch=512, causing 0% draft token acceptance). This led to a two-server sidecar architecture: generation with spec decode (~100 tok/s) on the main server, embeddings via a lightweight nomic-embed-text-v1.5 sidecar (~300 MiB VRAM). C(x) energy does correlate with task difficulty (58.5% vs 18.9% pass rate across energy tiers) and will be repurposed for difficulty-adaptive routing in V3.
+> **⚠️ V2.5.1 INVESTIGATION — EMBEDDING SOURCE HYPOTHESIS**: This ablation was conducted after switching from Qwen3-14B self-embeddings (5120-dim) to nomic-embed-text-v1.5 (768-dim). Self-embeddings encode the model's internal confidence and reasoning state; nomic encodes only output text semantics. The Lens may have lost its discriminative signal when it lost access to the model's internal representation. V2.5.1 is a focused investigation milestone to test this hypothesis by re-running the ablation with original self-embeddings. This is the highest-priority open question in the project.
+
+The study also discovered that llama.cpp's `--embeddings` flag was silently breaking speculative decoding (forcing n_batch=512, causing 0% draft token acceptance). This led to a two-server sidecar architecture: generation with spec decode (~100 tok/s) on the main server, embeddings via a lightweight nomic-embed-text-v1.5 sidecar (~300 MiB VRAM). C(x) energy does correlate with task difficulty (58.5% vs 18.9% pass rate across energy tiers) and will be repurposed for difficulty-adaptive routing (or candidate selection, pending V2.5.1 results).
 
 Full results: [V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) | Architecture change: [V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)
 
@@ -112,8 +116,8 @@ The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model)
 | | |
 |---|---|
 | **What it learns** | C(x) achieves strong energy separation between passing and failing code (Val AUC 0.968, energy gap doubling from 5.3 to 11.3 over 3 retraining epochs). Real learned structure, not an artifact. |
-| **What it doesn't do** | Energy-sorted candidate selection is statistically indistinguishable from random ordering (37.7% vs 37.1%, within 3.4pp seed variance). 92% of tasks are all-pass or all-fail across k=3 candidates, so ordering doesn't matter. |
-| **What it's good for** | C(x) energy correlates strongly with task difficulty (58.5% vs 18.9% pass rate across energy tiers). V3 repurposes it as a difficulty predictor for adaptive compute routing. |
+| **What it doesn't do (under nomic)** | Under 768-dim nomic embeddings, energy-sorted candidate selection is statistically indistinguishable from random ordering (37.7% vs 37.1%, within 3.4pp seed variance). **V2.5.1 is investigating** whether restoring Qwen3-14B self-embeddings (5120-dim) recovers discrimination — the embedding source switch is the leading hypothesis for this result. |
+| **What it's good for** | C(x) energy correlates strongly with task difficulty (58.5% vs 18.9% pass rate across energy tiers). Currently used as a difficulty predictor for adaptive routing; may also serve as a candidate ranker if V2.5.1 confirms the embedding source hypothesis. |
 
 G(x) metric tensor is currently dormant (loaded but unused by the benchmark pipeline).
 
@@ -185,9 +189,20 @@ tests/           Test suite
 
 ---
 
-## V3 Roadmap
+## Roadmap
 
-V3 targets 70%+ LiveCodeBench through diversity-driven generation, adaptive compute allocation, and novel inference-time theory formation. The core thesis: a frozen model with the right selection and routing infrastructure can match models 10x its size.
+### V2.5.1 — Embedding Source Hypothesis Investigation (blocking)
+
+V2.5.1 is a focused investigation milestone to determine whether the V2.5 ablation finding (Lens ≈ random for candidate selection) is an artifact of switching embedding sources. **This is the highest-priority open question** and a blocking dependency for V3 Phase 4 strategy.
+
+- **Confirmation ablation**: Re-run V2.5 ablation methodology with Qwen3-14B self-embeddings (5120-dim) to test whether discrimination recovers
+- **Success criteria**: Selection accuracy exceeding random by ≥5pp on mixed-result tasks; spec decode ≥80 tok/s; VRAM ≤16 GiB
+- **If confirmed**: Implement self-embedding restoration (hidden state extraction, post-generation embedding, or draft model embeddings) while maintaining spec decode throughput
+- **If rejected**: Current V3 strategy stands — build multi-signal verifier from scratch
+
+### V3 — Performance Target
+
+V3 targets 70%+ LiveCodeBench through diversity-driven generation, adaptive compute allocation, and novel inference-time theory formation. The core thesis: a frozen model with the right selection and routing infrastructure can match models 10x its size. V3 Phase 4 strategy (build multi-signal verifier vs. validate restored Lens discrimination) depends on V2.5.1 results.
 
 ---
 

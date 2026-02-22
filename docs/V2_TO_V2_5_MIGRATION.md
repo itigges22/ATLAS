@@ -115,7 +115,7 @@ Managed by ConfigMap `llama-entrypoint` key `entrypoint-embed.sh`.
 
 ### Geometric Lens Adaptation
 
-The Geometric Lens MLP input layer changed from 5120-dim (Qwen3-14B self-embeddings) to 768-dim (nomic-embed-text-v1.5 embeddings). This adaptation is automatic:
+The Geometric Lens MLP input layer changed from 5120-dim (Qwen3-14B self-embeddings) to 768-dim (nomic-embed-text-v1.5 embeddings). This adaptation is automatic, but the V2.5 ablation found that candidate discrimination was lost after this switch (see Section 5 for the V2.5.1 investigation):
 
 - The Lens retrains at the start of each benchmark epoch using pass/fail embeddings from the current embedding source
 - `training.py` reads `input_dim` from the embedding vector length, not a hardcoded constant
@@ -157,7 +157,17 @@ The embed sidecar adds only ~300 MiB to the V2 baseline, while enabling speculat
 
 This two-server architecture is a workaround for a llama.cpp upstream limitation. If a future llama.cpp release decouples the embeddings pooling batch size from the main model's `n_batch` (allowing `--embeddings` and `--model-draft` to coexist without the n_batch override), the architecture can be consolidated back to a single server.
 
-The sidecar approach has the secondary benefit of using a purpose-built embedding model (nomic-embed-text-v1.5, 137M params, trained specifically for embedding tasks) rather than repurposing the generation model's hidden states. Whether this produces better or worse embeddings for the Geometric Lens is an open question for V3 evaluation.
+The sidecar approach has the secondary benefit of using a purpose-built embedding model (nomic-embed-text-v1.5, 137M params, trained specifically for embedding tasks) rather than repurposing the generation model's hidden states.
+
+> **⚠️ V2.5.1 INVESTIGATION — EMBEDDING SOURCE HYPOTHESIS**
+>
+> The V2.5 ablation found that C(x) energy scoring ≈ random for candidate selection. However, this result may be an artifact of the embedding source switch described in this document, NOT a fundamental failure of the Geometric Lens architecture.
+>
+> **Why self-embeddings may be critical**: The ARM-EBM theoretical framework underpinning the Lens describes the energy landscape of the model's OWN representation space. Qwen3-14B self-embeddings (5120-dim) encode the model's internal confidence and uncertainty — two candidates differing by one edge case would have meaningfully different self-embeddings. Nomic-embed-text-v1.5 (768-dim) encodes only surface semantics — those same two candidates look nearly identical because the text is 95% the same.
+>
+> **V2.5.1** will run a confirmation ablation with original self-embeddings. If discrimination recovers, a solution restoring self-embeddings without breaking spec decode will be implemented (candidates: hidden state extraction during generation, post-generation self-embedding, draft model embeddings via Qwen3-0.6B at 1024-dim, or a hybrid approach using nomic for routing and self-embeddings for ranking).
+>
+> This may result in changes to the architecture described in this document — specifically, the embedding source and dimension for the Geometric Lens could change from 768-dim nomic to 1024-dim (draft) or 5120-dim (self-embeddings) depending on V2.5.1 outcomes.
 
 ---
 
