@@ -159,7 +159,7 @@ During the ablation study, we discovered that llama.cpp's `--embeddings` flag fo
 - **Server A** (port 8000): Qwen3-14B + draft, spec decode ON, embeddings OFF (~100 tok/s)
 - **Server B** (port 8001): nomic-embed-text-v1.5, embeddings ON, 768-dim output (~26ms per request)
 
-Both containers share a single GPU in the same K3s pod. The embed sidecar adds only ~300 MiB VRAM. See [ARCHITECTURE_V2_5.md](ARCHITECTURE_V2_5.md) for full details.
+Both containers share a single GPU in the same K3s pod. The embed sidecar adds only ~300 MiB VRAM. See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for full details.
 
 ---
 

@@ -1,4 +1,4 @@
-# ATLAS V2 Architecture Diagram
+# ATLAS Architecture Diagram
 
 <div align="center">
 
@@ -27,7 +27,7 @@ flowchart TB
   end
 
   subgraph Evaluation["Candidate Selection"]
-    GL[Geometric Lens<br/>Cost Field C x 2.7M params<br/>Metric Tensor G x 5.2M params]
+    GL[Geometric Lens<br/>C x Cost Field 2.7M params<br/>G x Metric Tensor 5.2M params DORMANT]
     SB[Sandbox<br/>K8s service, port 8020<br/>Isolated code execution + testing<br/>Energy-sorted early exit]
   end
 

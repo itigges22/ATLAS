@@ -1,6 +1,27 @@
-# ATLAS V2.5 Architecture: Two-Server Inference
+# V2 to V2.5 Migration: Two-Server Inference
+
+> **This document describes the V2 → V2.5 architecture change. For the current architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).**
 
 Documents the infrastructure change from V2's single-server design to V2.5's two-server architecture, discovered during the V2.5 ablation study (2026-02-19 to 2026-02-21).
+
+```mermaid
+flowchart LR
+  subgraph V2["V2 (Single Server)"]
+    V2S[llama-server<br/>Qwen3-14B + Draft<br/>--embeddings ON<br/>Spec decode BROKEN<br/>~38 tok/s]
+  end
+
+  subgraph V25["V2.5 (Sidecar Architecture)"]
+    A[Server A: Generation<br/>Qwen3-14B + Draft<br/>Spec decode ON<br/>~100 tok/s<br/>Port 8000]
+    B[Server B: Embeddings<br/>nomic-embed-text-v1.5<br/>768-dim, ~26ms<br/>Port 8001]
+  end
+
+  V2S -.->|split| A
+  V2S -.->|split| B
+
+  style V2S fill:#8b0000,color:#fff
+  style A fill:#1a3a5c,color:#fff
+  style B fill:#2d5016,color:#fff
+```
 
 ---
 

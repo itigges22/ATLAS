@@ -2,7 +2,7 @@
 ![Python](https://img.shields.io/badge/python-3.10+-green)
 ![K8s](https://img.shields.io/badge/platform-K3s%20%7C%20K8s-blue)
 ![GPU](https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-green)
-![Status](https://img.shields.io/badge/status-v2.0.0-orange)
+![Status](https://img.shields.io/badge/status-v2.5-orange)
 
 # ATLAS -- Adaptive Test-time Learning and Autonomous Specialization
 
@@ -29,6 +29,8 @@ ATLAS achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single c
 
 First-pick accuracy = how often the Lens's lowest-energy candidate actually passes. The energy gap between pass and fail candidates doubled after retraining (5.3 to 11.3), showing the Lens learned to separate passing from failing code. Val AUC reached 0.968 at epoch 3.
 
+**Note**: The V2.5 ablation study found that while C(x) learns real energy separation, this does not translate to statistically significant candidate selection improvement (37.7% vs 37.1% random, within seed variance). Most tasks are all-pass or all-fail across k=3 candidates, so ordering has limited effect. The pass rate improvement across epochs is primarily driven by Best-of-K diversity, not Lens ranking. See [V2.5 Ablation Study](#v25-ablation-study).
+
 **Hardware:** RTX 5060 Ti 16GB VRAM. Total cost: ~$500 GPU.
 **Runtime:** 109 tasks/hr aggregate throughput on V2 benchmark.
 **Run ID:** `v2_run_20260217_125310`.
@@ -41,7 +43,7 @@ A systematic ablation (2026-02-21) tested whether the Geometric Lens C(x) energy
 
 The study also discovered that llama.cpp's `--embeddings` flag was silently breaking speculative decoding (forcing n_batch=512, causing 0% draft token acceptance). This led to a two-server sidecar architecture: generation with spec decode (~100 tok/s) on the main server, embeddings via a lightweight nomic-embed-text-v1.5 sidecar (~300 MiB VRAM). C(x) energy does correlate with task difficulty (58.5% vs 18.9% pass rate across energy tiers) and will be repurposed for difficulty-adaptive routing in V3.
 
-Full results: [docs/V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) | Architecture change: [docs/ARCHITECTURE_V2_5.md](docs/ARCHITECTURE_V2_5.md)
+Full results: [docs/V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) | Architecture change: [docs/V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)
 
 ## Architecture Overview
 
@@ -57,12 +59,13 @@ flowchart TB
   end
 
   subgraph Generation["Best-of-K Pipeline"]
-    LS[llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B Draft<br/>2 parallel slots]
+    LS[Server A: llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B Draft<br/>Spec decode ON]
+    EM[Server B: Embeddings<br/>nomic-embed-text-v1.5<br/>768-dim]
     PC[Pattern Cache<br/>Redis + Ebbinghaus Decay]
   end
 
   subgraph Evaluation["Candidate Selection"]
-    GL[Geometric Lens<br/>Cost Field 2.7M params<br/>Metric Tensor 5.2M params<br/>Val AUC: 0.968]
+    GL[Geometric Lens<br/>C x Cost Field ~0.5M params<br/>G x Metric Tensor ~0.8M params DORMANT]
     SB[Sandbox<br/>Code Execution + Testing]
   end
 
@@ -76,11 +79,13 @@ flowchart TB
   PC -.->|strategy hints| LS
   PI -.->|relevant context| LS
   LS -->|k candidates| GL
-  GL -->|best candidate| SB
+  GL -->|extract embedding| EM
+  GL -->|sorted by energy| SB
   SB -->|result + feedback| PC
 
   style GL fill:#2d5016,color:#fff
   style LS fill:#1a3a5c,color:#fff
+  style EM fill:#1a3a5c,color:#fff
   style DE fill:#5c3a1a,color:#fff
 ```
 
@@ -92,9 +97,13 @@ The system includes an API Portal (`api-portal` service, port 3000, NodePort 300
 
 ## The Geometric Lens
 
-The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to a scalar energy: passing code concentrates near energy 5.00, failing code near 14.04 (training targets were 2.0/25.0; measured outputs converged to 5.00/14.04). A metric tensor G(x) defines a Riemannian geometry over embedding space, enabling gradient-based correction via the update rule dx = -alpha * G^{-1} * grad(C). The theoretical framing draws on Riemannian geometry and energy-based models; the implementation uses standard PyTorch autograd gradient descent.
+The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to a scalar energy: passing code concentrates near energy 5.00, failing code near 14.04. A metric tensor G(x) defines a Riemannian geometry over embedding space, enabling gradient-based correction via dx = -alpha * G^{-1} * grad(C). The implementation uses standard PyTorch autograd.
 
-In practice, the model generates k candidates, the Lens scores each one, and the sandbox tests them in energy order (lowest first), stopping at the first pass. **First-pick accuracy** measures how often the lowest-energy candidate is a passer: ~80% on LiveCodeBench after retraining, with an average of 1.3 sandbox calls per task. The Lens retrains on each epoch's pass/fail data — the energy gap between passing and failing code doubled from 5.3 to 11.3 over three retraining rounds, all without changing the frozen LLM weights.
+**What the Lens learns**: C(x) achieves strong energy separation between passing and failing code (Val AUC 0.968, energy gap doubling from 5.3 to 11.3 over 3 retraining epochs). This is real learned structure, not an artifact.
+
+**What it doesn't do**: The V2.5 ablation found that energy-sorted candidate selection is statistically indistinguishable from random ordering (37.7% vs 37.1%, within 3.4pp seed variance). The reason: 92% of tasks are either all-pass or all-fail across k=3 candidates, so ordering doesn't matter. The pass rate improvement in V2 comes from Best-of-K diversity (generating 3 candidates at temp=0.6), not from Lens ranking.
+
+**What it's good for**: C(x) energy correlates strongly with task difficulty (58.5% vs 18.9% pass rate across energy tiers). V3 repurposes it as a difficulty predictor for adaptive compute routing rather than candidate selection. G(x) is currently dormant (loaded but unused by the benchmark pipeline).
 
 ## Quick Start
 

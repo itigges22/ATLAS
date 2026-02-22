@@ -1,6 +1,6 @@
 # ATLAS Architecture
 
-Detailed architecture companion to the README. Covers the V2 verified system as deployed and benchmarked on 2026-02-17.
+Detailed architecture companion to the README. Describes the system as currently deployed (V2.5).
 
 ---
 
@@ -98,7 +98,7 @@ GPU-accelerated LLM inference via llama.cpp, serving OpenAI-compatible API endpo
 
 Speculative decoding is active with ~80% token acceptance rate. Throughput: ~100 tok/s.
 
-**V2.5 Note**: As of V2.5, embeddings are served by a dedicated sidecar (nomic-embed-text-v1.5, port 8001) instead of the main model. The `--embeddings` flag was removed from Server A because it forces `n_batch=512`, breaking speculative decoding. See [ARCHITECTURE_V2_5.md](ARCHITECTURE_V2_5.md) for details.
+Embeddings are served by a dedicated sidecar (nomic-embed-text-v1.5, port 8001) instead of the main model. The `--embeddings` flag was removed from Server A because it forces `n_batch=512`, breaking speculative decoding. See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for the migration rationale.
 
 **Verified Flag List** (Server A -- generation):
 
@@ -135,18 +135,20 @@ An energy-based model that scores code generation candidates, enabling the best-
 
 **Architecture**:
 
-C(x) Cost Field (~2.7M params):
+C(x) Cost Field (~0.5M params at 768-dim input):
 ```
-Linear(5120 -> 512) + SiLU
-Linear(512 -> 128)  + SiLU
-Linear(128 -> 1)    + Softplus
+Linear(768 -> 512) + SiLU
+Linear(512 -> 128) + SiLU
+Linear(128 -> 1)   + Softplus
 ```
 
-G(x) Metric Tensor (~5.2M params):
+G(x) Metric Tensor (~0.8M params at 768-dim input, **dormant** -- see note below):
 ```
-Linear(5120 -> 512) + SiLU
-Linear(512 -> 5120) + Softplus
+Linear(768 -> 512) + SiLU
+Linear(512 -> 768) + Softplus
 ```
+
+Input dimension adapts automatically on retrain (768 for nomic-embed-text-v1.5; was 5120 for Qwen3-14B in V2).
 
 **Core Equation**:
 ```
@@ -157,24 +159,25 @@ The correction vector delta_x indicates the direction in embedding space that wo
 
 **Training**: Contrastive ranking loss on real benchmark pass/fail data. Self-supervised -- no human labels required beyond the sandbox's binary pass/fail signal.
 
-**Verified Performance** (V2 benchmark run):
+**Performance** (V2 benchmark run, contextualized by V2.5 ablation):
 
-| Metric | Value |
-|--------|-------|
-| Validation AUC | 0.968 (Epoch 3) |
-| Selection efficiency | 100% (188/188) |
-| First-try accuracy | 80% |
-| PASS energy (mean) | 5.00 |
-| FAIL energy (mean) | 14.04 |
-| Energy separation | 9.04 |
-| Correction magnitude | \|\|delta_x\|\| / \|\|x\|\| = 0.0006 |
-| Latency | ~75ms per evaluation |
+| Metric | Value | Note |
+|--------|-------|------|
+| Validation AUC | 0.968 (Epoch 3) | C(x) learns real energy separation |
+| PASS energy (mean) | 5.00 | |
+| FAIL energy (mean) | 14.04 | |
+| Energy separation | 9.04 | Doubled over 3 retraining epochs (5.3 → 11.3) |
+| Selection vs random | +0.6pp (37.7% vs 37.1%) | **Not statistically significant** (within 3.4pp seed variance) |
+| Difficulty prediction | 58.5% vs 18.9% pass rate | Energy tiers correlate with task difficulty |
+| Latency | ~75ms per evaluation | |
 
-Energy values are raw model outputs (not normalized). Training targets: PASS=2.0, FAIL=25.0. Measured: PASS mean=5.00, FAIL mean=14.04.
+The V2.5 ablation study ([V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md)) found that while C(x) learns meaningful energy separation between passing and failing code, this does not translate into significant candidate selection improvement. Energy-sorted selection is statistically indistinguishable from random ordering because most tasks are all-pass or all-fail across candidates (92% have full diversity). The energy signal's validated use is as a **difficulty predictor** for adaptive routing.
+
+**G(x) Status**: The metric tensor is functionally dormant. It is loaded but its correction output is never consumed by the benchmark. See the ablation study for V3 options (activate, remove, or defer).
 
 **Weights**: `rag-api/geometric_lens/models/cost_field.pt`, `metric_tensor.pt`. Baked into the container image. PyTorch CPU only (torch 2.10.0+cpu).
 
-**Embedding Source**: As of V2.5, embeddings come from a dedicated nomic-embed-text-v1.5 sidecar (768-dim). In V2, the main llama-server's `--embeddings` flag provided 5120-dim Qwen3-14B self-embeddings, but this was incompatible with speculative decoding. The Lens MLP input layer adapts automatically on retrain.
+**Embedding Source**: Dedicated nomic-embed-text-v1.5 sidecar (768-dim). The Lens MLP input layer adapts automatically on retrain to match the embedding source dimension.
 
 **Environment**: `GEOMETRIC_LENS_ENABLED` env var. Models loaded lazily on first use.
 
@@ -232,7 +235,7 @@ The selection pipeline generates k candidates in parallel, scores them with the 
 | k > 5 (code tasks) | 0.8 |
 
 **Selection Process**:
-1. Generate k candidates via llama-server `/v1/chat/completions`.
+1. Generate k candidates via llama-server `/completion` (raw ChatML, not `/v1/chat/completions` -- chat endpoint is incompatible with speculative decoding).
 2. Extract code from each response.
 3. Score each candidate via `/internal/lens/score-text` (Geometric Lens energy).
 4. Sort candidates by energy (ascending -- lowest energy first).
@@ -345,7 +348,7 @@ As of V2.5, measured via `nvidia-smi` with both servers running:
 
 Headroom: ~3,590 MiB. The embed sidecar adds only ~300 MiB while enabling speculative decoding (~100 tok/s vs ~38 tok/s in V2).
 
-See [ARCHITECTURE_V2_5.md](ARCHITECTURE_V2_5.md) for the full two-server architecture details.
+See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for the full two-server migration details.
 
 ---
 
