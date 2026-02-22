@@ -65,7 +65,7 @@ flowchart TB
   end
 
   subgraph Evaluation["Candidate Selection"]
-    GL[Geometric Lens<br/>C x Cost Field ~0.5M params<br/>G x Metric Tensor ~0.8M params DORMANT]
+    GL[Geometric Lens<br/>Energy-based scoring<br/>Cost Field C x ~0.5M params]
     SB[Sandbox<br/>Code Execution + Testing]
   end
 
@@ -79,7 +79,7 @@ flowchart TB
   PC -.->|strategy hints| LS
   PI -.->|relevant context| LS
   LS -->|k candidates| GL
-  GL -->|extract embedding| EM
+  EM -->|768-dim embeddings| GL
   GL -->|sorted by energy| SB
   SB -->|result + feedback| PC
 
