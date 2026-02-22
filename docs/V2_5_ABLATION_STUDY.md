@@ -6,7 +6,19 @@ Results of the V2.5 ablation study conducted 2026-02-19 to 2026-02-21, evaluatin
 
 ## 1. Executive Summary
 
-V2.5 was a systematic ablation of ATLAS V2's infrastructure to determine which components provide real value and which are dormant or marginal. The headline finding: **Lens C(x) energy scoring is statistically indistinguishable from random candidate selection** (37.7% vs 37.1% pass@1, within the 3.4pp seed-to-seed variance). The diversity benefit of generating 3 candidates at temperature 0.6 (Best-of-K) accounts for nearly all improvement over single-attempt baselines. A secondary discovery -- that llama.cpp's `--embeddings` flag breaks speculative decoding -- led to a two-server architecture change that recovered ~2.6x generation throughput. For V3, BoK-3 diversity is validated, C(x) energy should be repurposed for difficulty routing rather than candidate ranking, and G(x) should be activated or removed.
+V2.5 was a systematic ablation of ATLAS V2's infrastructure to determine which components provide real value and which are dormant or marginal. The headline finding: **under 768-dim nomic embeddings, Lens C(x) energy scoring is statistically indistinguishable from random candidate selection** (37.7% vs 37.1% pass@1, within the 3.4pp seed-to-seed variance). The diversity benefit of generating 3 candidates at temperature 0.6 (Best-of-K) accounts for nearly all improvement over single-attempt baselines. A secondary discovery -- that llama.cpp's `--embeddings` flag breaks speculative decoding -- led to a two-server architecture change that recovered ~2.6x generation throughput.
+
+> **⚠️ V2.5.1 INVESTIGATION — EMBEDDING SOURCE HYPOTHESIS**
+>
+> The candidate selection finding above may be an artifact of switching from Qwen3-14B self-embeddings (5120-dim) to nomic-embed-text-v1.5 (768-dim) in the V2→V2.5 migration, NOT a fundamental failure of the Geometric Lens architecture.
+>
+> Self-embeddings encode the model's internal confidence and reasoning state; external semantic embeddings encode only what the output text says. Two candidate solutions differing by one critical line look nearly identical to nomic (95% identical text) but would have meaningfully different self-embeddings (the model "knows" when it's unsure). This perfectly explains the observed results: energy predicts difficulty ✅ (easy vs hard produce semantically different code) but does NOT discriminate candidates ❌ (good vs bad solutions to the same problem are semantically near-identical to an external embedder).
+>
+> Additionally, the dimensional reduction matters: 5120→768 is a 6.7x compression of geometric space, reducing C(x) from 2.7M to ~0.5M params and G(x) from 5.2M to ~0.8M params — less geometric room for the Lens to learn separating manifolds.
+>
+> **V2.5.1 will run a confirmation ablation** using original V2 self-embeddings to test this hypothesis. If self-embeddings restore candidate selection accuracy to >random + 5pp, the hypothesis is confirmed and a solution restoring self-embeddings without breaking spec decode will be implemented. This is the highest-priority open question in the project.
+
+For V3, BoK-3 diversity is validated. C(x) energy's role in candidate ranking depends on V2.5.1 results: if self-embeddings restore discrimination, the Lens returns to its original verifier role; if not, C(x) is repurposed for difficulty routing only. G(x) should be activated or removed.
 
 ---
 
@@ -120,9 +132,11 @@ First-pick accuracy: 151/188 (80.3%) -- the lens's lowest-energy candidate was a
 | Random | 185/499 | 37.1% | 2.33 | 83.2% |
 | Reverse energy | 183/499 | 36.7% | 2.38 | 78.1% |
 
-**Verdict: energy ~ random.** The C(x) energy scoring provides ~0.6pp advantage over random selection, which is within the ~1.7% seed-to-seed standard deviation. Sandbox call counts are nearly identical across all strategies. Random selection actually has a higher first-pick rate (83.2% vs 80.3%).
+**Verdict: energy ~ random (under nomic 768-dim embeddings).** The C(x) energy scoring provides ~0.6pp advantage over random selection, which is within the ~1.7% seed-to-seed standard deviation. Sandbox call counts are nearly identical across all strategies. Random selection actually has a higher first-pick rate (83.2% vs 80.3%).
 
-**Interpretation**: The BoK-3 diversity benefit (generating 3 candidates at temp=0.6) accounts for nearly all the pass@1 improvement. C(x) scoring adds negligible value for candidate ranking on LiveCodeBench.
+**Interpretation**: Under 768-dim nomic embeddings, the BoK-3 diversity benefit (generating 3 candidates at temp=0.6) accounts for nearly all the pass@1 improvement. C(x) scoring adds negligible value for candidate ranking on LiveCodeBench.
+
+> **V2.5.1 Note**: This ablation was conducted after switching from Qwen3-14B self-embeddings (5120-dim) to nomic-embed-text-v1.5 (768-dim). The Embedding Source Hypothesis posits that the discriminative signal was lost in this switch — self-embeddings encode model confidence, while nomic encodes only surface semantics. V2.5.1 will re-run this comparison with original self-embeddings. If candidate selection accuracy recovers, the result above reflects an embedding limitation, not a Lens architecture limitation.
 
 ### 3.8 Energy Threshold Validation
 
@@ -171,11 +185,37 @@ Both containers share a single GPU in the same K3s pod. The embed sidecar adds o
 - **Two-server architecture**: Spec decode + sidecar embeddings is stable and efficient
 - **Epoch-based learning**: The lens retrain infrastructure works correctly
 
-### Needs Revision
-- **C(x) for candidate ranking**: Statistically indistinguishable from random. Either remove from selection path or fundamentally improve
+### Needs Revision (conditional on V2.5.1 results)
+- **C(x) for candidate ranking**: Did not discriminate candidates under 768-dim nomic embeddings. V2.5.1 is investigating whether restoring self-embeddings recovers discrimination. If V2.5.1 confirms the embedding source hypothesis, the Lens returns to its verifier role; if not, remove from selection path or build a multi-signal verifier
 - **G(x) metric tensor**: 5.2M dormant parameters. Activate (wire corrected embeddings into pipeline) or remove
 - **Pattern cache for benchmarks**: Fully implemented but bypassed. Wire into benchmark flow or acknowledge it's interactive-only
 - **Router for benchmarks**: All routing signals are logged but don't affect candidate generation flow in the current benchmark
+
+### V2.5.1 Investigation (blocking dependency for V3 Phase 4)
+
+V2.5.1 is a focused investigation milestone between V2.5 and V3 Phase 1 to test the **Embedding Source Hypothesis**: that C(x) ≈ random is an artifact of the V2→V2.5 embedding source switch, not a fundamental Lens failure.
+
+**Plan**:
+1. **Confirmation ablation (first priority)**: Re-run V2.5 ablation with original V2 config (self-embeddings enabled, spec decode disabled)
+2. **If confirmed**: Implement self-embedding restoration while maintaining spec decode (hidden state extraction, post-generation self-embedding, draft model embeddings, or hybrid approach)
+3. **Success criteria**: Selection accuracy > random + 5pp; spec decode ≥80 tok/s; VRAM ≤16 GiB
+
+**V3 strategy depends on V2.5.1 outcome**:
+- If hypothesis **confirmed**: Phase 4 validates restored Lens discrimination (+2-5% projected lift) instead of building verifier from scratch
+- If hypothesis **rejected**: Current strategy stands — build multi-signal verifier (+5-12% projected lift), Lens architecture itself needs rethinking
+
+| Scenario | Phase 1 Projection | Phase 4 Projection | Overall Ceiling |
+|----------|-------------------|-------------------|-----------------|
+| V2.5.1 confirms (self-embeddings restore discrimination) | +8-15% | +2-5% (validate existing) | ~70-80% |
+| V2.5.1 rejects (Lens architecture is the bottleneck) | +3-8% | +5-12% (build from scratch) | ~60-70% |
+
+### Risk Register
+
+| ID | Risk | Probability | Impact | Mitigation | V2.5.1 Effect |
+|----|------|-------------|--------|------------|---------------|
+| R6 | Lens energy non-discriminating for candidate selection | 80% (current) → 20% (if V2.5.1 confirms) | High | V2.5.1 confirmation ablation with self-embeddings. If discrimination recovers under self-embeddings, the risk is resolved by restoring the original embedding source. | V2.5.1 may resolve this risk entirely |
+| R11 | No verifier built by V3 Phase 4 | 60% | High | If V2.5.1 confirms the embedding source hypothesis, the existing Lens serves as the verifier — no from-scratch build needed. If rejected, Phase 4 builds a multi-signal verifier. | V2.5.1 could eliminate the need for a from-scratch verifier |
+| R13 | V2.5.1 confirmation ablation shows no improvement | 30% | Medium | If self-embeddings don't restore discrimination, the Lens architecture itself is the bottleneck and the current V3 strategy (multi-signal verifier) is confirmed as correct. Fallback: proceed with V3 as currently planned. | N/A (this IS the V2.5.1 risk) |
 
 ### Checklist (10/10 complete, 0 blocked)
 
