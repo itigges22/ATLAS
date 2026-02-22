@@ -4,11 +4,11 @@
 ![GPU](https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-green)
 ![Status](https://img.shields.io/badge/status-v2.5-orange)
 
-# ATLAS
+# A.T.L.A.S
 
 **Adaptive Test-time Learning and Autonomous Specialization**
 
-ATLAS achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single consumer GPU through intelligent test-time compute allocation. No fine-tuning, no API calls, no cloud -- just a $500 GPU and smart inference.
+A.T.L.A.S achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single consumer GPU through intelligent test-time compute allocation. No fine-tuning, no API calls, no cloud -- just a $500 GPU and smart inference.
 
 ---
 
@@ -97,7 +97,7 @@ flowchart TB
   style DE fill:#5c3a1a,color:#fff
 ```
 
-ATLAS runs entirely on K3s with a single GPU. The **Confidence Router** estimates task difficulty from 4 signals and selects how many candidates to generate (k=0 to k=20). The **Best-of-K Pipeline** generates candidates via speculative decoding (~100 tok/s), scores them with the **Geometric Lens** energy field, and tests them in an isolated **Sandbox** with early exit on first pass. A **Pattern Cache** with Ebbinghaus memory decay stores successful strategies for future routing.
+A.T.L.A.S runs entirely on K3s with a single GPU. The **Confidence Router** estimates task difficulty from 4 signals and selects how many candidates to generate (k=0 to k=20). The **Best-of-K Pipeline** generates candidates via speculative decoding (~100 tok/s), scores them with the **Geometric Lens** energy field, and tests them in an isolated **Sandbox** with early exit on first pass. A **Pattern Cache** with Ebbinghaus memory decay stores successful strategies for future routing.
 
 The system also includes an optional **MaaS layer** (API Portal + LLM Proxy) for multi-user access with JWT auth, API key management, and rate limiting.
 
@@ -123,11 +123,11 @@ G(x) metric tensor is currently dormant (loaded but unused by the benchmark pipe
 
 ```bash
 # 1. Clone
-git clone https://github.com/itigges22/atlas.git && cd atlas
+git clone https://github.com/itigges22/A.T.L.A.S.git && cd A.T.L.A.S
 
 # 2. Configure
-cp atlas.conf.example atlas.conf
-# Edit atlas.conf: set MODEL_PATH, DATA_DIR, GPU device
+cp A.T.L.A.S.conf.example A.T.L.A.S.conf
+# Edit A.T.L.A.S.conf: set MODEL_PATH, DATA_DIR, GPU device
 
 # 3. Install
 sudo ./scripts/install.sh
@@ -164,7 +164,7 @@ docs/            Architecture, setup, configuration, troubleshooting
 manifests/       K3s deployment manifests
 rag-api/         Core API: Geometric Lens, router, RAG, cache
 llama-server/    llama.cpp server container
-atlas/sandbox/   Isolated code execution environment
+A.T.L.A.S/sandbox/   Isolated code execution environment
 scripts/         Installation and management scripts
 tests/           Test suite
 ```
@@ -193,4 +193,4 @@ V3 targets 70%+ LiveCodeBench through diversity-driven generation, adaptive comp
 
 ## License
 
-Licensed under the ATLAS Source Available License v1.0 -- see [LICENSE](LICENSE).
+Licensed under the A.T.L.A.S Source Available License v1.0 -- see [LICENSE](LICENSE).
