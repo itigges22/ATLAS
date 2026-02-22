@@ -4,24 +4,31 @@
 ![GPU](https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-green)
 ![Status](https://img.shields.io/badge/status-v2.5-orange)
 
-# ATLAS -- Adaptive Test-time Learning and Autonomous Specialization
+# ATLAS
 
-ATLAS achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single consumer GPU through intelligent test-time compute allocation.
+**Adaptive Test-time Learning and Autonomous Specialization**
+
+ATLAS achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single consumer GPU through intelligent test-time compute allocation. No fine-tuning, no API calls, no cloud -- just a $500 GPU and smart inference.
 
 ---
 
-## V2 Results (Verified)
+## Benchmark Results
 
-| Benchmark | Score | Tasks | Notes |
-|-----------|-------|-------|-------|
-| LiveCodeBench v5 | 36-41% pass@1 | 599 evals / ~600 problems | k=3, Geometric Lens selection, 4 epochs (100+200+200+99) |
-| GPQA Diamond | 47.0% | 198 | k=5, multiple-choice knowledge reasoning |
-| SciCode (sub-problems) | 14.7% | 341 | Cross-domain scientific coding |
+> Run ID: `v2_run_20260217_125310` | Hardware: RTX 5060 Ti 16GB | Throughput: 109 tasks/hr
 
-**Lens learning curve (LiveCodeBench, k=3):**
+| Benchmark | Score | Tasks | Method |
+|-----------|-------|-------|--------|
+| **LiveCodeBench v5** | **36-41% pass@1** | 599 | k=3, Geometric Lens selection, 4 epochs |
+| **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning |
+| **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding |
 
-| Epoch | Tasks | Pass Rate | First-Pick Accuracy | Energy Gap (pass vs fail) |
-|-------|-------|-----------|---------------------|---------------------------|
+Single run, not averaged. LCB range reflects epoch 0-3 of Lens retraining, not a confidence interval.
+
+<details>
+<summary><b>Lens learning curve (LiveCodeBench, k=3)</b></summary>
+
+| Epoch | Tasks | Pass Rate | First-Pick Accuracy | Energy Gap |
+|-------|-------|-----------|---------------------|------------|
 | 0 (baseline, no Lens) | 100 | 36.0% | n/a | n/a |
 | 1 (1st retrain) | 200 | 38.0% | 82.9% | 5.3 |
 | 2 (2nd retrain) | 200 | 35.5% | 78.9% | 11.5 |
@@ -29,23 +36,24 @@ ATLAS achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single c
 
 First-pick accuracy = how often the Lens's lowest-energy candidate actually passes. The energy gap between pass and fail candidates doubled after retraining (5.3 to 11.3), showing the Lens learned to separate passing from failing code. Val AUC reached 0.968 at epoch 3.
 
-**Note**: The V2.5 ablation study found that while C(x) learns real energy separation, this does not translate to statistically significant candidate selection improvement (37.7% vs 37.1% random, within seed variance). Most tasks are all-pass or all-fail across k=3 candidates, so ordering has limited effect. The pass rate improvement across epochs is primarily driven by Best-of-K diversity, not Lens ranking. See [V2.5 Ablation Study](#v25-ablation-study).
+**Caveat**: The V2.5 ablation study found that while C(x) learns real energy separation, this does not translate to statistically significant candidate selection improvement (37.7% vs 37.1% random, within seed variance). Most tasks are all-pass or all-fail across k=3 candidates, so ordering has limited effect. The pass rate improvement across epochs is primarily driven by Best-of-K diversity, not Lens ranking.
 
-**Hardware:** RTX 5060 Ti 16GB VRAM. Total cost: ~$500 GPU.
-**Runtime:** 109 tasks/hr aggregate throughput on V2 benchmark.
-**Run ID:** `v2_run_20260217_125310`.
+</details>
 
-All results from a single benchmark run. Not averaged across multiple runs. Variance unknown. LCB "36-41%" reflects epoch 0 to epoch 3 of Geometric Lens retraining on 100-200 task batches, not a confidence interval.
-
-## V2.5 Ablation Study
+<details>
+<summary><b>V2.5 Ablation Study</b></summary>
 
 A systematic ablation (2026-02-21) tested whether the Geometric Lens C(x) energy scoring provides real candidate selection value beyond diversity. **Result: Lens scoring is statistically indistinguishable from random selection** -- energy-sorted candidates achieve 37.7% pass@1 vs 37.1% for random ordering (0.6pp gap within the 3.4pp seed-to-seed variance, mean 36.0% +/- 1.7% across 3 seeds). The Best-of-K diversity benefit (generating 3 candidates at temp=0.6) accounts for nearly all improvement.
 
 The study also discovered that llama.cpp's `--embeddings` flag was silently breaking speculative decoding (forcing n_batch=512, causing 0% draft token acceptance). This led to a two-server sidecar architecture: generation with spec decode (~100 tok/s) on the main server, embeddings via a lightweight nomic-embed-text-v1.5 sidecar (~300 MiB VRAM). C(x) energy does correlate with task difficulty (58.5% vs 18.9% pass rate across energy tiers) and will be repurposed for difficulty-adaptive routing in V3.
 
-Full results: [docs/V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) | Architecture change: [docs/V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)
+Full results: [V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) | Architecture change: [V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)
 
-## Architecture Overview
+</details>
+
+---
+
+## Architecture
 
 ```mermaid
 flowchart TB
@@ -89,51 +97,51 @@ flowchart TB
   style DE fill:#5c3a1a,color:#fff
 ```
 
-Full architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+ATLAS runs entirely on K3s with a single GPU. The **Confidence Router** estimates task difficulty from 4 signals and selects how many candidates to generate (k=0 to k=20). The **Best-of-K Pipeline** generates candidates via speculative decoding (~100 tok/s), scores them with the **Geometric Lens** energy field, and tests them in an isolated **Sandbox** with early exit on first pass. A **Pattern Cache** with Ebbinghaus memory decay stores successful strategies for future routing.
 
-### API Portal
+The system also includes an optional **MaaS layer** (API Portal + LLM Proxy) for multi-user access with JWT auth, API key management, and rate limiting.
 
-The system includes an API Portal (`api-portal` service, port 3000, NodePort 30000) for multi-user access. It provides user registration and login with JWT authentication, API key management (`sk-llm-*` keys), and an OpenAI-compatible `/v1/models` endpoint. The `rag-api` validates API keys against the portal on every `/v1/*` request. A web UI is included for key management.
+Full architecture details: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+
+---
 
 ## The Geometric Lens
 
-The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to a scalar energy: passing code concentrates near energy 5.00, failing code near 14.04. A metric tensor G(x) defines a Riemannian geometry over embedding space, enabling gradient-based correction via dx = -alpha * G^{-1} * grad(C). The implementation uses standard PyTorch autograd.
+The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to scalar energy: passing code concentrates near energy 5.00, failing code near 14.04.
 
-**What the Lens learns**: C(x) achieves strong energy separation between passing and failing code (Val AUC 0.968, energy gap doubling from 5.3 to 11.3 over 3 retraining epochs). This is real learned structure, not an artifact.
+| | |
+|---|---|
+| **What it learns** | C(x) achieves strong energy separation between passing and failing code (Val AUC 0.968, energy gap doubling from 5.3 to 11.3 over 3 retraining epochs). Real learned structure, not an artifact. |
+| **What it doesn't do** | Energy-sorted candidate selection is statistically indistinguishable from random ordering (37.7% vs 37.1%, within 3.4pp seed variance). 92% of tasks are all-pass or all-fail across k=3 candidates, so ordering doesn't matter. |
+| **What it's good for** | C(x) energy correlates strongly with task difficulty (58.5% vs 18.9% pass rate across energy tiers). V3 repurposes it as a difficulty predictor for adaptive compute routing. |
 
-**What it doesn't do**: The V2.5 ablation found that energy-sorted candidate selection is statistically indistinguishable from random ordering (37.7% vs 37.1%, within 3.4pp seed variance). The reason: 92% of tasks are either all-pass or all-fail across k=3 candidates, so ordering doesn't matter. The pass rate improvement in V2 comes from Best-of-K diversity (generating 3 candidates at temp=0.6), not from Lens ranking.
+G(x) metric tensor is currently dormant (loaded but unused by the benchmark pipeline).
 
-**What it's good for**: C(x) energy correlates strongly with task difficulty (58.5% vs 18.9% pass rate across energy tiers). V3 repurposes it as a difficulty predictor for adaptive compute routing rather than candidate selection. G(x) is currently dormant (loaded but unused by the benchmark pipeline).
+---
 
 ## Quick Start
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/itigges22/atlas.git && cd atlas
-   ```
+```bash
+# 1. Clone
+git clone https://github.com/itigges22/atlas.git && cd atlas
 
-2. **Configure**
-   ```bash
-   cp atlas.conf.example atlas.conf
-   # Edit atlas.conf: set MODEL_PATH, DATA_DIR, GPU device
-   ```
+# 2. Configure
+cp atlas.conf.example atlas.conf
+# Edit atlas.conf: set MODEL_PATH, DATA_DIR, GPU device
 
-3. **Install dependencies**
-   ```bash
-   sudo ./scripts/install.sh
-   ```
+# 3. Install
+sudo ./scripts/install.sh
 
-4. **Verify installation**
-   ```bash
-   ./scripts/verify-install.sh
-   ```
+# 4. Verify
+./scripts/verify-install.sh
 
-5. **Run the V2 benchmark**
-   ```bash
-   benchmark/run_v2_benchmark.sh
-   ```
+# 5. Run benchmark
+benchmark/run_v2_benchmark.sh
+```
 
-See [docs/SETUP.md](docs/SETUP.md) for full installation instructions.
+See **[docs/SETUP.md](docs/SETUP.md)** for full installation instructions.
+
+---
 
 ## Hardware Requirements
 
@@ -145,23 +153,43 @@ See [docs/SETUP.md](docs/SETUP.md) for full installation instructions.
 | Storage | ~20 GB | 150 GB SSD |
 | OS | RHEL 9 / Ubuntu 24 | RHEL 9 (Proxmox VM) |
 
+---
+
 ## Project Structure
 
 ```
-api-portal/      -- API key management portal (JWT auth, web UI)
-benchmark/       -- V2 benchmark suite (LCB, GPQA, SciCode, Custom, IFBench)
-docs/            -- Architecture, setup, configuration, troubleshooting
-manifests/       -- K3s deployment manifests
-rag-api/         -- Core API: Geometric Lens, router, RAG, cache
-llama-server/    -- llama.cpp server container
-atlas/sandbox/   -- Isolated code execution environment
-scripts/         -- Installation and management scripts
-tests/           -- Test suite
+api-portal/      API key management portal (JWT auth, web UI)
+benchmark/       V2 benchmark suite (LCB, GPQA, SciCode, Custom, IFBench)
+docs/            Architecture, setup, configuration, troubleshooting
+manifests/       K3s deployment manifests
+rag-api/         Core API: Geometric Lens, router, RAG, cache
+llama-server/    llama.cpp server container
+atlas/sandbox/   Isolated code execution environment
+scripts/         Installation and management scripts
+tests/           Test suite
 ```
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Full system architecture, component deep-dives, data flows |
+| **[V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md)** | Geometric Lens ablation results and analysis |
+| **[V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)** | Two-server sidecar migration details |
+| **[SETUP.md](docs/SETUP.md)** | Installation and deployment guide |
+| **[CONFIGURATION.md](docs/CONFIGURATION.md)** | Configuration reference |
+| **[API.md](docs/API.md)** | API endpoint documentation |
+| **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
+
+---
 
 ## V3 Roadmap
 
 V3 targets 70%+ LiveCodeBench through diversity-driven generation, adaptive compute allocation, and novel inference-time theory formation. The core thesis: a frozen model with the right selection and routing infrastructure can match models 10x its size.
+
+---
 
 ## License
 
