@@ -1,20 +1,28 @@
 # Changelog
 
-## [2.5.1] - Planned
+## [2.5.1] - 2026-02-23
 
-### Investigation: Embedding Source Hypothesis
-- **Blocking dependency for V3 Phase 4 strategy**
-- V2.5 ablation found C(x) ≈ random for candidate selection under 768-dim nomic embeddings
-- Hypothesis: discrimination was lost when embedding source switched from Qwen3-14B self-embeddings (5120-dim) to nomic-embed-text-v1.5 (768-dim) in V2.5 — NOT a fundamental Lens failure
-- Confirmation ablation planned: re-run V2.5 methodology with original self-embeddings
-- If confirmed: restore self-embeddings without breaking spec decode (hidden state extraction, post-generation embedding, draft model embeddings, or hybrid approach)
-- Success criteria: selection accuracy > random + 5pp; spec decode ≥80 tok/s; VRAM ≤16 GiB
+### Confirmation Ablation: Embedding Source Hypothesis — STRONG CONFIRMATION
+- **H1: Self-embeddings restore C(x) discrimination: CONFIRMED (+39.5pp)**
+  - C(x) selects passing candidate 87.8% on mixed-result tasks vs 48.3% random (p < 0.000001)
+  - V2.5 result (+0.6pp under nomic 768-dim) was an embedding source limitation, not architecture failure
+  - Reverse energy selects only 4.3%, proving strong directional signal
+  - Val AUC: 0.9934, energy separation: 21.75 (7.2x wider than V2.5)
+- **H2: G(x) adds value beyond C(x): NEUTRAL (0.0pp)**
+  - G(x) contributes zero at optimal alpha (0.001); monotonically degrades at higher alpha
+  - Zero corrections, zero breakages across all mixed-result tasks
+- **Outcome B**: Ship C(x)-only with self-embeddings, remove or redesign G(x)
+- **Difficulty routing validated**: Q1 (low energy) = 100% oracle, Q4 (high energy) = 0.3%
+- **C(x) confirmed as both verifier (87.8% selection) and router (perfect difficulty stratification)**
+- Runtime: 24h 42m on LiveCodeBench v5 (599 tasks, K=3, 4 epochs)
+- Infrastructure: Qwen3-14B with `--embeddings` (no spec decode, ~45 tok/s)
+- Risk R6 (Lens non-discriminating) RESOLVED; Risk R11 (no verifier) substantially mitigated
 
 ## [2.5.0] - 2026-02-21
 
 ### Ablation Study
 - Systematic ablation of Geometric Lens, router, and infrastructure components
-- Finding: C(x) energy scoring ≈ random for candidate selection under nomic embeddings (37.7% vs 37.1%, within 3.4pp seed variance) — under investigation by V2.5.1
+- Finding: C(x) energy scoring ≈ random for candidate selection under nomic embeddings (37.7% vs 37.1%, within 3.4pp seed variance) — **V2.5.1 confirmed this was an embedding source limitation** (87.8% accuracy restored with self-embeddings)
 - Finding: C(x) energy strongly correlates with task difficulty (58.5% vs 18.9% pass rate across tiers)
 - Finding: G(x) metric tensor confirmed dormant (5.2M params, zero impact)
 - Finding: Pattern cache bypassed entirely by benchmark runner

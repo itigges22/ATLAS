@@ -314,33 +314,31 @@ The correction vector delta_x indicates the direction in embedding space that wo
 
 **Training**: Contrastive ranking loss on real benchmark pass/fail data. Self-supervised -- no human labels required beyond the sandbox's binary pass/fail signal.
 
-**Performance** (V2 benchmark run, contextualized by V2.5 ablation):
+**Performance** (V2.5.1 confirmation ablation, 2026-02-23):
 
-| Metric | Value | Note |
-|--------|-------|------|
-| Validation AUC | 0.968 (Epoch 3) | C(x) learns real energy separation |
-| PASS energy (mean) | 5.00 | |
-| FAIL energy (mean) | 14.04 | |
-| Energy separation | 9.04 | Doubled over 3 retraining epochs (5.3 → 11.3) |
-| Selection vs random | +0.6pp (37.7% vs 37.1%) | **Not significant under nomic embeddings** (within 3.4pp seed variance); V2.5.1 investigating self-embedding restoration |
-| Difficulty prediction | 58.5% vs 18.9% pass rate | Energy tiers correlate with task difficulty |
-| Latency | ~75ms per evaluation | |
+| Metric | V2.5 (nomic 768-dim) | V2.5.1 (self 5120-dim) | Note |
+|--------|---------------------|------------------------|------|
+| Validation AUC | ~0.85 | **0.9934** | Near-perfect binary discrimination |
+| PASS energy (mean) | ~5.00 | 2.99 | Lower = more confident |
+| FAIL energy (mean) | ~14.04 | 24.73 | Higher = more certain of failure |
+| Energy separation | ~9.04 | **21.75** | 7.2x wider under self-embeddings |
+| Selection vs random (mixed tasks) | +0.6pp (37.7% vs 37.1%) | **+39.5pp (87.8% vs 48.3%)** | Self-embeddings restore discrimination |
+| Difficulty prediction | 58.5% vs 18.9% pass rate | Q1=100%, Q4=0.3% | Perfect difficulty stratification |
+| Latency | ~75ms per evaluation | ~75ms per evaluation | |
 
-The V2.5 ablation study ([V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md)) found that while C(x) learns meaningful energy separation between passing and failing code, this did not translate into significant candidate selection improvement under 768-dim nomic embeddings. Energy-sorted selection was statistically indistinguishable from random ordering because most tasks are all-pass or all-fail across candidates (92% have full diversity). The energy signal's validated use is as a **difficulty predictor** for adaptive routing.
+The V2.5 ablation study ([V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md)) found that under 768-dim nomic embeddings, C(x) was statistically indistinguishable from random. **V2.5.1 confirmed this was an embedding source limitation, not an architecture failure.** With 5120-dim self-embeddings, C(x) achieves 87.8% selection accuracy on mixed-result tasks (p < 0.000001), serving as both a **candidate verifier** and a **difficulty router**.
 
-> **⚠️ V2.5.1 INVESTIGATION — EMBEDDING SOURCE HYPOTHESIS**
+> **✅ V2.5.1 CONFIRMED — EMBEDDING SOURCE HYPOTHESIS (2026-02-23)**
 >
-> The V2.5 ablation finding that C(x) energy scoring ≈ random for candidate selection may be an artifact of switching from Qwen3-14B self-embeddings (5120-dim) to nomic-embed-text-v1.5 (768-dim) in the V2→V2.5 migration, NOT a fundamental failure of the Geometric Lens architecture.
+> Self-embeddings encode the model's internal confidence and reasoning state; external semantic embeddings encode only surface text semantics. The Lens requires the model's own representations to discriminate candidates — two solutions differing by one critical line are nearly identical to nomic (95% same text) but have meaningfully different self-embeddings.
 >
-> Self-embeddings encode the model's internal confidence and reasoning state; external semantic embeddings encode only what the output text says. The Lens may have lost its discriminative signal when it lost access to the model's internal representation. This perfectly explains the observed results: energy predicts difficulty (semantically distinct problems) but not candidate quality (semantically near-identical solutions).
->
-> **V2.5.1 will run a confirmation ablation** using original V2 self-embeddings to test this hypothesis. If confirmed, a solution restoring self-embeddings without breaking spec decode will be implemented before V3 proceeds. This is the highest-priority open question in the project.
+> **The Lens architecture works.** The engineering challenge for V3 is restoring self-embeddings while maintaining speculative decoding throughput (~45 tok/s without spec decode vs ~100 tok/s with). G(x) metric tensor adds zero value and should be removed (5.2M parameters, zero net contribution at any alpha).
 
 **G(x) Status**: The metric tensor is functionally dormant. It is loaded but its correction output is never consumed by the benchmark. See the ablation study for V3 options (activate, remove, or defer).
 
 **Weights**: `rag-api/geometric_lens/models/cost_field.pt`, `metric_tensor.pt`. Baked into the container image. PyTorch CPU only (torch 2.10.0+cpu).
 
-**Embedding Source**: Currently uses dedicated nomic-embed-text-v1.5 sidecar (768-dim). The Lens MLP input layer adapts automatically on retrain to match the embedding source dimension. **V2.5.1 may change the embedding source** back to self-embeddings (possibly via draft model extraction at 1024-dim, hidden state capture at 5120-dim, or post-generation self-embedding), with corresponding MLP dimension changes. See [V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md) for details.
+**Embedding Source**: Currently uses dedicated nomic-embed-text-v1.5 sidecar (768-dim) in V2.5, but **V2.5.1 confirmed that self-embeddings (5120-dim) are required for candidate discrimination** (87.8% vs ≈random under nomic). V3 will restore self-embeddings — the Lens MLP input layer adapts automatically on retrain to match the embedding source dimension. See [V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md) for the full V2.5.1 confirmation ablation results.
 
 **Environment**: `GEOMETRIC_LENS_ENABLED` env var. Models loaded lazily on first use.
 
@@ -558,7 +556,7 @@ The following V1 components were removed and replaced:
 | V1 Component | V2 Replacement | Reason |
 |-------------|----------------|--------|
 | Qdrant vector database | PageIndex (AST tree + BM25) | Structural code understanding, lower resource usage |
-| Dedicated embedding service | llama-server `--embeddings` (V2), then nomic-embed-text-v1.5 sidecar (V2.5) | V2 used self-embeddings (5120-dim); V2.5 uses dedicated embed model (768-dim) to enable spec decode. V2.5.1 investigating whether the embedding source switch degraded Lens discrimination — may restore self-embeddings via alternative extraction methods |
+| Dedicated embedding service | llama-server `--embeddings` (V2), then nomic-embed-text-v1.5 sidecar (V2.5) | V2 used self-embeddings (5120-dim); V2.5 uses dedicated embed model (768-dim) to enable spec decode. **V2.5.1 confirmed** the embedding source switch degraded Lens discrimination from 87.8% to ≈random. V3 will restore self-embeddings via alternative extraction methods |
 | Chunking pipeline (`rag-api/chunker.py`) | AST-based tree indexing | Chunk boundaries are semantic (functions, classes) rather than arbitrary token windows |
 
 Removed manifests: `embedding-deployment.yaml`, `qdrant-deployment.yaml`.

@@ -493,7 +493,7 @@ Set in `manifests/rag-api-deployment.yaml`:
 | `REDIS_HOST` | `redis` | Redis hostname for caching and Thompson Sampling posteriors |
 | `REDIS_PORT` | `6379` | Redis port |
 | `ROUTING_ENABLED` | `true` | Enable the confidence router (Thompson Sampling route selection). When false, all queries use the STANDARD route |
-| `GEOMETRIC_LENS_ENABLED` | `true` | Enable geometric lens correction (MLP-based energy field for embedding quality estimation). Uses nomic-embed-text-v1.5 sidecar (V2.5+); V2.5.1 may change embedding source to self-embeddings |
+| `GEOMETRIC_LENS_ENABLED` | `true` | Enable geometric lens correction (MLP-based energy field for candidate verification and difficulty routing). V2.5.1 confirmed C(x) selects correctly 87.8% with self-embeddings (5120-dim); V3 will restore self-embeddings as the Lens input source |
 | `CONTEXT_BUDGET` | `8000` | Maximum tokens of retrieved context per query |
 | `TOP_K` | `20` | Number of code snippets returned by the hybrid retriever |
 | `MAX_FILES` | `10000` | Maximum files per indexed project |
