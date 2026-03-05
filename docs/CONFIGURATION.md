@@ -1,4 +1,4 @@
-# ATLAS V2 Configuration Reference
+# ATLAS Configuration Reference
 
 All cluster-level configuration lives in `atlas.conf` at the repository root. Service-specific behavior is controlled by environment variables in the Kubernetes deployment manifests.
 
@@ -177,9 +177,9 @@ Number of parallel inference slots. Each slot gets `ATLAS_CONTEXT_LENGTH / ATLAS
 
 | Default | Type | Range |
 |---------|------|-------|
-| 2 | integer | 1-8 |
+| 1 | integer | 1-8 |
 
-Changed from 1 in V1 to 2 in V2 (for best-of-k pipelining).
+V3 requires `--parallel 1` (VRAM too tight for 2 draft KV contexts with self-embeddings enabled). V2 used 2 slots before self-embeddings were restored.
 
 ### ATLAS_FLASH_ATTENTION
 
@@ -417,6 +417,74 @@ Log every incoming HTTP request.
 
 ---
 
+## V3 Pipeline Configuration
+
+V3 adds per-phase and per-component toggles in `atlas.conf`. All V3 features are enabled by default.
+
+### Phase Toggles
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAS_V3_PHASE1_ENABLED` | true | Phase 1: Constraint-Driven Generation (PlanSearch, DivSampling, BudgetForcing) |
+| `ATLAS_V3_PHASE2_ENABLED` | true | Phase 2: Adaptive Compute Allocation (Blend-ASC, ReASC, S*) |
+| `ATLAS_V3_PHASE3_ENABLED` | true | Phase 3: Self-Verified Iterative Refinement |
+
+### Phase 1 Components
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAS_V3_BUDGET_FORCING_ENABLED` | true | Budget Forcing thinking token control |
+| `ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER` | "standard" | Default thinking tier (minimal/low/standard/high/unlimited) |
+| `ATLAS_V3_PLAN_SEARCH_ENABLED` | true | PlanSearch constraint-guided plan generation |
+| `ATLAS_V3_PLAN_SEARCH_NUM_PLANS` | 3 | Number of diverse plans to generate |
+| `ATLAS_V3_DIV_SAMPLING_ENABLED` | true | DivSampling prompt perturbations |
+
+### Phase 2 Components
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAS_V3_BLEND_ASC_ENABLED` | true | Adaptive K allocation based on Lens energy |
+| `ATLAS_V3_BLEND_ASC_DEFAULT_K` | 3 | Default candidate count |
+| `ATLAS_V3_REASC_ENABLED` | true | Early stopping on confident tasks |
+| `ATLAS_V3_S_STAR_ENABLED` | true | Edge-case tiebreaking |
+
+### Phase 3 Components
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAS_V3_FAILURE_ANALYSIS_ENABLED` | true | Failure categorization |
+| `ATLAS_V3_CONSTRAINT_REFINEMENT_ENABLED` | true | Hypothesis-driven constraint updates |
+| `ATLAS_V3_PR_COT_ENABLED` | true | Multi-perspective PR-CoT repair |
+| `ATLAS_V3_PR_COT_MAX_ROUNDS` | 2 | Maximum repair rounds |
+| `ATLAS_V3_DERIVATION_CHAINS_ENABLED` | true | Sub-problem decomposition |
+| `ATLAS_V3_REFINEMENT_LOOP_ENABLED` | true | Full refinement cycle |
+| `ATLAS_V3_REFINEMENT_LOOP_MAX_ITERATIONS` | 5 | Max iterations per task |
+| `ATLAS_V3_REFINEMENT_LOOP_TIME_BUDGET_SEC` | 300 | Time budget per task (seconds) |
+| `ATLAS_V3_METACOGNITIVE_ENABLED` | true | Category-specific failure patterns |
+| `ATLAS_V3_ACE_ENABLED` | true | Evolving playbook context |
+| `ATLAS_V3_SELF_TEST_ENABLED` | true | Self-test generation for internal verification |
+| `ATLAS_V3_SELF_TEST_NUM_CASES` | 5 | Number of self-generated test cases |
+
+### Phase 4 Components (Lens Evolution)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAS_V3_REPLAY_BUFFER_ENABLED` | true | Domain-stratified experience replay |
+| `ATLAS_V3_REPLAY_BUFFER_MAX_SIZE` | 5000 | Maximum replay buffer entries |
+| `ATLAS_V3_EWC_ENABLED` | true | Elastic Weight Consolidation |
+| `ATLAS_V3_EWC_LAMBDA` | 1000.0 | EWC penalty strength |
+| `ATLAS_V3_LENS_FEEDBACK_ENABLED` | false | Online Lens recalibration (experimental) |
+
+### Cache Manager
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAS_CACHE_MANAGER_ENABLED` | true | Proactive llama-server memory management |
+| `ATLAS_CACHE_MANAGER_SOFT_THRESHOLD_MB` | 8192 | Soft RSS threshold for slot erase |
+| `ATLAS_CACHE_MANAGER_HARD_THRESHOLD_MB` | 10240 | Hard RSS threshold for pod restart |
+
+---
+
 ## Advanced
 
 ### ATLAS_EXTERNAL_URL
@@ -476,7 +544,7 @@ Set in `manifests/llama-deployment.yaml`:
 | `GPU_LAYERS` | `99` | Number of layers offloaded to GPU |
 | `PARALLEL_SLOTS` | `2` | Number of parallel inference slots |
 | `DRAFT_MODEL` | `/models/Qwen3-0.6B-Q8_0.gguf` | Full path to draft model; unset to disable speculative decoding |
-| `ENABLE_EMBEDDINGS` | `true` | Enable the `/embedding` endpoint (V2 legacy; V2.5+ uses nomic-embed-text-v1.5 sidecar on Server B instead) |
+| `ENABLE_EMBEDDINGS` | `true` | Enable the `/embedding` endpoint (V3 uses self-embeddings via patched single server (draft embedding=false fix)) |
 | `KV_CACHE_TYPE` | `q4_0` | KV cache quantization type (q4_0, q8_0, f16) |
 | `CHAT_TEMPLATE` | `Qwen3-custom.jinja` | Jinja2 chat template filename |
 | `GGML_CUDA_NO_PINNED` | `0` | Set to 0 to enable pinned host memory for PCIe transfers |
@@ -493,7 +561,7 @@ Set in `manifests/rag-api-deployment.yaml`:
 | `REDIS_HOST` | `redis` | Redis hostname for caching and Thompson Sampling posteriors |
 | `REDIS_PORT` | `6379` | Redis port |
 | `ROUTING_ENABLED` | `true` | Enable the confidence router (Thompson Sampling route selection). When false, all queries use the STANDARD route |
-| `GEOMETRIC_LENS_ENABLED` | `true` | Enable geometric lens correction (MLP-based energy field for candidate verification and difficulty routing). V2.5.1 confirmed C(x) selects correctly 87.8% with self-embeddings (5120-dim); V3 will restore self-embeddings as the Lens input source |
+| `GEOMETRIC_LENS_ENABLED` | `true` | Enable geometric lens correction (MLP-based energy field for candidate verification and difficulty routing). V2.5.1 confirmed C(x) selects correctly 87.8% with self-embeddings (5120-dim); V3.0 restored self-embeddings via single-server patch (draft embedding=false) |
 | `CONTEXT_BUDGET` | `8000` | Maximum tokens of retrieved context per query |
 | `TOP_K` | `20` | Number of code snippets returned by the hybrid retriever |
 | `MAX_FILES` | `10000` | Maximum files per indexed project |
@@ -515,7 +583,7 @@ ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
 
 ### Production Configuration
 
-Full V2 production setup with speculative decoding, routing, and geometric lens:
+Full production setup with speculative decoding, routing, and geometric lens:
 
 ```bash
 # Storage

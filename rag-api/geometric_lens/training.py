@@ -412,12 +412,22 @@ def retrain_cost_field_bce(
     test_fraction: float = 0.2,
     seed: int = 42,
     save_path: str = None,
+    replay_buffer=None,
+    ewc=None,
+    domain: str = None,
+    epoch_num: int = 0,
 ) -> dict:
     """Retrain CostField on real pass/fail benchmark data using weighted MSE.
 
     Uses MSE loss to energy targets (PASS=2.0, FAIL=25.0) with class-weighted
     samples to handle imbalanced data. Includes early stopping on validation
     AUC with patience=10 (checked every 5 epochs).
+
+    Phase 4 additions:
+    - replay_buffer: If provided, mixes 30% old data with 70% new data (4A-CL).
+    - ewc: If provided, adds EWC penalty to preserve old domain weights (4A-EWC).
+    - domain: Domain tag for replay buffer entries (e.g., "LCB", "SciCode").
+    - epoch_num: Training epoch number for replay buffer tracking.
 
     Args:
         embeddings: List of float lists, each 5120-dim.
@@ -428,6 +438,10 @@ def retrain_cost_field_bce(
         test_fraction: Fraction of data reserved for validation.
         seed: Random seed for reproducibility.
         save_path: If provided, save model state_dict to this path.
+        replay_buffer: ReplayBuffer instance for continual learning (4A-CL).
+        ewc: ElasticWeightConsolidation instance for forgetting prevention (4A-EWC).
+        domain: Domain tag string for replay buffer.
+        epoch_num: Epoch number for replay buffer entries.
 
     Returns:
         Dict with val_auc, train_auc, val_accuracy, train_size, val_size,
@@ -453,6 +467,17 @@ def retrain_cost_field_bce(
             "best_test_auc": 0.5,
             "model": None,
         }
+
+    # Mix with replay buffer if provided (4A-CL: 30% old / 70% new)
+    if replay_buffer is not None and len(replay_buffer) > 0:
+        new_data = [{"embedding": e, "label": l} for e, l in zip(embeddings, labels)]
+        mixed = replay_buffer.get_training_mix(new_data, replay_ratio=0.30)
+        embeddings = [d["embedding"] for d in mixed]
+        labels = [d["label"] for d in mixed]
+        n = len(embeddings)
+        n_pass = sum(1 for l in labels if l == "PASS")
+        n_fail = sum(1 for l in labels if l == "FAIL")
+        print(f"Retrain BCE | Replay mix: {len(new_data)} new + {n - len(new_data)} replay = {n} total")
 
     # Adaptive learning rate
     if lr is None:
@@ -544,6 +569,10 @@ def retrain_cost_field_bce(
             per_sample_mse = (energies - t_batch) ** 2
             weighted_loss = (per_sample_mse * w_batch).mean()
 
+            # Add EWC penalty to prevent catastrophic forgetting (4A-EWC)
+            if ewc is not None and ewc.is_initialized:
+                weighted_loss = weighted_loss + ewc.penalty(model)
+
             optimizer.zero_grad()
             weighted_loss.backward()
             optimizer.step()
@@ -609,6 +638,47 @@ def retrain_cost_field_bce(
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
 
+    # Compute energy statistics for Lens Feedback recalibration
+    # Note: model.eval() is the PyTorch eval mode toggle, not code evaluation
+    model.eval()
+    with torch.no_grad():
+        all_X = torch.tensor(embeddings, dtype=torch.float32, device=device)
+        all_energies = model(all_X).squeeze().tolist()
+        if isinstance(all_energies, float):
+            all_energies = [all_energies]
+
+    _pass_e = [e for e, l in zip(all_energies, labels) if l == "PASS"]
+    _fail_e = [e for e, l in zip(all_energies, labels) if l == "FAIL"]
+    pass_energy_mean = sum(_pass_e) / max(len(_pass_e), 1) if _pass_e else 0.0
+    fail_energy_mean = sum(_fail_e) / max(len(_fail_e), 1) if _fail_e else 0.0
+
+    # Post-retrain: update replay buffer with new domain samples (4A-CL)
+    if replay_buffer is not None and domain is not None:
+        sorted_e = sorted(all_energies)
+        q25 = sorted_e[len(sorted_e) // 4] if len(sorted_e) > 3 else sorted_e[0]
+        q50 = sorted_e[len(sorted_e) // 2] if len(sorted_e) > 1 else sorted_e[0]
+        q75 = sorted_e[3 * len(sorted_e) // 4] if len(sorted_e) > 3 else sorted_e[-1]
+
+        difficulty_quartiles = []
+        for e in all_energies:
+            if e <= q25:
+                difficulty_quartiles.append(1)
+            elif e <= q50:
+                difficulty_quartiles.append(2)
+            elif e <= q75:
+                difficulty_quartiles.append(3)
+            else:
+                difficulty_quartiles.append(4)
+
+        replay_buffer.add_batch(embeddings, labels, domain, epoch_num,
+                                difficulty_quartiles)
+        print(f"Retrain BCE | Added {len(embeddings)} samples to replay buffer (domain={domain})")
+
+    # Post-retrain: recompute Fisher for EWC (4A-EWC)
+    if ewc is not None and domain is not None:
+        ewc.compute_fisher(model, embeddings, labels, n_samples=min(500, len(embeddings)))
+        print(f"Retrain BCE | Fisher recomputed ({len(embeddings)} samples, domain={domain})")
+
     return {
         "skipped": False,
         "val_auc": final_val_auc,
@@ -619,6 +689,8 @@ def retrain_cost_field_bce(
         "val_size": len(val_embs),
         "fail_ratio": n_fail / max(n, 1),
         "best_test_auc": best_val_auc,
+        "pass_energy_mean": pass_energy_mean,
+        "fail_energy_mean": fail_energy_mean,
         "model": model,
     }
 

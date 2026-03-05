@@ -1,12 +1,12 @@
 # ATLAS Architecture
 
-Detailed architecture companion to the README. Describes the system as currently deployed (V2.5).
+Detailed architecture companion to the README. Describes the system as currently deployed (V3.0).
 
 ---
 
 ## 1. System Overview
 
-ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generation. It runs a local Qwen3-14B model on consumer hardware (single 16GB GPU) under K3s, combining retrieval-augmented generation, energy-based verification, and adaptive routing to maximize pass rates within a fixed VRAM budget.
+ATLAS is a self-hosted benchmark infrastructure for evaluating LLM code generation. It runs a local Qwen3-14B model on consumer hardware (single 16GB GPU) under K3s, combining constraint-driven generation, energy-based verification, self-verified iterative refinement, and adaptive routing to maximize pass rates within a fixed VRAM budget. V3.0 achieves 74.6% LiveCodeBench pass@1.
 
 ### System Diagram
 
@@ -28,14 +28,13 @@ flowchart TB
     AK[Adaptive-k Selection<br/>CACHE_HIT k=0 / FAST k=1<br/>STANDARD k=5 / HARD k=20]
   end
 
-  subgraph Generation["Best-of-K Pipeline"]
-    LS[llama-server Server A<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B-Q8_0 Draft<br/>Spec decode ON, embeddings OFF<br/>Port 8000 / NodePort 32735]
-    EM[llama-server Server B<br/>nomic-embed-text-v1.5 Q8_0<br/>Embeddings ON, 768-dim<br/>Port 8001 / NodePort 32736]
+  subgraph Generation["Generation + Embedding"]
+    LS[llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B-Q8_0 Draft<br/>Spec decode ON + Self-embeddings<br/>Port 8000 / NodePort 32735]
     PC[Pattern Cache<br/>Redis + Ebbinghaus Decay<br/>STM / LTM tiers]
   end
 
   subgraph Evaluation["Candidate Selection"]
-    GL[Geometric Lens<br/>C x Cost Field ~0.5M params<br/>G x Metric Tensor ~0.8M params DORMANT]
+    GL[Geometric Lens<br/>C x Cost Field ~2.7M params<br/>5120-dim self-embeddings]
     SB[Sandbox<br/>K8s service, port 8020<br/>Isolated code execution + testing<br/>Energy-sorted early exit]
   end
 
@@ -79,7 +78,7 @@ flowchart TB
 
   %% Evaluation flow
   LS -->|k candidates| GL
-  GL -->|extract embedding| EM
+  LS -.->|5120-dim self-embeddings| GL
   GL -->|sorted by energy| SB
   SB -->|result + feedback| FR
   SB -->|pass/fail embeddings| RT
@@ -106,7 +105,6 @@ flowchart TB
   style FR fill:#4a1a5c,color:#fff
   style RT fill:#4a1a5c,color:#fff
   style TW fill:#3a3a3a,color:#fff
-  style EM fill:#1a3a5c,color:#fff
   style RD fill:#8b0000,color:#fff
 ```
 
@@ -129,13 +127,12 @@ flowchart TB
 | **MaaS**        | api-portal             | api-portal             | 3000 (NodePort 30000)  | FastAPI                 | User registration/login (JWT), API key mgmt (sk-llm-*), /v1/models      |
 |                 | llm-proxy              | llm-proxy              | 8000 (NodePort 30080)  | FastAPI                 | Reverse proxy to llama-server with API key validation + rate limiting    |
 | **Core**        | rag-api                | rag-api                | 8001 (NodePort 31144)  | FastAPI                 | Orchestration: routing, RAG, cache, lens, key validation via api-portal  |
-|                 | llama-server (Server A)| llama-service          | 8000 (NodePort 32735)  | llama.cpp + CUDA        | GPU inference (Qwen3-14B + 0.6B draft, spec decode ON, embeddings OFF)  |
-|                 | llama-embed (Server B) | llama-embed-service    | 8001 (NodePort 32736)  | llama.cpp + CUDA        | Embedding sidecar (nomic-embed-text-v1.5, 768-dim, embeddings ON)       |
+|                 | llama-server           | llama-service          | 8000 (NodePort 32735)  | llama.cpp + CUDA        | GPU inference (Qwen3-14B + 0.6B draft, spec decode ON, self-embeddings 5120-dim) |
 | **Execution**   | sandbox                | sandbox                | 8020 (NodePort 30820)  | K8s service             | Isolated code execution and testing (HTTP API)                           |
 |                 | task-worker            | task-worker             | 8080 (ClusterIP)       | Python                  | Async task processor: polls Redis queues, runs ralph-loop, calls sandbox |
 | **Storage**     | Redis                  | redis                  | 6379                   | Redis                   | Pattern cache, Thompson state, task queue, rate limits, usage metrics    |
 | **Intelligence**| Confidence Router      | (in rag-api)           | --                     | Thompson Sampling       | 4-signal difficulty estimation, adaptive-k                               |
-|                 | Geometric Lens         | (in rag-api)           | --                     | PyTorch (CPU)           | Energy-based candidate scoring, ~1.3M params                            |
+|                 | Geometric Lens         | (in rag-api)           | --                     | PyTorch (CPU)           | Energy-based candidate scoring, C(x) ~2.7M params                      |
 |                 | Pattern Cache          | (in rag-api)           | --                     | Redis-backed            | Ebbinghaus-decay STM/LTM pattern memory                                  |
 |                 | PageIndex              | (in rag-api)           | --                     | tree-sitter + BM25      | AST-aware code retrieval with LLM tree search                            |
 | **Dashboard**   | atlas-dashboard        | atlas-dashboard        | 3001 (NodePort 30001)  | Web UI                  | Monitoring dashboard (queue stats, daily metrics, weekly trend)          |
@@ -145,7 +142,7 @@ flowchart TB
 
 | Pod | Purpose |
 |-----|---------|
-| llama-server | GPU inference (Qwen3-14B) + embedding sidecar (nomic-embed-text-v1.5) |
+| llama-server | GPU inference (Qwen3-14B) + self-embedding extraction (5120-dim, patched) |
 | rag-api | Orchestration, routing, PageIndex, Geometric Lens |
 | redis | Pattern Cache, Thompson Sampling state, AOF persistence |
 | sandbox | Isolated code execution and test validation |
@@ -160,7 +157,6 @@ flowchart TB
 | Service | NodePort |
 |---------|----------|
 | llama-server | 32735 |
-| llama-embed-service | 32736 |
 | rag-api | 31144 |
 | api-portal | 30000 |
 | llm-proxy | 30080 |
@@ -203,16 +199,15 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant R as Router
-  participant LS as Server A (Generation)
-  participant EM as Server B (Embeddings)
+  participant LS as llama-server
   participant GL as Geometric Lens
   participant SB as Sandbox
 
   R->>LS: Generate k candidates (temperature varies by mode)
   Note over LS: k=1: temp 0.0<br/>mcq/ifbench: 0.3<br/>code k≤5: 0.6<br/>code k>5: 0.8
   LS-->>GL: k code candidates
-  GL->>EM: Extract 768-dim embedding per candidate
-  EM-->>GL: Embeddings
+  GL->>LS: Extract 5120-dim self-embedding per candidate
+  LS-->>GL: Embeddings
   GL->>GL: Score C(x) each, sort by energy (ascending)
   loop For each candidate (lowest energy first)
     GL->>SB: Test candidate
@@ -253,13 +248,14 @@ GPU-accelerated LLM inference via llama.cpp, serving OpenAI-compatible API endpo
 
 Speculative decoding is active with ~80% token acceptance rate. Throughput: ~100 tok/s.
 
-Embeddings are served by a dedicated sidecar (nomic-embed-text-v1.5, port 8001) instead of the main model. The `--embeddings` flag was removed from Server A because it forces `n_batch=512`, breaking speculative decoding. See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for the migration rationale.
+Self-embeddings (5120-dim) are extracted from the same server via a patched llama.cpp build (`params_dft.embedding = false`) that enables `--embeddings` alongside speculative decoding. See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for the migration history.
 
-**Verified Flag List** (Server A -- generation):
+**Verified Flag List** (V3.0):
 
 ```
---ctx-size 16384          # 2 parallel slots
---parallel 2
+--ctx-size 16384          # single slot (--parallel 1)
+--parallel 1
+--embeddings              # self-embedding extraction (patched for spec decode)
 --cont-batching
 --flash-attn
 --no-mmap
@@ -269,11 +265,12 @@ Embeddings are served by a dedicated sidecar (nomic-embed-text-v1.5, port 8001) 
 --draft-min 1
 --ngl 99
 --mlock
+-b 4096 -ub 4096          # equal batch sizes required with --embeddings
 ```
 
-**VRAM Budget**: ~12,720 / 16,311 MiB (78%). See Section 5 for breakdown.
+**VRAM Budget**: ~14,400 / 16,311 MiB (88%). See Section 5 for breakdown.
 
-**Throughput**: 109 tasks/hr (V2 benchmark aggregate across all datasets).
+**Throughput**: ~100 tok/s generation (speculative decoding, ~80% acceptance).
 
 **Deployment Notes**:
 - Strategy: Recreate (single GPU, cannot run 2 pods simultaneously).
@@ -290,27 +287,16 @@ An energy-based model that scores code generation candidates, enabling the best-
 
 **Architecture**:
 
-C(x) Cost Field (~0.5M params at 768-dim input):
+C(x) Cost Field (~2.7M params at 5120-dim input):
 ```
-Linear(768 -> 512) + SiLU
+Linear(5120 -> 512) + SiLU
 Linear(512 -> 128) + SiLU
 Linear(128 -> 1)   + Softplus
 ```
 
-G(x) Metric Tensor (~0.8M params at 768-dim input, **dormant** -- see note below):
-```
-Linear(768 -> 512) + SiLU
-Linear(512 -> 768) + Softplus
-```
+Input dimension adapts automatically on retrain to match the embedding source dimension.
 
-Input dimension adapts automatically on retrain (768 for nomic-embed-text-v1.5; was 5120 for Qwen3-14B in V2).
-
-**Core Equation**:
-```
-delta_x = -alpha * G(x)^{-1} * grad_C(x)
-```
-
-The correction vector delta_x indicates the direction in embedding space that would reduce energy, providing a geometric interpretation of what the model "should have generated."
+G(x) Metric Tensor was removed in V3.0 (5.2M params, zero contribution at any correction strength -- confirmed in V2.5.1 ablation).
 
 **Training**: Contrastive ranking loss on real benchmark pass/fail data. Self-supervised -- no human labels required beyond the sandbox's binary pass/fail signal.
 
@@ -328,17 +314,15 @@ The correction vector delta_x indicates the direction in embedding space that wo
 
 The V2.5 ablation study ([V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md)) found that under 768-dim nomic embeddings, C(x) was statistically indistinguishable from random. **V2.5.1 confirmed this was an embedding source limitation, not an architecture failure.** With 5120-dim self-embeddings, C(x) achieves 87.8% selection accuracy on mixed-result tasks (p < 0.000001), serving as both a **candidate verifier** and a **difficulty router**.
 
-> **✅ V2.5.1 CONFIRMED — EMBEDDING SOURCE HYPOTHESIS (2026-02-23)**
+> **V2.5.1 CONFIRMED — EMBEDDING SOURCE HYPOTHESIS (2026-02-23)**
 >
-> Self-embeddings encode the model's internal confidence and reasoning state; external semantic embeddings encode only surface text semantics. The Lens requires the model's own representations to discriminate candidates — two solutions differing by one critical line are nearly identical to nomic (95% same text) but have meaningfully different self-embeddings.
->
-> **The Lens architecture works.** The engineering challenge for V3 is restoring self-embeddings while maintaining speculative decoding throughput (~45 tok/s without spec decode vs ~100 tok/s with). G(x) metric tensor adds zero value and should be removed (5.2M parameters, zero net contribution at any alpha).
+> Self-embeddings encode the model's internal confidence and reasoning state; external semantic embeddings encode only surface text semantics. The Lens requires the model's own representations to discriminate candidates. V3.0 restored self-embeddings via a one-line llama.cpp patch (`params_dft.embedding = false`), enabling `--embeddings` + spec decode on a single server.
 
-**G(x) Status**: The metric tensor is functionally dormant. It is loaded but its correction output is never consumed by the benchmark. See the ablation study for V3 options (activate, remove, or defer).
+**G(x) Status**: Removed in V3.0. The V2.5.1 ablation confirmed zero contribution at any correction strength (5.2M parameters, 0.0pp net effect).
 
 **Weights**: `rag-api/geometric_lens/models/cost_field.pt`, `metric_tensor.pt`. Baked into the container image. PyTorch CPU only (torch 2.10.0+cpu).
 
-**Embedding Source**: Currently uses dedicated nomic-embed-text-v1.5 sidecar (768-dim) in V2.5, but **V2.5.1 confirmed that self-embeddings (5120-dim) are required for candidate discrimination** (87.8% vs ≈random under nomic). V3 will restore self-embeddings — the Lens MLP input layer adapts automatically on retrain to match the embedding source dimension. See [V2_5_ABLATION_STUDY.md](V2_5_ABLATION_STUDY.md) for the full V2.5.1 confirmation ablation results.
+**Embedding Source**: Uses Qwen3-14B self-embeddings (5120-dim) extracted via a patched llama-server (draft embedding=false fix enables --embeddings + spec decode on single server). V2.5.1 confirmed that self-embeddings are required for candidate discrimination (87.8% vs ~random under nomic 768-dim). The Lens MLP input layer adapts automatically on retrain to match the embedding source dimension.
 
 **Environment**: `GEOMETRIC_LENS_ENABLED` env var. Models loaded lazily on first use.
 
@@ -456,15 +440,23 @@ Isolated code execution environment providing ground-truth pass/fail signals. Th
 
 ---
 
-## 4. V2 Benchmark Results
+## 4. Benchmark Results
 
-Run ID: `v2_run_20260217_125310`
-Hardware: RTX 5060 Ti 16GB VRAM
-Throughput: 109 tasks/hr aggregate
+### V3.0 (Current)
 
-All results from a single benchmark run. Not averaged across multiple runs; variance unknown.
+Hardware: RTX 5060 Ti 16GB VRAM | Model: Qwen3-14B-Q4_K_M (frozen)
 
-### Benchmark Scores
+| Benchmark | Tasks | pass@1 | Method |
+|-----------|-------|--------|--------|
+| LiveCodeBench v5 | 599 | **74.6%** | V3 pipeline (PlanSearch + self-verified PR-CoT repair) |
+| GPQA Diamond | 198 | 47.0% | k=5, MCQ format |
+| SciCode | 341 | 14.7% sub-problems | k=1, scientific computing |
+
+Full ablation: [V3_ABLATION_STUDY.md](V3_ABLATION_STUDY.md)
+
+### V2 Baseline (Historical)
+
+Run ID: `v2_run_20260217_125310` | Throughput: 109 tasks/hr
 
 | Benchmark | Tasks | pass@1 | Conditions |
 |-----------|-------|--------|------------|
@@ -499,17 +491,14 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 
 Total available: 16,311 MiB (RTX 5060 Ti 16GB).
 
-As of V2.5, measured via `nvidia-smi` with both servers running:
+As of V3.0, measured via `nvidia-smi` with single patched server:
 
 | Component | VRAM |
 |-----------|------|
-| Server A (Qwen3-14B + draft + KV cache) | ~12,420 MiB |
-| Server B (nomic-embed-text-v1.5 Q8_0 sidecar) | ~300 MiB |
-| **Total** | **~12,720 MiB (78%)** |
+| llama-server (Qwen3-14B + draft + KV cache + self-embeddings) | ~14,400 MiB |
+| **Total** | **~14,400 MiB (88%)** |
 
-Headroom: ~3,590 MiB. The embed sidecar adds only ~300 MiB while enabling speculative decoding (~100 tok/s vs ~38 tok/s in V2).
-
-See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for the full two-server migration details.
+Headroom: ~1,900 MiB. Single-server patch (draft embedding=false) enables self-embeddings + spec decode on one GPU process. Nomic sidecar removed.
 
 ---
 
@@ -556,8 +545,70 @@ The following V1 components were removed and replaced:
 | V1 Component | V2 Replacement | Reason |
 |-------------|----------------|--------|
 | Qdrant vector database | PageIndex (AST tree + BM25) | Structural code understanding, lower resource usage |
-| Dedicated embedding service | llama-server `--embeddings` (V2), then nomic-embed-text-v1.5 sidecar (V2.5) | V2 used self-embeddings (5120-dim); V2.5 uses dedicated embed model (768-dim) to enable spec decode. **V2.5.1 confirmed** the embedding source switch degraded Lens discrimination from 87.8% to ≈random. V3 will restore self-embeddings via alternative extraction methods |
+| Dedicated embedding service | llama-server `--embeddings` (V2), then nomic-embed-text-v1.5 sidecar (V2.5) | V2 used self-embeddings (5120-dim); V2.5 uses dedicated embed model (768-dim) to enable spec decode. **V2.5.1 confirmed** the embedding source switch degraded Lens discrimination from 87.8% to ≈random. V3.0 restored self-embeddings via single-server patch (draft embedding=false), removing the nomic sidecar entirely. |
 | Chunking pipeline (`rag-api/chunker.py`) | AST-based tree indexing | Chunk boundaries are semantic (functions, classes) rather than arbitrary token windows |
 
 Removed manifests: `embedding-deployment.yaml`, `qdrant-deployment.yaml`.
 Removed modules: `rag-api/chunker.py`, `rag-api/vector_store.py`.
+
+---
+
+## 8. V3 Pipeline
+
+V3.0 adds a three-phase pipeline that improves LCB pass@1 from 54.9% (baseline) to 74.6%.
+
+### Phase 1: Constraint-Driven Generation (+12.4pp)
+
+| Component | Module | Purpose |
+|-----------|--------|---------|
+| PlanSearch (1A) | `benchmark/v3/plan_search.py` | Extract constraints from problem, generate diverse solution plans |
+| DivSampling (1B) | `benchmark/v3/div_sampling.py` | 12 prompt perturbations (role, instruction, style) for candidate diversity |
+| Budget Forcing (1C) | `benchmark/v3/budget_forcing.py` | 5-tier thinking token budget, Wait injection, /nothink fallback |
+
+### Phase 2: Adaptive Compute Allocation (+0.0pp on LCB)
+
+| Component | Module | Purpose |
+|-----------|--------|---------|
+| Blend-ASC (2A) | `benchmark/v3/blend_asc.py` | Adaptive K allocation based on Lens energy tiers |
+| ReASC (2B) | `benchmark/v3/reasc.py` | Early stopping on easy/confident tasks |
+| S* Tiebreaking (2C) | `benchmark/v3/s_star.py` | Distinguishing input generation for close candidates |
+
+Phase 2 showed no measurable improvement on LCB stdio tasks. S* tiebreaking requires custom test case routing that was non-functional for stdio mode. Deferred to V3.1 redesign.
+
+### Phase 3: Self-Verified Iterative Refinement (+7.3pp)
+
+| Component | Module | Purpose |
+|-----------|--------|---------|
+| Self-Test Generation | `benchmark/v3/self_test_gen.py` | Model generates its own I/O test cases from problem statement |
+| Failure Analysis (3A) | `benchmark/v3/failure_analysis.py` | Categorize failure mode (6 categories) |
+| Constraint Refinement (3B) | `benchmark/v3/constraint_refinement.py` | Hypothesis-driven constraint updates |
+| PR-CoT Repair (3C) | `benchmark/v3/pr_cot.py` | 4-perspective repair (dominant: 36/42 rescues) |
+| Derivation Chains (3D) | `benchmark/v3/derivation_chains.py` | Sub-problem decomposition (0% on LCB) |
+| Refinement Loop (3E) | `benchmark/v3/refinement_loop.py` | Full analyze-refine-generate-test cycle |
+| Metacognitive Model (3F) | `benchmark/v3/metacognitive.py` | Category-specific failure pattern learning |
+| ACE Playbooks (3G) | `benchmark/v3/ace_pipeline.py` | Evolving playbook with knowledge derivation |
+
+Phase 3 uses **self-generated test cases** for internal verification. The model reasons about the problem statement and generates I/O pairs, which are used for iterative repair. Real benchmark tests are used ONLY for final scoring -- the model never sees the answer key during refinement.
+
+### Phase 4: Lens Evolution (Scaffolding Complete)
+
+| Component | Module | Purpose |
+|-----------|--------|---------|
+| Replay Buffer (4A-CL) | `rag-api/geometric_lens/replay_buffer.py` | Domain-stratified experience replay |
+| EWC (4A-EWC) | `rag-api/geometric_lens/ewc.py` | Elastic Weight Consolidation for catastrophic forgetting |
+| Enhanced Retrain (4A-RT) | `rag-api/geometric_lens/training.py` | Replay+EWC integrated retrain pipeline |
+
+Phase 4 modules are implemented and tested but not yet active in the benchmark pipeline. Validation showed 0 AUC degradation across 5 domains.
+
+### V3 Data Flow
+
+```
+Problem -> PlanSearch (constraints -> plans -> code, k=3 candidates)
+       -> Budget Forcing (thinking token control per difficulty)
+       -> DivSampling (prompt perturbations for diversity)
+       -> Lens Scoring (C(x) energy ranking, 5120-dim self-embeddings)
+       -> Sandbox Testing (real tests, one-shot)
+       -> [if all fail] Phase 3 Self-Verified Refinement:
+           Self-Test Gen -> Failure Analysis -> PR-CoT Repair -> Self-Test Verify
+           -> [if self-tests pass] Final Scoring (real tests)
+```

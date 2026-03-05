@@ -1,0 +1,13 @@
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -644,6 +644,9 @@
+
+         auto params_dft = params_base;
+
++        // ATLAS patch: draft model never needs embeddings — propagating embedding=true
++        // from the main model poisons the draft context (forces output_all=true, wrong
++        // n_ubatch). This broke speculative decoding when --embeddings was enabled.
++        params_dft.embedding = false;
++
+         params_dft.n_parallel   = 1;
+         params_dft.n_ctx        = params_spec.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_spec.n_ctx;

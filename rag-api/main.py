@@ -870,6 +870,10 @@ async def lens_score_text(request: LensScoreTextRequest):
 class LensRetrainRequest(BaseModel):
     training_data: List[Dict]
     epochs: int = 50
+    domain: str = "LCB"
+    use_replay: bool = True
+    use_ewc: bool = True
+    lambda_ewc: float = 1000.0
 
 
 @app.post("/internal/lens/retrain")
@@ -883,16 +887,36 @@ async def lens_retrain(request: LensRetrainRequest):
         embeddings = [d["embedding"] for d in request.training_data]
         labels = [d["label"] for d in request.training_data]
 
-        save_path = os.path.join(
+        models_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "geometric_lens", "models", "cost_field.pt"
+            "geometric_lens", "models"
         )
+        save_path = os.path.join(models_dir, "cost_field.pt")
+
+        # Phase 4: Load replay buffer if enabled (4A-CL)
+        replay_buffer = None
+        if request.use_replay:
+            from geometric_lens.replay_buffer import ReplayBuffer
+            replay_buffer = ReplayBuffer(max_size=5000)
+            replay_path = os.path.join(models_dir, "replay_buffer.json")
+            replay_buffer.load(replay_path)  # OK if file doesn't exist yet
+
+        # Phase 4: Load EWC state if enabled (4A-EWC)
+        ewc = None
+        if request.use_ewc:
+            from geometric_lens.ewc import ElasticWeightConsolidation
+            ewc = ElasticWeightConsolidation(lambda_ewc=request.lambda_ewc)
+            ewc_path = os.path.join(models_dir, "ewc_state.pt")
+            ewc.load(ewc_path)  # OK if file doesn't exist yet
 
         metrics = retrain_cost_field_bce(
             embeddings=embeddings,
             labels=labels,
             epochs=request.epochs,
             save_path=save_path,
+            replay_buffer=replay_buffer,
+            ewc=ewc,
+            domain=request.domain,
         )
 
         # Remove non-serializable 'model' key from metrics
@@ -902,6 +926,17 @@ async def lens_retrain(request: LensRetrainRequest):
         if not metrics.get("skipped", False):
             reload_result = reload_weights()
             metrics["reload_status"] = reload_result.get("status", "unknown")
+
+            # Phase 4: Save replay buffer and EWC state
+            if replay_buffer is not None:
+                replay_path = os.path.join(models_dir, "replay_buffer.json")
+                replay_buffer.save(replay_path)
+                metrics["replay_buffer_size"] = len(replay_buffer)
+
+            if ewc is not None:
+                ewc_path = os.path.join(models_dir, "ewc_state.pt")
+                ewc.save(ewc_path)
+                metrics["ewc_initialized"] = ewc.is_initialized
 
         return {"status": "ok", "metrics": metrics}
     except Exception as e:

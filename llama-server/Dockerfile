@@ -2,6 +2,12 @@ FROM docker.io/nvidia/cuda:12.8.0-devel-rockylinux9 AS builder
 RUN dnf install -y git cmake gcc-c++ && dnf clean all
 RUN git clone https://github.com/ggml-org/llama.cpp /llama.cpp && \
     cd /llama.cpp && \
+    # ATLAS patch: prevent --embeddings from poisoning the draft model context.
+    # Without this, embedding=true propagates to the draft via params_dft = params_base,
+    # causing output_all=true and n_ubatch mismatch → 0% spec decode acceptance.
+    # See: patches/fix-embeddings-spec-decode.patch for details.
+    sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
+        tools/server/server-context.cpp && \
     cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES=89 && \
     cmake --build build --config Release -j$(nproc)
 

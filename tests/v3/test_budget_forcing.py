@@ -1,0 +1,644 @@
+"""Tests for V3 Budget Forcing (Feature 1C)."""
+
+import json
+import math
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from benchmark.v3.budget_forcing import (
+    BUDGET_TIERS,
+    VALID_TIERS,
+    WAIT_INJECTION_TEXT,
+    BudgetForcing,
+    BudgetForcingConfig,
+    BudgetForcingEvent,
+    build_continuation_prompt,
+    estimate_thinking_tokens,
+    extract_thinking,
+    get_system_prompt,
+    normalize_energy,
+    select_tier,
+    should_inject_wait,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def tmp_telemetry(tmp_path):
+    """Provide a temporary telemetry directory."""
+    d = tmp_path / "telemetry"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def bf_enabled(tmp_telemetry):
+    """BudgetForcing instance with enabled=True."""
+    cfg = BudgetForcingConfig(enabled=True)
+    return BudgetForcing(cfg, telemetry_dir=tmp_telemetry)
+
+
+@pytest.fixture
+def bf_disabled(tmp_telemetry):
+    """BudgetForcing instance with enabled=False."""
+    cfg = BudgetForcingConfig(enabled=False)
+    return BudgetForcing(cfg, telemetry_dir=tmp_telemetry)
+
+
+# ---------------------------------------------------------------------------
+# Test: Disabled noop behavior
+# ---------------------------------------------------------------------------
+
+class TestDisabledNoop:
+    """When enabled=False, BudgetForcing should be a complete noop."""
+
+    def test_select_tier_returns_nothink(self, bf_disabled):
+        assert bf_disabled.select_tier(raw_energy=15.0) == "nothink"
+        assert bf_disabled.select_tier(raw_energy=2.0) == "nothink"
+        assert bf_disabled.select_tier() == "nothink"
+
+    def test_process_response_never_injects(self, bf_disabled):
+        response = "<think>Short thought</think>\ndef foo(): pass"
+        needs, continuation = bf_disabled.process_response(
+            response, tier="hard", actual_thinking_tokens=5
+        )
+        assert needs is False
+        assert continuation is None
+
+
+# ---------------------------------------------------------------------------
+# Test: Energy normalization
+# ---------------------------------------------------------------------------
+
+class TestNormalizeEnergy:
+    """Test the sigmoid energy normalization function."""
+
+    def test_pass_energy_is_low(self):
+        """PASS mean energy (5.0) should normalize to low value."""
+        norm = normalize_energy(5.0)
+        assert norm < 0.10, f"PASS energy normalized to {norm}, expected <0.10"
+
+    def test_fail_energy_is_high(self):
+        """FAIL mean energy (14.0) should normalize to high value."""
+        norm = normalize_energy(14.0)
+        assert norm > 0.90, f"FAIL energy normalized to {norm}, expected >0.90"
+
+    def test_midpoint_is_half(self):
+        """Energy at midpoint (9.5) should normalize to exactly 0.5."""
+        norm = normalize_energy(9.5)
+        assert abs(norm - 0.5) < 1e-10
+
+    def test_monotonically_increasing(self):
+        """Higher energy should always give higher normalized value."""
+        energies = [0, 3, 5, 7, 9.5, 12, 14, 20, 50]
+        norms = [normalize_energy(e) for e in energies]
+        for i in range(len(norms) - 1):
+            assert norms[i] < norms[i + 1], (
+                f"Not monotonic at {energies[i]}->{energies[i+1]}: "
+                f"{norms[i]}->{norms[i+1]}"
+            )
+
+    def test_bounds(self):
+        """Normalized energy should approach but not exceed [0, 1]."""
+        assert 0 < normalize_energy(-100)
+        assert normalize_energy(100) <= 1.0
+        # Moderate values stay strictly in (0, 1)
+        assert 0 < normalize_energy(-10) < 1
+        assert 0 < normalize_energy(20) < 1
+
+    def test_custom_midpoint_and_steepness(self):
+        """Custom parameters should shift the sigmoid."""
+        # With midpoint=5, energy=5 should be 0.5
+        assert abs(normalize_energy(5.0, midpoint=5.0) - 0.5) < 1e-10
+        # Steeper sigmoid → more extreme values
+        steep = normalize_energy(12.0, steepness=2.0)
+        gentle = normalize_energy(12.0, steepness=0.1)
+        assert steep > gentle
+
+
+# ---------------------------------------------------------------------------
+# Test: Tier selection
+# ---------------------------------------------------------------------------
+
+class TestSelectTier:
+    """Test energy-to-tier mapping."""
+
+    def test_no_energy_returns_default(self):
+        assert select_tier() == "standard"
+        assert select_tier(default_tier="hard") == "hard"
+
+    def test_very_easy_task(self):
+        """Very low energy (easy) → nothink."""
+        # Energy 2.0 normalizes to ~0.024
+        assert select_tier(raw_energy=2.0) == "nothink"
+
+    def test_easy_task(self):
+        """Low energy → nothink."""
+        # Energy 5.0 normalizes to ~0.095
+        assert select_tier(raw_energy=5.0) == "nothink"
+
+    def test_medium_task(self):
+        """Medium energy → standard."""
+        # Energy 6.0 normalizes to ~0.148 (in [0.10, 0.20) → standard)
+        assert select_tier(raw_energy=6.0) == "standard"
+
+    def test_hard_task(self):
+        """Higher energy → hard."""
+        # Energy 7.2 normalizes to ~0.241 (in [0.20, 0.30) → hard)
+        assert select_tier(raw_energy=7.2) == "hard"
+
+    def test_extreme_task(self):
+        """High energy → extreme."""
+        assert select_tier(raw_energy=14.0) == "extreme"
+
+    def test_all_normalized_boundaries(self):
+        """Test tier boundaries using pre-normalized energy values."""
+        assert select_tier(normalized_energy=0.05) == "nothink"
+        assert select_tier(normalized_energy=0.09) == "nothink"
+        assert select_tier(normalized_energy=0.10) == "standard"
+        assert select_tier(normalized_energy=0.19) == "standard"
+        assert select_tier(normalized_energy=0.20) == "hard"
+        assert select_tier(normalized_energy=0.29) == "hard"
+        assert select_tier(normalized_energy=0.30) == "extreme"
+        assert select_tier(normalized_energy=0.99) == "extreme"
+
+    def test_normalized_takes_precedence(self):
+        """If both raw and normalized provided, normalized is used."""
+        # raw=2.0 would give nothink, but normalized=0.50 gives extreme
+        assert select_tier(raw_energy=2.0, normalized_energy=0.50) == "extreme"
+
+
+# ---------------------------------------------------------------------------
+# Test: System prompt generation
+# ---------------------------------------------------------------------------
+
+class TestGetSystemPrompt:
+
+    def test_nothink_has_nothink_tag(self):
+        prompt = get_system_prompt("nothink")
+        assert "/nothink" in prompt
+
+    def test_thinking_tiers_lack_nothink(self):
+        for tier in ["light", "standard", "hard", "extreme"]:
+            prompt = get_system_prompt(tier)
+            assert "/nothink" not in prompt
+            assert "think" in prompt.lower() or "step by step" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Test: Thinking extraction
+# ---------------------------------------------------------------------------
+
+class TestExtractThinking:
+
+    def test_normal_think_block(self):
+        response = "<think>I need to use a hash map.</think>\ndef solve(): pass"
+        thinking, output = extract_thinking(response)
+        assert thinking == "I need to use a hash map."
+        assert output == "def solve(): pass"
+
+    def test_empty_think_block(self):
+        response = "<think>\n\n</think>\ndef solve(): pass"
+        thinking, output = extract_thinking(response)
+        assert thinking == ""
+        assert output == "def solve(): pass"
+
+    def test_no_think_block(self):
+        response = "def solve(): pass"
+        thinking, output = extract_thinking(response)
+        assert thinking == ""
+        assert output == "def solve(): pass"
+
+    def test_unclosed_think_block(self):
+        response = "<think>Still thinking about this..."
+        thinking, output = extract_thinking(response)
+        assert "Still thinking" in thinking
+        assert output == ""
+
+    def test_empty_response(self):
+        assert extract_thinking("") == ("", "")
+
+    def test_multiline_thinking(self):
+        response = (
+            "<think>\nStep 1: Parse input\n"
+            "Step 2: Process\nStep 3: Output\n</think>\n"
+            "```python\ndef solve(): pass\n```"
+        )
+        thinking, output = extract_thinking(response)
+        assert "Step 1" in thinking
+        assert "Step 3" in thinking
+        assert "def solve" in output
+
+
+# ---------------------------------------------------------------------------
+# Test: Wait injection logic
+# ---------------------------------------------------------------------------
+
+class TestShouldInjectWait:
+
+    def test_nothink_never_injects(self):
+        assert should_inject_wait("some thinking", 10, "nothink") is False
+
+    def test_light_never_injects(self):
+        assert should_inject_wait("some thinking", 10, "light") is False
+
+    def test_standard_injects_below_threshold(self):
+        """Standard tier: threshold=512, should inject if <512 tokens."""
+        assert should_inject_wait("I think we need...", 100, "standard") is True
+
+    def test_standard_no_inject_above_threshold(self):
+        """Standard tier: threshold=512, should not inject if >=512 tokens."""
+        assert should_inject_wait("Long thinking...", 600, "standard") is False
+
+    def test_hard_injects_below_threshold(self):
+        """Hard tier: threshold=1024."""
+        assert should_inject_wait("some thought", 500, "hard") is True
+
+    def test_hard_no_inject_above_threshold(self):
+        assert should_inject_wait("some thought", 1100, "hard") is False
+
+    def test_extreme_injects_below_threshold(self):
+        """Extreme tier: threshold=2048."""
+        assert should_inject_wait("short", 100, "extreme") is True
+
+    def test_extreme_no_inject_above_threshold(self):
+        assert should_inject_wait("long enough", 2100, "extreme") is False
+
+    def test_empty_thinking_no_inject(self):
+        """Don't inject if thinking is empty (model didn't think at all)."""
+        assert should_inject_wait("", 0, "hard") is False
+        assert should_inject_wait("   ", 0, "hard") is False
+
+    def test_unknown_tier_no_inject(self):
+        assert should_inject_wait("thinking", 10, "nonexistent") is False
+
+
+# ---------------------------------------------------------------------------
+# Test: Continuation prompt building
+# ---------------------------------------------------------------------------
+
+class TestBuildContinuationPrompt:
+
+    def test_basic_continuation(self):
+        original = (
+            "<|im_start|>system\nYou are an expert.\n<|im_end|>\n"
+            "<|im_start|>user\nSolve this.\n<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+        thinking = "I need to use dynamic programming"
+        result = build_continuation_prompt(original, thinking)
+        assert result.startswith(original)
+        assert "<think>" in result
+        assert "dynamic programming" in result
+        assert WAIT_INJECTION_TEXT in result
+
+    def test_continuation_preserves_original_prompt(self):
+        original = "<|im_start|>system\nTest<|im_end|>\n<|im_start|>assistant\n"
+        result = build_continuation_prompt(original, "thought")
+        assert result.startswith(original)
+
+
+# ---------------------------------------------------------------------------
+# Test: Token estimation
+# ---------------------------------------------------------------------------
+
+class TestEstimateThinkingTokens:
+
+    def test_empty_string(self):
+        assert estimate_thinking_tokens("") == 0
+
+    def test_short_text(self):
+        # "Hello" = 5 chars → 5//4 = 1
+        assert estimate_thinking_tokens("Hello") >= 1
+
+    def test_long_text(self):
+        text = "a" * 4000  # ~1000 tokens
+        est = estimate_thinking_tokens(text)
+        assert 800 <= est <= 1200
+
+
+# ---------------------------------------------------------------------------
+# Test: BudgetForcing class (integration)
+# ---------------------------------------------------------------------------
+
+class TestBudgetForcingClass:
+
+    def test_format_chatml_nothink(self, bf_enabled):
+        prompt = bf_enabled.format_chatml("Solve this", "nothink")
+        assert "/nothink" in prompt
+        assert "<|im_start|>system" in prompt
+        assert "<|im_start|>user" in prompt
+        assert "Solve this" in prompt
+        assert prompt.endswith("<|im_start|>assistant\n")
+
+    def test_format_chatml_thinking(self, bf_enabled):
+        prompt = bf_enabled.format_chatml("Solve this", "hard")
+        assert "/nothink" not in prompt
+        assert "step by step" in prompt.lower()
+
+    def test_get_max_tokens_nothink(self, bf_enabled):
+        assert bf_enabled.get_max_tokens("nothink") == 16384
+
+    def test_get_max_tokens_tiers(self, bf_enabled):
+        assert bf_enabled.get_max_tokens("light") == 1024 + 4096
+        assert bf_enabled.get_max_tokens("standard") == 2048 + 4096
+        assert bf_enabled.get_max_tokens("hard") == 4096 + 4096
+        assert bf_enabled.get_max_tokens("extreme") == 8192 + 4096
+
+    def test_process_response_needs_injection(self, bf_enabled):
+        """Short thinking in 'hard' tier should trigger injection."""
+        response = "<think>Quick thought.</think>\ndef solve(): pass"
+        needs, continuation = bf_enabled.process_response(
+            response, tier="hard", actual_thinking_tokens=50
+        )
+        assert needs is True
+        assert continuation == "Quick thought."
+
+    def test_process_response_sufficient_thinking(self, bf_enabled):
+        """Long enough thinking should not trigger injection."""
+        response = "<think>Long analysis...</think>\ndef solve(): pass"
+        needs, continuation = bf_enabled.process_response(
+            response, tier="hard", actual_thinking_tokens=1500
+        )
+        assert needs is False
+        assert continuation is None
+
+    def test_process_response_nothink_tier(self, bf_enabled):
+        """Nothink tier never triggers injection."""
+        response = "<think>Short</think>\ncode"
+        needs, _ = bf_enabled.process_response(
+            response, tier="nothink", actual_thinking_tokens=5
+        )
+        assert needs is False
+
+    def test_process_response_estimates_tokens(self, bf_enabled):
+        """Without actual_thinking_tokens, estimates from text."""
+        # 100 chars ≈ 25 tokens → below standard threshold (512)
+        short_thinking = "x" * 100
+        response = f"<think>{short_thinking}</think>\ndef solve(): pass"
+        needs, _ = bf_enabled.process_response(response, tier="standard")
+        assert needs is True
+
+    def test_select_tier_enabled(self, bf_enabled):
+        """Enabled BudgetForcing selects by energy."""
+        assert bf_enabled.select_tier(raw_energy=2.0) == "nothink"
+        assert bf_enabled.select_tier(raw_energy=14.0) == "extreme"
+
+    def test_select_tier_no_energy_uses_default(self, bf_enabled):
+        assert bf_enabled.select_tier() == "standard"
+
+
+# ---------------------------------------------------------------------------
+# Test: Telemetry logging
+# ---------------------------------------------------------------------------
+
+class TestTelemetry:
+
+    def test_event_written_to_jsonl(self, bf_enabled, tmp_telemetry):
+        bf_enabled.log_event(
+            task_id="LCB_001",
+            tier="hard",
+            raw_energy=12.5,
+            normalized_energy=0.82,
+            thinking_tokens=2000,
+            wait_injections=1,
+            thinking_extended=True,
+            total_tokens=5000,
+        )
+        events_file = tmp_telemetry / "budget_forcing_events.jsonl"
+        assert events_file.exists()
+        lines = events_file.read_text().strip().split("\n")
+        assert len(lines) == 1
+        data = json.loads(lines[0])
+        assert data["task_id"] == "LCB_001"
+        assert data["tier"] == "hard"
+        assert data["raw_energy"] == 12.5
+        assert data["thinking_tokens"] == 2000
+        assert data["wait_injections"] == 1
+        assert data["thinking_extended"] is True
+
+    def test_multiple_events_appended(self, bf_enabled, tmp_telemetry):
+        for i in range(5):
+            bf_enabled.log_event(task_id=f"task_{i}", tier="standard")
+        events_file = tmp_telemetry / "budget_forcing_events.jsonl"
+        lines = events_file.read_text().strip().split("\n")
+        assert len(lines) == 5
+
+    def test_event_without_energy(self, bf_enabled, tmp_telemetry):
+        event = bf_enabled.log_event(task_id="test", tier="nothink")
+        data = event.to_dict()
+        assert "raw_energy" not in data
+        assert "normalized_energy" not in data
+
+    def test_no_telemetry_dir_no_crash(self):
+        """BudgetForcing without telemetry_dir should not crash on log."""
+        cfg = BudgetForcingConfig(enabled=True)
+        bf = BudgetForcing(cfg, telemetry_dir=None)
+        event = bf.log_event(task_id="test", tier="standard")
+        assert event.task_id == "test"
+
+
+# ---------------------------------------------------------------------------
+# Test: Budget tier definitions
+# ---------------------------------------------------------------------------
+
+class TestBudgetTierDefinitions:
+
+    def test_all_five_tiers_exist(self):
+        expected = {"nothink", "light", "standard", "hard", "extreme"}
+        assert set(BUDGET_TIERS.keys()) == expected
+
+    def test_thinking_budgets_increase(self):
+        order = ["nothink", "light", "standard", "hard", "extreme"]
+        for i in range(len(order) - 1):
+            assert (
+                BUDGET_TIERS[order[i]]["max_thinking"]
+                < BUDGET_TIERS[order[i + 1]]["max_thinking"]
+            )
+
+    def test_nothink_no_injection(self):
+        assert BUDGET_TIERS["nothink"]["inject_wait"] is False
+        assert BUDGET_TIERS["nothink"]["max_thinking"] == 0
+
+    def test_light_no_injection(self):
+        assert BUDGET_TIERS["light"]["inject_wait"] is False
+
+    def test_standard_hard_extreme_inject(self):
+        for tier in ["standard", "hard", "extreme"]:
+            assert BUDGET_TIERS[tier]["inject_wait"] is True
+            assert BUDGET_TIERS[tier]["wait_threshold"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Test: AC-1C-1 — Extends thinking by >=50%
+# ---------------------------------------------------------------------------
+
+class TestAC1C1ThinkingExtension:
+    """AC-1C-1: Budget forcing extends thinking by >=50% on early-termination."""
+
+    def test_wait_injection_extends_thinking(self, bf_enabled):
+        """Simulate: model stops at 200 tokens in 'hard' tier (threshold=1024).
+        After Wait injection, model continues. Final thinking should be >=50% more."""
+        # First response: 200 tokens of thinking (early termination)
+        needs, thinking = bf_enabled.process_response(
+            "<think>Short analysis of the problem.</think>\ndef solve(): pass",
+            tier="hard",
+            actual_thinking_tokens=200,
+        )
+        assert needs is True
+
+        # Simulate continuation: model adds more thinking after Wait
+        # In real usage, the runner would concatenate and re-call LLM
+        # Here we verify the mechanism detects early termination
+        # and that the continuation prompt structure is correct
+        original_prompt = bf_enabled.format_chatml("Solve X", "hard")
+        cont = build_continuation_prompt(original_prompt, thinking)
+        assert WAIT_INJECTION_TEXT in cont
+        # The continuation prompt should cause the model to produce more thinking
+        # Verification: if the model produces 300 more tokens, total = 500
+        # 500/200 = 2.5x = +150% >= 50% ✓
+
+    def test_multiple_injections_compound(self, bf_enabled):
+        """Multiple Wait injections should further extend thinking."""
+        # First: 100 tokens
+        needs1, t1 = bf_enabled.process_response(
+            "<think>First thought.</think>\ncode",
+            tier="extreme",
+            actual_thinking_tokens=100,
+        )
+        assert needs1 is True
+        # Second: 500 tokens (still below extreme threshold 2048)
+        needs2, t2 = bf_enabled.process_response(
+            "<think>First thought.\nWait, let me reconsider.\nMore thinking.</think>\ncode",
+            tier="extreme",
+            actual_thinking_tokens=500,
+        )
+        assert needs2 is True
+        # Third: 2100 tokens (above threshold)
+        needs3, _ = bf_enabled.process_response(
+            "<think>Very long analysis...</think>\ncode",
+            tier="extreme",
+            actual_thinking_tokens=2100,
+        )
+        assert needs3 is False
+
+
+# ---------------------------------------------------------------------------
+# Test: AC-1C-2 — HARD_PATH tasks >=5% improvement
+# (Offline validation — measured during benchmark, tested structurally here)
+# ---------------------------------------------------------------------------
+
+class TestAC1C2HardPathImprovement:
+    """AC-1C-2: Structural test that hard tier gets appropriate budget."""
+
+    def test_hard_tier_gets_4096_budget(self, bf_enabled):
+        """Hard tier should have 4096 thinking tokens — sufficient for complex reasoning."""
+        assert BUDGET_TIERS["hard"]["max_thinking"] == 4096
+
+    def test_extreme_tier_gets_8192_budget(self, bf_enabled):
+        """Extreme tier for hardest tasks gets maximum budget."""
+        assert BUDGET_TIERS["extreme"]["max_thinking"] == 8192
+
+    def test_high_energy_selects_extreme(self, bf_enabled):
+        """Tasks with FAIL-like energy should get maximum reasoning."""
+        tier = bf_enabled.select_tier(raw_energy=14.0)
+        assert tier == "extreme"
+
+
+# ---------------------------------------------------------------------------
+# Test: AC-1C-3 — Token injection does not corrupt output
+# ---------------------------------------------------------------------------
+
+class TestAC1C3NoCorrruption:
+    """AC-1C-3: Wait injection does not corrupt generation output."""
+
+    def test_continuation_prompt_well_formed(self, bf_enabled):
+        """Continuation prompt should be valid ChatML."""
+        prompt = bf_enabled.format_chatml("Solve: find max sum subarray", "hard")
+        cont = build_continuation_prompt(prompt, "I should use Kadane's algorithm")
+        # Must contain the original prompt structure
+        assert "<|im_start|>system" in cont
+        assert "<|im_start|>user" in cont
+        assert "<|im_start|>assistant" in cont
+        # Must have think block with the continuation
+        assert "<think>" in cont
+        assert "Kadane" in cont
+        assert WAIT_INJECTION_TEXT in cont
+        # Must NOT have premature end-of-turn
+        assert cont.count("<|im_end|>") == 2  # system + user only
+
+    def test_extract_thinking_preserves_code(self):
+        """Code after thinking should be extracted intact."""
+        code = "def solve(nums):\n    return max(nums)"
+        response = f"<think>Use max builtin.</think>\n{code}"
+        _, output = extract_thinking(response)
+        assert output == code
+
+
+# ---------------------------------------------------------------------------
+# Test: AC-1C-4 — Total thinking tokens within budget ±10%
+# ---------------------------------------------------------------------------
+
+class TestAC1C4TokenBudgetCompliance:
+    """AC-1C-4: Token budgets are correctly configured."""
+
+    def test_max_tokens_includes_output_buffer(self, bf_enabled):
+        """get_max_tokens adds 4096 output buffer to thinking budget."""
+        for tier_name, tier_config in BUDGET_TIERS.items():
+            max_tok = bf_enabled.get_max_tokens(tier_name)
+            if tier_name == "nothink":
+                assert max_tok == 16384
+            else:
+                assert max_tok == tier_config["max_thinking"] + 4096
+
+    def test_wait_threshold_below_max(self):
+        """Wait threshold must be strictly below max_thinking."""
+        for name, cfg in BUDGET_TIERS.items():
+            if cfg["inject_wait"]:
+                assert cfg["wait_threshold"] < cfg["max_thinking"], (
+                    f"{name}: wait_threshold ({cfg['wait_threshold']}) >= "
+                    f"max_thinking ({cfg['max_thinking']})"
+                )
+
+
+# ---------------------------------------------------------------------------
+# Test: AC-1C-5 — FAST_PATH (/nothink) no regression
+# ---------------------------------------------------------------------------
+
+class TestAC1C5NothinkNoRegression:
+    """AC-1C-5: /nothink mode matches V2 behavior exactly."""
+
+    def test_nothink_system_prompt_matches_v2(self):
+        """The nothink system prompt should match V2's exactly."""
+        prompt = get_system_prompt("nothink")
+        assert prompt == "You are an expert programmer. Respond directly and concisely. /nothink"
+
+    def test_nothink_chatml_matches_v2_format(self, bf_enabled):
+        """ChatML for nothink tier should produce identical format to V2 runner."""
+        user_content = "Write a function to sort a list"
+        chatml = bf_enabled.format_chatml(user_content, "nothink")
+        # V2 runner format from runner.py:_format_chatml()
+        expected = (
+            "<|im_start|>system\n"
+            "You are an expert programmer. Respond directly and concisely. /nothink"
+            "<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"{user_content}"
+            "<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+        assert chatml == expected
+
+    def test_nothink_max_tokens_matches_v2(self, bf_enabled):
+        """Nothink max tokens should match V2 default (16384)."""
+        assert bf_enabled.get_max_tokens("nothink") == 16384
+
+    def test_easy_tasks_use_nothink(self, bf_enabled):
+        """Easy tasks (low energy) should use nothink — same as V2."""
+        assert bf_enabled.select_tier(raw_energy=3.0) == "nothink"
+        assert bf_enabled.select_tier(raw_energy=5.0) == "nothink"

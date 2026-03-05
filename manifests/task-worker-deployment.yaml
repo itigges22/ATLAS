@@ -45,10 +45,10 @@ spec:
           value: "INFO"
         resources:
           limits:
-            memory: 2Gi
+            memory: 512Mi
             cpu: 2
           requests:
-            memory: 512Mi
+            memory: 128Mi
             cpu: 0.5
 ---
 apiVersion: v1

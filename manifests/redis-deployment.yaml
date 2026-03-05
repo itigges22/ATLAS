@@ -40,10 +40,10 @@ spec:
         - "allkeys-lru"
         resources:
           requests:
-            memory: "512Mi"
+            memory: "64Mi"
             cpu: "250m"
           limits:
-            memory: "4Gi"
+            memory: "512Mi"
             cpu: "1000m"
         volumeMounts:
         - name: redis-storage

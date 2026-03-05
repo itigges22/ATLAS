@@ -398,7 +398,7 @@ class BenchmarkRunner:
         max_tokens: int = 16384,
         error_context: str = None,
         seed: int = None,
-        cache_prompt: bool = True,
+        cache_prompt: bool = False,
         think: bool = False
     ) -> Tuple[str, int, float]:
         """

@@ -138,5 +138,10 @@ benchmark/result/
 v2_5_results/
 V2_5_RALPH_LOOP_PROMPT.md
 
+# ----- Ablation/benchmark result data (documented in reports, raw stays local) -----
+v3_ablation_results/
+v2_5_1_results/
+v2_5_1/
+
 # ----- Telemetry -----
 *.jsonl

@@ -26,7 +26,7 @@ spec:
         - name: LLAMA_URL
           value: "http://llama-service:8000"
         - name: LLAMA_EMBED_URL
-          value: "http://llama-embed-service:8000"
+          value: "http://llama-service:8000"
         - name: API_PORTAL_URL
           value: "http://api-portal:3000"
         - name: REDIS_HOST
@@ -51,10 +51,10 @@ spec:
           value: "true"
         resources:
           limits:
-            memory: 3Gi
+            memory: 1Gi
             cpu: 2
           requests:
-            memory: 1Gi
+            memory: 512Mi
             cpu: 0.5
         volumeMounts:
         - name: projects

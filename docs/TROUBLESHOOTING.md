@@ -1,6 +1,6 @@
-# ATLAS V2 Troubleshooting Guide
+# ATLAS Troubleshooting Guide
 
-This guide covers common issues and their solutions for the V2 deployment.
+This guide covers common issues and their solutions.
 
 ---
 
@@ -92,13 +92,13 @@ If you see this error, ensure `KV_CACHE_TYPE` is set in the llama-server deploym
 kubectl exec deployment/llama-server -n atlas -- nvidia-smi
 ```
 
-Typical V2 VRAM usage with Qwen3-14B-Q4_K_M + Qwen3-0.6B-Q8_0 draft + 2 slots:
+Typical VRAM usage with Qwen3-14B-Q4_K_M + Qwen3-0.6B-Q8_0 draft + self-embeddings (V3.0, `--parallel 1`):
 
 ```
-Memory: ~12,951 / 16,311 MiB (79.4%)
+Memory: ~14,400 / 16,311 MiB (88%)
 ```
 
-There is little headroom. Do not attempt to load additional models or increase context length without first checking available VRAM.
+There is very little headroom (~1,900 MiB). Do not attempt to load additional models or increase context length without first checking available VRAM.
 
 **Mitigation options:**
 
@@ -389,6 +389,42 @@ sudo firewall-cmd --list-all
    ```bash
    kubectl get svc -n atlas -o wide
    ```
+
+---
+
+## V3 Pipeline Issues
+
+### Self-Test Generation Returns Zero Cases
+
+**Symptom:** Phase 3 self-test generation produces 0 test cases, and the `reason` field in telemetry is empty.
+
+**Root cause:** The LLM callable strips thinking blocks (`<think>...</think>`) before the self-test parser can extract test cases from the response.
+
+**Fix (applied in V3.0):** Self-test generation uses raw ChatML responses that preserve the full model output. If you see this issue, ensure `benchmark/v3/self_test_gen.py` uses the raw response, not the post-processed output.
+
+### Budget Forcing /nothink Not Taking Effect
+
+**Symptom:** Model generates excessive thinking tokens despite Budget Forcing being enabled.
+
+**Root cause:** Budget Forcing's `process_response()` was not being called in the runner. The enforcement logic existed but was never wired into the generation pipeline.
+
+**Fix:** Ensure `benchmark/v3_runner.py` calls Budget Forcing enforcement in the LLM adapter. If a think block consumes the budget with minimal output, the adapter retries with `/nothink`.
+
+### Phase 3 Derivation Chains Producing Zero Rescues
+
+**Symptom:** Derivation chains decompose problems into sub-problems but none of the sub-problems verify in the sandbox.
+
+**Root cause:** LiveCodeBench competitive programming problems resist decomposition -- the sub-problems require the full solution context to be testable, and the SandboxAdapter ignores custom `test_case` for stdio mode tasks.
+
+**Impact:** Expected behavior for LCB. Derivation chains may be more effective on multi-function software engineering tasks. PR-CoT repair is the dominant Phase 3 rescue mechanism (85.7% of rescues).
+
+### Speculative Decoding + Self-Embeddings Conflict
+
+**Symptom:** 0% token acceptance rate when `--embeddings` and `--model-draft` are both enabled.
+
+**Root cause:** `--embeddings` forces `n_batch=512` on the main model, and `params_dft = params_base` copies `embedding=true` to the draft context.
+
+**Fix:** Use the patched llama-server image (`localhost/llama-server:v3-specdec`) which sets `params_dft.embedding = false`. Also requires `-b 4096 -ub 4096` (equal batch sizes) and no `--jinja` flag.
 
 ---
 

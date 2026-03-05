@@ -71,14 +71,16 @@ ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
 # Draft model for speculative decoding (leave empty to disable)
 ATLAS_DRAFT_MODEL="Qwen3-0.6B-Q8_0.gguf"
 
-# Context window size (tokens) — V2 default is 40960
+# Context window size (tokens)
+# V3 uses --parallel 1 with 16384 context; set higher if using --parallel 2
 ATLAS_CONTEXT_LENGTH=40960
 
 # GPU layers to offload (99 = all layers)
 ATLAS_GPU_LAYERS=99
 
-# Parallel inference slots (2 for V2 with 16GB VRAM)
-ATLAS_PARALLEL_SLOTS=2
+# Parallel inference slots
+# V3 requires --parallel 1 (VRAM too tight for 2 draft KV contexts with self-embeddings)
+ATLAS_PARALLEL_SLOTS=1
 
 # Flash attention (recommended for better performance)
 ATLAS_FLASH_ATTENTION=true
@@ -206,6 +208,107 @@ ATLAS_LOG_REQUESTS=true
 # Set these if using reverse proxy/ingress
 ATLAS_EXTERNAL_URL=""
 ATLAS_API_EXTERNAL_URL=""
+
+#-------------------------------------------
+# V3 Pipeline — Phase Toggles
+#-------------------------------------------
+# Enable/disable entire V3 phases
+ATLAS_V3_PHASE1_ENABLED=true
+ATLAS_V3_PHASE2_ENABLED=true
+ATLAS_V3_PHASE3_ENABLED=true
+
+#-------------------------------------------
+# V3 Phase 1: Constraint-Driven Generation
+#-------------------------------------------
+# Budget Forcing (1C) — Controls thinking token budget per difficulty
+ATLAS_V3_BUDGET_FORCING_ENABLED=true
+ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER="standard"
+ATLAS_V3_BUDGET_FORCING_MAX_WAIT_INJECTIONS=3
+
+# PlanSearch (1A) — Constraint-guided plan generation
+ATLAS_V3_PLAN_SEARCH_ENABLED=true
+ATLAS_V3_PLAN_SEARCH_NUM_PLANS=3
+
+# DivSampling (1B) — Prompt diversity perturbations
+ATLAS_V3_DIV_SAMPLING_ENABLED=true
+
+#-------------------------------------------
+# V3 Phase 2: Adaptive Compute Allocation
+#-------------------------------------------
+# Blend-ASC (2A) — Adaptive K allocation based on Lens energy
+ATLAS_V3_BLEND_ASC_ENABLED=true
+ATLAS_V3_BLEND_ASC_DEFAULT_K=3
+
+# ReASC (2B) — Early stopping on easy/confident tasks
+ATLAS_V3_REASC_ENABLED=true
+ATLAS_V3_REASC_CONFIDENCE_THRESHOLD=-0.5
+ATLAS_V3_REASC_ENERGY_THRESHOLD=0.10
+
+# S* Tiebreaking (2C) — Edge-case candidate comparison
+ATLAS_V3_S_STAR_ENABLED=true
+ATLAS_V3_S_STAR_ENERGY_DELTA=1.0
+
+#-------------------------------------------
+# V3 Phase 3: Verified Iterative Refinement
+#-------------------------------------------
+# Failure Analysis (3A) — Categorize why candidates fail
+ATLAS_V3_FAILURE_ANALYSIS_ENABLED=true
+
+# Constraint Refinement (3B) — Refine constraints from failures
+ATLAS_V3_CONSTRAINT_REFINEMENT_ENABLED=true
+
+# PR-CoT Repair (3C) — Multi-perspective quick repair
+ATLAS_V3_PR_COT_ENABLED=true
+ATLAS_V3_PR_COT_MAX_ROUNDS=2
+
+# Derivation Chains (3D) — Verified sub-problem decomposition
+ATLAS_V3_DERIVATION_CHAINS_ENABLED=true
+
+# Refinement Loop (3E) — Full analyze→refine→generate→test cycle
+ATLAS_V3_REFINEMENT_LOOP_ENABLED=true
+ATLAS_V3_REFINEMENT_LOOP_MAX_ITERATIONS=5
+ATLAS_V3_REFINEMENT_LOOP_TIME_BUDGET_SEC=300
+
+# Metacognitive Model (3F) — Category-specific failure patterns
+ATLAS_V3_METACOGNITIVE_ENABLED=true
+
+# ACE Playbooks (3G) — Evolving persistent context
+ATLAS_V3_ACE_ENABLED=true
+
+# Self-Test Generation (Internal Verification)
+ATLAS_V3_SELF_TEST_ENABLED=true
+ATLAS_V3_SELF_TEST_NUM_CASES=5
+ATLAS_V3_SELF_TEST_MAJORITY_THRESHOLD=0.6
+
+#-------------------------------------------
+# V3 Phase 4: Lens Evolution
+#-------------------------------------------
+# Replay Buffer (4A-CL) — Domain-stratified experience replay
+ATLAS_V3_REPLAY_BUFFER_ENABLED=true
+ATLAS_V3_REPLAY_BUFFER_MAX_SIZE=5000
+ATLAS_V3_REPLAY_BUFFER_REPLAY_RATIO=0.30
+
+# EWC (4A-EWC) — Elastic Weight Consolidation
+ATLAS_V3_EWC_ENABLED=true
+ATLAS_V3_EWC_LAMBDA=1000.0
+
+# Lens Feedback Loop — Online recalibration during benchmarks
+ATLAS_V3_LENS_FEEDBACK_ENABLED=false
+ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL=50
+ATLAS_V3_LENS_FEEDBACK_DOMAIN="LCB"
+
+#-------------------------------------------
+# Cache Manager — Proactive llama-server memory management
+#-------------------------------------------
+# Two-tier system: slot erase (fast, no downtime) + pod restart (slow, ~90s)
+# Run: python3 scripts/llama-cache-manager.py --daemon
+ATLAS_CACHE_MANAGER_ENABLED=true
+ATLAS_CACHE_MANAGER_SOFT_THRESHOLD_MB=8192
+ATLAS_CACHE_MANAGER_HARD_THRESHOLD_MB=10240
+ATLAS_CACHE_MANAGER_CHECK_INTERVAL_SEC=30
+ATLAS_CACHE_MANAGER_ERASE_COOLDOWN_SEC=60
+ATLAS_CACHE_MANAGER_RESTART_COOLDOWN_SEC=300
+ATLAS_CACHE_MANAGER_WARMUP_ENABLED=true
 
 #-------------------------------------------
 # Advanced (usually don't change)

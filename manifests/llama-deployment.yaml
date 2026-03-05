@@ -27,7 +27,7 @@ spec:
       runtimeClassName: nvidia
       containers:
       - name: llama
-        image: localhost/llama-server:latest
+        image: localhost/llama-server:v3-specdec
         imagePullPolicy: Never
         ports:
         - containerPort: 8000
@@ -39,7 +39,7 @@ spec:
         - name: GPU_LAYERS
           value: "99"
         - name: PARALLEL_SLOTS
-          value: "2"
+          value: "1"
         - name: DRAFT_MODEL
           value: "/models/Qwen3-0.6B-Q8_0.gguf"
         # PCIe transfer optimization: enable pinned (page-locked) host memory
@@ -60,7 +60,7 @@ spec:
         resources:
           limits:
             nvidia.com/gpu: 1
-            memory: 16Gi
+            memory: 10Gi
             cpu: 4
           requests:
             memory: 8Gi
@@ -75,25 +75,8 @@ spec:
           subPath: entrypoint.sh
         - name: templates
           mountPath: /templates
-      # Sidecar: nomic-embed-text-v1.5 embedding server (shares pod GPU)
-      - name: llama-embed
-        image: localhost/llama-server:latest
-        imagePullPolicy: Never
-        ports:
-        - containerPort: 8001
-        resources:
-          limits:
-            memory: 2Gi
-            cpu: 1
-          requests:
-            memory: 512Mi
-            cpu: 100m
-        volumeMounts:
-        - name: models
-          mountPath: /models
-        - name: entrypoint
-          mountPath: /entrypoint.sh
-          subPath: entrypoint-embed.sh
+      # Nomic sidecar REMOVED — V3 uses self-embeddings from main model (5120-dim via --embeddings)
+      # Saves ~286MB VRAM for spec decode draft model
       volumes:
       - name: models
         hostPath:

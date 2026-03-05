@@ -1,6 +1,6 @@
-# ATLAS V2 Setup Guide
+# ATLAS Setup Guide
 
-This guide covers installation and configuration of ATLAS V2. The V2 architecture removes the Qdrant vector database and standalone embedding service in favor of PageIndex (AST-based tree indexing with BM25) and llama-server's built-in embedding endpoint.
+This guide covers installation and configuration of ATLAS. The architecture removes the Qdrant vector database and standalone embedding service in favor of PageIndex (AST-based tree indexing with BM25) and llama-server's built-in embedding endpoint.
 
 ---
 
@@ -73,11 +73,11 @@ ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
 # Draft model for speculative decoding
 ATLAS_DRAFT_MODEL="Qwen3-0.6B-Q8_0.gguf"
 
-# Context window (V2 default)
+# Context window
 ATLAS_CONTEXT_LENGTH=40960
 
-# Parallel inference slots
-ATLAS_PARALLEL_SLOTS=2
+# Parallel inference slots (V3 requires 1 for VRAM headroom with self-embeddings)
+ATLAS_PARALLEL_SLOTS=1
 
 # GPU layers (99 = full offload)
 ATLAS_GPU_LAYERS=99
@@ -119,7 +119,7 @@ kubectl get pods -n atlas
 
 ### Expected Pods
 
-The V2 deployment runs these pods:
+The deployment runs these pods:
 
 ```
 NAME                           READY   STATUS    RESTARTS   AGE
@@ -165,6 +165,34 @@ Expected results on RTX 5060 Ti with Qwen3-14B-Q4_K_M:
 |--------|---------------|
 | LiveCodeBench pass@1 | 36-41% |
 | Throughput | ~109 tasks/hr |
+
+For V3 results (74.6% LCB), see the V3 benchmark section below.
+
+### Run the V3 Benchmark
+
+```bash
+# Full V3 pipeline (all 599 LCB tasks)
+python3 benchmark/v3_runner.py
+
+# Quick smoke test (10 tasks)
+python3 benchmark/v3_runner.py --smoke
+
+# Limit to N tasks
+python3 benchmark/v3_runner.py --max-tasks 50
+```
+
+Expected results on RTX 5060 Ti with Qwen3-14B-Q4_K_M (V3 pipeline):
+
+| Metric | Expected Range |
+|--------|---------------|
+| LiveCodeBench pass@1 | 74-75% |
+| Phase 1 pass rate | ~67% |
+| Phase 3 rescue rate | ~21% of Phase 1 failures |
+
+V3 prerequisites:
+- Self-embeddings enabled (patched llama-server with `--embeddings`)
+- Sandbox service running for code execution
+- V3 config sections enabled in `atlas.conf` (all enabled by default)
 
 ---
 

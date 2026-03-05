@@ -2,152 +2,93 @@
 ![Python](https://img.shields.io/badge/python-3.10+-green)
 ![K8s](https://img.shields.io/badge/platform-K3s%20%7C%20K8s-blue)
 ![GPU](https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-green)
-![Status](https://img.shields.io/badge/status-v2.5-orange)
+![Status](https://img.shields.io/badge/status-v3.0-blue)
 
 # A.T.L.A.S
 
 **Adaptive Test-time Learning and Autonomous Specialization**
 
-A.T.L.A.S achieves 36-41% LiveCodeBench pass@1 with a frozen 14B model on a single consumer GPU through intelligent test-time compute allocation. No fine-tuning, no API calls, no cloud -- just a $500 GPU and smart inference.
+A.T.L.A.S achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a single consumer GPU -- up from 36-41% in V2 -- through constraint-driven generation and self-verified iterative refinement. No fine-tuning, no API calls, no cloud -- just a $500 GPU and smart inference.
 
 ---
 
 ## Benchmark Results
 
-> Run ID: `v2_run_20260217_125310` | Hardware: RTX 5060 Ti 16GB | Throughput: 109 tasks/hr
+> Hardware: RTX 5060 Ti 16GB | Model: Qwen3-14B-Q4_K_M (frozen)
 
 | Benchmark | Score | Tasks | Method |
 |-----------|-------|-------|--------|
-| **LiveCodeBench v5** | **36-41% pass@1** | 599 | k=3, Geometric Lens selection, 4 epochs |
+| **LiveCodeBench v5** | **74.6% pass@1** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair |
 | **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning |
 | **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding |
 
-Single run, not averaged. LCB range reflects epoch 0-3 of Lens retraining, not a confidence interval.
-
 <details>
-<summary><b>Lens learning curve (LiveCodeBench, k=3)</b></summary>
+<summary><b>V3 ablation breakdown</b></summary>
 
-| Epoch | Tasks | Pass Rate | First-Pick Accuracy | Energy Gap |
-|-------|-------|-----------|---------------------|------------|
-| 0 (baseline, no Lens) | 100 | 36.0% | n/a | n/a |
-| 1 (1st retrain) | 200 | 38.0% | 82.9% | 5.3 |
-| 2 (2nd retrain) | 200 | 35.5% | 78.9% | 11.5 |
-| 3 (3rd retrain) | 99 | 41.4% | 78.0% | 11.3 |
+| Condition | Configuration | Pass Rate | Delta |
+|-----------|---------------|-----------|-------|
+| A | Baseline (no V3) | 54.9% | -- |
+| B | +Phase 1 (PlanSearch + BudgetForcing + DivSampling) | 67.3% | +12.4pp |
+| C | +Phase 1+2 (Lens routing) | 67.3% | +0.0pp |
+| D | +Phase 1+3 (self-verified refinement) | **74.6%** | +7.3pp |
 
-First-pick accuracy = how often the Lens's lowest-energy candidate actually passes. The energy gap between pass and fail candidates doubled after retraining (5.3 to 11.3), showing the Lens learned to separate passing from failing code. Val AUC reached 0.968 at epoch 3.
-
-**Note**: The V2.5 ablation study found that under 768-dim nomic embeddings, C(x) was statistically indistinguishable from random selection (37.7% vs 37.1%). **V2.5.1 confirmed this was an embedding source limitation**, not an architecture failure. With Qwen3-14B self-embeddings (5120-dim), C(x) selects correctly **87.8% of the time** on mixed-result tasks vs 48.3% random (**+39.5pp**, p < 0.000001). The Lens requires the model's own internal representations to discriminate candidates.
-
-> **V2.5.1 Result (2026-02-23)**: Self-embeddings restore full discrimination. C(x) is a verified candidate verifier AND difficulty router. G(x) metric tensor contributes zero value and will be removed. See [V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) for the full confirmation ablation report.
-
-</details>
-
-<details>
-<summary><b>V2.5 Ablation Study + V2.5.1 Confirmation</b></summary>
-
-A systematic ablation (2026-02-21) tested whether the Geometric Lens C(x) energy scoring provides real candidate selection value beyond diversity. Under 768-dim nomic embeddings, Lens scoring was statistically indistinguishable from random selection (37.7% vs 37.1%, +0.6pp within 3.4pp seed variance).
-
-> **✅ V2.5.1 CONFIRMED (2026-02-23)**: This result was caused by the embedding source switch, not the Lens architecture. With Qwen3-14B self-embeddings (5120-dim), **C(x) selects correctly 87.8% of the time** on mixed-result tasks vs 48.3% random (**+39.5pp**, p < 0.000001). Reverse energy selects only 4.3%, proving a strong directional signal. The Lens is a verified candidate discriminator — it just needs the model's own internal representations.
-
-| Metric | V2.5 (nomic 768-dim) | V2.5.1 (self 5120-dim) |
-|--------|---------------------|------------------------|
-| Selection accuracy (mixed tasks) | 37.7% | **87.8%** |
-| Selection - Random delta | +0.6pp | **+39.5pp** |
-| Energy separation (PASS - FAIL) | ~3.0 | **21.75** |
-| G(x) metric tensor value | dormant | **zero** (0.0pp at any alpha) |
-
-The V2.5 study also discovered that llama.cpp's `--embeddings` flag silently breaks speculative decoding (forcing n_batch=512). This led to a two-server sidecar architecture: generation with spec decode (~100 tok/s) on the main server, embeddings via nomic sidecar (~300 MiB VRAM). C(x) energy is confirmed as both a **candidate verifier** (87.8% selection accuracy) and **difficulty router** (Q1=100% solvable, Q4=0.3%).
-
-Full results: [V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md) | Architecture change: [V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)
+Phase 3 uses self-generated test cases for internal verification -- the model never sees the answer key during repair. PR-CoT rescues 36/42 tasks (85.7% of Phase 3 rescues). Full report: [V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)
 
 </details>
 
 ---
 
-## Architecture
+## How It Works
 
 ```mermaid
-flowchart TB
-  subgraph Input
-    Problem[Coding Problem]
+flowchart LR
+  subgraph Phase1["Phase 1: Generate"]
+    PS[PlanSearch<br/>Constraint extraction<br/>+ diverse plans]
+    BF[Budget Forcing<br/>Thinking token<br/>control]
   end
 
-  subgraph Routing["Confidence Router"]
-    DE[Difficulty Estimator<br/>Weights: 0.30 / 0.25 / 0.20 / 0.25]
-    AK[Adaptive-k Selection<br/>CACHE_HIT k=0 / FAST k=1<br/>STANDARD k=5 / HARD k=20]
+  subgraph Verify["Score + Test"]
+    GL[Geometric Lens<br/>C x energy scoring<br/>5120-dim self-embeddings]
+    SB[Sandbox<br/>Code execution]
   end
 
-  subgraph Generation["Best-of-K Pipeline"]
-    LS[Server A: llama-server<br/>Qwen3-14B-Q4_K_M<br/>+ Qwen3-0.6B Draft<br/>Spec decode ON]
-    EM[Server B: Embeddings<br/>nomic-embed-text-v1.5<br/>768-dim]
-    PC[Pattern Cache<br/>Redis + Ebbinghaus Decay]
+  subgraph Phase3["Phase 3: Repair"]
+    ST[Self-Test Gen<br/>Model-generated<br/>I/O pairs]
+    PR[PR-CoT Repair<br/>Multi-perspective<br/>chain-of-thought]
   end
 
-  subgraph Evaluation["Candidate Selection"]
-    GL[Geometric Lens<br/>Energy-based scoring<br/>Cost Field C x ~0.5M params]
-    SB[Sandbox<br/>Code Execution + Testing]
-  end
-
-  subgraph Knowledge["Context Retrieval"]
-    PI[PageIndex RAG<br/>Tree Index + LLM Reasoning]
-  end
-
-  Problem --> DE
-  DE --> AK
-  AK --> LS
-  PC -.->|strategy hints| LS
-  PI -.->|relevant context| LS
-  LS -->|k candidates| GL
-  EM -->|768-dim embeddings| GL
-  GL -->|sorted by energy| SB
-  SB -->|result + feedback| PC
+  PS --> BF
+  BF -->|k=3 candidates| GL
+  GL -->|energy-sorted| SB
+  SB -->|all fail| ST
+  ST --> PR
+  PR -->|repaired code| SB
 
   style GL fill:#2d5016,color:#fff
-  style LS fill:#1a3a5c,color:#fff
-  style EM fill:#1a3a5c,color:#fff
-  style DE fill:#5c3a1a,color:#fff
+  style PS fill:#1a3a5c,color:#fff
+  style BF fill:#1a3a5c,color:#fff
+  style SB fill:#2d5016,color:#fff
+  style ST fill:#5c3a1a,color:#fff
+  style PR fill:#5c3a1a,color:#fff
 ```
 
-A.T.L.A.S runs entirely on K3s with a single GPU. The **Confidence Router** estimates task difficulty from 4 signals and selects how many candidates to generate (k=0 to k=20). The **Best-of-K Pipeline** generates candidates via speculative decoding (~100 tok/s), scores them with the **Geometric Lens** energy field, and tests them in an isolated **Sandbox** with early exit on first pass. A **Pattern Cache** with Ebbinghaus memory decay stores successful strategies for future routing.
+A single patched llama-server runs on K3s, providing both generation with speculative decoding (~100 tok/s) and 5120-dim self-embeddings for Lens scoring. The **Geometric Lens** C(x) energy field selects the best candidate (87.8% accuracy on mixed-result tasks). Failed tasks enter Phase 3, where the model generates its own test cases and iteratively repairs solutions via PR-CoT -- real tests are used only for final scoring.
 
-The system also includes an optional **MaaS layer** (API Portal + LLM Proxy) for multi-user access with JWT auth, API key management, and rate limiting.
-
-Full architecture details: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
-
----
-
-## The Geometric Lens
-
-The Lens implements an ARM-EBM (Adaptive Riemannian Metric / Energy-Based Model) duality. A cost field C(x) maps code embeddings to scalar energy: passing code concentrates near energy 2.99, failing code near 24.73 (under self-embeddings; V2.5.1 results).
-
-| | |
-|---|---|
-| **Candidate verifier** | With 5120-dim self-embeddings, C(x) selects the passing candidate **87.8% of the time** on mixed-result tasks (+39.5pp vs random, p < 0.000001). Val AUC 0.9934. Reverse energy selects only 4.3%, proving a strong directional signal. |
-| **Difficulty router** | C(x) energy perfectly stratifies task difficulty: Q1 (low energy) = 100% solvable, Q4 (high energy) = 0.3%. Dual use as verifier + router validated. |
-| **Embedding source matters** | Under 768-dim nomic embeddings (V2.5), C(x) ≈ random (+0.6pp). V2.5.1 confirmed this was an embedding source limitation — the Lens requires the model's own internal representations. |
-
-G(x) metric tensor contributes zero value at any correction strength and will be removed or redesigned for V3 (5.2M parameters, 0.0pp net contribution).
+Full architecture: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Clone
 git clone https://github.com/itigges22/A.T.L.A.S.git && cd A.T.L.A.S
 
-# 2. Configure
-cp A.T.L.A.S.conf.example A.T.L.A.S.conf
-# Edit A.T.L.A.S.conf: set MODEL_PATH, DATA_DIR, GPU device
-
-# 3. Install
+cp atlas.conf.example atlas.conf    # set MODEL_PATH, DATA_DIR, GPU device
 sudo ./scripts/install.sh
-
-# 4. Verify
 ./scripts/verify-install.sh
 
-# 5. Run benchmark
-benchmark/run_v2_benchmark.sh
+# Run V3 benchmark
+python3 benchmark/v3_runner.py
 ```
 
 See **[docs/SETUP.md](docs/SETUP.md)** for full installation instructions.
@@ -158,10 +99,9 @@ See **[docs/SETUP.md](docs/SETUP.md)** for full installation instructions.
 
 | Resource | Minimum | Tested |
 |----------|---------|--------|
-| Python | 3.10+ | 3.11 |
 | GPU VRAM | 16 GB | RTX 5060 Ti 16 GB |
 | System RAM | 14 GB | 16 GB |
-| Storage | ~20 GB | 150 GB SSD |
+| Python | 3.10+ | 3.11 |
 | OS | RHEL 9 / Ubuntu 24 | RHEL 9 (Proxmox VM) |
 
 ---
@@ -169,15 +109,16 @@ See **[docs/SETUP.md](docs/SETUP.md)** for full installation instructions.
 ## Project Structure
 
 ```
-api-portal/      API key management portal (JWT auth, web UI)
-benchmark/       V2 benchmark suite (LCB, GPQA, SciCode, Custom, IFBench)
-docs/            Architecture, setup, configuration, troubleshooting
+benchmark/       Benchmark suite (V2 runner, V3 pipeline, datasets)
+benchmark/v3/    V3 subsystems (16 modules: PlanSearch, BudgetForcing, PR-CoT, etc.)
+rag-api/         Core API: Geometric Lens, confidence router, RAG, cache
+llama-server/    Patched llama.cpp server (spec decode + self-embeddings)
 manifests/       K3s deployment manifests
-rag-api/         Core API: Geometric Lens, router, RAG, cache
-llama-server/    llama.cpp server container
-A.T.L.A.S/sandbox/   Isolated code execution environment
 scripts/         Installation and management scripts
-tests/           Test suite
+tests/           Test suite (infrastructure, integration, V3)
+docs/            Architecture, setup, configuration, troubleshooting
+api-portal/      API key management portal (JWT auth, web UI)
+sandbox/         Isolated code execution environment
 ```
 
 ---
@@ -186,29 +127,30 @@ tests/           Test suite
 
 | Document | Description |
 |----------|-------------|
-| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Full system architecture, component deep-dives, data flows |
-| **[V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md)** | Geometric Lens ablation results and analysis |
-| **[V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)** | Two-server sidecar migration details |
+| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | System architecture, component deep-dives, data flows |
+| **[V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)** | V3 ablation results and phase contribution analysis |
 | **[SETUP.md](docs/SETUP.md)** | Installation and deployment guide |
-| **[CONFIGURATION.md](docs/CONFIGURATION.md)** | Configuration reference |
-| **[API.md](docs/API.md)** | API endpoint documentation |
+| **[CONFIGURATION.md](docs/CONFIGURATION.md)** | Configuration reference (including all V3 toggles) |
 | **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
+| **[API.md](docs/API.md)** | API endpoint documentation |
+
+<details>
+<summary><b>Historical documentation</b></summary>
+
+| Document | Description |
+|----------|-------------|
+| **[V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md)** | V2.5 Geometric Lens ablation (embedding source discovery) |
+| **[V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)** | V2 to V2.5 two-server sidecar migration and V3 restoration |
+
+</details>
 
 ---
 
 ## Roadmap
 
-### V2.5.1 — Embedding Source Hypothesis (CONFIRMED, 2026-02-23)
+**V3.0** -- Complete (2026-03-05). 74.6% LCB pass@1 on frozen Qwen3-14B. [Full ablation report](docs/V3_ABLATION_STUDY.md).
 
-V2.5.1 confirmed that the V2.5 finding (Lens ≈ random) was caused by the embedding source switch from self-embeddings to nomic, not a Lens architecture failure.
-
-- **Result**: C(x) selects correctly **87.8%** on mixed tasks (+39.5pp vs random, p < 0.000001) with 5120-dim self-embeddings
-- **G(x)**: Zero value at any alpha. Remove or fundamentally redesign.
-- **Next step**: Restore self-embeddings in production while maintaining spec decode throughput
-
-### V3 — Performance Target
-
-V3 targets 70%+ LiveCodeBench through C(x) candidate verification (87.8% accuracy), test synthesis for the remaining 12.2%, and difficulty-adaptive routing. The core thesis: a frozen model with the right selection and routing infrastructure can match models 10x its size. V2.5.1 resolved the blocking dependency — the Lens is the verifier, and V3 Phase 4 builds a test synthesis module for cases beyond C(x)'s ceiling.
+**V3.1** -- Planned. Model swap to Qwen3.5-9B, Lens Evolution (online C(x) recalibration), Phase 2 redesign. Target: 80-90% LCB pass@1.
 
 ---
 

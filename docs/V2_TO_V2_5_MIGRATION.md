@@ -186,3 +186,28 @@ The sidecar approach has the secondary benefit of using a purpose-built embeddin
 | Service (gen) | `llama-service` | NodePort 32735 -> pod port 8000 |
 | Service (embed) | `llama-embed-service` | NodePort 32736 -> pod port 8001 |
 | rag-api env | `LLAMA_EMBED_URL=http://llama-embed-service:8000` | Embedding routing |
+
+---
+
+## 7. V2.5 to V3.0: Self-Embeddings Restored
+
+V3.0 resolves the embedding source tension described in Section 5 by patching llama.cpp directly.
+
+**The fix**: A one-line patch in `tools/server/server-context.cpp` sets `params_dft.embedding = false`, preventing `--embeddings` from poisoning the draft model context. This allows a single llama-server to run spec decode + self-embeddings simultaneously.
+
+**What changed**:
+
+| Aspect | V2.5 (Two-Server Sidecar) | V3.0 (Single Patched Server) |
+|--------|---------------------------|-------------------------------|
+| **Servers** | 2 containers (gen + embed) | 1 container (patched llama-server) |
+| **Embedding model** | nomic-embed-text-v1.5 (768-dim) | Qwen3-14B self-embeddings (5120-dim) |
+| **Spec decode** | Working (Server A only) | Working (same server, patched) |
+| **VRAM** | ~12,720 MiB (78%) | ~14,400 MiB (88%) |
+| **Lens accuracy** | ~random (nomic) | 87.8% selection (self-embeddings) |
+| **LCB pass@1** | 36-41% (V2) | **74.6%** (V3 pipeline) |
+
+**Patch details**: `llama-server/Dockerfile` applies the sed patch during build. `llama-server/patches/` contains the patch file. Entrypoint: `entrypoint-v3-specdec.sh`.
+
+**Batch sizes**: Must use `-b 4096 -ub 4096` (equal batch sizes) to avoid n_batch clamp from `--embeddings`. The `--jinja` flag is also removed (breaks spec decode via tokenization mismatch).
+
+**VRAM constraint**: `--parallel 1` required (2 draft KV contexts = 2x896 MiB would exceed budget).
