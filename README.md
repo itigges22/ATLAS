@@ -81,7 +81,7 @@ Full architecture: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 ## Quick Start
 
 ```bash
-git clone https://github.com/itigges22/A.T.L.A.S.git && cd A.T.L.A.S
+git clone https://github.com/itigges22/ATLAS.git && cd ATLAS
 
 cp atlas.conf.example atlas.conf    # set MODEL_PATH, DATA_DIR, GPU device
 sudo ./scripts/install.sh
