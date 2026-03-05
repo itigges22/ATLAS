@@ -18,9 +18,11 @@ A.T.L.A.S achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a s
 
 | Benchmark | Score | Tasks | Method |
 |-----------|-------|-------|--------|
-| **LiveCodeBench v5** | **74.6% pass@1** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair |
+| **LiveCodeBench v5** | **74.6% pass@1*** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair |
 | **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning |
 | **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding |
+
+\*pass@1 = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation. See [methodology](docs/V3_ABLATION_STUDY.md#2-methodology).
 
 <details>
 <summary><b>V3 ablation breakdown</b></summary>
@@ -150,7 +152,7 @@ sandbox/         Isolated code execution environment
 
 **V3.0** -- Complete (2026-03-05). 74.6% LCB pass@1 on frozen Qwen3-14B. [Full ablation report](docs/V3_ABLATION_STUDY.md).
 
-**V3.1** -- Planned. Model swap to Qwen3.5-9B, Lens Evolution (online C(x) recalibration), Phase 2 redesign. Target: 80-90% LCB pass@1.
+**V3.1** -- Planned. Model swap to Qwen3.5-9B (native multi-token prediction), Lens Evolution (online C(x) recalibration), Phase 2 redesign, and pipeline speed optimization (current V3 pipeline is compute-heavy due to best-of-3 + repair). Target: 80-90% LCB pass@1 with faster per-task throughput.
 
 ---
 

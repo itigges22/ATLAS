@@ -9,7 +9,9 @@ and 36-41% V2 baseline. The ablation isolates contributions from each V3 phase:
 - **Phase 2** (Intelligent Compute / Lens Routing) provides **+0.0pp** — ineffective in its current form.
 - **Phase 3** (Self-Verified Iterative Refinement) adds **+7.3pp**, rescuing 42 of 194 Phase 1 failures.
 
-Total improvement over V2: **+33 percentage points** (41% to 74.6%).
+Total improvement over V3 baseline: **+19.7 percentage points** (54.9% to 74.6%).
+Total improvement over V2: **+33pp** (41% to 74.6%), of which ~13pp comes from infrastructure
+fixes between V2 and V3 (temperature tuning, ChatML fixes, prompt refinements).
 
 ## 2. Methodology
 
@@ -31,6 +33,20 @@ Total improvement over V2: **+33 percentage points** (41% to 74.6%).
 | Tasks | 599 |
 | Evaluation | stdio (stdin/stdout pairs) |
 | Metric | pass@1 |
+
+### What "pass@1" Means Here
+
+We report pass@1 — one solution submitted per task, scored pass/fail — but the generation
+process behind that single submission is not single-shot. The V3 pipeline generates **k=3
+candidates** per task, selects the best via Geometric Lens energy scoring, and if all
+candidates fail, attempts iterative repair via Phase 3 (PR-CoT with self-generated tests).
+The final submitted solution is either the best Phase 1 candidate or a Phase 3 repaired
+solution.
+
+This is comparable to other systems that use best-of-k, majority voting, or multi-turn
+refinement before submitting, but it is **not** equivalent to single-generation pass@1
+(k=1, no selection, no repair). For reference, our single-generation baseline (Condition A)
+achieves 54.9%.
 
 ### Ablation Design
 
@@ -256,6 +272,7 @@ through the sandbox).
 | Lens Evolution (Phase 4) | Online C(x) recalibration during benchmark runs via replay buffer + EWC | Better routing accuracy over time |
 | Phase 2 redesign | S* needs stdio-compatible distinguishing input generation | Unlock the +0.0pp gap — potential for additional gains |
 | Derivation chain removal | Replace with alternative repair strategy or remove entirely | Reduce wasted compute on LCB tasks |
-| Target | 80-90% LCB pass@1 | |
+| Pipeline speed optimization | Reduce per-task latency (current V3 is compute-heavy: best-of-3 + Lens + repair) | Faster end-to-end benchmark runs |
+| Target | 80-90% LCB pass@1 with improved throughput | |
 
 Full ablation data: `v3_ablation_results/`
