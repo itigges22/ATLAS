@@ -153,21 +153,6 @@ curl http://localhost:30080/health
 curl http://localhost:30820/health
 ```
 
-### Run the V2 Benchmark
-
-```bash
-./benchmark/run_v2_benchmark.sh
-```
-
-Expected results on RTX 5060 Ti with Qwen3-14B-Q4_K_M:
-
-| Metric | Expected Range |
-|--------|---------------|
-| LiveCodeBench pass@1 | 36-41% |
-| Throughput | ~109 tasks/hr |
-
-For V3 results (74.6% LCB), see the V3 benchmark section below.
-
 ### Run the V3 Benchmark
 
 ```bash
@@ -193,6 +178,19 @@ V3 prerequisites:
 - Self-embeddings enabled (patched llama-server with `--embeddings`)
 - Sandbox service running for code execution
 - V3 config sections enabled in `atlas.conf` (all enabled by default)
+
+### Run the V2 Benchmark (Historical)
+
+```bash
+./benchmark/run_v2_benchmark.sh
+```
+
+Expected results on RTX 5060 Ti with Qwen3-14B-Q4_K_M:
+
+| Metric | Expected Range |
+|--------|---------------|
+| LiveCodeBench pass@1 | 36-41% |
+| Throughput | ~109 tasks/hr |
 
 ---
 

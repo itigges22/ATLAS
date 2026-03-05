@@ -103,8 +103,8 @@ There is very little headroom (~1,900 MiB). Do not attempt to load additional mo
 **Mitigation options:**
 
 1. Reduce context length: `ATLAS_CONTEXT_LENGTH=32768` (saves ~1-2 GB)
-2. Reduce to 1 parallel slot: `ATLAS_PARALLEL_SLOTS=1` (saves one KV cache allocation)
-3. Disable speculative decoding: unset `DRAFT_MODEL` (saves ~600 MiB)
+2. Disable speculative decoding: unset `DRAFT_MODEL` (saves ~600 MiB)
+3. Disable self-embeddings: set `ENABLE_EMBEDDINGS=false` (frees KV overhead, but disables Geometric Lens)
 4. Use a more aggressively quantized model (Q3_K_M instead of Q4_K_M)
 
 ---

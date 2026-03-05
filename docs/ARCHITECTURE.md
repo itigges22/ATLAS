@@ -136,7 +136,7 @@ flowchart TB
 |                 | Pattern Cache          | (in rag-api)           | --                     | Redis-backed            | Ebbinghaus-decay STM/LTM pattern memory                                  |
 |                 | PageIndex              | (in rag-api)           | --                     | tree-sitter + BM25      | AST-aware code retrieval with LLM tree search                            |
 | **Dashboard**   | atlas-dashboard        | atlas-dashboard        | 3001 (NodePort 30001)  | Web UI                  | Monitoring dashboard (queue stats, daily metrics, weekly trend)          |
-| **Training**    | atlas-nightly-training | (CronJob, suspended)   | --                     | CronJob, suspended       | LoRA fine-tuning (V1 artifact, suspended -- V2 uses frozen model)        |
+| **Training**    | atlas-nightly-training | (CronJob, suspended)   | --                     | CronJob, suspended       | LoRA fine-tuning (V1 artifact, suspended -- frozen model since V2)        |
 
 ### K3s Pods
 
@@ -534,7 +534,7 @@ Async task processor implementing the Ralph Loop (retry-until-success code gener
 
 ### atlas-nightly-training (CronJob — Suspended)
 
-LoRA fine-tuning cronjob. Currently suspended (`suspend: true`). V2 uses a frozen base model; the only model adaptation is Geometric Lens retraining during benchmark runs.
+LoRA fine-tuning cronjob. Currently suspended (`suspend: true`). Model has been frozen since V2; the only adaptation is Geometric Lens retraining during benchmark runs.
 
 ---
 
@@ -545,7 +545,7 @@ The following V1 components were removed and replaced:
 | V1 Component | V2 Replacement | Reason |
 |-------------|----------------|--------|
 | Qdrant vector database | PageIndex (AST tree + BM25) | Structural code understanding, lower resource usage |
-| Dedicated embedding service | llama-server `--embeddings` (V2), then nomic-embed-text-v1.5 sidecar (V2.5) | V2 used self-embeddings (5120-dim); V2.5 uses dedicated embed model (768-dim) to enable spec decode. **V2.5.1 confirmed** the embedding source switch degraded Lens discrimination from 87.8% to ≈random. V3.0 restored self-embeddings via single-server patch (draft embedding=false), removing the nomic sidecar entirely. |
+| Dedicated embedding service | llama-server `--embeddings` (V2), then nomic-embed-text-v1.5 sidecar (V2.5) | V2 used self-embeddings (5120-dim); V2.5 used dedicated embed model (768-dim) to enable spec decode. **V2.5.1 confirmed** the embedding source switch degraded Lens discrimination from 87.8% to ≈random. V3.0 restored self-embeddings via single-server patch (draft embedding=false), removing the nomic sidecar entirely. |
 | Chunking pipeline (`rag-api/chunker.py`) | AST-based tree indexing | Chunk boundaries are semantic (functions, classes) rather than arbitrary token windows |
 
 Removed manifests: `embedding-deployment.yaml`, `qdrant-deployment.yaml`.
@@ -600,15 +600,72 @@ Phase 3 uses **self-generated test cases** for internal verification. The model 
 
 Phase 4 modules are implemented and tested but not yet active in the benchmark pipeline. Validation showed 0 AUC degradation across 5 domains.
 
-### V3 Data Flow
+### V3 Pipeline Diagram
 
+```mermaid
+flowchart TB
+  subgraph Input
+    P[Coding Problem]
+  end
+
+  subgraph Phase1["Phase 1: Constraint-Driven Generation (+12.4pp)"]
+    PS[PlanSearch<br/>Extract constraints<br/>Generate diverse plans]
+    BF[Budget Forcing<br/>5-tier thinking control<br/>Wait injection / nothink]
+    DS[DivSampling<br/>12 prompt perturbations<br/>role / instruction / style]
+  end
+
+  subgraph Scoring["Candidate Selection"]
+    GL[Geometric Lens C x<br/>~2.7M params<br/>5120-dim self-embeddings<br/>Energy ranking]
+    SB1[Sandbox<br/>Real test execution<br/>Energy-sorted early exit]
+  end
+
+  subgraph Phase3["Phase 3: Self-Verified Repair (+7.3pp)"]
+    STG[Self-Test Gen<br/>Model generates own<br/>I/O test cases]
+    FA[Failure Analysis<br/>6 failure categories]
+    CR[Constraint Refinement<br/>Hypothesis-driven updates]
+    PRC[PR-CoT Repair<br/>4-perspective chain-of-thought<br/>36/42 rescues = 85.7%]
+    RL[Refinement Loop<br/>Iterative repair cycle<br/>6 additional rescues]
+    SB2[Self-Test Verify<br/>Validate against<br/>model-generated tests]
+  end
+
+  subgraph Final["Final Scoring"]
+    SB3[Sandbox<br/>Real tests only<br/>pass/fail]
+  end
+
+  P --> PS
+  PS --> BF
+  BF --> DS
+  DS -->|k=3 candidates| GL
+  GL -->|energy-sorted| SB1
+  SB1 -->|any pass| Result([Pass])
+  SB1 -->|all fail| STG
+  STG --> FA
+  FA --> CR
+  CR --> PRC
+  PRC --> SB2
+  SB2 -->|self-tests fail| RL
+  RL --> SB2
+  SB2 -->|self-tests pass| SB3
+  SB3 --> Result2([Final Result])
+
+  style PS fill:#1a3a5c,color:#fff
+  style BF fill:#1a3a5c,color:#fff
+  style DS fill:#1a3a5c,color:#fff
+  style GL fill:#2d5016,color:#fff
+  style SB1 fill:#2d5016,color:#fff
+  style STG fill:#5c3a1a,color:#fff
+  style FA fill:#5c3a1a,color:#fff
+  style CR fill:#5c3a1a,color:#fff
+  style PRC fill:#5c3a1a,color:#fff
+  style RL fill:#5c3a1a,color:#fff
+  style SB2 fill:#5c3a1a,color:#fff
+  style SB3 fill:#2d5016,color:#fff
+  style Result fill:#0d5016,color:#fff
+  style Result2 fill:#0d5016,color:#fff
 ```
-Problem -> PlanSearch (constraints -> plans -> code, k=3 candidates)
-       -> Budget Forcing (thinking token control per difficulty)
-       -> DivSampling (prompt perturbations for diversity)
-       -> Lens Scoring (C(x) energy ranking, 5120-dim self-embeddings)
-       -> Sandbox Testing (real tests, one-shot)
-       -> [if all fail] Phase 3 Self-Verified Refinement:
-           Self-Test Gen -> Failure Analysis -> PR-CoT Repair -> Self-Test Verify
-           -> [if self-tests pass] Final Scoring (real tests)
-```
+
+| Color | Phase |
+|-------|-------|
+| Dark blue | Phase 1: Generation |
+| Dark green | Scoring / Sandbox |
+| Dark brown | Phase 3: Self-verified repair |

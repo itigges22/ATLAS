@@ -297,7 +297,7 @@ Maximum number of tokens allocated for retrieved context in a prompt.
 
 ### ATLAS_RAG_TOP_K
 
-Number of code snippets to retrieve per query. In V2 with PageIndex, this controls how many tree nodes are returned by the hybrid retriever (BM25 + tree search).
+Number of code snippets to retrieve per query. Controls how many tree nodes are returned by the PageIndex hybrid retriever (BM25 + tree search).
 
 | Default | Type | Range |
 |---------|------|-------|
@@ -435,6 +435,7 @@ V3 adds per-phase and per-component toggles in `atlas.conf`. All V3 features are
 |----------|---------|-------------|
 | `ATLAS_V3_BUDGET_FORCING_ENABLED` | true | Budget Forcing thinking token control |
 | `ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER` | "standard" | Default thinking tier (minimal/low/standard/high/unlimited) |
+| `ATLAS_V3_BUDGET_FORCING_MAX_WAIT_INJECTIONS` | 3 | Maximum Wait token injections per response |
 | `ATLAS_V3_PLAN_SEARCH_ENABLED` | true | PlanSearch constraint-guided plan generation |
 | `ATLAS_V3_PLAN_SEARCH_NUM_PLANS` | 3 | Number of diverse plans to generate |
 | `ATLAS_V3_DIV_SAMPLING_ENABLED` | true | DivSampling prompt perturbations |
@@ -446,7 +447,10 @@ V3 adds per-phase and per-component toggles in `atlas.conf`. All V3 features are
 | `ATLAS_V3_BLEND_ASC_ENABLED` | true | Adaptive K allocation based on Lens energy |
 | `ATLAS_V3_BLEND_ASC_DEFAULT_K` | 3 | Default candidate count |
 | `ATLAS_V3_REASC_ENABLED` | true | Early stopping on confident tasks |
+| `ATLAS_V3_REASC_CONFIDENCE_THRESHOLD` | -0.5 | Confidence threshold for early stopping |
+| `ATLAS_V3_REASC_ENERGY_THRESHOLD` | 0.10 | Energy threshold for early stopping |
 | `ATLAS_V3_S_STAR_ENABLED` | true | Edge-case tiebreaking |
+| `ATLAS_V3_S_STAR_ENERGY_DELTA` | 1.0 | Energy delta threshold for tiebreak trigger |
 
 ### Phase 3 Components
 
@@ -464,6 +468,7 @@ V3 adds per-phase and per-component toggles in `atlas.conf`. All V3 features are
 | `ATLAS_V3_ACE_ENABLED` | true | Evolving playbook context |
 | `ATLAS_V3_SELF_TEST_ENABLED` | true | Self-test generation for internal verification |
 | `ATLAS_V3_SELF_TEST_NUM_CASES` | 5 | Number of self-generated test cases |
+| `ATLAS_V3_SELF_TEST_MAJORITY_THRESHOLD` | 0.6 | Majority vote threshold for self-test pass |
 
 ### Phase 4 Components (Lens Evolution)
 
@@ -471,9 +476,12 @@ V3 adds per-phase and per-component toggles in `atlas.conf`. All V3 features are
 |----------|---------|-------------|
 | `ATLAS_V3_REPLAY_BUFFER_ENABLED` | true | Domain-stratified experience replay |
 | `ATLAS_V3_REPLAY_BUFFER_MAX_SIZE` | 5000 | Maximum replay buffer entries |
+| `ATLAS_V3_REPLAY_BUFFER_REPLAY_RATIO` | 0.30 | Ratio of replay samples in training batch (30% replay, 70% new) |
 | `ATLAS_V3_EWC_ENABLED` | true | Elastic Weight Consolidation |
 | `ATLAS_V3_EWC_LAMBDA` | 1000.0 | EWC penalty strength |
 | `ATLAS_V3_LENS_FEEDBACK_ENABLED` | false | Online Lens recalibration (experimental) |
+| `ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL` | 50 | Tasks between online retrain cycles |
+| `ATLAS_V3_LENS_FEEDBACK_DOMAIN` | "LCB" | Domain label for feedback samples |
 
 ### Cache Manager
 
@@ -482,6 +490,10 @@ V3 adds per-phase and per-component toggles in `atlas.conf`. All V3 features are
 | `ATLAS_CACHE_MANAGER_ENABLED` | true | Proactive llama-server memory management |
 | `ATLAS_CACHE_MANAGER_SOFT_THRESHOLD_MB` | 8192 | Soft RSS threshold for slot erase |
 | `ATLAS_CACHE_MANAGER_HARD_THRESHOLD_MB` | 10240 | Hard RSS threshold for pod restart |
+| `ATLAS_CACHE_MANAGER_CHECK_INTERVAL_SEC` | 30 | Seconds between RSS checks |
+| `ATLAS_CACHE_MANAGER_ERASE_COOLDOWN_SEC` | 60 | Cooldown after slot erase before next check |
+| `ATLAS_CACHE_MANAGER_RESTART_COOLDOWN_SEC` | 300 | Cooldown after pod restart before next check |
+| `ATLAS_CACHE_MANAGER_WARMUP_ENABLED` | true | Send warmup request after pod restart |
 
 ---
 
@@ -596,7 +608,7 @@ ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
 ATLAS_DRAFT_MODEL="Qwen3-0.6B-Q8_0.gguf"
 ATLAS_CONTEXT_LENGTH=40960
 ATLAS_GPU_LAYERS=99
-ATLAS_PARALLEL_SLOTS=2
+ATLAS_PARALLEL_SLOTS=1
 ATLAS_FLASH_ATTENTION=true
 
 # Security
