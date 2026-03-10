@@ -98,6 +98,8 @@ Full architecture: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 
 ## Quick Start
 
+> **Before you begin:** ATLAS was developed and tested on specific hardware. Read the [Reproduction](#reproduction) section below to check compatibility and tune variables for your setup before running.
+
 ```bash
 git clone https://github.com/itigges22/ATLAS.git && cd ATLAS
 
