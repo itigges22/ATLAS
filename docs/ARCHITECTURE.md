@@ -669,3 +669,32 @@ flowchart TB
 | Dark blue | Phase 1: Generation |
 | Dark green | Scoring / Sandbox |
 | Dark brown | Phase 3: Self-verified repair |
+
+---
+
+## 9. Reproduction Notes
+
+V3 results were produced on the following environment:
+
+| Parameter | Value |
+|-----------|-------|
+| OS | RHEL 9 (Proxmox VM) |
+| GPU | RTX 5060 Ti 16GB (VFIO passthrough) |
+| CUDA | 12.8 |
+| K3s | Single-node, single GPU |
+| Model | Qwen3-14B-Q4_K_M (frozen) |
+| Draft model | Qwen3-0.6B-Q8_0 |
+
+### Hardware Tuning Variables
+
+If reproducing on different hardware, the key variables to adjust are:
+
+- **`--parallel` slots**: Default 2. Reduce to 1 if VRAM is tight. Each slot reserves context memory in the KV cache.
+- **KV cache quantization**: Currently Q4_0 for both K and V caches. This is the primary VRAM optimization -- higher quantization (Q8_0) improves quality marginally but may not fit in 16GB.
+- **Context per slot**: Default 20480 tokens. Reducing this frees VRAM but limits the model's reasoning window, especially for PlanSearch and PR-CoT repair which benefit from long context.
+- **CUDA driver version**: Tested on CUDA 12.8. Older drivers may work but are untested.
+- **Speculative decoding**: Draft model (Qwen3-0.6B-Q8_0) adds ~610 MiB VRAM overhead. Can be disabled to free memory at the cost of ~2-3x slower generation.
+
+### VRAM Breakdown (for reference)
+
+See Section 5 above. Total usage is ~14,400 / 16,311 MiB (88%) with ~1,900 MiB headroom on the RTX 5060 Ti 16GB.
