@@ -1,16 +1,20 @@
-![License](https://img.shields.io/badge/license-Source%20Available-blue)
-![Python](https://img.shields.io/badge/python-3.10+-green)
-![K8s](https://img.shields.io/badge/platform-K3s%20%7C%20K8s-blue)
-![GPU](https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-green)
-![Status](https://img.shields.io/badge/status-v3.0-blue)
+<p align="center">
+  <img src="docs/images/banner.png" alt="A.T.L.A.S" width="100%">
+</p>
 
-# A.T.L.A.S
+<p align="center">
+  <img src="https://img.shields.io/badge/license-Source%20Available-blue" alt="License">
+  <img src="https://img.shields.io/badge/python-3.10+-green" alt="Python">
+  <img src="https://img.shields.io/badge/platform-K3s%20%7C%20K8s-blue" alt="K8s">
+  <img src="https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-green" alt="GPU">
+  <img src="https://img.shields.io/badge/status-v3.0-blue" alt="Status">
+</p>
 
-**Adaptive Test-time Learning and Autonomous Specialization**
+<h1 align="center">A.T.L.A.S</h1>
 
-A.T.L.A.S achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a single consumer GPU -- up from 36-41% in V2 -- through constraint-driven generation and self-verified iterative refinement. No fine-tuning, no API calls, no cloud -- just a $500 GPU and smart inference.
+<p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
-The premise is simple: wrap a frozen smaller model in intelligent infrastructure -- structured generation, energy-based verification, self-verified repair -- and it can compete with frontier API models at a fraction of the cost. ATLAS is fully self-hosted. No data leaves the machine, no API keys required, no usage metering. One GPU, one box.
+A.T.L.A.S achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a single consumer GPU -- up from 36-41% in V2 -- through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure -- structured generation, energy-based verification, self-verified repair -- and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted -- no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
 
 ---
 
@@ -50,9 +54,14 @@ Phase 3 uses self-generated test cases for internal verification -- the model ne
 | Claude 4.5 Sonnet | 71.4% | ~$0.066 | API, single-shot |
 | Claude 4 Sonnet | 65.5% | ~$0.066 | API, single-shot |
 
+<details>
+<summary><b>Methodology notes & sources</b></summary>
+
 > **Methodology notes:** ATLAS scores are from 599 LCB tasks using the full V3 pipeline (best-of-3 + Lens selection + iterative repair) on a frozen 14B quantized model. Competitor scores are single-shot pass@1 (zero-shot, temperature 0) from [Artificial Analysis](https://artificialanalysis.ai/evaluations/livecodebench) on 315 LCB problems -- not the same task set, so this is not a controlled head-to-head. API costs assume ~2,000 input + ~4,000 output tokens per task at current pricing. ATLAS cost = electricity at $0.12/kWh (~165W GPU, ~1h 55m for 599 tasks). ATLAS trades latency for cost -- the pipeline takes longer per task than a single API call, but no data leaves the machine.
 >
 > **Sources:** [Artificial Analysis LCB Leaderboard](https://artificialanalysis.ai/evaluations/livecodebench) | [AA Benchmarking Methodology](https://artificialanalysis.ai/methodology/intelligence-benchmarking) | [LiveCodeBench Paper (arXiv)](https://arxiv.org/abs/2403.07974) | [LCB Dataset (HuggingFace)](https://huggingface.co/datasets/livecodebench/code_generation_lite) | Pricing: [OpenAI](https://openai.com/api/pricing/), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models/overview), [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing)
+
+</details>
 
 ---
 
@@ -98,7 +107,7 @@ Full architecture: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 
 ## Quick Start
 
-> **Before you begin:** ATLAS was developed and tested on specific hardware. Read the [Reproduction](#reproduction) section below to check compatibility and tune variables for your setup before running.
+> **Before you begin:** ATLAS was developed and tested on specific hardware. Read the [Hardware & Reproduction](#hardware--reproduction) section below to check compatibility and tune variables for your setup before running.
 
 ```bash
 git clone https://github.com/itigges22/ATLAS.git && cd ATLAS
@@ -115,7 +124,17 @@ See **[docs/SETUP.md](docs/SETUP.md)** for full installation instructions.
 
 ---
 
-## Reproduction
+## Hardware & Reproduction
+
+| Resource | Minimum | Tested |
+|----------|---------|--------|
+| GPU VRAM | 16 GB | RTX 5060 Ti 16 GB |
+| System RAM | 14 GB | 16 GB |
+| Python | 3.10+ | 3.11 |
+| OS | RHEL 9 / Ubuntu 24 | RHEL 9 (Proxmox VM) |
+
+<details>
+<summary><b>Reproduction details</b></summary>
 
 V3 results were produced on RHEL 9 running as a Proxmox VM with an RTX 5060 Ti 16GB passed through via VFIO. Other NVIDIA GPUs with 16GB+ VRAM should work, though you may need to adjust driver versions and VRAM allocation.
 
@@ -129,16 +148,7 @@ Key variables to tune for your hardware:
 
 Full VRAM budget breakdown is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Community reproduction attempts are welcome -- open an issue with your hardware config and results.
 
----
-
-## Hardware Requirements
-
-| Resource | Minimum | Tested |
-|----------|---------|--------|
-| GPU VRAM | 16 GB | RTX 5060 Ti 16 GB |
-| System RAM | 14 GB | 16 GB |
-| Python | 3.10+ | 3.11 |
-| OS | RHEL 9 / Ubuntu 24 | RHEL 9 (Proxmox VM) |
+</details>
 
 ---
 
@@ -210,7 +220,8 @@ These are actively being addressed in V3.1:
 - **Task parallelization**: Parallel task execution for faster benchmark runs.
 - **Broader benchmark suite**: See below.
 
-### V3.1 Benchmark Suite
+<details>
+<summary><b>V3.1 benchmark suite (planned)</b></summary>
 
 V3 was evaluated only on LiveCodeBench v5. V3.1 expands evaluation to cover coding, reasoning, and general knowledge -- because ATLAS is not purely a coding system. The Confidence Router allocates compute based on task difficulty: simple knowledge questions route to raw inference + RAG (~30 seconds per response), while hard coding problems use the full V3 pipeline (PlanSearch + best-of-3 + PR-CoT repair), which can take up to 20 minutes per task. The benchmark suite should reflect this full range.
 
@@ -229,6 +240,8 @@ V3 was evaluated only on LiveCodeBench v5. V3.1 expands evaluation to cover codi
 General knowledge benchmarks matter because ATLAS is designed as a general-purpose self-hosted AI system, not a coding-only tool. The Confidence Router handles this by routing knowledge queries directly to raw inference + RAG (~30s), while reserving the full pipeline for hard coding problems (~20min). Benchmarks like AA-Omniscience and Humanity's Last Exam validate the fast-path routing, not the coding pipeline.
 
 **None of these V3.1 benchmarks have been run yet.** This section is forward-looking roadmap only.
+
+</details>
 
 Target: 80-90% LCB pass@1 with faster per-task throughput.
 
