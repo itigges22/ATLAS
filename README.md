@@ -20,9 +20,9 @@ The premise is simple: wrap a frozen smaller model in intelligent infrastructure
 
 | Benchmark | Score | Tasks | Method |
 |-----------|-------|-------|--------|
-| **LiveCodeBench v5** | **74.6% pass@1*** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair |
-| **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning |
-| **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding |
+| **LiveCodeBench v5** | **74.6% pass@1*** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair, V3 Score |
+| **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning, V2 Score |
+| **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding, V2 Score |
 
 \*pass@1 = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation. See [methodology](docs/V3_ABLATION_STUDY.md#2-methodology).
 
