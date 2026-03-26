@@ -14,7 +14,7 @@
 
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
-A.T.L.A.S achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a single consumer GPU -- up from 36-41% in V2 -- through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure -- structured generation, energy-based verification, self-verified repair -- and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted -- no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
+A.T.L.A.S achieves **74.6% LiveCodeBench pass@k-v(k=3)** with a frozen 14B model on a single consumer GPU -- up from 36-41% in V2 -- through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure -- structured generation, energy-based verification, self-verified repair -- and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted -- no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
 
 ---
 
@@ -24,11 +24,11 @@ A.T.L.A.S achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a s
 
 | Benchmark | Score | Tasks | Method |
 |-----------|-------|-------|--------|
-| **LiveCodeBench v5** | **74.6% pass@1*** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair, V3 Score |
+| **LiveCodeBench v5** | **74.6% pass@k-v(k=3)*** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair, V3 Score |
 | **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning, V2 Score |
 | **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding, V2 Score |
 
-\*pass@1 = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation. See [methodology](docs/V3_ABLATION_STUDY.md#2-methodology).
+\*pass@k-v(k=3) = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation, it is not pass@1. See [methodology](docs/V3_ABLATION_STUDY.md#2-methodology).
 
 <details>
 <summary><b>V3 ablation breakdown</b></summary>
@@ -50,14 +50,14 @@ Phase 3 uses self-generated test cases for internal verification -- the model ne
 |--------|-----------|----------------|-------|
 | DeepSeek V3.2 Reasoning | 86.2% | ~$0.002 | API, single-shot |
 | GPT-5 (high) | 84.6% | ~$0.043 | API, single-shot |
-| **ATLAS V3 (this work)** | **74.6%** | **~$0.004** | Local electricity only, best-of-3 + repair pipeline |
+| **ATLAS V3 (pass@k-v(k=3))** | **74.6%** | **~$0.004** | Local electricity only, best-of-3 + repair pipeline |
 | Claude 4.5 Sonnet | 71.4% | ~$0.066 | API, single-shot |
 | Claude 4 Sonnet | 65.5% | ~$0.066 | API, single-shot |
 
 <details>
 <summary><b>Methodology notes & sources</b></summary>
 
-> **Methodology notes:** ATLAS scores are from 599 LCB tasks using the full V3 pipeline (best-of-3 + Lens selection + iterative repair) on a frozen 14B quantized model. Competitor scores are single-shot pass@1 (zero-shot, temperature 0) from [Artificial Analysis](https://artificialanalysis.ai/evaluations/livecodebench) on 315 LCB problems -- not the same task set, so this is not a controlled head-to-head. API costs assume ~2,000 input + ~4,000 output tokens per task at current pricing. ATLAS cost = electricity at $0.12/kWh (~165W GPU, ~1h 55m for 599 tasks). ATLAS trades latency for cost -- the pipeline takes longer per task than a single API call, but no data leaves the machine.
+> **Methodology notes:** ATLAS scores are from 599 LCB tasks using the full V3 pipeline (best-of-3 + Lens selection + iterative repair) on a frozen 14B quantized model or "pass@k-v(k=3)". Competitor scores are single-shot pass@1 (zero-shot, temperature 0) from [Artificial Analysis](https://artificialanalysis.ai/evaluations/livecodebench) on 315 LCB problems -- not the same task set, so this is not a controlled head-to-head. API costs assume ~2,000 input + ~4,000 output tokens per task at current pricing. ATLAS cost = electricity at $0.12/kWh (~165W GPU, ~1h 55m for 599 tasks). ATLAS trades latency for cost -- the pipeline takes longer per task than a single API call, but no data leaves the machine.
 >
 > **Sources:** [Artificial Analysis LCB Leaderboard](https://artificialanalysis.ai/evaluations/livecodebench) | [AA Benchmarking Methodology](https://artificialanalysis.ai/methodology/intelligence-benchmarking) | [LiveCodeBench Paper (arXiv)](https://arxiv.org/abs/2403.07974) | [LCB Dataset (HuggingFace)](https://huggingface.co/datasets/livecodebench/code_generation_lite) | Pricing: [OpenAI](https://openai.com/api/pricing/), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models/overview), [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing)
 
@@ -196,7 +196,7 @@ sandbox/         Isolated code execution environment
 
 ### V3.0 -- Complete (2026-03-05)
 
-74.6% LCB pass@1 on frozen Qwen3-14B-Q4_K_M. PlanSearch + BudgetForcing + Geometric Lens + PR-CoT repair pipeline. [Full ablation report](docs/V3_ABLATION_STUDY.md).
+74.6% LCB pass@k-v(k=3) on frozen Qwen3-14B-Q4_K_M. PlanSearch + BudgetForcing + Geometric Lens + PR-CoT repair pipeline. [Full ablation report](docs/V3_ABLATION_STUDY.md).
 
 ### Known Limitations
 
@@ -243,7 +243,7 @@ General knowledge benchmarks matter because ATLAS is designed as a general-purpo
 
 </details>
 
-Target: 80-90% LCB pass@1 with faster per-task throughput.
+Target: 80-90% LCB pass@k-v(k=3) with faster per-task throughput.
 
 ---
 
