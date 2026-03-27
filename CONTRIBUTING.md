@@ -44,7 +44,7 @@ Feature requests are welcome! Please:
 
 ```bash
 # Clone your fork
-git clone https://github.com/yourusername/atlas.git
+git clone https://github.com/<your-username>/atlas.git
 cd atlas
 
 # Create feature branch

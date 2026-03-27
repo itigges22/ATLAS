@@ -62,7 +62,7 @@ At minimum, set the following:
 
 ```bash
 # Directory containing the two GGUF files
-ATLAS_MODELS_DIR="/home/yourusername/models"
+ATLAS_MODELS_DIR="<your-models-path>"
 
 # Directory for persistent data (indexes, training data, projects)
 ATLAS_DATA_DIR="/opt/atlas/data"
