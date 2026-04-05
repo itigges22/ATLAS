@@ -58,7 +58,7 @@ import_to_k3s() {
     log_info "Importing $name to K3s..."
 
     # Check if image exists
-    if ! $runtime image exists "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" 2>/dev/null; then
+    if ! $runtime image inspect "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" &>/dev/null; then
         log_warn "Image ${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG} not found, skipping import"
         return 0
     fi
