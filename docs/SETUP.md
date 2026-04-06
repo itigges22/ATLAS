@@ -330,6 +330,24 @@ AMD and Intel GPUs are not supported (llama.cpp CUDA backend required).
 
 ---
 
+## Geometric Lens Weights (Optional)
+
+ATLAS works without Geometric Lens weights — the service degrades gracefully, returning neutral scores. The V3 pipeline falls back to sandbox-only verification.
+
+To enable C(x)/G(x) scoring, you need trained model weights. Pre-trained weights and training data are available on HuggingFace:
+
+**[ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)** — includes embeddings, training data, and weight files.
+
+Place weight files in `geometric-lens/geometric_lens/models/` (or mount via `ATLAS_LENS_MODELS` in Docker Compose). The service loads them automatically on startup.
+
+Training scripts are provided in `scripts/` if you want to train on your own benchmark data:
+- `scripts/retrain_cx_phase0.py` — Initial C(x) training from collected embeddings
+- `scripts/retrain_cx.py` — Production C(x) retraining with class weights
+- `scripts/collect_lens_training_data.py` — Collect pass/fail embeddings from benchmark runs
+- `scripts/prepare_lens_training.py` — Prepare and validate training data format
+
+---
+
 ## Next Steps
 
 - [CLI.md](CLI.md) — How to use ATLAS once it's running

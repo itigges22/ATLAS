@@ -72,7 +72,10 @@ load_config() {
 
     # Handle auto-detection for node IP
     if [[ "${ATLAS_NODE_IP:-auto}" == "auto" ]]; then
-        ATLAS_NODE_IP=$({ hostname -I 2>/dev/null || ip -4 addr show scope global | grep -oP "(?<=inet )[d.]+" | head -1; } | awk '{print $1}')
+        ATLAS_NODE_IP=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet )\d+\.\d+\.\d+\.\d+' | head -1)
+        # Fallback if ip command unavailable
+        [[ -z "$ATLAS_NODE_IP" ]] && ATLAS_NODE_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        [[ -z "$ATLAS_NODE_IP" ]] && ATLAS_NODE_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
     fi
 
     # Handle auto-generation for JWT secret
