@@ -12,11 +12,11 @@
 <h1 align="center">A.T.L.A.S.</h1>
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
-A.T.L.A.S achieves **74.6% LiveCodeBench pass@1-v(k=3)** with a frozen 14B model on a single consumer GPU — up from 36-41% in V2 — through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure — structured generation, energy-based verification, self-verified repair — and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted — no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
+A.T.L.A.S achieves **74.6% LiveCodeBench pass@1-v(k=3)** with a frozen Qwen3-14B model on a single consumer GPU — up from 36-41% in V2 — through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure — structured generation, energy-based verification, self-verified repair — and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted — no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
 
 ---
 
-**V3.0.1** ships ATLAS as an **interactive coding assistant powered by a local 9B model** that you can download and use today. The 9B model (Qwen3.5-9B) has not yet been formally benchmarked under the V3 pipeline — that is V3.1 work — but the V3 pipeline architecture is identical to what scored 74.6% on the 14B model, and the 9B model's published baselines suggest it should score similarly or higher. Type `atlas` in any project directory and start building.
+**V3.0.1** ships ATLAS as an **interactive coding assistant powered by a local 9B model** that you can download and use today. The 9B model (Qwen3.5-9B) has not yet been formally benchmarked under the V3 pipeline — that is V3.1 work — but the V3 pipeline architecture is identical to what scored 74.6% on Qwen3-14B, and the 9B model's published baselines suggest it should score similarly or higher. Type `atlas` in any project directory and start building.
 
 <p align="center">
   <img src="docs/images/ATLAS_CLI.png" alt="ATLAS CLI" width="500"/>
@@ -95,7 +95,7 @@ Raw ablation data: [`v3_ablation_results/`](v3_ablation_results/) | Full traces:
 |--------|-----------|----------------|-------|
 | DeepSeek V3.2 Reasoning | 86.2% | ~$0.002 | API, single-shot (low cost due to aggressive pricing strategy) |
 | GPT-5 (high) | 84.6% | ~$0.043 | API, single-shot |
-| **ATLAS V3 (pass@1-v(k=3))** | **74.6%** | **~$0.004** | **Local electricity only, best-of-3 + repair pipeline** |
+| **ATLAS V3, Qwen3-14B (pass@1-v(k=3))** | **74.6%** | **~$0.004** | **Local electricity only, best-of-3 + repair pipeline** |
 | Claude 4.5 Sonnet | 71.4% | ~$0.066 | API, single-shot |
 | Claude 4 Sonnet | 65.5% | ~$0.066 | API, single-shot |
 
