@@ -152,6 +152,8 @@ v2_5_1/
 # ATLAS workspace (sandbox staging, backups)
 .atlas/
 .aider*
+!.aider.model.settings.yml
+!.aider.model.metadata.json
 
 # ----- Go build artifacts -----
 atlas-proxy/atlas-proxy-v2

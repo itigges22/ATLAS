@@ -33,7 +33,28 @@ echo "solve this" | atlas      # Pipe mode (stdin as problem)
 
 Any arguments after `atlas` are passed through to Aider.
 
-### Startup Sequence
+### Startup Flow
+
+```mermaid
+flowchart TD
+    Start["atlas command"] --> Detect{"Docker Compose\nstack running?"}
+    Detect -->|"Yes"| DPort["Discover proxy port\nfrom compose"] --> Launch["Launch Aider\nconnected to proxy"]
+    Detect -->|"No"| Bare["Start bare-metal services"]
+
+    Bare --> LL["Start llama-server\n(120s health timeout)"]
+    LL --> Lens["Start Geometric Lens\n(30s timeout)"]
+    Lens --> V3["Start V3 Pipeline\n(15s timeout)"]
+    V3 --> Proxy["Start Proxy v2\n(30s timeout)"]
+    Proxy --> Launch
+
+    Launch --> Aider["Aider session\nOpenAI API → proxy:8090\nGrammar: json_object\nEdit format: whole"]
+
+    style Start fill:#1a3a5c,color:#fff
+    style Aider fill:#333,color:#fff
+    style Launch fill:#2d5016,color:#fff
+```
+
+### Startup Banner
 
 ```
     _  _____ _      _   ___
@@ -52,14 +73,14 @@ Any arguments after `atlas` are passed through to Aider.
   Context: 32K | GPU: RTX 5060 Ti | ~51 tok/s
 ```
 
-Each service is health-checked before proceeding:
+Each service is health-checked via `GET /health` before proceeding:
 
-| Service | Port | Health Timeout | Endpoint |
-|---------|------|---------------|----------|
-| llama-server | 8080 | 120s | GET /health |
-| Geometric Lens | 8099 | 30s | GET /health |
-| V3 Pipeline | 8070 | 15s | GET /health |
-| Proxy v2 | 8090 | 30s | GET /health |
+| Service | Port | Health Timeout |
+|---------|------|---------------|
+| llama-server | 8080 | 120s (model loading is slow) |
+| Geometric Lens | 8099 | 30s |
+| V3 Pipeline | 8070 | 15s |
+| Proxy v2 | 8090 | 30s |
 
 If a service is already running, ATLAS skips it and shows "(already running)". Logs for each service are written to `logs/` in the ATLAS directory.
 
@@ -96,6 +117,29 @@ Every tool call, V3 pipeline stage, and build verification is streamed in real-t
 ═══════════════════════════════════════════
 ```
 
+### How Streaming Works
+
+The proxy wraps each status update in OpenAI-compatible SSE chunks:
+
+```mermaid
+sequenceDiagram
+    participant A as Aider
+    participant P as atlas-proxy
+    participant L as llama-server
+
+    A->>P: POST /v1/chat/completions (stream=true)
+    P->>L: POST /v1/chat/completions (json_object)
+    L-->>P: {"type":"tool_call","name":"write_file",...}
+    Note over P: Classify tier, execute tool
+    P-->>A: SSE: [Turn 1/30] ✎ writing app.py (T2)
+    P-->>A: SSE: V3 pipeline progress events
+    P-->>A: SSE: ✓ wrote successfully
+    P-->>A: SSE: completion summary
+    P-->>A: data: [DONE]
+```
+
+All status lines are injected as `delta.content` in standard OpenAI SSE chunks, so any OpenAI-compatible client can display them.
+
 ### Status Icons
 
 | Icon | Tool | Example |
@@ -114,7 +158,19 @@ Every tool call, V3 pipeline stage, and build verification is streamed in real-t
 |--------|---------|---------|
 | ✓ | Success | `✓ wrote successfully (1.2ms)` |
 | ✗ | Failure | `✗ failed: SyntaxError on line 12 (0.4s)` |
-| └─ | Read result | `└─ 42 lines loaded` |
+| └─ | Read/search result | `└─ 42 lines loaded` |
+
+### Edit Diff Preview
+
+When the model uses `edit_file`, the proxy shows what changed:
+
+```
+[Turn 3/30] ✏️ editing auth.py
+  - def authenticate(user, password):
+  + def authenticate(user: str, password: str) -> bool:
+  (1 lines replaced with 1 lines)
+  ✓ edit applied (0.8ms)
+```
 
 ### Completion Summary
 
@@ -123,6 +179,69 @@ After the agent finishes, a summary box shows:
 - **Commands run** count
 - **V3 pipeline** count (only shown if V3 was used)
 - **Tokens** total consumed
+
+---
+
+## Workflow Examples
+
+### Creating a new project
+
+```
+> Create a Flask REST API with user authentication, SQLite database,
+  and input validation using Pydantic
+
+[Turn 1/30] 📋 planning subtasks...
+[Turn 2/30] ✎ writing requirements.txt (T1, direct)
+  ✓ wrote successfully
+[Turn 3/30] ✎ writing app.py (T2, V3 pipeline)
+  ┌─ V3 Pipeline ─────────────────────────────
+  │ [probe] C(x)=0.68, testing...
+  │ [probe_sandbox] ✓ probe passed
+  └──── V3 complete: phase0 (probe pass)
+  ✓ wrote successfully
+[Turn 4/30] ✎ writing models.py (T1, direct)
+  ✓ wrote successfully
+[Turn 5/30] 🔧 running: python -c "import app; print('ok')"
+  ✓ exit code 0 (0.5s)
+
+═══════════════════════════════════════════
+✓ Complete (5 turns, 23s)
+  Files created:  3 (requirements.txt, app.py, models.py)
+  Commands run:   1
+  V3 pipeline:    1 file enhanced
+═══════════════════════════════════════════
+```
+
+Notice `app.py` (complex logic) went through V3, while `requirements.txt` and `models.py` (simple/short) were written directly as T1.
+
+### Fixing a bug in existing code
+
+```
+> The login endpoint returns 500 when the email field is missing.
+  Fix the input validation.
+
+[Turn 1/30] 📖 reading app.py
+  └─ 187 lines loaded
+[Turn 2/30] 📖 reading models.py
+  └─ 42 lines loaded
+[Turn 3/30] ✏️ editing app.py
+  - data = request.json
+  + data = request.json or {}
+  + if not data.get("email"):
+  +     return jsonify({"error": "email required"}), 400
+  (1 lines replaced with 3 lines)
+  ✓ edit applied
+[Turn 4/30] 🔧 running: python -m pytest tests/ -q
+  ✓ exit code 0 (1.2s)
+
+═══════════════════════════════════════════
+✓ Complete (4 turns, 8s)
+  Files edited:   1 (app.py)
+  Commands run:   1
+═══════════════════════════════════════════
+```
+
+The model reads files first, uses `edit_file` for surgical changes (not full rewrites), and verifies the fix by running tests.
 
 ---
 
@@ -148,7 +267,7 @@ ATLAS also includes a standalone Python REPL that talks directly to services wit
 
 ```bash
 pip install -e .
-atlas  # If no Docker Compose stack is detected, falls back to Python REPL
+atlas  # Falls back to Python REPL if no Docker stack and no bare-metal launcher
 ```
 
 ### REPL Commands
@@ -209,9 +328,69 @@ Generation parameters: `max_tokens=8192`, `temperature=0.6`, `top_k=20`, `top_p=
 
 ---
 
+## Troubleshooting
+
+### llama-server fails to start (120s timeout)
+
+**Symptom:** `✗ llama-server failed to start (120s timeout)`
+
+**Common causes:**
+- **GPU not detected**: Check `nvidia-smi` — driver must be installed and GPU visible
+- **Model file missing**: Check that the GGUF model exists at the expected path (`ATLAS_MODEL_PATH` or `./models/Qwen3.5-9B-Q6_K.gguf`)
+- **Insufficient VRAM**: The 9B Q6_K model needs ~8.2 GB VRAM. Run `nvidia-smi` to check available memory. Close other GPU processes.
+- **Port conflict**: Another process may be using port 8080. Check with `lsof -i :8080`
+
+**Debug:** Check `logs/llama-server.log` for the actual error.
+
+### Geometric Lens reports "unavailable"
+
+**Symptom:** `! Lens unavailable — verification disabled`
+
+This is non-fatal. ATLAS still works but skips C(x)/G(x) scoring and Lens-based candidate selection. The V3 pipeline falls back to sandbox-only verification.
+
+**Common causes:**
+- Lens service failed to connect to llama-server (check `logs/geometric-lens.log`)
+- Model weight files missing from the models directory (service degrades gracefully)
+
+### Sandbox reports "unavailable"
+
+**Symptom:** `! Sandbox unavailable — code testing disabled`
+
+Non-fatal but significantly impacts quality. Without sandbox, V3 cannot verify candidates by executing them.
+
+**Common causes:**
+- Docker/Podman not installed (sandbox runs in a container)
+- Port 30820 already in use
+
+### Aider shows "Model not found" or similar
+
+**Check that both config files exist in the ATLAS root:**
+- `.aider.model.settings.yml` — model configuration
+- `.aider.model.metadata.json` — token limits and cost
+
+These are included in the repo. If they're missing, the launcher's `--model-settings-file` and `--model-metadata-file` flags will fail.
+
+### Agent loop stops with "too many failures"
+
+The proxy's error loop breaker triggers after 3 consecutive tool failures. This usually means:
+- The model is generating truncated output (file too large for one `write_file`)
+- The file doesn't exist where the model expects it
+
+**Fix:** Try rephrasing your request to be more specific. For large files, ask for targeted edits rather than full rewrites.
+
+### V3 pipeline takes too long (5+ minutes)
+
+V3 fires on T2 files (50+ lines with logic). If Phase 3 repair engages, it can take several minutes. This is normal for complex code generation.
+
+**If it's consistently slow:**
+- Check GPU utilization with `nvidia-smi` — should be near 100% during generation
+- Ensure no other services are competing for GPU VRAM
+
+---
+
 ## Environment Variables
 
-All ports and URLs are configurable via environment variables:
+All ports and URLs are configurable:
 
 ### Service URLs
 
@@ -252,40 +431,40 @@ All ports and URLs are configurable via environment variables:
 
 ### `.aider.model.settings.yml`
 
-Aider model configuration for the ATLAS proxy:
+Controls how Aider interacts with the ATLAS proxy:
 
 ```yaml
 - name: openai/atlas
-  edit_format: whole
-  weak_model_name: openai/atlas
-  use_repo_map: true
-  send_undo_reply: true
-  examples_as_sys_msg: true
+  edit_format: whole           # Aider sends full file content (not diffs)
+  weak_model_name: openai/atlas # Use same model for all tasks
+  use_repo_map: true           # Send repo structure to model
+  send_undo_reply: true        # Notify model when user undoes changes
+  examples_as_sys_msg: true    # Include examples in system prompt
   extra_params:
-    max_tokens: 32768
-    temperature: 0.3
-  cache_control: false
+    max_tokens: 32768          # Match llama-server context window
+    temperature: 0.3           # Low temp for deterministic output
+  cache_control: false         # No Anthropic-style caching
   caches_by_default: false
-  streaming: true
-  reminder: sys
+  streaming: true              # Enable SSE streaming
+  reminder: sys                # Put reminders in system prompt
 ```
 
 ### `.aider.model.metadata.json`
 
-Model metadata telling Aider the token limits and cost (local = free):
+Tells Aider the model's token limits and cost (local = free):
 
 ```json
 {
   "openai/atlas": {
-    "max_tokens": 32768,
-    "max_input_tokens": 32768,
-    "max_output_tokens": 32768,
-    "input_cost_per_token": 0,
+    "max_tokens": 32768,         // Max output tokens
+    "max_input_tokens": 32768,   // Max input context
+    "max_output_tokens": 32768,  // Max generation length
+    "input_cost_per_token": 0,   // Free (local inference)
     "output_cost_per_token": 0,
-    "litellm_provider": "openai",
-    "mode": "chat"
+    "litellm_provider": "openai",// OpenAI-compatible API
+    "mode": "chat"               // Chat completion mode
   }
 }
 ```
 
-Both files must exist in the ATLAS project root for the launcher to work. The launcher passes them to Aider via `--model-settings-file` and `--model-metadata-file`.
+Both files are included in the repo and referenced by the launcher via `--model-settings-file` and `--model-metadata-file`.

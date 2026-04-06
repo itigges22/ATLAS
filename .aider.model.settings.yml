@@ -1,0 +1,13 @@
+- name: openai/atlas
+  edit_format: whole
+  weak_model_name: openai/atlas
+  use_repo_map: true
+  send_undo_reply: true
+  examples_as_sys_msg: true
+  extra_params:
+    max_tokens: 32768
+    temperature: 0.3
+  cache_control: false
+  caches_by_default: false
+  streaming: true
+  reminder: sys
