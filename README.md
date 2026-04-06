@@ -238,7 +238,7 @@ For a complete guide to every directory and file, see **[docs/MAP.md](docs/MAP.m
 - **Benchmarks** (not yet run): LiveCodeBench v5 on Qwen3.5-9B with CLI pipeline, GPQA Diamond, SciCode, AA-LCR, AA-Omniscience, Humanity's Last Exam, CritPt
 - **CLI reliability testing**: Expand 8-level test to 10 iterations, target L6 ≥ 90%
 - **Fox optimization**: C-side sampler chain for grammar speed (14→50 tok/s target)
-- **Geometric Lens**: Online C(x) recalibration, G(x) redesign, properly sized training dataset
+- **Geometric Lens**: Further improving Geometric Lens datasets through V3.1 full-suite benchmark data
 - **Target**: 80-90% LCB pass@1-v(k=3)
 
 ---
