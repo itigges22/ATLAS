@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.png" alt="ATLAS Banner" width="600"/>
+  <img src="docs/images/banner.png" alt="ATLAS Banner"/>
 </p>
 
 <h1 align="center">A.T.L.A.S.</h1>
@@ -7,12 +7,12 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
-  <img src="https://img.shields.io/badge/LiveCodeBench-74.6%25_pass%401-green" alt="LCB"/>
+  <img src="https://img.shields.io/badge/LiveCodeBench-74.6%25_pass%401--v(k%3D3)-green" alt="LCB"/>
   <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
   <img src="https://img.shields.io/badge/license-Source%20Available-blue" alt="License"/>
 </p>
 
-ATLAS achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a single consumer GPU — up from 37% in V2 — through constraint-driven generation and self-verified iterative refinement. No fine-tuning, no API calls, no cloud. Just a $500 GPU and smart inference.
+A.T.L.A.S achieves **74.6% LiveCodeBench pass@1-v(k=3)** with a frozen 14B model on a single consumer GPU — up from 36-41% in V2 — through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure — structured generation, energy-based verification, self-verified repair — and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted — no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
 
 **V3.0.1** ships ATLAS as an **interactive coding assistant** you can download and use today. Type `atlas` in any project directory and start building.
 
@@ -59,17 +59,17 @@ See [docs/SETUP.md](docs/SETUP.md) for detailed setup (Docker, bare-metal, K3s).
 
 ## Benchmark Results
 
-> **Important**: The 74.6% benchmark was run on **Qwen3-14B** (V3.0). The CLI currently runs **Qwen3.5-9B** (V3.0.1). Formal benchmarks on the 9B model under the CLI pipeline have not yet been run — that is V3.1 work. The V3 pipeline architecture is identical; only the base model differs.
-
-> Hardware: RTX 5060 Ti 16GB | Model: Qwen3-14B-Q4_K_M (frozen, V3.0)
+> Hardware: RTX 5060 Ti 16GB | Model: Qwen3-14B-Q4_K_M (frozen)
 
 | Benchmark | Score | Tasks | Method |
 |-----------|-------|-------|--------|
-| **LiveCodeBench v5** | **74.6% pass@1*** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair |
-| **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning |
-| **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding |
+| **LiveCodeBench v5** | **74.6% pass@1-v(k=3)*** | 599 | V3 pipeline: PlanSearch + self-verified PR-CoT repair, **V3 Score** |
+| **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning, **V2 Score** |
+| **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding, **V2 Score** |
 
-\*pass@1 = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation. See [methodology](docs/V3_ABLATION_STUDY.md#2-methodology).
+\*pass@1-v(k=3) = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation — it is not pass@1. See [methodology](docs/V3_ABLATION_STUDY.md#2-methodology).
+
+> **Important**: Only LiveCodeBench was tested on V3 infrastructure. GPQA Diamond and SciCode scores are from V2 — they were not optimized for and perform accordingly. The CLI currently runs **Qwen3.5-9B** (V3.0.1). Formal benchmarks on the 9B model have not yet been run — that is V3.1 work.
 
 <details>
 <summary><b>V3 ablation breakdown (Qwen3-14B)</b></summary>
@@ -84,6 +84,25 @@ See [docs/SETUP.md](docs/SETUP.md) for detailed setup (Docker, bare-metal, K3s).
 Phase 3 uses self-generated test cases for internal verification — the model never sees the answer key during repair. PR-CoT rescues 36/42 tasks (85.7% of Phase 3 rescues). Full report: [V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)
 
 Raw ablation data: [`v3_ablation_results/`](v3_ablation_results/) — per-task pass/fail for all conditions.
+
+</details>
+
+### Cost and Performance Context
+
+| System | LCB pass@1 | Est. cost/task | Notes |
+|--------|-----------|----------------|-------|
+| DeepSeek V3.2 Reasoning | 86.2% | ~$0.002 | API, single-shot |
+| GPT-5 (high) | 84.6% | ~$0.043 | API, single-shot |
+| **ATLAS V3 (pass@1-v(k=3))** | **74.6%** | **~$0.004** | **Local electricity only, best-of-3 + repair pipeline** |
+| Claude 4.5 Sonnet | 71.4% | ~$0.066 | API, single-shot |
+| Claude 4 Sonnet | 65.5% | ~$0.066 | API, single-shot |
+
+<details>
+<summary><b>Methodology notes & sources</b></summary>
+
+ATLAS scores are from 599 LCB tasks using the full V3 pipeline (best-of-3 + Lens selection + iterative repair) on a frozen 14B quantized model — "pass@1-v(k=3)". Competitor scores are single-shot pass@1 (zero-shot, temperature 0) from Artificial Analysis on 315 LCB problems — not the same task set, so this is not a controlled head-to-head. API costs assume ~2,000 input + ~4,000 output tokens per task at current pricing. ATLAS cost = electricity at $0.12/kWh (~165W GPU, ~1h 55m for 599 tasks). ATLAS trades latency for cost — the pipeline takes longer per task than a single API call, but no data leaves the machine.
+
+Sources: [Artificial Analysis LCB Leaderboard](https://artificialanalysis.ai/leaderboards/live-code-bench) | [LiveCodeBench Paper (arXiv)](https://arxiv.org/abs/2403.07974) | [LCB Dataset (HuggingFace)](https://huggingface.co/datasets/livecodebench/code_generation_lite)
 
 </details>
 
@@ -110,8 +129,6 @@ Full training data and benchmark traces: [ATLAS Dataset on HuggingFace](https://
 ---
 
 ## How It Works
-
-ATLAS uses a two-layer architecture: an **agent loop** that handles tool calls and user interaction, wrapping a **V3 pipeline** that generates diverse candidates and selects the best.
 
 ```mermaid
 flowchart TB
@@ -178,6 +195,17 @@ Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
 
+## Known Limitations
+
+These are actively being addressed in V3.1:
+
+- **LCB-only optimization.** V3 phases were designed and tuned for LiveCodeBench. GPQA Diamond (47.0%) and SciCode (14.7%) results are from V2 infrastructure and were not optimized for. Cross-domain generalization is a V3.1 priority.
+- **Phase 2 (Geometric Lens routing) contributed +0.0pp.** C(x) was retrained on self-embeddings for V3, but the training dataset was only ~60 samples — far too small to learn a meaningful energy landscape. V3.1 retrains C(x) on a properly sized dataset.
+- **G(x) metric tensor is dormant.** G(x) is downstream of C(x) — with C(x) undertrained, G(x) has no meaningful geometry to navigate. Being redesigned for V3.1.
+- **L6 reliability at 67%.** Adding features to existing projects fails ~1/3 of the time — the 9B model sometimes over-explores instead of writing code.
+
+---
+
 ## Project Structure
 
 ```
@@ -226,15 +254,15 @@ ATLAS/
 
 ## Roadmap
 
-**V3.0** — Complete (2026-03-05). 74.6% LCB pass@1 on frozen Qwen3-14B. [Full ablation report](docs/V3_ABLATION_STUDY.md).
+**V3.0** — Complete (2026-03-05). 74.6% LCB pass@1-v(k=3) on frozen Qwen3-14B. [Full ablation report](docs/V3_ABLATION_STUDY.md).
 
 **V3.0.1** — Complete (2026-04-05). Interactive CLI with tool-call agent loop, Docker Compose deployment, V3 pipeline integration, 95.8% reliability. **This is the current release.**
 
 **V3.1** — In Progress.
 - **Benchmarks** (not yet run): LiveCodeBench v5 on Qwen3.5-9B with CLI pipeline, GPQA Diamond, SciCode, AA-LCR, AA-Omniscience, Humanity's Last Exam, CritPt
 - **Fox optimization**: C-side sampler chain for grammar speed (14→50 tok/s target)
-- **Geometric Lens**: Online C(x) recalibration, G(x) redesign
-- **Target**: 80-90% LCB pass@1
+- **Geometric Lens**: Online C(x) recalibration, G(x) redesign, properly sized training dataset
+- **Target**: 80-90% LCB pass@1-v(k=3)
 
 ---
 
