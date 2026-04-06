@@ -1,5 +1,12 @@
 # A.T.L.A.S.
 
+```
+    _  _____ _      _   ___
+   /_\|_   _| |    /_\ / __|
+  / _ \ | | | |__ / _ \\__ \
+ /_/ \_\|_| |____/_/ \_\___/
+```
+
 **Adaptive Test-time Learning and Autonomous Specialization**
 
 ![Version](https://img.shields.io/badge/version-V3.0.1-blue)
@@ -67,6 +74,10 @@ ATLAS uses a two-layer architecture:
 **Inner layer** (V3 pipeline): When `write_file` or `edit_file` targets a file with real application logic (50+ lines, T2 classification), the V3 pipeline activates. It generates diverse implementation candidates via PlanSearch and DivSampling, build-verifies each one, scores with C(x)/G(x) energy, selects the best candidate, and repairs failures with PR-CoT.
 
 **Per-file tier classification**: Config files, data files, CSS, and boilerplate (T1) write directly — no pipeline overhead. Feature files with logic (T2) route through V3 for quality enhancement.
+
+### CLI in Action
+
+![ATLAS CLI](docs/images/ATLAS_CLI.png)
 
 ## Quick Start
 
