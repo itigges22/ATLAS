@@ -34,6 +34,109 @@ graph TB
 
 Services run as containers via Docker Compose (recommended) or as local processes via the `atlas` launcher. Only llama-server uses the GPU. Everything else runs on CPU.
 
+### Component Detail
+
+```mermaid
+graph LR
+    subgraph proxy["atlas-proxy (Go)"]
+        direction TB
+        Grammar["Grammar Engine\njson_object schema"]
+        TierClass["Tier Classifier\nT0-T3 heuristics"]
+        AgentLoop["Agent Loop\nturn mgmt, trimming"]
+        Tools["Tool Executor\n8 tools"]
+        VerifyRepair["Verify-Repair Pipeline\nscore → sandbox → fix"]
+        BestK["Best-of-K\nparallel candidates"]
+        AiderFmt["Aider Formatter\nwhole-file output"]
+        Perms["Permission System\nallow/deny patterns"]
+        ProjDetect["Project Detector\nlang, framework, build cmd"]
+        V3Adapter["V3 Adapter\nconstraint extraction"]
+        V3Bridge["V3 Bridge\nSSE streaming to Python"]
+        BuildVerify["Build Verifier\nper-language syntax"]
+        Parallel["Parallel Tasks\ntopo sort, sub-agents"]
+    end
+
+    subgraph v3["v3-service (Python)"]
+        direction TB
+        PS["PlanSearch (1A)\n3 constraint-based plans"]
+        DS["DivSampling (1B)\n12 perturbations"]
+        BF["BudgetForcing (1C)\n5 tiers, Wait injection"]
+        BASC["BlendASC (2A)\nadaptive K allocation"]
+        REASC["ReASC (2B)\nearly stopping"]
+        SSTAR["S* (2C)\ndifferential tiebreaking"]
+        CS["CandidateSelection\n4 strategies"]
+        FA["FailureAnalysis (3A)\n6 failure categories"]
+        CR["ConstraintRefinement (3B)\ncosine filtering"]
+        PRCOT["PR-CoT (3C)\n4 perspectives"]
+        DC["DerivationChains (3D)\nsub-problem decomposition"]
+        RL["RefinementLoop (3E)\norchestrator"]
+        MC["Metacognitive (3F)\nfailure pattern library"]
+        ACE["ACE Pipeline (3G)\nplaybook learning"]
+        STG["SelfTestGen\nmodel-generated tests"]
+        LF["LensFeedback\nonline recalibration"]
+        ES["EmbeddingStore\nbinary persistence"]
+    end
+
+    subgraph lens["geometric-lens (Python)"]
+        direction TB
+        CX["C(x) Cost Field\n4096→512→128→1 MLP"]
+        GX["G(x) XGBoost\nPCA(128) + classifier"]
+        MT["Metric Tensor\ndiagonal G(x), PCA"]
+        EE["Embedding Extractor\nllama-server /embedding"]
+        SVC["Service Layer\nevaluate_combined()"]
+        EWC["EWC\ncontinual learning"]
+        RB["Replay Buffer\ndomain-stratified"]
+        CORR["Correction Engine\nnatural gradient"]
+        TR["Training Pipeline\ncontrastive loss"]
+        subgraph rag["RAG / PageIndex"]
+            AST["AST Parser\ntree-sitter"]
+            BM25["BM25 Index\ninverted index"]
+            TreeS["Tree Search\nLLM-guided traversal"]
+            Hybrid["Hybrid Retriever\nrouting logic"]
+        end
+        subgraph router["Confidence Router"]
+            Thompson["Thompson Sampling\nBeta posteriors"]
+            DiffEst["Difficulty Estimator\n4-signal fusion"]
+            SigCol["Signal Collector"]
+            FeedRec["Feedback Recorder"]
+        end
+        subgraph pcache["Pattern Cache"]
+            PStore["Pattern Store\nRedis STM/LTM"]
+            PMatch["Pattern Matcher\nBM25 over patterns"]
+            PExtract["Pattern Extractor\nLLM-driven"]
+            CoOccur["Co-occurrence Graph"]
+        end
+    end
+
+    subgraph sb["sandbox (Python)"]
+        direction TB
+        ExecPy["Python Executor\npylint + pytest"]
+        ExecJS["JavaScript Executor\nNode.js 20"]
+        ExecTS["TypeScript Executor\ntsc + tsx"]
+        ExecGo["Go Executor\nGo 1.22"]
+        ExecRust["Rust Executor\nrustc stable"]
+        ExecC["C/C++ Executor\ngcc/g++"]
+        ExecBash["Bash Executor"]
+        SynCheck["Syntax Checker\nper-language AST"]
+        ErrClass["Error Classifier\n15 error types"]
+    end
+
+    subgraph llm["llama-server (C++)"]
+        direction TB
+        CUDA["CUDA Inference\nn-gpu-layers 99"]
+        GrammarEng["Grammar Engine\njson_object + GBNF"]
+        ChatAPI["/v1/chat/completions"]
+        CompAPI["/completion\n(raw, no template)"]
+        EmbedAPI["/embedding\n4096-dim self-embed"]
+        Health["/health"]
+    end
+
+    style proxy fill:#1a3a5c,color:#fff
+    style v3 fill:#2d5016,color:#fff
+    style lens fill:#2d5016,color:#fff
+    style sb fill:#2d5016,color:#fff
+    style llm fill:#5c1a1a,color:#fff
+```
+
 ---
 
 ## 2. Services
@@ -288,11 +391,138 @@ Three repair strategies run sequentially. Each exits early if the repaired code 
 - Solutions are composed into a final candidate
 - ~7+ LLM calls total (1 decomposition + 5 per-step + 1 composition)
 
+### V3 Module Dependency Map
+
+19 Python modules in `benchmark/v3/` orchestrated by `v3-service/main.py`:
+
+```mermaid
+graph TD
+    Main["v3-service/main.py\nHTTP wrapper + pipeline orchestrator"]
+
+    Main --> PS["plan_search.py\nPlanSearch (1A)\n3 plans, 3-step pipeline"]
+    Main --> DS["div_sampling.py\nDivSampling (1B)\n12 perturbations"]
+    Main --> BF["budget_forcing.py\nBudgetForcing (1C)\n5 tiers, Wait injection"]
+    Main --> BASC["blend_asc.py\nBlendASC (2A)\nadaptive K from energy"]
+    Main --> REASC["reasc.py\nReASC (2B)\nearly stopping"]
+    Main --> SSTAR["s_star.py\nS* (2C)\ndifferential tiebreaking"]
+    Main --> CS["candidate_selection.py\n4 strategies:\nlens, random, logprob, oracle"]
+    Main --> FA["failure_analysis.py\nFailureAnalyzer (3A)\n6 failure categories"]
+    Main --> CR["constraint_refinement.py\nConstraintRefiner (3B)\ncosine distance filtering"]
+    Main --> PRCOT["pr_cot.py\nPR-CoT (3C)\n4 perspectives"]
+    Main --> DC["derivation_chains.py\nDerivationChains (3D)\nsub-problem decomposition"]
+    Main --> RL["refinement_loop.py\nRefinementLoop (3E)\norchestrator"]
+    Main --> MC["metacognitive.py\nMetacognitiveProfile (3F)\nfailure pattern library"]
+    Main --> ACE["ace_pipeline.py\nACE (3G)\nplaybook learning"]
+    Main --> STG["self_test_gen.py\nSelfTestGen\nmodel-generated tests"]
+    Main --> LF["lens_feedback.py\nLensFeedbackCollector\nonline recalibration"]
+    Main --> ES["embedding_store.py\nEmbeddingWriter/Reader\nbinary persistence"]
+
+    RL --> FA
+    RL --> CR
+    RL --> DC
+    BASC --> BF
+    REASC --> BF
+    LF --> BASC
+    LF --> BF
+    CR -.->|"cosine distance"| FA
+
+    style Main fill:#333,color:#fff
+    style PS fill:#1a3a5c,color:#fff
+    style DS fill:#1a3a5c,color:#fff
+    style BF fill:#1a3a5c,color:#fff
+    style BASC fill:#2d5016,color:#fff
+    style REASC fill:#2d5016,color:#fff
+    style SSTAR fill:#2d5016,color:#fff
+    style CS fill:#2d5016,color:#fff
+    style FA fill:#5c3a1a,color:#fff
+    style CR fill:#5c3a1a,color:#fff
+    style PRCOT fill:#5c3a1a,color:#fff
+    style DC fill:#5c3a1a,color:#fff
+    style RL fill:#5c3a1a,color:#fff
+    style MC fill:#5c3a1a,color:#fff
+    style ACE fill:#5c3a1a,color:#fff
+    style STG fill:#333,color:#fff
+    style LF fill:#333,color:#fff
+    style ES fill:#333,color:#fff
+```
+
+Color key: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 3 (repair), gray = utilities.
+
 ---
 
 ## 5. Geometric Lens
 
-Neural scoring system that evaluates code quality without executing it. Runs entirely on CPU.
+Neural scoring system that evaluates code quality without executing it. Runs entirely on CPU. Also serves as the RAG API for project indexing, retrieval, confidence routing, and pattern caching.
+
+```mermaid
+graph TB
+    subgraph scoring["Scoring Models"]
+        CX["C(x) Cost Field\n4096→512→128→1 MLP\nSiLU + Softplus"]
+        GX["G(x) XGBoost\nPCA(128) + classifier"]
+        MT["Metric Tensor\ndiagonal G(x) in PCA space\n(code exists, not deployed)"]
+        CORR["Correction Engine\nnatural gradient: -α·G⁻¹·∇C"]
+    end
+
+    subgraph training["Training & Continual Learning"]
+        TR["Training Pipeline\ncontrastive ranking loss"]
+        EWC["EWC\nFisher information\ncatastrophic forgetting prevention"]
+        RB["Replay Buffer\ndomain-stratified\n30% old / 70% new"]
+    end
+
+    subgraph embed["Embedding Layer"]
+        EE["Embedding Extractor\nllama-server /embedding\n4096-dim"]
+    end
+
+    subgraph retrieval["RAG / PageIndex V2"]
+        AST["AST Parser\ntree-sitter Python"]
+        TB2["Tree Builder\nhierarchical code index"]
+        BM25["BM25 Index\ninverted index, k1=1.5"]
+        SUM["Summarizer\nLLM-generated node summaries"]
+        PERS["Persistence\nJSON to disk"]
+        BM25S["BM25 Searcher\nmin_score=0.1"]
+        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6"]
+        HYB["Hybrid Retriever\nroute: bm25_first / tree_only / both"]
+    end
+
+    subgraph routing["Confidence Router"]
+        SIG["Signal Collector\n4 signals"]
+        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
+        TS["Thompson Sampling\nBeta(α,β) posteriors"]
+        FB["Feedback Recorder\nRedis-backed"]
+        FC["Fallback Chain\nCACHE→FAST→STANDARD→HARD"]
+    end
+
+    subgraph cache["Pattern Cache"]
+        PS2["Pattern Store\nRedis STM/LTM/PERSISTENT"]
+        PM["Pattern Matcher\nBM25 over summaries"]
+        PE["Pattern Extractor\nLLM-driven"]
+        PSC["Pattern Scorer\nEbbinghaus decay"]
+        COO["Co-occurrence Graph"]
+    end
+
+    subgraph service["Service Layer (service.py)"]
+        SVC["evaluate_combined()\nevaluate_energy()\nevaluate_gx()\nreload_weights()"]
+    end
+
+    EE --> CX
+    EE --> GX
+    CX --> SVC
+    GX --> SVC
+    TR --> CX
+    EWC --> TR
+    RB --> TR
+    SIG --> DIFF
+    DIFF --> TS
+    TS --> FC
+
+    style scoring fill:#2d5016,color:#fff
+    style training fill:#1a3a5c,color:#fff
+    style embed fill:#333,color:#fff
+    style retrieval fill:#1a3a5c,color:#fff
+    style routing fill:#5c3a1a,color:#fff
+    style cache fill:#5c3a1a,color:#fff
+    style service fill:#333,color:#fff
+```
 
 ### C(x) Cost Field
 
