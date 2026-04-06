@@ -2,15 +2,15 @@
   <img src="docs/images/banner.png" alt="ATLAS Banner"/>
 </p>
 
-<h1 align="center">A.T.L.A.S.</h1>
-<p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
-
 <p align="center">
   <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/LiveCodeBench-74.6%25_pass%401--v(k%3D3)-green" alt="LCB"/>
   <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
   <img src="https://img.shields.io/badge/license-Source%20Available-blue" alt="License"/>
 </p>
+
+<h1 align="center">A.T.L.A.S.</h1>
+<p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 A.T.L.A.S achieves **74.6% LiveCodeBench pass@1-v(k=3)** with a frozen 14B model on a single consumer GPU — up from 36-41% in V2 — through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure — structured generation, energy-based verification, self-verified repair — and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted — no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
 
