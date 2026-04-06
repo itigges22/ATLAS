@@ -36,6 +36,8 @@ ATLAS isn't the destination. It's proof of what we can build.
 
 ## Download and Use It
 
+**Prerequisites:** NVIDIA GPU (16GB+ VRAM) with proprietary drivers, Docker (with [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)) or Podman, Python 3.9+, pip, wget.
+
 ```bash
 # 1. Clone
 git clone https://github.com/itigges22/ATLAS.git
