@@ -272,7 +272,7 @@ scripts/build-containers.sh
 scripts/generate-manifests.sh
 
 # 4. Deploy
-kubectl apply -n atlas -f k8s/manifests/
+kubectl apply -n atlas -f manifests/
 
 # 5. Verify
 scripts/verify-install.sh
