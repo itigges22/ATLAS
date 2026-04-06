@@ -264,7 +264,21 @@ through the sandbox).
    represents a near-doubling of pass rate on a frozen 14B model with no fine-tuning,
    achieved entirely through test-time compute strategies.
 
-## 9. V3.1 Roadmap
+## 9. Limitations
+
+1. **Single-benchmark optimization.** All V3 phases were designed, tuned, and ablated on LiveCodeBench v5. GPQA Diamond and SciCode results are reported but neither benchmark received pipeline optimization. Cross-domain generalization remains untested.
+
+2. **Phase 2 C(x) undertrained.** The C(x) cost field was retrained on self-embeddings for V3 (fixing the V2 nomic embedding failure), but the training dataset contained only ~60 samples -- too small to learn a meaningful energy landscape. This is the root cause of the +0.0pp Phase 2 result: with an undertrained C(x), neither adaptive K allocation nor S\* tiebreaking has a useful signal to act on.
+
+3. **G(x) metric tensor dormant.** G(x) operates downstream of C(x), applying metric corrections via Δx = -G⁻¹∇C. With C(x) producing a weak/noisy energy landscape, G(x) has no meaningful geometry to navigate. The correction term contributes nothing. G(x) is being redesigned from the ground up for V3.1.
+
+4. **SandboxAdapter stdio limitation.** S\* distinguishing input tiebreaking is implemented but non-functional on stdio-mode LCB tasks due to a bug where the SandboxAdapter silently ignores the `test_case` parameter for stdio evaluation. This also affects Phase 2's distinguishing input generation.
+
+5. **Sequential task processing.** The benchmark pipeline processes tasks one at a time. This does not affect per-task accuracy but significantly impacts total benchmark runtime.
+
+---
+
+## 10. V3.1 Roadmap
 
 | Initiative | Description | Expected Impact |
 |------------|-------------|-----------------|
