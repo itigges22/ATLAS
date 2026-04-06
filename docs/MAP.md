@@ -206,11 +206,12 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`MAP.md`](#docs) — This file
   - [`SETUP.md`](#docs) — Installation guide (Docker, bare-metal, K3s)
   - [`TROUBLESHOOTING.md`](#docs) — Common issues and solutions
-  - [`V3_ABLATION_STUDY.md`](#docs) — V3 ablation methodology and results
-  - [`V2_5_ABLATION_STUDY.md`](#docs) — V2.5 Geometric Lens ablation (historical)
-  - [`V2_TO_V2_5_MIGRATION.md`](#docs) — V2 to V2.5 migration guide (historical)
-  - [`V3_STATUS.md`](#docs) — V3 implementation status (historical)
-  - [`V3_1_STATUS.md`](#docs) — V3.1 implementation status
+  - [`reports/`](#docs-reports) — Ablation studies, status tracking, migration guides
+    - [`V3_ABLATION_STUDY.md`](#docs-reports) — V3 ablation methodology and results
+    - [`V2_5_ABLATION_STUDY.md`](#docs-reports) — V2.5 Geometric Lens ablation (historical)
+    - [`V2_TO_V2_5_MIGRATION.md`](#docs-reports) — V2 to V2.5 migration guide (historical)
+    - [`V3_STATUS.md`](#docs-reports) — V3 implementation status (historical)
+    - [`V3_1_STATUS.md`](#docs-reports) — V3.1 implementation status
   - [`images/banner.png`](#docs) — README banner image
   - [`images/ATLAS_CLI.png`](#docs) — CLI screenshot
 - [`v3_ablation_results/`](#v3-ablation-results) — Published ablation data
@@ -524,11 +525,16 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`MAP.md`](MAP.md) | This file — repository file map |
 | [`SETUP.md`](SETUP.md) | Installation: Docker Compose, bare-metal, K3s |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Common issues and solutions |
-| [`V3_ABLATION_STUDY.md`](V3_ABLATION_STUDY.md) | V3 ablation methodology: conditions A-D, 599 tasks, statistical analysis |
-| [`V2_5_ABLATION_STUDY.md`](V2_5_ABLATION_STUDY.md) | Historical: V2.5 Geometric Lens ablation study |
-| [`V2_TO_V2_5_MIGRATION.md`](V2_TO_V2_5_MIGRATION.md) | Historical: V2 to V2.5 migration guide |
-| [`V3_STATUS.md`](V3_STATUS.md) | Historical: V3 implementation tracking |
-| [`V3_1_STATUS.md`](V3_1_STATUS.md) | V3.1 implementation status and roadmap |
+<a id="docs-reports"></a>
+### docs/reports/ — Studies, Status, Migration
+
+| File | Description |
+|------|-------------|
+| [`V3_ABLATION_STUDY.md`](reports/V3_ABLATION_STUDY.md) | V3 ablation methodology: conditions A-D, 599 tasks, statistical analysis |
+| [`V2_5_ABLATION_STUDY.md`](reports/V2_5_ABLATION_STUDY.md) | Historical: V2.5 Geometric Lens ablation study |
+| [`V2_TO_V2_5_MIGRATION.md`](reports/V2_TO_V2_5_MIGRATION.md) | Historical: V2 to V2.5 migration guide |
+| [`V3_STATUS.md`](reports/V3_STATUS.md) | Historical: V3 implementation tracking |
+| [`V3_1_STATUS.md`](reports/V3_1_STATUS.md) | V3.1 implementation status and roadmap |
 
 <a id="v3-ablation-results"></a>
 ### v3_ablation_results/ — Published Evidence

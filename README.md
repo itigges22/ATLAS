@@ -81,7 +81,7 @@ See [docs/SETUP.md](docs/SETUP.md) for detailed setup (Docker, bare-metal, K3s).
 | **GPQA Diamond** | **47.0%** | 198 | k=5, multiple-choice knowledge reasoning, **V2 Score** |
 | **SciCode** | **14.7%** (sub-problems) | 341 | k=1, cross-domain scientific coding, **V2 Score** |
 
-\*pass@1-v(k=3) = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation — it is not pass@1. See [methodology](docs/V3_ABLATION_STUDY.md#2-methodology).
+\*pass@1-v(k=3) = one solution submitted per task, but generated via best-of-3 candidates + Lens selection + iterative repair on failures. Not single-shot generation — it is not pass@1. See [methodology](docs/reports/V3_ABLATION_STUDY.md#2-methodology).
 
 > **Important**: Only LiveCodeBench was tested on V3 infrastructure. GPQA Diamond and SciCode scores are from V2 — they were not optimized for and perform accordingly. The CLI currently runs **Qwen3.5-9B** (V3.0.1). Formal benchmarks on the 9B model have not yet been run — that is V3.1 work.
 
@@ -95,7 +95,7 @@ See [docs/SETUP.md](docs/SETUP.md) for detailed setup (Docker, bare-metal, K3s).
 | C | +Phase 1+2 (Lens routing) | 67.3% | +0.0pp |
 | D | +Phase 1+3 (self-verified refinement) | **74.6%** | +7.3pp |
 
-Phase 3 uses self-generated test cases for internal verification — the model never sees the answer key during repair. PR-CoT rescues 36/42 tasks (85.7% of Phase 3 rescues). Full report: [V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)
+Phase 3 uses self-generated test cases for internal verification — the model never sees the answer key during repair. PR-CoT rescues 36/42 tasks (85.7% of Phase 3 rescues). Full report: [V3_ABLATION_STUDY.md](docs/reports/V3_ABLATION_STUDY.md)
 
 Raw ablation data: [`v3_ablation_results/`](v3_ablation_results/) | Full traces: [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)
 
@@ -215,7 +215,7 @@ These are actively being addressed in V3.1:
 | **[CONFIGURATION.md](docs/CONFIGURATION.md)** | All environment variables and config |
 | **[API.md](docs/API.md)** | HTTP API endpoints and formats |
 | **[MAP.md](docs/MAP.md)** | Visual guide to every file in the repo |
-| **[V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)** | Ablation methodology and results |
+| **[V3_ABLATION_STUDY.md](docs/reports/V3_ABLATION_STUDY.md)** | Ablation methodology and results |
 | **[CHANGELOG.md](CHANGELOG.md)** | Release history |
 
 <details>
@@ -223,8 +223,8 @@ These are actively being addressed in V3.1:
 
 | Document | Description |
 |----------|-------------|
-| **[V2_5_ABLATION_STUDY.md](docs/V2_5_ABLATION_STUDY.md)** | V2.5 Geometric Lens ablation |
-| **[V2_TO_V2_5_MIGRATION.md](docs/V2_TO_V2_5_MIGRATION.md)** | V2 to V2.5 migration |
+| **[V2_5_ABLATION_STUDY.md](docs/reports/V2_5_ABLATION_STUDY.md)** | V2.5 Geometric Lens ablation |
+| **[V2_TO_V2_5_MIGRATION.md](docs/reports/V2_TO_V2_5_MIGRATION.md)** | V2 to V2.5 migration |
 
 </details>
 
@@ -234,7 +234,7 @@ For a complete guide to every directory and file, see **[docs/MAP.md](docs/MAP.m
 
 ## Roadmap
 
-**V3.0** — Complete (2026-03-05). 74.6% LCB pass@1-v(k=3) on frozen Qwen3-14B. [Full ablation report](docs/V3_ABLATION_STUDY.md).
+**V3.0** — Complete (2026-03-05). 74.6% LCB pass@1-v(k=3) on frozen Qwen3-14B. [Full ablation report](docs/reports/V3_ABLATION_STUDY.md).
 
 **V3.0.1** — Complete (2026-04-05). Interactive CLI with tool-call agent loop, Docker Compose deployment, V3 pipeline integration, 95.8% reliability. **This is the current release.**
 

@@ -27,7 +27,7 @@
 
 Phase 3 was redesigned to use self-generated test cases instead of real LCB tests. The model generates its own I/O pairs from the problem statement, uses them for iterative repair, and only submits to real tests for final scoring. This makes the result legitimate and comparable to other systems' pass@1.
 
-Full ablation report: [docs/V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)
+Full ablation report: [V3_ABLATION_STUDY.md](V3_ABLATION_STUDY.md)
 
 ---
 
