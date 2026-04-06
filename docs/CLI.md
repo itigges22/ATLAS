@@ -2,6 +2,10 @@
 
 The ATLAS CLI launches all required services, connects to the local LLM, and drops you into an interactive coding session powered by the V3 pipeline.
 
+<p align="center">
+  <img src="images/ATLAS_CLI.png" alt="ATLAS CLI" width="600"/>
+</p>
+
 ---
 
 ## Launching
