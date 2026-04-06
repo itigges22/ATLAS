@@ -51,8 +51,8 @@ cd atlas
 git checkout -b feature/your-feature-name
 
 # Copy configuration
-cp atlas.conf.example atlas.conf
-# Edit atlas.conf for your environment
+cp .env.example .env
+# Edit .env if you need to change model path or ports
 
 # Run tests before making changes
 python tests/validate_tests.py
@@ -167,7 +167,7 @@ fi
 python tests/validate_tests.py
 
 # Run specific test file
-pytest tests/test_rag_api.py -v
+pytest tests/v3/test_plan_search.py -v
 
 # Run with coverage
 pytest tests/ --cov=. --cov-report=html
