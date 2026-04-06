@@ -14,6 +14,8 @@
 
 A.T.L.A.S achieves **74.6% LiveCodeBench pass@1-v(k=3)** with a frozen 14B model on a single consumer GPU — up from 36-41% in V2 — through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure — structured generation, energy-based verification, self-verified repair — and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted — no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
 
+---
+
 **V3.0.1** ships ATLAS as an **interactive coding assistant powered by a local 9B model** that you can download and use today. The 9B model (Qwen3.5-9B) has not yet been formally benchmarked under the V3 pipeline — that is V3.1 work — but the V3 pipeline architecture is identical to what scored 74.6% on the 14B model, and the 9B model's published baselines suggest it should score similarly or higher. Type `atlas` in any project directory and start building.
 
 <p align="center">
