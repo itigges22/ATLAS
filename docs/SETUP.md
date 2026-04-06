@@ -1,120 +1,199 @@
 # ATLAS Setup Guide
 
-Three deployment methods: Docker Compose (recommended), bare-metal, and K3s.
+Three deployment methods: Docker Compose (recommended and tested), bare-metal, and K3s.
 
 ---
 
 ## Prerequisites (All Methods)
 
-- **NVIDIA GPU** with 16GB+ VRAM (tested on RTX 5060 Ti)
-- **NVIDIA drivers** installed and working (`nvidia-smi` shows the GPU)
-- **Model weights**: Download `Qwen3.5-9B-Q6_K.gguf` (~6.9GB)
+| Requirement | Details |
+|-------------|---------|
+| **NVIDIA GPU** | 16GB+ VRAM (tested on RTX 5060 Ti 16GB) |
+| **NVIDIA drivers** | Proprietary drivers installed (`nvidia-smi` should show your GPU) |
+| **Python 3.9+** | With pip |
+| **wget** | For downloading model weights |
+| **Model weights** | Qwen3.5-9B-Q6_K.gguf (~7GB) from HuggingFace |
+
+### Verify GPU
+
+```bash
+nvidia-smi
+# Should show your GPU with driver version and VRAM
+# If this fails, install NVIDIA proprietary drivers first
+```
 
 ---
 
 ## Method 1: Docker Compose (Recommended)
 
-### Prerequisites
-- Docker or Podman with `podman-compose`
-- NVIDIA Container Toolkit (`nvidia-container-toolkit` package)
+This is the tested deployment method for V3.0.1.
+
+### Additional Prerequisites
+
+- **Docker** with [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), **or Podman**
+- ~20GB disk space (model weights + container images)
 
 ### Setup
 
 ```bash
-# 1. Clone the repository
+# 1. Clone
 git clone https://github.com/itigges22/ATLAS.git
 cd ATLAS
 
-# 2. Download model weights
+# 2. Download model weights (~7GB)
 mkdir -p models
-# Download Qwen3.5-9B-Q6_K.gguf into models/
-# Source: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF
+wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
+     -O models/Qwen3.5-9B-Q6_K.gguf
 
-# 3. Configure environment
+# 3. Install the ATLAS CLI
+pip install -e .
+
+# 4. Configure environment
 cp .env.example .env
-# Edit .env — set ATLAS_MODELS_DIR to absolute path of your models directory
+# Defaults work if your model is in ./models/ — edit .env only if you changed the path
 
-# 4. Build and start
-podman-compose up -d    # or: docker compose up -d
+# 5. Start all services (first run builds container images — this takes several minutes)
+docker compose up -d         # or: podman-compose up -d
 
-# 5. Verify all services are healthy
-podman-compose ps       # All should show "healthy"
+# 6. Verify everything is healthy (wait for all services to show "healthy")
+docker compose ps
 
-# 6. Launch ATLAS
+# 7. Start coding
 atlas
 ```
+
+### What Happens on First Run
+
+1. Docker builds 5 container images from source:
+   - **llama-server** — compiles llama.cpp with CUDA (slowest, ~5-10 min)
+   - **geometric-lens** — installs PyTorch CPU + FastAPI
+   - **v3-service** — installs PyTorch CPU + benchmark modules
+   - **sandbox** — installs Node.js, Go, Rust, gcc
+   - **atlas-proxy** — compiles Go binary
+2. llama-server loads the 7GB model into GPU VRAM (~1-2 min)
+3. All services start health checks
+4. Once all 5 services report healthy, `atlas` connects and launches Aider
+
+Subsequent `docker compose up -d` starts are fast (seconds) since images are cached.
 
 ### Verify Installation
 
 ```bash
-# Check service health
-curl http://localhost:8080/health   # llama-server
-curl http://localhost:8099/health   # geometric-lens
-curl http://localhost:8070/health   # v3-service
-curl http://localhost:8090/health   # atlas-proxy
+# Check each service individually
+curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
+curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
+curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
+curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
+curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Quick test
+# Quick functional test
 atlas --message "Create hello.py that prints hello world"
 ```
 
-### Stop
+All health endpoints should return `{"status": "ok"}` or `{"status": "healthy"}`.
+
+### Stopping
 
 ```bash
-podman-compose down     # or: docker compose down
+docker compose down          # Stop all services (preserves images)
+docker compose down --rmi all  # Stop and remove images (next start rebuilds)
+```
+
+### Viewing Logs
+
+```bash
+docker compose logs -f llama-server    # Follow llama-server logs
+docker compose logs -f geometric-lens  # Follow Lens logs
+docker compose logs -f v3-service      # Follow V3 pipeline logs
+docker compose logs -f atlas-proxy     # Follow proxy logs
+docker compose logs -f sandbox         # Follow sandbox logs
+docker compose logs --tail 50          # Last 50 lines from all services
+```
+
+### Updating
+
+```bash
+git pull
+docker compose down
+docker compose build         # Rebuild changed images
+docker compose up -d
 ```
 
 ---
 
 ## Method 2: Bare Metal
 
-### Prerequisites
-- **Go 1.24+** (for building atlas-proxy)
-- **Python 3.10+** with pip
-- **llama.cpp** built with CUDA from [llama-cpp-mtp](https://github.com/ggml-org/llama.cpp)
-- **Aider** (`pip install aider-chat`)
+Run all services as local processes without containers. Useful for development or systems where Docker isn't available.
+
+### Additional Prerequisites
+
+| Requirement | Details |
+|-------------|---------|
+| **Go 1.24+** | For building atlas-proxy |
+| **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
+| **Aider** | `pip install aider-chat` |
+| **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
+| **Rust** | Required by sandbox for Rust execution |
 
 ### Build
 
 ```bash
-# Build atlas-proxy
+# 1. Clone and install Python CLI
+git clone https://github.com/itigges22/ATLAS.git
+cd ATLAS
+pip install -e .
+
+# 2. Download model weights
+mkdir -p models
+wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
+     -O models/Qwen3.5-9B-Q6_K.gguf
+
+# 3. Build atlas-proxy
 cd atlas-proxy
 go build -o ~/.local/bin/atlas-proxy-v2 .
+cd ..
 
-# Install Python dependencies for geometric-lens
-cd ../geometric-lens
-pip install -r requirements.txt
+# 4. Install geometric-lens Python dependencies
+pip install -r geometric-lens/requirements.txt
 
-# Install Python dependencies for V3 service
+# 5. Install V3 service PyTorch (CPU only)
 pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# 6. Install sandbox dependencies
+pip install fastapi uvicorn pylint pytest pydantic
 ```
 
-### Start Services Manually
+### Start Services
+
+Start each service in a separate terminal (or use `&` and redirect to log files):
 
 ```bash
-# 1. Start llama-server
+# Terminal 1: llama-server (GPU)
 llama-server \
-  --model ~/models/Qwen3.5-9B-Q6_K.gguf \
+  --model models/Qwen3.5-9B-Q6_K.gguf \
   --host 0.0.0.0 --port 8080 \
-  --ctx-size 32768 --n-gpu-layers 99 --no-mmap &
+  --ctx-size 32768 --n-gpu-layers 99 --no-mmap
 
-# 2. Start geometric-lens
+# Terminal 2: Geometric Lens
 cd geometric-lens
 LLAMA_URL=http://localhost:8080 \
+LLAMA_EMBED_URL=http://localhost:8080 \
 GEOMETRIC_LENS_ENABLED=true \
-python -m uvicorn main:app --host 0.0.0.0 --port 8099 &
+PROJECT_DATA_DIR=/tmp/atlas-projects \
+python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
-# 3. Start V3 service
-cd ../v3-service
+# Terminal 3: V3 Pipeline
+cd v3-service
 ATLAS_INFERENCE_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
-python main.py &
+python main.py
 
-# 4. Start sandbox
-cd ../sandbox
-python executor_server.py &
+# Terminal 4: Sandbox
+cd sandbox
+python executor_server.py
 
-# 5. Start proxy
+# Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
 ATLAS_INFERENCE_URL=http://localhost:8080 \
 ATLAS_LLAMA_URL=http://localhost:8080 \
@@ -122,57 +201,138 @@ ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
 ATLAS_AGENT_LOOP=1 \
-atlas-proxy-v2 &
-
-# 6. Launch ATLAS
-atlas
+ATLAS_MODEL_NAME=Qwen3.5-9B-Q6_K \
+atlas-proxy-v2
 ```
 
-Or use the `atlas` command which starts all services automatically:
+> **Note:** The sandbox listens on port **8020** in bare-metal mode (no Docker port remapping). The proxy's `ATLAS_SANDBOX_URL` must use port 8020, not 30820.
+
+### Start with the Launcher Script
+
+Alternatively, copy the launcher script to your PATH:
 
 ```bash
-atlas    # Detects and starts any missing services
+cp /path/to/atlas-launcher ~/.local/bin/atlas
+chmod +x ~/.local/bin/atlas
+atlas    # Starts all missing services and launches Aider
 ```
+
+The launcher auto-detects which services are already running and starts only what's missing. If it detects a Docker Compose stack, it connects to that instead.
 
 ---
 
 ## Method 3: K3s
 
-K3s manifests are generated at runtime from `atlas.conf`.
+For production Kubernetes deployment with GPU scheduling, health probes, and resource limits.
 
-### Prerequisites
-- K3s cluster with NVIDIA device plugin
-- `kubectl` configured
-- Podman for building container images
+### Additional Prerequisites
 
-### Deploy
+| Requirement | Details |
+|-------------|---------|
+| **K3s** | Single-node or multi-node cluster |
+| **NVIDIA GPU Operator** or **device plugin** | GPU must be visible as `nvidia.com/gpu` resource |
+| **Helm** | For GPU Operator installation |
+| **Podman or Docker** | For building container images |
+
+### Automated Install
+
+The install script handles the complete setup — K3s installation, GPU Operator, container builds, and deployment:
 
 ```bash
 # 1. Configure
 cp atlas.conf.example atlas.conf
-# Edit atlas.conf with your model paths, ports, etc.
+# Edit atlas.conf: model paths, GPU layers, context size, NodePorts
 
-# 2. Build container images
+# 2. Run the installer (requires root)
+sudo scripts/install.sh
+```
+
+The installer will:
+1. Check prerequisites (NVIDIA drivers, GPU VRAM, system RAM)
+2. Install K3s if not already running
+3. Install NVIDIA GPU Operator via Helm (if GPU not visible to cluster)
+4. Build container images and import to K3s containerd
+5. Generate manifests from `atlas.conf` via envsubst
+6. Deploy to the `atlas` namespace
+7. Wait for all services to be healthy
+
+### Manual Deploy
+
+If K3s is already running with GPU support:
+
+```bash
+# 1. Configure
+cp atlas.conf.example atlas.conf
+# Edit atlas.conf
+
+# 2. Build and import images
 scripts/build-containers.sh
 
-# 3. Generate manifests
+# 3. Generate manifests from atlas.conf
 scripts/generate-manifests.sh
 
 # 4. Deploy
-kubectl apply -f manifests/ -n atlas
+kubectl apply -n atlas -f k8s/manifests/
 
 # 5. Verify
 scripts/verify-install.sh
 ```
 
-> **Note**: Docker Compose is the verified deployment method for V3.0.1. K3s manifests are provided but may need adjustment for your cluster.
+### K3s-Specific Configuration
+
+K3s uses `atlas.conf` (not `.env`) for configuration. Key differences from Docker Compose:
+
+| Setting | Docker Compose | K3s |
+|---------|---------------|-----|
+| Config file | `.env` | `atlas.conf` |
+| Context size | 32K | 40K per slot (× 4 slots = 160K total) |
+| Parallel slots | 1 (implicit) | 4 |
+| Flash attention | Off | On |
+| KV cache quantization | None | q8_0 (keys) + q4_0 (values) |
+| Memory locking | No | mlock enabled |
+| Embeddings endpoint | Not exposed | `--embeddings` flag |
+| Service exposure | Host ports | NodePorts |
+
+See [CONFIGURATION.md](CONFIGURATION.md) for the full `atlas.conf` reference.
+
+### Verify K3s Deployment
+
+```bash
+# Check pods
+kubectl get pods -n atlas
+
+# Check GPU allocation
+kubectl describe nodes | grep nvidia.com/gpu
+
+# Run verification suite
+scripts/verify-install.sh
+```
+
+> **Note:** Docker Compose is the verified deployment method for V3.0.1. K3s manifests are generated from templates at deploy time. The K3s deployment was used for V3.0 benchmarks on Qwen3-14B and is production-tested, but the template files may need adjustment for your cluster configuration.
 
 ---
 
-## Configuration
+## Hardware Sizing
 
-See [CONFIGURATION.md](CONFIGURATION.md) for all environment variables and config options.
+| Resource | Minimum | Recommended | Notes |
+|----------|---------|-------------|-------|
+| GPU VRAM | 16 GB | 16 GB | Model (~7GB) + KV cache (~1.3GB) + overhead |
+| System RAM | 14 GB | 16 GB+ | PyTorch runtime + container overhead |
+| Disk | 15 GB | 25 GB | Model (7GB) + container images (5-8GB) + working space |
+| CPU | 4 cores | 8+ cores | V3 pipeline is CPU-intensive during repair phases |
 
-## Troubleshooting
+### Supported GPUs
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues.
+Any NVIDIA GPU with 16GB+ VRAM and CUDA support. Tested on:
+- RTX 5060 Ti 16GB (primary development GPU)
+
+AMD and Intel GPUs are not supported (llama.cpp CUDA backend required).
+
+---
+
+## Next Steps
+
+- [CLI.md](CLI.md) — How to use ATLAS once it's running
+- [CONFIGURATION.md](CONFIGURATION.md) — All environment variables and tuning options
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Common issues and solutions
+- [ARCHITECTURE.md](ARCHITECTURE.md) — How the system works internally
