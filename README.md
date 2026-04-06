@@ -138,35 +138,50 @@ Full training data and benchmark traces: [ATLAS Dataset on HuggingFace](https://
 ## How It Works
 
 ```mermaid
-flowchart LR
-  subgraph Phase1["Phase 1: Generate"]
-    PS["PlanSearch\nConstraint extraction\n+ diverse plans"]
-    BF["Budget Forcing\nThinking token\ncontrol"]
+flowchart TD
+  Probe["Probe\nGenerate single candidate"]
+  GL1["Geometric Lens\nC(x) score"]
+  SB1["Sandbox Test"]
+  Pass1{"Passes?"}
+
+  subgraph Phase1["Phase 1: Diverse Generation"]
+    PS["PlanSearch\n3 diverse plans"]
+    DS["DivSampling\nK candidates"]
+    BF["Budget Forcing"]
   end
 
-  subgraph Verify["Score + Test"]
-    GL["Geometric Lens\nC(x) energy scoring"]
-    SB["Sandbox\nCode execution"]
-  end
+  GL2["Score + Sandbox\nTest all K"]
+  Pass2{"Any pass?"}
+  Select["Best-of-K\nLens selection"]
 
   subgraph Phase3["Phase 3: Repair"]
-    ST["Self-Test Gen\nModel-generated\nI/O pairs"]
-    PR["PR-CoT Repair\nMulti-perspective\nchain-of-thought"]
+    PR["PR-CoT Repair"]
+    RL["Refinement Loop"]
+    DC["Derivation Chains"]
   end
 
-  PS --> BF
-  BF -->|"k=3 candidates"| GL
-  GL -->|"energy-sorted"| SB
-  SB -->|"all fail"| ST
-  ST --> PR
-  PR -->|"repaired code"| SB
+  Done["Write Winner"]
 
-  style GL fill:#2d5016,color:#fff
+  Probe --> GL1 --> SB1 --> Pass1
+  Pass1 -->|"Yes"| Done
+  Pass1 -->|"No"| PS
+  PS --> DS --> BF --> GL2 --> Pass2
+  Pass2 -->|"Yes"| Select --> Done
+  Pass2 -->|"No, 0/K pass"| PR --> RL --> DC
+  DC -->|"repaired"| Done
+
+  style Probe fill:#1a3a5c,color:#fff
+  style GL1 fill:#2d5016,color:#fff
+  style SB1 fill:#2d5016,color:#fff
   style PS fill:#1a3a5c,color:#fff
+  style DS fill:#1a3a5c,color:#fff
   style BF fill:#1a3a5c,color:#fff
-  style SB fill:#2d5016,color:#fff
-  style ST fill:#5c3a1a,color:#fff
+  style GL2 fill:#2d5016,color:#fff
+  style Select fill:#2d5016,color:#fff
   style PR fill:#5c3a1a,color:#fff
+  style RL fill:#5c3a1a,color:#fff
+  style DC fill:#5c3a1a,color:#fff
+  style Done fill:#333,color:#fff
 ```
 
 **The model writes code. The infrastructure makes it reliable.**
