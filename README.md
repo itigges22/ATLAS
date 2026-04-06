@@ -37,23 +37,33 @@ ATLAS isn't the destination. It's proof of what we can build.
 ## Download and Use It
 
 ```bash
-# Clone
-git clone https://github.com/itigges22/ATLAS.git && cd ATLAS
+# 1. Clone
+git clone https://github.com/itigges22/ATLAS.git
+cd ATLAS
 
-# Download model weights (~7GB)
-mkdir -p models && cd models
-# Download Qwen3.5-9B-Q6_K.gguf from HuggingFace
-cd ..
+# 2. Download model weights (~7GB)
+mkdir -p models
+wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
+     -O models/Qwen3.5-9B-Q6_K.gguf
 
-# Configure and start
-cp .env.example .env        # Edit: set ATLAS_MODELS_DIR
-podman-compose up -d         # or: docker compose up -d
+# 3. Install the ATLAS CLI
+pip install -e .
 
-# Start coding
+# 4. Configure environment
+cp .env.example .env
+# Defaults work if your model is in ./models/ — edit .env only if you changed the path
+
+# 5. Start all services (requires NVIDIA GPU — model loading takes ~2 minutes)
+docker compose up -d         # or: podman-compose up -d
+
+# 6. Verify everything is healthy (wait for all services to show "healthy")
+docker compose ps
+
+# 7. Start coding
 atlas
 ```
 
-That's it. Five commands. ATLAS starts all services, connects to the model, and drops you into an interactive coding session. Ask it to build anything.
+Step 5 builds container images on first run, which can take several minutes. Subsequent starts are fast. Step 6 should show all 5 services (llama-server, geometric-lens, v3-service, sandbox, atlas-proxy) as healthy before proceeding.
 
 See [docs/SETUP.md](docs/SETUP.md) for detailed setup (Docker, bare-metal, K3s).
 
