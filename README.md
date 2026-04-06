@@ -1,19 +1,24 @@
-![License](https://img.shields.io/badge/license-Source%20Available-blue)
-![Python](https://img.shields.io/badge/python-3.10+-green)
-![GPU](https://img.shields.io/badge/GPU-RTX%205060%20Ti%2016GB-green)
-![Version](https://img.shields.io/badge/version-V3.0.1-blue)
+<p align="center">
+  <img src="docs/images/banner.png" alt="ATLAS Banner" width="600"/>
+</p>
 
-![ATLAS Banner](docs/images/banner.png)
+<h1 align="center">A.T.L.A.S.</h1>
+<p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
-# A.T.L.A.S.
-
-**Adaptive Test-time Learning and Autonomous Specialization**
+<p align="center">
+  <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/LiveCodeBench-74.6%25_pass%401-green" alt="LCB"/>
+  <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
+  <img src="https://img.shields.io/badge/license-Source%20Available-blue" alt="License"/>
+</p>
 
 ATLAS achieves **74.6% LiveCodeBench pass@1** with a frozen 14B model on a single consumer GPU — up from 37% in V2 — through constraint-driven generation and self-verified iterative refinement. No fine-tuning, no API calls, no cloud. Just a $500 GPU and smart inference.
 
 **V3.0.1** ships ATLAS as an **interactive coding assistant** you can download and use today. Type `atlas` in any project directory and start building.
 
-![ATLAS CLI](docs/images/ATLAS_CLI.png)
+<p align="center">
+  <img src="docs/images/ATLAS_CLI.png" alt="ATLAS CLI" width="500"/>
+</p>
 
 ---
 
@@ -106,37 +111,55 @@ Full training data and benchmark traces: [ATLAS Dataset on HuggingFace](https://
 
 ## How It Works
 
-ATLAS uses a two-layer architecture:
+ATLAS uses a two-layer architecture: an **agent loop** that handles tool calls and user interaction, wrapping a **V3 pipeline** that generates diverse candidates and selects the best.
 
-```
-┌─────────────────────────────────────────────────────┐
-│  User types `atlas` in any project directory          │
-│                                                      │
-│  Aider (TUI) ──► atlas-proxy (agent loop)            │
-│                    │                                  │
-│    OUTER LAYER:    │  Structured JSON tool calls      │
-│    Agent Loop      │  Grammar-constrained output      │
-│                    │  8 tools: read, write, edit,     │
-│                    │  delete, run, search, list, plan │
-│                    │                                  │
-│    INNER LAYER:    │  V3 Pipeline (T2/T3 files)       │
-│    V3 Pipeline     │  PlanSearch → DivSampling →      │
-│                    │  Budget Forcing → Build Verify →  │
-│                    │  C(x)/G(x) Score → Best-of-K →   │
-│                    │  PR-CoT Repair → Select Winner   │
-│                    │                                  │
-│    ┌───────────────┼──────────────────────┐          │
-│    │ llama-server  │  geometric-lens      │ sandbox  │
-│    │ (CUDA, 32K)   │  C(x)/G(x) scoring   │ (code   │
-│    │ ~51 tok/s     │  Val AUC 0.9467      │  exec)  │
-│    └───────────────┴──────────────────────┘          │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph Outer["Agent Loop (Proxy)"]
+    direction TB
+    TC[Tool Call Router<br/>Grammar-constrained JSON<br/>8 tools: read, write, edit,<br/>delete, run, search, list, plan]
+    TF[Per-File Tier Classifier<br/>T1: config, data → direct write<br/>T2: logic, features → V3 pipeline]
+  end
+
+  subgraph Inner["V3 Pipeline (T2 files only)"]
+    direction LR
+    PS[PlanSearch<br/>3 diverse plans]
+    DS[DivSampling<br/>K candidates]
+    BV[Build Verify<br/>Per-language]
+    GL[Geometric Lens<br/>C(x) energy scoring]
+    BK[Best-of-K<br/>Select winner]
+    PR[PR-CoT Repair<br/>Fix failures]
+  end
+
+  subgraph Services["Infrastructure"]
+    LS[llama-server<br/>CUDA, 32K context<br/>~51 tok/s + grammar]
+    GS[geometric-lens<br/>C(x)/G(x) scoring<br/>AUC 0.9467]
+    SB[sandbox<br/>Code execution<br/>8 languages]
+  end
+
+  User([User: atlas]) --> Aider([Aider TUI])
+  Aider --> TC
+  TC --> TF
+  TF -->|T1| Direct[Direct Write]
+  TF -->|T2| PS
+  PS --> DS --> BV --> GL --> BK
+  BK -->|fails| PR --> BV
+  BK -->|winner| Write[Write File]
+  
+  TC -.-> LS
+  BV -.-> SB
+  GL -.-> GS
+  PS -.-> LS
+
+  style Outer fill:#1a3a5c,color:#fff
+  style Inner fill:#5c3a1a,color:#fff
+  style Services fill:#2d5016,color:#fff
 ```
 
 **The model writes code. The infrastructure makes it reliable.**
 
-- **Outer layer** (agent loop): Grammar enforcement guarantees 100% valid JSON tool calls. The model reads files, writes code, runs commands, and verifies its own work — iterating until done.
-- **Inner layer** (V3 pipeline): Feature files (50+ lines with logic) get diverse candidate generation, build verification, energy-based scoring, and automated repair. Config files skip the pipeline entirely.
+- **Agent loop** (outer): Grammar enforcement guarantees 100% valid JSON tool calls. The model reads files, writes code, runs commands, and verifies its own work — iterating until done.
+- **V3 pipeline** (inner): Feature files (50+ lines with logic) get diverse candidate generation, build verification, energy-based scoring, and automated repair. Config files skip the pipeline entirely.
 - **Geometric Lens**: Neural scoring that evaluates code correctness from embeddings alone — C(x) cost field achieves 0.9467 AUC without executing the code.
 
 Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
