@@ -42,11 +42,25 @@
 - 5-language integration: 100% (Shell, Python, Rust, C, Go)
 - L6 (add feature to existing project): 67% — marked as future improvement
 
+### Documentation Overhaul
+- **ARCHITECTURE.md**: Complete rewrite — 13 Mermaid diagrams (service topology, agent loop flow, V3 pipeline, module map, sequence diagrams), every component verified against source code
+- **API.md**: Complete rewrite — every endpoint across all 5 services verified against source, request/response formats, SSE stages
+- **CLI.md**: Complete rewrite — startup flow diagram, streaming format, workflow examples, troubleshooting, env vars, Aider config reference
+- **CONFIGURATION.md**: Complete rewrite — every env var across all services verified, internal constants, Docker Compose vs K3s differences
+- **MAP.md**: Complete rewrite — every file in repo with clickable tree, 150 file links, 18 description tables
+- **SETUP.md**: Complete rewrite — verified build steps, first-run guide, bare metal, K3s, hardware sizing, Lens training guide
+- **TROUBLESHOOTING.md**: Complete rewrite — quick diagnostics, 20+ issue scenarios with verified fixes
+- **README.md**: Honest 7-step setup with actual download command, prerequisites, model clarity (Qwen3-14B vs Qwen3.5-9B)
+- Reorganized historical docs into `docs/reports/` (ablation studies, status tracking, migration guides)
+
 ### Bug Fixes
-- GitHub Issue #12: `docker image exists` → `docker image inspect` in build script
-- GitHub Issue #10: Added `.gitkeep` to `geometric-lens/geometric_lens/models/`
-- GitHub Issue #6: `hostname -I` → portable fallback with `ip addr` for Arch Linux
-- GitHub Issue #11: Added Geometric Lens training documentation and HuggingFace dataset
+- **geometric-lens Dockerfile port mismatch**: Container was listening on 8001 but docker-compose expected 8099 — fresh Docker Compose deploys had broken Lens service. Fixed Dockerfile to use port 8099.
+- **Python CLI default RAG port**: `atlas/cli/client.py` defaulted to port 31144 (K3s NodePort) instead of 8099 (Docker Compose). Fixed default to match Docker Compose.
+- **Missing Aider config files**: `.aider.model.settings.yml` and `.aider.model.metadata.json` were not in the repo — the `atlas` launcher would fail without them. Restored both files and added `.gitignore` exceptions.
+- GitHub Issue #6: `hostname -I` → portable fallback chain (`ip addr` → `hostname -I` → `hostname -i`) for Arch Linux compatibility
+- GitHub Issue #10: `rag-api/` → `geometric-lens/` restructuring resolved missing models directory
+- GitHub Issue #11: Added Geometric Lens training documentation to SETUP.md with HuggingFace dataset link
+- GitHub Issue #12 / PR #13: `docker image exists` → `docker image inspect` in build script
 
 ### Cleanup
 - Removed 62 stale test directories, old v1 proxy binary, dead G(x) training scripts
