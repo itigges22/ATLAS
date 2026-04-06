@@ -579,7 +579,7 @@ sequenceDiagram
     Note over V: Phase 0: Probe
     V->>L: POST /v1/chat/completions (generate code)
     L-->>V: probe candidate
-    V->>L: POST /embedding (4096-dim)
+    V->>L: POST /v1/embeddings (4096-dim)
     L-->>V: embedding vector
     V->>G: POST /internal/lens/gx-score
     G-->>V: {cx_energy, gx_score, verdict}
