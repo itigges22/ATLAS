@@ -14,7 +14,7 @@
 
 A.T.L.A.S achieves **74.6% LiveCodeBench pass@1-v(k=3)** with a frozen 14B model on a single consumer GPU — up from 36-41% in V2 — through constraint-driven generation and self-verified iterative refinement. The premise: wrap a frozen smaller model in intelligent infrastructure — structured generation, energy-based verification, self-verified repair — and it can compete with frontier API models at a fraction of the cost. No fine-tuning, no API calls, no cloud. Fully self-hosted — no data leaves the machine, no API keys required, no usage metering. One GPU, one box.
 
-**V3.0.1** ships ATLAS as an **interactive coding assistant** you can download and use today. Type `atlas` in any project directory and start building.
+**V3.0.1** ships ATLAS as an **interactive coding assistant powered by a local 9B model** that you can download and use today. The 9B model (Qwen3.5-9B) has not yet been formally benchmarked under the V3 pipeline — that is V3.1 work — but the V3 pipeline architecture is identical to what scored 74.6% on the 14B model, and the 9B model's published baselines suggest it should score similarly or higher. Type `atlas` in any project directory and start building.
 
 <p align="center">
   <img src="docs/images/ATLAS_CLI.png" alt="ATLAS CLI" width="500"/>
@@ -83,7 +83,7 @@ See [docs/SETUP.md](docs/SETUP.md) for detailed setup (Docker, bare-metal, K3s).
 
 Phase 3 uses self-generated test cases for internal verification — the model never sees the answer key during repair. PR-CoT rescues 36/42 tasks (85.7% of Phase 3 rescues). Full report: [V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)
 
-Raw ablation data: [`v3_ablation_results/`](v3_ablation_results/) — per-task pass/fail for all conditions.
+Raw ablation data: [`v3_ablation_results/`](v3_ablation_results/) | Full traces: [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)
 
 </details>
 
@@ -91,22 +91,25 @@ Raw ablation data: [`v3_ablation_results/`](v3_ablation_results/) — per-task p
 
 | System | LCB pass@1 | Est. cost/task | Notes |
 |--------|-----------|----------------|-------|
-| DeepSeek V3.2 Reasoning | 86.2% | ~$0.002 | API, single-shot |
+| DeepSeek V3.2 Reasoning | 86.2% | ~$0.002 | API, single-shot (low cost due to aggressive pricing strategy) |
 | GPT-5 (high) | 84.6% | ~$0.043 | API, single-shot |
 | **ATLAS V3 (pass@1-v(k=3))** | **74.6%** | **~$0.004** | **Local electricity only, best-of-3 + repair pipeline** |
 | Claude 4.5 Sonnet | 71.4% | ~$0.066 | API, single-shot |
 | Claude 4 Sonnet | 65.5% | ~$0.066 | API, single-shot |
 
+> DeepSeek's cost is lower than ATLAS despite being an API because DeepSeek operates at subsidized pricing — their per-token costs are significantly below market rate as a growth strategy. ATLAS's cost is pure electricity (~$0.12/kWh × 165W GPU × 1h 55m for 599 tasks). ATLAS trades latency for privacy — no data leaves the machine.
+
 <details>
 <summary><b>Methodology notes & sources</b></summary>
 
-ATLAS scores are from 599 LCB tasks using the full V3 pipeline (best-of-3 + Lens selection + iterative repair) on a frozen 14B quantized model — "pass@1-v(k=3)". Competitor scores are single-shot pass@1 (zero-shot, temperature 0) from Artificial Analysis on 315 LCB problems — not the same task set, so this is not a controlled head-to-head. API costs assume ~2,000 input + ~4,000 output tokens per task at current pricing. ATLAS cost = electricity at $0.12/kWh (~165W GPU, ~1h 55m for 599 tasks). ATLAS trades latency for cost — the pipeline takes longer per task than a single API call, but no data leaves the machine.
+ATLAS scores are from 599 LCB tasks using the full V3 pipeline (best-of-3 + Lens selection + iterative repair) on a frozen 14B quantized model — "pass@1-v(k=3)". Competitor scores are single-shot pass@1 (zero-shot, temperature 0) from Artificial Analysis on 315 LCB problems — not the same task set, so this is not a controlled head-to-head. API costs assume ~2,000 input + ~4,000 output tokens per task at current pricing. ATLAS trades latency for cost — the pipeline takes longer per task than a single API call, but no data leaves the machine.
 
 Sources: [Artificial Analysis LCB Leaderboard](https://artificialanalysis.ai/leaderboards/live-code-bench) | [LiveCodeBench Paper (arXiv)](https://arxiv.org/abs/2403.07974) | [LCB Dataset (HuggingFace)](https://huggingface.co/datasets/livecodebench/code_generation_lite)
 
 </details>
 
-### CLI Reliability (Qwen3.5-9B, V3.0.1)
+<details>
+<summary><b>CLI Reliability (Qwen3.5-9B, V3.0.1)</b></summary>
 
 The interactive CLI has been validated across 8 difficulty levels × 3 iterations:
 
@@ -124,6 +127,8 @@ The interactive CLI has been validated across 8 difficulty levels × 3 iteration
 
 5-language integration: Python, Rust, Go, C, Shell — **all pass** (compile + run).
 
+</details>
+
 Full training data and benchmark traces: [ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)
 
 ---
@@ -131,53 +136,40 @@ Full training data and benchmark traces: [ATLAS Dataset on HuggingFace](https://
 ## How It Works
 
 ```mermaid
-flowchart TB
-  subgraph Outer["Agent Loop (Proxy)"]
-    direction TB
-    TC[Tool Call Router<br/>Grammar-constrained JSON<br/>8 tools: read, write, edit,<br/>delete, run, search, list, plan]
-    TF[Per-File Tier Classifier<br/>T1: config, data → direct write<br/>T2: logic, features → V3 pipeline]
+flowchart LR
+  subgraph Phase1["Phase 1: Generate"]
+    PS["PlanSearch\nConstraint extraction\n+ diverse plans"]
+    BF["Budget Forcing\nThinking token\ncontrol"]
   end
 
-  subgraph Inner["V3 Pipeline (T2 files only)"]
-    direction LR
-    PS[PlanSearch<br/>3 diverse plans]
-    DS[DivSampling<br/>K candidates]
-    BV[Build Verify<br/>Per-language]
-    GL[Geometric Lens<br/>C(x) energy scoring]
-    BK[Best-of-K<br/>Select winner]
-    PR[PR-CoT Repair<br/>Fix failures]
+  subgraph Verify["Score + Test"]
+    GL["Geometric Lens\nC(x) energy scoring"]
+    SB["Sandbox\nCode execution"]
   end
 
-  subgraph Services["Infrastructure"]
-    LS[llama-server<br/>CUDA, 32K context<br/>~51 tok/s + grammar]
-    GS[geometric-lens<br/>C(x)/G(x) scoring<br/>AUC 0.9467]
-    SB[sandbox<br/>Code execution<br/>8 languages]
+  subgraph Phase3["Phase 3: Repair"]
+    ST["Self-Test Gen\nModel-generated\nI/O pairs"]
+    PR["PR-CoT Repair\nMulti-perspective\nchain-of-thought"]
   end
 
-  User([User: atlas]) --> Aider([Aider TUI])
-  Aider --> TC
-  TC --> TF
-  TF -->|T1| Direct[Direct Write]
-  TF -->|T2| PS
-  PS --> DS --> BV --> GL --> BK
-  BK -->|fails| PR --> BV
-  BK -->|winner| Write[Write File]
-  
-  TC -.-> LS
-  BV -.-> SB
-  GL -.-> GS
-  PS -.-> LS
+  PS --> BF
+  BF -->|"k=3 candidates"| GL
+  GL -->|"energy-sorted"| SB
+  SB -->|"all fail"| ST
+  ST --> PR
+  PR -->|"repaired code"| SB
 
-  style Outer fill:#1a3a5c,color:#fff
-  style Inner fill:#5c3a1a,color:#fff
-  style Services fill:#2d5016,color:#fff
+  style GL fill:#2d5016,color:#fff
+  style PS fill:#1a3a5c,color:#fff
+  style BF fill:#1a3a5c,color:#fff
+  style SB fill:#2d5016,color:#fff
+  style ST fill:#5c3a1a,color:#fff
+  style PR fill:#5c3a1a,color:#fff
 ```
 
 **The model writes code. The infrastructure makes it reliable.**
 
-- **Agent loop** (outer): Grammar enforcement guarantees 100% valid JSON tool calls. The model reads files, writes code, runs commands, and verifies its own work — iterating until done.
-- **V3 pipeline** (inner): Feature files (50+ lines with logic) get diverse candidate generation, build verification, energy-based scoring, and automated repair. Config files skip the pipeline entirely.
-- **Geometric Lens**: Neural scoring that evaluates code correctness from embeddings alone — C(x) cost field achieves 0.9467 AUC without executing the code.
+The ATLAS CLI wraps this pipeline in a **tool-call agent loop**. The model emits structured JSON tool calls (`write_file`, `edit_file`, `run_command`, etc.) with grammar enforcement guaranteeing 100% valid output. Feature files with complex logic (T2) automatically route through the V3 pipeline for diverse candidate generation, build verification, and energy-based selection. Config files and boilerplate (T1) skip the pipeline for instant writes.
 
 Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
@@ -199,30 +191,10 @@ Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 These are actively being addressed in V3.1:
 
-- **LCB-only optimization.** V3 phases were designed and tuned for LiveCodeBench. GPQA Diamond (47.0%) and SciCode (14.7%) results are from V2 infrastructure and were not optimized for. Cross-domain generalization is a V3.1 priority.
-- **Phase 2 (Geometric Lens routing) contributed +0.0pp.** C(x) was retrained on self-embeddings for V3, but the training dataset was only ~60 samples — far too small to learn a meaningful energy landscape. V3.1 retrains C(x) on a properly sized dataset.
-- **G(x) metric tensor is dormant.** G(x) is downstream of C(x) — with C(x) undertrained, G(x) has no meaningful geometry to navigate. Being redesigned for V3.1.
-- **L6 reliability at 67%.** Adding features to existing projects fails ~1/3 of the time — the 9B model sometimes over-explores instead of writing code.
-
----
-
-## Project Structure
-
-```
-ATLAS/
-├── atlas-proxy/          Go proxy — agent loop, grammar, 8 tools
-├── geometric-lens/       C(x)/G(x) scoring service (Geometric Lens)
-├── benchmark/            Benchmark runner + V3 pipeline (20 modules)
-├── v3-service/           V3 pipeline HTTP service
-├── inference/            llama-server Dockerfiles
-├── sandbox/              Isolated code execution
-├── scripts/              Build, deploy, train, validate
-├── tests/                33 test files (infrastructure + V3)
-├── v3_ablation_results/  Published ablation data (A–D, 599 tasks each)
-├── docs/                 Full documentation suite
-├── docker-compose.yml    One-command deployment
-└── atlas.conf.example    Configuration template
-```
+- **9B model not yet formally benchmarked.** The 74.6% result was achieved on Qwen3-14B. The CLI runs Qwen3.5-9B with the same V3 pipeline — formal LCB benchmarks on the 9B model are V3.1 work.
+- **GPQA and SciCode scores are from V2.** V3 phases were not designed specifically for any single benchmark — they are general-purpose code generation improvements. GPQA (47.0%) and SciCode (14.7%) were tested on V2 infrastructure only. Cross-benchmark evaluation is a V3.1 priority.
+- **L6 reliability at 67%.** Adding features to existing projects fails ~1/3 of the time — the 9B model sometimes over-explores instead of writing code. Exploration budget and context injection mitigate but don't fully solve this.
+- **Inference speed.** Grammar-constrained output runs at ~51 tok/s on llama-server. Fox (with PagedAttention and prefix caching) achieves only 14 tok/s with grammar due to Tokio async overhead. C-side sampler chain fix planned for V3.1.
 
 ---
 
@@ -231,12 +203,12 @@ ATLAS/
 | Document | Description |
 |----------|-------------|
 | **[SETUP.md](docs/SETUP.md)** | Installation — Docker, bare-metal, K3s |
-| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Two-layer architecture, component design |
-| **[CLI.md](docs/CLI.md)** | CLI usage, streaming output, tips |
-| **[MAP.md](docs/MAP.md)** | Visual guide to every file in the repo |
-| **[API.md](docs/API.md)** | HTTP API endpoints and formats |
-| **[CONFIGURATION.md](docs/CONFIGURATION.md)** | All environment variables and config |
+| **[CLI.md](docs/CLI.md)** | CLI usage, streaming output, getting best results |
 | **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
+| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Two-layer architecture, component design |
+| **[CONFIGURATION.md](docs/CONFIGURATION.md)** | All environment variables and config |
+| **[API.md](docs/API.md)** | HTTP API endpoints and formats |
+| **[MAP.md](docs/MAP.md)** | Visual guide to every file in the repo |
 | **[V3_ABLATION_STUDY.md](docs/V3_ABLATION_STUDY.md)** | Ablation methodology and results |
 | **[CHANGELOG.md](CHANGELOG.md)** | Release history |
 
@@ -250,6 +222,8 @@ ATLAS/
 
 </details>
 
+For a complete guide to every directory and file, see **[docs/MAP.md](docs/MAP.md)**.
+
 ---
 
 ## Roadmap
@@ -260,9 +234,22 @@ ATLAS/
 
 **V3.1** — In Progress.
 - **Benchmarks** (not yet run): LiveCodeBench v5 on Qwen3.5-9B with CLI pipeline, GPQA Diamond, SciCode, AA-LCR, AA-Omniscience, Humanity's Last Exam, CritPt
+- **CLI reliability testing**: Expand 8-level test to 10 iterations, target L6 ≥ 90%
 - **Fox optimization**: C-side sampler chain for grammar speed (14→50 tok/s target)
 - **Geometric Lens**: Online C(x) recalibration, G(x) redesign, properly sized training dataset
 - **Target**: 80-90% LCB pass@1-v(k=3)
+
+---
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=itigges22%2FATLAS&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=itigges22/ATLAS&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=itigges22/ATLAS&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=itigges22/ATLAS&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ---
 
