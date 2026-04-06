@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/2792",
+  "passed": false,
+  "code": "class Solution:\n    def doesValidArrayExist(self, derived: List[int]) -> bool:\n        n = len(derived)\n        original = [0] * n\n        original[0] = 0\n        for i in range(n - 1):\n            original[i + 1] = original[i] ^ derived[i]\n        return original[0] ^ original[-1] == derived[-1]",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 50065,
+  "total_time_ms": 1111105.2343845367,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc355_c",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = int(data[1])\n    A = list(map(int, data[2:2+T]))\n    \n    # Map from value to (row, col)\n    pos = {}\n    for i in range(N):\n        for j in range(N):\n            val = N * (i) + (j + 1)\n            pos[val] = (i, j)\n    \n    # Counters for rows, cols, diagonals\n    row_count = [0] * N\n    col_count = [0] * N\n    diag1_count = 0\n    diag2_count = 0\n    \n    for turn in range(T):\n        val = A[turn]\n        i, j = pos[val]\n        \n        # Update row count\n        row_count[i] += 1\n        if row_count[i] == N:\n            print(turn + 1)\n            return\n        \n        # Update column count\n        col_count[j] += 1\n        if col_count[j] == N:\n            print(turn + 1)\n            return\n        \n        # Update diagonal 1 (top-left to bottom-right)\n        if i == j:\n            diag1_count += 1\n            if diag1_count == N:\n                print(turn + 1)\n                return\n        \n        # Update diagonal 2 (top-right to bottom-left)\n        if i + j == N - 1:\n            diag2_count += 1\n            if diag2_count == N:\n                print(turn + 1)\n                return\n    \n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 373,
+  "total_time_ms": 5312.965393066406,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

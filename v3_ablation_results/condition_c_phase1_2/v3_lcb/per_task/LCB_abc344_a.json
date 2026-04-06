@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc344_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\nparts = S.split('|')\nresult = parts[0] + parts[2]\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 43,
+  "total_time_ms": 923.1555461883545,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

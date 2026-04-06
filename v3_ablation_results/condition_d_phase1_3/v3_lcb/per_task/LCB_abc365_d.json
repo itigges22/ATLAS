@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc365_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    N, S = input().split()\n    N = int(N)\n    S = S.strip()\n\n    # Define the winning move for each Aoki's move\n    win_move = {'R': 'P', 'P': 'S', 'S': 'R'}\n\n    # Define the losing move for each Aoki's move\n    lose_move = {'R': 'S', 'P': 'R', 'S': 'P'}\n\n    # We will use dynamic programming\n    # dp[i][m] = max wins up to i-th game with move m\n    # m can be 'R', 'P', 'S'\n    # Initialize dp with -infinity\n    from collections import defaultdict\n\n    dp = [defaultdict(lambda: -1) for _ in range(N)]\n\n    # Initialize first move\n    for m in ['R', 'P', 'S']:\n        if win_move[m] == S[0]:\n            dp[0][m] = 1\n        elif lose_move[m] == S[0]:\n            dp[0][m] = 0\n        else:\n            dp[0][m] = -1  # Not allowed\n\n    for i in range(1, N):\n        for prev_m in ['R', 'P', 'S']:\n            if dp[i-1][prev_m] == -1:\n                continue\n            for curr_m in ['R', 'P', 'S']:\n                if curr_m == prev_m:\n                    continue\n                if win_move[curr_m] == S[i]:\n                    dp[i][curr_m] = max(dp[i][curr_m], dp[i-1][prev_m] + 1)\n                elif lose_move[curr_m] == S[i]:\n                    dp[i][curr_m] = max(dp[i][curr_m], dp[i-1][prev_m])\n                else:\n                    continue\n\n    print(max(dp[N-1].values()))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1514,
+  "total_time_ms": 43329.251289367676,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1074
+  }
+}

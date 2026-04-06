@@ -78,7 +78,7 @@ Fixes #123
 ```
 
 Examples:
-- `rag-api: add project caching for faster queries`
+- `geometric-lens: add project caching for faster queries`
 - `sandbox: increase default timeout to 90s`
 - `docs: add GPU troubleshooting section`
 

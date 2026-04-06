@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc351_e",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    points = []\n    for i in range(N):\n        x = int(data[1 + 2 * i])\n        y = int(data[2 + 2 * i])\n        points.append((x, y))\n    \n    total = 0\n    \n    for i in range(N):\n        x1, y1 = points[i]\n        for j in range(i + 1, N):\n            x2, y2 = points[j]\n            dx = abs(x1 - x2)\n            dy = abs(y1 - y2)\n            if (dx + dy) % 2 != 0:\n                continue\n            dist = max(dx, dy)\n            total += dist\n    \n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 21917,
+  "total_time_ms": 332908.9467525482,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 762,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3490",
+  "passed": true,
+  "code": "class Solution:\n    def maximumLength(self, nums: List[int]) -> int:\n        # Count the number of even and odd numbers\n        even_count = 0\n        odd_count = 0\n        \n        for num in nums:\n            if num % 2 == 0:\n                even_count += 1\n            else:\n                odd_count += 1\n        \n        # The valid subsequence alternates between even and odd or is all even or all odd\n        # The maximum length is the minimum of even_count and odd_count multiplied by 2, or the maximum of even_count and odd_count\n        return min(even_count, odd_count) * 2 if min(even_count, odd_count) * 2 > 0 else max(even_count, odd_count)",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3451,
+  "total_time_ms": 57832.27062225342,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3370
+  }
+}

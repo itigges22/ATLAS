@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc333_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN = int(input())\nresult = str(N) * N\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 33,
+  "total_time_ms": 565.8121109008789,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

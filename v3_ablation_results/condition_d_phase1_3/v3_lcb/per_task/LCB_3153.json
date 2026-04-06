@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3153",
+  "passed": false,
+  "code": "class Solution:\n    def maxSum(self, nums: List[int], k: int) -> int:\n        MOD = 10**9 + 7\n        nums.sort(reverse=True)\n        result = 0\n        for i in range(k):\n            result = (result + nums[i] * nums[i]) % MOD\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 64981,
+  "total_time_ms": 1029562.9796981812,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1565,
+    "self_tests_generated": 5
+  }
+}

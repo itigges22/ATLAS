@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3261",
+  "passed": false,
+  "code": "class Solution:\n    def minOrAfterOperations(self, nums: List[int], k: int) -> int:\n        # The maximum possible bit is 30 (since nums[i] < 2^30)\n        # We will try to eliminate bits from the highest to the lowest\n        res = 0\n        for bit in reversed(range(30)):  # Check from highest bit to lowest\n            # Try to eliminate this bit\n            mask = (1 << bit)\n            cnt = 0\n            curr = 0\n            for num in nums:\n                curr &= num  # Apply AND operation with current number\n                if (curr & mask) == 0:\n                    cnt += 1\n                    curr = 0  # Reset current value after operation\n            # If we can eliminate this bit with at most k operations\n            if cnt >= k:\n                res |= mask  # Keep this bit in the result\n            else:\n                # We cannot eliminate this bit, so it must be in the final OR\n                pass\n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5516,
+  "total_time_ms": 100637.44711875916,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5384
+  }
+}

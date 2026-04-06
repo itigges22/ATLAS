@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc309_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    grid = input[1:N+1]\n\n    # Convert grid to 2D list\n    grid = [list(row) for row in grid]\n\n    # Collect outer elements in clockwise order\n    outer = []\n    # Top row left to right\n    for j in range(N):\n        outer.append(grid[0][j])\n    # Right column top to bottom (excluding top)\n    for i in range(1, N):\n        outer.append(grid[i][N-1])\n    # Bottom row right to left (excluding right)\n    for j in range(N-2, -1, -1):\n        outer.append(grid[N-1][j])\n    # Left column bottom to top (excluding bottom)\n    for i in range(N-2, 0, -1):\n        outer.append(grid[i][0])\n\n    # Shift outer elements clockwise by one\n    if outer:\n        outer = [outer[-1]] + outer[:-1]\n\n    # Reassign outer elements back to grid\n    idx = 0\n    # Top row left to right\n    for j in range(N):\n        grid[0][j] = outer[idx]\n        idx += 1\n    # Right column top to bottom (excluding top)\n    for i in range(1, N):\n        grid[i][N-1] = outer[idx]\n        idx += 1\n    # Bottom row right to left (excluding right)\n    for j in range(N-2, -1, -1):\n        grid[N-1][j] = outer[idx]\n        idx += 1\n    # Left column bottom to top (excluding bottom)\n    for i in range(N-2, 0, -1):\n        grid[i][0] = outer[idx]\n        idx += 1\n\n    # Print the result\n    for row in grid:\n        print(''.join(row))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 439,
+  "total_time_ms": 7650.0842571258545,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

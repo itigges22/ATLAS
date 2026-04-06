@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc318_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    count = defaultdict(int)\n    freq = defaultdict(int)\n    result = 0\n\n    for num in A:\n        count[num] += 1\n\n    for i in range(N):\n        for j in range(i + 1, N):\n            if A[i] != A[j]:\n                result += freq[A[j]]\n        freq[A[i]] += 1\n\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 941,
+  "total_time_ms": 17416.984796524048,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 788
+  }
+}

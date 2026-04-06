@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3213",
+  "passed": false,
+  "code": "class Solution:\n    def countSubarrays(self, nums: List[int], k: int) -> int:\n        max_val = max(nums)\n        count = 0\n        left = 0\n        freq = defaultdict(int)\n        \n        for right in range(len(nums)):\n            freq[nums[right]] += 1\n            \n            while freq[max_val] >= k:\n                freq[nums[left]] -= 1\n                left += 1\n            \n            count += left\n        \n        return count",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 113,
+  "total_time_ms": 1840.3146266937256,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

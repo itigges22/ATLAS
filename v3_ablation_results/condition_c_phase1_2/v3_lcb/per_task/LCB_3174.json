@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3174",
+  "passed": true,
+  "code": "class Solution:\n    def minChanges(self, s: str) -> int:\n        changes = 0\n        for i in range(0, len(s), 2):\n            if s[i] != s[i + 1]:\n                changes += 1\n        return changes",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4027,
+  "total_time_ms": 65742.03038215637,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 1867,
+    "s_star_triggered": true
+  }
+}

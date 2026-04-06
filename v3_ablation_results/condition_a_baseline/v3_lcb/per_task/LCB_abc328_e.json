@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc328_e",
+  "passed": true,
+  "code": "import sys\nimport itertools\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    K = int(data[2])\n    \n    edges = []\n    index = 3\n    for _ in range(M):\n        u = int(data[index])\n        v = int(data[index+1])\n        w = int(data[index+2])\n        edges.append((u, v, w))\n        index += 3\n    \n    min_cost = K  # Initialize with maximum possible value modulo K\n    \n    # Generate all combinations of N-1 edges\n    for combo in itertools.combinations(edges, N-1):\n        # Check if the combo forms a spanning tree (connected)\n        # Use Union-Find to check connectivity\n        parent = list(range(N+1))  # 1-based indexing\n        \n        def find(u):\n            while parent[u] != u:\n                parent[u] = parent[parent[u]]\n                u = parent[u]\n            return u\n        \n        def union(u, v):\n            pu = find(u)\n            pv = find(v)\n            if pu != pv:\n                parent[pu] = pv\n        \n        for u, v, _ in combo:\n            union(u, v)\n        \n        # Check if all nodes are connected\n        root = find(1)\n        connected = all(find(i) == root for i in range(2, N+1))\n        \n        if connected:\n            total_weight = sum(w for _, _, w in combo)\n            cost = total_weight % K\n            if cost < min_cost:\n                min_cost = cost\n    \n    print(min_cost)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 11323.139905929565,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

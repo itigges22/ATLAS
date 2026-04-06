@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3346",
+  "passed": false,
+  "code": "class Solution:\n    def getSmallestString(self, s: str, k: int) -> str:\n        t = list(s)\n        n = len(s)\n        \n        for i in range(n):\n            original_char = s[i]\n            for c in range(ord('a'), ord(original_char) + 1):\n                cost = (ord(original_char) - ord(c)) % 26\n                if cost <= k:\n                    t[i] = chr(c)\n                    k -= cost\n                    break\n        \n        return ''.join(t)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53663,
+  "total_time_ms": 820995.1140880585,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1255,
+    "self_tests_generated": 5
+  }
+}

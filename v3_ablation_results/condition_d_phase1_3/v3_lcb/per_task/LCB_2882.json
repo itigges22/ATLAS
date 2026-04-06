@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2882",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfWays(self, n: int, x: int) -> int:\n        MOD = 10**9 + 7\n        powers = []\n        i = 1\n        while i ** x <= n:\n            powers.append(i ** x)\n            i += 1\n\n        def backtrack(start, target):\n            if target == 0:\n                return 1\n            if target < 0:\n                return 0\n            count = 0\n            for i in range(start, len(powers)):\n                if powers[i] > target:\n                    break\n                count += backtrack(i + 1, target - powers[i])\n                count %= MOD\n            return count\n\n        return backtrack(0, n)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1307,
+  "total_time_ms": 22210.514545440674,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1151
+  }
+}

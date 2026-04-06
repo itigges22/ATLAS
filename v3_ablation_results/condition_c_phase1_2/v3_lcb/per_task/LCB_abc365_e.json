@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc365_e",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    \n    prefix_xor = [0] * (N + 1)\n    for i in range(N):\n        prefix_xor[i+1] = prefix_xor[i] ^ A[i]\n    \n    result = 0\n    for i in range(N):\n        for j in range(i+1, N+1):\n            result += (prefix_xor[j] ^ prefix_xor[i])\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 157,
+  "total_time_ms": 6972.448110580444,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

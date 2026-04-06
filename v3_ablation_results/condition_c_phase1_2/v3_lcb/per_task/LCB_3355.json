@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3355",
+  "passed": true,
+  "code": "class Solution:\n    def minimumLevels(self, possible: List[int]) -> int:\n        n = len(possible)\n        # Convert possible to points: 1 -> +1, 0 -> -1\n        points = [1 if x == 1 else -1 for x in possible]\n        \n        # Precompute prefix sums\n        prefix = [0] * (n + 1)\n        for i in range(n):\n            prefix[i + 1] = prefix[i] + points[i]\n        \n        # Total sum of all points\n        total = prefix[n]\n        \n        # Find the minimum k such that Alice's score > Bob's score\n        # Alice's score = prefix[k], Bob's score = total - prefix[k]\n        # So we need prefix[k] > total - prefix[k] => 2 * prefix[k] > total\n        for k in range(1, n):\n            if 2 * prefix[k] > total:\n                return k\n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 221,
+  "total_time_ms": 3600.860595703125,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

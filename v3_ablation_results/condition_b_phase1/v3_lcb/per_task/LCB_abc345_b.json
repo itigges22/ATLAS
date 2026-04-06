@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc345_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    X = int(sys.stdin.read())\n    quotient = X // 10\n    remainder = X % 10\n    if remainder != 0:\n        print(quotient + 1)\n    else:\n        print(quotient)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1404,
+  "total_time_ms": 22255.366325378418,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1349
+  }
+}

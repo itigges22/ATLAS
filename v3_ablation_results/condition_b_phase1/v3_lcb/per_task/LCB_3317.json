@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3317",
+  "passed": true,
+  "code": "from collections import Counter\nfrom typing import List\n\nclass Solution:\n    def maxPalindromesAfterOperations(self, words: List[str]) -> int:\n        # Count total character frequencies across all words\n        total_chars = Counter()\n        for word in words:\n            total_chars += Counter(word)\n        \n        # Count total number of characters\n        total = sum(total_chars.values())\n        \n        # Count how many words can be made into palindromes\n        # A palindrome can be formed if we can use characters to make a symmetric string\n        # For a palindrome, we can use even counts of characters, and at most one odd count\n        # We will greedily use the most frequent characters first\n        \n        # Sort character frequencies in descending order\n        freq = sorted(total_chars.values(), reverse=True)\n        \n        # Count how many palindromes we can form\n        count = 0\n        i = 0\n        n = len(words)\n        \n        # Try to make as many palindromes as possible\n        while i < n:\n            # For each palindrome, we need at least 1 character (for length 1)\n            # Or at least 2 characters (for length 2)\n            # We can use even counts of characters to form palindromes\n            # So we try to use the largest available frequency\n            if freq and freq[0] >= 1:\n                # Use one character for a single-character palindrome\n                freq[0] -= 1\n                count += 1\n                i += 1\n            else:\n                # No more characters to form palindromes\n                break\n        \n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2204,
+  "total_time_ms": 39759.09495353699,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1945
+  }
+}

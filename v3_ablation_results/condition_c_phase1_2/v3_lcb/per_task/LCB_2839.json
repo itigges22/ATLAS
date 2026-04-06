@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2839",
+  "passed": true,
+  "code": "class Solution:\n    def maximumSumQueries(self, nums1: List[int], nums2: List[int], queries: List[List[int]]) -> List[int]:\n        import bisect\n\n        n = len(nums1)\n        pairs = sorted([(nums1[i], nums2[i]) for i in range(n)], key=lambda x: (x[0], x[1]))\n        max_sums = []\n        res = []\n\n        for x, y in queries:\n            idx = bisect.bisect_left(pairs, (x, y))\n            max_sum = -1\n            for i in range(idx, len(pairs)):\n                a, b = pairs[i]\n                if a >= x and b >= y:\n                    max_sum = max(max_sum, a + b)\n            res.append(max_sum)\n\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2342,
+  "total_time_ms": 37763.24772834778,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2160
+  }
+}

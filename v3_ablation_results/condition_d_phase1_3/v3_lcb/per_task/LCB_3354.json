@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3354",
+  "passed": false,
+  "code": "class Solution:\n    def minimizeStringValue(self, s: str) -> str:\n        count = [0] * 26  # Frequency count of characters\n        res = list(s)\n        # First pass: count existing characters\n        for ch in s:\n            if ch != '?':\n                count[ord(ch) - ord('a')] += 1\n        \n        # Second pass: replace '?' with the least frequent character\n        # and lexicographically smallest in case of tie\n        for i in range(len(res)):\n            if res[i] == '?':\n                # Find the character with minimum frequency\n                min_freq = float('inf')\n                min_char = 'z'\n                for c in range(26):\n                    if count[c] < min_freq or (count[c] == min_freq and chr(ord('a') + c) < min_char):\n                        min_freq = count[c]\n                        min_char = chr(ord('a') + c)\n                res[i] = min_char\n                count[ord(min_char) - ord('a')] += 1\n        \n        return ''.join(res)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54623,
+  "total_time_ms": 913533.8006019592,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1512,
+    "self_tests_generated": 3
+  }
+}

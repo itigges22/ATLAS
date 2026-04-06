@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3402",
+  "passed": true,
+  "code": "import heapq\nfrom typing import List\n\nclass Solution:\n    def minCostToEqualizeArray(self, nums: List[int], cost1: int, cost2: int) -> int:\n        MOD = 10**9 + 7\n        n = len(nums)\n        target = max(nums)\n        diffs = [target - num for num in nums]\n        total_cost = 0\n\n        # Use a min-heap to always pick the cheapest operation\n        heap = []\n        for diff in diffs:\n            if diff > 0:\n                heapq.heappush(heap, diff)\n\n        while heap:\n            # Get the smallest difference\n            smallest = heapq.heappop(heap)\n            if cost2 < cost1 * 2 and heap:\n                # Use cost2 to increment two elements\n                second_smallest = heapq.heappop(heap)\n                total_cost += cost2\n                # Update the differences (add 1 to both)\n                new_diff1 = smallest - 1\n                new_diff2 = second_smallest - 1\n                if new_diff1 > 0:\n                    heapq.heappush(heap, new_diff1)\n                if new_diff2 > 0:\n                    heapq.heappush(heap, new_diff2)\n            else:\n                # Use cost1 to increment one element\n                total_cost += cost1 * smallest\n\n        return total_cost % MOD",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1521,
+  "total_time_ms": 26357.032775878906,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1429
+  }
+}

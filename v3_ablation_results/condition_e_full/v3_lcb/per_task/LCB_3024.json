@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3024",
+  "passed": false,
+  "code": "class Solution:\n    def numberOfWays(self, s: str, t: str, k: int) -> int:\n        MOD = 10**9 + 7\n        n = len(s)\n        \n        # Find all valid rotations that transform s into t\n        valid_rotations = set()\n        for l in range(1, n):\n            if s[n - l:] + s[:n - l] == t:\n                valid_rotations.add(l)\n        \n        if not valid_rotations:\n            return 0\n        \n        # Count the number of ways to reach a valid rotation in exactly k steps\n        # We use matrix exponentiation to compute the number of ways\n        from collections import defaultdict\n        import sys\n        sys.setrecursionlimit(1000000)\n        \n        # Transition matrix for the number of ways to reach a rotation\n        # dp[i][j] = number of ways to reach rotation j in i steps\n        # We use matrix exponentiation to compute dp[k][*]\n        \n        # Let's define the transition matrix\n        # We use a dictionary to represent the number of ways to reach each rotation\n        # from another rotation in one step\n        \n        # For each rotation l, we can reach rotation (l + l') % n in one step\n        # So we build a transition matrix\n        from collections import defaultdict\n        trans = defaultdict(int)\n        for l in range(1, n):\n            for l2 in range(1, n):\n                new_l = (l + l2) % n\n                if new_l != 0:\n                    trans[(l, new_l)] += 1\n        \n        # Now, we need to compute the number of ways to reach each valid rotation in k steps\n        # We use matrix exponentiation to compute the number of ways\n        \n        # We use a dictionary to represent the number of ways to reach each rotation\n        # in k steps\n        from collections import defaultdict\n        import numpy as np\n        \n        # Build the transition matrix\n        size = n - 1\n        mat = np.zeros((size, size), dtype=int)\n        for l in range(1, n):\n            for l2 in range(1, n):\n                new_l = (l + l2) % n\n                if new_l != 0:\n                    mat[l2 - 1][new_l - 1] += 1\n        \n        # Compute mat^k\n        mat_k = np.linalg.matrix_power(mat, k)\n        \n        # Initialize the initial state: in 0 steps, we are at rotation 0\n        initial = np.zeros(size)\n        initial[0] = 1  # We start at rotation 0\n        \n        # Compute the result\n        result = np.dot(mat_k, initial)\n        \n        # Sum the number of ways to reach any valid rotation\n        total = 0\n        for l in valid_rotations:\n            total = (total + result[l - 1]) % MOD\n        \n        return total",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 53335,
+  "total_time_ms": 1345041.9790744781,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

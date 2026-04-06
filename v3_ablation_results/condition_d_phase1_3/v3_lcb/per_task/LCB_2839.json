@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2839",
+  "passed": false,
+  "code": "class Solution:\n    def maximumSumQueries(self, nums1: List[int], nums2: List[int], queries: List[List[int]]) -> List[int]:\n        import bisect\n\n        n = len(nums1)\n        pairs = sorted([(nums1[i], nums2[i]) for i in range(n)], key=lambda x: (x[0], x[1]))\n        queries_sorted = sorted([(x, y, i) for i, (x, y) in enumerate(queries)]), key=lambda x: (x[0], x[1]))\n\n        # Preprocess to build a structure for efficient querying\n        max_sums = []\n        res = [-1] * len(queries)\n        idx = 0\n\n        for x, y, i in queries_sorted:\n            while idx < n and pairs[idx][0] < x:\n                idx += 1\n            max_sum = -1\n            for j in range(idx, n):\n                if pairs[j][1] >= y:\n                    max_sum = max(max_sum, pairs[j][0] + pairs[j][1])\n            res[i] = max_sum\n\n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 51304,
+  "total_time_ms": 881793.5245037079,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2147,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc329_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    votes = list(map(int, data[2:2+M]))\n\n    count = [0] * (N + 1)\n    current_winner = 0\n    current_count = 0\n\n    for vote in votes:\n        count[vote] += 1\n        if count[vote] > current_count or (count[vote] == current_count and vote < current_winner):\n            current_winner = vote\n            current_count = count[vote]\n        print(current_winner)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6893,
+  "total_time_ms": 95784.62362289429,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2626,
+    "s_star_triggered": true
+  }
+}

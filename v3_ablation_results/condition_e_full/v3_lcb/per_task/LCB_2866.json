@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2866",
+  "passed": true,
+  "code": "class Solution:\n    def longestAlternatingSubarray(self, nums: List[int], threshold: int) -> int:\n        max_len = 0\n        n = len(nums)\n        \n        for l in range(n):\n            if nums[l] % 2 != 0:\n                continue  # Skip if starting element is not even\n            if nums[l] > threshold:\n                continue  # Skip if starting element exceeds threshold\n            \n            # Start of valid subarray\n            r = l\n            while r < n:\n                if nums[r] > threshold:\n                    break  # Invalid element, break the loop\n                # Check parity alternation\n                if r > l and (nums[r] % 2) == (nums[r - 1] % 2):\n                    break  # Parity not alternating, break the loop\n                r += 1\n            \n            # Update max length\n            max_len = max(max_len, r - l)\n        \n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6611,
+  "total_time_ms": 170864.1676902771,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4366,
+    "s_star_triggered": true
+  }
+}

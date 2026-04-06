@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3225",
+  "passed": true,
+  "code": "class Solution:\n    def maxSubarrayLength(self, nums: List[int], k: int) -> int:\n        from collections import defaultdict\n\n        count = defaultdict(int)\n        left = 0\n        max_len = 0\n\n        for right in range(len(nums)):\n            count[nums[right]] += 1\n\n            while count[nums[right]] > k:\n                count[nums[left]] -= 1\n                left += 1\n\n            max_len = max(max_len, right - left + 1)\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1758.8951587677002,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

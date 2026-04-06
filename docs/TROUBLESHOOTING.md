@@ -1,478 +1,199 @@
 # ATLAS Troubleshooting Guide
 
-This guide covers common issues and their solutions.
+Common issues and solutions for ATLAS V3.0.1.
 
 ---
 
-## Quick Diagnostics
+## Docker / Podman Issues
 
+### GPU Not Detected in Container
+
+**Symptom**: llama-server container starts but model loads on CPU (very slow, ~2 tok/s).
+
+**Fix**: Install NVIDIA Container Toolkit:
 ```bash
-# Check pod status
-kubectl get pods -n atlas
+# RHEL/Fedora
+sudo dnf install nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=podman
+sudo systemctl restart podman
 
-# Check pod events
-kubectl describe pod <pod-name> -n atlas
-
-# View pod logs
-kubectl logs <pod-name> -n atlas
-
-# Follow logs in real-time
-kubectl logs -f <pod-name> -n atlas
-
-# Check service endpoints
-kubectl get svc -n atlas
-
-# Check persistent volumes
-kubectl get pvc -n atlas
+# Ubuntu
+sudo apt install nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
 ```
 
----
+Verify: `podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi`
 
-## V2-Specific Issues
+### Sandbox Unreachable in Docker
 
-### mlock Failure (Resolved)
+**Symptom**: Proxy health shows `sandbox:false`, V3 build verification fails.
 
-**Symptom:** llama-server logs report `Cannot allocate memory` when the `--mlock` flag is active.
-
-**Fix (applied):** Create a systemd override for K3s to set unlimited memlock:
-
+**Fix**: Ensure all services are on the same Docker network:
 ```bash
-sudo mkdir -p /etc/systemd/system/k3s.service.d
-cat << 'EOF' | sudo tee /etc/systemd/system/k3s.service.d/memlock.conf
-[Service]
-LimitMEMLOCK=infinity
-EOF
-sudo systemctl daemon-reload
-sudo systemctl restart k3s
+# Check network
+podman network ls
+podman inspect atlas-proxy-container --format '{{.NetworkSettings.Networks}}'
 ```
 
-If you see this error on a fresh install, apply the override above and restart K3s.
-
----
-
-### Speculative Decoding Slot 1 Failure (Resolved)
-
-**Symptom:** Slot 0 works with speculative decoding but slot 1 fails with `failed to create draft context`.
-
-**Root cause:** The draft model KV cache was using f16 (2,240 MiB per slot), leaving insufficient VRAM for a second draft context.
-
-**Fix (applied):** The entrypoint now passes `-ctkd q4_0 -ctvd q4_0` to quantize the draft KV cache, reducing it from 2,240 MiB to 630 MiB per slot. Both slots now initialize with speculative decoding.
-
-If you see this error, ensure `KV_CACHE_TYPE` is set in the llama-server deployment (the entrypoint applies it to both main and draft KV caches via `-ctk`/`-ctv`/`-ctkd`/`-ctvd`).
-
----
-
-### Dashboard Not Loading (Resolved)
-
-**Symptom:** The atlas-dashboard deployment crashes with a Jinja2 `UndefinedError` on `daily_stats.total_attempts`.
-
-**Fix (applied):** Added `|default(0)` filters to the dashboard template for Redis hash fields that may not exist when no tasks have run that day.
-
----
-
-### Per-Slot Context Truncation
-
-**Symptom:** llama-server logs contain the warning `n_ctx_seq (20480) < n_ctx_train (40960)`.
-
-**Root cause:** The `--ctx-size 40960` setting is divided equally across `--parallel 2` slots, giving each slot 20,480 tokens of context. The model was trained with a 40,960-token context window, so the server warns that each slot has less context than the model was trained for.
-
-**Impact:** Each individual request is limited to approximately 20,000 tokens of context (prompt + generation), not the full 40,960. This is sufficient for most benchmark tasks and RAG queries but will truncate very long prompts.
-
-**Workaround:** To give a single slot the full 40,960 context, set `ATLAS_PARALLEL_SLOTS=1`. This eliminates concurrent request handling but removes the context split.
-
----
-
-### GPU Memory Pressure
-
-**Symptom:** Inference becomes slow, requests time out, or CUDA out-of-memory errors appear.
-
-**Monitor VRAM usage:**
-
+For Podman rootless: use `--network=host` for all containers, or create a shared network:
 ```bash
-kubectl exec deployment/llama-server -n atlas -- nvidia-smi
+podman network create atlas
+podman-compose up -d  # compose handles networking automatically
 ```
 
-Typical VRAM usage with Qwen3-14B-Q4_K_M + Qwen3-0.6B-Q8_0 draft + self-embeddings (V3.0, `--parallel 1`):
+### SELinux Blocking Container Access (Fedora/RHEL)
 
-```
-Memory: ~14,400 / 16,311 MiB (88%)
-```
+**Symptom**: Containers can't read mounted volumes, permission denied errors.
 
-There is very little headroom (~1,900 MiB). Do not attempt to load additional models or increase context length without first checking available VRAM.
-
-**Mitigation options:**
-
-1. Reduce context length: `ATLAS_CONTEXT_LENGTH=32768` (saves ~1-2 GB)
-2. Disable speculative decoding: unset `DRAFT_MODEL` (saves ~600 MiB)
-3. Disable self-embeddings: set `ENABLE_EMBEDDINGS=false` (frees KV overhead, but disables Geometric Lens)
-4. Use a more aggressively quantized model (Q3_K_M instead of Q4_K_M)
-
----
-
-## Installation Issues
-
-### Installer fails with "command not found"
-
-**Symptom:** `./scripts/install.sh: command not found`
-
-**Solution:**
-
+**Fix**:
 ```bash
-chmod +x scripts/install.sh
-bash scripts/install.sh
-```
-
-### "atlas.conf not found"
-
-**Symptom:** Installer complains about missing configuration.
-
-**Solution:**
-
-```bash
-cp atlas.conf.example atlas.conf
-vim atlas.conf
-```
-
-### kubectl not configured
-
-**Symptom:** `KUBECONFIG not set` or connection refused.
-
-**Solution:**
-
-```bash
-mkdir -p ~/.kube
-sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-sudo chown $(id -u):$(id -g) ~/.kube/config
-chmod 600 ~/.kube/config
-export KUBECONFIG=~/.kube/config
+# Allow container access to model directory
+chcon -Rt svirt_sandbox_file_t ~/models/
+# Or use :Z flag in volume mounts
+podman run -v ~/models:/models:Z ...
 ```
 
 ---
 
-## GPU Issues
+## llama-server Issues
 
-### GPU not detected
+### Model Loading on CPU Instead of GPU
 
-**Symptom:** `nvidia.com/gpu: 0` in node allocatable resources.
+**Symptom**: Generation at ~2 tok/s instead of ~50 tok/s.
 
-**Check each layer of the stack:**
-
-1. **NVIDIA driver:**
-   ```bash
-   nvidia-smi
-   # If missing: sudo dnf install -y nvidia-driver nvidia-driver-cuda && sudo reboot
-   ```
-
-2. **NVIDIA device plugin:**
-   ```bash
-   kubectl get pods -n kube-system | grep nvidia
-   # If missing:
-   kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.1/deployments/static/nvidia-device-plugin.yml
-   ```
-
-3. **Containerd NVIDIA runtime:**
-   ```bash
-   # Verify the containerd config template exists
-   ls /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-   ```
-   See [SETUP.md](SETUP.md) for the full containerd template.
-
-### CUDA out of memory
-
-**Symptom:** `CUDA error: out of memory`
-
-**Solutions in order of impact:**
-
-1. Reduce GPU layers: `ATLAS_GPU_LAYERS=80`
-2. Use a smaller quantization: switch from Q4_K_M to Q3_K_M
-3. Disable speculative decoding: `ATLAS_DRAFT_MODEL=""`
-4. Reduce context length: `ATLAS_CONTEXT_LENGTH=16384`
-5. Reduce parallel slots: `ATLAS_PARALLEL_SLOTS=1`
-
----
-
-## Service Issues
-
-### Pod stuck in Pending
-
-**Symptom:** Pod shows `Pending` status indefinitely.
-
-**Debug:**
-
+**Fix**: Ensure `--n-gpu-layers 99` is set. Check with:
 ```bash
-kubectl describe pod <pod-name> -n atlas
+nvidia-smi  # Should show llama-server process using GPU
 ```
 
-**Common causes:**
+If using Docker, ensure the NVIDIA runtime is configured (see GPU section above).
 
-1. **Insufficient resources:** Reduce resource requests in atlas.conf. Check node capacity with `kubectl describe node`.
-2. **PVC not bound:** Check `kubectl get pvc -n atlas`. If Pending, verify the storage class exists: `kubectl get sc`.
-3. **GPU not available:** See [GPU not detected](#gpu-not-detected).
+### Grammar Not Enforced (Model Outputs Thinking Blocks)
 
-### Pod in CrashLoopBackOff
+**Symptom**: Model outputs `<think>` tags or raw text instead of JSON tool calls.
 
-**Symptom:** Pod repeatedly crashes and restarts.
+**Fix**: Ensure `response_format: {"type": "json_object"}` is in the request. The proxy sets this automatically when `ATLAS_AGENT_LOOP=1`.
 
-**Debug:**
-
+If using llama-server directly, verify your build supports `response_format`:
 ```bash
-kubectl logs <pod-name> -n atlas
-kubectl logs <pod-name> -n atlas --previous
-kubectl describe pod <pod-name> -n atlas
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen3.5-9B-Q6_K","messages":[{"role":"user","content":"Say hi in JSON"}],"max_tokens":20,"response_format":{"type":"json_object"}}'
 ```
 
-**Common causes:**
+### Context Window Too Small
 
-1. **Model file not found:** Verify the model path matches atlas.conf and the hostPath mount exists on disk.
-2. **Configuration error:** Check for typos in atlas.conf or invalid YAML in manifests.
-3. **Port conflict:** Check if the NodePort is already in use by another service.
+**Symptom**: Tool calls get truncated, write_file fails with "unexpected end of JSON".
 
-### Service returning 502/503
-
-**Symptom:** API calls return bad gateway or service unavailable.
-
-**Debug:**
-
+**Fix**: Increase `--ctx-size` to 32768 (default in Docker Compose). Check:
 ```bash
-# Check if pods are ready
-kubectl get pods -n atlas
-
-# Test health endpoint from inside the cluster
-kubectl exec -it <pod-name> -n atlas -- curl localhost:8000/health
-
-# Verify service endpoints are populated
-kubectl get endpoints -n atlas
-```
-
-**Common cause:** llama-server takes 30-60 seconds to load the model on startup. The first request after a pod restart will be slow (cold KV cache warmup).
-
----
-
-## Model Issues
-
-### Model fails to load
-
-**Symptom:** `error loading model` in llama-server logs.
-
-**Check:**
-
-```bash
-# Verify file exists on the host
-ls -la /opt/atlas/models/Qwen3-14B-Q4_K_M.gguf  # adjust to your ATLAS_MODELS_DIR
-
-# Verify file is visible inside the pod
-kubectl exec deployment/llama-server -n atlas -- ls -la /models/
-
-# Verify filename matches config
-grep ATLAS_MAIN_MODEL atlas.conf
-```
-
-### Slow inference
-
-**Symptom:** Responses take significantly longer than expected.
-
-**Possible causes and solutions:**
-
-1. **Cold KV cache:** The first request after model load is always slow. Send a warmup request before benchmarking.
-2. **Flash attention disabled:** Ensure `ATLAS_FLASH_ATTENTION=true`.
-3. **Partial GPU offload:** Set `ATLAS_GPU_LAYERS=99` to offload all layers.
-4. **Speculative decoding not active:** Check llama-server logs for `Speculative decoding enabled`. If slot 1 shows draft context failure, only slot 0 gets spec decode benefit.
-5. **Qwen3 thinking mode:** At temperature=0, Qwen3 engages thinking mode with `<think>` tags that consume 8000+ tokens before generating the actual answer. Use the `/nothink` template mode or set `max_tokens` to at least 16384.
-
----
-
-## RAG Issues
-
-### Project sync fails
-
-**Symptom:** Error during codebase sync to PageIndex.
-
-**Debug:**
-
-```bash
-# Check rag-api logs
-kubectl logs deployment/rag-api -n atlas
-
-# Verify llama-server is healthy (needed for tree search and embeddings)
-curl http://localhost:32735/health
-```
-
-**Common causes:**
-
-1. **llama-server not ready:** PageIndex tree search requires the LLM for summarization. Wait for llama-server to finish loading.
-2. **Project too large:** Reduce project size or increase `MAX_FILES`.
-3. **Disk full:** Check available space on the projects volume.
-
-### Poor retrieval quality
-
-**Symptom:** Retrieved context is not relevant to the query.
-
-**Solutions:**
-
-1. **Increase TOP_K:** Set `TOP_K=30` in the rag-api deployment to retrieve more candidates.
-2. **Re-sync project:** Delete the project and re-upload to rebuild the PageIndex tree and BM25 index.
-3. **Check routing:** If `ROUTING_ENABLED=true`, the confidence router may be selecting FAST_PATH (k=1) for queries that need more context. Check `route_decisions.jsonl` telemetry.
-
----
-
-## Memory Issues
-
-### Node running out of memory
-
-**Symptom:** Pods evicted or OOMKilled.
-
-**Solutions:**
-
-1. **Reduce memory requests:**
-   ```bash
-   ATLAS_LLAMA_MEMORY_REQUEST="4Gi"
-   ATLAS_SERVICE_MEMORY_REQUEST="256Mi"
-   ```
-
-2. **Disable unused services:**
-   ```bash
-   ATLAS_ENABLE_DASHBOARD=false
-   ATLAS_ENABLE_TRAINING=false
-   ```
-
-3. **Enable swap (not recommended for production):**
-   ```bash
-   sudo fallocate -l 8G /swapfile
-   sudo chmod 600 /swapfile
-   sudo mkswap /swapfile
-   sudo swapon /swapfile
-   ```
-
----
-
-## Network Issues
-
-### Cannot connect to service
-
-**Symptom:** Connection refused or timeout when accessing a NodePort.
-
-**Debug:**
-
-```bash
-# Check services exist
-kubectl get svc -n atlas
-
-# Check endpoints are populated
-kubectl get endpoints -n atlas
-
-# Test from inside the cluster
-kubectl run test --rm -it --image=busybox -n atlas -- wget -qO- http://rag-api:8001/health
-
-# Check firewall
-sudo firewall-cmd --list-all
-```
-
-### NodePort not accessible
-
-**Symptom:** Cannot reach service from outside the cluster.
-
-**Solutions:**
-
-1. **Open firewall port:**
-   ```bash
-   sudo firewall-cmd --permanent --add-port=32735/tcp
-   sudo firewall-cmd --permanent --add-port=31144/tcp
-   sudo firewall-cmd --reload
-   ```
-
-2. **Verify correct IP:**
-   ```bash
-   kubectl get nodes -o wide
-   ```
-
-3. **Verify NodePort assignment:**
-   ```bash
-   kubectl get svc -n atlas -o wide
-   ```
-
----
-
-## V3 Pipeline Issues
-
-### Self-Test Generation Returns Zero Cases
-
-**Symptom:** Phase 3 self-test generation produces 0 test cases, and the `reason` field in telemetry is empty.
-
-**Root cause:** The LLM callable strips thinking blocks (`<think>...</think>`) before the self-test parser can extract test cases from the response.
-
-**Fix (applied in V3.0):** Self-test generation uses raw ChatML responses that preserve the full model output. If you see this issue, ensure `benchmark/v3/self_test_gen.py` uses the raw response, not the post-processed output.
-
-### Budget Forcing /nothink Not Taking Effect
-
-**Symptom:** Model generates excessive thinking tokens despite Budget Forcing being enabled.
-
-**Root cause:** Budget Forcing's `process_response()` was not being called in the runner. The enforcement logic existed but was never wired into the generation pipeline.
-
-**Fix:** Ensure `benchmark/v3_runner.py` calls Budget Forcing enforcement in the LLM adapter. If a think block consumes the budget with minimal output, the adapter retries with `/nothink`.
-
-### Phase 3 Derivation Chains Producing Zero Rescues
-
-**Symptom:** Derivation chains decompose problems into sub-problems but none of the sub-problems verify in the sandbox.
-
-**Root cause:** LiveCodeBench competitive programming problems resist decomposition -- the sub-problems require the full solution context to be testable, and the SandboxAdapter ignores custom `test_case` for stdio mode tasks.
-
-**Impact:** Expected behavior for LCB. Derivation chains may be more effective on multi-function software engineering tasks. PR-CoT repair is the dominant Phase 3 rescue mechanism (85.7% of rescues).
-
-### Speculative Decoding + Self-Embeddings Conflict
-
-**Symptom:** 0% token acceptance rate when `--embeddings` and `--model-draft` are both enabled.
-
-**Root cause:** `--embeddings` forces `n_batch=512` on the main model, and `params_dft = params_base` copies `embedding=true` to the draft context.
-
-**Fix:** Use the patched llama-server image (`localhost/llama-server:v3-specdec`) which sets `params_dft.embedding = false`. Also requires `-b 4096 -ub 4096` (equal batch sizes) and no `--jinja` flag.
-
----
-
-## Collecting Logs
-
-### Per-service logs
-
-```bash
-# Current logs
-kubectl logs deployment/llama-server -n atlas
-kubectl logs deployment/rag-api -n atlas
-
-# Previous container logs (after a restart)
-kubectl logs deployment/llama-server -n atlas --previous
-
-# Follow logs in real-time
-kubectl logs -f deployment/rag-api -n atlas
-```
-
-### System logs
-
-```bash
-# K3s logs
-sudo journalctl -u k3s
-
-# NVIDIA driver messages
-dmesg | grep nvidia
-```
-
-### Export all logs for debugging
-
-```bash
-mkdir -p logs
-for pod in $(kubectl get pods -n atlas -o name); do
-  kubectl logs -n atlas $pod > logs/$(basename $pod).log 2>&1
-done
+ps aux | grep llama-server | grep ctx-size
 ```
 
 ---
 
-## Getting Help
+## Proxy Issues
 
-If you cannot resolve an issue:
+### Agent Loop Not Activating
 
-1. Check existing GitHub issues.
-2. Open a new issue with:
-   - ATLAS version or commit hash (`git rev-parse HEAD`)
-   - Output of `kubectl get pods -n atlas`
-   - Relevant pod logs
-   - Your `atlas.conf` (remove any secrets)
-   - Steps to reproduce the problem
+**Symptom**: Requests go directly to llama-server without tool calls.
+
+**Fix**: Set `ATLAS_AGENT_LOOP=1` environment variable. The `atlas` command sets this automatically.
+
+### V3 Pipeline Not Firing on Feature Files
+
+**Symptom**: All write_file calls go direct (T1), no V3 pipeline steps in logs.
+
+**Fix**: V3 fires on files with 50+ lines AND 3+ logic indicators. Check the proxy log:
+```bash
+tail -f logs/atlas-proxy.log | grep "write_file"
+# Should show: [write_file] app.py → T2:medium (V3 pipeline activating)
+```
+
+If V3 service is unreachable: `curl http://localhost:8070/health`
+
+### Truncation Errors (write_file fails repeatedly)
+
+**Symptom**: `Content was truncated — the file is too large for write_file`.
+
+**Fix**: The model is trying to rewrite an entire large file. The proxy automatically redirects to `edit_file` for existing files >100 lines. If the error persists:
+- Ask for smaller, targeted changes instead of full rewrites
+- The error loop breaker stops after 3 consecutive failures
+
+### File Deletion Not Working
+
+**Symptom**: Model calls delete_file but file reappears.
+
+**Fix**: File deletion uses a fast-path before the tier classifier. It requires the proxy to detect the real project directory. If the wrong directory is detected, the file is deleted from the wrong location.
+
+Check proxy log for: `delete fast-path:` and `deleted:` lines.
+
+---
+
+## Geometric Lens Issues
+
+### Lens Model Not Loaded
+
+**Symptom**: `Lens model: NOT LOADED` in service startup.
+
+**Fix**: Model weights (`cost_field.pt`, `metric_tensor.pt`) must be in `geometric-lens/geometric_lens/models/`. Download from HuggingFace:
+Download from [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+
+### Low C(x) Scores (All Near 0.5)
+
+**Symptom**: All candidates score ~0.5 regardless of quality.
+
+**Fix**: The Lens model may not be loaded. Check:
+```bash
+curl http://localhost:8099/internal/lens/gx-score \
+  -H "Content-Type: application/json" \
+  -d '{"text": "print(1)"}'
+```
+
+If `cx_energy: 0.0` and `gx_score: 0.5`, the model is not loaded.
+
+---
+
+## Aider Issues
+
+### Timeout on Long Tasks
+
+**Symptom**: Aider disconnects before the agent loop completes.
+
+**Fix**: The Aider timeout has been increased to 24 hours. If you see timeouts, check:
+```python
+# In aider/models.py
+request_timeout = 86400  # Should be 86400, not 600
+```
+
+### Empty Response (No Text Displayed)
+
+**Symptom**: `[done: 0 files, 0 tool calls]` but no text shown.
+
+**Fix**: For conversational responses, the agent loop returns text via `formatForAider`. If the model only emits a `done` signal without text, the response appears empty. This is a model behavior issue with very short prompts.
+
+### Wrong Working Directory
+
+**Symptom**: Files created in wrong location, `list_directory` shows stale test dirs.
+
+**Fix**: The proxy detects the project directory from Aider's `.aider.chat.history.md` timestamps. If you have many Aider sessions open, the most recently modified one wins. Close other Aider sessions or specify the directory explicitly.
+
+---
+
+## Performance
+
+### Slow Generation (~2 tok/s)
+
+The model is running on CPU. Check:
+1. `nvidia-smi` — is llama-server using GPU?
+2. `--n-gpu-layers 99` — is GPU offloading enabled?
+3. Container runtime — is NVIDIA runtime configured?
+
+Expected: ~51 tok/s on RTX 5060 Ti with grammar enforcement.
+
+### V3 Pipeline Takes 5+ Minutes Per File
+
+Normal for T2 files. The pipeline makes 10+ LLM calls (PlanSearch, DivSampling, scoring, repair). Each call takes ~10s at 51 tok/s. Total: 2-5 minutes per T2 file.
+
+To skip V3 for faster (lower quality) results, make files shorter (<50 lines) or simpler (fewer logic indicators).

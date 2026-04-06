@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc347_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\n# Read input\nN, K = map(int, input().split())\nA = list(map(int, input().split()))\n\n# Process the list\nresult = []\nfor num in A:\n    if num % K == 0:\n        result.append(num // K)\n\n# Print the result\nprint(' '.join(map(str, result)))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 605,
+  "total_time_ms": 12265.679597854614,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 541
+  }
+}

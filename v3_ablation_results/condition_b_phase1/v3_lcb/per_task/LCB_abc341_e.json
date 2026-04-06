@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc341_e",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    S = data[idx]\n    idx += 1\n    \n    # Convert string to list for easier manipulation\n    S = list(S)\n    \n    # For flip operations, we can use a binary indexed tree or a segment tree\n    # However, for this problem, we can use a simple approach with a flip array\n    # We'll use a flip array to track the number of flips at each position\n    flip = [0] * (N + 2)  # 1-based indexing\n    \n    def apply_flip(l, r):\n        flip[l] += 1\n        flip[r + 1] -= 1\n    \n    def get_flips(pos):\n        res = 0\n        for i in range(1, pos + 1):\n            res += flip[i]\n        return res\n    \n    output = []\n    \n    for _ in range(Q):\n        query_type = int(data[idx])\n        idx += 1\n        L = int(data[idx])\n        idx += 1\n        R = int(data[idx])\n        idx += 1\n        \n        if query_type == 1:\n            apply_flip(L, R)\n        else:\n            # Check if the substring from L to R is a good string\n            # A good string has no two consecutive characters the same\n            # We need to check if S[L-1] != S[L], S[L] != S[L+1], etc.\n            # But we need to account for flips\n            # We can compute the actual value of each character in the range [L, R]\n            # by checking if the number of flips up to that position is even or odd\n            is_good = True\n            for i in range(L, R):\n                current = S[i - 1]\n                flips = get_flips(i)\n                if flips % 2 == 1:\n                    current = '1' if current == '0' else '0'\n                next_char = S[i]\n                flips_next = get_flips(i + 1)\n                if flips_next % 2 == 1:\n                    next_char = '1' if next_char == '0' else '0'\n                if current == next_char:\n                    is_good = False\n                    break\n            output.append(\"Yes\" if is_good else \"No\")\n    \n    print(\"\\n\".join(output))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2238,
+  "total_time_ms": 37551.93519592285,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1674
+  }
+}

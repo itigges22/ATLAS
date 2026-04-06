@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3317",
+  "passed": false,
+  "code": "from collections import Counter\nfrom typing import List\n\nclass Solution:\n    def maxPalindromesAfterOperations(self, words: List[str]) -> int:\n        # Count all characters across all words\n        char_count = Counter()\n        total_chars = 0\n        for word in words:\n            char_count.update(word)\n            total_chars += len(word)\n\n        # Count how many characters have even counts\n        even_pairs = sum(count // 2 for count in char_count.values())\n        # Total number of palindromes we can form\n        max_palindromes = 0\n\n        # Try to form as many palindromes as possible\n        for word in words:\n            length = len(word)\n            # For a palindrome, we need at least one pair of characters (for even length)\n            # or one pair plus one unpaired character (for odd length)\n            needed_pairs = (length // 2)\n            if even_pairs >= needed_pairs:\n                max_palindromes += 1\n                even_pairs -= needed_pairs\n            else:\n                # If we don't have enough pairs, we can still form a palindrome with one unpaired character\n                # if we have at least one character with an odd count\n                if any(count % 2 == 1 for count in char_count.values()):\n                    max_palindromes += 1\n                    # Use one unpaired character\n                    for ch in char_count:\n                        if char_count[ch] % 2 == 1:\n                            char_count[ch] -= 1\n                            break\n                else:\n                    # No unpaired character available, can't form this palindrome\n                    pass\n\n        return max_palindromes",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54592,
+  "total_time_ms": 915030.7796001434,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1725,
+    "self_tests_generated": 5
+  }
+}

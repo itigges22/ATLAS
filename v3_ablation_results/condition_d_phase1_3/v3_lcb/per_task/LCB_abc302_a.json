@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc302_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    A, B = map(int, sys.stdin.read().split())\n    print((A + B - 1) // B)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 521,
+  "total_time_ms": 8464.242935180664,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 460
+  }
+}

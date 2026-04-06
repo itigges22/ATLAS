@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2919",
+  "passed": true,
+  "code": "class Solution:\n    def maxIncreasingGroups(self, usageLimits: List[int]) -> int:\n        usageLimits.sort()\n        res = 0\n        total = 0\n        for limit in usageLimits:\n            total += limit\n            res += 1\n            if total < res * (res + 1) // 2:\n                res -= 1\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1758.4025859832764,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

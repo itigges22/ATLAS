@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc321_e",
+  "passed": false,
+  "code": "import sys\nimport math\nfrom collections import deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    T = int(data[0])\n    idx = 1\n    results = []\n    \n    for _ in range(T):\n        N = int(data[idx])\n        X = int(data[idx+1])\n        K = int(data[idx+2])\n        idx += 3\n        \n        if K == 0:\n            results.append(1)\n            continue\n        \n        count = 0\n        queue = deque()\n        queue.append((X, 0))\n        \n        while queue:\n            node, dist = queue.popleft()\n            if dist == K:\n                count += 1\n                continue\n            if dist > K:\n                continue\n            \n            # Move to parent\n            parent = node // 2\n            if parent >= 1:\n                queue.append((parent, dist + 1))\n            \n            # Move to left child\n            left = node * 2\n            if left <= N:\n                queue.append((left, dist + 1))\n            \n            # Move to right child\n            right = node * 2 + 1\n            if right <= N:\n                queue.append((right, dist + 1))\n        \n        results.append(count)\n    \n    sys.stdout.write(\"\\n\".join(map(str, results)) + \"\\n\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5045,
+  "total_time_ms": 108753.79800796509,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4631
+  }
+}

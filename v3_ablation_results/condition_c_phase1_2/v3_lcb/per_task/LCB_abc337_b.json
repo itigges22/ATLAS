@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc337_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_extended_abc(s):\n    if len(s) == 0:\n        return True\n    if s[0] != 'A':\n        return False\n    a_count = 0\n    while a_count < len(s) and s[a_count] == 'A':\n        a_count += 1\n    if a_count == len(s):\n        return True\n    if s[a_count] != 'B':\n        return False\n    b_count = a_count\n    while b_count < len(s) and s[b_count] == 'B':\n        b_count += 1\n    if b_count == len(s):\n        return True\n    if s[b_count] != 'C':\n        return False\n    c_count = b_count\n    while c_count < len(s) and s[c_count] == 'C':\n        c_count += 1\n    return c_count == len(s)\n\ndef main():\n    s = sys.stdin.readline().strip()\n    if is_extended_abc(s):\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4245,
+  "total_time_ms": 66550.0955581665,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3995
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc304_e",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N, M = map(int, sys.stdin.readline().split())\n    graph = defaultdict(list)\n    for _ in range(M):\n        u, v = map(int, sys.stdin.readline().split())\n        graph[u].append(v)\n        graph[v].append(u)\n\n    K = int(sys.stdin.readline())\n    forbidden_pairs = set()\n    for _ in range(K):\n        x, y = map(int, sys.stdin.readline().split())\n        if x > y:\n            x, y = y, x\n        forbidden_pairs.add((x, y))\n\n    Q = int(sys.stdin.readline())\n    queries = []\n    for _ in range(Q):\n        p, q = map(int, sys.stdin.readline().split())\n        if p > q:\n            p, q = q, p\n        queries.append((p, q))\n\n    # Union-Find (Disjoint Set Union)\n    parent = list(range(N + 1))\n\n    def find(u):\n        while parent[u] != u:\n            parent[u] = parent[parent[u]]\n            u = parent[u]\n        return u\n\n    def union(u, v):\n        pu = find(u)\n        pv = find(v)\n        if pu != pv:\n            parent[pv] = pu\n\n    # Build DSU\n    for u in range(1, N + 1):\n        for v in graph[u]:\n            if find(u) != find(v):\n                union(u, v)\n\n    # Precompute for each node its root\n    root = [find(i) for i in range(N + 1)]\n\n    # For each forbidden pair, check if they are in the same component\n    # We can precompute a set of forbidden roots\n    forbidden_roots = set()\n    for x, y in forbidden_pairs:\n        if find(x) == find(y):\n            # This should not happen as per problem statement\n            pass\n        else:\n            forbidden_roots.add((find(x), find(y)))\n\n    # Answer queries\n    for p, q in queries:\n        rp = find(p)\n        rq = find(q)\n        if (rp, rq) in forbidden_roots or (rq, rp) in forbidden_roots:\n            print(\"No\")\n        else:\n            print(\"Yes\")\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 9458,
+  "total_time_ms": 150645.91336250305,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6812,
+    "s_star_triggered": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2892",
+  "passed": false,
+  "code": "class Solution:\n    def isGood(self, nums: List[int]) -> bool:\n        n = max(nums)\n        if len(nums) != n + 1:\n            return False\n        count = {}\n        for num in nums:\n            count[num] = count.get(num, 0) + 1\n        if count[n] != 2:\n            return False\n        for i in range(1, n):\n            if count.get(i, 0) != 1:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 41157,
+  "total_time_ms": 911484.610080719,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3190",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def minOperations(self, nums1: List[int], nums2: List[int]) -> int:\n        n = len(nums1)\n        max1 = max(nums1)\n        max2 = max(nums2)\n\n        # Check if the final condition is already satisfied\n        if nums1[-1] == max1 and nums2[-1] == max2:\n            return 0\n\n        # Check if it's impossible to satisfy the conditions\n        if nums1[-1] < max1 or nums2[-1] < max2:\n            return -1\n\n        # Greedy approach: iterate from the end to the beginning\n        operations = 0\n        for i in range(n - 1, -1, -1):\n            # If nums1[i] is not the max in nums1, and nums2[i] is the max in nums2\n            if nums1[i] < max1 and nums2[i] == max2:\n                # Swap to make nums1[i] the max in nums1\n                nums1[i], nums2[i] = nums2[i], nums1[i]\n                operations += 1\n            # If nums2[i] is not the max in nums2, and nums1[i] is the max in nums1\n            elif nums2[i] < max2 and nums1[i] == max1:\n                # Swap to make nums2[i] the max in nums2\n                nums1[i], nums2[i] = nums2[i], nums1[i]\n                operations += 1\n\n        # Final check\n        if nums1[-1] == max(nums1) and nums2[-1] == max(nums2):\n            return operations\n        else:\n            return -1",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 11552,
+  "total_time_ms": 154802.5598526001,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 11234
+  }
+}

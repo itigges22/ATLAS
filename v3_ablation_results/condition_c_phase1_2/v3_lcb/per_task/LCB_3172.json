@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3172",
+  "passed": true,
+  "code": "class Solution:\n    def differenceOfSums(self, n: int, m: int) -> int:\n        num1 = 0\n        num2 = 0\n        for i in range(1, n + 1):\n            if i % m != 0:\n                num1 += i\n            else:\n                num2 += i\n        return num1 - num2",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4202,
+  "total_time_ms": 61508.108377456665,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4114
+  }
+}

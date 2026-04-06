@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc365_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n\n    # Mapping of Aoki's move to Takahashi's move that beats it\n    beat_map = {\n        'R': 'P',  # Paper beats Rock\n        'P': 'S',  # Scissors beats Paper\n        'S': 'R'   # Rock beats Scissors\n    }\n\n    # Mapping of Aoki's move to Takahashi's move that draws\n    draw_map = {\n        'R': 'R',\n        'P': 'P',\n        'S': 'S'\n    }\n\n    # Mapping of Aoki's move to Takahashi's move that loses\n    lose_map = {\n        'R': 'S',\n        'P': 'R',\n        'S': 'P'\n    }\n\n    # We will store Takahashi's moves in this list\n    takahashi_moves = []\n\n    # We will store the count of wins\n    win_count = 0\n\n    # Previous move (initially None)\n    prev_move = None\n\n    for aoki_move in S:\n        # Determine the move that beats Aoki's move\n        winning_move = beat_map[aoki_move]\n        # Determine the move that draws with Aoki's move\n        drawing_move = draw_map[aoki_move]\n\n        # We want to choose the winning move if possible\n        if prev_move != winning_move:\n            takahashi_moves.append(winning_move)\n            win_count += 1\n            prev_move = winning_move\n        else:\n            # If we can't choose the winning move (due to previous move constraint),\n            # choose the drawing move (so we don't lose)\n            takahashi_moves.append(drawing_move)\n            prev_move = drawing_move\n\n    print(win_count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2362,
+  "total_time_ms": 38412.90831565857,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2075
+  }
+}

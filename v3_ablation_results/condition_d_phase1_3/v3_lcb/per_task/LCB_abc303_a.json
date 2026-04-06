@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc303_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef are_similar_chars(a, b):\n    if a == b:\n        return True\n    if {a, b} == {'1', 'l'} or {a, b} == {'0', 'o'}:\n        return True\n    return False\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n    T = data[2]\n    \n    for s_char, t_char in zip(S, T):\n        if not are_similar_chars(s_char, t_char):\n            print(\"No\")\n            return\n    print(\"Yes\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1106,
+  "total_time_ms": 17720.966815948486,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 940
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc320_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef longest_palindrome_substring(s):\n    n = len(s)\n    max_len = 1  # Minimum length is 1\n\n    # Check all substrings\n    for i in range(n):\n        for j in range(i + 1, n + 1):\n            substr = s[i:j]\n            if substr == substr[::-1]:\n                max_len = max(max_len, j - i)\n    return max_len\n\nif __name__ == \"__main__\":\n    import sys\n    s = sys.stdin.readline().strip()\n    print(longest_palindrome_substring(s))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2262.211799621582,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

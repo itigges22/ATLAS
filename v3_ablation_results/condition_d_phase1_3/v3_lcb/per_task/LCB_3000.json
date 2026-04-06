@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3000",
+  "passed": false,
+  "code": "from bisect import bisect_left\nfrom typing import List\n\nclass Solution:\n    def minAbsoluteDifference(self, nums: List[int], x: int) -> int:\n        n = len(nums)\n        sorted_list = []\n        min_diff = float('inf')\n        \n        for i in range(n):\n            # Check elements that are at least x indices apart\n            if i >= x:\n                # Find the closest value in sorted_list to nums[i]\n                pos = bisect_left(sorted_list, nums[i])\n                if pos < len(sorted_list):\n                    min_diff = min(min_diff, abs(nums[i] - sorted_list[pos]))\n                if pos > 0:\n                    min_diff = min(min_diff, abs(nums[i] - sorted_list[pos - 1]))\n            # Insert nums[i] into the sorted list\n            bisect_left(sorted_list, nums[i])\n            sorted_list.insert(pos, nums[i])\n        \n        return min_diff",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50481,
+  "total_time_ms": 778235.57305336,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1309,
+    "self_tests_generated": 5
+  }
+}

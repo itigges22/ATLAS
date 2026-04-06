@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3446",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfPairs(self, nums1: List[int], nums2: List[int], k: int) -> int:\n        count = 0\n        for num1 in nums1:\n            for num2 in nums2:\n                if num1 % (num2 * k) == 0:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1018,
+  "total_time_ms": 16536.144018173218,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 930
+  }
+}

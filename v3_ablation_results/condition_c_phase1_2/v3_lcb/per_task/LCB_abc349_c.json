@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc349_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_airport_code(S, T):\n    # Case 1: T is a subsequence of S (length 3)\n    def is_subsequence(s, t):\n        it = iter(s)\n        return all(c in it for c in t)\n    \n    if is_subsequence(S, T):\n        return True\n    \n    # Case 2: T[:2] is a subsequence of S and T[2] == 'X'\n    if T[2] == 'X' and is_subsequence(S, T[:2]):\n        return True\n    \n    return False\n\ndef main():\n    S = sys.stdin.readline().strip()\n    T = sys.stdin.readline().strip()\n    if is_airport_code(S, T):\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 192,
+  "total_time_ms": 2843.7106609344482,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

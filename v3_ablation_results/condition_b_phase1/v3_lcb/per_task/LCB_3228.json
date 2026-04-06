@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3228",
+  "passed": true,
+  "code": "class Solution:\n    def maximumSetSize(self, nums1: List[int], nums2: List[int]) -> int:\n        from collections import Counter\n\n        n = len(nums1)\n        set1 = set(nums1)\n        set2 = set(nums2)\n\n        # Count unique elements in each array\n        count1 = Counter(nums1)\n        count2 = Counter(nums2)\n\n        # Maximum number of unique elements we can take from each array\n        max_take1 = min(len(set1), n // 2)\n        max_take2 = min(len(set2), n // 2)\n\n        # Total unique elements that can be taken\n        total_unique = max_take1 + max_take2\n\n        # But we can't have more than the total unique elements in both sets combined\n        return min(total_unique, len(set1 | set2))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2101,
+  "total_time_ms": 34710.803747177124,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1912
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc342_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    P = list(map(int, data[1:N+1]))\n    Q = int(data[N+1])\n    queries = list(map(int, data[N+2:]))\n    \n    pos = [0] * (N + 1)  # 1-based indexing for person numbers\n    for i in range(N):\n        pos[P[i]] = i + 1  # position from front (1-based)\n    \n    results = []\n    for i in range(Q):\n        A = queries[2*i]\n        B = queries[2*i + 1]\n        if pos[A] < pos[B]:\n            results.append(str(A))\n        else:\n            results.append(str(B))\n    \n    print(\"\\n\".join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1070,
+  "total_time_ms": 18634.594917297363,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 862
+  }
+}

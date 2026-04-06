@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc307_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    A = list(map(int, input[1:]))\n    result = []\n    for i in range(N):\n        start = i * 7\n        end = start + 7\n        week_sum = sum(A[start:end])\n        result.append(str(week_sum))\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 114,
+  "total_time_ms": 1858.8314056396484,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

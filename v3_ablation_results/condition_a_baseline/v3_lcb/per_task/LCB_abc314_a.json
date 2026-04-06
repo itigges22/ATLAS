@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc314_a",
+  "passed": true,
+  "code": "# Read input\nN = int(input())\n\n# Pi to 100 decimal places\npi = \"3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679\"\n\n# Truncate to N decimal places\nresult = pi[:N + 2]  # +2 to include the decimal point and N digits\n\n# Print the result\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2556.044340133667,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

@@ -38,7 +38,7 @@ class DerivationChainsConfig:
     max_sub_problems: int = 5
     max_attempts_per_step: int = 3
     decomposition_temperature: float = 0.3
-    step_generation_temperature: float = 0.2
+    step_generation_temperature: float = 0.4
     decomposition_max_tokens: int = 2048
     step_max_tokens: int = 4096
 
@@ -400,7 +400,7 @@ class DerivationChains:
             output_format=sp.output_format or "standard",
             context=f"Context from previous verified steps:\n{context}" if context else "",
         )
-        system = "You are an expert programmer. Write correct Python code."
+        system = "You are an expert programmer. Think carefully about the approach, then write correct Python code."
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"
@@ -418,7 +418,7 @@ class DerivationChains:
         user_content = COMPOSITION_PROMPT.format(
             problem=problem, verified_steps=steps_text,
         )
-        system = "You are an expert programmer. Compose verified steps into a complete solution."
+        system = "You are an expert programmer. Think carefully about how to combine the steps, then write the complete solution."
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc351_a",
+  "passed": true,
+  "code": "# Read input\nA = list(map(int, input().split()))\nB = list(map(int, input().split()))\n\n# Calculate total scores\nscore_takahashi = sum(A)\nscore_aoki = sum(B)\n\n# Calculate the minimum runs needed for Aoki to win\nrequired_runs = score_takahashi - score_aoki + 1\n\n# Output the result\nprint(required_runs)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 92,
+  "total_time_ms": 1767.625331878662,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

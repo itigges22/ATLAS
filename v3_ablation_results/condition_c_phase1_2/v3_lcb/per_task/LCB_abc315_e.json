@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc315_e",
+  "passed": false,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    pre = [[] for _ in range(N + 1)]\n    for i in range(1, N + 1):\n        parts = list(map(int, sys.stdin.readline().split()))\n        C_i = parts[0]\n        P_i = parts[1:]\n        pre[i] = P_i\n\n    visited = [False] * (N + 1)\n    order = []\n\n    def dfs(u):\n        visited[u] = True\n        for v in pre[u]:\n            if not visited[v]:\n                dfs(v)\n        order.append(u)\n\n    dfs(1)\n\n    result = []\n    for u in reversed(order):\n        if u != 1:\n            result.append(u)\n\n    print(' '.join(map(str, result)))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 212,
+  "total_time_ms": 3878.7076473236084,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "hard"
+  }
+}

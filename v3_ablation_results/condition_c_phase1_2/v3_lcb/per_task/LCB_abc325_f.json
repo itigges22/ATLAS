@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc325_f",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    D = list(map(int, data[1:N+1]))\n    L1, C1, K1 = map(int, data[N+1:N+4])\n    L2, C2, K2 = map(int, data[N+4:N+7])\n    \n    # DP[i][k1][k2] = min cost to cover first i sections using k1 type-1 and k2 type-2 sensors\n    # Initialize with large value\n    INF = float('inf')\n    dp = [[[INF] * (K2 + 1) for _ in range(K1 + 1)] for __ in range(N + 1)]\n    dp[0][0][0] = 0\n\n    for i in range(N):\n        for k1 in range(K1 + 1):\n            for k2 in range(K2 + 1):\n                if dp[i][k1][k2] == INF:\n                    continue\n                # Try using only type-1 sensors\n                for cnt1 in range(1, K1 + 1):\n                    if k1 + cnt1 > K1:\n                        break\n                    if cnt1 * L1 >= D[i]:\n                        dp[i+1][k1 + cnt1][k2] = min(dp[i+1][k1 + cnt1][k2], dp[i][k1][k2] + cnt1 * C1)\n                # Try using only type-2 sensors\n                for cnt2 in range(1, K2 + 1):\n                    if k2 + cnt2 > K2:\n                        break\n                    if cnt2 * L2 >= D[i]:\n                        dp[i+1][k1][k2 + cnt2] = min(dp[i+1][k1][k2 + cnt2], dp[i][k1][k2] + cnt2 * C2)\n                # Try using both types\n                for cnt1 in range(1, K1 + 1):\n                    if k1 + cnt1 > K1:\n                        break\n                    for cnt2 in range(1, K2 + 1):\n                        if k2 + cnt2 > K2:\n                            break\n                        if cnt1 * L1 + cnt2 * L2 >= D[i]:\n                            dp[i+1][k1 + cnt1][k2 + cnt2] = min(dp[i+1][k1 + cnt1][k2 + cnt2], dp[i][k1][k2] + cnt1 * C1 + cnt2 * C2)\n\n    # Find the minimum cost among all valid combinations\n    result = INF\n    for k1 in range(K1 + 1):\n        for k2 in range(K2 + 1):\n            result = min(result, dp[N][k1][k2])\n    \n    if result == INF:\n        print(-1)\n    else:\n        print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 3949,
+  "total_time_ms": 75783.93220901489,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3415
+  }
+}

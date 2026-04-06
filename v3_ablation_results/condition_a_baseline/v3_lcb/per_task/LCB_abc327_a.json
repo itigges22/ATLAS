@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc327_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\ns = input()\n\nfound = False\nfor i in range(n - 1):\n    if (s[i] == 'a' and s[i + 1] == 'b') or (s[i] == 'b' and s[i + 1] == 'a'):\n        found = True\n        break\n\nprint(\"Yes\" if found else \"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1359.9140644073486,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

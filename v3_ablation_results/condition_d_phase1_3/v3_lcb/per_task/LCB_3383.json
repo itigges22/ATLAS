@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3383",
+  "passed": true,
+  "code": "class Solution:\n    def maximumEnergy(self, energy: List[int], k: int) -> int:\n        n = len(energy)\n        max_energy = float('-inf')\n        for i in range(n):\n            current = 0\n            j = i\n            while j < n:\n                current += energy[j]\n                j += k\n            max_energy = max(max_energy, current)\n        return max_energy",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1139,
+  "total_time_ms": 21064.59665298462,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1040
+  }
+}

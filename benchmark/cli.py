@@ -331,7 +331,7 @@ def run_benchmark_suite(
             tasks,
             k=k,
             temperature=temperature,
-            use_ralph_loop=k > 1,  # Use error feedback for multi-attempt
+            use_retry_loop=k > 1,  # Use error feedback for multi-attempt
             progress_callback=progress_callback,
             save_callback=save_callback
         )

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2868",
+  "passed": true,
+  "code": "class Solution:\n    def continuousSubarrays(self, nums: List[int]) -> int:\n        from collections import deque\n\n        count = 0\n        qmin = deque()\n        qmax = deque()\n        \n        left = 0\n        for right in range(len(nums)):\n            # Maintain max queue\n            while qmax and nums[right] > nums[qmax[-1]]:\n                qmax.pop()\n            qmax.append(right)\n            \n            # Maintain min queue\n            while qmin and nums[right] < nums[qmin[-1]]:\n                qmin.pop()\n            qmin.append(right)\n            \n            # Ensure the difference between max and min is <= 2\n            while nums[qmax[0]] - nums[qmin[0]] > 2:\n                left += 1\n                if qmax[0] < left:\n                    qmax.popleft()\n                if qmin[0] < left:\n                    qmin.popleft()\n            \n            # All subarrays ending at right and starting from left to right are valid\n            count += right - left + 1\n        \n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3593.287229537964,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

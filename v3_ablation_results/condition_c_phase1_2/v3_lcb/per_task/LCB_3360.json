@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3360",
+  "passed": true,
+  "code": "class Solution:\n    def minimumDeletions(self, word: str, k: int) -> int:\n        from collections import Counter\n\n        # Step 1: Count the frequency of each character in the word\n        freq = Counter(word)\n        \n        # Step 2: Sort the frequencies in descending order\n        sorted_freq = sorted(freq.values(), reverse=True)\n        \n        # Step 3: Try to adjust frequencies to satisfy the k-special condition\n        # We will try to make all frequencies fall within a range [min_freq, min_freq + k]\n        # We will iterate through the sorted frequencies and adjust them to fit within this range\n        \n        # Step 4: Initialize the minimum deletions required\n        min_deletions = float('inf')\n        \n        # Step 5: Try each possible frequency as the base frequency (min_freq)\n        for i in range(len(sorted_freq)):\n            # Assume sorted_freq[i] is the base frequency\n            base_freq = sorted_freq[i]\n            # We will adjust all other frequencies to be within [base_freq, base_freq + k]\n            # If a frequency is less than base_freq, we need to delete all of it\n            # If a frequency is greater than base_freq + k, we need to delete the excess\n            deletions = 0\n            for j in range(len(sorted_freq)):\n                if j == i:\n                    continue\n                if sorted_freq[j] < base_freq:\n                    deletions += sorted_freq[j]\n                elif sorted_freq[j] > base_freq + k:\n                    deletions += sorted_freq[j] - (base_freq + k)\n            min_deletions = min(min_deletions, deletions)\n        \n        # Step 6: Return the minimum deletions required\n        return min_deletions",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5072,
+  "total_time_ms": 79851.15122795105,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4913
+  }
+}

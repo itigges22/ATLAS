@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3527",
+  "passed": false,
+  "code": "from typing import List\n\nclass SegmentTreeNode:\n    def __init__(self, l, r):\n        self.l = l\n        self.r = r\n        self.left = None\n        self.right = None\n        self.count = 0  # count of alternating groups in this segment\n\nclass SegmentTree:\n    def __init__(self, data):\n        self.n = len(data)\n        self.data = data\n        self.root = self.build(0, self.n - 1)\n\n    def build(self, l, r):\n        node = SegmentTreeNode(l, r)\n        if l == r:\n            node.count = 0  # no group of size > 1 in a single tile\n            return node\n        mid = (l + r) // 2\n        node.left = self.build(l, mid)\n        node.right = self.build(mid + 1, r)\n        node.count = node.left.count + node.right.count\n        return node\n\n    def update(self, index, value):\n        self._update(self.root, index, value)\n\n    def _update(self, node, index, value):\n        if node.l == node.r == index:\n            node.count = 0\n            return\n        if index <= node.left.r:\n            self._update(node.left, index, value)\n        else:\n            self._update(node.right, index, value)\n        # Recompute count based on children\n        node.count = node.left.count + node.right.count\n\n    def query(self, size):\n        return self._query(self.root, size)\n\n    def _query(self, node, size):\n        if node.r - node.l + 1 < size:\n            return 0\n        if node.l == node.r:\n            return 0\n        if node.left.r - node.left.l + 1 >= size:\n            left_count = self._query(node.left, size)\n        else:\n            left_count = 0\n        if node.right.r - node.right.l + 1 >= size:\n            right_count = self._query(node.right, size)\n        else:\n            right_count = 0\n        return left_count + right_count\n\nclass Solution:\n    def numberOfAlternatingGroups(self, colors: List[int], queries: List[List[int]]) -> List[int]:\n        n = len(colors)\n        # Build the segment tree\n        st = SegmentTree(colors)\n        result = []\n\n        for query in queries:\n            if query[0] == 1:\n                size = query[1]\n                count = st.query(size)\n                result.append(count)\n            else:\n                index = query[1]\n                color = query[2]\n                st.update(index, color)\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 6555,
+  "total_time_ms": 107619.51327323914,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6253
+  }
+}

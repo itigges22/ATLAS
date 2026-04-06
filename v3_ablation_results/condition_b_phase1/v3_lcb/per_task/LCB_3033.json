@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3033",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, s1: str, s2: str, x: int) -> int:\n        n = len(s1)\n        diff = [i for i in range(n) if s1[i] != s2[i]]\n        m = len(diff)\n        \n        if m == 0:\n            return 0\n        \n        if m % 2 != 0:\n            return -1\n        \n        # dp[i][j]: min cost to fix first i differences with j flips\n        dp = [[float('inf')] * (m + 1) for _ in range(m + 1)]\n        dp[0][0] = 0\n        \n        for i in range(1, m + 1):\n            for j in range(i + 1):\n                if j % 2 == 0:\n                    # Use the first operation (cost x) to flip two differences\n                    if i - j >= 2:\n                        dp[i][j] = min(dp[i][j], dp[i - 2][j] + x)\n                    # Use the second operation (cost 1) to flip adjacent differences\n                    if i - j >= 1:\n                        dp[i][j] = min(dp[i][j], dp[i - 1][j] + 1)\n                else:\n                    # Use the second operation (cost 1) to flip adjacent differences\n                    if i - j >= 1:\n                        dp[i][j] = min(dp[i][j], dp[i - 1][j] + 1)\n        \n        return dp[m][0] if dp[m][0] != float('inf') else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1957,
+  "total_time_ms": 31541.895389556885,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1757
+  }
+}

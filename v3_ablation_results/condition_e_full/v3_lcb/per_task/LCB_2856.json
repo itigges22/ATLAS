@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2856",
+  "passed": true,
+  "code": "class Solution:\n    def countCompleteSubarrays(self, nums: List[int]) -> int:\n        total_distinct = len(set(nums))\n        count = 0\n        n = len(nums)\n        \n        for i in range(n):\n            distinct = set()\n            for j in range(i, n):\n                distinct.add(nums[j])\n                if len(distinct) == total_distinct:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 98,
+  "total_time_ms": 2997.013568878174,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

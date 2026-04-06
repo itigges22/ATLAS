@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc348_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    n = int(data[0])\n    color_map = defaultdict(list)\n    \n    index = 1\n    for _ in range(n):\n        a = int(data[index])\n        c = int(data[index + 1])\n        color_map[c].append(a)\n        index += 2\n    \n    max_min_deliciousness = 0\n    for color in color_map:\n        min_deliciousness = min(color_map[color])\n        if min_deliciousness > max_min_deliciousness:\n            max_min_deliciousness = min_deliciousness\n    \n    print(max_min_deliciousness)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1178,
+  "total_time_ms": 20186.23638153076,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1053
+  }
+}

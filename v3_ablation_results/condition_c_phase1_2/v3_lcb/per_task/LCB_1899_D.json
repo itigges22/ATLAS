@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/1899_D",
+  "passed": false,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    t = int(data[idx])\n    idx += 1\n    \n    results = []\n    \n    for _ in range(t):\n        n = int(data[idx])\n        idx += 1\n        a = list(map(int, data[idx:idx + n]))\n        idx += n\n        \n        count = defaultdict(int)\n        for num in a:\n            count[num] += 1\n        \n        total = 0\n        # For pairs (x, x), number of pairs is C(count[x], 2)\n        for c in count.values():\n            if c >= 2:\n                total += c * (c - 1) // 2\n        \n        # For pairs (x, y) where x != y and 2^x^2^y = 2^y^2^x\n        # This happens when x = y or (x, y) = (2, 4) or (4, 2)\n        # So we check for pairs (2, 4) and (4, 2)\n        x = count.get(2, 0)\n        y = count.get(4, 0)\n        total += x * y\n        \n        results.append(str(total))\n    \n    print('\\n'.join(results))\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 302,
+  "total_time_ms": 5108.798503875732,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

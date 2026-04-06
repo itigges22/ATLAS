@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3398",
+  "passed": false,
+  "code": "class Solution:\n    def canMakeSquare(self, grid: List[List[str]]) -> bool:\n        # Check all 2x2 squares in the 3x3 grid\n        for i in range(2):\n            for j in range(2):\n                # Extract the 2x2 square\n                square = [\n                    [grid[i][j], grid[i][j+1]],\n                    [grid[i+1][j], grid[i+1][j+1]]\n                ]\n                # Count 'B' and 'W'\n                b_count = sum(row.count('B') for row in square)\n                w_count = 4 - b_count\n                # If either count is 4 or can be made 4 by changing one cell\n                if b_count == 4 or w_count == 4 or b_count == 3 or w_count == 3:\n                    return True\n        return False",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 57383,
+  "total_time_ms": 852454.0312290192,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1343,
+    "self_tests_generated": 3
+  }
+}

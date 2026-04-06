@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc303_e",
+  "passed": false,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    edges = [[] for _ in range(N + 1)]\n    for _ in range(N - 1):\n        u, v = map(int, sys.stdin.readline().split())\n        edges[u].append(v)\n        edges[v].append(u)\n\n    # Count the number of leaves (degree 1)\n    leaves = [i for i in range(1, N + 1) if len(edges[i]) == 1]\n    M = len(leaves)\n    result = []\n\n    # For each leaf, find the depth of the star it belongs to\n    visited = [False] * (N + 1)\n    for leaf in leaves:\n        if not visited[leaf]:\n            stack = [leaf]\n            visited[leaf] = True\n            level = 0\n            count = 0\n            while stack:\n                node = stack.pop()\n                if len(edges[node]) == 1:\n                    count += 1\n                else:\n                    for neighbor in edges[node]:\n                        if not visited[neighbor]:\n                            visited[neighbor] = True\n                            stack.append(neighbor)\n            result.append(count - 1)\n\n    result.sort()\n    print(' '.join(map(str, result)))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49516,
+  "total_time_ms": 1154677.674293518,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 4637,
+    "self_tests_generated": 5
+  }
+}

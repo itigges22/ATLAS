@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc313_c",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    total = sum(A)\n    avg = total // N\n    remainder = total % N\n\n    res = 0\n    for a in A:\n        if a > avg + 1:\n            res += a - (avg + 1)\n        elif a > avg:\n            res += a - avg\n\n    print(res)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 12216,
+  "total_time_ms": 141762.53175735474,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 12089
+  }
+}

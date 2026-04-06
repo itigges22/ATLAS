@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3171",
+  "passed": false,
+  "code": "class Solution:\n    def minSum(self, nums1: List[int], nums2: List[int]) -> int:\n        sum1 = sum(nums1)\n        sum2 = sum(nums2)\n        zeros1 = nums1.count(0)\n        zeros2 = nums2.count(0)\n\n        # If both arrays have no zeros, check if sums are equal\n        if zeros1 == 0 and zeros2 == 0:\n            return sum1 if sum1 == sum2 else -1\n\n        # If one array has no zeros, the other must have sum >= its sum\n        if zeros1 == 0:\n            if sum1 < sum2:\n                return -1\n            # We need to replace zeros in nums2 with at least 1 each\n            required = sum1 - sum2 + zeros2\n            if required < 0:\n                return -1\n            return sum1\n        if zeros2 == 0:\n            if sum2 < sum1:\n                return -1\n            required = sum2 - sum1 + zeros1\n            if required < 0:\n                return -1\n            return sum2\n\n        # Both arrays have zeros\n        # We can replace zeros with 1s to minimize the sum\n        min_sum1 = sum1 + zeros1\n        min_sum2 = sum2 + zeros2\n\n        if min_sum1 == min_sum2:\n            return min_sum1\n        elif min_sum1 < min_sum2:\n            # Need to increase sum1 by at least (min_sum2 - min_sum1)\n            # We can do this by increasing the zeros in nums1\n            return min_sum2\n        else:\n            return min_sum1",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50466,
+  "total_time_ms": 756006.0293674469,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1436,
+    "self_tests_generated": 5
+  }
+}

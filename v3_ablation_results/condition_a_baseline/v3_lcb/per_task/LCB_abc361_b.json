@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc361_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef has_positive_volume_intersection(cuboid1, cuboid2):\n    # Extract coordinates for cuboid1\n    a, b, c, d, e, f = cuboid1\n    # Extract coordinates for cuboid2\n    g, h, i, j, k, l = cuboid2\n\n    # Calculate overlap in x-axis\n    x_overlap = max(0, min(d, j) - max(a, g))\n    # Calculate overlap in y-axis\n    y_overlap = max(0, min(e, k) - max(b, h))\n    # Calculate overlap in z-axis\n    z_overlap = max(0, min(f, l) - max(c, i))\n\n    # If all overlaps are positive, the intersection has positive volume\n    return x_overlap > 0 and y_overlap > 0 and z_overlap > 0\n\ndef main():\n    input = sys.stdin.read().strip()\n    coords = list(map(int, input.split()))\n    cuboid1 = coords[:6]\n    cuboid2 = coords[6:]\n    if has_positive_volume_intersection(cuboid1, cuboid2):\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4162.383556365967,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

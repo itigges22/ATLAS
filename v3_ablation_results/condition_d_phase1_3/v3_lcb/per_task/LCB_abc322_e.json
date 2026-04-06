@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc322_e",
+  "passed": true,
+  "code": "import sys\nimport itertools\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    P = int(data[2])\n    \n    plans = []\n    idx = 3\n    for _ in range(N):\n        C = int(data[idx])\n        A = list(map(int, data[idx+1:idx+1+K]))\n        plans.append((C, A))\n        idx += K + 1\n    \n    min_cost = float('inf')\n    \n    # Iterate over all possible subset sizes\n    for r in range(0, N + 1):\n        for subset in itertools.combinations(range(N), r):\n            total_cost = 0\n            param = [0] * K\n            for i in subset:\n                total_cost += plans[i][0]\n                for j in range(K):\n                    param[j] += plans[i][1][j]\n            \n            if all(p >= P for p in param):\n                if total_cost < min_cost:\n                    min_cost = total_cost\n    \n    print(min_cost if min_cost != float('inf') else -1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 17460,
+  "total_time_ms": 280360.8913421631,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1306,
+    "self_tests_generated": 2
+  }
+}

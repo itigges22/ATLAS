@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3362",
+  "passed": true,
+  "code": "from typing import List\nfrom collections import defaultdict\n\nclass Solution:\n    def medianOfUniquenessArray(self, nums: List[int]) -> int:\n        n = len(nums)\n        total_subarrays = n * (n + 1) // 2\n        \n        # Function to count number of subarrays with at most k distinct elements\n        def count_subarrays_with_at_most_k_distinct(k):\n            freq = defaultdict(int)\n            left = 0\n            count = 0\n            for right in range(n):\n                freq[nums[right]] += 1\n                while len(freq) > k:\n                    freq[nums[left]] -= 1\n                    if freq[nums[left]] == 0:\n                        del freq[nums[left]]\n                    left += 1\n                count += right - left + 1\n            return count\n        \n        # Binary search for the median\n        low, high = 1, n\n        while low < high:\n            mid = (low + high) // 2\n            if count_subarrays_with_at_most_k_distinct(mid) < (total_subarrays + 1) // 2:\n                low = mid + 1\n            else:\n                high = mid\n        \n        return low",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7950,
+  "total_time_ms": 122963.93537521362,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5553,
+    "s_star_triggered": true
+  }
+}

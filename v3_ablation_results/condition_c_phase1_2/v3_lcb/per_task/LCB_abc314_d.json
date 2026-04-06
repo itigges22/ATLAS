@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc314_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    S = list(data[1])\n    Q = int(data[2])\n    \n    # Track the case transformation state\n    # 0: no transformation, 1: all lowercase, 2: all uppercase\n    case_transform = 0\n    \n    # Index for data\n    idx = 3\n    \n    for _ in range(Q):\n        t = int(data[idx])\n        x = int(data[idx + 1])\n        c = data[idx + 2]\n        idx += 3\n        \n        if t == 1:\n            # Apply case transformation if any\n            if case_transform == 1:\n                c = c.lower()\n            elif case_transform == 2:\n                c = c.upper()\n            S[x - 1] = c\n        elif t == 2:\n            case_transform = 1\n        elif t == 3:\n            case_transform = 2\n    \n    # Apply final case transformation\n    if case_transform == 1:\n        print(''.join([ch.lower() for ch in S]))\n    elif case_transform == 2:\n        print(''.join([ch.upper() for ch in S]))\n    else:\n        print(''.join(S))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 306,
+  "total_time_ms": 4747.467517852783,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

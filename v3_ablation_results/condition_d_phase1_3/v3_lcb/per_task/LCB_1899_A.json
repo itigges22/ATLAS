@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/1899_A",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nt = int(input())\nfor _ in range(t):\n    n = int(input())\n    if n % 3 == 0:\n        print(\"Second\")\n    else:\n        print(\"First\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1246,
+  "total_time_ms": 20876.35588645935,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1189
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/1899_C",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    t = int(data[idx])\n    idx += 1\n    \n    results = []\n    \n    for _ in range(t):\n        n = int(data[idx])\n        idx += 1\n        a = list(map(int, data[idx:idx + n]))\n        idx += n\n        \n        max_sum = a[0]\n        current_even = a[0] if a[0] % 2 == 0 else float('-inf')\n        current_odd = a[0] if a[0] % 2 == 1 else float('-inf')\n        \n        for i in range(1, n):\n            num = a[i]\n            parity = num % 2\n            \n            if parity == 0:\n                # current number is even\n                new_current_even = max(num, current_odd + num)\n                current_even = new_current_even\n                current_odd = float('-inf')\n            else:\n                # current number is odd\n                new_current_odd = max(num, current_even + num)\n                current_odd = new_current_odd\n                current_even = float('-inf')\n            \n            max_sum = max(max_sum, current_even, current_odd)\n        \n        results.append(str(max_sum))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "refinement",
+  "candidates_generated": 3,
+  "total_tokens": 46400,
+  "total_time_ms": 719032.71317482,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1778,
+    "self_tests_generated": 5,
+    "refinement_iterations": 2
+  }
+}

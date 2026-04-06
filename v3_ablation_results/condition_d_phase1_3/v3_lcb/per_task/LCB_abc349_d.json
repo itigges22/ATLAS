@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc349_d",
+  "passed": true,
+  "code": "import sys\nimport math\n\ndef is_good(l, r):\n    # Check if the interval [l, r) can be represented as S(2^i * j, 2^i * (j+1))\n    # This means that r - l must be a power of 2\n    length = r - l\n    if length == 0:\n        return False\n    # Check if length is a power of 2\n    if (length & (length - 1)) != 0:\n        return False\n    # Check if l is divisible by the same power of 2\n    i = 0\n    while (1 << i) <= length:\n        if (l % (1 << i)) == 0:\n            return True\n        i += 1\n    return False\n\ndef find_good_segments(L, R):\n    result = []\n    current = L\n    while current < R:\n        # Find the maximum possible good segment starting at current\n        max_len = 1\n        while current + max_len <= R and (max_len & (max_len - 1)) == 0:\n            max_len <<= 1\n        # Now max_len is the largest power of 2 such that current + max_len <= R\n        # But we need to check if current is divisible by the same power of 2\n        max_len >>= 1\n        while max_len > 0:\n            if (current % max_len) == 0:\n                break\n            max_len >>= 1\n        result.append((current, current + max_len))\n        current += max_len\n    return result\n\ndef main():\n    L, R = map(int, sys.stdin.read().split())\n    segments = find_good_segments(L, R)\n    print(len(segments))\n    for l, r in segments:\n        print(l, r)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3058,
+  "total_time_ms": 54592.02551841736,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2648
+  }
+}

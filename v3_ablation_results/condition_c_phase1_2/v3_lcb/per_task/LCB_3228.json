@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3228",
+  "passed": true,
+  "code": "class Solution:\n    def maximumSetSize(self, nums1: List[int], nums2: List[int]) -> int:\n        from collections import Counter\n\n        n = len(nums1)\n        count1 = Counter(nums1)\n        count2 = Counter(nums2)\n\n        # Total unique elements in both arrays\n        total_unique = len(count1 | count2)\n\n        # Maximum number of elements we can keep from each array\n        max_keep = n // 2\n\n        # Count of unique elements in each array\n        unique1 = len(count1)\n        unique2 = len(count2)\n\n        # We can keep at most max_keep elements from each array\n        keep1 = min(unique1, max_keep)\n        keep2 = min(unique2, max_keep)\n\n        # The maximum size of the set s is the sum of the unique elements we can keep\n        return min(keep1 + keep2, total_unique)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2400,
+  "total_time_ms": 36633.08525085449,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2196
+  }
+}

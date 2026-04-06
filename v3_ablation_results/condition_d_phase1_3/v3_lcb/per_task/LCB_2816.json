@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2816",
+  "passed": false,
+  "code": "class Solution:\n    def makeSmallestPalindrome(self, s: str) -> str:\n        s = list(s)\n        n = len(s)\n        for i in range(n // 2):\n            if s[i] != s[n - 1 - i]:\n                # Replace both with the smaller character\n                if s[i] < s[n - 1 - i]:\n                    s[n - 1 - i] = s[i]\n                else:\n                    s[i] = s[n - 1 - i]\n        return ''.join(s)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 46639,
+  "total_time_ms": 741749.8788833618,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1178,
+    "self_tests_generated": 5
+  }
+}

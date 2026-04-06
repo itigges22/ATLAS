@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_d",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    Q = int(data[idx])\n    idx += 1\n    queries = []\n    for _ in range(Q):\n        l = int(data[idx])\n        r = int(data[idx+1])\n        queries.append((l, r))\n        idx += 2\n\n    # Precompute prefix sums of sleep intervals\n    sleep_intervals = []\n    for i in range(1, (N - 1) // 2 + 1):\n        start = A[2 * i - 1]\n        end = A[2 * i]\n        sleep_intervals.append((start, end))\n    \n    # Sort sleep intervals by start time\n    sleep_intervals.sort()\n    \n    # Create prefix sum array for sleep times\n    prefix = [0]\n    for start, end in sleep_intervals:\n        prefix.append(prefix[-1] + (end - start))\n    \n    # Create a list of all sleep start and end times for binary search\n    starts = [s for s, e in sleep_intervals]\n    ends = [e for s, e in sleep_intervals]\n\n    # Function to compute total sleep time in [l, r]\n    def query(l, r):\n        total = 0\n        # Find all intervals that are fully inside [l, r]\n        left = bisect.bisect_left(starts, l)\n        right_idx = bisect.bisect_right(ends, r)\n        total += prefix[right_idx] - prefix[left]\n        \n        # Add partial intervals at the beginning\n        if left > 0:\n            s = starts[left - 1]\n            e = ends[left - 1]\n            if e > l:\n                total += min(e, r) - l\n        # Add partial intervals at the end\n        if right_idx < len(starts):\n            s = starts[right_idx]\n            e = ends[right_idx]\n            if s < r:\n                total += min(r, e) - max(l, s)\n        return total\n\n    # Process queries\n    results = []\n    for l, r in queries:\n        results.append(str(query(l, r)))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2742,
+  "total_time_ms": 47342.91744232178,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2212
+  }
+}

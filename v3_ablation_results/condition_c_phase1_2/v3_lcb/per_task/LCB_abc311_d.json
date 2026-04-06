@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc311_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input.split()\n    N, M = int(data[0]), int(data[1])\n    grid = data[2:2+N]\n\n    visited = [[False] * M for _ in range(N)]\n    q = deque()\n    q.append((1, 1))  # (i, j) 0-based\n    visited[1][1] = True\n\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # up, down, left, right\n\n    while q:\n        i, j = q.popleft()\n        for di, dj in directions:\n            ni, nj = i, j\n            while True:\n                next_i, next_j = ni + di, nj + dj\n                if 0 <= next_i < N and 0 <= next_j < M and grid[next_i][next_j] == '.':\n                    ni, nj = next_i, next_j\n                else:\n                    break\n            if not visited[ni][nj]:\n                visited[ni][nj] = True\n                q.append((ni, nj))\n\n    count = sum(sum(row) for row in visited)\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 299,
+  "total_time_ms": 4749.089479446411,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

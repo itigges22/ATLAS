@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2817",
+  "passed": true,
+  "code": "class Solution:\n    def minimumCost(self, s: str) -> int:\n        n = len(s)\n        res = 0\n        for i in range(n - 1):\n            if s[i] != s[i + 1]:\n                res += min(i + 1, n - i - 1)\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1389.7511959075928,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

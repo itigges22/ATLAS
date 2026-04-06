@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3249",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, nums: List[int], k: int) -> int:\n        target = k\n        current_xor = 0\n        for num in nums:\n            current_xor ^= num\n        diff = current_xor ^ k\n        return bin(diff).count('1')",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1113,
+  "total_time_ms": 19889.080286026,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1038
+  }
+}

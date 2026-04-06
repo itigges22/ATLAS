@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2883",
+  "passed": true,
+  "code": "class Solution:\n    def minimumBeautifulSubstrings(self, s: str) -> int:\n        powers_of_5 = {bin(5**i)[2:] for i in range(16)}  # Precompute binary representations of powers of 5\n        n = len(s)\n        dp = [float('inf')] * (n + 1)\n        dp[0] = 0  # Base case: empty string requires 0 substrings\n\n        for i in range(1, n + 1):\n            for j in range(i):\n                substr = s[j:i]\n                if substr[0] == '0':  # Skip substrings with leading zeros\n                    continue\n                if substr in powers_of_5:\n                    dp[i] = min(dp[i], dp[j] + 1)\n\n        return dp[n] if dp[n] != float('inf') else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2391,
+  "total_time_ms": 37666.17441177368,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2191
+  }
+}

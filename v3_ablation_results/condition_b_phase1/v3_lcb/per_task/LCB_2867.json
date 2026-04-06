@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2867",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfGoodSubarraySplits(self, nums: List[int]) -> int:\n        MOD = 10**9 + 7\n        count_ones = 0\n        prev_one = -1\n        result = 1\n\n        for i, num in enumerate(nums):\n            if num == 1:\n                count_ones += 1\n                if count_ones > 1:\n                    result = (result * (i - prev_one)) % MOD\n                prev_one = i\n\n        return result if count_ones > 0 else 0",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1190,
+  "total_time_ms": 18265.445709228516,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1054
+  }
+}

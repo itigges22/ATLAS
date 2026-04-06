@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc308_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [sys.stdin.readline().strip() for _ in range(H)]\n\n    # Directions: up, down, left, right\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n\n    # BFS queue: (i, j, step_in_sequence)\n    queue = deque()\n    # Start at (0, 0) with step 0 (since the first character should be 's' which is index 0 in \"snuke\")\n    if grid[0][0] != 's':\n        print(\"No\")\n        return\n    queue.append((0, 0, 0))\n    visited = [[[False] * 5 for _ in range(W)] for _ in range(H)]\n    visited[0][0][0] = True\n\n    target = (H - 1, W - 1)\n\n    while queue:\n        i, j, step = queue.popleft()\n        if (i, j) == target:\n            # Check if the last character is 'e' (step 4)\n            if step % 5 == 4:\n                print(\"Yes\")\n                return\n\n        for di, dj in directions:\n            ni, nj = i + di, j + dj\n            if 0 <= ni < H and 0 <= nj < W:\n                next_step = (step + 1) % 5\n                if not visited[ni][nj][next_step] and grid[ni][nj] == \"snuke\"[next_step]:\n                    visited[ni][nj][next_step] = True\n                    queue.append((ni, nj, next_step))\n\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 44305,
+  "total_time_ms": 690528.4304618835,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1460,
+    "self_tests_generated": 5
+  }
+}

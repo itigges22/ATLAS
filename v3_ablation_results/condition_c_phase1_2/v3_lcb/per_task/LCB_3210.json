@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3210",
+  "passed": true,
+  "code": "class Solution:\n    def beautifulSubstrings(self, s: str, k: int) -> int:\n        vowels = set('aeiou')\n        n = len(s)\n        count = 0\n        \n        for i in range(n):\n            vowel_count = 0\n            consonant_count = 0\n            for j in range(i, n):\n                if s[j] in vowels:\n                    vowel_count += 1\n                else:\n                    consonant_count += 1\n                \n                if vowel_count == consonant_count:\n                    product = vowel_count * consonant_count\n                    if product % k == 0:\n                        count += 1\n        \n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 149,
+  "total_time_ms": 2275.810956954956,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

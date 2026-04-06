@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc306_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    bits = sys.stdin.read().split()\n    result = 0\n    for i in range(64):\n        result += int(bits[i]) * (1 << i)\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 735,
+  "total_time_ms": 12360.968112945557,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 657
+  }
+}

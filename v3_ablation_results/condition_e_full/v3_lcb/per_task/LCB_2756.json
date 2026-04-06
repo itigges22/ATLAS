@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2756",
+  "passed": true,
+  "code": "class Solution:\n    def buyChoco(self, prices: List[int], money: int) -> int:\n        prices.sort()\n        min_sum = prices[0] + prices[1]\n        if min_sum <= money:\n            return money - min_sum\n        else:\n            return money",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 69,
+  "total_time_ms": 2240.4215335845947,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

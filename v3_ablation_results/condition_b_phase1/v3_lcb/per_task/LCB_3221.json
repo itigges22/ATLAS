@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3221",
+  "passed": true,
+  "code": "class Solution:\n    def findPeaks(self, mountain: List[int]) -> List[int]:\n        peaks = []\n        for i in range(1, len(mountain) - 1):\n            if mountain[i] > mountain[i - 1] and mountain[i] > mountain[i + 1]:\n                peaks.append(i)\n        return peaks",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 704,
+  "total_time_ms": 10721.638679504395,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 620
+  }
+}

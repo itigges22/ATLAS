@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc354_d",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    A, B, C, D = map(int, sys.stdin.readline().split())\n\n    # Count the number of black regions in the grid\n    # Each black region is a unit square with (x + y) even and (x, y) in the rectangle\n    # We need to count the number of such squares\n\n    # The region (0.5, 0.5) is black, which is in the square (0, 0) to (1, 1)\n    # So the parity of (x + y) determines the color\n\n    # Count the number of black squares in the rectangle\n    # A black square has (x + y) even\n    # We need to count the number of integer points (x, y) such that A <= x < C, B <= y < D, and (x + y) is even\n\n    # Total number of squares in the rectangle\n    total_squares = (C - A) * (D - B)\n\n    # Number of black squares\n    # If total_squares is even, half are black\n    # If total_squares is odd, (total_squares // 2) + 1 if (A + B) is even, else total_squares // 2\n    if (C - A) * (D - B) % 2 == 0:\n        black_squares = (C - A) * (D - B) // 2\n    else:\n        if (A + B) % 2 == 0:\n            black_squares = (C - A) * (D - B) // 2 + 1\n        else:\n            black_squares = (C - A) * (D - B) // 2\n\n    print(black_squares)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54630,
+  "total_time_ms": 908684.4873428345,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1277,
+    "self_tests_generated": 5
+  }
+}

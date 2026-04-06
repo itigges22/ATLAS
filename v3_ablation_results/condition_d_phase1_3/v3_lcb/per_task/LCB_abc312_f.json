@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc312_f",
+  "passed": false,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    items = []\n    idx = 2\n    for _ in range(N):\n        T = int(data[idx])\n        X = int(data[idx+1])\n        items.append((T, X))\n        idx += 2\n\n    cans = []\n    pull_tabs = []\n    openers = []\n\n    for T, X in items:\n        if T == 0:\n            pull_tabs.append(X)\n        elif T == 1:\n            cans.append(X)\n        else:\n            openers.append(X)\n\n    # Sort pull tabs in descending order\n    pull_tabs.sort(reverse=True)\n    # Sort cans in descending order\n    cans.sort(reverse=True)\n    # Sort openers in descending order\n    openers.sort(reverse=True)\n\n    # Use the best M items, prioritizing pull tabs and cans with openers\n    total_happiness = 0\n    used_openers = 0\n    used_pull_tabs = 0\n    used_cans = 0\n\n    # Use pull tabs first\n    used_pull_tabs = min(len(pull_tabs), M)\n    total_happiness += sum(pull_tabs[:used_pull_tabs])\n    M -= used_pull_tabs\n\n    if M == 0:\n        print(total_happiness)\n        return\n\n    # Use openers to open cans\n    used_openers = min(len(openers), M)\n    used_cans = min(len(cans), M)\n    total_happiness += sum(cans[:used_cans])\n    M -= min(used_openers, used_cans)\n\n    print(total_happiness)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 56193,
+  "total_time_ms": 1297686.3968372345,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 4988,
+    "self_tests_generated": 5
+  }
+}

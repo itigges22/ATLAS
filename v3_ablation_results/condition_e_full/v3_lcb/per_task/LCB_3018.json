@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/3018",
+  "passed": false,
+  "code": "class Solution:\n    def canMakeSubsequence(self, str1: str, str2: str) -> bool:\n        i = j = 0\n        n, m = len(str1), len(str2)\n        while i < n and j < m:\n            if str1[i] == str2[j]:\n                i += 1\n                j += 1\n            elif ord(str1[i]) + 1 == ord(str2[j]) or (str1[i] == 'z' and str2[j] == 'a'):\n                i += 1\n                j += 1\n            else:\n                i += 1\n        return j == m",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 55862,
+  "total_time_ms": 1209201.1013031006,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2902",
+  "passed": true,
+  "code": "class Solution:\n    def maxSum(self, nums: List[int]) -> int:\n        from collections import defaultdict\n\n        # Group numbers by their maximum digit\n        groups = defaultdict(list)\n        for num in nums:\n            max_digit = max(int(d) for d in str(num))\n            groups[max_digit].append(num)\n\n        # Find the maximum sum for each group\n        max_total = -1\n        for group in groups.values():\n            if len(group) >= 2:\n                # Sort to get the two largest numbers\n                group.sort()\n                current_sum = group[-1] + group[-2]\n                if current_sum > max_total:\n                    max_total = current_sum\n\n        return max_total",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5667,
+  "total_time_ms": 132863.9566898346,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3435,
+    "s_star_triggered": true
+  }
+}

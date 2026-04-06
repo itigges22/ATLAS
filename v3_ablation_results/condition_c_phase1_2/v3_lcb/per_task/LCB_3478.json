@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3478",
+  "passed": false,
+  "code": "class Solution:\n    def canReachCorner(self, xCorner: int, yCorner: int, circles: List[List[int]]) -> bool:\n        # Check if any circle blocks the entire rectangle\n        for x, y, r in circles:\n            # Check if the circle blocks the bottom edge (y = 0)\n            if y - r <= 0 <= y + r and x - r <= 0 <= x + r:\n                continue\n            # Check if the circle blocks the top edge (y = yCorner)\n            if y - r <= yCorner <= y + r and x - r <= xCorner <= x + r:\n                continue\n            # Check if the circle blocks the left edge (x = 0)\n            if x - r <= 0 <= x + r and y - r <= 0 <= y + r:\n                continue\n            # Check if the circle blocks the right edge (x = xCorner)\n            if x - r <= xCorner <= x + r and y - r <= yCorner <= y + r:\n                continue\n            # Check if the circle blocks the diagonal (from (0, 0) to (xCorner, yCorner))\n            # We check if the circle is close enough to the diagonal\n            # The distance from the center of the circle to the diagonal is <= r\n            # The diagonal line equation: y = (yCorner / xCorner) * x\n            # The distance from (x, y) to this line is |y - (yCorner / xCorner) * x| / sqrt(1 + (yCorner / xCorner)^2)\n            # If this distance <= r, the circle blocks the diagonal\n            distance = abs(y - (yCorner / xCorner) * x) / ((1 + (yCorner / xCorner)**2)**0.5)\n            if distance <= r:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 6780,
+  "total_time_ms": 107305.67717552185,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6470
+  }
+}

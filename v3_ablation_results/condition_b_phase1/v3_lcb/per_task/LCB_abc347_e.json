@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc347_e",
+  "passed": true,
+  "code": "import sys\ninput = sys.stdin.read\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    Q = int(data[1])\n    queries = list(map(int, data[2:2+Q]))\n    \n    A = [0] * (N + 1)  # 1-based indexing\n    S = set()\n    current_size = 0\n    \n    for x in queries:\n        if x in S:\n            S.remove(x)\n            current_size -= 1\n        else:\n            S.add(x)\n            current_size += 1\n        \n        for j in S:\n            A[j] += current_size\n    \n    print(' '.join(map(str, A[1:])))\n    \nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 5114,
+  "total_time_ms": 56730.056047439575,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 4939
+  }
+}

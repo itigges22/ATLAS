@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc302_f",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque, defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n\n    sets = []\n    for _ in range(N):\n        A = int(data[idx])\n        idx += 1\n        elements = list(map(int, data[idx:idx+A]))\n        idx += A\n        sets.append(set(elements))\n\n    # Check if any set already contains both 1 and M\n    for s in sets:\n        if 1 in s and M in s:\n            print(0)\n            return\n\n    # Build graph: nodes are sets, edges if sets share an element\n    # We need to find the shortest path from any set containing 1 to any set containing M\n    # So we build a graph where nodes are sets, and edges exist if sets share an element\n\n    # Map from element to list of sets containing it\n    element_to_sets = defaultdict(list)\n    for i, s in enumerate(sets):\n        for elem in s:\n            element_to_sets[elem].append(i)\n\n    # BFS from sets containing 1 to sets containing M\n    from_1 = []\n    to_M = []\n    for i, s in enumerate(sets):\n        if 1 in s:\n            from_1.append(i)\n        if M in s:\n            to_M.append(i)\n\n    if not from_1 or not to_M:\n        print(-1)\n        return\n\n    # Build adjacency list\n    adj = [[] for _ in range(N)]\n    for elem, set_indices in element_to_sets.items():\n        if len(set_indices) < 2:\n            continue\n        for i in range(len(set_indices)):\n            for j in range(i + 1, len(set_indices)):\n                u = set_indices[i]\n                v = set_indices[j]\n                adj[u].append(v)\n                adj[v].append(u)\n\n    # BFS to find shortest path from any set with 1 to any set with M\n    visited = [False] * N\n    queue = deque()\n    for node in from_1:\n        visited[node] = True\n        queue.append((node, 0))\n\n    while queue:\n        node, dist = queue.popleft()\n        if node in to_M:\n            print(dist)\n            return\n        for neighbor in adj[node]:\n            if not visited[neighbor]:\n                visited[neighbor] = True\n                queue.append((neighbor, dist + 1))\n\n    print(-1)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5046,
+  "total_time_ms": 83461.59744262695,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4539
+  }
+}

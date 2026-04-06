@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc327_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_valid_sudoku(grid):\n    # Check rows\n    for row in grid:\n        if set(row) != set(range(1, 10)):\n            return \"No\"\n    \n    # Check columns\n    for col in range(9):\n        column = [grid[row][col] for row in range(9)]\n        if set(column) != set(range(1, 10)):\n            return \"No\"\n    \n    # Check 3x3 subgrids\n    for i in range(0, 9, 3):\n        for j in range(0, 9, 3):\n            subgrid = []\n            for x in range(i, i + 3):\n                for y in range(j, j + 3):\n                    subgrid.append(grid[x][y])\n            if set(subgrid) != set(range(1, 10)):\n                return \"No\"\n    \n    return \"Yes\"\n\ndef main():\n    grid = []\n    for line in sys.stdin:\n        row = list(map(int, line.strip().split()))\n        grid.append(row)\n    print(is_valid_sudoku(grid))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6779,
+  "total_time_ms": 102129.12106513977,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3972,
+    "s_star_triggered": true
+  }
+}

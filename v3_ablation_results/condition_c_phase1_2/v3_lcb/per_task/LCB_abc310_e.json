@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc310_e",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n\n    result = 0\n    for i in range(N):\n        current = 1 if S[i] == '0' else 0\n        for j in range(i, N):\n            if i == j:\n                current = 1 if S[j] == '0' else 0\n            else:\n                current = 1 if current == 1 or S[j] == '0' else 0\n            result += current\n    print(result)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 154,
+  "total_time_ms": 2964.4529819488525,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

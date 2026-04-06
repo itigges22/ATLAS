@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3517",
+  "passed": true,
+  "code": "from collections import deque\n\nclass Solution:\n    def shortestDistanceAfterQueries(self, n: int, queries: List[List[int]]) -> List[int]:\n        # Initialize the graph with the initial roads\n        graph = [[] for _ in range(n)]\n        for i in range(n - 1):\n            graph[i].append(i + 1)\n        \n        answer = []\n        for u, v in queries:\n            graph[u].append(v)\n            # Use BFS to find the shortest path from 0 to n-1\n            dist = [-1] * n\n            q = deque()\n            q.append(0)\n            dist[0] = 0\n            while q:\n                node = q.popleft()\n                for neighbor in graph[node]:\n                    if dist[neighbor] == -1:\n                        dist[neighbor] = dist[node] + 1\n                        q.append(neighbor)\n            answer.append(dist[n - 1])\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1691,
+  "total_time_ms": 49868.08228492737,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1486
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2893",
+  "passed": false,
+  "code": "class Solution:\n    def maxScore(self, nums: List[int], x: int) -> int:\n        even = nums[0] if nums[0] % 2 == 0 else -float('inf')\n        odd = nums[0] if nums[0] % 2 == 1 else -float('inf')\n        \n        for num in nums[1:]:\n            if num % 2 == 0:\n                even = max(even, odd - x + num)\n            else:\n                odd = max(odd, even - x + num)\n        \n        return max(even, odd)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 52269,
+  "total_time_ms": 828399.2657661438,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1075,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc348_d",
+  "passed": true,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    H = int(data[idx])\n    idx += 1\n    W = int(data[idx])\n    idx += 1\n    \n    grid = []\n    start = None\n    goal = None\n    for i in range(H):\n        grid.append(data[idx])\n        idx += 1\n        for j in range(W):\n            if grid[i][j] == 'S':\n                start = (i, j)\n            if grid[i][j] == 'T':\n                goal = (i, j)\n    \n    N = int(data[idx])\n    idx += 1\n    \n    medicines = []\n    for _ in range(N):\n        r = int(data[idx]) - 1\n        idx += 1\n        c = int(data[idx]) - 1\n        idx += 1\n        e = int(data[idx])\n        idx += 1\n        medicines.append((r, c, e))\n    \n    # Directions: up, right, down, left\n    directions = [(-1, 0), (0, 1), (1, 0), (0, -1)]\n    \n    # Dijkstra's algorithm: (energy, row, col)\n    dist = [[-1 for _ in range(W)] for _ in range(H)]\n    heap = []\n    \n    # Start with 0 energy at the start position\n    dist[start[0]][start[1]] = 0\n    heapq.heappush(heap, (0, start[0], start[1]))\n    \n    while heap:\n        energy, r, c = heapq.heappop(heap)\n        \n        # If we reached the goal, return \"Yes\"\n        if (r, c) == goal:\n            print(\"Yes\")\n            return\n        \n        # If this state is outdated, skip\n        if dist[r][c] > energy:\n            continue\n        \n        # Try to use medicine at current cell\n        for med_r, med_c, med_e in medicines:\n            if (med_r, med_c) == (r, c):\n                if dist[med_r][med_c] < med_e:\n                    dist[med_r][med_c] = med_e\n                    heapq.heappush(heap, (med_e, med_r, med_c))\n        \n        # Try to move to adjacent cells\n        for dr, dc in directions:\n            nr, nc = r + dr, c + dc\n            if 0 <= nr < H and 0 <= nc < W:\n                if grid[nr][nc] == '#':\n                    continue\n                if energy > 0:\n                    if dist[nr][nc] < energy - 1:\n                        dist[nr][nc] = energy - 1\n                        heapq.heappush(heap, (energy - 1, nr, nc))\n    \n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 8963.53006362915,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

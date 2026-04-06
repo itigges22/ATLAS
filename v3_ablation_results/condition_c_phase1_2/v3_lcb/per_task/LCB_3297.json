@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3297",
+  "passed": false,
+  "code": "class Solution:\n    def minimumTimeToInitialState(self, word: str, k: int) -> int:\n        n = len(word)\n        current = word\n        time = 0\n        \n        while True:\n            time += 1\n            removed = current[:k]\n            current = current[k:] + removed\n            if current == word:\n                return time",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 8378,
+  "total_time_ms": 548439.1694068909,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 8192
+  }
+}

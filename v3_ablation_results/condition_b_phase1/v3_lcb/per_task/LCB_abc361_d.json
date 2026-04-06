@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc361_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n    T = data[2]\n\n    from itertools import permutations\n\n    # Initial state: S + '..'\n    initial = list(S + '..')\n    target = list(T + '..')\n\n    # We need to find the minimum number of operations to reach the target state\n    # Each operation moves two adjacent stones to the two empty cells\n\n    # BFS to find minimum steps\n    visited = set()\n    queue = deque()\n    queue.append((initial, 0))\n    visited.add(tuple(initial))\n\n    while queue:\n        state, steps = queue.popleft()\n        if ''.join(state[:N]) == T:\n            print(steps)\n            return\n\n        # Find the positions of the two empty cells\n        empty = [i for i, val in enumerate(state) if val == '.']\n        k, k1 = empty\n\n        # Try all pairs of adjacent stones\n        for i in range(len(state) - 1):\n            if state[i] != '.' and state[i+1] != '.':\n                # Move stones from i and i+1 to k and k1\n                new_state = state[:]\n                new_state[k], new_state[k1] = new_state[i], new_state[i+1]\n                new_state[i], new_state[i+1] = '.', '.'\n                if tuple(new_state) not in visited:\n                    visited.add(tuple(new_state))\n                    queue.append((new_state, steps + 1))\n\n    print(-1)\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1471,
+  "total_time_ms": 27244.807481765747,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1109
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc358_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = int(data[1])\n    T = list(map(int, data[2:2+N]))\n    \n    finish_time = 0\n    for t in T:\n        if finish_time <= t:\n            finish_time = t + A\n        else:\n            finish_time += A\n        print(finish_time)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1281,
+  "total_time_ms": 22035.736560821533,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1155
+  }
+}

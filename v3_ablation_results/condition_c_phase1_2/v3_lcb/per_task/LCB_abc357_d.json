@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc357_d",
+  "passed": true,
+  "code": "import sys\n\nMOD = 998244353\n\ndef main():\n    N = int(sys.stdin.read())\n    s = str(N)\n    len_s = len(s)\n    \n    # Compute pow(10, len_s * N, MOD) using modular exponentiation\n    power = pow(10, len_s * N, MOD)\n    \n    # Compute (N * (10^{len_s * (N - 1)} + 10^{len_s * (N - 2)} + ... + 1)) % MOD\n    # This is equivalent to N * (pow(10, len_s * N, MOD) - 1) // (pow(10, len_s, MOD) - 1)\n    # But we need to compute it using modular inverse\n    numerator = (power - 1) % MOD\n    denominator = (pow(10, len_s, MOD) - 1) % MOD\n    inv_denominator = pow(denominator, MOD - 2, MOD)\n    result = (N % MOD) * (numerator * inv_denominator % MOD) % MOD\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1280,
+  "total_time_ms": 80782.8996181488,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1124
+  }
+}

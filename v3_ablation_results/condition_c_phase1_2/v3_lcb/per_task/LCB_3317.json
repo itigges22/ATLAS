@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3317",
+  "passed": false,
+  "code": "class Solution:\n    def maxPalindromesAfterOperations(self, words: List[str]) -> int:\n        from collections import Counter\n\n        # Count all characters across all words\n        total_chars = Counter()\n        lengths = []\n        for word in words:\n            total_chars += Counter(word)\n            lengths.append(len(word))\n\n        # Sort lengths to prioritize smaller words for palindromes\n        lengths.sort()\n\n        # Count how many characters we have in total\n        total = sum(total_chars.values())\n\n        # Maximum number of palindromes we can form\n        max_palindromes = 0\n        used = 0\n        for length in lengths:\n            # For a palindrome of length `length`, we need at most `length // 2` pairs\n            needed_pairs = length // 2\n            available_pairs = sum(count // 2 for count in total_chars.values())\n            if available_pairs >= needed_pairs:\n                max_palindromes += 1\n                used += needed_pairs\n            else:\n                # If we can't form enough pairs, we can still use remaining characters for one palindrome\n                if total - used >= 1:\n                    max_palindromes += 1\n                break\n\n        return max_palindromes",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 275,
+  "total_time_ms": 5329.375267028809,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

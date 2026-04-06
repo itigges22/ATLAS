@@ -58,7 +58,7 @@ import_to_k3s() {
     log_info "Importing $name to K3s..."
 
     # Check if image exists
-    if ! $runtime image exists "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" 2>/dev/null; then
+    if ! $runtime image inspect "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" >/dev/null 2>&1; then
         log_warn "Image ${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG} not found, skipping import"
         return 0
     fi
@@ -88,19 +88,15 @@ main() {
     log_info "Using container runtime: $RUNTIME"
 
     # Core services (in k8s root)
-    # V1 components (Qdrant, embedding-service) removed in V2
     declare -a CORE_IMAGES=(
         "llama-server:$K8S_DIR/llama-server"
-        "rag-api:$K8S_DIR/rag-api"
-        "api-portal:$K8S_DIR/api-portal"
+        "geometric-lens:$K8S_DIR/geometric-lens"
         "llm-proxy:$K8S_DIR/llm-proxy"
     )
 
     # Atlas services (in k8s/atlas)
     declare -a ATLAS_IMAGES=(
         "sandbox:$K8S_DIR/atlas/sandbox"
-        "task-worker:$K8S_DIR/atlas/task-worker"
-        "atlas-dashboard:$K8S_DIR/atlas/dashboard"
         # atlas-trainer: V1 LoRA training, moved to atlas/v1_archived/ (V2 uses frozen model)
     )
 

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3163",
+  "passed": true,
+  "code": "class Solution:\n    def sumCounts(self, nums: List[int]) -> int:\n        n = len(nums)\n        result = 0\n        for i in range(n):\n            distinct = set()\n            for j in range(i, n):\n                distinct.add(nums[j])\n                result += len(distinct) ** 2\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 819,
+  "total_time_ms": 14066.526651382446,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 735
+  }
+}

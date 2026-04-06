@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2916",
+  "passed": false,
+  "code": "class Solution:\n    def canSplitArray(self, nums: List[int], m: int) -> bool:\n        n = len(nums)\n        if n == 1:\n            return True\n        \n        # Check if all subarrays of length >= 2 have sum >= m\n        for i in range(n - 1):\n            if sum(nums[i:i+2]) < m:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 55978,
+  "total_time_ms": 1307159.826040268,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

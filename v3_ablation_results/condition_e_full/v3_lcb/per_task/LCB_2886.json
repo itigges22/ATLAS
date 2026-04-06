@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2886",
+  "passed": false,
+  "code": "class Solution:\n    def finalString(self, s: str) -> str:\n        stack = []\n        for char in s:\n            if char == 'i':\n                stack.reverse()\n            else:\n                stack.append(char)\n        return ''.join(stack)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 46547,
+  "total_time_ms": 1064549.7460365295,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2850,
+    "self_tests_generated": 5
+  }
+}

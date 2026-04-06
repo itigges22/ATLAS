@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc352_e",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n\n    edges = []\n\n    for _ in range(M):\n        K_i = int(data[idx])\n        idx += 1\n        C_i = int(data[idx])\n        idx += 1\n        S_i = list(map(int, data[idx:idx+K_i]))\n        idx += K_i\n\n        # Add edges between all pairs in S_i with weight C_i\n        # To avoid O(K^2) operations, we can use a trick:\n        # For each node in S_i, connect it to the first node in S_i with weight C_i\n        # This ensures all nodes in S_i are connected with minimal edges\n        first = S_i[0]\n        for node in S_i[1:]:\n            edges.append((C_i, first, node))\n\n    # Kruskal's algorithm\n    parent = list(range(N + 1))\n    total_weight = 0\n    edge_count = 0\n\n    def find(u):\n        while parent[u] != u:\n            parent[u] = parent[parent[u]]\n            u = parent[u]\n        return u\n\n    def union(u, v):\n        pu = find(u)\n        pv = find(v)\n        if pu == pv:\n            return False\n        parent[pu] = pv\n        return True\n\n    # Sort edges by weight\n    edges.sort()\n    for weight, u, v in edges:\n        if union(u, v):\n            total_weight += weight\n            edge_count += 1\n            if edge_count == N - 1:\n                break\n\n    # Check if all nodes are connected\n    root = find(1)\n    for i in range(2, N + 1):\n        if find(i) != root:\n            print(-1)\n            return\n\n    print(total_weight)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 451,
+  "total_time_ms": 6984.480857849121,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

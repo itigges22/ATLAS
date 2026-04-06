@@ -20,6 +20,7 @@ within this massively narrowed space rather than searching blindly.
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -394,26 +395,55 @@ class PlanSearch:
             )]
             result.constraint_sets = constraint_sets
 
-        # Step 2: Plan Construction (per constraint set)
-        plans: List[Plan] = []
-        for i, cs in enumerate(constraint_sets):
-            plan, tokens, _ = self._step2_construct_plan(
+        # Step 2: Plan Construction (parallel across constraint sets)
+        plans: List[Plan] = [None] * len(constraint_sets)
+        step2_tokens_list = [0] * len(constraint_sets)
+
+        def _build_plan(i, cs):
+            plan, tokens, t = self._step2_construct_plan(
                 problem, cs, llm_call, budget_tier,
                 seed=base_seed + i + 100
             )
-            plans.append(plan)
-            step2_tokens += tokens
+            return i, plan, tokens
+
+        if len(constraint_sets) > 1:
+            with ThreadPoolExecutor(max_workers=len(constraint_sets)) as pool:
+                futures = [pool.submit(_build_plan, i, cs)
+                           for i, cs in enumerate(constraint_sets)]
+                for future in as_completed(futures):
+                    i, plan, tokens = future.result()
+                    plans[i] = plan
+                    step2_tokens += tokens
+        else:
+            for i, cs in enumerate(constraint_sets):
+                _, plan, tokens = _build_plan(i, cs)
+                plans[i] = plan
+                step2_tokens += tokens
         result.plans = plans
 
-        # Step 3: Code Generation (per plan)
-        candidates: List[str] = []
-        for i, plan in enumerate(plans):
-            code, tokens, _ = self._step3_generate_code(
+        # Step 3: Code Generation (parallel across plans)
+        candidates: List[str] = [None] * len(plans)
+
+        def _gen_code(i, plan):
+            code, tokens, t = self._step3_generate_code(
                 problem, plan, llm_call, budget_tier,
                 seed=base_seed + i + 200
             )
-            candidates.append(code)
-            step3_tokens += tokens
+            return i, code, tokens
+
+        if len(plans) > 1:
+            with ThreadPoolExecutor(max_workers=len(plans)) as pool:
+                futures = [pool.submit(_gen_code, i, p)
+                           for i, p in enumerate(plans)]
+                for future in as_completed(futures):
+                    i, code, tokens = future.result()
+                    candidates[i] = code
+                    step3_tokens += tokens
+        else:
+            for i, plan in enumerate(plans):
+                _, code, tokens = _gen_code(i, plan)
+                candidates[i] = code
+                step3_tokens += tokens
         result.candidates = candidates
 
         total_time = (time.time() - total_start) * 1000
@@ -449,8 +479,9 @@ class PlanSearch:
         )
         # Constraint extraction is structured output — thinking wastes tokens
         # and can consume the entire budget, leaving no room for constraints.
+        # base=1024: most constraint responses are <500 tokens of structured text.
         prompt = self._format_prompt(user_content, "nothink")
-        max_tokens = self._get_max_tokens("nothink", base=2048)
+        max_tokens = self._get_max_tokens("nothink", base=1024)
 
         response, tokens, time_ms = llm_call(
             prompt, self.config.step1_temperature, max_tokens, seed
@@ -472,8 +503,9 @@ class PlanSearch:
             constraints=constraints_text, problem=problem
         )
         # Plan construction is structured output — thinking wastes tokens.
+        # base=1024: plan descriptions are typically <500 tokens.
         prompt = self._format_prompt(user_content, "nothink")
-        max_tokens = self._get_max_tokens("nothink", base=2048)
+        max_tokens = self._get_max_tokens("nothink", base=1024)
 
         response, tokens, time_ms = llm_call(
             prompt, self.config.step2_temperature, max_tokens, seed
@@ -523,9 +555,16 @@ class PlanSearch:
         )
 
     def _get_max_tokens(self, tier: str, base: int = 2048) -> int:
-        """Get max tokens for a generation step."""
+        """Get max tokens for a generation step.
+
+        For nothink tier, respects the base parameter (steps 1/2 produce
+        structured text, not code — they don't need the full 4096 budget).
+        """
         if self.budget_forcing is not None:
-            return self.budget_forcing.get_max_tokens(tier)
+            bf_max = self.budget_forcing.get_max_tokens(tier)
+            if tier == "nothink":
+                return min(base, bf_max)
+            return bf_max
         return base + 4096
 
     def _log_event(self, event: PlanSearchEvent) -> None:

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2902",
+  "passed": true,
+  "code": "class Solution:\n    def maxSum(self, nums: List[int]) -> int:\n        max_digits = {}\n        for num in nums:\n            max_d = max(int(d) for d in str(num))\n            if max_d not in max_digits:\n                max_digits[max_d] = []\n            max_digits[max_d].append(num)\n        \n        result = -1\n        for key in max_digits:\n            if len(max_digits[key]) >= 2:\n                current_sum = sum(max_digits[key])\n                if current_sum > result:\n                    result = current_sum\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1880.2757263183594,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/2847",
+  "passed": true,
+  "code": "class Solution:\n    def maximumNumberOfStringPairs(self, words: List[str]) -> int:\n        word_set = set(words)\n        count = 0\n        for word in words:\n            reversed_word = word[::-1]\n            if reversed_word in word_set and reversed_word != word:\n                count += 1\n                word_set.remove(word)\n                word_set.remove(reversed_word)\n        return count",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 1,
+  "total_tokens": 17272,
+  "total_time_ms": 382703.27615737915,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

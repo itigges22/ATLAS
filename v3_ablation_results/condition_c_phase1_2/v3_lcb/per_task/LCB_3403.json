@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3403",
+  "passed": true,
+  "code": "class Solution:\n    def minimumSubstringsInPartition(self, s: str) -> int:\n        n = len(s)\n        dp = [float('inf')] * (n + 1)\n        dp[0] = 0\n\n        for i in range(1, n + 1):\n            for j in range(i):\n                # Check if substring s[j:i] is balanced\n                freq = {}\n                for k in range(j, i):\n                    freq[s[k]] = freq.get(s[k], 0) + 1\n                if len(set(freq.values())) == 1:\n                    dp[i] = min(dp[i], dp[j] + 1)\n\n        return dp[n]",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4426,
+  "total_time_ms": 65694.15330886841,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4274
+  }
+}

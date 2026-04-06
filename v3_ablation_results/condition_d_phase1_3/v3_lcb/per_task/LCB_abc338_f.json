@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc338_f",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    sys.setrecursionlimit(1 << 25)\n    N, M = map(int, sys.stdin.readline().split())\n    edges = []\n    graph = defaultdict(list)\n    for _ in range(M):\n        u, v, w = map(int, sys.stdin.readline().split())\n        graph[u].append((v, w))\n        edges.append((u, v, w))\n\n    # Step 1: Compute shortest paths from every node to every other node\n    dist = [{} for _ in range(N + 1)]\n    for u in range(1, N + 1):\n        heap = [(0, u)]\n        visited = set()\n        while heap:\n            d, v = heapq.heappop(heap)\n            if v in visited:\n                continue\n            visited.add(v)\n            dist[u][v] = d\n            for nei, w in graph[v]:\n                if nei not in visited:\n                    heapq.heappush(heap, (d + w, nei))\n\n    # Step 2: Try all permutations of nodes to find a path that covers all nodes\n    from itertools import permutations\n    min_total = float('inf')\n\n    for perm in permutations(range(1, N + 1)):\n        total = 0\n        for i in range(len(perm) - 1):\n            u = perm[i]\n            v = perm[i + 1]\n            if v not in dist[u]:\n                break\n            total += dist[u][v]\n        else:\n            if total < min_total:\n                min_total = total\n\n    if min_total != float('inf'):\n        print(min_total)\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1705,
+  "total_time_ms": 50186.93923950195,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1327
+  }
+}

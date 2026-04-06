@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc312_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nMOD = 998244353\n\ndef main():\n    S = sys.stdin.readline().strip()\n    n = len(S)\n    dp = [[0] * (n + 1) for _ in range(n + 1)]\n    dp[0][0] = 1\n\n    for i in range(n):\n        for j in range(n + 1):\n            if dp[i][j]:\n                # Try replacing '?' with '('\n                if S[i] in ('?', '('):\n                    dp[i + 1][j + 1] = (dp[i + 1][j + 1] + dp[i][j]) % MOD\n                # Try replacing '?' with ')'\n                if S[i] in ('?', ')'):\n                    if j > 0:\n                        dp[i + 1][j - 1] = (dp[i + 1][j - 1] + dp[i][j]) % MOD\n\n    print(dp[n][0])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6950,
+  "total_time_ms": 94911.12017631531,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2627,
+    "s_star_triggered": true
+  }
+}

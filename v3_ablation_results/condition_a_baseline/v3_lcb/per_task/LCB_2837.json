@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2837",
+  "passed": true,
+  "code": "class Solution:\n    def makeTheIntegerZero(self, num1: int, num2: int) -> int:\n        for k in range(1, 61):\n            target = num1 - k * num2\n            if target < k:\n                continue\n            if bin(target).count('1') <= k:\n                return k\n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1507.7714920043945,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

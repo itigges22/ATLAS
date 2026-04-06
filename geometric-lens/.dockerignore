@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+geometric_lens/models/metric_tensor.pt
+geometric_lens/models/training_embeddings_*.json
+geometric_lens/models/.gitkeep
+.pytest_cache/

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc363_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N, T, P = map(int, sys.stdin.readline().split())\n    L = list(map(int, sys.stdin.readline().split()))\n    \n    # Count how many people already have hair length >= T\n    count = sum(1 for l in L if l >= T)\n    if count >= P:\n        print(0)\n        return\n    \n    # Calculate days needed for each person to reach T\n    days_needed = []\n    for l in L:\n        if l < T:\n            days_needed.append(T - l)\n        else:\n            days_needed.append(0)\n    \n    # Sort by days needed\n    days_needed.sort()\n    \n    # Find the day when P people have hair length >= T\n    print(days_needed[P - 1])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3143.3422565460205,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

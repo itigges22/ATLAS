@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2917",
+  "passed": true,
+  "code": "class Solution:\n    def countPairs(self, nums: List[int], target: int) -> int:\n        count = 0\n        n = len(nums)\n        for i in range(n):\n            for j in range(i + 1, n):\n                if nums[i] + nums[j] < target:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 83,
+  "total_time_ms": 2557.6579570770264,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

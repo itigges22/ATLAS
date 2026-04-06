@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_e",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n\n    parent = list(range(N + 1))\n    rank = [1] * (N + 1)\n\n    def find(u):\n        while parent[u] != u:\n            parent[u] = parent[parent[u]]  # Path compression\n            u = parent[u]\n        return u\n\n    def union(u, v):\n        u_root = find(u)\n        v_root = find(v)\n        if u_root == v_root:\n            return\n        # Union by rank\n        if rank[u_root] < rank[v_root]:\n            parent[u_root] = v_root\n        else:\n            parent[v_root] = u_root\n            if rank[u_root] == rank[v_root]:\n                rank[u_root] += 1\n\n    # Process initial edges\n    for _ in range(M):\n        u = int(data[idx])\n        idx += 1\n        v = int(data[idx])\n        idx += 1\n        union(u, v)\n\n    K = int(data[idx])\n    idx += 1\n\n    forbidden = set()\n    for _ in range(K):\n        x = int(data[idx])\n        idx += 1\n        y = int(data[idx])\n        idx += 1\n        forbidden.add((find(x), find(y)))\n\n    Q = int(data[idx])\n    idx += 1\n\n    for _ in range(Q):\n        p = int(data[idx])\n        idx += 1\n        q = int(data[idx])\n        idx += 1\n        p_root = find(p)\n        q_root = find(q)\n        if (p_root, q_root) in forbidden or (q_root, p_root) in forbidden:\n            print(\"No\")\n        else:\n            print(\"Yes\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3024,
+  "total_time_ms": 44828.57155799866,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2576
+  }
+}

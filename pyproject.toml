@@ -1,11 +1,21 @@
 [project]
 name = "atlas"
-version = "2.0.0"
+version = "3.1.0"
 description = "Adaptive Test-time Learning and Autonomous Specialization"
 license = "LicenseRef-ATLAS-Source-Available-1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 authors = [{name = "Isaac"}]
+
+[project.scripts]
+atlas = "atlas.cli.repl:run"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 collect_ignore = ["tests/v1_archived"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["atlas*"]

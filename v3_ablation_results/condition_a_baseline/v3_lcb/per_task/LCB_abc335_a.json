@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc335_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().rstrip('3')\nprint(S + '4')",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 781.6934585571289,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

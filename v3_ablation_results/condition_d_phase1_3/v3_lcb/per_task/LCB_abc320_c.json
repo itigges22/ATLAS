@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc320_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    M = int(sys.stdin.readline())\n    S1 = sys.stdin.readline().strip()\n    S2 = sys.stdin.readline().strip()\n    S3 = sys.stdin.readline().strip()\n\n    min_time = float('inf')\n\n    # Iterate over all possible characters (digits '0' to '9')\n    for ch in set(S1 + S2 + S3):\n        # Find positions where the character appears on each reel\n        pos1 = [i for i, c in enumerate(S1) if c == ch]\n        pos2 = [i for i, c in enumerate(S2) if c == ch]\n        pos3 = [i for i, c in enumerate(S3) if c == ch]\n\n        # Check all combinations of positions\n        for p1 in pos1:\n            for p2 in pos2:\n                for p3 in pos3:\n                    # Find t such that:\n                    # (t mod M) + 1 == p1 + 1 => t mod M == p1\n                    # (t mod M) + 1 == p2 + 1 => t mod M == p2\n                    # (t mod M) + 1 == p3 + 1 => t mod M == p3\n                    # So t mod M must be equal to p1, p2, p3\n                    # This is only possible if p1 == p2 == p3\n                    if p1 == p2 == p3:\n                        t = p1\n                        min_time = min(min_time, t)\n\n    if min_time == float('inf'):\n        print(-1)\n    else:\n        print(min_time)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 52245,
+  "total_time_ms": 856074.248790741,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1412,
+    "self_tests_generated": 5
+  }
+}

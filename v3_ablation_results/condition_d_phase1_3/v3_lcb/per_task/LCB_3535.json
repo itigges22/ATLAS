@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3535",
+  "passed": false,
+  "code": "class Solution:\n    def countOfPairs(self, nums: List[int]) -> int:\n        MOD = 10**9 + 7\n        n = len(nums)\n        dp = [[0] * (max(nums) + 1) for _ in range(n)]\n\n        for i in range(n):\n            for x in range(nums[i] + 1):\n                if i == 0:\n                    dp[i][x] = 1\n                else:\n                    for y in range(x, nums[i] + 1):\n                        if (i == 0 or dp[i - 1][y] > 0) and (i == 0 or dp[i - 1][y] <= dp[i - 1][y]):\n                            dp[i][x] += dp[i - 1][y]\n                            dp[i][x] %= MOD\n        return sum(dp[-1]) % MOD",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50259,
+  "total_time_ms": 1136066.7717456818,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1561,
+    "self_tests_generated": 5
+  }
+}

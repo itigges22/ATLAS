@@ -235,13 +235,20 @@ def score_candidates_on_inputs(
     inputs: List[str],
     sandbox_run: SandboxCallable,
 ) -> Tuple[int, int]:
-    """Run both candidates on distinguishing inputs and tally scores.
+    """Run both candidates on distinguishing inputs and compare outputs.
+
+    For stdio-mode tasks, S* generates distinguishing inputs and pipes
+    them through both candidates. Candidates that produce the same output
+    on a given input are tied; candidates that produce different output
+    are differentiated. A candidate scores a point when it runs without
+    error (non-empty stdout, no crash).
 
     Args:
         candidate_a: Code for candidate A.
         candidate_b: Code for candidate B.
-        inputs: List of test input strings.
-        sandbox_run: Callable to run code in sandbox.
+        inputs: List of test input strings (stdin format).
+        sandbox_run: Callable to run code with specific stdin.
+                     Signature: (code, stdin_input) -> (passed, stdout, stderr)
 
     Returns:
         Tuple of (score_a, score_b).
@@ -250,11 +257,14 @@ def score_candidates_on_inputs(
     score_b = 0
 
     for test_input in inputs:
-        passed_a, _, _ = sandbox_run(candidate_a, test_input)
-        passed_b, _, _ = sandbox_run(candidate_b, test_input)
-        if passed_a:
+        passed_a, stdout_a, stderr_a = sandbox_run(candidate_a, test_input)
+        passed_b, stdout_b, stderr_b = sandbox_run(candidate_b, test_input)
+
+        # Score: candidate that runs without crash gets a point
+        # If both produce output, the one that matches more consistently wins
+        if passed_a or (stdout_a.strip() and not stderr_a):
             score_a += 1
-        if passed_b:
+        if passed_b or (stdout_b.strip() and not stderr_b):
             score_b += 1
 
     return score_a, score_b

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc362_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_right_triangle(A, B, C):\n    def dist_sq(p1, p2):\n        return (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2\n\n    AB_sq = dist_sq(A, B)\n    BC_sq = dist_sq(B, C)\n    CA_sq = dist_sq(C, A)\n\n    return (AB_sq + BC_sq == CA_sq or\n            AB_sq + CA_sq == BC_sq or\n            BC_sq + CA_sq == AB_sq)\n\ndef main():\n    A = tuple(map(int, sys.stdin.readline().split()))\n    B = tuple(map(int, sys.stdin.readline().split()))\n    C = tuple(map(int, sys.stdin.readline().split()))\n    if is_right_triangle(A, B, C):\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3081.72869682312,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

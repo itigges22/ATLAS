@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2832",
+  "passed": true,
+  "code": "from collections import defaultdict\nfrom typing import List\n\nclass Solution:\n    def longestEqualSubarray(self, nums: List[int], k: int) -> int:\n        freq = defaultdict(int)\n        left = 0\n        max_len = 0\n\n        for right in range(len(nums)):\n            freq[nums[right]] += 1\n\n            # Shrink the window if the number of elements not equal to the majority is > k\n            while (right - left + 1) - freq[nums[right]] > k:\n                freq[nums[left]] -= 1\n                left += 1\n\n            # Update the maximum length of the equal subarray\n            max_len = max(max_len, freq[nums[right]])\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1301,
+  "total_time_ms": 21511.451959609985,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1157
+  }
+}

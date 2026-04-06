@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2999",
+  "passed": false,
+  "code": "class Solution:\n    def canBeEqual(self, s1: str, s2: str) -> bool:\n        # Check if characters at positions 0 and 2 can be swapped\n        # Check if characters at positions 1 and 3 can be swapped\n        # Since we can perform these operations any number of times,\n        # we can rearrange characters at positions 0 and 2 independently\n        # and characters at positions 1 and 3 independently.\n        return sorted(s1[::2]) == sorted(s2[::2]) and sorted(s1[1::2]) == sorted(s2[1::2])",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 39385,
+  "total_time_ms": 863142.9579257965,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

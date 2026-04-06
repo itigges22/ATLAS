@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3479",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfSubstrings(self, s: str) -> int:\n        count = 0\n        n = len(s)\n        for i in range(n):\n            zeros = 0\n            ones = 0\n            for j in range(i, n):\n                if s[j] == '0':\n                    zeros += 1\n                else:\n                    ones += 1\n                if ones >= zeros * zeros:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1205,
+  "total_time_ms": 34097.097635269165,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1097
+  }
+}

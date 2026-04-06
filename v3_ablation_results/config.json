@@ -1,0 +1,37 @@
+{
+  "study": "ATLAS V3 Ablation Study",
+  "version": "3.0",
+  "timestamp": "2026-03-03T04:51:31.468324+00:00",
+  "model": {
+    "main": "Qwen3-14B-Q4_K_M",
+    "draft": "Qwen3-0.6B-Q8_0",
+    "spec_decode": true,
+    "frozen": true
+  },
+  "conditions": {
+    "D": {
+      "name": "+Phase1+3",
+      "description": "Phase 1 + PR-CoT repair/refinement (no adaptive K)",
+      "enable_phase1": true,
+      "enable_phase2": false,
+      "enable_phase3": true,
+      "directory": "condition_d_phase1_3"
+    },
+    "E": {
+      "name": "Full V3",
+      "description": "All phases active with Geometric Lens + feedback",
+      "enable_phase1": true,
+      "enable_phase2": true,
+      "enable_phase3": true,
+      "directory": "condition_e_full"
+    }
+  },
+  "benchmark": {
+    "dataset": "LiveCodeBench v5",
+    "tasks": 599,
+    "eval_mode": "stdio",
+    "temperature": 0.6
+  },
+  "smoke": false,
+  "max_tasks": null
+}

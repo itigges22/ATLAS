@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2888",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumIndex(self, nums: List[int]) -> int:\n        # Step 1: Find the dominant element\n        freq = {}\n        for num in nums:\n            freq[num] = freq.get(num, 0) + 1\n        \n        dominant = None\n        for num, count in freq.items():\n            if count * 2 > len(nums):\n                dominant = num\n                break\n        \n        # Step 2: Use prefix sum approach to find the minimum valid split index\n        prefix = 0\n        for i, num in enumerate(nums):\n            if num == dominant:\n                prefix += 1\n            # Check if current split is valid\n            if prefix * 2 > (i + 1) and (freq[dominant] - prefix) * 2 > (len(nums) - (i + 1)):\n                return i\n        \n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1823,
+  "total_time_ms": 29748.388290405273,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1589
+  }
+}

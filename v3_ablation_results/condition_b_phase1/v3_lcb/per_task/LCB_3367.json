@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3367",
+  "passed": true,
+  "code": "class Solution:\n    def sumOfEncryptedInt(self, nums: List[int]) -> int:\n        total = 0\n        for num in nums:\n            max_digit = max(int(d) for d in str(num))\n            encrypted = int(str(max_digit) * len(str(num)))\n            total += encrypted\n        return total",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 962,
+  "total_time_ms": 15450.86669921875,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 885
+  }
+}

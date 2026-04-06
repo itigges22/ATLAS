@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3164",
+  "passed": true,
+  "code": "class Solution:\n    def lastVisitedIntegers(self, words: List[str]) -> List[int]:\n        nums = []\n        res = []\n        consecutive_prev = 0\n        \n        for word in words:\n            if word == \"prev\":\n                consecutive_prev += 1\n                k = consecutive_prev\n                if k <= len(nums):\n                    res.append(nums[-k])\n                else:\n                    res.append(-1)\n            else:\n                consecutive_prev = 0\n                nums.append(int(word))\n        \n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3344,
+  "total_time_ms": 51382.964849472046,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1131,
+    "s_star_triggered": true
+  }
+}

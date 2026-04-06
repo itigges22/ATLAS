@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc341_f",
+  "passed": false,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n    \n    graph = defaultdict(list)\n    for _ in range(M):\n        u = int(data[idx]) - 1\n        idx += 1\n        v = int(data[idx]) - 1\n        idx += 1\n        graph[u].append(v)\n        graph[v].append(u)\n    \n    W = list(map(int, data[idx:idx+N]))\n    idx += N\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    # Precompute the sum of weights of neighbors for each node\n    neighbor_weights = []\n    for i in range(N):\n        total = sum(W[j] for j in graph[i])\n        neighbor_weights.append(total)\n    \n    # Max heap based on weight of node\n    max_heap = []\n    for i in range(N):\n        if A[i] > 0:\n            heapq.heappush(max_heap, (-W[i], i))  # Use negative for max heap simulation\n    \n    total_operations = 0\n    \n    while max_heap:\n        neg_w, u = heapq.heappop(max_heap)\n        w_u = -neg_w\n        \n        # If no pieces left on this node, skip\n        if A[u] == 0:\n            continue\n        \n        # Process one piece from u\n        total_operations += 1\n        A[u] -= 1\n        \n        # Determine which neighbors can receive pieces\n        neighbors = graph[u]\n        total_neighbor_weight = neighbor_weights[u]\n        \n        # If total neighbor weight is less than W[u], we can spread to all neighbors\n        if total_neighbor_weight < w_u:\n            for v in neighbors:\n                A[v] += 1\n                # Push v into the heap if it has pieces\n                heapq.heappush(max_heap, (-W[v], v))\n        else:\n            # Otherwise, we need to select a subset of neighbors whose total weight is < W[u]\n            # Sort neighbors by weight in descending order\n            sorted_neighbors = sorted([(W[v], v) for v in neighbors], reverse=True)\n            current_sum = 0\n            for w_v, v in sorted_neighbors:\n                if current_sum + w_v < w_u:\n                    A[v] += 1\n                    heapq.heappush(max_heap, (-W[v], v))\n                    current_sum += w_v\n                else:\n                    continue\n    \n    print(total_operations)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 12010,
+  "total_time_ms": 259698.73142242432,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 11580
+  }
+}

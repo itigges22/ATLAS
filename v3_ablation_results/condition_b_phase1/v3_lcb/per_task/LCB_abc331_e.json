@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc331_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n    L = int(data[idx])\n    idx += 1\n    \n    a = list(map(int, data[idx:idx+N]))\n    idx += N\n    b = list(map(int, data[idx:idx+M]))\n    idx += M\n    \n    forbidden = set()\n    for _ in range(L):\n        c = int(data[idx]) - 1  # 0-based index\n        idx += 1\n        d = int(data[idx]) - 1\n        idx += 1\n        forbidden.add((c, d))\n    \n    # Get top K main dishes and side dishes\n    K = 200  # A reasonable number to consider for top candidates\n    \n    # Get top K main dishes (highest prices)\n    top_a = a[:K]\n    # Get top K side dishes (highest prices)\n    top_b = b[:K]\n    \n    max_price = 0\n    \n    # Check all combinations of top K main and side dishes\n    for i in range(len(top_a)):\n        for j in range(len(top_b)):\n            if (i, j) not in forbidden:\n                price = top_a[i] + top_b[j]\n                if price > max_price:\n                    max_price = price\n    \n    print(max_price)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1427,
+  "total_time_ms": 25278.856992721558,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1008
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc318_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    D = int(data[1])\n    P = int(data[2])\n    F = list(map(int, data[3:]))\n    \n    # Sort F in descending order to maximize savings\n    F.sort(reverse=True)\n    \n    total_cost = sum(F)  # Start with the total regular fare\n    savings = 0\n    \n    # Use as many passes as possible on the most expensive days\n    for i in range(0, N, D):\n        # Take the next D most expensive days\n        batch = F[i:i+D]\n        batch_sum = sum(batch)\n        # Compare cost of pass vs sum of F_i for these days\n        if P < batch_sum:\n            total_cost -= batch_sum - P\n        else:\n            # No savings, do not use the pass\n            pass\n    \n    print(total_cost)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3165,
+  "total_time_ms": 59364.787101745605,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2912
+  }
+}

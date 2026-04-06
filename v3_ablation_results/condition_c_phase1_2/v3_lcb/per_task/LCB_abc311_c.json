@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc311_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nsys.setrecursionlimit(1 << 25)\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    visited = [0] * (N + 1)\n    parent = [0] * (N + 1)\n    cycle = []\n\n    def dfs(u):\n        if visited[u] == 1:\n            return\n        if visited[u] == 2:\n            # Found a cycle\n            idx = parent[u]\n            cycle.append(u)\n            while idx != u:\n                cycle.append(idx)\n                idx = parent[idx]\n            cycle.append(u)\n            return\n        visited[u] = 1\n        v = A[u - 1]\n        parent[v] = u\n        dfs(v)\n        visited[u] = 2\n\n    for i in range(1, N + 1):\n        if visited[i] == 0:\n            dfs(i)\n            if cycle:\n                break\n\n    # Extract the cycle\n    cycle = cycle[::-1]\n    M = len(cycle)\n    print(M)\n    print(' '.join(map(str, cycle)))\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 276,
+  "total_time_ms": 9281.433820724487,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

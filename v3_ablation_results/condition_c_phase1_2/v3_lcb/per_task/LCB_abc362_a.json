@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc362_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nR, G, B = map(int, input().split())\nC = input().strip()\n\nif C == 'Red':\n    print(min(G, B))\nelif C == 'Green':\n    print(min(R, B))\nelif C == 'Blue':\n    print(min(R, G))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 75,
+  "total_time_ms": 1509.2971324920654,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

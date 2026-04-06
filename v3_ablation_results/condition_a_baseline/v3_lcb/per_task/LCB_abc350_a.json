@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc350_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\n# Extract the numeric part and convert to integer\nnumber_part = S[3:]\nnumber = int(number_part)\n\n# Check if the number is in the valid range and not equal to 316\nif 1 <= number <= 349 and number != 316:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1804.2182922363281,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

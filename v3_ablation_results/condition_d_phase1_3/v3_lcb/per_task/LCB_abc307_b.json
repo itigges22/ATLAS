@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc307_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_palindrome(s):\n    return s == s[::-1]\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    strings = input[1:]\n\n    for i in range(N):\n        for j in range(N):\n            if i != j:\n                concat = strings[i] + strings[j]\n                if is_palindrome(concat):\n                    print(\"Yes\")\n                    return\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 530,
+  "total_time_ms": 9833.84370803833,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 410
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc334_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    A, M, L, R = map(int, sys.stdin.read().split())\n    \n    # Find the first tree >= L\n    if (L - A) % M == 0:\n        first = L\n    else:\n        first = L + (M - (L - A) % M)\n    \n    # Find the last tree <= R\n    if (R - A) % M == 0:\n        last = R\n    else:\n        last = R - ((R - A) % M)\n    \n    if first > R or last < L:\n        print(0)\n    else:\n        print((last - first) // M + 1)\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 166,
+  "total_time_ms": 2766.242504119873,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

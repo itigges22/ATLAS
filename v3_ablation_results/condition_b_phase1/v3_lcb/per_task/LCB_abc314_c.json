@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc314_c",
+  "passed": true,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    S = data[2]\n    C = list(map(int, data[3:]))\n    \n    # Map color to list of indices (0-based)\n    color_indices = defaultdict(list)\n    for idx, color in enumerate(C):\n        color_indices[color].append(idx)\n    \n    # Convert S to list for easy manipulation\n    S = list(S)\n    \n    # Process each color in order from 1 to M\n    for color in range(1, M + 1):\n        indices = color_indices[color]\n        k = len(indices)\n        if k == 0:\n            continue\n        # Right circular shift by 1\n        last_char = S[indices[-1]]\n        for i in range(k - 1, 0, -1):\n            S[indices[i]] = S[indices[i - 1]]\n        S[indices[0]] = last_char\n    \n    print(''.join(S))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1330,
+  "total_time_ms": 22824.724197387695,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1070
+  }
+}

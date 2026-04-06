@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3329",
+  "passed": true,
+  "code": "class Solution:\n    def longestCommonPrefix(self, arr1: List[int], arr2: List[int]) -> int:\n        # Convert all numbers to strings and store prefixes in sets\n        prefixes1 = set()\n        for num in arr1:\n            s = str(num)\n            for i in range(1, len(s) + 1):\n                prefixes1.add(s[:i])\n        \n        prefixes2 = set()\n        for num in arr2:\n            s = str(num)\n            for i in range(1, len(s) + 1):\n                prefixes2.add(s[:i])\n        \n        # Find the longest common prefix\n        max_len = 0\n        for prefix in prefixes1:\n            if prefix in prefixes2:\n                max_len = max(max_len, len(prefix))\n        \n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2810.0295066833496,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

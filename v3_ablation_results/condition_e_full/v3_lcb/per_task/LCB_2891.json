@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2891",
+  "passed": true,
+  "code": "from collections import defaultdict\nfrom typing import List\n\nclass Solution:\n    def maximumBeauty(self, nums: List[int], k: int) -> int:\n        events = defaultdict(int)\n        for num in nums:\n            events[num - k] += 1\n            events[num + k + 1] -= 1\n        \n        max_count = 0\n        current = 0\n        for key in sorted(events.keys()):\n            current += events[key]\n            max_count = max(max_count, current)\n        \n        return max_count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 118,
+  "total_time_ms": 3764.676332473755,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3251",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def areaOfMaxDiagonal(self, dimensions: List[List[int]]) -> int:\n        max_diagonal = 0\n        max_area = 0\n        \n        for length, width in dimensions:\n            diagonal = length * length + width * width\n            area = length * width\n            \n            if diagonal > max_diagonal:\n                max_diagonal = diagonal\n                max_area = area\n            elif diagonal == max_diagonal:\n                if area > max_area:\n                    max_area = area\n        \n        return max_area",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 959,
+  "total_time_ms": 14380.165815353394,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 837
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3246",
+  "passed": false,
+  "code": "class Solution:\n    def hasTrailingZeros(self, nums: List[int]) -> bool:\n        n = len(nums)\n        for i in range(n):\n            for j in range(i + 1, n):\n                if (nums[i] | nums[j]) & 1 == 0:\n                    return True\n        return False",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 83,
+  "total_time_ms": 1362.8437519073486,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

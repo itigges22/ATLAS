@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3229",
+  "passed": true,
+  "code": "class Solution:\n    def minimumCost(self, nums: List[int]) -> int:\n        from itertools import product\n        \n        def is_palindrome(x):\n            return str(x) == str(x)[::-1]\n        \n        def generate_palindromes(limit):\n            palindromes = set()\n            length = len(str(limit))\n            \n            # Generate palindromes with length <= length\n            for l in range(1, length + 1):\n                # Generate first half of the palindrome\n                for first_half in range(10 ** ((l + 1) // 2)):\n                    first_half_str = str(first_half)\n                    if l % 2 == 0:\n                        full_str = first_half_str + first_half_str[::-1]\n                    else:\n                        full_str = first_half_str + first_half_str[-2::-1]\n                    palindrome = int(full_str)\n                    if palindrome < limit:\n                        palindromes.add(palindrome)\n            return palindromes\n        \n        # Generate all palindromic numbers less than 10^9\n        palindromes = generate_palindromes(10**9)\n        \n        # Find the median of nums to minimize total cost\n        median = sorted(nums)[len(nums) // 2]\n        \n        # Find the closest palindrome to the median\n        closest_pal = None\n        min_diff = float('inf')\n        for p in palindromes:\n            diff = abs(p - median)\n            if diff < min_diff:\n                min_diff = diff\n                closest_pal = p\n        \n        # Compute total cost to convert all elements to closest_pal\n        total_cost = sum(abs(num - closest_pal) for num in nums)\n        \n        return total_cost",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1849,
+  "total_time_ms": 33916.60451889038,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1566
+  }
+}

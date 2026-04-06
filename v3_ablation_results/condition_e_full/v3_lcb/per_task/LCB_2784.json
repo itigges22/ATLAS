@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2784",
+  "passed": true,
+  "code": "class Solution:\n    def sumOfPower(self, nums: List[int]) -> int:\n        MOD = 10**9 + 7\n        nums.sort()\n        n = len(nums)\n        prefix_sum = [0] * (n + 1)\n        \n        for i in range(n):\n            prefix_sum[i + 1] = prefix_sum[i] + nums[i]\n        \n        result = 0\n        for i in range(n):\n            # max is nums[i], min is nums[i]\n            power = (nums[i] ** 2) * nums[i]\n            result = (result + power) % MOD\n            \n            # max is nums[i], min is nums[j] for j < i\n            # number of subsets where nums[i] is max and nums[j] is min\n            # contribution is (nums[i]^2) * nums[j] * 2^{i - j - 1}\n            for j in range(i):\n                contribution = (nums[i] ** 2) * nums[j] * (1 << (i - j - 1))\n                result = (result + contribution) % MOD\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2021,
+  "total_time_ms": 55214.53309059143,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1858
+  }
+}

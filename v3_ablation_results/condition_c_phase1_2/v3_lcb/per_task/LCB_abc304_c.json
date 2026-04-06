@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    D = float(data[1])\n    \n    coords = []\n    for i in range(N):\n        x = int(data[2 + 2*i])\n        y = int(data[3 + 2*i])\n        coords.append((x, y))\n    \n    # Build adjacency list: for each person, list of people within distance D\n    adj = [[] for _ in range(N)]\n    for i in range(N):\n        x1, y1 = coords[i]\n        for j in range(N):\n            if i == j:\n                continue\n            x2, y2 = coords[j]\n            dist = math.sqrt((x1 - x2)**2 + (y1 - y2)**2)\n            if dist <= D:\n                adj[i].append(j)\n    \n    # BFS to find all infected people\n    infected = [False] * N\n    queue = deque()\n    queue.append(0)\n    infected[0] = True\n    \n    while queue:\n        u = queue.popleft()\n        for v in adj[u]:\n            if not infected[v]:\n                infected[v] = True\n                queue.append(v)\n    \n    for result in infected:\n        print(\"Yes\" if result else \"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3440,
+  "total_time_ms": 55966.30024909973,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3198
+  }
+}

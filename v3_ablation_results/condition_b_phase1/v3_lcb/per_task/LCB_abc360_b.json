@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc360_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    S, T = sys.stdin.read().split()\n    len_S = len(S)\n    len_T = len(T)\n\n    for w in range(1, len_S):\n        substrings = [S[i:i + w] for i in range(0, len_S, w)]\n        for c in range(1, w + 1):\n            result = \"\"\n            for sub in substrings:\n                if len(sub) >= c:\n                    result += sub[c - 1]\n            if result == T:\n                print(\"Yes\")\n                return\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1192,
+  "total_time_ms": 18782.094955444336,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1039
+  }
+}

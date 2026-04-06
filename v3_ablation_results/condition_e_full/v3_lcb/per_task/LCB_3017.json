@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3017",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfBeautifulIntegers(self, low: int, high: int, k: int) -> int:\n        count = 0\n        for num in range(low, high + 1):\n            if num % k == 0:\n                even = 0\n                odd = 0\n                for digit in str(num):\n                    if int(digit) % 2 == 0:\n                        even += 1\n                    else:\n                        odd += 1\n                if even == odd:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 125,
+  "total_time_ms": 3410.338878631592,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

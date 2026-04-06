@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc321_c",
+  "passed": true,
+  "code": "import heapq\n\ndef main():\n    import sys\n    K = int(sys.stdin.readline())\n\n    # Initialize the min-heap with single-digit numbers (1-9)\n    heap = []\n    for i in range(1, 10):\n        heapq.heappush(heap, i)\n\n    # Skip the first K-1 elements to get the K-th smallest\n    for _ in range(K - 1):\n        current = heapq.heappop(heap)\n        # Generate next 321-like numbers by appending a digit smaller than the last digit\n        last_digit = current % 10\n        for d in range(last_digit - 1, -1, -1):\n            new_num = current * 10 + d\n            heapq.heappush(heap, new_num)\n\n    # The K-th smallest 321-like number\n    print(heapq.heappop(heap))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1201,
+  "total_time_ms": 21806.8585395813,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1044
+  }
+}

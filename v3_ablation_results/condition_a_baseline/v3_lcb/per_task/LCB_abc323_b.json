@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc323_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\nresults = [input().strip() for _ in range(n)]\n\n# Count wins for each player\nwins = [0] * n\nfor i in range(n):\n    for j in range(n):\n        if i != j and results[i][j] == 'o':\n            wins[i] += 1\n\n# Create list of (player_number, wins) and sort\nplayers = [(i + 1, wins[i]) for i in range(n)]\nplayers.sort(key=lambda x: (-x[1], x[0]))\n\n# Output the player numbers in order\nprint(' '.join(str(p[0]) for p in players))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 7210.638999938965,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

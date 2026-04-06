@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3328",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, k: int) -> int:\n        if k == 1:\n            return 0\n        # We try different numbers of duplications and calculate the required increments\n        min_ops = float('inf')\n        for dup in range(1, int(k**0.5) + 2):\n            # After dup duplications, we have (dup + 1) elements\n            # Each element needs to be at least ceil(k / (dup + 1))\n            inc = (k + dup) // (dup + 1) - 1\n            total_ops = inc + dup\n            min_ops = min(min_ops, total_ops)\n        return min_ops",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1196,
+  "total_time_ms": 20407.131910324097,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1055
+  }
+}

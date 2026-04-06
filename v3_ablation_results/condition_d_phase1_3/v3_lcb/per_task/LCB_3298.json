@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3298",
+  "passed": true,
+  "code": "class Solution:\n    def maxSelectedElements(self, nums: List[int]) -> int:\n        from collections import defaultdict\n\n        nums.sort()\n        dp = defaultdict(int)\n        max_len = 0\n\n        for num in nums:\n            # Try to increase num by 1\n            val1 = num + 1\n            dp[val1] = max(dp[val1], dp[val1 - 1] + 1)\n            # Try to keep num as is\n            val2 = num\n            dp[val2] = max(dp[val2], dp[val2 - 1] + 1)\n            max_len = max(max_len, dp[val1], dp[val2])\n\n        return max_len",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 21938,
+  "total_time_ms": 332380.6428909302,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1175,
+    "self_tests_generated": 5
+  }
+}

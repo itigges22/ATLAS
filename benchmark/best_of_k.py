@@ -13,7 +13,7 @@ def score_candidate(text: str, rag_api_url: str) -> Tuple[float, float]:
 
     Args:
         text: Full text to score (typically "TASK: {prompt}\\n\\nSOLUTION: {response}").
-        rag_api_url: Base URL for rag-api (e.g. "http://localhost:31144").
+        rag_api_url: Base URL for geometric-lens (e.g. "http://localhost:31144").
 
     Returns:
         Tuple of (raw_energy, normalized_energy). Returns (999.0, 1.0) on failure.

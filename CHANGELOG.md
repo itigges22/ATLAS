@@ -1,5 +1,68 @@
 # Changelog
 
+## [3.0.1] - 2026-04-05
+
+### Tool-Call Agent Loop Architecture
+- Replaced Aider format-translation proxy with structured JSON tool-call agent loop
+- Grammar-constrained output via llama-server `response_format:json_object` — 100% valid JSON
+- 8 tool definitions: `read_file`, `write_file`, `edit_file`, `delete_file`, `run_command`, `search_files`, `list_directory`, `plan_tasks`
+- Per-file tier classification: T1 (config/data) writes directly, T2 (logic/features) routes through V3 pipeline
+- 3400+ lines new Go code across 14 files in `atlas-proxy/`
+
+### V3 Pipeline Integration
+- All 14 V3 steps wired into `write_file`/`edit_file` executors for T2/T3 files
+- PlanSearch → DivSampling → Budget Forcing → Build Verification → C(x)/G(x) Scoring → Best-of-K → S*/Blend-ASC → Failure Analysis → PR-CoT Repair → Refinement Loop → Derivation Chains → Metacognitive → Final Write
+- Per-file-type build verification: tsc, py_compile, gcc, go build, cargo check, bash -n
+- V3 service SSE streaming: pipeline progress visible in real-time
+
+### CLI Experience
+- `atlas` command: starts all services and launches Aider
+- Streaming progress: `[Turn N/M]` with tool call details, V3 pipeline steps, completion summary
+- Exploration budget: 4 consecutive read-only calls triggers nudge, prevents model from over-exploring
+- Pre-injected project context: model sees project file list in system prompt
+- File deletion via fast-path before tier classification
+- Truncation prevention: 32K context, reject write_file for existing files >100 lines, detect truncated args before execution
+
+### Deployment
+- Docker Compose (`docker-compose.yml`) for full stack orchestration
+- Podman compatible with host networking
+- `.env.example` with all configurable parameters
+- `atlas` script auto-detects Docker vs bare-metal and routes accordingly
+
+### Renames (362 total reference updates)
+- `rag-api/` → `geometric-lens/` (directory + all references)
+- `ATLAS_RAG_URL` → `ATLAS_LENS_URL`
+- `ATLAS_FOX_URL` → `ATLAS_INFERENCE_URL`
+- `foxURL` → `inferenceURL` (Go code)
+- `ralph-loop` → `verify-repair loop`
+- `rag.py` → `pipeline.py` (geometric-lens orchestration)
+
+### Reliability
+- 8-level test × 3 iterations: 95.8% (23/24)
+- 5-language integration: 100% (Shell, Python, Rust, C, Go)
+- L6 (add feature to existing project): 67% — marked as future improvement
+
+### Bug Fixes
+- GitHub Issue #12: `docker image exists` → `docker image inspect` in build script
+- GitHub Issue #10: Added `.gitkeep` to `geometric-lens/geometric_lens/models/`
+- GitHub Issue #6: `hostname -I` → portable fallback with `ip addr` for Arch Linux
+- GitHub Issue #11: Added Geometric Lens training documentation and HuggingFace dataset
+
+### Cleanup
+- Removed 62 stale test directories, old v1 proxy binary, dead G(x) training scripts
+- Removed stale tests for deleted services (api-portal, dashboard, embedding-service, task-worker)
+- Removed root-level development artifacts (bubble_sort.py, snake_game.py, etc.)
+- All hardcoded `/home/isaac/` paths replaced with `$HOME` or `ATLAS_DIR` env vars
+
+## [3.0] - 2026-03-05
+
+### V3.0 Benchmark Release
+- **74.6% LCB pass@1** (447/599) on frozen Qwen3-14B
+- Full ablation study: conditions A–D with per-task results
+- Phase 1 (PlanSearch/DivSampling): +12.4pp
+- Phase 3 (PR-CoT/Refinement/Derivation): +7.3pp
+- Self-verified Phase 3 using model-generated test cases
+
 ## [2.5.1] - 2026-02-23
 
 ### Confirmation Ablation: Embedding Source Hypothesis — STRONG CONFIRMATION

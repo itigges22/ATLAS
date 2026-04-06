@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3469",
+  "passed": true,
+  "code": "class Solution:\n    def maxHeightOfTriangle(self, red: int, blue: int) -> int:\n        # Try both possibilities: starting with red or starting with blue\n        max_height = 0\n        for start_color, count in [('red', red), ('blue', blue)]:\n            r, b = red, blue\n            height = 0\n            # Alternate colors\n            while True:\n                if start_color == 'red':\n                    if r >= height + 1:\n                        r -= height + 1\n                        height += 1\n                        start_color = 'blue'\n                    else:\n                        break\n                else:\n                    if b >= height + 1:\n                        b -= height + 1\n                        height += 1\n                        start_color = 'red'\n                    else:\n                        break\n            max_height = max(max_height, height)\n        return max_height",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1532,
+  "total_time_ms": 44160.465478897095,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1393
+  }
+}

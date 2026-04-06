@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3226",
+  "passed": true,
+  "code": "class Solution:\n    def numberGame(self, nums: List[int]) -> List[int]:\n        arr = []\n        nums.sort()\n        for i in range(0, len(nums), 2):\n            # Alice removes the minimum element (nums[i])\n            # Bob removes the next minimum element (nums[i+1])\n            # Bob appends first, then Alice\n            arr.append(nums[i+1])\n            arr.append(nums[i])\n        return arr",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1222,
+  "total_time_ms": 21164.658546447754,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1102
+  }
+}

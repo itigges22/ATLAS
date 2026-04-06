@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2810",
+  "passed": true,
+  "code": "class Solution:\n    def minCost(self, nums: List[int], x: int) -> int:\n        n = len(nums)\n        min_total = float('inf')\n        \n        # For each possible number of operations (from 0 to n-1)\n        for k in range(n):\n            current_cost = 0\n            # For each position i, find the minimum cost of collecting that type after up to k rotations\n            for i in range(n):\n                # The cost of collecting type i after k rotations is nums[(i - k) % n]\n                current_cost += min(nums[(i - k) % n] for k in range(k + 1))\n            min_total = min(min_total, current_cost + k * x)\n        \n        return min_total",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1412,
+  "total_time_ms": 39110.798358917236,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1313
+  }
+}

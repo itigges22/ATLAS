@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3091",
+  "passed": true,
+  "code": "class Solution:\n    def countSubMultisets(self, nums: List[int], l: int, r: int) -> int:\n        MOD = 10**9 + 7\n        from collections import Counter\n\n        # Count frequency of each number\n        freq = Counter(nums)\n        \n        # Total sum of the array\n        total_sum = sum(nums)\n        \n        # If total_sum is less than l, no subsets can satisfy the condition\n        if total_sum < l:\n            return 0\n        \n        # Initialize dp array. dp[s] = number of ways to get sum s\n        max_sum = r\n        dp = [0] * (max_sum + 1)\n        dp[0] = 1  # empty subset has sum 0\n\n        for num, count in freq.items():\n            # Iterate backwards to prevent overwriting values we still need\n            for s in range(max_sum, -1, -1):\n                if dp[s]:\n                    # Try adding 0 to count occurrences of num\n                    for k in range(1, count + 1):\n                        next_s = s + num * k\n                        if next_s > max_sum:\n                            break\n                        dp[next_s] = (dp[next_s] + dp[s]) % MOD\n\n        # Sum all dp values from l to r inclusive\n        return sum(dp[l:r+1]) % MOD",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 5419,
+  "total_time_ms": 89568.94659996033,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3090,
+    "s_star_triggered": true
+  }
+}

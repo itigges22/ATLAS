@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc340_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport functools\n\ndef main():\n    N = int(sys.stdin.readline())\n    \n    @functools.lru_cache(maxsize=None)\n    def cost(x):\n        if x < 2:\n            return 0\n        return x + cost(x // 2) + cost((x + 1) // 2)\n    \n    print(cost(N))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 1472,
+  "total_time_ms": 89250.38647651672,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 1385
+  }
+}

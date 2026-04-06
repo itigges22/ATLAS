@@ -1,0 +1,29 @@
+{
+  "timestamp": "2026-03-03T04:51:32.154822+00:00",
+  "all_ok": true,
+  "checks": {
+    "llama_server": {
+      "ok": true,
+      "status": "ok"
+    },
+    "rag_api": {
+      "ok": true,
+      "status": "healthy"
+    },
+    "lens": {
+      "ok": true,
+      "energy": 1.1071192026138306
+    },
+    "sandbox": {
+      "ok": true
+    },
+    "disk": {
+      "ok": true,
+      "free_gb": 11.5
+    },
+    "v3_full_import": {
+      "ok": true,
+      "task_count": 599
+    }
+  }
+}

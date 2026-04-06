@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2839",
+  "passed": true,
+  "code": "from bisect import bisect_right\nfrom collections import defaultdict\nfrom typing import List\n\nclass Solution:\n    def maximumSumQueries(self, nums1: List[int], nums2: List[int], queries: List[List[int]]) -> List[int]:\n        n = len(nums1)\n        pairs = list(zip(nums1, nums2))\n        pairs.sort()\n        nums1_sorted = [x for x, y in pairs]\n        nums2_sorted = [y for x, y in pairs]\n        sums = [x + y for x, y in pairs]\n\n        # Coordinate compression for nums2\n        sorted_nums2 = sorted(set(nums2_sorted))\n        num2_to_idx = {v: i for i, v in enumerate(sorted_nums2)}\n\n        # Preprocess queries\n        queries_with_idx = [(x, y, i) for i, (x, y) in enumerate(queries)]\n        queries_with_idx.sort(key=lambda x: x[1])  # Sort by y_i\n\n        # Prepare answer array\n        answer = [-1] * len(queries)\n\n        # Use a sorted list to maintain max sums for valid nums2 values\n        from bisect import bisect_right, insort\n        max_sums = []\n        idx = 0\n\n        for x, y, original_idx in queries_with_idx:\n            # Find all pairs with nums2[j] >= y\n            while idx < n and nums2_sorted[idx] < y:\n                idx += 1\n\n            # Now, for all pairs from idx to n-1, nums2[j] >= y\n            # We need to find the max sum where nums1[j] >= x\n            # Use binary search on nums1_sorted from idx to n-1\n            start = idx\n            end = n\n            max_sum = -1\n\n            while start < end:\n                mid = (start + end) // 2\n                if nums1_sorted[mid] >= x:\n                    end = mid\n                else:\n                    start = mid + 1\n\n            if start < n:\n                max_sum = max(sums[start:])\n\n            answer[original_idx] = max_sum\n\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 10105,
+  "total_time_ms": 264418.47586631775,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7412,
+    "s_star_triggered": true
+  }
+}

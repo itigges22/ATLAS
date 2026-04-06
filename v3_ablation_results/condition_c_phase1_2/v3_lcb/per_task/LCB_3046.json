@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3046",
+  "passed": false,
+  "code": "class Solution:\n    def minimumOperations(self, num: str) -> int:\n        n = len(num)\n        target = \"\"\n        min_ops = n  # worst case: delete all digits to get 0\n\n        # Check for divisibility by 25\n        for i in range(n - 1, -1, -1):\n            if num[i] == '0':\n                target = '0'\n                min_ops = min(min_ops, n - i - 1)\n            elif num[i] == '5':\n                target = '5'\n                for j in range(i - 1, -1, -1):\n                    if num[j] == '2':\n                        min_ops = min(min_ops, n - i - 1 + n - j - 1)\n                        break\n        return min_ops if min_ops != n else 1  # if all digits are deleted, return 1 (0 is special)",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 207,
+  "total_time_ms": 3866.9304847717285,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

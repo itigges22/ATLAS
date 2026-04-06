@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2833",
+  "passed": true,
+  "code": "from collections import defaultdict\nimport bisect\n\nclass Solution:\n    def countServers(self, n: int, logs: List[List[int]], x: int, queries: List[int]) -> List[int]:\n        # Sort logs by time\n        logs.sort(key=lambda log: log[1])\n        # Group server_ids by their times\n        time_to_servers = defaultdict(list)\n        for server_id, time in logs:\n            time_to_servers[time].append(server_id)\n        \n        # Sort the times for binary search\n        sorted_times = sorted(time_to_servers.keys())\n        result = []\n        \n        for q in queries:\n            start = q - x\n            end = q\n            # Find the range of times in [start, end]\n            left = bisect.bisect_left(sorted_times, start)\n            right = bisect.bisect_right(sorted_times, end)\n            \n            # Count servers that received requests in this interval\n            active_servers = set()\n            for i in range(left, right):\n                active_servers.update(time_to_servers[sorted_times[i]])\n            \n            # Total servers that did not receive any requests\n            result.append(n - len(active_servers))\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4128.134489059448,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2819",
+  "passed": false,
+  "code": "class Solution:\n    def removeTrailingZeros(self, num: str) -> str:\n        return num.rstrip('0')",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 39,
+  "total_time_ms": 742.4197196960449,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

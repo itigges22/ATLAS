@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc309_c",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    \n    a_list = []\n    b_list = []\n    \n    idx = 2\n    for _ in range(N):\n        a = int(data[idx])\n        b = int(data[idx + 1])\n        a_list.append(a)\n        b_list.append(b)\n        idx += 2\n    \n    # Sort the medicines by the day they are taken until\n    sorted_days = sorted(zip(a_list, b_list), key=lambda x: x[0])\n    \n    # Extract the sorted days and corresponding b values\n    sorted_a = [a for a, b in sorted_days]\n    sorted_b = [b for a, b in sorted_days]\n    \n    # Binary search for the first day where total pills <= K\n    left = 1\n    right = max(sorted_a)\n    \n    while left < right:\n        mid = (left + right) // 2\n        total = 0\n        for a, b in zip(sorted_a, sorted_b):\n            if a >= mid:\n                total += b\n            else:\n                continue\n        if total <= K:\n            right = mid\n        else:\n            left = mid + 1\n    \n    print(left)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4985.423803329468,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

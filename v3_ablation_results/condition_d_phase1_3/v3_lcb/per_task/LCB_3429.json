@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3429",
+  "passed": true,
+  "code": "class Solution:\n    def isArraySpecial(self, nums: List[int]) -> bool:\n        if len(nums) < 2:\n            return \"true\"\n        for i in range(1, len(nums)):\n            if (nums[i] % 2) == (nums[i-1] % 2):\n                return \"false\"\n        return \"true\"",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 14721,
+  "total_time_ms": 233705.28554916382,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 633,
+    "self_tests_generated": 5
+  }
+}

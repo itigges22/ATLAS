@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc338_f",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict, deque\n\ndef main():\n    sys.setrecursionlimit(10000)\n    N, M = map(int, sys.stdin.readline().split())\n    edges = []\n    graph = defaultdict(list)\n    for _ in range(M):\n        u, v, w = map(int, sys.stdin.readline().split())\n        edges.append((u, v, w))\n        graph[u].append((v, w))\n\n    # Check if the graph is strongly connected\n    def is_strongly_connected():\n        visited = set()\n        start = 1\n        queue = deque([start])\n        while queue:\n            node = queue.popleft()\n            if node not in visited:\n                visited.add(node)\n                for neighbor, _ in graph[node]:\n                    if neighbor not in visited:\n                        queue.append(neighbor)\n        if len(visited) < N:\n            return False\n\n        reverse_graph = defaultdict(list)\n        for u, v, w in edges:\n            reverse_graph[v].append(u)\n        visited = set()\n        queue = deque([start])\n        while queue:\n            node = queue.popleft()\n            if node not in visited:\n                visited.add(node)\n                for neighbor in reverse_graph[node]:\n                    if neighbor not in visited:\n                        queue.append(neighbor)\n        return len(visited) == N\n\n    if not is_strongly_connected():\n        print(\"No\")\n        return\n\n    # Use Floyd-Warshall to find shortest paths between all pairs\n    INF = float('inf')\n    dist = [[INF] * (N + 1) for _ in range(N + 1)]\n    for i in range(1, N + 1):\n        dist[i][i] = 0\n    for u, v, w in edges:\n        dist[u][v] = min(dist[u][v], w)\n\n    for k in range(1, N + 1):\n        for i in range(1, N + 1):\n            for j in range(1, N + 1):\n                if dist[i][j] > dist[i][k] + dist[k][j]:\n                    dist[i][j] = dist[i][k] + dist[k][j]\n\n    # Try all permutations of vertices to find the minimum walk\n    from itertools import permutations\n    min_total = INF\n    for perm in permutations(range(1, N + 1)):\n        total = 0\n        for i in range(len(perm) - 1):\n            u = perm[i]\n            v = perm[i + 1]\n            if dist[u][v] == INF:\n                break\n            total += dist[u][v]\n        if total < min_total:\n            min_total = total\n\n    if min_total == INF:\n        print(\"No\")\n    else:\n        print(min_total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 6038,
+  "total_time_ms": 106683.39943885803,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3493,
+    "s_star_triggered": true
+  }
+}

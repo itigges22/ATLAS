@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc326_c",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:]))\n    A.sort()\n    \n    max_gifts = 0\n    for i in range(N):\n        j = bisect.bisect_left(A, A[i] + M)\n        max_gifts = max(max_gifts, j - i)\n    \n    print(max_gifts)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 948,
+  "total_time_ms": 16124.726295471191,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 811
+  }
+}

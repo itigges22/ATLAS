@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc360_c",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    W = list(map(int, data[N+1:2*N+1]))\n    \n    from collections import defaultdict\n\n    box_to_items = defaultdict(list)\n    for i in range(N):\n        box_to_items[A[i]].append(i)\n\n    total_cost = 0\n\n    for box in box_to_items:\n        items = box_to_items[box]\n        if len(items) == 1:\n            continue\n        # Sort items by weight to minimize cost\n        items.sort(key=lambda x: W[x])\n        # Only move the heaviest item, others stay\n        total_cost += sum(W[i] for i in items[:-1])\n\n    print(total_cost)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2079,
+  "total_time_ms": 36447.71313667297,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1871
+  }
+}

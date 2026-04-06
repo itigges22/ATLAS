@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read().splitlines()\n    N = int(input[0])\n    people = []\n    for i in range(1, N + 1):\n        name, age = input[i].split()\n        people.append((name, int(age)))\n\n    # Find the index of the youngest person\n    min_age = min(p[1] for p in people)\n    youngest_index = next(i for i, p in enumerate(people) if p[1] == min_age)\n\n    # Output names starting from the youngest person in clockwise order\n    for i in range(N):\n        index = (youngest_index + i) % N\n        print(people[index][0])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 954,
+  "total_time_ms": 19053.58839035034,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 814
+  }
+}

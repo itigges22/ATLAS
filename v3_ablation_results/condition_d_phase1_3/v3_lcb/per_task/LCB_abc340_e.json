@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc340_e",
+  "passed": true,
+  "code": "import sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n\n    for b in B:\n        count = A[b]\n        A[b] = 0\n        start = b\n        full_cycles = count // N\n        remainder = count % N\n\n        # Add full_cycles to all boxes\n        for i in range(N):\n            A[i] += full_cycles\n\n        # Add 1 to the first 'remainder' boxes after (start + 1)\n        for i in range(1, remainder + 1):\n            target = (start + i) % N\n            A[target] += 1\n\n    print(' '.join(map(str, A)))\n\nmain()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 23045,
+  "total_time_ms": 679536.3512039185,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1651,
+    "self_tests_generated": 5
+  }
+}

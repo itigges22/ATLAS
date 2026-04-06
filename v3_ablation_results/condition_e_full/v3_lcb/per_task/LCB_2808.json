@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2808",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def paintWalls(self, cost: List[int], time: List[int]) -> int:\n        n = len(cost)\n        dp = [0] + [float('inf')] * n\n        \n        for i in range(n):\n            for j in range(n, -1, -1):\n                if j >= time[i]:\n                    dp[j] = min(dp[j], dp[j - time[i]] + cost[i])\n        \n        return dp[n]",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 58381,
+  "total_time_ms": 1386821.605205536,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5509,
+    "self_tests_generated": 5
+  }
+}

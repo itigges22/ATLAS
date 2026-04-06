@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc339_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    H, W, N = map(int, sys.stdin.readline().split())\n    grid = [['.' for _ in range(W)] for _ in range(H)]\n    direction = 0  # 0: up, 1: right, 2: down, 3: left\n    x, y = 0, 0  # Starting at (1,1) which is (0,0) in 0-indexed\n\n    for _ in range(N):\n        if grid[x][y] == '.':\n            grid[x][y] = '#'\n            direction = (direction + 1) % 4\n        else:\n            grid[x][y] = '.'\n            direction = (direction - 1) % 4\n\n        # Move forward\n        if direction == 0:\n            x = (x - 1) % H\n        elif direction == 1:\n            y = (y + 1) % W\n        elif direction == 2:\n            x = (x + 1) % H\n        else:  # direction == 3\n            y = (y - 1) % W\n\n    for row in grid:\n        print(''.join(row))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3977.6768684387207,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

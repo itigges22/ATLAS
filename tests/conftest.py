@@ -20,8 +20,13 @@ from typing import Generator, Optional
 from dataclasses import dataclass
 
 import pytest
-import redis
-import httpx
+
+try:
+    import redis
+    import httpx
+    _HAS_INFRA_DEPS = True
+except ImportError:
+    _HAS_INFRA_DEPS = False
 
 # Service endpoints - using cluster IPs when running inside cluster,
 # or localhost with NodePort when running externally
@@ -33,7 +38,7 @@ IN_CLUSTER = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token
 
 if IN_CLUSTER:
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://api-portal:3000")
-    RAG_API_URL = os.environ.get("RAG_API_URL", "http://rag-api:8001")
+    RAG_API_URL = os.environ.get("RAG_API_URL", "http://geometric-lens:8001")
     LLAMA_URL = os.environ.get("LLAMA_URL", "http://llama-service:8000")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://llm-proxy:8000")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
@@ -70,151 +75,120 @@ class TestAPIKey:
     name: str
 
 
-@pytest.fixture(scope="session")
-def redis_client() -> Generator[redis.Redis, None, None]:
-    """
-    Create a Redis client for testing.
-
-    Uses port-forwarding or direct connection depending on environment.
-    """
-    # Try to connect via kubectl port-forward first, then cluster service
-    try:
-        client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-        client.ping()
-        yield client
-    except redis.ConnectionError:
-        # Try connecting via kubectl port-forward
-        import subprocess
-        # Start port-forward in background
-        proc = subprocess.Popen(
-            ["kubectl", "port-forward", "svc/redis", "6379:6379"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        time.sleep(2)
+if _HAS_INFRA_DEPS:
+    @pytest.fixture(scope="session")
+    def redis_client() -> Generator:
+        """Create a Redis client for testing."""
         try:
-            client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+            client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
             client.ping()
             yield client
-        finally:
-            proc.terminate()
-            proc.wait()
+        except redis.ConnectionError:
+            import subprocess
+            proc = subprocess.Popen(
+                ["kubectl", "port-forward", "svc/redis", "6379:6379"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            time.sleep(2)
+            try:
+                client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+                client.ping()
+                yield client
+            finally:
+                proc.terminate()
+                proc.wait()
 
+    @pytest.fixture(scope="session")
+    def api_portal_client() -> Generator:
+        """HTTP client for API Portal service."""
+        with httpx.Client(base_url=API_PORTAL_URL, timeout=DEFAULT_TIMEOUT) as client:
+            yield client
 
-@pytest.fixture(scope="session")
-def api_portal_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for API Portal service."""
-    with httpx.Client(base_url=API_PORTAL_URL, timeout=DEFAULT_TIMEOUT) as client:
-        yield client
+    @pytest.fixture(scope="session")
+    def rag_api_client() -> Generator:
+        """HTTP client for RAG API service."""
+        with httpx.Client(base_url=RAG_API_URL, timeout=DEFAULT_TIMEOUT) as client:
+            yield client
 
+    @pytest.fixture(scope="session")
+    def llama_client() -> Generator:
+        """HTTP client for llama-server (direct, no proxy)."""
+        with httpx.Client(base_url=LLAMA_URL, timeout=LLM_TIMEOUT) as client:
+            yield client
 
-@pytest.fixture(scope="session")
-def rag_api_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for RAG API service."""
-    with httpx.Client(base_url=RAG_API_URL, timeout=DEFAULT_TIMEOUT) as client:
-        yield client
+    @pytest.fixture(scope="session")
+    def llm_proxy_client() -> Generator:
+        """HTTP client for LLM Proxy service."""
+        with httpx.Client(base_url=LLM_PROXY_URL, timeout=LLM_TIMEOUT) as client:
+            yield client
 
+    @pytest.fixture(scope="session")
+    def sandbox_client() -> Generator:
+        """HTTP client for Sandbox executor service."""
+        with httpx.Client(base_url=SANDBOX_URL, timeout=120.0) as client:
+            yield client
 
-@pytest.fixture(scope="session")
-def llama_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for llama-server (direct, no proxy)."""
-    with httpx.Client(base_url=LLAMA_URL, timeout=LLM_TIMEOUT) as client:
-        yield client
+    @pytest.fixture(scope="session")
+    def dashboard_client() -> Generator:
+        """HTTP client for Atlas Dashboard."""
+        with httpx.Client(base_url=DASHBOARD_URL, timeout=DEFAULT_TIMEOUT) as client:
+            yield client
 
+    @pytest.fixture(scope="function")
+    def test_user(api_portal_client) -> Generator:
+        """Create a test user and clean up after test."""
+        unique_id = str(uuid.uuid4())[:8]
+        user = TestUser(
+            username=f"testuser_{unique_id}",
+            email=f"testuser_{unique_id}@example.com",
+            password=f"TestPass123_{unique_id}"
+        )
+        response = api_portal_client.post(
+            "/api/auth/register",
+            json={"username": user.username, "email": user.email, "password": user.password}
+        )
+        if response.status_code == 200:
+            data = response.json()
+            user.jwt_token = data.get("token") or data.get("access_token")
+            user.is_admin = data.get("is_admin", False)
+        yield user
 
-@pytest.fixture(scope="session")
-def llm_proxy_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for LLM Proxy service."""
-    with httpx.Client(base_url=LLM_PROXY_URL, timeout=LLM_TIMEOUT) as client:
-        yield client
-
-
-
-@pytest.fixture(scope="session")
-def sandbox_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for Sandbox executor service."""
-    with httpx.Client(base_url=SANDBOX_URL, timeout=120.0) as client:
-        yield client
-
-
-@pytest.fixture(scope="session")
-def dashboard_client() -> Generator[httpx.Client, None, None]:
-    """HTTP client for Atlas Dashboard."""
-    with httpx.Client(base_url=DASHBOARD_URL, timeout=DEFAULT_TIMEOUT) as client:
-        yield client
-
-
-@pytest.fixture(scope="function")
-def test_user(api_portal_client: httpx.Client) -> Generator[TestUser, None, None]:
-    """
-    Create a test user and clean up after test.
-
-    Registers a new user with unique credentials and provides JWT token.
-    """
-    unique_id = str(uuid.uuid4())[:8]
-    user = TestUser(
-        username=f"testuser_{unique_id}",
-        email=f"testuser_{unique_id}@example.com",  # Use .com domain for validation
-        password=f"TestPass123_{unique_id}"  # Avoid special chars that may cause issues
-    )
-
-    # Register user
-    response = api_portal_client.post(
-        "/api/auth/register",
-        json={
-            "username": user.username,
-            "email": user.email,
-            "password": user.password
-        }
-    )
-
-    if response.status_code == 200:
-        data = response.json()
-        user.jwt_token = data.get("token") or data.get("access_token")
-        user.is_admin = data.get("is_admin", False)
-
-    yield user
-
-    # Cleanup: We can't easily delete users, but test data will be minimal
-
-
-@pytest.fixture(scope="function")
-def test_api_key(api_portal_client: httpx.Client, test_user: TestUser) -> Generator[TestAPIKey, None, None]:
-    """
-    Create a test API key for the test user.
-
-    Requires a valid test user with JWT token.
-    """
-    if not test_user.jwt_token:
-        pytest.skip("Test user creation failed, cannot create API key")
-
-    unique_id = str(uuid.uuid4())[:8]
-    key_name = f"test_key_{unique_id}"
-
-    response = api_portal_client.post(
-        "/api/keys",
-        json={"name": key_name},
-        headers={"Authorization": f"Bearer {test_user.jwt_token}"}
-    )
-
-    if response.status_code != 200:
-        pytest.fail(f"Failed to create API key: {response.status_code} - {response.text}")
-
-    data = response.json()
-    api_key = TestAPIKey(
-        key_id=data.get("id") or data.get("key_id"),
-        key_string=data.get("key") or data.get("api_key"),
-        name=key_name
-    )
-
-    yield api_key
-
-    # Cleanup: Delete the API key
-    if api_key.key_id:
-        api_portal_client.delete(
-            f"/api/keys/{api_key.key_id}",
+    @pytest.fixture(scope="function")
+    def test_api_key(api_portal_client, test_user) -> Generator:
+        """Create a test API key for the test user."""
+        if not test_user.jwt_token:
+            pytest.skip("Test user creation failed, cannot create API key")
+        unique_id = str(uuid.uuid4())[:8]
+        key_name = f"test_key_{unique_id}"
+        response = api_portal_client.post(
+            "/api/keys", json={"name": key_name},
             headers={"Authorization": f"Bearer {test_user.jwt_token}"}
         )
+        if response.status_code != 200:
+            pytest.fail(f"Failed to create API key: {response.status_code} - {response.text}")
+        data = response.json()
+        api_key = TestAPIKey(
+            key_id=data.get("id") or data.get("key_id"),
+            key_string=data.get("key") or data.get("api_key"),
+            name=key_name
+        )
+        yield api_key
+        if api_key.key_id:
+            api_portal_client.delete(
+                f"/api/keys/{api_key.key_id}",
+                headers={"Authorization": f"Bearer {test_user.jwt_token}"}
+            )
+
+    @pytest.fixture(scope="function")
+    def cleanup_redis_keys(redis_client) -> Generator:
+        """Track and clean up Redis keys created during tests."""
+        keys_to_cleanup = []
+        yield keys_to_cleanup
+        for key in keys_to_cleanup:
+            try:
+                redis_client.delete(key)
+            except Exception:
+                pass
 
 
 @pytest.fixture(scope="function")
@@ -324,25 +298,6 @@ def test_calculator():
 
     # Cleanup
     shutil.rmtree(project_dir, ignore_errors=True)
-
-
-@pytest.fixture(scope="function")
-def cleanup_redis_keys(redis_client: redis.Redis) -> Generator[list, None, None]:
-    """
-    Fixture to track and clean up Redis keys created during tests.
-
-    Yields a list that tests can append keys to for automatic cleanup.
-    """
-    keys_to_cleanup = []
-
-    yield keys_to_cleanup
-
-    # Cleanup all tracked keys
-    for key in keys_to_cleanup:
-        try:
-            redis_client.delete(key)
-        except Exception:
-            pass
 
 
 def pytest_configure(config):

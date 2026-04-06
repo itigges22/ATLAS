@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3236",
+  "passed": true,
+  "code": "class Solution:\n    def missingInteger(self, nums: List[int]) -> int:\n        # Step 1: Identify the longest sequential prefix\n        i = 1\n        while i < len(nums) and nums[i] == nums[i - 1] + 1:\n            i += 1\n        \n        # Step 2: Compute the sum of this prefix\n        prefix_sum = sum(nums[:i])\n        \n        # Step 3: Find the smallest integer x >= sum that is missing from nums\n        x = prefix_sum\n        while x in nums:\n            x += 1\n        \n        # Step 4: Return x\n        return x",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5084,
+  "total_time_ms": 81364.60089683533,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2880,
+    "s_star_triggered": true
+  }
+}

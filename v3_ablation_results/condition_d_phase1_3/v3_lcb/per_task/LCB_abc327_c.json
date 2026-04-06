@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc327_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_valid(grid):\n    # Check rows\n    for row in grid:\n        if sorted(row) != list(range(1, 10)):\n            return False\n\n    # Check columns\n    for col in range(9):\n        column = [grid[row][col] for row in range(9)]\n        if sorted(column) != list(range(1, 10)):\n            return False\n\n    # Check 3x3 subgrids\n    for i in range(0, 9, 3):\n        for j in range(0, 9, 3):\n            subgrid = []\n            for x in range(i, i + 3):\n                for y in range(j, j + 3):\n                    subgrid.append(grid[x][y])\n            if sorted(subgrid) != list(range(1, 10)):\n                return False\n\n    return True\n\ndef main():\n    grid = []\n    for line in sys.stdin:\n        row = list(map(int, line.strip().split()))\n        grid.append(row)\n    \n    if is_valid(grid):\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 958,
+  "total_time_ms": 16179.19921875,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 699
+  }
+}

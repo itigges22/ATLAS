@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc360_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    W = list(map(int, data[N+1:2*N+1]))\n\n    # Create a list where index is box number and value is item index\n    box_to_item = [0] * (N + 1)\n    for i in range(N):\n        box_to_item[A[i]] = i\n\n    # Initialize total cost\n    total_cost = 0\n\n    # Iterate through each box\n    for box in range(1, N + 1):\n        item = box_to_item[box]\n        if item == box:\n            continue  # Already correct, no cost\n        # Move the item to its correct box\n        total_cost += W[item]\n\n    print(total_cost)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 42806,
+  "total_time_ms": 746149.4603157043,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1656,
+    "self_tests_generated": 5
+  }
+}

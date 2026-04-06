@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3308",
+  "passed": false,
+  "code": "class Solution:\n    def lastNonEmptyString(self, s: str) -> str:\n        from collections import deque, defaultdict\n\n        freq = defaultdict(int)\n        for ch in s:\n            freq[ch] += 1\n\n        max_freq = max(freq.values())\n        result = []\n        queue = deque()\n\n        for ch in s:\n            queue.append(ch)\n            freq[ch] -= 1\n            if freq[ch] == 0:\n                while queue and freq[queue[0]] == 0:\n                    queue.popleft()\n\n        return ''.join(queue)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 51776,
+  "total_time_ms": 840064.6266937256,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1165,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc361_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n    T = data[2]\n\n    from itertools import permutations\n\n    # Initial state: S + '..'\n    initial = list(S + '..')\n    target = list(T + '..')\n\n    # Check if the multiset of characters in S and T are the same\n    if sorted(S) != sorted(T):\n        print(-1)\n        return\n\n    # BFS to find minimum number of operations\n    visited = set()\n    queue = deque()\n    queue.append((initial, 0))\n    visited.add(tuple(initial))\n\n    while queue:\n        state, steps = queue.popleft()\n        if state == target:\n            print(steps)\n            return\n        # Find empty cells\n        empty = [i for i, val in enumerate(state) if val == '.']\n        if len(empty) != 2:\n            continue\n        k, k1 = empty\n        # Try to move stones from adjacent cells to empty cells\n        for i in range(N + 1):\n            if state[i] != '.' and state[i + 1] != '.':\n                new_state = state[:]\n                # Move from i and i+1 to k and k+1\n                new_state[k] = new_state[i]\n                new_state[k + 1] = new_state[i + 1]\n                new_state[i] = '.'\n                new_state[i + 1] = '.'\n                if tuple(new_state) not in visited:\n                    visited.add(tuple(new_state))\n                    queue.append((new_state, steps + 1))\n\n    print(-1)\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 6763.353586196899,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

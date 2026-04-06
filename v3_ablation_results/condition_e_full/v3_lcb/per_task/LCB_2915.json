@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2915",
+  "passed": true,
+  "code": "from typing import List\nfrom collections import defaultdict\n\nclass Solution:\n    def countInterestingSubarrays(self, nums: List[int], modulo: int, k: int) -> int:\n        # Count how many numbers in nums are congruent to k modulo 'modulo'\n        count_map = defaultdict(int)\n        count_map[0] = 1  # To handle subarrays starting from index 0\n        prefix_count = 0\n        result = 0\n\n        for num in nums:\n            # Check if num % modulo == k\n            if num % modulo == k:\n                prefix_count += 1\n\n            # We want (prefix_count - prev_count) % modulo == k\n            # So (prefix_count - k) % modulo == prev_count % modulo\n            # We look for how many times (prefix_count - k) % modulo has occurred\n            result += count_map[(prefix_count - k) % modulo]\n            count_map[prefix_count % modulo] += 1\n\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3916,
+  "total_time_ms": 98834.51914787292,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1594,
+    "s_star_triggered": true
+  }
+}

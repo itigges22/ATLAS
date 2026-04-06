@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc342_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    S = input().strip()\n    count1 = 0\n    count2 = 0\n    first_char = S[0]\n    second_char = None\n\n    for char in S:\n        if char == first_char:\n            count1 += 1\n        else:\n            count2 += 1\n            second_char = char\n\n    if count1 == 1:\n        print(1)\n    elif count2 == 1:\n        print(S.index(second_char) + 1)\n    else:\n        # This case should not occur as per the problem constraints\n        pass\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3789,
+  "total_time_ms": 66700.74939727783,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 1608,
+    "s_star_triggered": true
+  }
+}

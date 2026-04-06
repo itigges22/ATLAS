@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3492",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def numberOfSubmatrices(self, grid: List[List[str]]) -> int:\n        n, m = len(grid), len(grid[0])\n        # 2D prefix sum for 'X' and 'Y'\n        prefix_x = [[0] * (m + 1) for _ in range(n + 1)]\n        prefix_y = [[0] * (m + 1) for _ in range(n + 1)]\n\n        for i in range(n):\n            for j in range(m):\n                prefix_x[i + 1][j + 1] = prefix_x[i][j + 1] + prefix_x[i + 1][j] - prefix_x[i][j] + (1 if grid[i][j] == 'X' else 0)\n                prefix_y[i + 1][j + 1] = prefix_y[i][j + 1] + prefix_y[i + 1][j] - prefix_y[i][j] + (1 if grid[i][j] == 'Y' else 0)\n\n        count = 0\n\n        # Only consider submatrices that include grid[0][0]\n        for i in range(n):\n            for j in range(m):\n                # Compute the number of 'X' and 'Y' in the submatrix from (0,0) to (i,j)\n                x = prefix_x[i + 1][j + 1] - prefix_x[0][j + 1] - prefix_x[i + 1][0] + prefix_x[0][0]\n                y = prefix_y[i + 1][j + 1] - prefix_y[0][j + 1] - prefix_y[i + 1][0] + prefix_y[0][0]\n                if x == y and x > 0:\n                    count += 1\n\n        return count",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22044,
+  "total_time_ms": 445854.50649261475,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1024,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc353_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn, k = map(int, input().split())\na = list(map(int, input().split()))\n\nempty_seats = k\nstart_count = 0\n\nfor group in a:\n    if empty_seats < group:\n        start_count += 1\n        empty_seats = k\n    empty_seats -= group\n\n# After processing all groups, check if the attraction needs to be started one last time\nif empty_seats < k:\n    start_count += 1\n\nprint(start_count)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1466,
+  "total_time_ms": 29342.84019470215,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1347
+  }
+}

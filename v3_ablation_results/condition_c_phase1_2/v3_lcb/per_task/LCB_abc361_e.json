@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc361_e",
+  "passed": true,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    edges = []\n    for i in range(N-1):\n        A = int(data[1 + 3*i])\n        B = int(data[2 + 3*i])\n        C = int(data[3 + 3*i])\n        edges.append((A, B, C))\n    \n    # Build adjacency list\n    from collections import defaultdict\n    adj = defaultdict(list)\n    for A, B, C in edges:\n        adj[A].append((B, C))\n        adj[B].append((A, C))\n    \n    # Step 1: Find the longest path in the tree (using DFS or BFS)\n    # Since it's a tree, we can do DFS to find the farthest node from an arbitrary node\n    def dfs(start):\n        visited = set()\n        stack = [(start, 0)]\n        max_dist = 0\n        farthest_node = start\n        while stack:\n            node, dist = stack.pop()\n            if node in visited:\n                continue\n            visited.add(node)\n            if dist > max_dist:\n                max_dist = dist\n                farthest_node = node\n            for neighbor, weight in adj[node]:\n                if neighbor not in visited:\n                    stack.append((neighbor, dist + weight))\n        return farthest_node, max_dist\n    \n    # Find the farthest node from node 1\n    farthest_node, _ = dfs(1)\n    # Find the farthest node from that node to get the diameter\n    farthest_node2, max_dist = dfs(farthest_node)\n    \n    # Step 2: Find the minimum path that visits all cities (Traveling Salesman Problem on a tree)\n    # The minimum path is (sum of all edge weights) * 2 - max_dist\n    total_weight = sum(c for _, _, c in edges)\n    result = total_weight * 2 - max_dist\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5230,
+  "total_time_ms": 86273.29277992249,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4779
+  }
+}

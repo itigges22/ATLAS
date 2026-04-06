@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [list(sys.stdin.readline().strip()) for _ in range(H)]\n\n    # Find the rectangle of cookies\n    # Find the min and max row and column with cookies\n    min_row, max_row = H, 0\n    min_col, max_col = W, 0\n\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#':\n                min_row = min(min_row, i)\n                max_row = max(max_row, i)\n                min_col = min(min_col, j)\n                max_col = max(max_col, j)\n\n    # Check if the rectangle has at least 2 rows and 2 columns\n    if (max_row - min_row + 1 < 2) or (max_col - min_col + 1 < 2):\n        print(\"Invalid grid configuration\")\n        return\n\n    # Find the missing cookie (the one that was eaten)\n    for i in range(min_row, max_row + 1):\n        for j in range(min_col, max_col + 1):\n            if grid[i][j] == '.':\n                print(i + 1, j + 1)\n                return\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7165,
+  "total_time_ms": 736745.6886768341,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6898
+  }
+}

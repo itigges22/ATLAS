@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3183",
+  "passed": true,
+  "code": "class Solution:\n    def findKOr(self, nums: List[int], k: int) -> int:\n        bit_count = [0] * 32  # Since nums[i] < 2^31, we need 31 bits\n        for num in nums:\n            for i in range(31):\n                if num & (1 << i):\n                    bit_count[i] += 1\n        result = 0\n        for i in range(31):\n            if bit_count[i] >= k:\n                result |= (1 << i)\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 935,
+  "total_time_ms": 15947.493553161621,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 800
+  }
+}

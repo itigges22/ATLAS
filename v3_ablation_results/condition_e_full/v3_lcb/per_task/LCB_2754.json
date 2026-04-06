@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2754",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def maxStrength(self, nums: List[int]) -> int:\n        from itertools import combinations\n        \n        max_strength = float('-inf')\n        n = len(nums)\n        \n        # Check all possible non-empty subsets\n        for i in range(1, n + 1):\n            for subset in combinations(nums, i):\n                product = 1\n                for num in subset:\n                    product *= num\n                max_strength = max(max_strength, product)\n        \n        return max_strength",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3177,
+  "total_time_ms": 81827.71849632263,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 951,
+    "s_star_triggered": true
+  }
+}

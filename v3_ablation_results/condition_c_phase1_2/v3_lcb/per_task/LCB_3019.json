@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3019",
+  "passed": true,
+  "code": "class Solution:\n    def furthestDistanceFromOrigin(self, moves: str) -> int:\n        left = moves.count('L')\n        right = moves.count('R')\n        underscores = moves.count('_')\n        \n        # Max distance is achieved by converting all underscores to one direction\n        return abs(left - right) + underscores",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 80,
+  "total_time_ms": 1473.9933013916016,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

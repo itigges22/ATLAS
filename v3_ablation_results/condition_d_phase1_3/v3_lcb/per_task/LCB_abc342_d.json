@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/abc342_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\nfrom collections import defaultdict\n\ndef is_square(x):\n    s = int(math.isqrt(x))\n    return s * s == x\n\ndef square_free_part(x):\n    if x == 0:\n        return 0\n    # Factor out squares\n    i = 2\n    while i * i <= x:\n        while x % (i * i) == 0:\n            x //= i * i\n        i += 1\n    return x\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    count = 0\n    freq = defaultdict(int)\n    zero_count = 0\n\n    for num in A:\n        if num == 0:\n            zero_count += 1\n        else:\n            sf = square_free_part(num)\n            count += freq[sf]\n            freq[sf] += 1\n\n    # Add pairs of zeros: C(zero_count, 2)\n    count += zero_count * (zero_count - 1) // 2\n    # Add pairs where one element is zero and the other is non-zero: zero_count * (N - zero_count)\n    count += zero_count * (N - zero_count)\n\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "refinement",
+  "candidates_generated": 3,
+  "total_tokens": 33451,
+  "total_time_ms": 651671.5199947357,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1194,
+    "self_tests_generated": 3,
+    "refinement_iterations": 1
+  }
+}

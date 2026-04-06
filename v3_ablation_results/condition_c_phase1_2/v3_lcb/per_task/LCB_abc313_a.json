@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc313_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\np = list(map(int, input().split()))\nmax_other = max(p[1:])\nrequired = max(0, max_other - p[0] + 1)\nprint(required)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 60,
+  "total_time_ms": 1120.7139492034912,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc336_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    def is_possible(k):\n        # Check if a pyramid sequence of size k can be formed\n        # The pyramid sequence has length 2k - 1\n        # We need to check if there exists a subarray of length 2k - 1 in A\n        # such that A[i] >= k - abs(i - mid), where mid is the center index\n        # We can slide a window of size 2k - 1 over A and check\n        required_length = 2 * k - 1\n        if required_length > N:\n            return False\n        for i in range(N - required_length + 1):\n            valid = True\n            mid = i + k - 1\n            for j in range(i, i + required_length):\n                if A[j] < k - abs(j - mid):\n                    valid = False\n                    break\n            if valid:\n                return True\n        return False\n\n    # Binary search for the maximum k\n    low = 1\n    high = N\n    answer = 1\n    while low <= high:\n        mid = (low + high) // 2\n        if is_possible(mid):\n            answer = mid\n            low = mid + 1\n        else:\n            high = mid - 1\n    print(answer)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 343,
+  "total_time_ms": 5305.714845657349,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

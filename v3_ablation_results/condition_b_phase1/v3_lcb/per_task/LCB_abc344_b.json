@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc344_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read all input values into a list\n    input_values = []\n    for line in sys.stdin:\n        input_values.append(int(line.strip()))\n    \n    # Reverse the list for output\n    reversed_values = input_values[::-1]\n    \n    # Print each value in reversed order\n    for value in reversed_values:\n        print(value)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 683,
+  "total_time_ms": 12836.524963378906,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 591
+  }
+}

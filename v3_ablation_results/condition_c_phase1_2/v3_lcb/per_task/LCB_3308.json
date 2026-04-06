@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3308",
+  "passed": false,
+  "code": "class Solution:\n    def lastNonEmptyString(self, s: str) -> str:\n        from collections import defaultdict\n\n        # Count the frequency of each character\n        freq = defaultdict(int)\n        for ch in s:\n            freq[ch] += 1\n\n        # Find the maximum frequency\n        max_freq = max(freq.values())\n\n        # Collect characters that appear max_freq times\n        result = []\n        for ch in s:\n            if freq[ch] == max_freq:\n                result.append(ch)\n\n        return ''.join(result)",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 121,
+  "total_time_ms": 2173.91300201416,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

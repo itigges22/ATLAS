@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc307_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\nMOD = 998244353\n\ndef main():\n    input = sys.stdin.read\n    N, M = map(int, input().split())\n\n    if N == 1:\n        print(M)\n        return\n\n    # Formula: (M-1)^N + (-1)^N * (M-1)\n    # Using modular exponentiation and properties of modular arithmetic\n    term1 = pow(M - 1, N, MOD)\n    term2 = pow(-1, N)\n    term2 = (term2 * (M - 1)) % MOD\n\n    result = (term1 + term2) % MOD\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1061,
+  "total_time_ms": 16302.496194839478,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 696
+  }
+}

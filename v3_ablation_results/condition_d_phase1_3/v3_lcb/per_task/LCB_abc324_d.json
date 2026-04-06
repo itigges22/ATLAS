@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc324_d",
+  "passed": false,
+  "code": "import sys\nimport math\nfrom itertools import permutations\n\ndef main():\n    N = int(sys.stdin.readline())\n    S = sys.stdin.readline().strip()\n    \n    # Generate all unique permutations of the digits in S\n    unique_perms = set(permutations(S))\n    \n    # Set to store unique square numbers\n    square_numbers = set()\n    \n    # Check each permutation\n    for perm in unique_perms:\n        # Convert permutation to string and then to integer\n        num_str = ''.join(perm)\n        # Check for leading zeros\n        if len(num_str) > 1 and num_str[0] == '0':\n            continue\n        num = int(num_str)\n        # Check if the number is a perfect square\n        root = int(math.isqrt(num))\n        if root * root == num:\n            square_numbers.add(num)\n    \n    # Output the count of unique square numbers\n    print(len(square_numbers))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49703,
+  "total_time_ms": 875209.7818851471,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 616,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc336_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef nth_good_integer(N):\n    # Convert N to base-5 representation, treating N as 1-based\n    # So subtract 1 to make it 0-based\n    N -= 1\n    digits = []\n    if N == 0:\n        return \"0\"\n    while N > 0:\n        digits.append(N % 5)\n        N = N // 5\n    # Map base-5 digits to even digits\n    mapping = {0: '0', 1: '2', 2: '4', 3: '6', 4: '8'}\n    result = ''.join(mapping[d] for d in reversed(digits))\n    return result\n\ndef main():\n    import sys\n    N = int(sys.stdin.readline())\n    print(nth_good_integer(N))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 25597,
+  "total_time_ms": 381868.34597587585,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1469,
+    "self_tests_generated": 5
+  }
+}

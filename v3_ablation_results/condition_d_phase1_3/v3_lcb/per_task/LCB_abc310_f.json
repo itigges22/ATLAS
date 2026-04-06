@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc310_f",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport itertools\n\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    total_sum = sum(A)\n    max_sum = total_sum\n    dp = [0] * (max_sum + 1)\n    dp[0] = 1\n\n    for a in A:\n        for s in range(max_sum, a - 1, -1):\n            dp[s] = (dp[s] + dp[s - a]) % MOD\n\n    # Total number of outcomes\n    total_outcomes = 1\n    for a in A:\n        total_outcomes = total_outcomes * a % MOD\n\n    # Count of outcomes where there is a subset summing to 10\n    count = 0\n    for s in range(10, max_sum + 1):\n        count = (count + dp[s]) % MOD\n\n    # Compute modular inverse of total_outcomes\n    inv_total = pow(total_outcomes, MOD - 2, MOD)\n    result = (count * inv_total) % MOD\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54345,
+  "total_time_ms": 978865.1652336121,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1141,
+    "self_tests_generated": 5
+  }
+}

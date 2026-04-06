@@ -19,8 +19,8 @@ import time
 import pytest
 import torch
 
-# rag-api is a separate service
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "rag-api"))
+# geometric-lens is a separate service
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))
 
 from geometric_lens.cost_field import CostField
 from geometric_lens.ewc import ElasticWeightConsolidation

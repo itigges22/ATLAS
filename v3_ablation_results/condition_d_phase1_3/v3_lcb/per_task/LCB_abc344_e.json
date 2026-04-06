@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc344_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\nclass Node:\n    def __init__(self, val):\n        self.val = val\n        self.prev = None\n        self.next = None\n\nclass LinkedList:\n    def __init__(self):\n        self.head = None\n        self.tail = None\n        self.nodes = {}  # maps value to Node\n\n    def insert_after(self, x, y):\n        if x not in self.nodes:\n            return\n        x_node = self.nodes[x]\n        y_node = Node(y)\n        self.nodes[y] = y_node\n        y_node.prev = x_node\n        y_node.next = x_node.next\n        if x_node.next:\n            x_node.next.prev = y_node\n        else:\n            self.tail = y_node\n        x_node.next = y_node\n\n    def remove(self, x):\n        if x not in self.nodes:\n            return\n        x_node = self.nodes[x]\n        if x_node.prev:\n            x_node.prev.next = x_node.next\n        else:\n            self.head = x_node.next\n        if x_node.next:\n            x_node.next.prev = x_node.prev\n        else:\n            self.tail = x_node.prev\n        del self.nodes[x]\n\n    def to_list(self):\n        result = []\n        current = self.head\n        while current:\n            result.append(current.val)\n            current = current.next\n        return result\n\ndef main():\n    data = input().split()\n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    Q = int(data[idx])\n    idx += 1\n    queries = data[idx:]\n\n    ll = LinkedList()\n    for val in A:\n        node = Node(val)\n        ll.nodes[val] = node\n    ll.head = ll.nodes[A[0]]\n    ll.tail = ll.nodes[A[-1]]\n    for i in range(N - 1):\n        ll.nodes[A[i]].next = ll.nodes[A[i+1]]\n        ll.nodes[A[i+1]].prev = ll.nodes[A[i]]\n\n    i = 0\n    while i < len(queries):\n        if queries[i] == '1':\n            x = int(queries[i+1])\n            y = int(queries[i+2])\n            ll.insert_after(x, y)\n            i += 3\n        elif queries[i] == '2':\n            x = int(queries[i+1])\n            ll.remove(x)\n            i += 2\n        else:\n            i += 1\n\n    result = ll.to_list()\n    print(' '.join(map(str, result)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2351,
+  "total_time_ms": 65160.95018386841,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1761
+  }
+}

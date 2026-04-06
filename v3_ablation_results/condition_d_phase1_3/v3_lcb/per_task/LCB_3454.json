@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3454",
+  "passed": false,
+  "code": "class Solution:\n    def minimumOperations(self, nums: List[int], target: List[int]) -> int:\n        n = len(nums)\n        res = 0\n        diff = 0\n        \n        for i in range(n):\n            diff += nums[i] - target[i]\n            if diff != 0:\n                res += abs(diff)\n        \n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54344,
+  "total_time_ms": 1182219.3720340729,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 913,
+    "self_tests_generated": 5
+  }
+}

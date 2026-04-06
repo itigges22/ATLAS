@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3313",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def maximumStrength(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        # dp[i][j] = max strength using i subarrays from first j elements\n        dp = [[-float('inf')] * (n + 1) for _ in range(k + 1)]\n        dp[0][0] = 0  # base case: 0 subarrays, 0 elements, strength is 0\n\n        # precompute prefix sums for quick subarray sum calculation\n        prefix = [0] * (n + 1)\n        for i in range(n):\n            prefix[i + 1] = prefix[i] + nums[i]\n\n        for i in range(1, k + 1):\n            for j in range(1, n + 1):\n                # Case 1: do not take the j-th element\n                dp[i][j] = dp[i][j - 1]\n\n                # Case 2: take the j-th element as part of the i-th subarray\n                # We try all possible start positions for the i-th subarray\n                for l in range(j - 1, -1, -1):\n                    subarray_sum = prefix[j] - prefix[l]\n                    # The contribution of this subarray to the strength is subarray_sum * (k - i + 1) * (-1)^(i+1)\n                    # Since the sign alternates, we can compute it directly\n                    sign = (-1) ** (i + 1)\n                    contribution = subarray_sum * (k - i + 1) * sign\n                    dp[i][j] = max(dp[i][j], dp[i - 1][l] + contribution)\n\n        return dp[k][n]",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 9615,
+  "total_time_ms": 154261.40594482422,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7247,
+    "s_star_triggered": true
+  }
+}

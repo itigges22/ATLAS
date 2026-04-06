@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc326_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import product\n\ndef main():\n    N = int(sys.stdin.readline())\n    R = sys.stdin.readline().strip()\n    C = sys.stdin.readline().strip()\n\n    # Initialize grid with empty cells\n    grid = [['.' for _ in range(N)] for _ in range(N)]\n\n    # Place the leftmost character in each row\n    for i in range(N):\n        for j in range(N):\n            if grid[i][j] == '.':\n                grid[i][j] = R[i]\n                break\n\n    # Place the topmost character in each column\n    for j in range(N):\n        for i in range(N):\n            if grid[i][j] == '.':\n                grid[i][j] = C[j]\n                break\n\n    # Check if the grid is valid\n    def is_valid(grid):\n        for row in grid:\n            chars = [c for c in row if c != '.']\n            if sorted(chars) != ['A', 'B', 'C']:\n                return False\n        for j in range(N):\n            chars = [grid[i][j] for i in range(N) if grid[i][j] != '.']\n            if sorted(chars) != ['A', 'B', 'C']:\n                return False\n        return True\n\n    # Backtracking to fill the rest of the grid\n    def backtrack(grid, row, col):\n        if row == N:\n            return is_valid(grid)\n        if col == N:\n            return backtrack(grid, row + 1, 0)\n        if grid[row][col] != '.':\n            return backtrack(grid, row, col + 1)\n\n        for c in ['A', 'B', 'C']:\n            if c in grid[row] or c in [grid[row][col] for row in range(N)]:\n                continue\n            grid[row][col] = c\n            if backtrack(grid, row, col + 1):\n                return True\n            grid[row][col] = '.'\n        return False\n\n    if backtrack(grid, 0, 0):\n        print(\"Yes\")\n        for row in grid:\n            print(''.join(row))\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 58620,
+  "total_time_ms": 949356.0471534729,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1289,
+    "self_tests_generated": 5
+  }
+}

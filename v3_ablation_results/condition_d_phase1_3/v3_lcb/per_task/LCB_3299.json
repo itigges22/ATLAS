@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3299",
+  "passed": false,
+  "code": "from collections import Counter\nfrom typing import List\n\nclass Solution:\n    def maximumLength(self, nums: List[int]) -> int:\n        freq = Counter(nums)\n        max_len = 0\n        unique_nums = set(freq.keys())\n        \n        for x in unique_nums:\n            current = x\n            length = 0\n            while current in freq:\n                length += freq[current]\n                current = current * current\n            max_len = max(max_len, length)\n        \n        return max_len",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 51043,
+  "total_time_ms": 1309246.9668388367,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1425,
+    "self_tests_generated": 5
+  }
+}

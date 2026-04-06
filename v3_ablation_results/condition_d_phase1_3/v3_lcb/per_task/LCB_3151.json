@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3151",
+  "passed": true,
+  "code": "class Solution:\n    def minProcessingTime(self, processorTime: List[int], tasks: List[int]) -> int:\n        processorTime.sort()\n        tasks.sort(reverse=True)\n        n = len(processorTime)\n        res = 0\n        for i in range(n):\n            pt = processorTime[i]\n            for j in range(4):\n                res = max(res, pt + tasks[i * 4 + j])\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1714,
+  "total_time_ms": 29366.10698699951,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1610
+  }
+}

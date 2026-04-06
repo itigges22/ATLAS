@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2786",
+  "passed": true,
+  "code": "class Solution:\n    def longestSemiRepetitiveSubstring(self, s: str) -> int:\n        max_len = 1\n        left = 0\n        duplicate_count = 0\n\n        for right in range(1, len(s)):\n            if s[right] == s[right - 1]:\n                duplicate_count += 1\n\n            # If more than one duplicate pair, move left pointer\n            while duplicate_count > 1:\n                if s[left] == s[left + 1]:\n                    duplicate_count -= 1\n                left += 1\n\n            max_len = max(max_len, right - left + 1)\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3353,
+  "total_time_ms": 86274.44458007812,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1164,
+    "s_star_triggered": true
+  }
+}

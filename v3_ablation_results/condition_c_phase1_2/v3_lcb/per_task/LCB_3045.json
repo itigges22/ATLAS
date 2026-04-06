@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3045",
+  "passed": false,
+  "code": "class Solution:\n    def minimumRightShifts(self, nums: List[int]) -> int:\n        n = len(nums)\n        for i in range(n):\n            if nums[i] > nums[(i + 1) % n]:\n                if i == n - 1:\n                    return 0\n                return -1\n        return n - 1",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 87,
+  "total_time_ms": 1403.290033340454,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc325_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    intervals = []\n    for i in range(N):\n        T = int(data[1 + 2 * i])\n        D = int(data[2 + 2 * i])\n        intervals.append((T, D))\n    \n    # Sort intervals by end time\n    intervals.sort(key=lambda x: x[1])\n    \n    # Greedy interval scheduling with charge time\n    count = 0\n    last_print_time = -1  # Last time the printer was used\n\n    for T, D in intervals:\n        if last_print_time < T:\n            # Can print this product\n            count += 1\n            last_print_time = D  # Charge time is 1, so next print can be at D\n\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 4749,
+  "total_time_ms": 82318.55630874634,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4517
+  }
+}

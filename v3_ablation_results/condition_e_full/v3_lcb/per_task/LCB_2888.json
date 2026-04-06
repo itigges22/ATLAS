@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2888",
+  "passed": true,
+  "code": "class Solution:\n    def minimumIndex(self, nums: List[int]) -> int:\n        # Step 1: Find the dominant element\n        dominant = None\n        count = 0\n        for num in nums:\n            if count == 0:\n                dominant = num\n            if num == dominant:\n                count += 1\n            else:\n                count -= 1\n        \n        # Step 2: Count total occurrences of the dominant element\n        total_count = 0\n        for num in nums:\n            if num == dominant:\n                total_count += 1\n        \n        # Step 3: Iterate through the array and check for valid splits\n        left_count = 0\n        for i in range(len(nums)):\n            if nums[i] == dominant:\n                left_count += 1\n            # Check if both subarrays have dominant as their dominant\n            if (left_count * 2 > (i + 1)) and ((total_count - left_count) * 2 > (len(nums) - (i + 1))):\n                return i\n        \n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1038,
+  "total_time_ms": 30566.720247268677,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 835
+  }
+}

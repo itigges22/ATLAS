@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2869",
+  "passed": true,
+  "code": "class Solution:\n    def maxNonDecreasingLength(self, nums1: List[int], nums2: List[int]) -> int:\n        n = len(nums1)\n        max_len = 1\n        dp = [1] * n\n\n        for i in range(1, n):\n            if nums1[i] >= nums1[i - 1]:\n                dp[i] = dp[i - 1] + 1\n            elif nums1[i] >= nums2[i - 1]:\n                dp[i] = dp[i - 1] + 1\n            elif nums2[i] >= nums1[i - 1]:\n                dp[i] = dp[i - 1] + 1\n            elif nums2[i] >= nums2[i - 1]:\n                dp[i] = dp[i - 1] + 1\n            else:\n                dp[i] = 1\n\n            max_len = max(max_len, dp[i])\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2897.8748321533203,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

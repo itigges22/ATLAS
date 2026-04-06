@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2883",
+  "passed": true,
+  "code": "class Solution:\n    def minimumBeautifulSubstrings(self, s: str) -> int:\n        from functools import lru_cache\n\n        # Precompute all powers of 5 in binary form up to length 15\n        powers_of_5 = set()\n        for i in range(0, 16):\n            power = 5 ** i\n            binary = bin(power)[2:]\n            powers_of_5.add(binary)\n\n        n = len(s)\n\n        @lru_cache(None)\n        def dp(i):\n            if i == n:\n                return 0\n            res = float('inf')\n            for j in range(i + 1, n + 1):\n                substr = s[i:j]\n                # Check for leading zeros\n                if len(substr) > 1 and substr[0] == '0':\n                    continue\n                # Check if the substring is a power of 5\n                if substr in powers_of_5:\n                    res = min(res, 1 + dp(j))\n            return res\n\n        result = dp(0)\n        return result if result != float('inf') else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1995,
+  "total_time_ms": 31180.015325546265,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1796
+  }
+}

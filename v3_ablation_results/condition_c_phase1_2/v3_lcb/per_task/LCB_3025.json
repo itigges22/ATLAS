@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3025",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, nums: List[int], target: int) -> int:\n        from collections import Counter\n\n        # Count the frequency of each power of 2 in nums\n        count = Counter()\n        for num in nums:\n            count[num] += 1\n\n        # Convert target to binary and check which powers of 2 are needed\n        # We will process from the smallest to the largest power of 2\n        operations = 0\n        for i in range(31):  # since target < 2^31\n            bit = (target >> i) & 1\n            if bit:\n                # Need a power of 2 equal to 2^i\n                if count[1 << i] > 0:\n                    count[1 << i] -= 1\n                else:\n                    # We need to split a larger power of 2 into smaller ones\n                    # Start from the next higher power of 2\n                    j = i + 1\n                    while j < 31:\n                        if count[1 << j] > 0:\n                            count[1 << j] -= 1\n                            # Split 2^j into two 2^(j-1)\n                            count[1 << (j - 1)] += 2\n                            operations += 1\n                            break\n                        j += 1\n                    else:\n                        # No higher power of 2 available\n                        return -1\n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 8889,
+  "total_time_ms": 155102.37002372742,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6505,
+    "s_star_triggered": true
+  }
+}

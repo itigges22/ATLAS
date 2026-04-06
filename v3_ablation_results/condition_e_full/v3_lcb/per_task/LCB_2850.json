@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2850",
+  "passed": false,
+  "code": "class Solution:\n    def longestString(self, x: int, y: int, z: int) -> int:\n        max_len = 0\n        # Try all possible combinations of AA, BB, AB\n        from itertools import permutations\n\n        # Generate all possible combinations of AA, BB, AB with their counts\n        strings = []\n        for _ in range(x):\n            strings.append(\"AA\")\n        for _ in range(y):\n            strings.append(\"BB\")\n        for _ in range(z):\n            strings.append(\"AB\")\n\n        # Try all permutations of the strings\n        from itertools import permutations\n\n        for perm in permutations(strings):\n            s = ''.join(perm)\n            if 'AAA' not in s and 'BBB' not in s:\n                max_len = max(max_len, len(s))\n\n        return max_len",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 60392,
+  "total_time_ms": 1345091.570854187,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1934,
+    "self_tests_generated": 5
+  }
+}

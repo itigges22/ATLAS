@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc361_e",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    from collections import defaultdict\n\n    graph = defaultdict(list)\n    for _ in range(N - 1):\n        A, B, C = map(int, sys.stdin.readline().split())\n        graph[A].append((B, C))\n        graph[B].append((A, C))\n\n    # Find the longest path in the tree (this is equivalent to finding the diameter)\n    # First, perform BFS/DFS to find the farthest node from an arbitrary node\n    def dfs(start):\n        visited = [False] * (N + 1)\n        max_dist = 0\n        farthest_node = start\n        stack = [(start, 0)]\n        visited[start] = True\n        while stack:\n            node, dist = stack.pop()\n            if dist > max_dist:\n                max_dist = dist\n                farthest_node = node\n            for neighbor, weight in graph[node]:\n                if not visited[neighbor]:\n                    visited[neighbor] = True\n                    stack.append((neighbor, dist + weight))\n        return farthest_node, max_dist\n\n    # First DFS to find one end of the diameter\n    farthest_node, _ = dfs(1)\n    # Second DFS to find the other end of the diameter and get the diameter length\n    _, diameter = dfs(farthest_node)\n\n    # The minimum travel distance is the total of all edge weights minus the longest path (diameter)\n    # Because we can avoid traversing the diameter twice\n    total = 0\n    for u in graph:\n        for v, c in graph[u]:\n            total += c\n\n    print(total - diameter)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1333,
+  "total_time_ms": 24027.127742767334,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 925
+  }
+}

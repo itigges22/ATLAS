@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc340_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    Q = int(sys.stdin.readline())\n    A = []\n    output = []\n    for _ in range(Q):\n        query = sys.stdin.readline().split()\n        if query[0] == '1':\n            x = int(query[1])\n            A.append(x)\n        else:\n            k = int(query[1])\n            output.append(str(A[-k]))\n    print('\\n'.join(output))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 116,
+  "total_time_ms": 1691.8344497680664,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

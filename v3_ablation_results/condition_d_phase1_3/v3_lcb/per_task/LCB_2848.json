@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2848",
+  "passed": true,
+  "code": "from typing import List\nfrom functools import lru_cache\n\nclass Solution:\n    def specialPerm(self, nums: List[int]) -> int:\n        MOD = 10**9 + 7\n        n = len(nums)\n        \n        # Precompute the compatibility between elements\n        compatible = [[False] * n for _ in range(n)]\n        for i in range(n):\n            for j in range(n):\n                if i != j:\n                    compatible[i][j] = nums[i] % nums[j] == 0 or nums[j] % nums[i] == 0\n        \n        @lru_cache(None)\n        def dp(mask, pos):\n            if mask == (1 << n) - 1:\n                return 1\n            total = 0\n            for i in range(n):\n                if not (mask & (1 << i)):\n                    if compatible[pos][i]:\n                        total += dp(mask | (1 << i), i)\n                        total %= MOD\n            return total\n        \n        result = 0\n        for i in range(n):\n            result += dp(1 << i, i)\n            result %= MOD\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1579,
+  "total_time_ms": 24850.356817245483,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1388
+  }
+}

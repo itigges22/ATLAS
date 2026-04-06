@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3375",
+  "passed": true,
+  "code": "from typing import List\nfrom math import gcd\nfrom functools import reduce\n\nclass Solution:\n    def findKthSmallest(self, coins: List[int], k: int) -> int:\n        def lcm(a, b):\n            return a * b // gcd(a, b)\n\n        def lcm_multiple(arr):\n            return reduce(lcm, arr)\n\n        def count_multiples(x):\n            total = 0\n            n = len(coins)\n            for i in range(n):\n                total += x // coins[i]\n            for i in range(n):\n                for j in range(i + 1, n):\n                    total -= x // lcm(coins[i], coins[j])\n            for i in range(n):\n                for j in range(i + 1, n):\n                    for k in range(j + 1, n):\n                        total += x // lcm(lcm(coins[i], coins[j]), coins[k])\n            return total\n\n        left = 1\n        right = 10**18  # A sufficiently large upper bound\n\n        while left < right:\n            mid = (left + right) // 2\n            cnt = count_multiples(mid)\n            if cnt < k:\n                left = mid + 1\n            else:\n                right = mid\n\n        return left",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5746,
+  "total_time_ms": 93154.48117256165,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5625
+  }
+}

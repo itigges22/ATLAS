@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc353_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N, K = map(int, sys.stdin.readline().split())\n    A = list(map(int, sys.stdin.readline().split()))\n    empty_seats = K\n    starts = 0\n\n    while A:\n        if empty_seats >= A[0]:\n            empty_seats -= A[0]\n            A.pop(0)\n        else:\n            starts += 1\n            empty_seats = K\n\n    # After processing all groups, if there are still people in the attraction, start once more\n    if empty_seats < K:\n        starts += 1\n\n    print(starts)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2968.933582305908,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

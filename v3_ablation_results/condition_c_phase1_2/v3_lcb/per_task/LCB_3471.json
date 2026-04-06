@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3471",
+  "passed": true,
+  "code": "class Solution:\n    def minimumAverage(self, nums: List[int]) -> float:\n        # Step 1: Sort the input array\n        nums.sort()\n        \n        # Step 2: Initialize two pointers\n        left = 0\n        right = len(nums) - 1\n        \n        # Step 3: Create a list to store averages\n        averages = []\n        \n        # Step 4: Process the array in a single pass using two pointers\n        while left < right:\n            # Step 5: Calculate the average of the smallest and largest elements\n            avg = (nums[left] + nums[right]) / 2\n            averages.append(avg)\n            left += 1\n            right -= 1\n        \n        # Step 6: Return the minimum element in averages\n        return min(averages)",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 1918,
+  "total_time_ms": 29201.859951019287,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 1828
+  }
+}

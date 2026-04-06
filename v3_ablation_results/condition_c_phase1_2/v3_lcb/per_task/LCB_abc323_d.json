@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc323_d",
+  "passed": false,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    slimes = []\n    count = defaultdict(int)\n    \n    idx = 1\n    for _ in range(N):\n        S = int(data[idx])\n        C = int(data[idx + 1])\n        count[S] = C\n        idx += 2\n    \n    # Use a priority queue (min-heap) to process slimes in increasing order of size\n    heap = []\n    for s in count:\n        heapq.heappush(heap, s)\n    \n    result = 0\n    while heap:\n        current = heapq.heappop(heap)\n        # Number of slimes of current size\n        c = count[current]\n        # How many times we can merge pairs\n        merges = c // 2\n        # After merging, remaining slimes of current size\n        remaining = c % 2\n        result += remaining\n        \n        # If there are merges, we create slimes of size 2*current\n        if merges > 0:\n            new_size = current * 2\n            count[new_size] += merges\n            heapq.heappush(heap, new_size)\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 3803,
+  "total_time_ms": 94338.2875919342,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3508
+  }
+}

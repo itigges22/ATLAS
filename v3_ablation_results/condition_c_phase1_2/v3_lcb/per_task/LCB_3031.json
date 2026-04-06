@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3031",
+  "passed": false,
+  "code": "class Solution:\n    def constructProductMatrix(self, grid: List[List[int]]) -> List[List[int]]:\n        n, m = len(grid), len(grid[0])\n        product = [[0] * m for _ in range(n)]\n        total_product = 1\n        \n        # Compute the product of all elements\n        for i in range(n):\n            for j in range(m):\n                total_product = (total_product * grid[i][j]) % 12345\n        \n        # Compute the product matrix\n        for i in range(n):\n            for j in range(m):\n                product[i][j] = (total_product * pow(grid[i][j], 12345 - 2, 12345)) % 12345\n        \n        return product",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 179,
+  "total_time_ms": 2741.0805225372314,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

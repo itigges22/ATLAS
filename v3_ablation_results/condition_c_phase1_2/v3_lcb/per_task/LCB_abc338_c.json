@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc338_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef max_servings():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    Q = list(map(int, data[1:N+1]))\n    A = list(map(int, data[N+1:2*N+1]))\n    B = list(map(int, data[2*N+1:3*N+1]))\n    \n    max_total = 0\n    \n    # Try all possible combinations of servings of A and B\n    for x in range(0, 100000):\n        # Calculate remaining quantity after making x servings of A\n        remaining = [Q[i] - x * A[i] for i in range(N)]\n        # Check if remaining is non-negative\n        if any(remaining[i] < 0 for i in range(N)):\n            continue\n        # Calculate maximum servings of B with remaining quantities\n        y = min(remaining[i] // B[i] for i in range(N) if B[i] > 0)\n        max_total = max(max_total, x + y)\n    \n    print(max_total)\n\nmax_servings()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 257,
+  "total_time_ms": 5077.56781578064,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

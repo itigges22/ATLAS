@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2887",
+  "passed": false,
+  "code": "class Solution:\n    def sortVowels(self, s: str) -> str:\n        vowels = {'a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U'}\n        vowel_indices = []\n        vowels_list = []\n\n        for i, char in enumerate(s):\n            if char in vowels:\n                vowel_indices.append(i)\n                vowels_list.append(char)\n\n        vowels_list.sort(key=lambda x: ord(x))\n        result = list(s)\n\n        for idx, vowel in zip(vowel_indices, vowels_list):\n            result[idx] = vowel\n\n        return ''.join(result)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 45132,
+  "total_time_ms": 694599.2252826691,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1032,
+    "self_tests_generated": 5
+  }
+}

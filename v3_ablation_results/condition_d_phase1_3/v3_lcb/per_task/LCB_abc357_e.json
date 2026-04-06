@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc357_e",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nsys.setrecursionlimit(1 << 25)\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    a = list(map(int, data[1:N+1]))\n    a = [x - 1 for x in a]  # Convert to 0-based indexing\n\n    visited = [False] * N\n    result = 0\n\n    for i in range(N):\n        if not visited[i]:\n            stack = []\n            current = i\n            while True:\n                if visited[current]:\n                    # Found a cycle\n                    idx = stack.index(current)\n                    cycle = stack[idx:]\n                    for node in cycle:\n                        visited[node] = True\n                    result += len(cycle) * (len(cycle) + 1) // 2\n                    # Add contributions from nodes outside the cycle\n                    for node in stack[:idx]:\n                        visited[node] = True\n                        result += len(cycle) + 1\n                    break\n                if current in stack:\n                    # Found a cycle\n                    idx = stack.index(current)\n                    cycle = stack[idx:]\n                    for node in cycle:\n                        visited[node] = True\n                    result += len(cycle) * (len(cycle) + 1) // 2\n                    # Add contributions from nodes outside the cycle\n                    for node in stack[:idx]:\n                        visited[node] = True\n                        result += len(cycle) + 1\n                    break\n                stack.append(current)\n                visited[current] = True\n                current = a[current]\n\n    print(result)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 59013,
+  "total_time_ms": 1028604.2883396149,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1029,
+    "self_tests_generated": 5
+  }
+}

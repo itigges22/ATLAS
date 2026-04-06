@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc322_d",
+  "passed": false,
+  "code": "import sys\nimport itertools\nimport numpy as np\n\ndef read_polyominoes():\n    polyominoes = []\n    for _ in range(3):\n        poly = []\n        for _ in range(4):\n            line = sys.stdin.readline().strip()\n            poly.append(list(line))\n        polyominoes.append(poly)\n    return polyominoes\n\ndef get_cells(poly):\n    cells = []\n    for i in range(4):\n        for j in range(4):\n            if poly[i][j] == '#':\n                cells.append((i, j))\n    return cells\n\ndef rotate(poly):\n    return [list(row) for row in zip(*poly[::-1])]\n\ndef translate(poly, dx, dy):\n    return [[poly[i][j] for j in range(4)] for i in range(4)]\n\ndef get_all_transformations(poly):\n    transformations = []\n    for _ in range(4):\n        for dx in range(4):\n            for dy in range(4):\n                transformed = translate(rotate(poly), dx, dy)\n                cells = get_cells(transformed)\n                if all(0 <= x < 4 and 0 <= y < 4 for x, y in cells):\n                    transformations.append(cells)\n        poly = rotate(poly)\n    return transformations\n\ndef is_connected(cells):\n    if not cells:\n        return False\n    visited = set()\n    queue = [cells[0]]\n    visited.add(cells[0])\n    while queue:\n        x, y = queue.pop(0)\n        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:\n            nx, ny = x + dx, y + dy\n            if (nx, ny) in cells and (nx, ny) not in visited:\n                visited.add((nx, ny))\n                queue.append((nx, ny))\n    return len(visited) == len(cells)\n\ndef solve():\n    polyominoes = read_polyominoes()\n    transformations = []\n    for poly in polyominoes:\n        transformations.append(get_all_transformations(poly))\n    \n    for combo in itertools.product(*transformations):\n        all_cells = set()\n        for cells in combo:\n            all_cells.update(cells)\n        if len(all_cells) != 16:\n            continue\n        if all(is_connected(cells) for cells in combo):\n            print(\"Yes\")\n            return\n    print(\"No\")\n\nsolve()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 524,
+  "total_time_ms": 10267.515897750854,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

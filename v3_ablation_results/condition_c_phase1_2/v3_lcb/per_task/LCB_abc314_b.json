@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc314_b",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input.split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    \n    people = []\n    for _ in range(N):\n        C_i = int(data[idx])\n        idx += 1\n        bets = list(map(int, data[idx:idx + C_i]))\n        idx += C_i\n        people.append((C_i, bets))\n    \n    X = int(data[idx])\n    \n    # Find all people who bet on X\n    candidates = []\n    for i in range(N):\n        if X in people[i][1]:\n            candidates.append((i + 1, people[i][0]))\n    \n    if not candidates:\n        print(0)\n        return\n    \n    # Find the minimum number of bets among candidates\n    min_bets = min(c[1] for c in candidates)\n    \n    # Filter candidates with min_bets\n    result = [str(c[0]) for c in candidates if c[1] == min_bets]\n    result.sort()\n    \n    print(len(result))\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 265,
+  "total_time_ms": 4066.279172897339,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

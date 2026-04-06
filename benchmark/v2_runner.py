@@ -150,14 +150,14 @@ def _set_routing_mode(mode):
     if mode == "A":
         # Enable router-controlled routing
         subprocess.run(
-            ["kubectl", "set", "env", "deployment/rag-api",
+            ["kubectl", "set", "env", "deployment/geometric-lens",
              "ROUTING_ENABLED=true", "-n", "atlas"],
             capture_output=True, timeout=10
         )
     else:
         # Disable routing (all tasks get STANDARD route)
         subprocess.run(
-            ["kubectl", "set", "env", "deployment/rag-api",
+            ["kubectl", "set", "env", "deployment/geometric-lens",
              "ROUTING_ENABLED=false", "-n", "atlas"],
             capture_output=True, timeout=10
         )
@@ -165,7 +165,7 @@ def _set_routing_mode(mode):
 
 
 def _trigger_retrain(tracker, max_epoch):
-    """POST accumulated training data to rag-api for C(x) retrain."""
+    """POST accumulated training data to geometric-lens for C(x) retrain."""
     payload = tracker.prepare_retrain_payload(max_epoch=max_epoch)
     n_pass, n_fail = tracker.count_labels(max_epoch=max_epoch)
 

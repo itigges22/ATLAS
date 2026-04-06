@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3493",
+  "passed": true,
+  "code": "class Solution:\n    def maxOperations(self, s: str) -> int:\n        operations = 0\n        n = len(s)\n        i = 0\n        while i < n - 1:\n            if s[i] == '1' and s[i + 1] == '0':\n                # Move the '1' to the right as far as possible\n                j = i\n                while j < n - 1 and s[j + 1] == '0':\n                    j += 1\n                # Move the '1' to position j\n                s = s[:i] + '0' + s[i + 1:j + 1] + '1' + s[j + 1:]\n                operations += 1\n                i = 0  # Reset index to start from the beginning again\n            else:\n                i += 1\n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3543,
+  "total_time_ms": 57440.601110458374,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3471
+  }
+}

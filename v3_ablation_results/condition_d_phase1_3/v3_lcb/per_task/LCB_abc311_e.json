@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc311_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    N = int(data[2])\n    \n    holed = set()\n    for i in range(N):\n        a = int(data[3 + 2*i])\n        b = int(data[4 + 2*i])\n        holed.add((a, b))\n    \n    # Initialize DP table\n    dp = [[0] * (W + 1) for _ in range(H + 1)]\n    \n    result = 0\n    \n    for i in range(1, H + 1):\n        for j in range(1, W + 1):\n            if (i, j) in holed:\n                dp[i][j] = 0\n            else:\n                dp[i][j] = min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]) + 1\n                result += dp[i][j]\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 17590,
+  "total_time_ms": 200056.50401115417,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1979
+  }
+}

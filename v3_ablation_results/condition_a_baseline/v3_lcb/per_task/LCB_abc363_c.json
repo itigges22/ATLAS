@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc363_c",
+  "passed": true,
+  "code": "import sys\nimport itertools\n\ndef is_palindrome(sub):\n    return sub == sub[::-1]\n\ndef contains_palindrome(s, k):\n    for i in range(len(s) - k + 1):\n        substring = s[i:i+k]\n        if is_palindrome(substring):\n            return True\n    return False\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    K = int(input[1])\n    S = input[2]\n\n    unique_perms = set(itertools.permutations(S))\n    count = 0\n\n    for perm in unique_perms:\n        perm_str = ''.join(perm)\n        if not contains_palindrome(perm_str, K):\n            count += 1\n\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4100.98934173584,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

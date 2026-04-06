@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2872",
+  "passed": true,
+  "code": "class Solution:\n    def maxArrayValue(self, nums: List[int]) -> int:\n        n = len(nums)\n        # Start from the end of the array and move backwards\n        for i in range(n - 2, -1, -1):\n            # If current element is less than or equal to the next one, combine them\n            if nums[i] <= nums[i + 1]:\n                nums[i] += nums[i + 1]\n        # The maximum value in the final array is the maximum of the modified nums\n        return max(nums)",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5452,
+  "total_time_ms": 133192.50226020813,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3244,
+    "s_star_triggered": true
+  }
+}

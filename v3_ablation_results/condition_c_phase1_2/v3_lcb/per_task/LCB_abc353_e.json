@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc353_e",
+  "passed": false,
+  "code": "import sys\nimport collections\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    strings = data[1:]\n\n    # Build a trie\n    class TrieNode:\n        def __init__(self):\n            self.children = collections.defaultdict(TrieNode)\n            self.count = 0  # number of strings passing through this node\n\n    root = TrieNode()\n\n    for s in strings:\n        node = root\n        for ch in s:\n            node = node.children[ch]\n            node.count += 1\n\n    # Now, perform a DFS to calculate the contribution of each node\n    total = 0\n\n    def dfs(node, depth):\n        nonlocal total\n        # Each node contributes (count choose 2) * depth\n        total += (node.count * (node.count - 1) // 2) * depth\n        for child in node.children.values():\n            dfs(child, depth + 1)\n\n    dfs(root, 0)\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 240,
+  "total_time_ms": 3863.4653091430664,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

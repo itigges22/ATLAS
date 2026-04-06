@@ -23,7 +23,7 @@ ATLAS_NAMESPACE="atlas"
 # External NodePorts (how you access services from outside the cluster)
 ATLAS_API_PORTAL_NODEPORT=30000
 ATLAS_LLM_PROXY_NODEPORT=30080
-ATLAS_RAG_API_NODEPORT=31144
+ATLAS_LENS_NODEPORT=31144
 ATLAS_DASHBOARD_NODEPORT=30001
 ATLAS_LLAMA_NODEPORT=32735
 ATLAS_SANDBOX_NODEPORT=30820
@@ -31,7 +31,7 @@ ATLAS_SANDBOX_NODEPORT=30820
 # Internal service ports (usually don't change these)
 ATLAS_REDIS_PORT=6379
 ATLAS_LLAMA_PORT=8000
-ATLAS_RAG_API_PORT=8001
+ATLAS_LENS_PORT=8001
 ATLAS_API_PORTAL_PORT=3000
 ATLAS_SANDBOX_PORT=8020
 ATLAS_DASHBOARD_PORT=3001
@@ -296,6 +296,15 @@ ATLAS_V3_EWC_LAMBDA=1000.0
 ATLAS_V3_LENS_FEEDBACK_ENABLED=false
 ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL=50
 ATLAS_V3_LENS_FEEDBACK_DOMAIN="LCB"
+
+#-------------------------------------------
+# V3 Benchmark Runner — Ablation & Telemetry
+#-------------------------------------------
+# Candidate selection strategy: lens, random, logprob, oracle
+ATLAS_V3_SELECTION_STRATEGY="lens"
+
+# Enable Lens online feedback (Phase 4 evolution during runs)
+ATLAS_V3_ENABLE_FEEDBACK=false
 
 #-------------------------------------------
 # Cache Manager — Proactive llama-server memory management

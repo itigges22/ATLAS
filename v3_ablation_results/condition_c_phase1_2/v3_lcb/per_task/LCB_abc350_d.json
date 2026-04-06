@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc350_d",
+  "passed": false,
+  "code": "import sys\nimport threading\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N, M = map(int, sys.stdin.readline().split())\n    graph = defaultdict(list)\n    for _ in range(M):\n        a, b = map(int, sys.stdin.readline().split())\n        graph[a].append(b)\n        graph[b].append(a)\n\n    def dfs(u, visited):\n        visited.add(u)\n        for v in graph[u]:\n            if v not in visited:\n                dfs(v, visited)\n\n    visited = set()\n    components = 0\n    for i in range(1, N + 1):\n        if i not in visited:\n            dfs(i, visited)\n            components += 1\n\n    result = 0\n    for c in range(1, components + 1):\n        result += (c * (c - 1) * (c - 2)) // 6\n    print(result)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 228,
+  "total_time_ms": 3706.35986328125,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

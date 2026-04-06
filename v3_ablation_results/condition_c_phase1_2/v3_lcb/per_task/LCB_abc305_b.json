@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\n# Define the distances between adjacent points\ndistances = {\n    'A': 0,\n    'B': 3,\n    'C': 4,\n    'D': 8,\n    'E': 9,\n    'F': 14,\n    'G': 23\n}\n\n# Read input\np, q = sys.stdin.read().split()\n\n# Calculate the distance between p and q\ndistance = abs(distances[p] - distances[q])\n\n# Output the result\nprint(distance)",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 2851,
+  "total_time_ms": 46674.6940612793,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2737
+  }
+}

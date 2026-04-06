@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3478",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def canReachCorner(self, xCorner: int, yCorner: int, circles: List[List[int]]) -> bool:\n        # Check if the bottom-left corner (0, 0) is blocked\n        for x, y, r in circles:\n            if (x - 0)**2 + (y - 0)**2 <= r**2:\n                return False\n        \n        # Check if the top-right corner (xCorner, yCorner) is blocked\n        for x, y, r in circles:\n            if (x - xCorner)**2 + (y - yCorner)**2 <= r**2:\n                return False\n        \n        # Check if any circle blocks the entire left edge (x=0) or top edge (y=yCorner)\n        for x, y, r in circles:\n            if y - r >= yCorner or x + r <= 0:\n                continue\n            if y - r <= 0:\n                return False\n        \n        for x, y, r in circles:\n            if y + r <= yCorner or x - r >= xCorner:\n                continue\n            if x - r >= 0:\n                return False\n        \n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 51640,
+  "total_time_ms": 1224065.1452541351,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1245,
+    "self_tests_generated": 5
+  }
+}

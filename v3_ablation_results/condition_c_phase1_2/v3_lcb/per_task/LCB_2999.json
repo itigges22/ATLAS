@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2999",
+  "passed": false,
+  "code": "class Solution:\n    def canBeEqual(self, s1: str, s2: str) -> bool:\n        # Check if the characters at even indices and odd indices match\n        # because allowed swaps only affect characters at positions with difference 2\n        # which preserves the parity of indices\n        return sorted(s1[::2]) == sorted(s2[::2]) and sorted(s1[1::2]) == sorted(s2[1::2])",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 4230,
+  "total_time_ms": 63235.23259162903,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4073
+  }
+}

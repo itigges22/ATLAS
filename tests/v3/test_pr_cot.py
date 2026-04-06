@@ -526,6 +526,6 @@ class TestDataStructures:
         assert cfg.enabled is False
         assert cfg.max_repair_rounds == 3
         assert cfg.analysis_temperature == 0.3
-        assert cfg.repair_temperature == 0.2
-        assert cfg.analysis_max_tokens == 1024
+        assert cfg.repair_temperature == 0.4
+        assert cfg.analysis_max_tokens == 2048
         assert cfg.repair_max_tokens == 4096

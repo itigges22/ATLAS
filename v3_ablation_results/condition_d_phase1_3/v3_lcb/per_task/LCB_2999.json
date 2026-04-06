@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2999",
+  "passed": false,
+  "code": "class Solution:\n    def canBeEqual(self, s1: str, s2: str) -> bool:\n        # Check if characters at positions 0 and 2 can be swapped to match s2\n        # Check if characters at positions 1 and 3 can be swapped to match s2\n        return sorted(s1[::2]) == sorted(s2[::2]) and sorted(s1[1::2]) == sorted(s2[1::2])",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54828,
+  "total_time_ms": 836963.671207428,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 825,
+    "self_tests_generated": 5
+  }
+}

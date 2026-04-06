@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3229",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumCost(self, nums: List[int]) -> int:\n        def is_palindrome(x: int) -> bool:\n            return str(x) == str(x)[::-1]\n\n        def generate_palindromes_around(target: int, max_pal: int) -> List[int]:\n            palindromes = []\n            # Generate palindromes around the target\n            for length in range(1, 10):  # up to 10^9\n                for prefix in range(10 ** ((length + 1) // 2)):\n                    s = str(prefix)\n                    if length % 2 == 0:\n                        pal = int(s + s[::-1])\n                    else:\n                        pal = int(s + s[-2::-1])\n                    if pal < max_pal:\n                        palindromes.append(pal)\n            return palindromes\n\n        median = sorted(nums)[len(nums) // 2]\n        max_pal = 10 ** 9\n        palindromes = generate_palindromes_around(median, max_pal)\n\n        min_cost = float('inf')\n        for p in palindromes:\n            cost = sum(abs(num - p) for num in nums)\n            if cost < min_cost:\n                min_cost = cost\n\n        return min_cost",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 8371,
+  "total_time_ms": 322717.4942493439,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6016,
+    "s_star_triggered": true
+  }
+}

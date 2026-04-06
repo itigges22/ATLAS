@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2811",
+  "passed": true,
+  "code": "class Solution:\n    def minimumSum(self, n: int, k: int) -> int:\n        # Set to keep track of used numbers\n        used = set()\n        # Result array\n        res = []\n        # Start from 1 and try to add numbers\n        i = 1\n        while len(res) < n:\n            valid = True\n            for num in used:\n                if i + num == k:\n                    valid = False\n                    break\n            if valid:\n                res.append(i)\n                used.add(i)\n            i += 1\n        return sum(res)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2052.5360107421875,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

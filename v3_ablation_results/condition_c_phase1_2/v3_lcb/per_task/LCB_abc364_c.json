@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc364_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    X = int(data[1])\n    Y = int(data[2])\n    A = list(map(int, data[3:3+N]))\n    B = list(map(int, data[3+N:3+2*N]))\n    \n    # Sort dishes by the sum of sweetness and saltiness\n    dishes = sorted(zip(A, B), key=lambda x: x[0] + x[1])\n    \n    total_sweet = 0\n    total_salt = 0\n    count = 0\n    \n    for a, b in dishes:\n        total_sweet += a\n        total_salt += b\n        count += 1\n        if total_sweet > X or total_salt > Y:\n            break\n    \n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1930,
+  "total_time_ms": 32474.698066711426,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1634
+  }
+}

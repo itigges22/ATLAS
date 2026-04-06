@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc313_a",
+  "passed": false,
+  "code": "",
+  "phase_solved": "none",
+  "candidates_generated": 0,
+  "total_tokens": 0,
+  "total_time_ms": 45220.247745513916,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "fallback_error": "Failed to connect to LLM after 10 attempts: HTTP 503: Service Unavailable"
+  }
+}

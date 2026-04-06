@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc346_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    W, B = map(int, sys.stdin.readline().split())\n    pattern = \"wbwbwwbwbwbw\"\n    length = len(pattern)\n    target_length = W + B\n\n    # Check all possible substrings of S with length target_length\n    # Since S is infinitely repeated, we only need to check substrings in one full cycle of the pattern\n    for i in range(length):\n        # Create a window of size target_length starting at i\n        window = \"\"\n        for j in range(target_length):\n            window += pattern[(i + j) % length]\n        w_count = window.count('w')\n        b_count = window.count('b')\n        if w_count == W and b_count == B:\n            print(\"Yes\")\n            return\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5498,
+  "total_time_ms": 211933.84456634521,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5297
+  }
+}

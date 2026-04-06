@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3312",
+  "passed": true,
+  "code": "class Solution:\n    def countKeyChanges(self, s: str) -> int:\n        count = 0\n        prev = s[0].lower()\n        for char in s[1:]:\n            current = char.lower()\n            if current != prev:\n                count += 1\n                prev = current\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 80,
+  "total_time_ms": 1334.3713283538818,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

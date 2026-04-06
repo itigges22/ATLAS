@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/2791",
+  "passed": false,
+  "code": "class Solution:\n    def circularGameLosers(self, n: int, k: int) -> List[int]:\n        visited = [False] * n\n        current = 0\n        step = k\n\n        while True:\n            current = (current + step) % n\n            step += k\n            if visited[current]:\n                break\n            visited[current] = True\n\n        losers = [i + 1 for i in range(n) if not visited[i]]\n        return losers",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 50761,
+  "total_time_ms": 1114323.1220245361,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3353",
+  "passed": false,
+  "code": "class Solution:\n    def isSubstringPresent(self, s: str) -> bool:\n        substrings = set()\n        for i in range(len(s) - 1):\n            substrings.add(s[i:i+2])\n        reversed_s = s[::-1]\n        for i in range(len(reversed_s) - 1):\n            if reversed_s[i:i+2] in substrings:\n                return True\n        return False",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3286,
+  "total_time_ms": 46689.637899398804,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3216
+  }
+}

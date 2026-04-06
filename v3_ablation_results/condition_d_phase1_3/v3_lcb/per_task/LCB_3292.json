@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3292",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def earliestSecondToMarkIndices(self, nums: List[int], changeIndices: List[int]) -> int:\n        n = len(nums)\n        m = len(changeIndices)\n        required = [0] * (n + 1)  # 1-based indexing\n        for i in range(1, n + 1):\n            required[i] = nums[i - 1]\n\n        # Preprocess the last occurrence of each index in changeIndices\n        last_occurrence = [0] * (n + 1)\n        for t in range(m):\n            idx = changeIndices[t]\n            last_occurrence[idx] = t + 1  # 1-based time\n\n        # Check if all indices are present in changeIndices\n        for i in range(1, n + 1):\n            if last_occurrence[i] == 0:\n                return -1\n\n        # Binary search on the answer\n        low = 1\n        high = m\n        answer = -1\n\n        while low <= high:\n            mid = (low + high) // 2\n            time_used = 0\n            marked = [False] * (n + 1)\n            required_copy = required.copy()\n\n            for t in range(mid):\n                idx = changeIndices[t]\n                if required_copy[idx] == 0 and not marked[idx]:\n                    marked[idx] = True\n                    time_used += 1\n                else:\n                    time_used += 1\n                    required_copy[idx] -= 1\n\n            if all(marked) and time_used <= mid:\n                answer = mid\n                high = mid - 1\n            else:\n                low = mid + 1\n\n        return answer",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 44708,
+  "total_time_ms": 2372906.768798828,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 5808,
+    "self_tests_generated": 5
+  }
+}

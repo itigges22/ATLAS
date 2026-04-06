@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc341_d",
+  "passed": true,
+  "code": "import sys\nimport math\n\ndef main():\n    N, M, K = map(int, sys.stdin.read().split())\n    lcm = N * M // math.gcd(N, M)\n    # Numbers divisible by N or M but not both\n    # Count of such numbers up to x is: (x // N + x // M - 2 * x // lcm)\n    low = 1\n    high = 2 * 10**18  # A safe upper bound\n\n    def count(x):\n        return x // N + x // M - 2 * (x // lcm)\n\n    while low < high:\n        mid = (low + high) // 2\n        if count(mid) < K:\n            low = mid + 1\n        else:\n            high = mid\n    print(low)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 3992,
+  "total_time_ms": 65307.87110328674,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 1677,
+    "s_star_triggered": true
+  }
+}

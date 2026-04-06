@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc308_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read input\n    input_line = sys.stdin.read().strip()\n    S = list(map(int, input_line.split()))\n    \n    # Check if there are exactly 8 values\n    if len(S) != 8:\n        print(\"No\")\n        return\n    \n    # Check monotonic non-decreasing\n    for i in range(7):\n        if S[i] > S[i + 1]:\n            print(\"No\")\n            return\n    \n    # Check range and divisibility\n    for s in S:\n        if not (100 <= s <= 675) or s % 25 != 0:\n            print(\"No\")\n            return\n    \n    # All conditions satisfied\n    print(\"Yes\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1527,
+  "total_time_ms": 24319.068431854248,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1363
+  }
+}

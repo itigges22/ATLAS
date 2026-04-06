@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc341_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    N, M, K = map(int, input().split())\n\n    # Ensure N < M for easier calculation\n    if N > M:\n        N, M = M, N\n\n    # Count numbers <= x divisible by exactly one of N or M\n    def count(x):\n        cnt_n = x // N\n        cnt_m = x // M\n        cnt_both = x // (N * M // gcd(N, M))\n        return cnt_n + cnt_m - 2 * cnt_both\n\n    # Binary search for the K-th number\n    low = 1\n    high = 10**18  # A sufficiently large upper bound\n\n    while low < high:\n        mid = (low + high) // 2\n        if count(mid) < K:\n            low = mid + 1\n        else:\n            high = mid\n\n    print(low)\n\ndef gcd(a, b):\n    while b:\n        a, b = b, a % b\n    return a\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 130531.22401237488,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

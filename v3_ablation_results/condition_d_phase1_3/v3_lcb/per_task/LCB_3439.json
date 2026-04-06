@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3439",
+  "passed": false,
+  "code": "from typing import List\nfrom collections import deque\n\nclass Solution:\n    def minimumDiameterAfterMerge(self, edges1: List[List[int]], edges2: List[List[int]]) -> int:\n        def build_graph(edges, n):\n            graph = [[] for _ in range(n)]\n            for u, v in edges:\n                graph[u].append(v)\n                graph[v].append(u)\n            return graph\n\n        def bfs(start, graph):\n            visited = [-1] * len(graph)\n            q = deque([start])\n            visited[start] = 0\n            max_dist = 0\n            farthest_node = start\n            while q:\n                u = q.popleft()\n                for v in graph[u]:\n                    if visited[v] == -1:\n                        visited[v] = visited[u] + 1\n                        q.append(v)\n                        if visited[v] > max_dist:\n                            max_dist = visited[v]\n                            farthest_node = v\n            return farthest_node, max_dist\n\n        def get_diameter(graph):\n            if not graph:\n                return 0\n            start = 0\n            farthest_node, _ = bfs(start, graph)\n            farthest_node2, max_dist = bfs(farthest_node, graph)\n            return max_dist\n\n        n = len(edges1) + 1\n        m = len(edges2) + 1\n\n        graph1 = build_graph(edges1, n)\n        graph2 = build_graph(edges2, m)\n\n        diameter1 = get_diameter(graph1)\n        diameter2 = get_diameter(graph2)\n\n        # The new diameter is the max of:\n        # - diameter1\n        # - diameter2\n        # - (diameter1 // 2 + diameter2 // 2 + 1)\n        return max(diameter1, diameter2, (diameter1 // 2 + diameter2 // 2 + 1))",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 59814,
+  "total_time_ms": 1414676.9888401031,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2022,
+    "self_tests_generated": 5
+  }
+}

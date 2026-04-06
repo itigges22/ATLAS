@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc356_c",
+  "passed": true,
+  "code": "import sys\nfrom itertools import combinations\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx]); idx += 1\n    M = int(data[idx]); idx += 1\n    K = int(data[idx]); idx += 1\n    \n    tests = []\n    for _ in range(M):\n        C_i = int(data[idx]); idx += 1\n        A_i = list(map(int, data[idx:idx + C_i]))\n        idx += C_i\n        R_i = data[idx]; idx += 1\n        tests.append((A_i, R_i))\n    \n    valid = 0\n    # Iterate over all possible real key combinations\n    for real in combinations(range(1, N + 1), K):\n        real_set = set(real)\n        valid_combination = True\n        for A_i, R_i in tests:\n            inserted = set(A_i)\n            real_inserted = inserted & real_set\n            if len(real_inserted) >= K:\n                if R_i == 'x':\n                    valid_combination = False\n                    break\n            else:\n                if R_i == 'o':\n                    valid_combination = False\n                    break\n        if valid_combination:\n            valid += 1\n    \n    print(valid)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4789.279937744141,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

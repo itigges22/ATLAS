@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3349",
+  "passed": true,
+  "code": "class Solution:\n    def maximumLengthSubstring(self, s: str) -> int:\n        max_len = 0\n        char_count = {}\n        left = 0\n\n        for right in range(len(s)):\n            char = s[right]\n            char_count[char] = char_count.get(char, 0) + 1\n\n            while char_count[char] > 2:\n                left_char = s[left]\n                char_count[left_char] -= 1\n                if char_count[left_char] == 0:\n                    del char_count[left_char]\n                left += 1\n\n            max_len = max(max_len, right - left + 1)\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 2010,
+  "total_time_ms": 29362.804651260376,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 1859
+  }
+}

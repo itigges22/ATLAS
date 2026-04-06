@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2886",
+  "passed": false,
+  "code": "from collections import deque\n\nclass Solution:\n    def finalString(self, s: str) -> str:\n        result = deque()\n        for char in s:\n            if char == 'i':\n                result = deque(reversed(result))\n            else:\n                result.append(char)\n        return ''.join(result)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1144,
+  "total_time_ms": 19692.538261413574,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1077
+  }
+}

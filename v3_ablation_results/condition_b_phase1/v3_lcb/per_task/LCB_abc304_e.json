@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_e",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n\n    # Build the graph\n    graph = [[] for _ in range(N + 1)]\n    for _ in range(M):\n        u = int(data[idx])\n        idx += 1\n        v = int(data[idx])\n        idx += 1\n        graph[u].append(v)\n        graph[v].append(u)\n\n    # Precompute connected components using BFS\n    visited = [False] * (N + 1)\n    component = [0] * (N + 1)\n    current_component = 0\n\n    for v in range(1, N + 1):\n        if not visited[v]:\n            current_component += 1\n            queue = deque()\n            queue.append(v)\n            visited[v] = True\n            component[v] = current_component\n            while queue:\n                u = queue.popleft()\n                for nei in graph[u]:\n                    if not visited[nei]:\n                        visited[nei] = True\n                        component[nei] = current_component\n                        queue.append(nei)\n\n    K = int(data[idx])\n    idx += 1\n\n    # Store forbidden pairs (x_i, y_i) as component pairs\n    forbidden = set()\n    for _ in range(K):\n        x = int(data[idx])\n        idx += 1\n        y = int(data[idx])\n        idx += 1\n        forbidden.add((component[x], component[y]))\n\n    Q = int(data[idx])\n    idx += 1\n\n    # Process queries\n    results = []\n    for _ in range(Q):\n        p = int(data[idx])\n        idx += 1\n        q = int(data[idx])\n        idx += 1\n        cp = component[p]\n        cq = component[q]\n        # Check if adding edge (p, q) connects any forbidden pair\n        new_forbidden = False\n        for (a, b) in forbidden:\n            if (a == cp and b == cq) or (a == cq and b == cp):\n                new_forbidden = True\n                break\n        if new_forbidden:\n            results.append(\"No\")\n        else:\n            results.append(\"Yes\")\n\n    print(\"\\n\".join(results))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 5743,
+  "total_time_ms": 60562.94012069702,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 5235
+  }
+}

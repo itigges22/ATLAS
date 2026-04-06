@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc332_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\n# Read input\nN, S, K = map(int, input().split())\ntotal_price = 0\n\nfor _ in range(N):\n    P, Q = map(int, input().split())\n    total_price += P * Q\n\n# Calculate the amount to pay\nif total_price >= S:\n    shipping = 0\nelse:\n    shipping = K\n\nprint(total_price + shipping)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1192,
+  "total_time_ms": 21393.38707923889,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1110
+  }
+}

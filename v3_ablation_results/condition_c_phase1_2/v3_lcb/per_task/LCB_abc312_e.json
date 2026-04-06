@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc312_e",
+  "passed": false,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    cuboids = []\n    index = 1\n    \n    for _ in range(N):\n        x1 = int(data[index])\n        y1 = int(data[index+1])\n        z1 = int(data[index+2])\n        x2 = int(data[index+3])\n        y2 = int(data[index+4])\n        z2 = int(data[index+5])\n        cuboids.append((x1, y1, z1, x2, y2, z2))\n        index += 6\n    \n    # For each face of a cuboid, store the cuboids that share that face\n    face_map = defaultdict(set)\n    \n    for i in range(N):\n        x1, y1, z1, x2, y2, z2 = cuboids[i]\n        \n        # Front face (z = z2)\n        face_map[(x1, y1, z2, x2, y2)].add(i)\n        # Back face (z = z1)\n        face_map[(x1, y1, z1, x2, y2)].add(i)\n        # Left face (x = x1)\n        face_map[(x1, y1, z1, x1, y2, z2)].add(i)\n        # Right face (x = x2)\n        face_map[(x2, y1, z1, x2, y2, z2)].add(i)\n        # Bottom face (y = y1)\n        face_map[(x1, y1, z1, x2, y1, z2)].add(i)\n        # Top face (y = y2)\n        face_map[(x1, y2, z1, x2, y2, z2)].add(i)\n    \n    result = [0] * N\n    \n    for i in range(N):\n        x1, y1, z1, x2, y2, z2 = cuboids[i]\n        \n        # Check front face\n        front = (x1, y1, z2, x2, y2)\n        for j in face_map[front]:\n            if j != i:\n                result[i] += 1\n        \n        # Check back face\n        back = (x1, y1, z1, x2, y2)\n        for j in face_map[back]:\n            if j != i:\n                result[i] += 1\n        \n        # Check left face\n        left = (x1, y1, z1, x1, y2, z2)\n        for j in face_map[left]:\n            if j != i:\n                result[i] += 1\n        \n        # Check right face\n        right = (x2, y1, z1, x2, y2, z2)\n        for j in face_map[right]:\n            if j != i:\n                result[i] += 1\n        \n        # Check bottom face\n        bottom = (x1, y1, z1, x2, y1, z2)\n        for j in face_map[bottom]:\n            if j != i:\n                result[i] += 1\n        \n        # Check top face\n        top = (x1, y2, z1, x2, y2, z2)\n        for j in face_map[top]:\n            if j != i:\n                result[i] += 1\n    \n    for count in result:\n        print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 772,
+  "total_time_ms": 9957.829475402832,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

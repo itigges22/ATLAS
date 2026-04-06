@@ -59,7 +59,7 @@ flowchart TB
   SvcA[llama-service<br/>NodePort 32735] -->|port 8000| A1
   SvcB[llama-embed-service<br/>NodePort 32736] -->|port 8001| B1
 
-  RAG[rag-api] -->|LLAMA_URL| SvcA
+  RAG[geometric-lens] -->|LLAMA_URL| SvcA
   RAG -->|LLAMA_EMBED_URL| SvcB
 
   style ServerA fill:#1a3a5c,color:#fff
@@ -111,7 +111,7 @@ Managed by ConfigMap `llama-entrypoint` key `entrypoint-embed.sh`.
 | **Embedding dims** | 5120 | 768 |
 | **VRAM usage** | ~12.9 GiB (model + KV + draft) | ~12.7 GiB (model + KV + draft + embed sidecar) |
 | **Flags** | `--embeddings --jinja --draft-p-min 0.9` | No `--embeddings` on main; sidecar handles it |
-| **rag-api** | Single `LLAMA_URL` for everything | `LLAMA_URL` (gen) + `LLAMA_EMBED_URL` (embed) |
+| **geometric-lens** | Single `LLAMA_URL` for everything | `LLAMA_URL` (gen) + `LLAMA_EMBED_URL` (embed) |
 
 ### Geometric Lens Adaptation
 
@@ -185,7 +185,7 @@ The sidecar approach has the secondary benefit of using a purpose-built embeddin
 | ConfigMap | `llama-templates` (atlas namespace) | Qwen3-custom.jinja chat template |
 | Service (gen) | `llama-service` | NodePort 32735 -> pod port 8000 |
 | Service (embed) | `llama-embed-service` | NodePort 32736 -> pod port 8001 |
-| rag-api env | `LLAMA_EMBED_URL=http://llama-embed-service:8000` | Embedding routing |
+| geometric-lens env | `LLAMA_EMBED_URL=http://llama-embed-service:8000` | Embedding routing |
 
 ---
 

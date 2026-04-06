@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/1873_D",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    t = int(data[idx])\n    idx += 1\n    \n    results = []\n    \n    for _ in range(t):\n        n, k = int(data[idx]), int(data[idx + 1])\n        idx += 2\n        s = data[idx]\n        idx += 1\n        \n        count = 0\n        i = 0\n        while i < n:\n            if s[i] == 'B':\n                count += 1\n                i += k\n            else:\n                i += 1\n        results.append(str(count))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 180,
+  "total_time_ms": 2556.2329292297363,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

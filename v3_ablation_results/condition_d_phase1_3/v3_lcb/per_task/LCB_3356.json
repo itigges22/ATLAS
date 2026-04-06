@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3356",
+  "passed": false,
+  "code": "class Solution:\n    def shortestSubstrings(self, arr: List[str]) -> List[str]:\n        from collections import defaultdict\n\n        # Step 1: Collect all substrings from all strings except the current one\n        substr_count = defaultdict(int)\n        n = len(arr)\n        for i in range(n):\n            for j in range(len(arr[i])):\n                for k in range(j + 1, len(arr[i]) + 1):\n                    substr = arr[i][j:k]\n                    substr_count[substr] += 1\n\n        # Step 2: For each string, find the shortest and lexicographically smallest unique substring\n        result = []\n        for s in arr:\n            min_len = float('inf')\n            candidates = []\n            for i in range(len(s)):\n                for j in range(i + 1, len(s) + 1):\n                    substr = s[i:j]\n                    if substr_count[substr] == 1:\n                        candidates.append(substr)\n            if candidates:\n                result.append(min(candidates))\n            else:\n                result.append(\"\")\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53427,
+  "total_time_ms": 824861.407995224,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1517,
+    "self_tests_generated": 5
+  }
+}

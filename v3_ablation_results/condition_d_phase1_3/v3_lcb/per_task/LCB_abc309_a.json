@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc309_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\n# Read input\nA, B = map(int, input().split())\n\n# Precomputed adjacency map for horizontal neighbors\nadjacency_map = {\n    1: {2},\n    2: {1, 3},\n    3: {2},\n    4: {5},\n    5: {4, 6},\n    6: {5},\n    7: {8},\n    8: {7, 9},\n    9: {8}\n}\n\n# Check if B is a horizontal neighbor of A\nif B in adjacency_map[A]:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1450,
+  "total_time_ms": 22843.937158584595,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1385
+  }
+}

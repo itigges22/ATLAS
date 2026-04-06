@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc356_e",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    \n    A.sort()\n    prefix = [0] * (N + 1)\n    for i in range(N):\n        prefix[i+1] = prefix[i] + A[i]\n    \n    total = 0\n    for i in range(N):\n        a = A[i]\n        # Count how many elements are <= a\n        # For each element b > a, compute floor(b / a)\n        # For each element b > a, floor(b / a) = k means b is in [a*k, a*(k+1))\n        # So we can iterate k from 1 to max_k and count the number of elements in that range\n        # We can use binary search to find the count of elements in each range\n        for k in range(1, (10**6) // a + 1):\n            lower = a * k\n            upper = a * (k + 1)\n            # Find the number of elements in [lower, upper)\n            left = bisect.bisect_left(A, lower, i + 1, N)\n            right = bisect.bisect_left(A, upper, i + 1, N)\n            count = right - left\n            total += count * k\n        # Also handle elements that are exactly divisible by a\n        # These are already counted in the range [a*k, a*(k+1))\n    \n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7228,
+  "total_time_ms": 129842.08154678345,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6937
+  }
+}

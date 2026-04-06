@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3223",
+  "passed": true,
+  "code": "class Solution:\n    def countCompleteSubstrings(self, word: str, k: int) -> int:\n        n = len(word)\n        res = 0\n        i = 0\n        \n        while i < n:\n            j = i\n            # Check for adjacent characters with difference > 2\n            while j + 1 < n and abs(ord(word[j + 1]) - ord(word[j])) <= 2:\n                j += 1\n            \n            # Now, check all substrings in word[i...j] for the complete condition\n            for l in range(i, j + 1):\n                for r in range(l, j + 1):\n                    substr = word[l:r + 1]\n                    freq = {}\n                    for ch in substr:\n                        freq[ch] = freq.get(ch, 0) + 1\n                    valid = True\n                    for count in freq.values():\n                        if count != k:\n                            valid = False\n                            break\n                    if valid:\n                        res += 1\n            i = j + 1\n        \n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1654,
+  "total_time_ms": 26228.670597076416,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1419
+  }
+}

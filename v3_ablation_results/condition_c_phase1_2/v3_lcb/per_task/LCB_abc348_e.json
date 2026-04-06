@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc348_e",
+  "passed": false,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    edges = [[] for _ in range(N)]\n    for _ in range(N - 1):\n        a, b = map(int, sys.stdin.readline().split())\n        edges[a - 1].append(b - 1)\n        edges[b - 1].append(a - 1)\n    C = list(map(int, sys.stdin.readline().split()))\n\n    total = 0\n    for i in range(N):\n        total += C[i]\n\n    res = 0\n    subtree_sum = [0] * N\n    visited = [False] * N\n\n    def dfs(u, parent):\n        visited[u] = True\n        subtree_sum[u] = C[u]\n        for v in edges[u]:\n            if v != parent and not visited[v]:\n                dfs(v, u)\n                subtree_sum[u] += subtree_sum[v]\n        return\n\n    def calc(u, parent, dist):\n        nonlocal res\n        res += dist * C[u]\n        for v in edges[u]:\n            if v != parent and not visited[v]:\n                calc(v, u, dist + 1)\n        return\n\n    dfs(0, -1)\n    calc(0, -1, 0)\n    print(res)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 307,
+  "total_time_ms": 5088.838815689087,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

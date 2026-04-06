@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3212",
+  "passed": false,
+  "code": "class Solution:\n    def numberOfGoodPartitions(self, nums: List[int]) -> int:\n        from collections import defaultdict\n\n        MOD = 10**9 + 7\n        last_occurrence = defaultdict(int)\n        for i, num in enumerate(nums):\n            last_occurrence[num] = i\n\n        res = 1\n        prev = -1\n        for i, num in enumerate(nums):\n            prev = max(prev, last_occurrence[num])\n            if i == prev:\n                res = (res * 2) % MOD\n\n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 130,
+  "total_time_ms": 2255.8255195617676,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

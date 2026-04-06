@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3267",
+  "passed": true,
+  "code": "class Solution:\n    def maximumLength(self, s: str) -> int:\n        from collections import defaultdict\n\n        # Dictionary to store counts of special substrings\n        count = defaultdict(int)\n\n        # Iterate through all possible substrings\n        n = len(s)\n        for i in range(n):\n            for j in range(i + 1, n + 1):\n                substr = s[i:j]\n                # Check if the substring is special (all same characters)\n                if all(c == substr[0] for c in substr):\n                    count[substr] += 1\n\n        # Find the maximum length of a special substring that appears at least three times\n        max_len = -1\n        for substr, freq in count.items():\n            if freq >= 3:\n                max_len = max(max_len, len(substr))\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3401.5228748321533,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

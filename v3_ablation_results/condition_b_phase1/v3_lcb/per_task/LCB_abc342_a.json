@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc342_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    S = sys.stdin.readline().strip()\n    count = {}\n    for char in S:\n        count[char] = count.get(char, 0) + 1\n    # Find the character that appears only once\n    unique_char = next(char for char, freq in count.items() if freq == 1)\n    # Find the index of the unique character\n    for i, char in enumerate(S):\n        if char == unique_char:\n            print(i + 1)\n            break\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 488,
+  "total_time_ms": 150238.86632919312,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 394
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/1899_B",
+  "passed": false,
+  "code": "import sys\nimport math\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    t = int(data[idx])\n    idx += 1\n    \n    results = []\n    \n    for _ in range(t):\n        n = int(data[idx])\n        idx += 1\n        a = list(map(int, data[idx:idx + n]))\n        idx += n\n        \n        a.sort()\n        prefix = [0] * (n + 1)\n        \n        for i in range(n):\n            prefix[i + 1] = prefix[i] + a[i]\n        \n        max_diff = 0\n        \n        for k in range(1, n + 1):\n            if n % k != 0:\n                continue\n            m = n // k\n            total = 0\n            min_sum = prefix[k]\n            max_sum = prefix[k]\n            \n            for i in range(1, m):\n                current = prefix[i * k] - prefix[(i - 1) * k]\n                min_sum = min(min_sum, current)\n                max_sum = max(max_sum, current)\n            \n            max_diff = max(max_diff, max_sum - min_sum)\n        \n        results.append(str(max_diff))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 2036,
+  "total_time_ms": 31598.249673843384,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1716
+  }
+}

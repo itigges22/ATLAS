@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3361",
+  "passed": false,
+  "code": "class Solution:\n    def findLatestTime(self, s: str) -> str:\n        # Replace hour part\n        if s[0] == '?':\n            if s[1] == '?':\n                s = '11' + s[2:]\n            else:\n                s = '1' + s[1] + s[2:]\n        elif s[1] == '?':\n            if s[0] == '0':\n                s = '09' + s[2:]\n            else:\n                s = s[0] + '1' + s[2:]\n        \n        # Replace minute part\n        if s[3] == '?':\n            s = s[:3] + '5' + s[4]\n        if s[4] == '?':\n            s = s[:4] + '9'\n        \n        return s",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53934,
+  "total_time_ms": 828973.6943244934,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2154,
+    "self_tests_generated": 5
+  }
+}

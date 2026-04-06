@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2824",
+  "passed": true,
+  "code": "class Solution:\n    def isFascinating(self, n: int) -> bool:\n        concatenated = str(n) + str(2 * n) + str(3 * n)\n        if len(concatenated) != 9:\n            return \"false\"\n        for digit in '123456789':\n            if concatenated.count(digit) != 1:\n                return \"false\"\n        return \"true\"",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 14717,
+  "total_time_ms": 224792.0880317688,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1402,
+    "self_tests_generated": 5
+  }
+}

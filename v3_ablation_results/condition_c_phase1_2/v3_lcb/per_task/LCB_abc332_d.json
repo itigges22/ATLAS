@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc332_d",
+  "passed": false,
+  "code": "import sys\nimport copy\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    H = int(data[idx])\n    idx += 1\n    W = int(data[idx])\n    idx += 1\n    \n    A = []\n    for _ in range(H):\n        row = list(map(int, data[idx:idx+W]))\n        A.append(row)\n        idx += W\n    \n    B = []\n    for _ in range(H):\n        row = list(map(int, data[idx:idx+W]))\n        B.append(row)\n        idx += W\n    \n    # Check if A and B are already equal\n    if A == B:\n        print(0)\n        return\n    \n    # Generate all possible row permutations\n    row_perms = []\n    from itertools import permutations\n    for perm in permutations(range(H)):\n        row_perms.append(perm)\n    \n    # Generate all possible column permutations\n    col_perms = []\n    for perm in permutations(range(W)):\n        col_perms.append(perm)\n    \n    # BFS to find minimum operations\n    visited = set()\n    queue = deque()\n    initial_state = (tuple(range(H)), tuple(range(W)))\n    queue.append((initial_state, 0))\n    visited.add((initial_state))\n    \n    while queue:\n        (rows, cols), steps = queue.popleft()\n        \n        # Apply row swaps\n        for i in range(H - 1):\n            new_rows = list(rows)\n            new_rows[i], new_rows[i + 1] = new_rows[i + 1], new_rows[i]\n            new_rows_tuple = tuple(new_rows)\n            if (new_rows_tuple, cols) not in visited:\n                visited.add((new_rows_tuple, cols))\n                queue.append(((new_rows_tuple, cols), steps + 1))\n        \n        # Apply column swaps\n        for i in range(W - 1):\n            new_cols = list(cols)\n            new_cols[i], new_cols[i + 1] = new_cols[i + 1], new_cols[i]\n            new_cols_tuple = tuple(new_cols)\n            if (rows, new_cols_tuple) not in visited:\n                visited.add((rows, new_cols_tuple))\n                queue.append(((rows, new_cols_tuple), steps + 1))\n        \n        # Check if current permutation matches B\n        current_A = copy.deepcopy(A)\n        for i in range(H):\n            current_A[i] = current_A[rows[i]]\n        for j in range(W):\n            current_A = [row[:j] + row[j:j+1] + row[j:j+1] + row[j+1:] for row in current_A]\n        if current_A == B:\n            print(steps)\n            return\n    \n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 593,
+  "total_time_ms": 10078.598022460938,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

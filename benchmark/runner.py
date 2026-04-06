@@ -328,7 +328,7 @@ class BenchmarkRunner:
     - Extracting code from responses
     - Executing code with tests
     - Recording results
-    - Retry logic with error feedback (ralph-loop pattern)
+    - Retry logic with error feedback (verify-repair pattern)
     """
 
     def __init__(
@@ -408,7 +408,7 @@ class BenchmarkRunner:
             prompt: The prompt to send
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
-            error_context: Previous error for ralph-loop retry
+            error_context: Previous error for verify-repair loop retry
             seed: Random seed for reproducible but diverse generation
             cache_prompt: Enable KV cache reuse for shared prompt prefixes
             think: Unused (thinking is always disabled)
@@ -499,7 +499,7 @@ class BenchmarkRunner:
         task: BenchmarkTask,
         k: int = 1,
         temperature: float = None,
-        use_ralph_loop: bool = False,
+        use_retry_loop: bool = False,
         max_tokens: int = 16384,
         think: bool = False
     ) -> TaskResult:
@@ -510,7 +510,7 @@ class BenchmarkRunner:
             task: The benchmark task to run
             k: Number of attempts
             temperature: Sampling temperature (default: 0 for k=1, 0.8 otherwise)
-            use_ralph_loop: Whether to feed errors back for retries
+            use_retry_loop: Whether to feed errors back for retries
             max_tokens: Maximum tokens for LLM generation
             think: Enable thinking mode for this task
 
@@ -530,7 +530,7 @@ class BenchmarkRunner:
                     task.prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    error_context=error_context if use_ralph_loop else None,
+                    error_context=error_context if use_retry_loop else None,
                     think=think
                 )
 
@@ -578,8 +578,8 @@ class BenchmarkRunner:
                 if passed and result.best_attempt is None:
                     result.best_attempt = attempt_num
 
-                # Update error context for ralph-loop
-                if not passed and use_ralph_loop:
+                # Update error context for verify-repair loop
+                if not passed and use_retry_loop:
                     error_context = stderr or "Tests failed"
 
             except LLMConnectionError as e:
@@ -713,7 +713,7 @@ def run_benchmark(
     tasks: List[BenchmarkTask],
     k: int = 1,
     temperature: float = None,
-    use_ralph_loop: bool = False,
+    use_retry_loop: bool = False,
     progress_callback=None,
     save_callback=None
 ) -> List[TaskResult]:
@@ -724,7 +724,7 @@ def run_benchmark(
         tasks: List of tasks to run
         k: Number of attempts per task
         temperature: Sampling temperature
-        use_ralph_loop: Whether to use error feedback for retries
+        use_retry_loop: Whether to use error feedback for retries
         progress_callback: Optional callback(task_idx, task_id, passed)
         save_callback: Optional callback(result) to save results incrementally
 
@@ -739,7 +739,7 @@ def run_benchmark(
                 task,
                 k=k,
                 temperature=temperature,
-                use_ralph_loop=use_ralph_loop
+                use_retry_loop=use_retry_loop
             )
             results.append(result)
 

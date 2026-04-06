@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc363_f",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import product\n\ndef main():\n    N = int(sys.stdin.readline())\n    max_len = 1000\n    digits = '123456789'\n    ops = ['*', '+', '-']  # Only * is valid for multiplication\n\n    # Try all possible palindromic expressions\n    for length in range(1, max_len + 1):\n        # Generate all possible palindromic expressions with length\n        for parts in product(digits, repeat=length // 2):\n            # Construct the first half\n            first_half = ''.join(parts)\n            # Construct the full palindrome\n            if length % 2 == 0:\n                expr = first_half + first_half[::-1]\n            else:\n                expr = first_half + parts[-1] + first_half[::-1]\n            # Check if the first character is a digit\n            if not expr[0].isdigit():\n                continue\n            # Evaluate the expression\n            try:\n                value = eval(expr)\n                if value == N:\n                    print(expr)\n                    return\n            except:\n                continue\n\n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 12786,
+  "total_time_ms": 847708.4710597992,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 12551
+  }
+}

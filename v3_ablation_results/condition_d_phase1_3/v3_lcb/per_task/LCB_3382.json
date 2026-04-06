@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3382",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfSubarrays(self, nums: List[int]) -> int:\n        n = len(nums)\n        count = 0\n        \n        for i in range(n):\n            max_val = nums[i]\n            for j in range(i, n):\n                if nums[j] > max_val:\n                    max_val = nums[j]\n                if nums[i] == max_val and nums[j] == max_val:\n                    count += 1\n        \n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1540,
+  "total_time_ms": 28885.549783706665,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1328
+  }
+}

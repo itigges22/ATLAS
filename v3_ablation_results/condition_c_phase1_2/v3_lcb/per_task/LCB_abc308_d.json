@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc308_d",
+  "passed": false,
+  "code": "import sys\nfrom collections import deque\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [sys.stdin.readline().strip() for _ in range(H)]\n    target = \"snuke\"\n    mod = 5\n\n    # Directions: up, down, left, right\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n\n    # dp[i][j][k] = True if we can reach (i, j) with the k-th character of \"snuke\"\n    dp = [[[False] * mod for _ in range(W)] for _ in range(H)]\n\n    # Starting point (1,1) is (0,0) in 0-based index\n    dp[0][0][(0) % mod] = True\n\n    for i in range(H):\n        for j in range(W):\n            for k in range(mod):\n                if dp[i][j][k]:\n                    for dx, dy in directions:\n                        ni, nj = i + dx, j + dy\n                        if 0 <= ni < H and 0 <= nj < W:\n                            next_k = (k + 1) % mod\n                            if grid[ni][nj] == target[next_k]:\n                                dp[ni][nj][next_k] = True\n\n    # Check if (H-1, W-1) can be reached with the correct character\n    if dp[H-1][W-1][(mod - 1) % mod]:\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 355,
+  "total_time_ms": 5303.2190799713135,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

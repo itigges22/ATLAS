@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [list(sys.stdin.readline().strip()) for _ in range(H)]\n\n    # Find the rectangle boundaries\n    a, b, c, d = 0, 0, 0, 0\n\n    # Find top boundary (a)\n    for i in range(H):\n        if '#' in grid[i]:\n            a = i\n            break\n\n    # Find bottom boundary (b)\n    for i in range(H-1, -1, -1):\n        if '#' in grid[i]:\n            b = i\n            break\n\n    # Find left boundary (c)\n    for j in range(W):\n        if any(grid[i][j] == '#' for i in range(a, b+1)):\n            c = j\n            break\n\n    # Find right boundary (d)\n    for j in range(W-1, -1, -1):\n        if any(grid[i][j] == '#' for i in range(a, b+1)):\n            d = j\n            break\n\n    # Find the missing cookie\n    for i in range(a, b+1):\n        for j in range(c, d+1):\n            if grid[i][j] == '.':\n                print(i+1, j+1)\n                return\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2013,
+  "total_time_ms": 34466.9725894928,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1774
+  }
+}

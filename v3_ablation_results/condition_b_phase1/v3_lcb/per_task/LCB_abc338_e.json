@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc338_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    chords = []\n    \n    for i in range(N):\n        a = int(data[1 + 2*i])\n        b = int(data[2 + 2*i])\n        if a > b:\n            a, b = b, a\n        chords.append((a, b))\n    \n    # Sort chords by their starting point\n    chords.sort()\n    \n    # Use a sweep line approach with a segment tree or a binary indexed tree (Fenwick Tree)\n    # We use a binary indexed tree to track active endpoints\n    # We represent the points on the circle as a linear array of size 2N\n    # We map the points to 1-based indexing for the BIT\n    \n    class BIT:\n        def __init__(self, size):\n            self.N = size\n            self.tree = [0] * (self.N + 2)\n        \n        def update(self, idx, delta):\n            while idx <= self.N:\n                self.tree[idx] += delta\n                idx += idx & -idx\n        \n        def query(self, idx):\n            res = 0\n            while idx > 0:\n                res += self.tree[idx]\n                idx -= idx & -idx\n            return res\n        \n        def range_query(self, l, r):\n            return self.query(r) - self.query(l - 1)\n    \n    bit = BIT(2 * N)\n    \n    for a, b in chords:\n        # For each chord, we want to count how many endpoints are in (a, b)\n        # If there is at least one, then there is an intersection\n        count = bit.range_query(a + 1, b - 1)\n        if count > 0:\n            print(\"Yes\")\n            return\n        bit.update(b, 1)\n    \n    print(\"No\")\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2109,
+  "total_time_ms": 35397.18794822693,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1937
+  }
+}

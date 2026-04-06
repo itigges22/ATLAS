@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc307_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N = int(sys.stdin.readline())\n    S = sys.stdin.readline().strip()\n    stack = []\n    for ch in S:\n        if ch == '(':\n            stack.append(ch)\n        elif ch == ')':\n            if stack and stack[-1] == '(':\n                stack.pop()\n            else:\n                stack.append(ch)\n        else:\n            stack.append(ch)\n    print(''.join(stack))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 113,
+  "total_time_ms": 1852.1738052368164,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

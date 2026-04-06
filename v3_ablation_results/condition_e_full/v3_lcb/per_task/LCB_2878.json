@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2878",
+  "passed": false,
+  "code": "class Solution:\n    def checkArray(self, nums: List[int], k: int) -> bool:\n        n = len(nums)\n        diff = [0] * (n + 1)\n        for i in range(n):\n            diff[i] += nums[i]\n            if i >= k:\n                diff[i] -= diff[i - k]\n            if i < n - k:\n                diff[i + k] -= nums[i]\n        for i in range(n):\n            if diff[i] != 0:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 53457,
+  "total_time_ms": 1215587.8992080688,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

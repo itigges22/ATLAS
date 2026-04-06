@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc332_d",
+  "passed": true,
+  "code": "import sys\nimport copy\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    H = int(data[idx])\n    idx += 1\n    W = int(data[idx])\n    idx += 1\n    \n    A = []\n    for _ in range(H):\n        row = list(map(int, data[idx:idx+W]))\n        A.append(row)\n        idx += W\n    \n    B = []\n    for _ in range(H):\n        row = list(map(int, data[idx:idx+W]))\n        B.append(row)\n        idx += W\n    \n    # Check if A and B are already equal\n    if A == B:\n        print(0)\n        return\n    \n    # Generate all possible row permutations\n    row_perms = []\n    rows = list(range(H))\n    from itertools import permutations\n    for perm in permutations(rows):\n        row_perms.append(perm)\n    \n    # Generate all possible column permutations\n    col_perms = []\n    cols = list(range(W))\n    for perm in permutations(cols):\n        col_perms.append(perm)\n    \n    # BFS to find minimum operations\n    visited = set()\n    queue = deque()\n    initial = (tuple(range(H)), tuple(range(W)), 0)\n    queue.append(initial)\n    visited.add((initial[0], initial[1]))\n    \n    while queue:\n        row_perm, col_perm, steps = queue.popleft()\n        \n        # Apply row and column permutations to A\n        transformed = [[0]*W for _ in range(H)]\n        for i in range(H):\n            for j in range(W):\n                transformed[i][j] = A[row_perm[i]][col_perm[j]]\n        \n        if transformed == B:\n            print(steps)\n            return\n        \n        # Generate next states\n        for i in range(H - 1):\n            new_row_perm = list(row_perm)\n            new_row_perm[i], new_row_perm[i+1] = new_row_perm[i+1], new_row_perm[i]\n            new_row_perm = tuple(new_row_perm)\n            if (new_row_perm, col_perm) not in visited:\n                visited.add((new_row_perm, col_perm))\n                queue.append((new_row_perm, col_perm, steps + 1))\n        \n        for i in range(W - 1):\n            new_col_perm = list(col_perm)\n            new_col_perm[i], new_col_perm[i+1] = new_col_perm[i+1], new_col_perm[i]\n            new_col_perm = tuple(new_col_perm)\n            if (row_perm, new_col_perm) not in visited:\n                visited.add((row_perm, new_col_perm))\n                queue.append((row_perm, new_col_perm, steps + 1))\n    \n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 9558.5458278656,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

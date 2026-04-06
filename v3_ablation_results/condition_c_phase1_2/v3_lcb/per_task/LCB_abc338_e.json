@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc338_e",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    chords = []\n    points = list(map(int, data[1:]))\n    \n    for i in range(N):\n        a = points[2*i]\n        b = points[2*i + 1]\n        if a > b:\n            a, b = b, a\n        chords.append((a, b))\n    \n    # Sort chords by their starting point\n    chords.sort()\n    \n    # Sweep line algorithm\n    active = []\n    for a, b in chords:\n        # Check for intersections with active chords\n        for x, y in active:\n            if x < a < y < b:\n                print(\"Yes\")\n                return\n        active.append((a, b))\n    \n    print(\"No\")\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 10887,
+  "total_time_ms": 193274.58667755127,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 8623,
+    "s_star_triggered": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/1883_B",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import Counter\n\ndef can_form_palindrome(n, k, s):\n    count = Counter(s)\n    total_chars = n - k\n    odd_count = 0\n\n    for freq in count.values():\n        if freq % 2 != 0:\n            odd_count += 1\n\n    # For a string to be rearranged into a palindrome:\n    # - If total_chars is even, there should be no odd frequency characters\n    # - If total_chars is odd, there should be exactly one odd frequency character\n    if total_chars % 2 == 0:\n        return odd_count == 0\n    else:\n        return odd_count == 1\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    t = int(data[0])\n    index = 1\n    results = []\n\n    for _ in range(t):\n        n = int(data[index])\n        k = int(data[index + 1])\n        index += 2\n        s = data[index]\n        index += 1\n        if can_form_palindrome(n, k, s):\n            results.append(\"YES\")\n        else:\n            results.append(\"NO\")\n\n    print(\"\\n\".join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 55562,
+  "total_time_ms": 903246.8874454498,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

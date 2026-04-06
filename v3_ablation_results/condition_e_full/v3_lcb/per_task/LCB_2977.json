@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/2977",
+  "passed": false,
+  "code": "class Solution:\n    def isAcronym(self, words: List[str], s: str) -> bool:\n        acronym = ''.join(word[0] for word in words)\n        return acronym == s",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 40507,
+  "total_time_ms": 895728.597164154,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

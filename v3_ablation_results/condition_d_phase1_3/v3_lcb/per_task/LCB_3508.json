@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3508",
+  "passed": true,
+  "code": "class Solution:\n    def minChanges(self, n: int, k: int) -> int:\n        if n == k:\n            return 0\n        \n        if (n & k) != k:\n            return -1\n        \n        return bin(n ^ k).count('1')",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 634,
+  "total_time_ms": 17818.345308303833,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 557
+  }
+}

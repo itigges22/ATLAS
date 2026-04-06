@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc305_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx + N]))\n    idx += N\n    Q = int(data[idx])\n    idx += 1\n    queries = []\n    for _ in range(Q):\n        l = int(data[idx])\n        r = int(data[idx + 1])\n        queries.append((l, r))\n        idx += 2\n\n    # Precompute prefix sums of sleep intervals\n    sleep_intervals = []\n    for i in range(0, N - 1, 2):\n        start = A[i]\n        end = A[i + 1]\n        sleep_intervals.append((start, end))\n\n    # Create prefix sum array for sleep times\n    prefix_sum = [0] * (N + 1)\n    for i in range(1, N + 1):\n        prefix_sum[i] = prefix_sum[i - 1] + (A[i] - A[i - 1]) if i % 2 == 1 else prefix_sum[i - 1]\n\n    # Precompute sleep times for each interval\n    sleep_times = []\n    for i in range(0, N - 1, 2):\n        start = A[i]\n        end = A[i + 1]\n        sleep_times.append(end - start)\n\n    # Precompute prefix sums of sleep times\n    sleep_prefix = [0] * (len(sleep_times) + 1)\n    for i in range(len(sleep_times)):\n        sleep_prefix[i + 1] = sleep_prefix[i] + sleep_times[i]\n\n    # For each query, compute the total sleep time in [l, r]\n    results = []\n    for l, r in queries:\n        # Find the indices in A where l and r fall\n        left_idx = bisect.bisect_right(A, l) - 1\n        right_idx = bisect.bisect_left(A, r)\n\n        # Calculate the total sleep time in the range [l, r]\n        total_sleep = 0\n        if left_idx < right_idx - 1:\n            # Full intervals\n            total_sleep += sleep_prefix[right_idx - 1] - sleep_prefix[left_idx + 1]\n        if left_idx >= 0 and right_idx < len(A):\n            # Partial intervals\n            if left_idx % 2 == 0:\n                # l is in a sleep interval\n                start = A[left_idx]\n                end = A[left_idx + 1]\n                total_sleep += max(0, min(end, r) - l)\n            if right_idx % 2 == 1:\n                # r is in a sleep interval\n                start = A[right_idx]\n                end = A[right_idx + 1]\n                total_sleep += max(0, end - max(l, r))\n        results.append(str(total_sleep))\n\n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 47080,
+  "total_time_ms": 786130.6700706482,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2591,
+    "self_tests_generated": 5
+  }
+}

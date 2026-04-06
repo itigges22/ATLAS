@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3025",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, nums: List[int], target: int) -> int:\n        from collections import Counter\n\n        # Count the frequency of each power of 2\n        count = Counter()\n        for num in nums:\n            count[num] += 1\n\n        # Convert target to binary and check which powers of 2 are needed\n        target_bits = []\n        temp = target\n        while temp > 0:\n            temp, bit = divmod(temp, 2)\n            target_bits.append(bit)\n\n        # Start from the smallest power of 2 and work upwards\n        operations = 0\n        i = 0\n        while i < len(target_bits):\n            bit = target_bits[i]\n            if bit == 0:\n                i += 1\n                continue\n\n            # Check if we have enough of this power\n            if count[2 ** i] > 0:\n                count[2 ** i] -= 1\n                i += 1\n            else:\n                # Need to split a higher power\n                j = i + 1\n                while j < 31 and count[2 ** j] == 0:\n                    j += 1\n                if j >= 31:\n                    return -1\n                # Split the higher power\n                count[2 ** j] -= 1\n                count[2 ** (j - 1)] += 2\n                operations += 1\n                i += 1\n\n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1868,
+  "total_time_ms": 29647.709608078003,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1543
+  }
+}

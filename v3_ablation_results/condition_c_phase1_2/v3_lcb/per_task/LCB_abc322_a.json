@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc322_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\ns = input()\n\nfor i in range(n - 2):\n    if s[i:i+3] == \"ABC\":\n        print(i + 1)\n        exit()\nprint(-1)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 61,
+  "total_time_ms": 1108.1981658935547,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

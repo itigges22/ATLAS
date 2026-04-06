@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3211",
+  "passed": false,
+  "code": "class Solution:\n    def findMaximumLength(self, nums: List[int]) -> int:\n        total_sum = sum(nums)\n        current_sum = 0\n        max_length = 0\n        current_length = 0\n\n        for num in nums:\n            current_sum += num\n            if current_sum >= total_sum - current_sum:\n                current_length += 1\n                max_length = max(max_length, current_length)\n            else:\n                current_length = 0\n\n        return max_length",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1377,
+  "total_time_ms": 22860.013484954834,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1182
+  }
+}

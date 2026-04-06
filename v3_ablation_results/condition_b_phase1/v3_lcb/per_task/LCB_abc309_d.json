@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc309_d",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N1, N2, M = map(int, sys.stdin.readline().split())\n    total = N1 + N2\n    graph = [[] for _ in range(total + 1)]\n\n    for _ in range(M):\n        a, b = map(int, sys.stdin.readline().split())\n        graph[a].append(b)\n        graph[b].append(a)\n\n    # BFS from node 1 to find distances to all nodes in group 1\n    dist1 = [-1] * (total + 1)\n    q = deque()\n    q.append(1)\n    dist1[1] = 0\n    while q:\n        u = q.popleft()\n        for v in graph[u]:\n            if dist1[v] == -1:\n                dist1[v] = dist1[u] + 1\n                q.append(v)\n\n    # BFS from node (N1 + N2) to find distances to all nodes in group 2\n    dist2 = [-1] * (total + 1)\n    q = deque()\n    q.append(total)\n    dist2[total] = 0\n    while q:\n        u = q.popleft()\n        for v in graph[u]:\n            if dist2[v] == -1:\n                dist2[v] = dist2[u] + 1\n                q.append(v)\n\n    # Find max distance from group 1 to group 2\n    max_d = 0\n    for u in range(1, N1 + 1):\n        for v in range(N1 + 1, total + 1):\n            if dist1[u] != -1 and dist2[v] != -1:\n                current_d = dist1[u] + dist2[v] + 1\n                if current_d > max_d:\n                    max_d = current_d\n\n    print(max_d)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1530,
+  "total_time_ms": 22937.068462371826,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1093
+  }
+}

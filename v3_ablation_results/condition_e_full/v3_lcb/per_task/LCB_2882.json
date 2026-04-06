@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2882",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfWays(self, n: int, x: int) -> int:\n        MOD = 10**9 + 7\n        visited = set()\n        count = 0\n\n        def backtrack(remaining, start):\n            nonlocal count\n            if remaining == 0:\n                count = (count + 1) % MOD\n                return\n            for i in range(start, n + 1):\n                power = i ** x\n                if power > remaining:\n                    break\n                if i not in visited:\n                    visited.add(i)\n                    backtrack(remaining - power, i + 1)\n                    visited.remove(i)\n\n        backtrack(n, 1)\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7194,
+  "total_time_ms": 191731.2593460083,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4951,
+    "s_star_triggered": true
+  }
+}

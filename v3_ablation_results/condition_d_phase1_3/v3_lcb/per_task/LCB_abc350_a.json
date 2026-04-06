@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc350_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\nnumeric_part = int(S[3:])\n\nif 1 <= numeric_part <= 349 and numeric_part != 316:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 926,
+  "total_time_ms": 17148.8139629364,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 831
+  }
+}

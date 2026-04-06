@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/abc325_f",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    D = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    L1, C1, K1 = map(int, data[idx:idx+3])\n    idx += 3\n    L2, C2, K2 = map(int, data[idx:idx+3])\n    \n    # We need to find the minimum cost to cover all D_i with sensors\n    # Let's define dp[i][a][b] = min cost to cover first i sections using a type-1 and b type-2 sensors\n    # But since N is small (<=100), and K1, K2 <=1000, we can use a 3D DP with memoization\n    \n    INF = float('inf')\n    \n    # Initialize DP table\n    dp = [[[INF] * (K2 + 1) for _ in range(K1 + 1)] for __ in range(N + 1)]\n    dp[0][0][0] = 0  # No sections, no sensors, cost 0\n    \n    for i in range(N):\n        for a in range(K1 + 1):\n            for b in range(K2 + 1):\n                if dp[i][a][b] == INF:\n                    continue\n                # Try all possible combinations of sensors for D[i]\n                # Try using only type-1 sensors\n                required = (D[i] + L1 - 1) // L1  # ceiling division\n                if a + required <= K1:\n                    dp[i+1][a + required][b] = min(dp[i+1][a + required][b], dp[i][a][b] + required * C1)\n                # Try using only type-2 sensors\n                required = (D[i] + L2 - 1) // L2\n                if b + required <= K2:\n                    dp[i+1][a][b + required] = min(dp[i+1][a][b + required], dp[i][a][b] + required * C2)\n                # Try using both sensors\n                # Try all possible combinations of type-1 and type-2 sensors that cover D[i]\n                # We can use a loop up to max possible for each type\n                max_a = min(K1 - a, (D[i] + L1 - 1) // L1)\n                for a_used in range(0, max_a + 1):\n                    remaining = D[i] - a_used * L1\n                    if remaining <= 0:\n                        # Only type-1 is enough\n                        continue\n                    b_used = (remaining + L2 - 1) // L2\n                    if b + b_used <= K2:\n                        dp[i+1][a + a_used][b + b_used] = min(dp[i+1][a + a_used][b + b_used], dp[i][a][b] + a_used * C1 + b_used * C2)\n    \n    # Find the minimum cost in dp[N][a][b] for all a <= K1 and b <= K2\n    result = min(dp[N][a][b] for a in range(K1 + 1) for b in range(K2 + 1))\n    print(result if result != INF else -1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "refinement",
+  "candidates_generated": 3,
+  "total_tokens": 34741,
+  "total_time_ms": 562672.2569465637,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1182,
+    "self_tests_generated": 3,
+    "refinement_iterations": 1
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc309_a",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nA, B = map(int, input().split())\n\n# Check if B is exactly one more than A (i.e., adjacent horizontally)\nif B == A + 1:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 65,
+  "total_time_ms": 1170.3836917877197,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc338_f",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    sys.setrecursionlimit(1000000)\n    N, M = map(int, sys.stdin.readline().split())\n    edges = []\n    graph = defaultdict(list)\n    for _ in range(M):\n        u, v, w = map(int, sys.stdin.readline().split())\n        edges.append((u, v, w))\n        graph[u].append((v, w))\n\n    # Step 1: Compute all-pairs shortest paths using Floyd-Warshall\n    dist = [[float('inf')] * (N + 1) for _ in range(N + 1)]\n    for i in range(1, N + 1):\n        dist[i][i] = 0\n    for u, v, w in edges:\n        dist[u][v] = min(dist[u][v], w)\n\n    for k in range(1, N + 1):\n        for i in range(1, N + 1):\n            for j in range(1, N + 1):\n                if dist[i][j] > dist[i][k] + dist[k][j]:\n                    dist[i][j] = dist[i][k] + dist[k][j]\n\n    # Step 2: Try all permutations of vertices to find the minimum path that visits all\n    from itertools import permutations\n\n    min_total = float('inf')\n    for perm in permutations(range(1, N + 1)):\n        total = 0\n        for i in range(len(perm) - 1):\n            u = perm[i]\n            v = perm[i + 1]\n            if dist[u][v] == float('inf'):\n                break\n            total += dist[u][v]\n        else:\n            min_total = min(min_total, total)\n\n    if min_total == float('inf'):\n        print(\"No\")\n    else:\n        print(min_total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 6252.553224563599,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

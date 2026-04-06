@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc356_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, L, R = map(int, input().split())\nA = list(range(1, N + 1))\nA[L-1:R] = A[L-1:R][::-1]\nprint(' '.join(map(str, A)))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 404,
+  "total_time_ms": 9129.613399505615,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 335
+  }
+}

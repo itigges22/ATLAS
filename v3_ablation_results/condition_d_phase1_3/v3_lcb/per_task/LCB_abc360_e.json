@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc360_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    N, K = map(int, input().split())\n\n    # dp[i] = probability that the black ball is at position i\n    dp = [0] * (N + 1)\n    dp[1] = 1  # Initially, black ball is at position 1\n\n    for _ in range(K):\n        new_dp = [0] * (N + 1)\n        for i in range(1, N + 1):\n            # Probability that the black ball remains at position i\n            # This happens when either:\n            # 1. a == i or b == i (but a != b), and the other is not i\n            # 2. a and b are both not i\n            # Total probability of no swap involving i\n            # Or swap involving i but ends up back at i\n            # But it's easier to calculate the probability of the black ball moving from i to j\n\n            # Probability that the black ball moves from i to j (j != i)\n            # This happens when one of a or b is i and the other is j\n            # There are 2 * (N - 1) such pairs (a, b) where one is i and the other is not i\n            # Total number of possible (a, b) pairs is N^2\n            # So probability of moving from i to j is 2 / N^2\n            # There are (N - 1) such j's\n            # So total probability of moving from i is 2 * (N - 1) / N^2\n            # Probability of staying at i is 1 - 2 * (N - 1) / N^2\n            prob_stay = (N * N - 2 * (N - 1)) * pow(N * N, MOD - 2, MOD) % MOD\n            new_dp[i] = (new_dp[i] + dp[i] * prob_stay) % MOD\n\n            # Probability that the black ball moves from i to j (j != i)\n            # For each j != i, probability is 2 / N^2\n            # So total contribution to new_dp[j] is dp[i] * 2 / N^2\n            move_prob = 2 * pow(N * N, MOD - 2, MOD) % MOD\n            for j in range(1, N + 1):\n                if j != i:\n                    new_dp[j] = (new_dp[j] + dp[i] * move_prob) % MOD\n        dp = new_dp\n\n    # Compute expected value\n    expected = 0\n    for i in range(1, N + 1):\n        expected = (expected + i * dp[i]) % MOD\n\n    print(expected)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 4041,
+  "total_time_ms": 64269.76680755615,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 3245
+  }
+}

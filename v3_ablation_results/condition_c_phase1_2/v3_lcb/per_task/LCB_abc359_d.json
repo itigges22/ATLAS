@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc359_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport itertools\nfrom collections import defaultdict\n\nMOD = 998244353\n\ndef is_palindrome(s):\n    return s == s[::-1]\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    K = int(data[1])\n    S = data[2]\n\n    q = S.count('?')\n    positions = [i for i, c in enumerate(S) if c == '?']\n    total = 0\n\n    # Precompute all forbidden palindromes of length K\n    forbidden = set()\n    for bits in itertools.product(['A', 'B'], repeat=K):\n        pal = ''.join(bits)\n        if is_palindrome(pal):\n            forbidden.add(pal)\n\n    # DP table: dp[i][state] = number of ways to fill first i characters with state\n    # state is a tuple of last K-1 characters (since we need to check for palindromes of length K)\n    # We use a dictionary for efficiency\n    dp = defaultdict(int)\n    dp[()] = 1  # Initially, no characters, empty state\n\n    for i in range(N):\n        new_dp = defaultdict(int)\n        for state, count in dp.items():\n            # Current character is fixed\n            c = S[i]\n            if c == '?':\n                for ch in ['A', 'B']:\n                    new_state = state + (ch,)\n                    if len(new_state) > K - 1:\n                        new_state = new_state[-(K - 1):]\n                    # Check if the new K-length substring is a palindrome\n                    if len(state) == K - 1:\n                        full_str = state + (ch,)\n                        if ''.join(full_str) in forbidden:\n                            continue\n                    new_dp[tuple(new_state)] = (new_dp[tuple(new_state)] + count) % MOD\n            else:\n                new_state = state + (c,)\n                if len(new_state) > K - 1:\n                    new_state = new_state[-(K - 1):]\n                # Check if the new K-length substring is a palindrome\n                if len(state) == K - 1:\n                    full_str = state + (c,)\n                    if ''.join(full_str) in forbidden:\n                        continue\n                new_dp[tuple(new_state)] = (new_dp[tuple(new_state)] + count) % MOD\n        dp = new_dp\n\n    print(sum(dp.values()) % MOD)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4912,
+  "total_time_ms": 85057.84964561462,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4543
+  }
+}

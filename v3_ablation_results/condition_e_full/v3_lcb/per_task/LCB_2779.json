@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2779",
+  "passed": true,
+  "code": "class Solution:\n    def colorTheArray(self, n: int, queries: List[List[int]]) -> List[int]:\n        nums = [0] * n\n        answer = []\n        count = 0\n\n        for index, color in queries:\n            old_color = nums[index]\n            nums[index] = color\n\n            # Check left neighbor\n            if index > 0 and nums[index - 1] == color:\n                count += 1\n            # Check right neighbor\n            if index < n - 1 and nums[index + 1] == color:\n                count += 1\n\n            # If old_color was not zero, check left and right again\n            if old_color != 0:\n                if index > 0 and nums[index - 1] == old_color:\n                    count -= 1\n                if index < n - 1 and nums[index + 1] == old_color:\n                    count -= 1\n\n            answer.append(count)\n\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 212,
+  "total_time_ms": 6068.323850631714,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

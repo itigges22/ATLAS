@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc357_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef generate_carpet(k):\n    size = 3 ** k\n    carpet = [['.' for _ in range(size)] for _ in range(size)]\n    \n    def build_carpet(k, x, y, size):\n        if k == 0:\n            carpet[y][x] = '#'\n            return\n        sub_size = size // 3\n        for i in range(3):\n            for j in range(3):\n                if i == 1 and j == 1:\n                    continue  # central block is white\n                build_carpet(k - 1, x + j * sub_size, y + i * sub_size, sub_size)\n    \n    build_carpet(k, 0, 0, size)\n    return carpet\n\ndef main():\n    import sys\n    N = int(sys.stdin.readline())\n    carpet = generate_carpet(N)\n    for row in carpet:\n        print(''.join(row))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1312,
+  "total_time_ms": 22664.276361465454,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1130
+  }
+}

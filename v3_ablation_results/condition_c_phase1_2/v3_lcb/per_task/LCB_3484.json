@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3484",
+  "passed": false,
+  "code": "class Solution:\n    def getSmallestString(self, s: str) -> str:\n        # Convert the string to a list for easy manipulation\n        s_list = list(s)\n        n = len(s_list)\n        \n        # Iterate through the string to find a pair of adjacent digits with the same parity\n        for i in range(n - 1):\n            # Check if current and next digit have the same parity\n            if (int(s_list[i]) % 2 == int(s_list[i + 1]) % 2):\n                # Swap them if it leads to a lexicographically smaller string\n                if s_list[i] > s_list[i + 1]:\n                    s_list[i], s_list[i + 1] = s_list[i + 1], s_list[i]\n                    break  # Only one swap allowed\n        \n        return ''.join(s_list)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3641,
+  "total_time_ms": 54240.55004119873,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3539
+  }
+}

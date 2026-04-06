@@ -17,8 +17,8 @@ import tempfile
 
 import pytest
 
-# rag-api is a separate service; add it to path for direct imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "rag-api"))
+# geometric-lens is a separate service; add it to path for direct imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))
 
 from geometric_lens.replay_buffer import ReplayBuffer, ReplayBufferConfig
 

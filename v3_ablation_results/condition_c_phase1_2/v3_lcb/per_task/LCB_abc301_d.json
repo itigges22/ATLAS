@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc301_d",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    S, N = input().split()\n    N = int(N)\n    max_val = -1\n    bits = len(S)\n    max_possible = (1 << bits) - 1\n    if max_possible < N:\n        print(max_val)\n        return\n\n    from itertools import product\n\n    # Generate all possible replacements for '?'\n    replacements = product([0, 1], repeat=S.count('?'))\n    for rep in replacements:\n        temp = list(S)\n        idx = 0\n        for i in range(len(temp)):\n            if temp[i] == '?':\n                temp[i] = str(rep[idx])\n                idx += 1\n        num = int(''.join(temp), 2)\n        if num <= N and num > max_val:\n            max_val = num\n    print(max_val)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 200,
+  "total_time_ms": 3602.9112339019775,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

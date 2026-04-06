@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3200",
+  "passed": true,
+  "code": "class Solution:\n    def stringCount(self, n: int) -> int:\n        MOD = 10**9 + 7\n        MAX = 10**5 + 10\n\n        # Precompute factorials and inverse factorials modulo MOD\n        fact = [1] * MAX\n        for i in range(1, MAX):\n            fact[i] = fact[i-1] * i % MOD\n\n        inv_fact = [1] * MAX\n        inv_fact[MAX-1] = pow(fact[MAX-1], MOD-2, MOD)\n        for i in range(MAX-2, -1, -1):\n            inv_fact[i] = inv_fact[i+1] * (i+1) % MOD\n\n        def comb(n, k):\n            if k < 0 or k > n:\n                return 0\n            return fact[n] * inv_fact[k] % MOD * inv_fact[n - k] % MOD\n\n        # Total number of strings of length n\n        total = pow(26, n, MOD)\n\n        # Subtract the number of strings that do not contain at least 1 'l', 2 'e's, and 1 't'\n        # Using inclusion-exclusion principle\n\n        # Count of strings with <1 'l' or <2 'e's or <1 't'\n        res = total\n\n        # Case 1: No 'l'\n        res = (res - pow(25, n, MOD)) % MOD\n\n        # Case 2: Less than 2 'e's\n        # Count of strings with 0 'e's\n        res = (res - pow(25, n, MOD)) % MOD\n        # Count of strings with exactly 1 'e'\n        res = (res - comb(n, 1) * pow(25, n-1, MOD)) % MOD\n\n        # Case 3: No 't'\n        res = (res - pow(25, n, MOD)) % MOD\n\n        # Add back cases where two conditions are violated\n        # Case 1 & 2: No 'l' and <2 'e's\n        res = (res + pow(24, n, MOD)) % MOD\n        res = (res + comb(n, 1) * pow(24, n-1, MOD)) % MOD\n\n        # Case 1 & 3: No 'l' and no 't'\n        res = (res + pow(24, n, MOD)) % MOD\n\n        # Case 2 & 3: <2 'e's and no 't'\n        res = (res + pow(24, n, MOD)) % MOD\n        res = (res + comb(n, 1) * pow(24, n-1, MOD)) % MOD\n\n        # Subtract back the case where all three conditions are violated\n        # Case 1 & 2 & 3: No 'l', <2 'e's, no 't'\n        res = (res - pow(23, n, MOD)) % MOD\n        res = (res - comb(n, 1) * pow(23, n-1, MOD)) % MOD\n\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2833,
+  "total_time_ms": 41904.09016609192,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2273
+  }
+}

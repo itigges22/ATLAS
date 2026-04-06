@@ -204,17 +204,13 @@ main() {
     check_models
 
     # Pod status - using actual app labels from manifests
-    # V1 components (Qdrant, embedding-service) removed in V2
     echo ""
     echo "Pod Status:"
     check_pod "redis"
     check_pod "llama-server"
-    check_pod "api-portal"
-    check_pod "rag-api"
+    check_pod "geometric-lens"
     check_pod "llm-proxy"
     check_pod "sandbox"
-    check_pod "task-worker"
-    check_pod "atlas-dashboard"
 
     # Service health endpoints - using NodePort values from config
     echo ""

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/1873_B",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    t = int(sys.stdin.readline())\n    for _ in range(t):\n        n = int(sys.stdin.readline())\n        a = list(map(int, sys.stdin.readline().split()))\n        max_prod = 0\n        for i in range(n):\n            new_a = a.copy()\n            new_a[i] += 1\n            prod = 1\n            for num in new_a:\n                prod *= num\n            max_prod = max(max_prod, prod)\n        print(max_prod)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 133,
+  "total_time_ms": 1751.0910034179688,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

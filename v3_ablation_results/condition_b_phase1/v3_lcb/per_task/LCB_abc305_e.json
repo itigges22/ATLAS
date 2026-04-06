@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_e",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx]); idx += 1\n    M = int(data[idx]); idx += 1\n    K = int(data[idx]); idx += 1\n\n    graph = [[] for _ in range(N + 1)]\n    for _ in range(M):\n        a = int(data[idx]); idx += 1\n        b = int(data[idx]); idx += 1\n        graph[a].append(b)\n        graph[b].append(a)\n\n    guards = []\n    for _ in range(K):\n        p = int(data[idx]); idx += 1\n        h = int(data[idx]); idx += 1\n        guards.append((p, h))\n\n    # Initialize a set to store guarded vertices\n    guarded = set()\n\n    # BFS for each guard\n    for p, h in guards:\n        visited = [False] * (N + 1)\n        q = deque()\n        q.append((p, 0))\n        visited[p] = True\n\n        while q:\n            node, dist = q.popleft()\n            if dist <= h:\n                guarded.add(node)\n                for neighbor in graph[node]:\n                    if not visited[neighbor]:\n                        visited[neighbor] = True\n                        q.append((neighbor, dist + 1))\n\n    # Output\n    print(len(guarded))\n    print(' '.join(map(str, sorted(guarded))))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1321,
+  "total_time_ms": 21696.921348571777,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 979
+  }
+}

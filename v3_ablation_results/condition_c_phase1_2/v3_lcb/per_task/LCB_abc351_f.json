@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc351_f",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    # We will use a Fenwick Tree (Binary Indexed Tree) to efficiently compute the sum\n    # We need to process elements in reverse order and keep track of the count of elements <= current value\n    # To handle this, we will compress the values of A to a smaller range\n\n    # Coordinate compression\n    sorted_A = sorted(set(A))\n    rank = {v: i + 1 for i, v in enumerate(sorted_A)}  # 1-based indexing for BIT\n    max_rank = len(sorted_A)\n\n    # Fenwick Tree\n    class FenwickTree:\n        def __init__(self, size):\n            self.n = size\n            self.tree = [0] * (self.n + 1)\n\n        def update(self, idx, delta):\n            while idx <= self.n:\n                self.tree[idx] += delta\n                idx += idx & -idx\n\n        def query(self, idx):\n            res = 0\n            while idx > 0:\n                res += self.tree[idx]\n                idx -= idx & -idx\n            return res\n\n    ft = FenwickTree(max_rank)\n    result = 0\n\n    for a in reversed(A):\n        r = rank[a]\n        # Sum of elements with rank <= r (i.e., values <= a)\n        count = ft.query(r)\n        result += a * count\n        ft.update(r, 1)\n\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 360,
+  "total_time_ms": 8137.833595275879,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

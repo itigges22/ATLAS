@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc323_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\n# Check even positions from 2 to 16 (indices 1 to 15 in 0-based)\nresult = \"Yes\"\nfor i in range(1, 16, 2):\n    if S[i] != '0':\n        result = \"No\"\n        break\n\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 738,
+  "total_time_ms": 13268.939971923828,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 651
+  }
+}

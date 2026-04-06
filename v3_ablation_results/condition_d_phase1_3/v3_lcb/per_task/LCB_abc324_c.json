@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc324_c",
+  "passed": false,
+  "code": "import sys\n\ndef is_valid(s, t):\n    len_s = len(s)\n    len_t = len(t)\n    \n    if len_s == len_t:\n        return s == t\n    elif len_s + 1 == len_t:\n        # s could be obtained by deleting one character from t\n        i = 0\n        j = 0\n        while i < len_s and j < len_t:\n            if s[i] == t[j]:\n                i += 1\n                j += 1\n            else:\n                j += 1\n        return i == len_s\n    elif len_s - 1 == len_t:\n        # t could be obtained by deleting one character from s\n        i = 0\n        j = 0\n        while i < len_t and j < len_s:\n            if t[i] == s[j]:\n                i += 1\n                j += 1\n            else:\n                j += 1\n        return i == len_t\n    else:\n        return False\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    T_prime = input[1]\n    S_list = input[2:]\n    \n    result = []\n    for idx, s in enumerate(S_list, 1):\n        if is_valid(s, T_prime):\n            result.append(idx)\n    \n    print(len(result))\n    if result:\n        print(' '.join(map(str, result)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53182,
+  "total_time_ms": 852085.410118103,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1074,
+    "self_tests_generated": 5
+  }
+}

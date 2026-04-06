@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc313_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    P = list(map(int, data[1:N+1]))\n    \n    max_p = max(P[1:])  # Find the maximum of others in one pass\n    if P[0] > max_p:\n        print(0)\n    else:\n        print(max_p - P[0] + 1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 402,
+  "total_time_ms": 149672.56951332092,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 342
+  }
+}

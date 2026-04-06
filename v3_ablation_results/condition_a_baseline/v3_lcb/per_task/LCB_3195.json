@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3195",
+  "passed": true,
+  "code": "class Solution:\n    def minimumSteps(self, s: str) -> int:\n        res = 0\n        count_ones = 0\n        for ch in s:\n            if ch == '1':\n                count_ones += 1\n            else:\n                res += count_ones\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1326.7436027526855,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

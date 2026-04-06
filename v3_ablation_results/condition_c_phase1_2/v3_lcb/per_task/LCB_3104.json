@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3104",
+  "passed": true,
+  "code": "class Solution:\n    def countWays(self, nums: List[int]) -> int:\n        nums.sort()\n        n = len(nums)\n        res = 0\n        # Check for selecting 0 students\n        if nums[0] > 0:\n            res += 1\n        # Check for selecting all students\n        if nums[-1] < n:\n            res += 1\n        # Check for selecting k students where 1 <= k <= n-1\n        for i in range(1, n):\n            if nums[i - 1] < i and nums[i] > i:\n                res += 1\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 2676,
+  "total_time_ms": 40035.79330444336,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2522
+  }
+}

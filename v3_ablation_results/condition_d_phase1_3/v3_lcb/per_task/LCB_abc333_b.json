@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc333_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\ndef distance(p1, p2):\n    # Calculate Euclidean distance between two points on a regular pentagon\n    # Points are labeled A, B, C, D, E in clockwise order\n    # Assume regular pentagon is inscribed in a unit circle\n    points = {\n        'A': (1, 0),\n        'B': (math.cos(72 * math.pi / 180), math.sin(72 * math.pi / 180)),\n        'C': (math.cos(144 * math.pi / 180), math.sin(144 * math.pi / 180)),\n        'D': (math.cos(216 * math.pi / 180), math.sin(216 * math.pi / 180)),\n        'E': (math.cos(288 * math.pi / 180), math.sin(288 * math.pi / 180))\n    }\n    return math.hypot(points[p1][0] - points[p2][0], points[p1][1] - points[p2][1])\n\ndef main():\n    # Read the two lines of input\n    line1 = sys.stdin.readline().strip()\n    line2 = sys.stdin.readline().strip()\n    \n    # Extract the points\n    s1, s2 = line1[0], line1[1]\n    t1, t2 = line2[0], line2[1]\n    \n    d1 = distance(s1, s2)\n    d2 = distance(t1, t2)\n    print(\"Yes\" if abs(d1 - d2) < 1e-9 else \"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 14828,
+  "total_time_ms": 215200.51765441895,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2009,
+    "self_tests_generated": 5
+  }
+}

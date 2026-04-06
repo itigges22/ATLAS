@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2884",
+  "passed": true,
+  "code": "class Solution:\n    def longestValidSubstring(self, word: str, forbidden: List[str]) -> int:\n        from collections import deque\n\n        # Constraint: Forbidden substrings have max length 10\n        # So, we only need to check the last 10 characters when looking for forbidden substrings\n\n        forbidden_set = set(forbidden)\n        max_len = 0\n        start = 0\n        n = len(word)\n\n        # Use a sliding window with limited lookback (max 10)\n        for end in range(n):\n            # Check all substrings ending at 'end' with length up to 10\n            for i in range(end, max(end - 9, start - 1), -1):\n                substring = word[i:end + 1]\n                if substring in forbidden_set:\n                    # If forbidden substring is found, move start to i + 1\n                    start = i + 1\n                    break\n            max_len = max(max_len, end - start + 1)\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7213,
+  "total_time_ms": 195310.46319007874,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4972,
+    "s_star_triggered": true
+  }
+}

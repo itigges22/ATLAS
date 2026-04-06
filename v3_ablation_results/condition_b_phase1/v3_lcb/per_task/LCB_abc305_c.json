@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [list(sys.stdin.readline().strip()) for _ in range(H)]\n\n    # Find the boundaries of the original rectangle\n    top = None\n    bottom = None\n    left = None\n    right = None\n\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#':\n                if top is None:\n                    top = i\n                bottom = i\n                if left is None or j < left:\n                    left = j\n                if right is None or j > right:\n                    right = j\n\n    # The original rectangle is from (top, left) to (bottom, right)\n    # Now find the missing cell in this rectangle\n    for i in range(top, bottom + 1):\n        for j in range(left, right + 1):\n            if grid[i][j] == '.':\n                print(i + 1, j + 1)\n                return\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 788,
+  "total_time_ms": 13869.234323501587,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 549
+  }
+}

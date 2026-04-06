@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3482",
+  "passed": true,
+  "code": "class Solution:\n    def minimumCost(self, target: str, words: List[str], costs: List[int]) -> int:\n        n = len(target)\n        dp = [float('inf')] * (n + 1)\n        dp[0] = 0\n\n        for i in range(n):\n            if dp[i] == float('inf'):\n                continue\n            for word, cost in zip(words, costs):\n                m = len(word)\n                if i + m > n:\n                    continue\n                if target[i:i+m] == word:\n                    dp[i + m] = min(dp[i + m], dp[i] + cost)\n\n        return dp[n] if dp[n] != float('inf') else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1499,
+  "total_time_ms": 22872.442960739136,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1319
+  }
+}

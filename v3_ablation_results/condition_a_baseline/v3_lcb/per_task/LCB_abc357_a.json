@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc357_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, M = map(int, input().split())\nH = list(map(int, input().split()))\nremaining = M\ncount = 0\n\nfor h in H:\n    if remaining >= h:\n        count += 1\n        remaining -= h\n    else:\n        break\n\nprint(count)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1285.2532863616943,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

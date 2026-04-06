@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3093",
+  "passed": true,
+  "code": "class Solution:\n    def sumIndicesWithKSetBits(self, nums: List[int], k: int) -> int:\n        return sum(num for i, num in enumerate(nums) if bin(i).count('1') == k)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1048.2571125030518,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc306_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    positions = [0] * (N + 1)  # 1-based indexing\n\n    for idx, val in enumerate(A):\n        positions[val] += 1\n        if positions[val] == 2:\n            f_val = idx + 1  # convert to 1-based index\n            print(val, end=' ')\n            # We can't store all f(i) and sort later because we need to print in order of f(i)\n            # So we print as we go, but we need to collect all f(i) first to sort properly\n\n    # Correct approach: collect all f(i) first, then sort based on f(i)\n    # Let's redo the logic properly\n\n    positions = [0] * (N + 1)\n    f = [0] * (N + 1)\n\n    for idx, val in enumerate(A):\n        positions[val] += 1\n        if positions[val] == 2:\n            f[val] = idx + 1  # 1-based index\n\n    result = []\n    for i in range(1, N + 1):\n        result.append(str(i))\n    result.sort(key=lambda x: f[int(x)])\n\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 326,
+  "total_time_ms": 5702.571868896484,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

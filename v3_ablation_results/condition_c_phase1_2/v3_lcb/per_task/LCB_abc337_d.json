@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc337_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    K = int(data[2])\n    grid = data[3:3+H]\n    \n    min_ops = float('inf')\n    \n    for i in range(H):\n        row = grid[i]\n        for j in range(W - K + 1):\n            ops = 0\n            for k in range(K):\n                if row[j + k] == 'x':\n                    ops = float('inf')\n                    break\n                elif row[j + k] == '.':\n                    ops += 1\n            if ops < min_ops:\n                min_ops = ops\n    \n    for j in range(W):\n        for i in range(H - K + 1):\n            ops = 0\n            for k in range(K):\n                if grid[i + k][j] == 'x':\n                    ops = float('inf')\n                    break\n                elif grid[i + k][j] == '.':\n                    ops += 1\n            if ops < min_ops:\n                min_ops = ops\n    \n    if min_ops == float('inf'):\n        print(-1)\n    else:\n        print(min_ops)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4837,
+  "total_time_ms": 79044.04854774475,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4592
+  }
+}

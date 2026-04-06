@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc355_e",
+  "passed": false,
+  "code": "import sys\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.readline\n    N = int(input().split()[0])\n    L = int(input().split()[1])\n    R = int(input().split()[2])\n\n    # We will use a Fenwick Tree (Binary Indexed Tree) approach to compute the sum\n    # We need to query ranges that are powers of two in length\n    # We will store the results of our queries in a dictionary for reuse\n\n    queries = {}\n    total = 0\n\n    def get_sum(l, r):\n        nonlocal total\n        if l == r:\n            return 0\n        # Check if we already have the sum for this range\n        if (l, r) in queries:\n            return queries[(l, r)]\n        # Find the smallest i such that 2^i >= (r - l + 1)\n        i = 0\n        while (1 << i) * (1 << 1) <= (1 << N):\n            if (1 << i) * (1 << 1) > (r - l + 1):\n                break\n            i += 1\n        i -= 1\n        j = l // (1 << i)\n        # Query the range [l, r]\n        print(f\"? {i} {j}\")\n        sys.stdout.flush()\n        T = int(input())\n        if T == -1:\n            sys.exit()\n        queries[(l, r)] = T\n        return T\n\n    # Use divide and conquer to compute the sum from L to R\n    def compute_sum(l, r):\n        nonlocal total\n        if l == r:\n            return 0\n        # Find the largest power of two that fits in the range [l, r]\n        size = r - l + 1\n        i = 0\n        while (1 << (i + 1)) <= size:\n            i += 1\n        # Query the range [l, l + (1 << i) - 1]\n        part1 = compute_sum(l, l + (1 << i) - 1)\n        # Query the range [r - (1 << i) + 1, r]\n        part2 = compute_sum(r - (1 << i) + 1, r)\n        # Query the middle range if needed\n        if l + (1 << i) <= r - (1 << i) + 1:\n            part3 = get_sum(l + (1 << i), r - (1 << i) - 1)\n            return (part1 + part2 + part3) % 100\n        else:\n            return (part1 + part2) % 100\n\n    result = compute_sum(L, R)\n    print(f\"! {result}\")\n    sys.stdout.flush()\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 36532,
+  "total_time_ms": 637911.4618301392,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2338,
+    "self_tests_generated": 5
+  }
+}

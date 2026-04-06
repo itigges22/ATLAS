@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2952",
+  "passed": false,
+  "code": "import heapq\nfrom typing import List\n\nclass Solution:\n    def minimumTime(self, nums1: List[int], nums2: List[int], x: int) -> int:\n        n = len(nums1)\n        total_sum = sum(nums1)\n        if total_sum <= x:\n            return 0\n\n        # Priority queue (min-heap) based on the rate of increase in nums1[i] (i.e., nums2[i])\n        heap = []\n        for i in range(n):\n            heapq.heappush(heap, (nums2[i], nums1[i], i))\n\n        time = 0\n        while time <= n:\n            # Calculate the current sum of nums1\n            current_sum = sum(nums1)\n            if current_sum <= x:\n                return time\n\n            # Select the index with the highest rate of increase (greedy choice)\n            rate, val, idx = heapq.heappop(heap)\n            # Apply the operation: set nums1[idx] to 0\n            nums1[idx] = 0\n            time += 1\n\n        return -1",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 52677,
+  "total_time_ms": 1613493.9427375793,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1558,
+    "self_tests_generated": 5
+  }
+}

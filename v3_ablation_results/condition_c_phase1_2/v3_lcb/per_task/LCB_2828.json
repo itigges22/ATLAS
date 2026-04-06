@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2828",
+  "passed": false,
+  "code": "class Solution:\n    def smallestString(self, s: str) -> str:\n        s = list(s)\n        i = 0\n        # Skip all 'a's at the beginning\n        while i < len(s) and s[i] == 'a':\n            i += 1\n        # If all characters are 'a', replace the last one with 'z'\n        if i == len(s):\n            s[-1] = 'z'\n        else:\n            # Replace characters until we hit 'a' or end of string\n            while i < len(s) and s[i] != 'a':\n                s[i] = chr(ord(s[i]) - 1)\n                i += 1\n        return ''.join(s)",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 165,
+  "total_time_ms": 2619.332790374756,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

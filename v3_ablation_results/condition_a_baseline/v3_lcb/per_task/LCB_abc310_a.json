@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc310_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read input\n    N, P, Q = map(int, sys.stdin.readline().split())\n    D = list(map(int, sys.stdin.readline().split()))\n    \n    # Calculate minimum cost with coupon\n    min_dish_cost = min(D)\n    coupon_total = Q + min_dish_cost\n    \n    # Compare with regular price\n    result = min(P, coupon_total)\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1824.5105743408203,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

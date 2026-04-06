@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2879",
+  "passed": false,
+  "code": "class Solution:\n    def minimumChanges(self, s: str, k: int) -> int:\n        n = len(s)\n        # Precompute cost for all substrings [i..j] to be semi-palindromes\n        cost = [[0] * n for _ in range(n)]\n\n        for i in range(n):\n            for j in range(i + 1, n):\n                length = j - i + 1\n                # Check all possible d values for semi-palindrome\n                for d in range(1, length):\n                    if length % d != 0:\n                        continue\n                    # Check if the substring is a semi-palindrome\n                    for m in range(d):\n                        for l in range(1, length // d):\n                            left = i + m + l * d\n                            right = i + (d - 1 - m) + l * d\n                            if left >= j or right >= j:\n                                break\n                            if s[left] != s[right]:\n                                cost[i][j] += 1\n                # If length is 1, it's not a semi-palindrome\n                if length == 1:\n                    cost[i][j] = float('inf')\n\n        # DP with memoization\n        dp = [[float('inf')] * (k + 1) for _ in range(n)]\n        dp[0][1] = cost[0][0]\n\n        for i in range(1, n):\n            for parts in range(1, k + 1):\n                for j in range(i):\n                    if parts > 1:\n                        dp[i][parts] = min(dp[i][parts], dp[j][parts - 1] + cost[j + 1][i])\n\n        return dp[n - 1][k]",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 6646,
+  "total_time_ms": 104360.80765724182,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6291
+  }
+}

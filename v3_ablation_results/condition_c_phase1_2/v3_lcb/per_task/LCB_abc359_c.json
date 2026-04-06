@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc359_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\ndef main():\n    Sx, Sy = map(int, sys.stdin.readline().split())\n    Tx, Ty = map(int, sys.stdin.readline().split())\n\n    # Convert to tile coordinates\n    def to_tile(x):\n        return x // 2\n\n    # Starting and target tile coordinates\n    start_tile = (to_tile(Sx), to_tile(Sy))\n    target_tile = (to_tile(Tx), to_tile(Ty))\n\n    # Number of tiles crossed in x and y directions\n    dx = abs(target_tile[0] - start_tile[0])\n    dy = abs(target_tile[1] - start_tile[1])\n\n    # Total toll is the number of tiles crossed\n    print(dx + dy)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5929,
+  "total_time_ms": 129899.16181564331,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5577
+  }
+}

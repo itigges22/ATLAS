@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3397",
+  "passed": true,
+  "code": "class Solution:\n    def addedInteger(self, nums1: List[int], nums2: List[int]) -> int:\n        # Sort both arrays\n        nums1_sorted = sorted(nums1)\n        nums2_sorted = sorted(nums2)\n        \n        # Calculate the difference between the first elements\n        return nums2_sorted[0] - nums1_sorted[0]",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 739,
+  "total_time_ms": 12803.848266601562,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 652
+  }
+}

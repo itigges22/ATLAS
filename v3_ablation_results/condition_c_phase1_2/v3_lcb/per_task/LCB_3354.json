@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3354",
+  "passed": false,
+  "code": "class Solution:\n    def minimizeStringValue(self, s: str) -> str:\n        from collections import Counter\n\n        # Convert string to list for easy modification\n        s_list = list(s)\n        freq = Counter()\n\n        # First pass: count frequencies of existing characters\n        for ch in s:\n            if ch != '?':\n                freq[ch] += 1\n\n        # Second pass: replace '?' with the character that minimizes the cost\n        for i in range(len(s_list)):\n            if s_list[i] == '?':\n                # Find the character with the smallest frequency\n                # In case of tie, choose the lexicographically smallest\n                min_char = None\n                min_freq = float('inf')\n                for ch in 'abcdefghijklmnopqrstuvwxyz':\n                    if freq[ch] < min_freq:\n                        min_freq = freq[ch]\n                        min_char = ch\n                # Replace '?' with the chosen character\n                s_list[i] = min_char\n                # Update frequency counter\n                freq[min_char] += 1\n\n        return ''.join(s_list)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5131,
+  "total_time_ms": 89273.4727859497,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4843
+  }
+}

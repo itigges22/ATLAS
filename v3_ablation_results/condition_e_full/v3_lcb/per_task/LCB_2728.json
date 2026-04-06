@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2728",
+  "passed": true,
+  "code": "class Solution:\n    def matrixSum(self, nums: List[List[int]]) -> int:\n        score = 0\n        # Sort each row in descending order\n        for row in nums:\n            row.sort(reverse=True)\n        \n        # Iterate through columns\n        for col in range(len(nums[0])):\n            max_val = 0\n            # Iterate through rows and get the current column value\n            for row in nums:\n                max_val = max(max_val, row[col])\n            score += max_val\n        \n        return score",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3148,
+  "total_time_ms": 86181.57291412354,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 970,
+    "s_star_triggered": true
+  }
+}

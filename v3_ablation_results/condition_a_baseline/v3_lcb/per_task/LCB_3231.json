@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3231",
+  "passed": true,
+  "code": "class Solution:\n    def minimumAddedCoins(self, coins: List[int], target: int) -> int:\n        coins.sort()\n        added = 0\n        current_max = 0\n        i = 0\n        n = len(coins)\n        \n        while current_max < target:\n            if i < n and coins[i] <= current_max + 1:\n                current_max += coins[i]\n                i += 1\n            else:\n                added += 1\n                current_max += current_max + 1\n        \n        return added",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2031.8362712860107,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

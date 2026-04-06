@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc365_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:]))\n\n    total = sum(A)\n    if total <= M:\n        print(\"infinite\")\n        return\n\n    low = 0\n    high = max(A)\n\n    def calculate_cost(x):\n        return sum(min(a, x) for a in A)\n\n    while low < high:\n        mid = (low + high + 1) // 2\n        cost = calculate_cost(mid)\n        if cost <= M:\n            low = mid\n        else:\n            high = mid - 1\n\n    print(low)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5732,
+  "total_time_ms": 88963.73200416565,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5452
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc320_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    M = int(sys.stdin.readline())\n    S1 = sys.stdin.readline().strip()\n    S2 = sys.stdin.readline().strip()\n    S3 = sys.stdin.readline().strip()\n\n    min_time = float('inf')\n\n    # Try each possible digit (0-9)\n    for digit in map(str, range(10)):\n        # Find all positions where digit appears in each reel\n        pos1 = [i for i, ch in enumerate(S1) if ch == digit]\n        pos2 = [i for i, ch in enumerate(S2) if ch == digit]\n        pos3 = [i for i, ch in enumerate(S3) if ch == digit]\n\n        if not pos1 or not pos2 or not pos3:\n            continue  # Not possible to get this digit on all reels\n\n        # Try all combinations of positions\n        for t1 in pos1:\n            for t2 in pos2:\n                for t3 in pos3:\n                    # Time to press each button\n                    # We can press buttons at different times, but we need to find the max time\n                    # because all reels must be stopped by that time\n                    time = max(t1, t2, t3)\n                    if time < min_time:\n                        min_time = time\n\n    if min_time == float('inf'):\n        print(-1)\n    else:\n        print(min_time)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 321,
+  "total_time_ms": 5277.471542358398,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "hard"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc321_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import bisect\n\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    P = int(data[2])\n    \n    A = list(map(int, data[3:3+N]))\n    B = list(map(int, data[3+N:3+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    # Compute prefix sums for B\n    prefix_B = [0] * (M + 1)\n    for i in range(M):\n        prefix_B[i+1] = prefix_B[i] + B[i]\n    \n    total = 0\n    \n    for a in A:\n        # Find the largest b such that a + b <= P\n        max_b = P - a\n        idx = bisect.bisect_right(B, max_b)\n        count = idx\n        sum_b = prefix_B[idx]\n        \n        # Contribution from pairs where a + b <= P\n        total += (a * count + sum_b)\n        \n        # Contribution from pairs where a + b > P\n        total += (P * (M - count))\n    \n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1023,
+  "total_time_ms": 18806.509256362915,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 821
+  }
+}

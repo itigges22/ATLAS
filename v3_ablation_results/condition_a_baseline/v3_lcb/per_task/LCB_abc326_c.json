@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc326_c",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    A.sort()\n    \n    max_count = 0\n    right = 0\n    \n    for left in range(N):\n        while right < N and A[right] - A[left] < M:\n            right += 1\n        max_count = max(max_count, right - left)\n    \n    print(max_count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2218.2488441467285,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

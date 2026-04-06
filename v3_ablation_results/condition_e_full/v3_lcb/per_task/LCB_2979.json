@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2979",
+  "passed": true,
+  "code": "class Solution:\n    def maximizeTheProfit(self, n: int, offers: List[List[int]]) -> int:\n        # Sort offers by end_i\n        offers.sort(key=lambda x: x[1])\n        \n        # dp[i] = max profit considering houses up to i\n        dp = [0] * (n + 1)\n        \n        for start, end, gold in offers:\n            # dp[end + 1] = max(dp[end + 1], dp[start] + gold)\n            dp[end + 1] = max(dp[end + 1], dp[start] + gold)\n        \n        # The maximum profit is the maximum value in dp\n        return max(dp)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 151,
+  "total_time_ms": 4443.7572956085205,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

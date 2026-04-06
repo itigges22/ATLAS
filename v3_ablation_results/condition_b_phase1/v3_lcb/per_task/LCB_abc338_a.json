@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc338_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\nif S[0].isupper() and all(c.islower() for c in S[1:]):\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 344,
+  "total_time_ms": 6154.814720153809,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 280
+  }
+}

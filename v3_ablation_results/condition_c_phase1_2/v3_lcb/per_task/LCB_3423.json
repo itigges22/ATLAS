@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3423",
+  "passed": true,
+  "code": "from typing import List\n\nMOD = 10**9 + 7\n\nclass SegmentTreeNode:\n    def __init__(self, l, r):\n        self.l = l\n        self.r = r\n        self.left = None\n        self.right = None\n        self.max_sum = 0\n        self.max_with_first = 0\n        self.max_with_last = 0\n        self.total = 0\n\nclass SegmentTree:\n    def __init__(self, nums):\n        self.n = len(nums)\n        self.nums = nums\n        self.root = self.build(0, self.n - 1)\n\n    def build(self, l, r):\n        node = SegmentTreeNode(l, r)\n        if l == r:\n            val = self.nums[l]\n            node.max_sum = max(0, val)\n            node.max_with_first = max(0, val)\n            node.max_with_last = max(0, val)\n            node.total = val\n            return node\n        mid = (l + r) // 2\n        node.left = self.build(l, mid)\n        node.right = self.build(mid + 1, r)\n        self.push_up(node)\n        return node\n\n    def push_up(self, node):\n        left = node.left\n        right = node.right\n        node.total = left.total + right.total\n        node.max_with_first = max(left.max_with_first, left.max_sum + right.max_with_first)\n        node.max_with_last = max(right.max_with_last, right.max_sum + left.max_with_last)\n        node.max_sum = max(left.max_sum, right.max_sum, left.max_with_last + right.max_with_first)\n        node.max_with_first = max(left.max_with_first, left.max_sum + right.max_with_first)\n        node.max_with_last = max(right.max_with_last, right.max_sum + left.max_with_last)\n\n    def update(self, index, value):\n        self._update(self.root, index, value)\n\n    def _update(self, node, index, value):\n        if node.l == node.r == index:\n            node.total = value\n            node.max_sum = max(0, value)\n            node.max_with_first = max(0, value)\n            node.max_with_last = max(0, value)\n            return\n        if index <= node.left.r:\n            self._update(node.left, index, value)\n        else:\n            self._update(node.right, index, value)\n        self.push_up(node)\n\n    def query(self):\n        return self.root.max_sum\n\nclass Solution:\n    def maximumSumSubsequence(self, nums: List[int], queries: List[List[int]]) -> int:\n        st = SegmentTree(nums)\n        result = 0\n        for pos, x in queries:\n            st.update(pos, x)\n            result = (result + st.query()) % MOD\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7499,
+  "total_time_ms": 113158.00642967224,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7248
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc335_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef create_spiral_grid(N):\n    grid = [[0 for _ in range(N)] for _ in range(N)]\n    center = N // 2\n\n    # Spiral traversal\n    directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # right, down, left, up\n    dir_idx = 0\n    x, y = 0, 0\n    num = 1\n\n    while num <= N * N:\n        grid[x][y] = num\n        num += 1\n        next_x = x + directions[dir_idx][0]\n        next_y = y + directions[dir_idx][1]\n\n        if 0 <= next_x < N and 0 <= next_y < N and grid[next_x][next_y] == 0:\n            x, y = next_x, next_y\n        else:\n            dir_idx = (dir_idx + 1) % 4\n            x, y = x + directions[dir_idx][0], y + directions[dir_idx][1]\n\n    # Place Takahashi at the center\n    grid[center][center] = 'T'\n\n    # Output the grid\n    for row in grid:\n        print(' '.join(str(cell) for cell in row))\n\ndef main():\n    N = int(sys.stdin.readline())\n    create_spiral_grid(N)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4409,
+  "total_time_ms": 74035.62021255493,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4089
+  }
+}

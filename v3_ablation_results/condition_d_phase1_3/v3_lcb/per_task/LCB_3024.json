@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3024",
+  "passed": false,
+  "code": "class Solution:\n    def numberOfWays(self, s: str, t: str, k: int) -> int:\n        MOD = 10**9 + 7\n        n = len(s)\n        \n        # Find all valid rotations that transform s to t\n        valid_rotations = set()\n        for l in range(1, n):\n            rotated = s[-l:] + s[:-l]\n            if rotated == t:\n                valid_rotations.add(l)\n        \n        if not valid_rotations:\n            return 0\n        \n        # Precompute powers of (n-1) modulo MOD\n        power = [1] * (k + 1)\n        for i in range(1, k + 1):\n            power[i] = (power[i - 1] * (n - 1)) % MOD\n        \n        # Precompute combination values using modular inverses\n        from math import comb\n        from functools import reduce\n        from operator import mul\n        \n        # Number of ways to choose k operations with exactly m valid rotations\n        res = 0\n        for m in valid_rotations:\n            c = comb(k, m)\n            res = (res + c * power[k - m]) % MOD\n        \n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 59193,
+  "total_time_ms": 961093.5020446777,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1562,
+    "self_tests_generated": 5
+  }
+}

@@ -342,10 +342,18 @@ class BudgetForcing:
             Full ChatML-formatted prompt string for the /completion endpoint.
         """
         system = get_system_prompt(tier)
+        if tier == "nothink":
+            # Pre-fill closed think block to force-skip thinking on Qwen3.5+
+            assistant_prefix = "<think>\n\n</think>\n\n"
+        else:
+            # With --jinja enabled, the model naturally uses <think> tags.
+            # Do NOT pre-fill <think>\n — it breaks the tag structure
+            # (response won't include opening <think>, only </think>).
+            assistant_prefix = ""
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"
-            f"<|im_start|>assistant\n"
+            f"<|im_start|>assistant\n{assistant_prefix}"
         )
 
     def get_max_tokens(self, tier: str) -> int:
@@ -355,7 +363,7 @@ class BudgetForcing:
         """
         tier_config = BUDGET_TIERS.get(tier, BUDGET_TIERS["standard"])
         if tier == "nothink":
-            return 16384  # V2 default, no thinking overhead
+            return 4096  # Code output only, no thinking overhead
         return tier_config["max_thinking"] + 4096
 
     def process_response(self, response: str, tier: str,

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc331_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport bisect\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n    \n    # Sort the array to use binary search\n    sorted_A = sorted(A)\n    \n    # Precompute prefix sums\n    prefix_sums = [0] * (N + 1)\n    for i in range(N):\n        prefix_sums[i + 1] = prefix_sums[i] + A[i]\n    \n    # For each element, find the sum of elements greater than it\n    result = []\n    for a in A:\n        # Find the first index in sorted_A where element > a\n        idx = bisect.bisect_right(sorted_A, a)\n        # Sum of elements greater than a is total_sum - prefix_sum up to idx\n        total_sum = prefix_sums[N]\n        sum_less_or_equal = prefix_sums[idx]\n        result.append(str(total_sum - sum_less_or_equal))\n    \n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 251,
+  "total_time_ms": 4018.268823623657,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

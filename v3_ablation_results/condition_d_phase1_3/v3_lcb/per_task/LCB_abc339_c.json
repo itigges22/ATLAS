@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc339_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    current_passengers = 0\n    min_passengers = 0\n    total_change = 0\n\n    for delta in A:\n        current_passengers += delta\n        total_change += delta\n        if current_passengers < 0:\n            min_passengers = min(min_passengers, current_passengers)\n\n    print(total_change - min_passengers)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 21495,
+  "total_time_ms": 488025.9189605713,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 542,
+    "self_tests_generated": 5
+  }
+}

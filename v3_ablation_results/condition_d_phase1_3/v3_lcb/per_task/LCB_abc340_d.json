@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc340_d",
+  "passed": true,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    stages = []\n    for i in range(N-1):\n        A = int(data[1 + 3*i])\n        B = int(data[2 + 3*i])\n        X = int(data[3 + 3*i])\n        stages.append((A, B, X))\n    \n    # Dijkstra's algorithm\n    dist = [float('inf')] * (N + 1)\n    dist[1] = 0\n    heap = [(0, 1)]\n    \n    while heap:\n        time, node = heapq.heappop(heap)\n        if time > dist[node]:\n            continue\n        if node == N:\n            break\n        A, B, X = stages[node - 1]\n        if dist[node + 1] > dist[node] + A:\n            dist[node + 1] = dist[node] + A\n            heapq.heappush(heap, (dist[node + 1], node + 1))\n        if dist[X] > dist[node] + B:\n            dist[X] = dist[node] + B\n            heapq.heappush(heap, (dist[X], X))\n    \n    print(dist[N])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1851,
+  "total_time_ms": 54943.493366241455,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1557
+  }
+}

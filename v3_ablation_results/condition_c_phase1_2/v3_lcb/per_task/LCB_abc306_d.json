@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc306_d",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    courses = []\n    for i in range(N):\n        X = int(data[1 + 2*i])\n        Y = int(data[2 + 2*i])\n        courses.append((X, Y))\n    \n    # dp[0][i] = max tastiness when in healthy state after i-th course\n    # dp[1][i] = max tastiness when in upset state after i-th course\n    # Initialize with -infinity to represent impossible states\n    dp = [[-float('inf')] * 2 for _ in range(N+1)]\n    dp[0][0] = 0  # Initially healthy with 0 tastiness\n    \n    for i in range(1, N+1):\n        X, Y = courses[i-1]\n        # Skip the course\n        dp[i][0] = max(dp[i][0], dp[i-1][0])\n        dp[i][1] = max(dp[i][1], dp[i-1][1])\n        \n        # Eat the course\n        if X == 0:  # Antidotal course\n            # From healthy to healthy\n            if dp[i-1][0] != -float('inf'):\n                dp[i][0] = max(dp[i][0], dp[i-1][0] + Y)\n            # From upset to healthy\n            if dp[i-1][1] != -float('inf'):\n                dp[i][0] = max(dp[i][0], dp[i-1][1] + Y)\n        else:  # Poisonous course\n            # From healthy to upset\n            if dp[i-1][0] != -float('inf'):\n                dp[i][1] = max(dp[i][1], dp[i-1][0] + Y)\n            # From upset to dead (not allowed)\n    \n    # The answer is the maximum tastiness when in healthy or upset state after N-th course\n    print(max(dp[N][0], dp[N][1]))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 471,
+  "total_time_ms": 7494.456052780151,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

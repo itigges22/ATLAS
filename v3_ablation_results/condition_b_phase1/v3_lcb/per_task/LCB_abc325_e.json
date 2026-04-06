@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc325_e",
+  "passed": true,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    A = int(data[idx])\n    idx += 1\n    B = int(data[idx])\n    idx += 1\n    C = int(data[idx])\n    idx += 1\n    \n    D = []\n    for _ in range(N):\n        row = list(map(int, data[idx:idx+N]))\n        D.append(row)\n        idx += N\n    \n    # Dijkstra's algorithm with state tracking (car or train)\n    # dist[i][0] = min time to reach city i using car\n    # dist[i][1] = min time to reach city i using train\n    INF = float('inf')\n    dist = [[INF] * 2 for _ in range(N)]\n    dist[0][0] = 0  # start at city 1 (0-indexed) using car\n    \n    # Priority queue: (time, city, mode)\n    heap = [(0, 0, 0)]  # (time, city, mode: 0=car, 1=train)\n    \n    while heap:\n        time, u, mode = heapq.heappop(heap)\n        \n        if time > dist[u][mode]:\n            continue\n        \n        for v in range(N):\n            if u == v:\n                continue\n            \n            # Travel by car\n            new_time_car = time + D[u][v] * A\n            if new_time_car < dist[v][0]:\n                dist[v][0] = new_time_car\n                heapq.heappush(heap, (new_time_car, v, 0))\n            \n            # If we are in car mode, we can switch to train at city v\n            if mode == 0:\n                new_time_train = time + D[u][v] * B + C\n                if new_time_train < dist[v][1]:\n                    dist[v][1] = new_time_train\n                    heapq.heappush(heap, (new_time_train, v, 1))\n            else:\n                # If we are in train mode, we can't switch back\n                new_time_train = time + D[u][v] * B + C\n                if new_time_train < dist[v][1]:\n                    dist[v][1] = new_time_train\n                    heapq.heappush(heap, (new_time_train, v, 1))\n    \n    print(min(dist[N-1][0], dist[N-1][1]))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1795,
+  "total_time_ms": 27310.571432113647,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1249
+  }
+}

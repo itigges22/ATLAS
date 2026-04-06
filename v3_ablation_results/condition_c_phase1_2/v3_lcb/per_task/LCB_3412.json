@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3412",
+  "passed": false,
+  "code": "class Solution:\n    def findPermutationDifference(self, s: str, t: str) -> int:\n        index_map = {char: idx for idx, char in enumerate(s)}\n        return sum(abs(index_map[char] - idx) for idx, char in enumerate(t)",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 70,
+  "total_time_ms": 1200.310230255127,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc328_c",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    Q = int(data[1])\n    S = data[2]\n    \n    # Preprocess: create a prefix sum array\n    prefix = [0] * (N + 1)\n    for i in range(1, N):\n        prefix[i+1] = prefix[i] + (1 if S[i-1] == S[i] else 0)\n    \n    # Process queries\n    results = []\n    index = 3\n    for _ in range(Q):\n        l = int(data[index])\n        r = int(data[index + 1])\n        index += 2\n        # Number of consecutive pairs in [l, r-1]\n        res = prefix[r] - prefix[l]\n        results.append(str(res))\n    \n    print(\"\\n\".join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 954,
+  "total_time_ms": 17355.527639389038,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 736
+  }
+}

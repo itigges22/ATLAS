@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc302_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport bisect\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    D = int(data[2])\n    \n    A = list(map(int, data[3:3+N]))\n    B = list(map(int, data[3+N:3+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    max_sum = -1\n    \n    for a in A:\n        low = a - D\n        high = a + D\n        \n        left = bisect.bisect_left(B, low)\n        right = bisect.bisect_right(B, high)\n        \n        for j in range(left, right):\n            current_sum = a + B[j]\n            if current_sum > max_sum:\n                max_sum = current_sum\n    \n    print(max_sum)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22265,
+  "total_time_ms": 351394.9611186981,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 645,
+    "self_tests_generated": 5
+  }
+}

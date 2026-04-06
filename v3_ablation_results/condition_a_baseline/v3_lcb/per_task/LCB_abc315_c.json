@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc315_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    flavor_delicious = []\n    flavor_map = defaultdict(list)\n    \n    index = 1\n    for _ in range(N):\n        F = int(data[index])\n        S = int(data[index + 1])\n        flavor_map[F].append(S)\n        flavor_delicious.append((F, S))\n        index += 2\n    \n    max_satisfaction = 0\n    \n    # Case 1: Different flavors\n    for i in range(N):\n        F1, S1 = flavor_delicious[i]\n        for j in range(i + 1, N):\n            F2, S2 = flavor_delicious[j]\n            if F1 != F2:\n                satisfaction = S1 + S2\n                if satisfaction > max_satisfaction:\n                    max_satisfaction = satisfaction\n    \n    # Case 2: Same flavor\n    for f, s_list in flavor_map.items():\n        if len(s_list) >= 2:\n            s_list.sort(reverse=True)\n            satisfaction = s_list[0] + s_list[1] // 2\n            if satisfaction > max_satisfaction:\n                max_satisfaction = satisfaction\n    \n    print(max_satisfaction)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4462.302207946777,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

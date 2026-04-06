@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2877",
+  "passed": false,
+  "code": "class Solution:\n    def minimumString(self, a: str, b: str, c: str) -> str:\n        def merge(s1: str, s2: str) -> str:\n            # Returns the shortest string that contains both s1 and s2 as substrings\n            if s1 in s2:\n                return s2\n            if s2 in s1:\n                return s1\n            # Try all possible combinations of s1 and s2\n            candidates = [s1 + s2, s2 + s1]\n            # Find the shortest one, and if equal, the lexicographically smallest\n            return min(candidates, key=lambda x: (len(x), x))\n        \n        # Generate all permutations of the three strings\n        from itertools import permutations\n        candidates = set()\n        for perm in permutations([a, b, c]):\n            merged = merge(merge(perm[0], perm[1]), perm[2])\n            candidates.add(merged)\n        \n        # Find the minimum length string, and among those, the lexicographically smallest\n        return min(candidates, key=lambda x: (len(x), x))",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 53974,
+  "total_time_ms": 1272628.0958652496,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5031,
+    "self_tests_generated": 5
+  }
+}

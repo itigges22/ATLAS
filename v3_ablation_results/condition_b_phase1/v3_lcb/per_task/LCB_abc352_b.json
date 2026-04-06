@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc352_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    S, T = input().split()\n    \n    i = 0  # Pointer for S\n    j = 0  # Pointer for T\n    result = []\n    \n    while i < len(S) and j < len(T):\n        if S[i] == T[j]:\n            result.append(j + 1)\n            i += 1\n            j += 1\n        else:\n            j += 1\n    \n    print(' '.join(map(str, result)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1034,
+  "total_time_ms": 18438.87734413147,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 894
+  }
+}

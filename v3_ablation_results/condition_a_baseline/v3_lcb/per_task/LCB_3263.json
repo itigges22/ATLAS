@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3263",
+  "passed": true,
+  "code": "class Solution:\n    def minimumCost(self, nums: List[int]) -> int:\n        n = len(nums)\n        # We need to split into 3 contiguous subarrays, so we need to choose 2 split points\n        # The first subarray must start at index 0, so the first split point is between i and i+1\n        # The second split point is between j and j+1, where j > i\n        min_cost = float('inf')\n        for i in range(1, n - 1):\n            for j in range(i + 1, n):\n                cost = nums[0] + nums[i] + nums[j]\n                if cost < min_cost:\n                    min_cost = cost\n        return min_cost",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2907.6919555664062,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

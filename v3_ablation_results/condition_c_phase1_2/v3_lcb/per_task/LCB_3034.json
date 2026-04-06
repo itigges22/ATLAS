@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3034",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfPoints(self, nums: List[List[int]]) -> int:\n        covered = set()\n        for start, end in nums:\n            covered.update(range(start, end + 1))\n        return len(covered)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 61,
+  "total_time_ms": 925.0259399414062,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

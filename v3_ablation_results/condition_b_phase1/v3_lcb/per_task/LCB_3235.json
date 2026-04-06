@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3235",
+  "passed": true,
+  "code": "class Solution:\n    def minimumCost(self, source: str, target: str, original: List[str], changed: List[str], cost: List[int]) -> int:\n        from collections import defaultdict\n\n        # Step 1: Build the graph\n        graph = defaultdict(dict)\n        for o, c, co in zip(original, changed, cost):\n            if c not in graph[o] or graph[o][c] > co:\n                graph[o][c] = co\n\n        # Step 2: Initialize distance matrix\n        chars = set(original + changed)\n        m = len(chars)\n        char_to_idx = {ch: i for i, ch in enumerate(chars)}\n        INF = float('inf')\n        dist = [[INF] * m for _ in range(m)]\n\n        for i in range(m):\n            dist[i][i] = 0\n\n        for o, c, co in zip(original, changed, cost):\n            u = char_to_idx[o]\n            v = char_to_idx[c]\n            dist[u][v] = min(dist[u][v], co)\n\n        # Step 3: Floyd-Warshall algorithm\n        for k in range(m):\n            for i in range(m):\n                for j in range(m):\n                    if dist[i][k] + dist[k][j] < dist[i][j]:\n                        dist[i][j] = dist[i][k] + dist[k][j]\n\n        # Step 4: Calculate total cost\n        total_cost = 0\n        for s_char, t_char in zip(source, target):\n            if s_char == t_char:\n                continue\n            if s_char not in char_to_idx or t_char not in char_to_idx:\n                return -1\n            u = char_to_idx[s_char]\n            v = char_to_idx[t_char]\n            if dist[u][v] == INF:\n                return -1\n            total_cost += dist[u][v]\n\n        return total_cost",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2659,
+  "total_time_ms": 42620.89943885803,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2321
+  }
+}

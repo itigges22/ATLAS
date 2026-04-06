@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3533",
+  "passed": true,
+  "code": "class Solution:\n    def finalPositionOfSnake(self, n: int, commands: List[str]) -> int:\n        position = 0\n        for command in commands:\n            if command == \"UP\":\n                position -= n\n            elif command == \"RIGHT\":\n                position += 1\n            elif command == \"DOWN\":\n                position += n\n            elif command == \"LEFT\":\n                position -= 1\n        return position",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1067,
+  "total_time_ms": 16920.88294029236,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 968
+  }
+}

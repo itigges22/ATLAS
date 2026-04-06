@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3151",
+  "passed": true,
+  "code": "class Solution:\n    def minProcessingTime(self, processorTime: List[int], tasks: List[int]) -> int:\n        # Check constraints\n        n = len(processorTime)\n        if n > 25000:\n            raise ValueError(\"Number of processors must be less than or equal to 25000\")\n        if len(tasks) != 4 * n:\n            raise ValueError(\"Number of tasks must be exactly 4 * number of processors\")\n        \n        # Sort processorTime in ascending order and tasks in descending order\n        processorTime.sort()\n        tasks.sort(reverse=True)\n        \n        # Assign the largest tasks to the earliest available processors\n        max_time = 0\n        task_index = 0\n        for time in processorTime:\n            # Assign 4 tasks to each processor\n            for i in range(4):\n                finish_time = time + tasks[task_index]\n                if finish_time > max_time:\n                    max_time = finish_time\n                task_index += 1\n        \n        return max_time",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4401,
+  "total_time_ms": 75347.81765937805,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4297
+  }
+}

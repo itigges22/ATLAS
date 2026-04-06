@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3453",
+  "passed": false,
+  "code": "class Solution:\n    def validStrings(self, n: int) -> List[str]:\n        if n == 1:\n            return [\"0\", \"1\"]\n        \n        result = []\n        def backtrack(s):\n            if len(s) == n:\n                result.append(s)\n                return\n            if s[-1] == '0':\n                backtrack(s + '1')\n            else:\n                backtrack(s + '0')\n                backtrack(s + '1')\n        \n        backtrack('0')\n        backtrack('1')\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 47283,
+  "total_time_ms": 1099026.8368721008,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1136,
+    "self_tests_generated": 5
+  }
+}

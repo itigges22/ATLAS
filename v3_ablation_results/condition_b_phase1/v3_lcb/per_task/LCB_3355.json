@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3355",
+  "passed": true,
+  "code": "class Solution:\n    def minimumLevels(self, possible: List[int]) -> int:\n        n = len(possible)\n        # Convert possible to +1 and -1 for easier score calculation\n        arr = [1 if x == 1 else -1 for x in possible]\n        \n        # Compute prefix sums for Alice's score\n        prefix = [0] * n\n        prefix[0] = arr[0]\n        for i in range(1, n):\n            prefix[i] = prefix[i - 1] + arr[i]\n        \n        # Compute suffix sums for Bob's score\n        suffix = [0] * n\n        suffix[-1] = arr[-1]\n        for i in range(n - 2, -1, -1):\n            suffix[i] = suffix[i + 1] + arr[i]\n        \n        # Check for minimum levels Alice should play\n        for i in range(n - 1):  # Alice must leave at least 1 level for Bob\n            alice_score = prefix[i]\n            bob_score = suffix[i + 1]\n            if alice_score > bob_score:\n                return i + 1  # Number of levels Alice plays (0-based index to 1-based count)\n        \n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1659,
+  "total_time_ms": 27668.54763031006,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1438
+  }
+}

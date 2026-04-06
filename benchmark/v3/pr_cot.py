@@ -37,8 +37,8 @@ class PRCoTConfig:
     enabled: bool = False
     max_repair_rounds: int = 3
     analysis_temperature: float = 0.3
-    repair_temperature: float = 0.2
-    analysis_max_tokens: int = 1024
+    repair_temperature: float = 0.4
+    analysis_max_tokens: int = 2048
     repair_max_tokens: int = 4096
 
 
@@ -159,12 +159,12 @@ Problem: {problem}
 Analysis of the failing code:
 {analysis}
 
-Fix the code based on this analysis. Write complete, correct Python code.
-
 Original failing code:
 ```python
 {code}
-```"""
+```
+
+Think step by step about what needs to change, then write the complete fixed Python code."""
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ class PRCoT:
             problem=problem, code=code,
             error=error, perspective=perspective,
         )
-        system = "You are an expert code reviewer. Analyze code failures precisely."
+        system = "You are an expert code reviewer. Analyze code failures precisely. Identify the root cause, not just symptoms."
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"
@@ -335,7 +335,7 @@ class PRCoT:
         user_content = REPAIR_PROMPT.format(
             problem=problem, code=code, analysis=analysis,
         )
-        system = "You are an expert programmer. Fix the code based on the analysis."
+        system = "You are an expert programmer. Think carefully about the root cause, then write a complete corrected solution."
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/1899_D",
+  "passed": true,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    t = int(data[idx])\n    idx += 1\n    \n    results = []\n    \n    for _ in range(t):\n        n = int(data[idx])\n        idx += 1\n        a = list(map(int, data[idx:idx + n]))\n        idx += n\n        \n        freq = defaultdict(int)\n        count = 0\n        \n        for num in a:\n            freq[num] += 1\n        \n        # Count pairs (i, j) where i < j and b_i^b_j == b_j^b_i\n        # This happens when b_i == b_j or (b_i, b_j) = (2, 4) or (4, 2)\n        # Since b_i = 2^a_i, b_j = 2^a_j, so b_i^b_j = (2^a_i)^(2^a_j) = 2^(a_i * 2^a_j)\n        # Similarly, b_j^b_i = 2^(a_j * 2^a_i)\n        # These are equal iff a_i * 2^a_j == a_j * 2^a_i\n        # This is true iff a_i == a_j or (a_i, a_j) = (1, 2) or (2, 1)\n        \n        # Count pairs with same a_i\n        for key in freq:\n            cnt = freq[key]\n            count += cnt * (cnt - 1) // 2\n        \n        # Count pairs (1, 2) and (2, 1)\n        count_1 = freq.get(1, 0)\n        count_2 = freq.get(2, 0)\n        count += count_1 * count_2\n        \n        results.append(str(count))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1215,
+  "total_time_ms": 22129.852056503296,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 924
+  }
+}

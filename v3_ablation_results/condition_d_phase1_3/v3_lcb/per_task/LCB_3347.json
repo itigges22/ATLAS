@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3347",
+  "passed": true,
+  "code": "class Solution:\n    def resultArray(self, nums: List[int]) -> List[int]:\n        if len(nums) < 2:\n            return nums\n        \n        arr1 = [nums[0]]\n        arr2 = [nums[1]]\n        \n        for i in range(2, len(nums)):\n            if arr1[-1] > arr2[-1]:\n                arr1.append(nums[i])\n            else:\n                arr2.append(nums[i])\n        \n        return arr1 + arr2",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1178,
+  "total_time_ms": 18904.46138381958,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1065
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3507",
+  "passed": false,
+  "code": "class Solution:\n    def nonSpecialCount(self, l: int, r: int) -> int:\n        # A number has exactly 2 proper divisors if it is:\n        # 1. The square of a prime number (e.g., 4 = 2^2, 9 = 3^2)\n        # 2. The product of two distinct primes (e.g., 6 = 2 * 3)\n        # So, we need to count numbers in [l, r] that are NOT special\n\n        # We will count the number of special numbers in [l, r]\n        # and subtract from (r - l + 1) to get the count of non-special numbers\n\n        # Step 1: Find all primes up to sqrt(r) using sieve\n        import math\n        import sys\n        sys.setrecursionlimit(100000)\n\n        def sieve(n):\n            is_prime = [True] * (n + 1)\n            is_prime[0] = is_prime[1] = False\n            for i in range(2, int(n ** 0.5) + 1):\n                if is_prime[i]:\n                    for j in range(i * i, n + 1, i):\n                        is_prime[j] = False\n            return [i for i, val in enumerate(is_prime) if val]\n\n        primes = sieve(int(r ** 0.5) + 1)\n\n        # Step 2: Count special numbers\n        special_count = 0\n\n        # Count squares of primes in [l, r]\n        for p in primes:\n            square = p * p\n            if square >= l and square <= r:\n                special_count += 1\n\n        # Count products of two distinct primes in [l, r]\n        # We need to avoid double counting\n        for i in range(len(primes)):\n            for j in range(i + 1, len(primes)):\n                product = primes[i] * primes[j]\n                if product >= l and product <= r:\n                    special_count += 1\n\n        # Total numbers in [l, r]\n        total = r - l + 1\n\n        # Return count of non-special numbers\n        return total - special_count",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 484,
+  "total_time_ms": 7324.109792709351,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

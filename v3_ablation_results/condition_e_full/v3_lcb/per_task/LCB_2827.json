@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2827",
+  "passed": false,
+  "code": "from typing import List\nimport sys\nimport math\nfrom collections import defaultdict\n\nclass Solution:\n    def canTraverseAllPairs(self, nums: List[int]) -> bool:\n        if len(nums) == 1:\n            return True\n\n        # Find all primes up to max(nums) using sieve of Eratosthenes\n        max_num = max(nums)\n        is_prime = [True] * (max_num + 1)\n        is_prime[0] = is_prime[1] = False\n        for i in range(2, int(max_num ** 0.5) + 1):\n            if is_prime[i]:\n                for j in range(i * i, max_num + 1, i):\n                    is_prime[j] = False\n\n        # Build a mapping from prime to list of indices where the number is divisible by that prime\n        prime_to_indices = defaultdict(list)\n        for idx, num in enumerate(nums):\n            temp = num\n            i = 2\n            while i * i <= temp:\n                if is_prime[i] and temp % i == 0:\n                    prime_to_indices[i].append(idx)\n                    while temp % i == 0:\n                        temp //= i\n                i += 1\n            if temp > 1:\n                prime_to_indices[temp].append(idx)\n\n        # Union-Find (DSU) data structure\n        parent = list(range(len(nums)))\n\n        def find(u):\n            while parent[u] != u:\n                parent[u] = parent[parent[u]]\n                u = parent[u]\n            return u\n\n        def union(u, v):\n            pu, pv = find(u), find(v)\n            if pu != pv:\n                parent[pu] = pv\n\n        # Union indices that share a common prime factor\n        for indices in prime_to_indices.values():\n            if len(indices) > 1:\n                first = indices[0]\n                for idx in indices[1:]:\n                    union(first, idx)\n\n        # Check if all indices are connected\n        root = find(0)\n        for i in range(1, len(nums)):\n            if find(i) != root:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 55168,
+  "total_time_ms": 1327791.7122840881,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3875,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc327_b",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    B = int(sys.stdin.readline())\n    # Try A from 1 to 60 because 60^60 is larger than 10^18\n    for A in range(1, 61):\n        if pow(A, A) == B:\n            print(A)\n            return\n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1581.6781520843506,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

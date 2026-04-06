@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc348_c",
+  "passed": true,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    color_min = defaultdict(lambda: float('inf'))\n    \n    index = 1\n    for _ in range(N):\n        A = int(data[index])\n        C = int(data[index + 1])\n        index += 2\n        if A < color_min[C]:\n            color_min[C] = A\n    \n    print(max(color_min.values()))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 125,
+  "total_time_ms": 2296.7629432678223,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

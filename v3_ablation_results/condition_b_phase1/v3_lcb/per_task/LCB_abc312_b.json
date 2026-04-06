@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc312_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_tak_code(grid, i, j):\n    # Check top-left 3x3\n    for x in range(3):\n        for y in range(3):\n            if grid[i + x][j + y] != '#':\n                return False\n\n    # Check bottom-right 3x3\n    for x in range(3):\n        for y in range(3):\n            if grid[i + 6 + x][j + 6 + y] != '#':\n                return False\n\n    # Check adjacent cells around top-left 3x3\n    for x in range(3):\n        for y in range(3):\n            for dx in (-1, 0, 1):\n                for dy in (-1, 0, 1):\n                    nx = i + x + dx\n                    ny = j + y + dy\n                    if 0 <= nx < 9 and 0 <= ny < 9:\n                        if (nx, ny) not in [(x, y) for x in range(3) for y in range(3)]:\n                            if grid[nx][ny] != '.':\n                                return False\n\n    # Check adjacent cells around bottom-right 3x3\n    for x in range(3):\n        for y in range(3):\n            for dx in (-1, 0, 1):\n                for dy in (-1, 0, 1):\n                    nx = i + 6 + x + dx\n                    ny = j + 6 + y + dy\n                    if 0 <= nx < 9 and 0 <= ny < 9:\n                        if (nx, ny) not in [(x, y) for x in range(6, 9) for y in range(6, 9)]:\n                            if grid[nx][ny] != '.':\n                                return False\n\n    return True\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    M = int(input[1])\n    grid = input[2:]\n\n    result = []\n    for i in range(N - 8):\n        for j in range(M - 8):\n            # Extract 9x9 region\n            region = [grid[i + x][j:j+9] for x in range(9)]\n            if is_tak_code(region, 0, 0):\n                result.append((i + 1, j + 1))\n\n    for i, j in result:\n        print(f\"{i} {j}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1688,
+  "total_time_ms": 25759.18483734131,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1139
+  }
+}

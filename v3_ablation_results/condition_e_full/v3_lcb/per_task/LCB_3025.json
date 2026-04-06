@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3025",
+  "passed": false,
+  "code": "class Solution:\n    def minOperations(self, nums: List[int], target: int) -> int:\n        from collections import Counter\n\n        cnt = Counter()\n        for num in nums:\n            cnt[num] += 1\n\n        operations = 0\n        for i in range(31):\n            bit = 1 << i\n            need = (target >> i) & 1\n            if need:\n                if cnt[bit] > 0:\n                    cnt[bit] -= 1\n                else:\n                    # Need to split higher bits\n                    j = i + 1\n                    while j < 31 and cnt[1 << j] == 0:\n                        j += 1\n                    if j == 31:\n                        return -1\n                    # Split higher bit\n                    operations += (j - i)\n                    cnt[1 << j] -= 1\n                    for k in range(j, i, -1):\n                        cnt[1 << k] += 1\n                        cnt[1 << (k - 1)] -= 1\n                    cnt[bit] -= 1\n            else:\n                # Carry over to higher bits\n                if cnt[bit] > 0:\n                    cnt[bit] -= 1\n                    cnt[bit << 1] += 1\n        return operations",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 54248,
+  "total_time_ms": 1245709.1019153595,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink",
+    "self_tests_generated": 5
+  }
+}

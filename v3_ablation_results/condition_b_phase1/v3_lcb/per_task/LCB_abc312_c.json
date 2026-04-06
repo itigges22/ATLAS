@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc312_c",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    # Binary search on X\n    low = 1\n    high = 10**18\n    answer = high\n    \n    while low <= high:\n        mid = (low + high) // 2\n        # Number of sellers who can sell at mid or less\n        sellers = bisect.bisect_right(A, mid)\n        # Number of buyers who can buy at mid or more\n        buyers = M - bisect.bisect_left(B, mid)\n        \n        if sellers >= buyers:\n            answer = mid\n            high = mid - 1\n        else:\n            low = mid + 1\n    \n    print(answer)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2261,
+  "total_time_ms": 33596.765995025635,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2020
+  }
+}

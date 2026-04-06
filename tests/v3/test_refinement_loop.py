@@ -335,7 +335,7 @@ class TestTimeBudget:
 
     def test_default_time_budget(self):
         cfg = RefinementLoopConfig()
-        assert cfg.max_time_ms == 300000.0  # 90 seconds
+        assert cfg.max_time_ms == 120000.0  # 2 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +676,6 @@ class TestDataStructures:
     def test_config_defaults(self):
         cfg = RefinementLoopConfig()
         assert cfg.enabled is False
-        assert cfg.max_iterations == 5
-        assert cfg.escalate_after == 2
-        assert cfg.max_time_ms == 300000.0
+        assert cfg.max_iterations == 2
+        assert cfg.escalate_after == 1
+        assert cfg.max_time_ms == 120000.0

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2834",
+  "passed": true,
+  "code": "class Solution:\n    def relocateMarbles(self, nums: List[int], moveFrom: List[int], moveTo: List[int]) -> List[int]:\n        from collections import defaultdict\n\n        pos_count = defaultdict(int)\n        for num in nums:\n            pos_count[num] += 1\n\n        for f, t in zip(moveFrom, moveTo):\n            if f == t:\n                continue\n            if pos_count[f] > 0:\n                pos_count[t] += pos_count[f]\n                del pos_count[f]\n\n        return sorted(pos_count.keys())",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1359,
+  "total_time_ms": 22041.999340057373,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1234
+  }
+}

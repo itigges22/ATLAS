@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3429",
+  "passed": false,
+  "code": "class Solution:\n    def isArraySpecial(self, nums: List[int]) -> bool:\n        # If the array has 0 or 1 element, it's trivially special\n        if len(nums) <= 1:\n            return True\n        \n        # Check each adjacent pair for different parity\n        for i in range(len(nums) - 1):\n            if (nums[i] % 2) == (nums[i + 1] % 2):\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3259,
+  "total_time_ms": 49199.379205703735,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3176
+  }
+}

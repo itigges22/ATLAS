@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2777",
+  "passed": true,
+  "code": "class Solution:\n    def distinctDifferenceArray(self, nums: List[int]) -> List[int]:\n        n = len(nums)\n        diff = []\n        for i in range(n):\n            prefix = set(nums[:i+1])\n            suffix = set(nums[i+1:])\n            diff.append(len(prefix) - len(suffix))\n        return diff",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 82,
+  "total_time_ms": 1465.6448364257812,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

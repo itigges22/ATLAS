@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2870",
+  "passed": true,
+  "code": "class Solution:\n    def alternatingSubarray(self, nums: List[int]) -> int:\n        max_len = -1\n        n = len(nums)\n        \n        for i in range(n - 1):\n            if nums[i + 1] == nums[i] + 1:\n                length = 2\n                j = i + 2\n                while j < n and nums[j] == nums[j - 2]:\n                    length += 1\n                    j += 1\n                max_len = max(max_len, length)\n        \n        return max_len if max_len > 1 else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1306,
+  "total_time_ms": 21443.151235580444,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1168
+  }
+}

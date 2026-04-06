@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc314_e",
+  "passed": false,
+  "code": "import sys\nimport functools\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n\n    wheels = []\n    for _ in range(N):\n        C_i = int(data[idx])\n        idx += 1\n        P_i = int(data[idx])\n        idx += 1\n        S_i = list(map(int, data[idx:idx+P_i]))\n        idx += P_i\n        wheels.append((C_i, S_i))\n\n    memo = {}\n\n    def dp(x):\n        if x >= M:\n            return 0.0\n        if x in memo:\n            return memo[x]\n        min_cost = float('inf')\n        for (cost, scores) in wheels:\n            total = 0.0\n            for s in scores:\n                total += dp(x + s)\n            avg = total / len(scores)\n            current_cost = cost + avg\n            if current_cost < min_cost:\n                min_cost = current_cost\n        memo[x] = min_cost\n        return min_cost\n\n    result = dp(0)\n    print(f\"{result:.15f}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 2721,
+  "total_time_ms": 54002.90060043335,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2425
+  }
+}

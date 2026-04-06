@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc314_f",
+  "passed": true,
+  "code": "import sys\ninput = sys.stdin.read\n\nMOD = 998244353\nMAXN = 2 * 10**5 + 10\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    matches = [(int(data[2*i+1]), int(data[2*i+2])) for i in range(N-1)]\n\n    parent = list(range(N+1))\n    size = [1] * (N+1)\n    expected = [0] * (N+1)\n\n    # Precompute modular inverses\n    inv = [1] * (N+1)\n    for i in range(2, N+1):\n        inv[i] = MOD - MOD // i * inv[MOD % i] % MOD\n\n    for p, q in matches:\n        root_p = find(parent, p)\n        root_q = find(parent, q)\n\n        a = size[root_p]\n        b = size[root_q]\n\n        # Contribution to expected value for each player in the team\n        inv_a_b = inv[a + b]\n        contrib = a * inv_a_b % MOD\n        contrib2 = b * inv_a_b % MOD\n\n        # Add contribution to all members of the team\n        for x in [root_p, root_q]:\n            for y in range(1, N+1):\n                if find(parent, y) == x:\n                    expected[y] = (expected[y] + contrib if x == root_p else expected[y] + contrib2) % MOD\n\n        # Union the teams\n        if root_p != root_q:\n            parent[root_q] = root_p\n            size[root_p] += size[root_q]\n\n    # Output the expected values for players 1 to N\n    print(' '.join(str(expected[i]) for i in range(1, N+1)))\n\ndef find(parent, x):\n    while parent[x] != x:\n        parent[x] = parent[parent[x]]\n        x = parent[x]\n    return x\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 16400,
+  "total_time_ms": 149016.91937446594,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1518
+  }
+}

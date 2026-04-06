@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2833",
+  "passed": true,
+  "code": "from collections import defaultdict\nimport bisect\n\nclass Solution:\n    def countServers(self, n: int, logs: List[List[int]], x: int, queries: List[int]) -> List[int]:\n        # Sort logs by time\n        logs.sort(key=lambda log: log[1])\n        \n        # Group server_ids by their times\n        time_to_servers = defaultdict(list)\n        for server_id, time in logs:\n            time_to_servers[time].append(server_id)\n        \n        # Extract sorted times\n        sorted_times = sorted(time_to_servers.keys())\n        \n        # Prepare result\n        result = []\n        \n        # For each query, find the number of servers not receiving requests in [q - x, q]\n        for q in queries:\n            start = q - x\n            end = q\n            \n            # Use binary search to find the range of times in [start, end]\n            left = bisect.bisect_left(sorted_times, start)\n            right = bisect.bisect_right(sorted_times, end)\n            \n            # Get all server_ids in the time range\n            active_servers = set()\n            for time in sorted_times[left:right]:\n                active_servers.update(time_to_servers[time])\n            \n            # Count servers not in active_servers\n            result.append(n - len(active_servers))\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 5485,
+  "total_time_ms": 145128.34119796753,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3039,
+    "s_star_triggered": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc350_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    Q = int(data[1])\n    treatments = list(map(int, data[2:2+Q]))\n    \n    # Initialize a list to track the presence of teeth in each hole\n    # True means a tooth is present, False means it's absent\n    teeth_present = [True] * (N + 1)  # Using 1-based indexing\n    \n    for t in treatments:\n        # Flip the state of the hole\n        teeth_present[t] = not teeth_present[t]\n    \n    # Count the number of teeth present\n    count = sum(teeth_present[1:])  # Skip index 0\n    \n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1341,
+  "total_time_ms": 24598.98090362549,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1230
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3351",
+  "passed": true,
+  "code": "class Solution:\n    def maximumHappinessSum(self, happiness: List[int], k: int) -> int:\n        happiness.sort(reverse=True)\n        total = 0\n        for i in range(k):\n            current = max(0, happiness[i] - i)\n            total += current\n        return total",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 77,
+  "total_time_ms": 1452.141284942627,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

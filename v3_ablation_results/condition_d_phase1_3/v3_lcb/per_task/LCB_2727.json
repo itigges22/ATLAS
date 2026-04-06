@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2727",
+  "passed": true,
+  "code": "class Solution:\n    def countSeniors(self, details: List[str]) -> int:\n        count = 0\n        for detail in details:\n            age_str = detail[11:13]\n            age = int(age_str)\n            if age > 60:\n                count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 839,
+  "total_time_ms": 13321.082592010498,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 766
+  }
+}

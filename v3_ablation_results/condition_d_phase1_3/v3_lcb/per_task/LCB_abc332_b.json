@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc332_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nK, G, M = map(int, input().split())\n\nglass = 0\nmug = 0\n\nfor _ in range(K):\n    if glass == G:\n        glass = 0\n    elif mug == 0:\n        mug = M\n    else:\n        transfer = min(G - glass, mug)\n        glass += transfer\n        mug -= transfer\n\nprint(glass, mug)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1437,
+  "total_time_ms": 25648.922443389893,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1265
+  }
+}

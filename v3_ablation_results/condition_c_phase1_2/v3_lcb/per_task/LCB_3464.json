@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3464",
+  "passed": true,
+  "code": "class Solution:\n    def maximumTotalCost(self, nums: List[int]) -> int:\n        n = len(nums)\n        if n == 1:\n            return nums[0]\n\n        # dp[i] represents the maximum total cost for the first i elements\n        dp = [0] * (n + 1)\n\n        # Initialize dp[0] = 0 (no elements), dp[1] = cost of first element\n        dp[1] = nums[0]\n\n        for i in range(2, n + 1):\n            # Option 1: Do not split, take the cost of the entire subarray from 0 to i-1\n            cost_no_split = 0\n            for j in range(i):\n                cost_no_split += nums[j] * ((-1) ** (j - 0))\n            # Option 2: Split at some position k < i-1, take max(dp[k] + cost(k, i-1))\n            max_split = 0\n            for k in range(1, i):\n                cost_split = 0\n                for j in range(k, i):\n                    cost_split += nums[j] * ((-1) ** (j - k))\n                max_split = max(max_split, dp[k] + cost_split)\n            dp[i] = max(dp[i], cost_no_split, max_split)\n\n        return dp[n]",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6086,
+  "total_time_ms": 102978.55806350708,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5904
+  }
+}

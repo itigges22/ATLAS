@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc354_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import combinations\nfrom functools import lru_cache\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    cards = [(int(data[i*2+1]), int(data[i*2+2])) for i in range(N)]\n\n    @lru_cache(maxsize=None)\n    def game_state(mask):\n        # Check if there are any valid moves\n        for i in range(N):\n            if not (mask & (1 << i)):\n                continue\n            for j in range(i + 1, N):\n                if not (mask & (1 << j)):\n                    continue\n                if cards[i][0] == cards[j][0] or cards[i][1] == cards[j][1]:\n                    new_mask = mask & ~((1 << i) | (1 << j))\n                    if not game_state(new_mask):\n                        return True\n        return False\n\n    if game_state( (1 << N) - 1 ):\n        print(\"Takahashi\")\n    else:\n        print(\"Aoki\")\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1779,
+  "total_time_ms": 26670.14217376709,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1532
+  }
+}

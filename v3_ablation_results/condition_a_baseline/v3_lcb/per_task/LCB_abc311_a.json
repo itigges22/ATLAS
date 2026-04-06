@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc311_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\ns = input()\n\nfound = set()\ncount = 0\n\nfor char in s:\n    found.add(char)\n    count += 1\n    if len(found) == 3:\n        break\n\nprint(count)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1668.1602001190186,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

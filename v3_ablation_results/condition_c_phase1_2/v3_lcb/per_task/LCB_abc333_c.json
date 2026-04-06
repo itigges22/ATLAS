@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc333_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef generate_repunits(limit):\n    repunits = set()\n    length = 1\n    while True:\n        repunit = int('1' * length)\n        if repunit > limit:\n            break\n        repunits.add(repunit)\n        length += 1\n    return repunits\n\ndef main():\n    N = int(sys.stdin.readline())\n    max_repunit_length = 20  # Sufficiently large to cover up to N=333\n    repunits = set()\n    for length in range(1, max_repunit_length + 1):\n        repunit = int('1' * length)\n        repunits.add(repunit)\n\n    sums = set()\n    repunits = sorted(repunits)\n    for i in range(len(repunits)):\n        for j in range(i, len(repunits)):\n            for k in range(j, len(repunits)):\n                s = repunits[i] + repunits[j] + repunits[k]\n                sums.add(s)\n\n    sorted_sums = sorted(sums)\n    print(sorted_sums[N - 1])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 251,
+  "total_time_ms": 3687.847375869751,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

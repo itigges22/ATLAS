@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc364_a",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nn = int(input())\ns_list = [input().strip() for _ in range(n)]\n\ncan_eat = True\nfor i in range(1, n):\n    if s_list[i] == 'sweet' and s_list[i-1] == 'sweet':\n        can_eat = False\n        break\n\nprint(\"Yes\" if can_eat else \"No\")",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 46698,
+  "total_time_ms": 1045491.4653301239,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 737,
+    "self_tests_generated": 5
+  }
+}

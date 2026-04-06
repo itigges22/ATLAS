@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc329_f",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    C = list(map(int, data[idx:idx+N]))\n    idx += N\n\n    from collections import defaultdict\n\n    class Box:\n        def __init__(self):\n            self.colors = defaultdict(int)\n            self.size = 0\n\n        def add(self, other):\n            for color, count in other.colors.items():\n                self.colors[color] += count\n            self.size += other.size\n            other.colors.clear()\n            other.size = 0\n\n        def get_unique(self):\n            return len(self.colors)\n\n    boxes = [Box() for _ in range(N)]\n    for i in range(N):\n        boxes[i].colors[C[i]] += 1\n        boxes[i].size += 1\n\n    for _ in range(Q):\n        a = int(data[idx]) - 1\n        idx += 1\n        b = int(data[idx]) - 1\n        idx += 1\n        boxes[b].add(boxes[a])\n        print(boxes[b].get_unique())\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1207,
+  "total_time_ms": 19715.644121170044,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 923
+  }
+}

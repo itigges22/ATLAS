@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc313_b",
+  "passed": true,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    sys.setrecursionlimit(10000)\n    N, M = map(int, sys.stdin.readline().split())\n    edges = []\n    graph = defaultdict(list)\n    for _ in range(M):\n        a, b = map(int, sys.stdin.readline().split())\n        edges.append((a, b))\n        graph[a].append(b)\n\n    # Build the adjacency list for the graph\n    adj = defaultdict(list)\n    for a, b in edges:\n        adj[a].append(b)\n\n    # Track all possible candidates for the strongest programmer\n    candidates = set(range(1, N + 1))\n\n    # DFS to find all possible candidates for the strongest programmer\n    def dfs(node, visited):\n        visited.add(node)\n        for neighbor in adj[node]:\n            if neighbor not in visited:\n                dfs(neighbor, visited)\n        return visited\n\n    # For each node, check if it can be the strongest\n    for candidate in range(1, N + 1):\n        visited = set()\n        dfs(candidate, visited)\n        if len(visited) != N:\n            candidates.discard(candidate)\n\n    if len(candidates) == 1:\n        print(candidates.pop())\n    else:\n        print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2212,
+  "total_time_ms": 36307.47199058533,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1636
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3406",
+  "passed": false,
+  "code": "class Solution:\n    def numberOfStableArrays(self, zero: int, one: int, limit: int) -> int:\n        MOD = 10**9 + 7\n\n        # dp[i][j] = number of ways to build a sequence with i zeros and j ones\n        # such that the last element is 0 if i > 0, or 1 if j > 0\n        dp = [[0] * (one + 1) for _ in range(zero + 1)]\n\n        # Initialize base cases\n        dp[0][0] = 1  # empty sequence\n\n        for i in range(zero + 1):\n            for j in range(one + 1):\n                if i == 0 and j == 0:\n                    continue\n                if i > 0:\n                    # Add a 0 to sequences ending with 0 or 1\n                    # Ensure that the last 'limit' elements do not consist of only 0s\n                    if i - 1 >= 0:\n                        for k in range(1, limit + 1):\n                            if j >= k:\n                                dp[i][j] = (dp[i][j] + dp[i - k][j]) % MOD\n                if j > 0:\n                    # Add a 1 to sequences ending with 0 or 1\n                    # Ensure that the last 'limit' elements do not consist of only 1s\n                    if j - 1 >= 0:\n                        for k in range(1, limit + 1):\n                            if i >= k:\n                                dp[i][j] = (dp[i][j] + dp[i][j - k]) % MOD\n\n        return dp[zero][one]",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 4858,
+  "total_time_ms": 75435.26434898376,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 4565
+  }
+}

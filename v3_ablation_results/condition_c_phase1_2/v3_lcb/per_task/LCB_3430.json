@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3430",
+  "passed": true,
+  "code": "class Solution:\n    def countDays(self, days: int, meetings: List[List[int]]) -> int:\n        # Sort meetings by start time\n        meetings.sort()\n        merged = []\n        for meet in meetings:\n            if not merged:\n                merged.append(meet)\n            else:\n                last = merged[-1]\n                # Check if current meeting overlaps with the last merged meeting\n                if meet[0] <= last[1]:\n                    # Merge intervals\n                    merged[-1] = [last[0], max(last[1], meet[1])]\n                else:\n                    merged.append(meet)\n        \n        # Calculate total days covered by meetings\n        total_meeting_days = 0\n        for start, end in merged:\n            total_meeting_days += end - start + 1\n        \n        # Days available but no meetings = total days - total meeting days\n        return days - total_meeting_days",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 200,
+  "total_time_ms": 3360.0430488586426,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3462",
+  "passed": false,
+  "code": "class Solution:\n    def doesAliceWin(self, s: str) -> bool:\n        vowels = set(\"aeiou\")\n        count = 0\n        for ch in s:\n            if ch in vowels:\n                count += 1\n        return count % 2 == 1",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53541,
+  "total_time_ms": 1304684.0057373047,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1003,
+    "self_tests_generated": 5
+  }
+}

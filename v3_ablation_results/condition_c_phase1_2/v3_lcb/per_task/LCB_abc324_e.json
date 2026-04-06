@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc324_e",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = data[1]\n    S_list = data[2:2+N]\n    \n    # Precompute for each string S_i, the maximum number of characters from T it can match from the start\n    # and the maximum number of characters from T it can match from the end.\n    # We'll use two pointers for this.\n    \n    # For each string, compute how much of T it can match from the start\n    def match_start(s):\n        i = 0\n        for c in s:\n            if i < len(T) and c == T[i]:\n                i += 1\n        return i\n    \n    # For each string, compute how much of T it can match from the end\n    def match_end(s):\n        i = len(T) - 1\n        for c in reversed(s):\n            if i >= 0 and c == T[i]:\n                i -= 1\n        return len(T) - 1 - i  # how much of T is matched from the end\n    \n    # Precompute for all strings\n    start_matches = []\n    end_matches = []\n    for s in S_list:\n        start_matches.append(match_start(s))\n        end_matches.append(match_end(s))\n    \n    # Now, for each string S_j, we want to find how many S_i's can be paired with it\n    # such that start_match_i + end_match_j >= len(T)\n    \n    # Sort end_matches for binary search\n    end_matches_sorted = sorted(end_matches)\n    \n    result = 0\n    for start in start_matches:\n        needed = len(T) - start\n        # Find how many end_matches >= needed\n        idx = bisect.bisect_left(end_matches_sorted, needed)\n        result += len(end_matches_sorted) - idx\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 9529,
+  "total_time_ms": 215938.93551826477,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6977,
+    "s_star_triggered": true
+  }
+}

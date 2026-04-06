@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc358_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS, T = input().split()\nif S == \"AtCoder\" and T == \"Land\":\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 649,
+  "total_time_ms": 10049.115657806396,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 599
+  }
+}

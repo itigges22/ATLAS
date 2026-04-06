@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2921",
+  "passed": false,
+  "code": "class Solution:\n    def countSteppingNumbers(self, low: str, high: str) -> int:\n        MOD = 10**9 + 7\n\n        def count_stepping_numbers_less_equal(s: str) -> int:\n            n = len(s)\n            dp = [[[[ -1 for _ in range(2)] for __ in range(10)] for ___ in range(2)] for ____ in range(n)]\n\n            def dp_func(pos: int, prev_digit: int, tight: int, leading_zero: int) -> int:\n                if pos == n:\n                    return 0 if leading_zero else 1\n                if dp[pos][prev_digit][tight][leading_zero] != -1:\n                    return dp[pos][prev_digit][tight][leading_zero]\n\n                limit = int(s[pos]) if tight else 9\n                total = 0\n\n                for d in range(0, limit + 1):\n                    new_tight = tight and (d == limit)\n                    new_leading_zero = leading_zero and (d == 0)\n                    new_prev_digit = d if not new_leading_zero else prev_digit\n\n                    if not new_leading_zero and abs(new_prev_digit - d) != 1:\n                        continue\n\n                    total += dp_func(pos + 1, d, new_tight, new_leading_zero)\n                    total %= MOD\n\n                dp[pos][prev_digit][tight][leading_zero] = total\n                return total\n\n            return dp_func(0, 0, 1, 1)\n\n        count_high = count_stepping_numbers_less_equal(high)\n        count_low_minus_1 = count_stepping_numbers_less_equal(str(int(low) - 1))\n\n        return (count_high - count_low_minus_1) % MOD",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 55462,
+  "total_time_ms": 1285342.3671722412,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6580,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3032",
+  "passed": true,
+  "code": "class Solution:\n    def getMaxFunctionValue(self, receiver: List[int], k: int) -> int:\n        n = len(receiver)\n        max_val = 0\n        for x in range(n):\n            current = x\n            total = x\n            for _ in range(k):\n                current = receiver[current]\n                total += current\n            max_val = max(max_val, total)\n        return max_val",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 96,
+  "total_time_ms": 1646.425724029541,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

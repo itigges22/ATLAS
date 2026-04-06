@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc342_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    index = 0\n    N = int(data[index])\n    index += 1\n    P = list(map(int, data[index:index + N]))\n    index += N\n    Q = int(data[index])\n    index += 1\n    queries = []\n    for _ in range(Q):\n        A = int(data[index])\n        B = int(data[index + 1])\n        queries.append((A, B))\n        index += 2\n    \n    pos = {person: i + 1 for i, person in enumerate(P)}\n    \n    for A, B in queries:\n        if pos[A] < pos[B]:\n            print(A)\n        else:\n            print(B)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2444.7598457336426,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

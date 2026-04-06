@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2848",
+  "passed": true,
+  "code": "from typing import List\nfrom functools import lru_cache\n\nclass Solution:\n    def specialPerm(self, nums: List[int]) -> int:\n        n = len(nums)\n        MOD = 10**9 + 7\n\n        # Precompute divisibility between all pairs\n        divisible = [[False] * n for _ in range(n)]\n        for i in range(n):\n            for j in range(n):\n                if i != j:\n                    divisible[i][j] = nums[i] % nums[j] == 0 or nums[j] % nums[i] == 0\n\n        @lru_cache(None)\n        def dp(mask, pos):\n            if mask == (1 << n) - 1:\n                return 1\n            total = 0\n            for i in range(n):\n                if not (mask & (1 << i)):\n                    if divisible[pos][i]:\n                        total += dp(mask | (1 << i), i)\n                        total %= MOD\n            return total\n\n        result = 0\n        for i in range(n):\n            result += dp(1 << i, i)\n            result %= MOD\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3738,
+  "total_time_ms": 94789.16764259338,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1408,
+    "s_star_triggered": true
+  }
+}

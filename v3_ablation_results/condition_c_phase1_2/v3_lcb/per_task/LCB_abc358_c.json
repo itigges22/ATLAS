@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc358_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import combinations\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    stands = data[2:2+N]\n\n    # Check all combinations of stands to find the minimum set that covers all flavors\n    for k in range(1, N+1):\n        for combo in combinations(range(N), k):\n            covered = set()\n            for i in combo:\n                for j in range(M):\n                    if stands[i][j] == 'o':\n                        covered.add(j)\n            if len(covered) == M:\n                print(k)\n                return\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3223,
+  "total_time_ms": 54982.993602752686,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3083
+  }
+}

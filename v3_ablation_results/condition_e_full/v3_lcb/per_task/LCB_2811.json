@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2811",
+  "passed": true,
+  "code": "class Solution:\n    def minimumSum(self, n: int, k: int) -> int:\n        forbidden = set()\n        result = []\n        num = 1\n\n        while len(result) < n:\n            valid = True\n            for x in result:\n                if x + num == k:\n                    valid = False\n                    break\n            if valid:\n                result.append(num)\n                for x in result:\n                    forbidden.add(x + num)\n            num += 1\n\n        return sum(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4572,
+  "total_time_ms": 116868.12233924866,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2360,
+    "s_star_triggered": true
+  }
+}

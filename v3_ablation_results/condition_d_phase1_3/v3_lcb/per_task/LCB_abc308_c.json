@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc308_c",
+  "passed": true,
+  "code": "import sys\nfrom functools import cmp_to_key\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    people = []\n    \n    index = 1\n    for i in range(N):\n        a = int(data[index])\n        b = int(data[index + 1])\n        index += 2\n        people.append((a, b, i + 1))\n    \n    def compare(p1, p2):\n        a1, b1, idx1 = p1\n        a2, b2, idx2 = p2\n        # Compare success rates: a1/(a1+b1) vs a2/(a2+b2)\n        # Cross multiply to avoid floating point\n        lhs = a1 * (a2 + b2)\n        rhs = a2 * (a1 + b1)\n        if lhs > rhs:\n            return -1\n        elif lhs < rhs:\n            return 1\n        else:\n            return idx1 - idx2\n    \n    people.sort(key=cmp_to_key(compare))\n    result = [str(p[2]) for p in people]\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1479,
+  "total_time_ms": 20564.300298690796,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1204
+  }
+}

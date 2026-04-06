@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc327_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read input\n    N = int(sys.stdin.readline())\n    S = sys.stdin.readline().strip()\n\n    # Single linear scan of the string\n    for i in range(N - 1):\n        if (S[i] == 'a' and S[i + 1] == 'b') or (S[i] == 'b' and S[i + 1] == 'a'):\n            print(\"Yes\")\n            return\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 4575,
+  "total_time_ms": 58639.04070854187,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 381,
+    "s_star_triggered": true
+  }
+}

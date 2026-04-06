@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/1873_A",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nt = int(input())\nfor _ in range(t):\n    s = input().strip()\n    if s == \"abc\":\n        print(\"YES\")\n    else:\n        # Check if swapping any two characters makes it \"abc\"\n        for i in range(3):\n            for j in range(i + 1, 3):\n                lst = list(s)\n                lst[i], lst[j] = lst[j], lst[i]\n                if ''.join(lst) == \"abc\":\n                    print(\"YES\")\n                    break\n            else:\n                continue\n            break\n        else:\n            print(\"NO\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1159,
+  "total_time_ms": 18086.100578308105,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1004
+  }
+}

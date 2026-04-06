@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3494",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumCost(self, m: int, n: int, horizontalCut: List[int], verticalCut: List[int]) -> int:\n        # Sort the cuts in descending order\n        horizontalCut.sort(reverse=True)\n        verticalCut.sort(reverse=True)\n\n        # Initialize the total cost\n        total_cost = 0\n\n        # Process horizontal cuts\n        for i in range(m - 1):\n            total_cost += horizontalCut[i] * (i + 1)\n\n        # Process vertical cuts\n        for j in range(n - 1):\n            total_cost += verticalCut[j] * (j + 1)\n\n        return total_cost",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 46414,
+  "total_time_ms": 1084748.3332157135,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1074,
+    "self_tests_generated": 5
+  }
+}

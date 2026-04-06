@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3379",
+  "passed": true,
+  "code": "class Solution:\n    def scoreOfString(self, s: str) -> int:\n        score = 0\n        for i in range(1, len(s)):\n            score += abs(ord(s[i]) - ord(s[i - 1]))\n        return score",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 936,
+  "total_time_ms": 16500.651121139526,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 869
+  }
+}

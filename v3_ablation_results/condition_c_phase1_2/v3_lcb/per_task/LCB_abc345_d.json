@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc345_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport itertools\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    H = int(data[1])\n    W = int(data[2])\n    \n    tiles = []\n    idx = 3\n    for _ in range(N):\n        A = int(data[idx])\n        B = int(data[idx + 1])\n        tiles.append((A, B))\n        idx += 2\n    \n    total_area = H * W\n    tile_areas = [a * b for a, b in tiles]\n    total_tile_area = sum(tile_areas)\n    \n    if total_tile_area < total_area:\n        print(\"No\")\n        return\n    \n    grid = [[False for _ in range(W)] for _ in range(H)]\n    \n    def can_place(x, y, a, b):\n        if x + a > H or y + b > W:\n            return False\n        for i in range(x, x + a):\n            for j in range(y, y + b):\n                if grid[i][j]:\n                    return False\n        return True\n    \n    def place(x, y, a, b):\n        for i in range(x, x + a):\n            for j in range(y, y + b):\n                grid[i][j] = True\n    \n    def unplace(x, y, a, b):\n        for i in range(x, x + a):\n            for j in range(y, y + b):\n                grid[i][j] = False\n    \n    def backtrack(tile_idx, placed_area):\n        if placed_area == total_area:\n            return True\n        \n        if tile_idx == N:\n            return False\n        \n        a, b = tiles[tile_idx]\n        for rot in [0, 1]:\n            if rot == 0:\n                tile_a, tile_b = a, b\n            else:\n                tile_a, tile_b = b, a\n            \n            for x in range(H):\n                for y in range(W):\n                    if not grid[x][y]:\n                        if can_place(x, y, tile_a, tile_b):\n                            place(x, y, tile_a, tile_b)\n                            if backtrack(tile_idx + 1, placed_area + tile_a * tile_b):\n                                return True\n                            unplace(x, y, tile_a, tile_b)\n        return backtrack(tile_idx + 1, placed_area)\n    \n    if backtrack(0, 0):\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6031,
+  "total_time_ms": 95138.90242576599,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5731
+  }
+}

@@ -334,7 +334,8 @@ class TestBudgetForcingClass:
         assert "<|im_start|>system" in prompt
         assert "<|im_start|>user" in prompt
         assert "Solve this" in prompt
-        assert prompt.endswith("<|im_start|>assistant\n")
+        # V3.1: pre-fill closed think block to force-skip thinking
+        assert "<think>\n\n</think>" in prompt
 
     def test_format_chatml_thinking(self, bf_enabled):
         prompt = bf_enabled.format_chatml("Solve this", "hard")
@@ -342,7 +343,7 @@ class TestBudgetForcingClass:
         assert "step by step" in prompt.lower()
 
     def test_get_max_tokens_nothink(self, bf_enabled):
-        assert bf_enabled.get_max_tokens("nothink") == 16384
+        assert bf_enabled.get_max_tokens("nothink") == 4096
 
     def test_get_max_tokens_tiers(self, bf_enabled):
         assert bf_enabled.get_max_tokens("light") == 1024 + 4096
@@ -592,7 +593,7 @@ class TestAC1C4TokenBudgetCompliance:
         for tier_name, tier_config in BUDGET_TIERS.items():
             max_tok = bf_enabled.get_max_tokens(tier_name)
             if tier_name == "nothink":
-                assert max_tok == 16384
+                assert max_tok == 4096  # V3.1: code-only, no thinking
             else:
                 assert max_tok == tier_config["max_thinking"] + 4096
 
@@ -618,25 +619,17 @@ class TestAC1C5NothinkNoRegression:
         prompt = get_system_prompt("nothink")
         assert prompt == "You are an expert programmer. Respond directly and concisely. /nothink"
 
-    def test_nothink_chatml_matches_v2_format(self, bf_enabled):
-        """ChatML for nothink tier should produce identical format to V2 runner."""
+    def test_nothink_chatml_has_prefill(self, bf_enabled):
+        """V3.1: ChatML for nothink tier pre-fills closed think block."""
         user_content = "Write a function to sort a list"
         chatml = bf_enabled.format_chatml(user_content, "nothink")
-        # V2 runner format from runner.py:_format_chatml()
-        expected = (
-            "<|im_start|>system\n"
-            "You are an expert programmer. Respond directly and concisely. /nothink"
-            "<|im_end|>\n"
-            "<|im_start|>user\n"
-            f"{user_content}"
-            "<|im_end|>\n"
-            "<|im_start|>assistant\n"
-        )
-        assert chatml == expected
+        assert "/nothink" in chatml
+        assert "<think>\n\n</think>\n\n" in chatml
+        assert chatml.endswith("<think>\n\n</think>\n\n")
 
-    def test_nothink_max_tokens_matches_v2(self, bf_enabled):
-        """Nothink max tokens should match V2 default (16384)."""
-        assert bf_enabled.get_max_tokens("nothink") == 16384
+    def test_nothink_max_tokens_v31(self, bf_enabled):
+        """V3.1: Nothink max tokens reduced to 4096 (code-only)."""
+        assert bf_enabled.get_max_tokens("nothink") == 4096
 
     def test_easy_tasks_use_nothink(self, bf_enabled):
         """Easy tasks (low energy) should use nothink — same as V2."""

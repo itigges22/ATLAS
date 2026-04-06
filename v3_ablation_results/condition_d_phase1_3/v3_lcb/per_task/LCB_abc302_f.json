@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc302_f",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque, defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n    \n    sets = []\n    for _ in range(N):\n        A_i = int(data[idx])\n        idx += 1\n        elements = list(map(int, data[idx:idx+A_i]))\n        idx += A_i\n        sets.append(set(elements))\n    \n    # Build adjacency list\n    adj = [[] for _ in range(N)]\n    element_to_sets = defaultdict(list)\n    \n    for i in range(N):\n        for elem in sets[i]:\n            element_to_sets[elem].append(i)\n    \n    for i in range(N):\n        for elem in sets[i]:\n            for j in element_to_sets[elem]:\n                if i < j:\n                    adj[i].append(j)\n                    adj[j].append(i)\n    \n    # BFS setup\n    start_nodes = []\n    end_nodes = []\n    for i in range(N):\n        if 1 in sets[i]:\n            start_nodes.append(i)\n        if M in sets[i]:\n            end_nodes.append(i)\n    \n    if not start_nodes or not end_nodes:\n        print(-1)\n        return\n    \n    # BFS from all start nodes\n    visited = [-1] * N\n    q = deque()\n    for node in start_nodes:\n        visited[node] = 0\n        q.append(node)\n    \n    while q:\n        u = q.popleft()\n        for v in adj[u]:\n            if visited[v] == -1:\n                visited[v] = visited[u] + 1\n                q.append(v)\n    \n    min_ops = -1\n    for node in end_nodes:\n        if visited[node] != -1:\n            if min_ops == -1 or visited[node] < min_ops:\n                min_ops = visited[node]\n    \n    print(min_ops)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2327,
+  "total_time_ms": 38532.646894454956,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1901
+  }
+}

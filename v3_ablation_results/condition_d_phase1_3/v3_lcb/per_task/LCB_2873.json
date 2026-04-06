@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2873",
+  "passed": true,
+  "code": "class Solution:\n    def findPrimePairs(self, n: int) -> List[List[int]]:\n        if n < 2:\n            return []\n\n        # Sieve of Eratosthenes to find all primes up to n\n        is_prime = [True] * (n + 1)\n        is_prime[0] = is_prime[1] = False\n        for i in range(2, int(n ** 0.5) + 1):\n            if is_prime[i]:\n                for j in range(i * i, n + 1, i):\n                    is_prime[j] = False\n\n        result = []\n        for x in range(2, n // 2 + 1):\n            y = n - x\n            if y >= x and is_prime[x] and is_prime[y]:\n                result.append([x, y])\n\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1554,
+  "total_time_ms": 22263.073682785034,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1361
+  }
+}

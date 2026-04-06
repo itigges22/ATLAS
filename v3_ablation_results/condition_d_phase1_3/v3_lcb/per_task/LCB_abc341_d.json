@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc341_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\ndef count_divisible_by_one(n, m, x):\n    # Count numbers <= x divisible by n or m but not both\n    lcm = n * m // math.gcd(n, m)\n    count_n = x // n\n    count_m = x // m\n    count_both = x // lcm\n    return count_n + count_m - 2 * count_both\n\ndef find_kth_number(n, m, k):\n    low = 1\n    high = max(n, m) * k  # Upper bound for binary search\n    while low < high:\n        mid = (low + high) // 2\n        cnt = count_divisible_by_one(n, m, mid)\n        if cnt < k:\n            low = mid + 1\n        else:\n            high = mid\n    return low\n\ndef main():\n    N, M, K = map(int, sys.stdin.read().split())\n    result = find_kth_number(N, M, K)\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1391,
+  "total_time_ms": 41582.85999298096,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1186
+  }
+}

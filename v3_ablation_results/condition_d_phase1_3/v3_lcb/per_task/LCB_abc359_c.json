@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc359_c",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    Sx, Sy, Tx, Ty = map(int, input().split())\n\n    # Convert coordinates to tile coordinates\n    def to_tile(x):\n        return x // 2\n\n    # Number of tiles crossed in x and y directions\n    dx = abs(to_tile(Sx) - to_tile(Tx))\n    dy = abs(to_tile(Sy) - to_tile(Ty))\n\n    # The minimum toll is the number of tiles crossed\n    print(dx + dy)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53342,
+  "total_time_ms": 875659.9624156952,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 900,
+    "self_tests_generated": 5
+  }
+}

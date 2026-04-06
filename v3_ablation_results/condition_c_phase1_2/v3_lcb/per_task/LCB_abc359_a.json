@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc359_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\ncount = 0\nfor _ in range(n):\n    s = input()\n    if s == \"Takahashi\":\n        count += 1\nprint(count)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 56,
+  "total_time_ms": 1106.609582901001,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc356_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\nMOD = 998244353\n\ndef main():\n    N, M = map(int, sys.stdin.read().split())\n    result = 0\n    for i in range(60):\n        bit = 1 << i\n        if not (M & bit):\n            continue\n        # Count how many numbers from 0 to N have the i-th bit set\n        count = (N + 1) // (bit << 1) * bit\n        remainder = (N + 1) % (bit << 1)\n        count += max(0, remainder - bit)\n        result = (result + count) % MOD\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 2392,
+  "total_time_ms": 72218.13201904297,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2299
+  }
+}

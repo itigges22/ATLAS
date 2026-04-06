@@ -72,7 +72,7 @@ load_config() {
 
     # Handle auto-detection for node IP
     if [[ "${ATLAS_NODE_IP:-auto}" == "auto" ]]; then
-        ATLAS_NODE_IP=$(hostname -I | awk '{print $1}')
+        ATLAS_NODE_IP=$({ hostname -I 2>/dev/null || ip -4 addr show scope global | grep -oP "(?<=inet )[d.]+" | head -1; } | awk '{print $1}')
     fi
 
     # Handle auto-generation for JWT secret
@@ -108,7 +108,6 @@ validate_config() {
         "$ATLAS_RAG_API_NODEPORT"
         "$ATLAS_DASHBOARD_NODEPORT"
         "$ATLAS_LLAMA_NODEPORT"
-        # V1 components (Qdrant, embedding-service) removed in V2
         "$ATLAS_SANDBOX_NODEPORT"
     )
 

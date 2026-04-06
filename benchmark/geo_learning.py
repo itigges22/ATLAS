@@ -8,29 +8,43 @@ import urllib.error
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Embedding dimension is model-dependent (768 for nomic-embed-text-v1.5,
-# 5120 for Qwen3-14B). Not used functionally — kept for documentation.
+# Embedding dimension is model-dependent (5120 for Qwen3-14B,
+# 4096 for Qwen3.5-9B). Not used functionally — kept for documentation.
 
 
 # --- Embedding extraction -----------------------------------------------------
 
 def extract_embedding_urllib(text: str, llama_url: str) -> Optional[List[float]]:
     """
-    Extract a mean-pooled embedding from llama-server's /embedding endpoint.
+    Extract embedding from LLM server.
 
-    The endpoint returns a list of per-token embedding vectors. This function
-    averages across all tokens to produce a single 5120-dim vector.
+    Supports both llama.cpp (/embedding) and Fox (/v1/embeddings) endpoints.
+    Set ATLAS_USE_FOX=1 to use Fox's OpenAI-compatible endpoint.
 
     Args:
         text: Input text to embed.
-        llama_url: Base URL for llama-server (e.g. "http://localhost:8080").
+        llama_url: Base URL for server (e.g. "http://localhost:8080").
 
     Returns:
-        List of floats (length EMBEDDING_DIM), or None on failure.
+        List of floats, or None on failure.
     """
-    body = json.dumps({"content": text}).encode("utf-8")
+    import os
+    use_fox = os.environ.get("ATLAS_USE_FOX", "0") == "1"
+
+    if use_fox:
+        # Fox: OpenAI-compatible /v1/embeddings
+        body = json.dumps({
+            "model": os.environ.get("ATLAS_MODEL_NAME", "default"),
+            "input": text,
+        }).encode("utf-8")
+        endpoint = f"{llama_url}/v1/embeddings"
+    else:
+        # llama.cpp: /embedding
+        body = json.dumps({"content": text}).encode("utf-8")
+        endpoint = f"{llama_url}/embedding"
+
     req = urllib.request.Request(
-        f"{llama_url}/embedding",
+        endpoint,
         data=body,
         headers={"Content-Type": "application/json"},
     )
@@ -40,30 +54,35 @@ def extract_embedding_urllib(text: str, llama_url: str) -> Optional[List[float]]
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
         return None
 
-    # Response format: [{"index": 0, "embedding": [[d0, d1, ...], [d0, d1, ...], ...]}]
-    try:
-        token_vectors = data[0]["embedding"]
-    except (KeyError, IndexError, TypeError):
-        return None
+    if use_fox:
+        # Fox response: {"data": [{"embedding": [d0, d1, ...]}]}
+        try:
+            return data["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError):
+            return None
+    else:
+        # llama.cpp response: [{"index": 0, "embedding": [[d0, ...], ...]}]
+        try:
+            token_vectors = data[0]["embedding"]
+        except (KeyError, IndexError, TypeError):
+            return None
 
-    if not token_vectors:
-        return None
+        if not token_vectors:
+            return None
 
-    # If the embedding is already a flat vector (single-token or pre-pooled),
-    # return it directly.
-    if not isinstance(token_vectors[0], list):
-        return token_vectors
+        if not isinstance(token_vectors[0], list):
+            return token_vectors
 
-    n_tokens = len(token_vectors)
-    n_dims = len(token_vectors[0])
-    pooled = [0.0] * n_dims
-    for vec in token_vectors:
-        for i, v in enumerate(vec):
-            pooled[i] += v
-    for i in range(n_dims):
-        pooled[i] /= n_tokens
+        n_tokens = len(token_vectors)
+        n_dims = len(token_vectors[0])
+        pooled = [0.0] * n_dims
+        for vec in token_vectors:
+            for i, v in enumerate(vec):
+                pooled[i] += v
+        for i in range(n_dims):
+            pooled[i] /= n_tokens
 
-    return pooled
+        return pooled
 
 
 # --- Spearman rank correlation ------------------------------------------------

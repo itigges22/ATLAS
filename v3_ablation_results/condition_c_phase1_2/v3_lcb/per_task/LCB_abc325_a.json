@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc325_a",
+  "passed": true,
+  "code": "# Read input\nS, T = input().split()\n\n# Output the surname followed by \" san\"\nprint(f\"{S} san\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 40,
+  "total_time_ms": 922.7132797241211,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc342_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    S = list(data[1])\n    Q = int(data[2])\n    \n    # Map from character to character\n    char_map = {}\n    for i in range(Q):\n        c = data[3 + 2*i]\n        d = data[4 + 2*i]\n        char_map[c] = d\n    \n    # Apply the transformations\n    for i in range(N):\n        if S[i] in char_map:\n            S[i] = char_map[S[i]]\n    \n    print(''.join(S))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 56962,
+  "total_time_ms": 1033760.4458332062,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 720,
+    "self_tests_generated": 5
+  }
+}

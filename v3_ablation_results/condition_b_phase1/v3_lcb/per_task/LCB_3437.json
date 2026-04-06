@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3437",
+  "passed": true,
+  "code": "from typing import List\nfrom collections import defaultdict\n\nclass Solution:\n    def maximumTotalDamage(self, power: List[int]) -> int:\n        freq = defaultdict(int)\n        for p in power:\n            freq[p] += p  # Store total damage for each unique power value\n\n        unique_powers = sorted(freq.keys())\n        n = len(unique_powers)\n        dp = [0] * n\n\n        for i in range(n):\n            # Take current power's total damage\n            current_total = freq[unique_powers[i]]\n            dp[i] = current_total\n\n            # Check for non-conflicting previous powers\n            for j in range(i):\n                if abs(unique_powers[i] - unique_powers[j]) > 2:\n                    dp[i] = max(dp[i], dp[j] + current_total)\n\n        return max(dp)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1676,
+  "total_time_ms": 27311.52606010437,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1442
+  }
+}

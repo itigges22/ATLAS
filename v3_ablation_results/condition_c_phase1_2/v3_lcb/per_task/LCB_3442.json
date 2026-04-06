@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3442",
+  "passed": true,
+  "code": "from typing import List\nfrom functools import lru_cache\n\nclass Solution:\n    def maxTotalReward(self, rewardValues: List[int]) -> int:\n        rewardValues.sort()\n        n = len(rewardValues)\n\n        @lru_cache(None)\n        def dp(i, x):\n            if i == n:\n                return x\n            # Option 1: skip the current reward\n            res = dp(i + 1, x)\n            # Option 2: take the current reward if possible\n            if rewardValues[i] > x:\n                res = max(res, dp(i + 1, x + rewardValues[i]))\n            return res\n\n        return dp(0, 0)",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 2489,
+  "total_time_ms": 41927.20651626587,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2389
+  }
+}

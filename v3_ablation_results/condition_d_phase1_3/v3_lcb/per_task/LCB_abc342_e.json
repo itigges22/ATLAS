@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc342_e",
+  "passed": false,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    idx = 2\n    \n    trains = defaultdict(list)\n    \n    for _ in range(M):\n        l = int(data[idx])\n        d = int(data[idx+1])\n        k = int(data[idx+2])\n        c = int(data[idx+3])\n        A = int(data[idx+4])\n        B = int(data[idx+5])\n        idx += 6\n        \n        # Generate all departure times for this train\n        # The last departure time is l + (k-1)*d\n        last_departure = l + (k-1)*d\n        trains[A].append((last_departure, B, c))\n    \n    # We want to find the latest time to reach station N from each station S\n    # So we reverse the graph and find the latest time to reach station N\n    \n    # Reverse the graph\n    rev_graph = defaultdict(list)\n    for A in trains:\n        for dep_time, B, c in trains[A]:\n            rev_graph[B].append((A, dep_time, c))\n    \n    # Use a max-heap (priority queue) to find the latest times\n    # We use negative times to simulate a max-heap\n    import heapq\n    dist = [-1] * (N + 1)\n    dist[N] = float('inf')\n    heap = []\n    heapq.heappush(heap, (-float('inf'), N))\n    \n    while heap:\n        curr_time_neg, u = heapq.heappop(heap)\n        curr_time = -curr_time_neg\n        \n        if dist[u] > curr_time:\n            continue\n        \n        for v, dep_time, c in rev_graph[u]:\n            arrival_time = dep_time\n            if arrival_time > dist[v]:\n                dist[v] = arrival_time\n                heapq.heappush(heap, (-arrival_time, v))\n    \n    for i in range(1, N):\n        if dist[i] == -1:\n            print(\"Unreachable\")\n        else:\n            print(dist[i])\n    \nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 48776,
+  "total_time_ms": 885408.8706970215,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1746,
+    "self_tests_generated": 5
+  }
+}

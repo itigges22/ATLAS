@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3200",
+  "passed": true,
+  "code": "import sys\nimport math\nfrom typing import List\n\nMOD = 10**9 + 7\n\nclass Solution:\n    def stringCount(self, n: int) -> int:\n        if n < 4:\n            return 0\n\n        max_n = n\n        fact = [1] * (max_n + 1)\n        inv_fact = [1] * (max_n + 1)\n\n        for i in range(1, max_n + 1):\n            fact[i] = fact[i - 1] * i % MOD\n\n        inv_fact[max_n] = pow(fact[max_n], MOD - 2, MOD)\n        for i in range(max_n - 1, -1, -1):\n            inv_fact[i] = inv_fact[i + 1] * (i + 1) % MOD\n\n        def comb(n, k):\n            if k < 0 or k > n:\n                return 0\n            return fact[n] * inv_fact[k] % MOD * inv_fact[n - k] % MOD\n\n        total = pow(26, n, MOD)\n        bad = 0\n\n        # Count strings with less than 1 'l'\n        bad += comb(n, 0) * pow(25, n, MOD)\n\n        # Count strings with less than 2 'e's\n        bad += comb(n, 0) * pow(25, n, MOD)\n        bad += comb(n, 1) * pow(25, n - 1, MOD)\n\n        # Count strings with less than 1 't'\n        bad += comb(n, 0) * pow(25, n, MOD)\n\n        # Count strings with less than 1 'l' AND less than 2 'e's\n        bad -= comb(n, 0) * comb(n, 0) * pow(24, n, MOD)\n        bad -= comb(n, 0) * comb(n, 1) * pow(24, n - 1, MOD)\n\n        # Count strings with less than 1 'l' AND less than 1 't'\n        bad -= comb(n, 0) * comb(n, 0) * pow(24, n, MOD)\n\n        # Count strings with less than 2 'e's AND less than 1 't'\n        bad -= comb(n, 0) * comb(n, 0) * pow(24, n, MOD)\n        bad -= comb(n, 1) * comb(n, 0) * pow(24, n - 1, MOD)\n\n        # Count strings with less than 1 'l' AND less than 2 'e's AND less than 1 't'\n        bad += comb(n, 0) * comb(n, 0) * comb(n, 0) * pow(23, n, MOD)\n        bad += comb(n, 0) * comb(n, 1) * comb(n, 0) * pow(23, n - 1, MOD)\n\n        # Use inclusion-exclusion to get the number of bad strings\n        bad %= MOD\n\n        return (total - bad + MOD) % MOD",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3342,
+  "total_time_ms": 47615.66233634949,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2789
+  }
+}

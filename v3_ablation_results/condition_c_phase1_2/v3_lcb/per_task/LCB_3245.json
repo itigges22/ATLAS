@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3245",
+  "passed": true,
+  "code": "from typing import List\nimport bisect\n\nclass Solution:\n    def beautifulIndices(self, s: str, a: str, b: str, k: int) -> List[int]:\n        # Step 1: Find all indices where a matches in s\n        a_indices = []\n        i = s.find(a)\n        while i != -1:\n            a_indices.append(i)\n            i = s.find(a, i + 1)\n\n        # Step 2: Find all indices where b matches in s\n        b_indices = []\n        j = s.find(b)\n        while j != -1:\n            b_indices.append(j)\n            j = s.find(b, j + 1)\n\n        # Step 3: For each index i in a_indices, check if there exists j in b_indices with |j - i| <= k\n        # Sort b_indices for binary search\n        b_indices.sort()\n\n        result = []\n        for i in a_indices:\n            # Use bisect to find the range of j in b_indices where |j - i| <= k\n            left = bisect.bisect_left(b_indices, i - k)\n            right = bisect.bisect_right(b_indices, i + k)\n            if left < right:\n                result.append(i)\n\n        # Step 4: Return the result in sorted order\n        return sorted(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7819,
+  "total_time_ms": 122050.11892318726,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5530,
+    "s_star_triggered": true
+  }
+}

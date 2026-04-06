@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3451",
+  "passed": false,
+  "code": "class Solution:\n    def compressedString(self, word: str) -> str:\n        comp = []\n        i = 0\n        while i < len(word):\n            j = i\n            while j < len(word) and word[j] == word[i] and j - i < 9:\n                j += 1\n            comp.append(str(j - i) + word[i])\n            i = j\n        return ''.join(comp)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3585,
+  "total_time_ms": 58584.1019153595,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3485
+  }
+}

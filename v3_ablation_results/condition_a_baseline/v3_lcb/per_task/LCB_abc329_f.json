@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc329_f",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    \n    C = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    queries = []\n    for _ in range(Q):\n        a = int(data[idx])\n        b = int(data[idx+1])\n        queries.append((a, b))\n        idx += 2\n    \n    # Use a list of sets to track colors in each box\n    boxes = [set() for _ in range(N)]\n    for i in range(N):\n        boxes[i].add(C[i])\n    \n    for a, b in queries:\n        a -= 1\n        b -= 1\n        # Move all balls from a to b\n        if boxes[a]:\n            boxes[b] |= boxes[a]\n            print(len(boxes[b]))\n        else:\n            print(len(boxes[b]))\n        # Clear box a\n        boxes[a].clear()\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3975.285530090332,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

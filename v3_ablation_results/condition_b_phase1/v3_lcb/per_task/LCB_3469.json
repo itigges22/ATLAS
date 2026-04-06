@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3469",
+  "passed": true,
+  "code": "class Solution:\n    def maxHeightOfTriangle(self, red: int, blue: int) -> int:\n        def max_height(r, b):\n            height = 0\n            while True:\n                if height % 2 == 0:\n                    if r >= height + 1:\n                        r -= height + 1\n                        height += 1\n                    else:\n                        break\n                else:\n                    if b >= height + 1:\n                        b -= height + 1\n                        height += 1\n                    else:\n                        break\n            return height\n\n        return max(max_height(red, blue), max_height(blue, red))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1207,
+  "total_time_ms": 20362.996816635132,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1064
+  }
+}

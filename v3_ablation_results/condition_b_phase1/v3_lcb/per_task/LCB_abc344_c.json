@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc344_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n\n    M = int(data[idx])\n    idx += 1\n    B = list(map(int, data[idx:idx+M]))\n    idx += M\n\n    L = int(data[idx])\n    idx += 1\n    C = list(map(int, data[idx:idx+L]))\n    idx += L\n\n    Q = int(data[idx])\n    idx += 1\n    X = list(map(int, data[idx:idx+Q]))\n\n    # Preprocess all possible sums of A, B, C\n    sum_set = set()\n    for a in A:\n        for b in B:\n            for c in C:\n                sum_set.add(a + b + c)\n\n    # Process queries\n    for x in X:\n        if x in sum_set:\n            print(\"Yes\")\n        else:\n            print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2039,
+  "total_time_ms": 31157.975912094116,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1684
+  }
+}

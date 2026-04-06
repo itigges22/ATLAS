@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc338_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nfrom collections import Counter\n\nS = input().strip()\ncount = Counter(S)\nmax_freq = max(count.values())\ncandidates = [char for char, freq in count.items() if freq == max_freq]\nprint(min(candidates))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1328.9313316345215,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

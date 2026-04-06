@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc320_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    events = []\n    idx = 2\n    for _ in range(M):\n        T = int(data[idx])\n        W = int(data[idx+1])\n        S = int(data[idx+2])\n        events.append((T, W, S))\n        idx += 3\n    \n    # We'll use a priority queue to track people who are out of the row\n    # The priority is based on the time they return to the row\n    # The heap will store (return_time, person_number)\n    out_of_row = []\n    \n    # We'll use an array to track the current availability of each person\n    # Initially, all are available (available[i] = True)\n    available = [True] * N\n    \n    # We'll use an array to accumulate the total noodles each person gets\n    noodles = [0] * N\n    \n    # Process each event in order\n    for T, W, S in events:\n        # First, check if any people have returned to the row before or at this time\n        while out_of_row and out_of_row[0][0] <= T:\n            return_time, person = heapq.heappop(out_of_row)\n            available[person] = True\n        \n        # Find the first available person in the row (from front to back)\n        for i in range(N):\n            if available[i]:\n                noodles[i] += W\n                available[i] = False\n                heapq.heappush(out_of_row, (T + S, i))\n                break\n    \n    # Print the result\n    for amount in noodles:\n        print(amount)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1324,
+  "total_time_ms": 115143.2318687439,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 952
+  }
+}

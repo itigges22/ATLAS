@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc355_d",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    intervals = []\n    for i in range(N):\n        l = int(data[1 + 2*i])\n        r = int(data[2 + 2*i])\n        intervals.append((l, r))\n    \n    # Sort intervals by start time\n    intervals.sort()\n    l_list = [x[0] for x in intervals]\n    r_list = [x[1] for x in intervals]\n    \n    # Total number of pairs\n    total_pairs = N * (N - 1) // 2\n    # Subtract non-overlapping pairs\n    non_overlapping = 0\n    for i in range(N):\n        # Find number of intervals that end before l_i\n        # These intervals do not overlap with i-th interval\n        count = bisect.bisect_left(r_list, l_list[i])\n        non_overlapping += count\n    \n    print(total_pairs - non_overlapping)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 247,
+  "total_time_ms": 3812.0012283325195,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3046",
+  "passed": true,
+  "code": "class Solution:\n    def minimumOperations(self, num: str) -> int:\n        # Check if the number is already divisible by 25\n        if int(num) % 25 == 0:\n            return 0\n        \n        # Try all possible suffixes that make a number divisible by 25\n        targets = [\"00\", \"25\", \"50\", \"75\"]\n        min_deletions = float('inf')\n        \n        for target in targets:\n            i = len(num) - 1\n            j = len(target) - 1\n            deletions = 0\n            \n            # Find the suffix matching the target\n            while i >= 0 and j >= 0:\n                if num[i] == target[j]:\n                    j -= 1\n                else:\n                    deletions += 1\n                i -= 1\n            \n            # If we found the target, update min_deletions\n            if j == -1:\n                min_deletions = min(min_deletions, deletions)\n        \n        # If no valid suffix is found, the only option is to delete all digits to get 0\n        return min_deletions if min_deletions != float('inf') else len(num) - 1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2103,
+  "total_time_ms": 34707.47089385986,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1706
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3420",
+  "passed": true,
+  "code": "class Solution:\n    def occurrencesOfElement(self, nums: List[int], queries: List[int], x: int) -> List[int]:\n        # Preprocess: collect all indices where nums[i] == x\n        indices = []\n        for i, num in enumerate(nums):\n            if num == x:\n                indices.append(i)\n        \n        # Prepare the answer list\n        answer = []\n        for q in queries:\n            if q <= len(indices):\n                answer.append(indices[q - 1])\n            else:\n                answer.append(-1)\n        \n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2054.4040203094482,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

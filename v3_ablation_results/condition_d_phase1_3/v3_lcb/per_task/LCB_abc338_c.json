@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc338_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    Q = list(map(int, data[1:N+1]))\n    A = list(map(int, data[N+1:2*N+1]))\n    B = list(map(int, data[2*N+1:3*N+1]))\n    \n    max_total = 0\n    \n    # Iterate over all possible servings of dish A (x)\n    for x in range(0, Q[0] // A[0] + 1 if A[0] > 0 else Q[0] + 1):\n        # Check if x is feasible\n        feasible = True\n        for i in range(N):\n            if A[i] * x > Q[i]:\n                feasible = False\n                break\n        if not feasible:\n            continue\n        \n        # Calculate remaining ingredients after x servings of A\n        remaining = [Q[i] - A[i] * x for i in range(N)]\n        \n        # Iterate over all possible servings of dish B (y)\n        max_y = 0\n        for y in range(0, remaining[0] // B[0] + 1 if B[0] > 0 else remaining[0] + 1):\n            feasible_y = True\n            for i in range(N):\n                if B[i] * y > remaining[i]:\n                    feasible_y = False\n                    break\n            if feasible_y:\n                max_y = y\n        \n        total = x + max_y\n        if total > max_total:\n            max_total = total\n    \n    print(max_total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54070,
+  "total_time_ms": 945989.0489578247,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1339,
+    "self_tests_generated": 5
+  }
+}

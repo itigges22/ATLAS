@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3081",
+  "passed": true,
+  "code": "class Solution:\n    def minLengthAfterRemovals(self, nums: List[int]) -> int:\n        n = len(nums)\n        count = 0\n        left, right = 0, n - 1\n\n        while left < right:\n            if nums[left] < nums[right]:\n                count += 2\n                left += 1\n                right -= 1\n            else:\n                right -= 1\n\n        return n - count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1167,
+  "total_time_ms": 19511.71898841858,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1064
+  }
+}

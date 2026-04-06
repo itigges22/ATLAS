@@ -92,12 +92,12 @@ No metric tensor, no gradient computation, no correction vector in the selection
 
 **Status: BYPASSED_ENTIRELY**
 
-The benchmark runner calls llama-server directly (port 32735), completely bypassing rag-api and its pattern cache. The cache is fully implemented (8 files, 1,092 LOC) with functional read and write paths for interactive RAG use, but the benchmark never:
-- Routes through rag-api's `/v1/chat/completions`
+The benchmark runner calls llama-server directly (port 32735), completely bypassing geometric-lens and its pattern cache. The cache is fully implemented (8 files, 1,092 LOC) with functional read and write paths for interactive RAG use, but the benchmark never:
+- Routes through geometric-lens's `/v1/chat/completions`
 - Queries for matching patterns
 - Writes new patterns after task completion
 
-The benchmark's only rag-api contact is telemetry (cache stats, lens scoring).
+The benchmark's only geometric-lens contact is telemetry (cache stats, lens scoring).
 
 ### 3.5 Simple Baseline Comparison
 

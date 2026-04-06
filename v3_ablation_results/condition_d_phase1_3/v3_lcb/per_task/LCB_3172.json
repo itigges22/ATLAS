@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3172",
+  "passed": true,
+  "code": "class Solution:\n    def differenceOfSums(self, n: int, m: int) -> int:\n        sum_total = n * (n + 1) // 2\n        k = n // m\n        sum_divisible = m * k * (k + 1) // 2\n        num1 = sum_total - sum_divisible\n        num2 = sum_divisible\n        return num1 - num2",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1698,
+  "total_time_ms": 23397.366523742676,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1610
+  }
+}

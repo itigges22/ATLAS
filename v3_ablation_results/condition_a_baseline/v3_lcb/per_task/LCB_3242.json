@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3242",
+  "passed": true,
+  "code": "class Solution:\n    def maxFrequencyElements(self, nums: List[int]) -> int:\n        from collections import Counter\n        freq = Counter(nums)\n        max_freq = max(freq.values())\n        return sum(count for count in freq.values() if count == max_freq)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 927.8788566589355,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

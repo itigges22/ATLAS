@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc314_e",
+  "passed": false,
+  "code": "import sys\nimport heapq\nimport math\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    wheels = []\n    idx = 2\n    for _ in range(N):\n        C = int(data[idx])\n        P = int(data[idx+1])\n        S = list(map(int, data[idx+2:idx+2+P]))\n        wheels.append((C, S))\n        idx += 2 + P\n    \n    # dp[x] = expected cost to reach at least M points from x points\n    dp = [0.0] * (M + 1)\n    \n    for x in range(M - 1, -1, -1):\n        min_cost = float('inf')\n        for i in range(N):\n            C, S = wheels[i]\n            total = 0.0\n            for s in S:\n                next_x = x + s\n                if next_x >= M:\n                    total += 0.0\n                else:\n                    total += dp[next_x]\n            avg = total / len(S)\n            cost = C + avg\n            if cost < min_cost:\n                min_cost = cost\n        dp[x] = min_cost\n    \n    print(dp[0])\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 67806,
+  "total_time_ms": 1126713.1345272064,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2156,
+    "self_tests_generated": 5
+  }
+}

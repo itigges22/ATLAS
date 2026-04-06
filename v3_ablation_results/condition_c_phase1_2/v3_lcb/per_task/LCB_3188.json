@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3188",
+  "passed": true,
+  "code": "class Solution:\n    def findChampion(self, grid: List[List[int]]) -> int:\n        n = len(grid)\n        for i in range(n):\n            is_champion = True\n            for j in range(n):\n                if i != j and grid[i][j] == 0:\n                    is_champion = False\n                    break\n            if is_champion:\n                return i\n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5244,
+  "total_time_ms": 85601.48119926453,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3329,
+    "s_star_triggered": true
+  }
+}

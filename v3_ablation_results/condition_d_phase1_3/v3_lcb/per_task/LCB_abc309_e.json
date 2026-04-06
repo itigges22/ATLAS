@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc309_e",
+  "passed": false,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    parent = [0] * (N + 1)\n    for i in range(2, N + 1):\n        parent[i] = int(data[i - 1])\n    \n    insurances = []\n    idx = 2\n    for _ in range(M):\n        x = int(data[idx])\n        y = int(data[idx + 1])\n        insurances.append((x, y))\n        idx += 2\n    \n    # Build tree\n    tree = [[] for _ in range(N + 1)]\n    for i in range(2, N + 1):\n        tree[parent[i]].append(i)\n    \n    covered = [False] * (N + 1)\n    \n    # Process insurances\n    for x, y in insurances:\n        queue = deque()\n        queue.append((x, y))\n        while queue:\n            node, depth = queue.popleft()\n            if depth < 0:\n                continue\n            if not covered[node]:\n                covered[node] = True\n            if depth > 0:\n                for child in tree[node]:\n                    queue.append((child, depth - 1))\n    \n    print(sum(covered))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 45379,
+  "total_time_ms": 725474.1561412811,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1918,
+    "self_tests_generated": 5
+  }
+}

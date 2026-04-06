@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc364_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nH, W = map(int, input().split())\nS_i, S_j = map(int, input().split())\ngrid = [input().strip() for _ in range(H)]\nX = input().strip()\n\n# Convert to 0-based index\ncurrent_i = S_i - 1\ncurrent_j = S_j - 1\n\n# Directions mapping\ndirections = {\n    'L': (0, -1),\n    'R': (0, 1),\n    'U': (-1, 0),\n    'D': (1, 0)\n}\n\nfor move in X:\n    di, dj = directions[move]\n    ni, nj = current_i + di, current_j + dj\n\n    # Check if the new position is within bounds and empty\n    if 0 <= ni < H and 0 <= nj < W and grid[ni][nj] == '.':\n        current_i, current_j = ni, nj\n\n# Convert back to 1-based index\nprint(current_i + 1, current_j + 1)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 234,
+  "total_time_ms": 3785.8424186706543,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

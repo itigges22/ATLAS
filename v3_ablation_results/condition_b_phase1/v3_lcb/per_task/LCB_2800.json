@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2800",
+  "passed": true,
+  "code": "class Solution:\n    def minLength(self, s: str) -> int:\n        while \"AB\" in s or \"CD\" in s:\n            s = s.replace(\"AB\", \"\").replace(\"CD\", \"\")\n        return len(s)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1057,
+  "total_time_ms": 17298.29454421997,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 996
+  }
+}

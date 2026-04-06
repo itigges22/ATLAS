@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3150",
+  "passed": false,
+  "code": "class Solution:\n    def shortestBeautifulSubstring(self, s: str, k: int) -> str:\n        min_len = float('inf')\n        candidates = []\n        n = len(s)\n        count_ones = 0\n        left = 0\n\n        for right in range(n):\n            if s[right] == '1':\n                count_ones += 1\n\n            while count_ones > k:\n                if s[left] == '1':\n                    count_ones -= 1\n                left += 1\n\n            if count_ones == k:\n                current_len = right - left + 1\n                if current_len < min_len:\n                    min_len = current_len\n                    candidates = [s[left:right+1]]\n                elif current_len == min_len:\n                    candidates.append(s[left:right+1])\n\n        return min(candidates) if candidates else \"\"",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1360,
+  "total_time_ms": 21981.173992156982,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1168
+  }
+}

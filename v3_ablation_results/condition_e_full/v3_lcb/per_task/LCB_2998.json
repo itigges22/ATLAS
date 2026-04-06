@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2998",
+  "passed": true,
+  "code": "class Solution:\n    def countSymmetricIntegers(self, low: int, high: int) -> int:\n        count = 0\n        for num in range(low, high + 1):\n            s = str(num)\n            n = len(s)\n            if n % 2 != 0:\n                continue\n            first_half = s[:n//2]\n            second_half = s[n//2:]\n            if sum(int(d) for d in first_half) == sum(int(d) for d in second_half):\n                count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 127,
+  "total_time_ms": 3270.3206539154053,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

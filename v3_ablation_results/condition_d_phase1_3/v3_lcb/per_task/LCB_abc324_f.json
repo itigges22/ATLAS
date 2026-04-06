@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc324_f",
+  "passed": false,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    edges = []\n    graph = defaultdict(list)\n    index = 2\n    for _ in range(M):\n        u = int(data[index])\n        v = int(data[index + 1])\n        b = int(data[index + 2])\n        c = int(data[index + 3])\n        edges.append((u, v, b, c))\n        graph[u].append((v, b, c))\n        index += 4\n\n    # We want to maximize (sum_b / sum_c)\n    # This is equivalent to minimizing (sum_c / sum_b) for a fixed sum_b\n    # We use a modified Dijkstra's algorithm to track the best ratio\n\n    # Priority queue: (current_ratio, current_node, total_beauty, total_cost)\n    # We use negative ratio to simulate max-heap\n    heap = [(-0.0, 1, 0, 0)]\n    visited = [False] * (N + 1)\n    max_ratio = -1.0\n\n    while heap:\n        neg_ratio, u, total_b, total_c = heapq.heappop(heap)\n        ratio = -neg_ratio\n\n        if visited[u]:\n            continue\n        visited[u] = True\n\n        if u == N:\n            max_ratio = ratio\n            continue\n\n        for v, b, c in graph[u]:\n            new_b = total_b + b\n            new_c = total_c + c\n            new_ratio = new_b / new_c\n            heapq.heappush(heap, (-new_ratio, v, new_b, new_c))\n\n    print(f\"{max_ratio:.15f}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53186,
+  "total_time_ms": 909432.8787326813,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1050,
+    "self_tests_generated": 1
+  }
+}

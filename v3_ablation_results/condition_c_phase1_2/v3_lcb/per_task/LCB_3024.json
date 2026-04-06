@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3024",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfWays(self, s: str, t: str, k: int) -> int:\n        MOD = 10**9 + 7\n        n = len(s)\n        \n        # Precompute all possible transformations of s\n        # Each transformation is determined by the suffix length l\n        # We store the count of each unique string after transformation\n        from collections import defaultdict\n        transitions = defaultdict(int)\n        transitions[s] = 1  # Initial state\n\n        # Precompute all possible transformations\n        for l in range(1, n):\n            new_s = s[-l:] + s[:-l]\n            transitions[new_s] += 1\n\n        # Check if t is reachable from s in any number of operations\n        if t not in transitions:\n            return 0\n\n        # Build transition matrix for states\n        states = list(transitions.keys())\n        m = len(states)\n        state_to_idx = {state: i for i, state in enumerate(states)}\n\n        # Build adjacency matrix\n        from collections import defaultdict\n        graph = defaultdict(list)\n        for l in range(1, n):\n            new_s = s[-l:] + s[:-l]\n            graph[s].append(new_s)\n\n        # Build transition matrix\n        trans = [[0] * m for _ in range(m)]\n        for i, state in enumerate(states):\n            for l in range(1, n):\n                new_state = state[-l:] + state[:-l]\n                j = state_to_idx[new_state]\n                trans[i][j] += 1\n\n        # Matrix exponentiation\n        def mat_mult(a, b):\n            res = [[0] * m for _ in range(m)]\n            for i in range(m):\n                for k in range(m):\n                    if a[i][k]:\n                        for j in range(m):\n                            res[i][j] = (res[i][j] + a[i][k] * b[k][j]) % MOD\n            return res\n\n        def mat_pow(mat, power):\n            result = [[0] * m for _ in range(m)]\n            for i in range(m):\n                result[i][i] = 1\n            while power > 0:\n                if power % 2 == 1:\n                    result = mat_mult(result, mat)\n                mat = mat_mult(mat, mat)\n                power //= 2\n            return result\n\n        # Initial state vector\n        initial = [0] * m\n        initial[state_to_idx[s]] = 1\n\n        # Compute transition matrix to the power k\n        trans_pow = mat_pow(trans, k)\n\n        # Multiply initial vector with trans_pow\n        result = 0\n        for i in range(m):\n            result = (result + initial[i] * trans_pow[i][state_to_idx[t]]) % MOD\n\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 10667,
+  "total_time_ms": 150434.44633483887,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 10417
+  }
+}

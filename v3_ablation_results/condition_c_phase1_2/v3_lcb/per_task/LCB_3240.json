@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3240",
+  "passed": true,
+  "code": "class Solution:\n    def findMaximumNumber(self, k: int, x: int) -> int:\n        def count_set_bits_at_position(pos: int, num: int) -> int:\n            # Count how many numbers from 1 to num have a set bit at position pos\n            cycle = 1 << (pos + 1)\n            full_cycles = num // cycle\n            count = full_cycles * (1 << (pos))\n            remainder = num % cycle\n            count += max(0, remainder - (1 << pos) + 1)\n            return count\n\n        def total_price(num: int) -> int:\n            total = 0\n            pos = x - 1  # 0-based index for x-th bit\n            while (1 << pos) <= num:\n                total += count_set_bits_at_position(pos, num)\n                pos += x\n            return total\n\n        # Binary search\n        low = 1\n        high = 10**18  # A sufficiently large upper bound\n        answer = 0\n\n        while low <= high:\n            mid = (low + high) // 2\n            price_sum = total_price(mid)\n            if price_sum <= k:\n                answer = mid\n                low = mid + 1\n            else:\n                high = mid - 1\n\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7986,
+  "total_time_ms": 194295.04561424255,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5583,
+    "s_star_triggered": true
+  }
+}

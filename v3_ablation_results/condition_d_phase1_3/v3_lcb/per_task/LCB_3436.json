@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3436",
+  "passed": true,
+  "code": "class Solution:\n    def minimumDifference(self, nums: List[int], k: int) -> int:\n        min_diff = float('inf')\n        current_ors = set()\n        \n        for num in nums:\n            new_ors = set()\n            new_ors.add(num)\n            for val in current_ors:\n                new_ors.add(val | num)\n            current_ors = new_ors\n            for val in current_ors:\n                min_diff = min(min_diff, abs(val - k))\n        \n        return min_diff",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1161,
+  "total_time_ms": 40067.31677055359,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 994
+  }
+}

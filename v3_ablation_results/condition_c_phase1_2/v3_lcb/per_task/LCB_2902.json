@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2902",
+  "passed": true,
+  "code": "class Solution:\n    def maxSum(self, nums: List[int]) -> int:\n        max_digit = lambda x: int(max(str(x)))\n        max_sum = -1\n        \n        for i in range(len(nums)):\n            for j in range(i + 1, len(nums)):\n                if max_digit(nums[i]) == max_digit(nums[j]):\n                    max_sum = max(max_sum, nums[i] + nums[j])\n        \n        return max_sum",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5861,
+  "total_time_ms": 91573.66847991943,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3621,
+    "s_star_triggered": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc340_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nA, B, D = map(int, input().split())\n\nsequence = []\ncurrent = A\nwhile current <= B:\n    sequence.append(current)\n    current += D\n\nprint(' '.join(map(str, sequence)))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 793,
+  "total_time_ms": 13044.11768913269,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 742
+  }
+}

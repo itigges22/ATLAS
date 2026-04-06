@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc356_c",
+  "passed": true,
+  "code": "import sys\nfrom itertools import combinations\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx]); idx += 1\n    M = int(data[idx]); idx += 1\n    K = int(data[idx]); idx += 1\n    \n    tests = []\n    for _ in range(M):\n        C = int(data[idx]); idx += 1\n        A = list(map(int, data[idx:idx+C]))\n        idx += C\n        R = data[idx]; idx += 1\n        tests.append((A, R))\n    \n    count = 0\n    # Iterate over all possible real key combinations\n    for real in combinations(range(1, N+1), K):\n        valid = True\n        for A, R in tests:\n            real_in_test = set(real) & set(A)\n            if R == 'o':\n                if len(real_in_test) < K:\n                    valid = False\n                    break\n            else:  # R == 'x'\n                if len(real_in_test) >= K:\n                    valid = False\n                    break\n        if valid:\n            count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1124,
+  "total_time_ms": 19177.265167236328,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 847
+  }
+}

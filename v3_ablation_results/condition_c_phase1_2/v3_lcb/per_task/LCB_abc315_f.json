@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc315_f",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    coords = [(int(data[i*2+1]), int(data[i*2+2])) for i in range(N)]\n    \n    # Precompute all pairwise distances\n    dist = [[0.0] * N for _ in range(N)]\n    for i in range(N):\n        for j in range(N):\n            if i != j:\n                dx = coords[i][0] - coords[j][0]\n                dy = coords[i][1] - coords[j][1]\n                dist[i][j] = math.hypot(dx, dy)\n    \n    # dp[i] = (minimum distance to reach checkpoint i, number of skipped checkpoints)\n    dp = [float('inf')] * N\n    dp[0] = (0.0, 0)  # Starting at checkpoint 1 with 0 skipped checkpoints\n    \n    # Dijkstra's algorithm\n    heap = [(0.0, 0, 0)]  # (distance, current checkpoint, skipped checkpoints)\n    \n    while heap:\n        curr_dist, u, skipped = heapq.heappop(heap)\n        if curr_dist > dp[u][0]:\n            continue\n        if u == N - 1:\n            break\n        for v in range(u + 1, N):\n            new_dist = curr_dist + dist[u][v]\n            new_skipped = skipped + (v - u - 1)\n            penalty = 0 if new_skipped == 0 else (2 ** (new_skipped - 1))\n            total = new_dist + penalty\n            if dp[v][0] > total:\n                dp[v] = (total, new_skipped)\n                heapq.heappush(heap, (total, v, new_skipped))\n    \n    # The answer is the minimum total distance to reach checkpoint N\n    print(f\"{dp[N-1][0]:.20f}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 8241,
+  "total_time_ms": 139024.96457099915,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7536
+  }
+}

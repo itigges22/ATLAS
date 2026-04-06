@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc304_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN = int(input())\n\nif N <= 999:\n    print(N)\nelif 1000 <= N <= 9999:\n    print((N // 10) * 10)\nelif 10000 <= N <= 99999:\n    print((N // 100) * 100)\nelif 100000 <= N <= 999999:\n    print((N // 1000) * 1000)\nelif 1000000 <= N <= 9999999:\n    print((N // 10000) * 10000)\nelif 10000000 <= N <= 99999999:\n    print((N // 100000) * 100000)\nelif 100000000 <= N <= 999999999:\n    print((N // 1000000) * 1000000)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 265,
+  "total_time_ms": 3633.1915855407715,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

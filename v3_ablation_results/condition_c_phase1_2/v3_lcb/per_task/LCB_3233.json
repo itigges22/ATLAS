@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3233",
+  "passed": true,
+  "code": "class Solution:\n    def maxPartitionsAfterOperations(self, s: str, k: int) -> int:\n        def count_partitions(s, k):\n            partitions = 0\n            freq = {}\n            for ch in s:\n                if ch in freq:\n                    freq[ch] += 1\n                else:\n                    freq[ch] = 1\n                if len(freq) > k:\n                    partitions += 1\n                    freq = {ch: 1}\n            partitions += 1  # account for the last partition\n            return partitions\n\n        max_partitions = 0\n        n = len(s)\n        for i in range(n):\n            for c in 'abcdefghijklmnopqrstuvwxyz':\n                if c == s[i]:\n                    continue\n                new_s = s[:i] + c + s[i+1:]\n                max_partitions = max(max_partitions, count_partitions(new_s, k))\n        return max_partitions",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7988,
+  "total_time_ms": 141611.40942573547,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5700,
+    "s_star_triggered": true
+  }
+}

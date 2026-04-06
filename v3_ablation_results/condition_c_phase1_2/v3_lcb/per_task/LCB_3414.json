@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3414",
+  "passed": false,
+  "code": "class Solution:\n    def waysToReachStair(self, k: int) -> int:\n        if k == 0:\n            return 2\n        from collections import deque\n        visited = set()\n        queue = deque()\n        queue.append((1, 0, 0))  # (current stair, jump, last_operation)\n        visited.add((1, 0))\n        result = 0\n\n        while queue:\n            stair, jump, last_op = queue.popleft()\n            if stair == k:\n                result += 1\n            # Go down\n            if last_op != 1 and stair > 0:\n                if (stair - 1, jump) not in visited:\n                    visited.add((stair - 1, jump))\n                    queue.append((stair - 1, jump, 1))\n            # Go up\n            new_stair = stair + (1 << jump)\n            if (new_stair, jump + 1) not in visited:\n                visited.add((new_stair, jump + 1))\n                queue.append((new_stair, jump + 1, 2))\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 252,
+  "total_time_ms": 6592.478513717651,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

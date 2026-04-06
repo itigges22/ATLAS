@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc338_e",
+  "passed": true,
+  "code": "import sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    chords = []\n    for i in range(N):\n        A = int(data[1 + 2*i])\n        B = int(data[2 + 2*i])\n        if A > B:\n            A, B = B, A\n        chords.append((A, B))\n    \n    # Sort chords by their starting point\n    chords.sort()\n    \n    # Use a segment tree or a binary indexed tree to check for intersections\n    # Here, we use a binary indexed tree (Fenwick Tree) to track the endpoints\n    # We map the points to a range [1, 2N]\n    size = 2 * N\n    tree = [0] * (size + 2)\n\n    def update(i, val):\n        while i <= size:\n            tree[i] += val\n            i += i & -i\n\n    def query(i):\n        res = 0\n        while i > 0:\n            res += tree[i]\n            i -= i & -i\n        return res\n\n    for A, B in chords:\n        # Check if there is any endpoint between A and B\n        # We need to count the number of endpoints in (A, B)\n        count = query(B - 1) - query(A)\n        if count > 0:\n            print(\"Yes\")\n            return\n        update(B, 1)\n\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 5464.408159255981,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

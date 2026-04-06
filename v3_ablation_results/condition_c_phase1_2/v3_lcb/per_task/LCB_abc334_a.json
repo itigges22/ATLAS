@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc334_a",
+  "passed": true,
+  "code": "# Read input\nB, G = map(int, input().split())\n\n# Compare the prices\nif B > G:\n    print(\"Bat\")\nelse:\n    print(\"Glove\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 50,
+  "total_time_ms": 985.0459098815918,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

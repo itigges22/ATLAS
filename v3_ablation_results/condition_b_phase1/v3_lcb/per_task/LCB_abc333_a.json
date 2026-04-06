@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc333_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\nresult = str(n) * n\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 730,
+  "total_time_ms": 10953.39059829712,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 697
+  }
+}

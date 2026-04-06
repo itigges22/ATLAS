@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2854",
+  "passed": true,
+  "code": "class Solution:\n    def minimizeConcatenatedLength(self, words: List[str]) -> int:\n        n = len(words)\n        # dp[i][s][e] = min length of string after processing first i words, ending with 'e' and starting with 's'\n        dp = {}\n        # Initialize with the first word\n        first_word = words[0]\n        dp[(first_word[0], first_word[-1])] = len(first_word)\n        \n        for i in range(1, n):\n            curr_dp = {}\n            word = words[i]\n            w_start, w_end = word[0], word[-1]\n            w_len = len(word)\n            \n            for (prev_start, prev_end), prev_len in dp.items():\n                # Option 1: join previous string with current word\n                new_start = prev_start\n                new_end = w_end\n                new_len = prev_len + w_len\n                if prev_end == w_start:\n                    new_len -= 1\n                key = (new_start, new_end)\n                if key not in curr_dp or curr_dp[key] > new_len:\n                    curr_dp[key] = new_len\n                \n                # Option 2: join current word with previous string\n                new_start = w_start\n                new_end = prev_end\n                new_len = prev_len + w_len\n                if w_end == prev_start:\n                    new_len -= 1\n                key = (new_start, new_end)\n                if key not in curr_dp or curr_dp[key] > new_len:\n                    curr_dp[key] = new_len\n            \n            dp = curr_dp\n        \n        # Find the minimum length among all possible states\n        return min(dp.values())",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 4346,
+  "total_time_ms": 106682.44504928589,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1854,
+    "s_star_triggered": true
+  }
+}

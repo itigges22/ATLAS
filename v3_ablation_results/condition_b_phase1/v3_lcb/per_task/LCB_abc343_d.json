@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc343_d",
+  "passed": true,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = int(data[1])\n    \n    scores = [0] * N\n    freq = defaultdict(int)\n    freq[0] = N\n    unique = 1\n    \n    res = []\n    \n    idx = 2\n    for _ in range(T):\n        a = int(data[idx]) - 1\n        b = int(data[idx + 1])\n        idx += 2\n        \n        old = scores[a]\n        new = old + b\n        scores[a] = new\n        \n        freq[old] -= 1\n        if freq[old] == 0:\n            unique -= 1\n        freq[new] += 1\n        if freq[new] == 1:\n            unique += 1\n        \n        res.append(str(unique))\n    \n    print('\\n'.join(res))\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1261,
+  "total_time_ms": 23902.393341064453,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1043
+  }
+}

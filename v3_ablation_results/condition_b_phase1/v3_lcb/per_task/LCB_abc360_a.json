@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc360_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\nr_index = S.index('R')\nm_index = S.index('M')\nprint(\"Yes\" if r_index < m_index else \"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 615,
+  "total_time_ms": 9506.278276443481,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 563
+  }
+}

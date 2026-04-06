@@ -57,9 +57,9 @@ CodeGenCallable = Callable[[str, List[str], int], Tuple[str, int, float]]
 class RefinementLoopConfig:
     """Configuration for the Refinement Loop."""
     enabled: bool = False
-    max_iterations: int = 5
-    escalate_after: int = 2
-    max_time_ms: float = 300000.0
+    max_iterations: int = 2
+    escalate_after: int = 1
+    max_time_ms: float = 120000.0
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +355,7 @@ class RefinementLoop:
             f"These constraints MUST be satisfied:\n{constraints_text}\n\n"
             f"Write clean, correct Python code."
         )
-        system = "You are an expert programmer. Write correct code."
+        system = "You are an expert programmer. Think through the approach carefully, then write correct code."
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"

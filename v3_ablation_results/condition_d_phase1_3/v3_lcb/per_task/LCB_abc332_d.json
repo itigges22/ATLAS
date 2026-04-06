@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc332_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nfrom collections import deque\nimport sys\n\ndef read_grid(h, w):\n    grid = []\n    for _ in range(h):\n        row = list(map(int, sys.stdin.readline().split()))\n        grid.append(row)\n    return grid\n\ndef is_equal(a, b):\n    return a == b\n\ndef bfs(start, target, h, w):\n    visited = set()\n    queue = deque()\n    queue.append((start, 0))\n    visited.add(tuple(map(tuple, start)))\n\n    while queue:\n        current, steps = queue.popleft()\n\n        if is_equal(current, target):\n            return steps\n\n        # Try all row swaps\n        for i in range(h - 1):\n            new_grid = [row[:] for row in current]\n            new_grid[i], new_grid[i + 1] = new_grid[i + 1], new_grid[i]\n            state = tuple(tuple(row) for row in new_grid)\n            if state not in visited:\n                visited.add(state)\n                queue.append((new_grid, steps + 1))\n\n        # Try all column swaps\n        for j in range(w - 1):\n            new_grid = [row[:] for row in current]\n            for row in new_grid:\n                row[j], row[j + 1] = row[j + 1], row[j]\n            state = tuple(tuple(row) for row in new_grid)\n            if state not in visited:\n                visited.add(state)\n                queue.append((new_grid, steps + 1))\n\n    return -1\n\ndef main():\n    h, w = map(int, sys.stdin.readline().split())\n    grid_a = read_grid(h, w)\n    grid_b = read_grid(h, w)\n\n    if not is_equal(grid_a, grid_b):\n        print(bfs(grid_a, grid_b, h, w))\n    else:\n        print(0)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2827,
+  "total_time_ms": 52440.92106819153,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2267
+  }
+}

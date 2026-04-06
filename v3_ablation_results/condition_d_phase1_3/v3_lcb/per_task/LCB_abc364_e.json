@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc364_e",
+  "passed": true,
+  "code": "import sys\nimport itertools\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    X = int(data[1])\n    Y = int(data[2])\n    dishes = []\n    index = 3\n    for i in range(N):\n        a = int(data[index])\n        b = int(data[index + 1])\n        dishes.append((a, b))\n        index += 2\n\n    max_dishes = 0\n    for perm in itertools.permutations(dishes):\n        total_a = 0\n        total_b = 0\n        count = 0\n        for a, b in perm:\n            total_a += a\n            total_b += b\n            count += 1\n            if total_a > X or total_b > Y:\n                break\n        max_dishes = max(max_dishes, count)\n    \n    print(max_dishes)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 24252,
+  "total_time_ms": 376397.3054885864,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2403,
+    "self_tests_generated": 3
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3439",
+  "passed": true,
+  "code": "class Solution:\n    def minimumDiameterAfterMerge(self, edges1: List[List[int]], edges2: List[List[int]]) -> int:\n        def build_tree(edges, n):\n            tree = [[] for _ in range(n)]\n            for a, b in edges:\n                tree[a].append(b)\n                tree[b].append(a)\n            return tree\n\n        def get_diameter(tree, n):\n            def dfs(node, parent):\n                max1 = 0\n                max2 = 0\n                for neighbor in tree[node]:\n                    if neighbor != parent:\n                        depth = dfs(neighbor, node)\n                        if depth > max1:\n                            max2 = max1\n                            max1 = depth\n                        elif depth > max2:\n                            max2 = depth\n                nonlocal diameter\n                diameter = max(diameter, max1 + max2)\n                return max1 + 1\n\n            diameter = 0\n            dfs(0, -1)\n            return diameter\n\n        def get_max_depth(tree, n):\n            def dfs(node, parent, depth):\n                max_depth = depth\n                for neighbor in tree[node]:\n                    if neighbor != parent:\n                        max_depth = max(max_depth, dfs(neighbor, node, depth + 1))\n                return max_depth\n\n            return dfs(0, -1, 0)\n\n        tree1 = build_tree(edges1, len(edges1) + 1)\n        tree2 = build_tree(edges2, len(edges2) + 1)\n\n        diameter1 = get_diameter(tree1, len(edges1) + 1)\n        diameter2 = get_diameter(tree2, len(edges2) + 1)\n\n        max_depth1 = get_max_depth(tree1, len(edges1) + 1)\n        max_depth2 = get_max_depth(tree2, len(edges2) + 1)\n\n        return max(diameter1, diameter2, max_depth1 + max_depth2 + 1)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3143,
+  "total_time_ms": 50186.14602088928,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2383
+  }
+}

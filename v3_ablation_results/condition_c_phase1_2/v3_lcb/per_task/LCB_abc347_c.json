@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc347_c",
+  "passed": true,
+  "code": "import sys\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = int(data[1])\n    B = int(data[2])\n    D = list(map(int, data[3:]))\n    \n    MOD = A + B\n    # For each D_i, the valid x must satisfy (D_i + x) % MOD < A\n    # => x % MOD \u2208 [(-D_i) % MOD, (-D_i + A - 1) % MOD]\n    # We represent this as a range [low, high] in mod MOD\n    \n    # Initialize the valid x range as [0, MOD - 1]\n    low = 0\n    high = MOD - 1\n    \n    for d in D:\n        # For x to satisfy (d + x) % MOD < A\n        # => x % MOD \u2208 [(-d) % MOD, (-d + A - 1) % MOD]\n        start = (-d) % MOD\n        end = (-d + A - 1) % MOD\n        \n        # Find the intersection of current [low, high] and [start, end]\n        # Since MOD is large, we need to handle wrap-around\n        if start <= end:\n            # No wrap-around\n            new_low = max(low, start)\n            new_high = min(high, end)\n        else:\n            # Wrap-around: [start, MOD-1] and [0, end]\n            new_low1 = max(low, start)\n            new_high1 = high\n            new_low2 = low\n            new_high2 = min(high, end)\n            new_low = new_low1\n            new_high = new_high1\n            if new_high1 >= new_low1:\n                low, high = new_low1, new_high1\n            elif new_low2 <= new_high2:\n                low, high = new_low2, new_high2\n            else:\n                # No overlap\n                print(\"No\")\n                return\n        # If no overlap, return No\n        if new_low > new_high:\n            print(\"No\")\n            return\n        low, high = new_low, new_high\n    \n    print(\"Yes\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 19732,
+  "total_time_ms": 241605.5145263672,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1759,
+    "s_star_triggered": true
+  }
+}

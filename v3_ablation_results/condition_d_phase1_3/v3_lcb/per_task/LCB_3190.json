@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3190",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def minOperations(self, nums1: List[int], nums2: List[int]) -> int:\n        n = len(nums1)\n        max1 = max(nums1)\n        max2 = max(nums2)\n        \n        # Check if the last elements can be max in their arrays\n        if nums1[-1] != max1 and nums2[-1] != max2:\n            # Check if swapping the last elements can fix it\n            if nums1[-1] == max2 and nums2[-1] == max1:\n                return 1\n            else:\n                return -1\n        \n        # If one of the last elements is already max\n        if nums1[-1] == max1 and nums2[-1] == max2:\n            return 0\n        \n        # If only one of the last elements is max\n        if nums1[-1] == max1:\n            # Need to swap to get max2 in nums2[-1]\n            for i in range(n - 1):\n                if nums2[i] == max2:\n                    return 1\n            return -1\n        elif nums2[-1] == max2:\n            # Need to swap to get max1 in nums1[-1]\n            for i in range(n - 1):\n                if nums1[i] == max1:\n                    return 1\n            return -1\n        else:\n            return -1",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 64194,
+  "total_time_ms": 1298848.2644557953,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1899,
+    "self_tests_generated": 5
+  }
+}

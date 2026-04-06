@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc340_e",
+  "passed": false,
+  "code": "import sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n    \n    for b in B:\n        count = A[b]\n        A[b] = 0\n        c = 1\n        while count > 0:\n            target = (b + c) % N\n            add = min(count, 1)\n            A[target] += add\n            count -= add\n            c += 1\n    print(' '.join(map(str, A)))\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 162,
+  "total_time_ms": 32635.821104049683,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

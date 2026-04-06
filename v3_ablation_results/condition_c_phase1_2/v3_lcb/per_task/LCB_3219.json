@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3219",
+  "passed": false,
+  "code": "class Solution:\n    def lexicographicallySmallestArray(self, nums: List[int], limit: int) -> List[int]:\n        indices = {num: i for i, num in enumerate(nums)}\n        nums_sorted = sorted(nums)\n        result = [0] * len(nums)\n        \n        i = 0\n        while i < len(nums_sorted):\n            j = i\n            while j < len(nums_sorted) and nums_sorted[j] - nums_sorted[i] <= limit:\n                j += 1\n            for k in range(i, j):\n                result[indices[nums_sorted[k]]] = nums_sorted[k]\n            i = j\n        \n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 151,
+  "total_time_ms": 2282.0985317230225,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

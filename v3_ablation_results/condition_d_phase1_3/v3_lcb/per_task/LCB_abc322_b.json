@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc322_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    S = data[2]\n    T = data[3]\n    \n    is_prefix = T[:N] == S\n    is_suffix = T[-N:] == S\n    \n    if is_prefix and is_suffix:\n        print(0)\n    elif is_prefix:\n        print(1)\n    elif is_suffix:\n        print(2)\n    else:\n        print(3)\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 868,
+  "total_time_ms": 14349.395751953125,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 771
+  }
+}

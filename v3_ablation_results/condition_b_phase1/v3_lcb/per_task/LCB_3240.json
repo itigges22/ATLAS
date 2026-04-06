@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3240",
+  "passed": true,
+  "code": "class Solution:\n    def findMaximumNumber(self, k: int, x: int) -> int:\n        def price(num: int) -> int:\n            \"\"\"Calculate the price of a number based on set bits at positions divisible by x.\"\"\"\n            res = 0\n            pos = 1\n            while (1 << (pos - 1)) <= num:\n                if pos % x == 0:\n                    res += (num >> (pos - 1)) & 1\n                pos += 1\n            return res\n\n        def total_price(max_num: int) -> int:\n            \"\"\"Calculate the total price from 1 to max_num.\"\"\"\n            total = 0\n            for num in range(1, max_num + 1):\n                total += price(num)\n                if total > k:\n                    return total\n            return total\n\n        # Binary search\n        low = 1\n        high = 10**18  # A safe upper bound\n        answer = 0\n\n        while low <= high:\n            mid = (low + high) // 2\n            total = total_price(mid)\n            if total <= k:\n                answer = mid\n                low = mid + 1\n            else:\n                high = mid - 1\n\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2098,
+  "total_time_ms": 35044.63791847229,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1798
+  }
+}

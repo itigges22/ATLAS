@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3309",
+  "passed": true,
+  "code": "class Solution:\n    def countPrefixSuffixPairs(self, words: List[str]) -> int:\n        count = 0\n        n = len(words)\n        for i in range(n):\n            for j in range(i + 1, n):\n                if words[i] == words[j][:len(words[i])] and words[i] == words[j][-len(words[i]):]:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1544.262409210205,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

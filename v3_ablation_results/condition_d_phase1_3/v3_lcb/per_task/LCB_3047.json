@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3047",
+  "passed": false,
+  "code": "class Solution:\n    def maximumSum(self, nums: List[int]) -> int:\n        from math import isqrt\n        from collections import defaultdict\n\n        def square_free_part(n):\n            # Factor out squares\n            i = 2\n            while i * i <= n:\n                while n % (i * i) == 0:\n                    n //= (i * i)\n                i += 1\n            return n\n\n        groups = defaultdict(list)\n        for idx, num in enumerate(nums):\n            sf = square_free_part(num)\n            groups[sf].append(nums[idx])\n\n        max_sum = 0\n        for group in groups.values():\n            current_sum = sum(group)\n            if current_sum > max_sum:\n                max_sum = current_sum\n\n        return max_sum",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 48402,
+  "total_time_ms": 733773.3070850372,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1329,
+    "self_tests_generated": 5
+  }
+}

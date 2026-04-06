@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3226",
+  "passed": true,
+  "code": "class Solution:\n    def numberGame(self, nums: List[int]) -> List[int]:\n        arr = []\n        while nums:\n            # Alice's turn\n            alice_pick = min(nums)\n            nums.remove(alice_pick)\n            # Bob's turn\n            bob_pick = min(nums)\n            nums.remove(bob_pick)\n            # Append to arr: Bob first, then Alice\n            arr.append(bob_pick)\n            arr.append(alice_pick)\n        return arr",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1111,
+  "total_time_ms": 16678.79319190979,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1005
+  }
+}

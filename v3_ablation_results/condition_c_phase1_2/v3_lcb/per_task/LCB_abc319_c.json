@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc319_c",
+  "passed": false,
+  "code": "import sys\nimport itertools\n\ndef main():\n    grid = [list(map(int, sys.stdin.readline().split())) for _ in range(3)]\n    lines = [\n        # Rows\n        [(0, 0), (0, 1), (0, 2)],\n        [(1, 0), (1, 1), (1, 2)],\n        [(2, 0), (2, 1), (2, 2)],\n        # Columns\n        [(0, 0), (1, 0), (2, 0)],\n        [(0, 1), (1, 1), (2, 1)],\n        [(0, 2), (1, 2), (2, 2)],\n        # Diagonals\n        [(0, 0), (1, 1), (2, 2)],\n        [(0, 2), (1, 1), (2, 0)],\n    ]\n\n    total = 0\n    valid = 0\n\n    # Generate all permutations of the 9 cells\n    for perm in itertools.permutations(range(9)):\n        total += 1\n        disappointed = False\n        # For each line, check if the first two elements in the permutation are the same and the third is different\n        for line in lines:\n            indices = [cell for cell in line]\n            positions = [perm.index(i) for i in indices]\n            positions.sort()\n            first, second, third = positions\n            if grid[indices[0][0]][indices[0][1]] == grid[indices[1][0]][indices[1][1]] and \\\n               grid[indices[0][0]][indices[0][1]] != grid[indices[2][0]][indices[2][1]]:\n                disappointed = True\n                break\n        if not disappointed:\n            valid += 1\n\n    probability = valid / total\n    print(probability)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 429,
+  "total_time_ms": 7468.8475131988525,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc323_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+M]))\n    \n    S = data[2+M:2+M+N]\n    \n    # Calculate current scores\n    current_scores = []\n    for i in range(N):\n        score = sum(A[j] for j in range(M) if S[i][j] == 'o') + (i + 1)\n        current_scores.append(score)\n    \n    # For each player, determine how many more problems they need to solve\n    # to exceed all other players' current scores\n    for i in range(N):\n        target = max(current_scores[j] for j in range(N) if j != i)\n        current = current_scores[i]\n        if current > target:\n            print(0)\n            continue\n        \n        # Find the problems not yet solved by player i\n        unsolved = [A[j] for j in range(M) if S[i][j] == 'x']\n        unsolved.sort(reverse=True)\n        \n        needed = 0\n        total = current\n        for val in unsolved:\n            total += val\n            needed += 1\n            if total > target:\n                print(needed)\n                break\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 11490.534782409668,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

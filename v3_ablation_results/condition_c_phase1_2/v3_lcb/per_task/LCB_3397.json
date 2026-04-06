@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3397",
+  "passed": false,
+  "code": "from typing import List\nfrom collections import Counter\n\nclass Solution:\n    def addedInteger(self, nums1: List[int], nums2: List[int]) -> int:\n        # Create frequency counters for both arrays\n        count1 = Counter(nums1)\n        count2 = Counter(nums2)\n        \n        # Find the x that, when added to each element in nums1, makes it equal to nums2\n        for x in count2:\n            if all((num - x) in count1 for num in count2):\n                return x\n        return 0",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 2605,
+  "total_time_ms": 43226.22466087341,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2508
+  }
+}

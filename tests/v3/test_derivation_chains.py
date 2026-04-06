@@ -751,7 +751,7 @@ class TestDataStructures:
         assert cfg.max_sub_problems == 5
         assert cfg.max_attempts_per_step == 3
         assert cfg.decomposition_temperature == 0.3
-        assert cfg.step_generation_temperature == 0.2
+        assert cfg.step_generation_temperature == 0.4
         assert cfg.decomposition_max_tokens == 2048
         assert cfg.step_max_tokens == 4096
 

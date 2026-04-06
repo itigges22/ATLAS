@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/1883_C",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    idx = 0\n    t = int(data[idx])\n    idx += 1\n    results = []\n    \n    for _ in range(t):\n        n, k = int(data[idx]), int(data[idx+1])\n        idx += 2\n        a = list(map(int, data[idx:idx+n]))\n        idx += n\n        \n        product_mod = 1\n        operations = 0\n        \n        for i in range(n):\n            product_mod = (product_mod * a[i]) % k\n            if product_mod == 0:\n                results.append(str(operations))\n                break\n            # Increment a[i] until product is divisible by k\n            while product_mod != 0:\n                a[i] += 1\n                operations += 1\n                product_mod = (product_mod * a[i]) % k\n        else:\n            results.append(str(operations))\n    \n    print('\\n'.join(results))\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53062,
+  "total_time_ms": 997622.2207546234,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1485,
+    "self_tests_generated": 5
+  }
+}

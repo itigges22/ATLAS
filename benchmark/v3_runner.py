@@ -36,6 +36,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -83,15 +84,21 @@ from benchmark.v3.metacognitive import (
 from benchmark.v3.ace_pipeline import ACEPipeline, ACEConfig
 from benchmark.v3.self_test_gen import SelfTestGen, SelfTestGenConfig
 from benchmark.v3.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
+from benchmark.v3.candidate_selection import (
+    CandidateInfo, select_candidate, STRATEGIES,
+)
+from benchmark.v3.embedding_store import EmbeddingWriter
 
 
 # --- Constants ----------------------------------------------------------------
 
 RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
 LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '32735')}")
-MAX_TOKENS = 16384
-BASE_TEMPERATURE = 0.0
-DIVERSITY_TEMPERATURE = 0.6
+# Published Qwen3.5 benchmarks use: temp=0.6, top_k=20, top_p=0.95,
+# max_tokens=32768+, thinking mode enabled. Match their settings.
+MAX_TOKENS = 8192
+BASE_TEMPERATURE = 0.6  # Qwen3.5 recommended for coding with thinking
+DIVERSITY_TEMPERATURE = 0.8  # Slightly higher for candidate diversity
 
 
 # --- Atomic I/O (reused from v2_runner) ----------------------------------------
@@ -223,23 +230,59 @@ class LLMAdapter:
     of the token budget and no useful output remains, the call is retried
     with /nothink injected into the prompt. This prevents infinite reasoning
     from starving code generation.
+
+    Request serialization: DeltaNet hybrid architecture (Qwen3.5-9B) hangs
+    when multiple slots generate simultaneously via cont-batching. A class-level
+    lock ensures only one /completion request is in-flight at a time, giving
+    full single-slot throughput (~47 tok/s) while keeping 4 slots for connection
+    acceptance and prompt caching.
     """
 
     # Thinking consumes too much if it's >80% of tokens and output is tiny
     THINK_BUDGET_RATIO = 0.80
     MIN_OUTPUT_CHARS = 50
 
-    def __init__(self, runner: BenchmarkRunner, max_retries: int = 4):
+    # Serialize LLM requests to avoid DeltaNet multi-slot generation hang.
+    # Set ATLAS_LLM_PARALLEL=1 to disable the lock (requires --no-cache-prompt
+    # on llama-server to prevent checkpoint restore hang).
+    _llm_lock = threading.Lock()
+    _parallel_mode = os.environ.get("ATLAS_LLM_PARALLEL", "0") == "1"
+
+    def __init__(self, runner: BenchmarkRunner, max_retries: int = 2,
+                 timeout: int = 900):
         self.runner = runner
         self.max_retries = max_retries
+        # Scale timeout by parallel tasks — shared GPU bandwidth means each
+        # call takes proportionally longer with more concurrent tasks.
+        parallel_tasks = int(os.environ.get("ATLAS_PARALLEL_TASKS", "1"))
+        if LLMAdapter._parallel_mode and parallel_tasks > 1:
+            self.timeout = timeout * parallel_tasks
+        else:
+            self.timeout = timeout
         self.call_count = 0
         self.total_tokens = 0
         self.last_logprobs: List[float] = []
 
     @staticmethod
     def _parse_logprobs(data: dict) -> List[float]:
-        """Extract per-token log-probabilities from llama-server response."""
+        """Extract per-token log-probabilities from llama-server response.
+
+        Handles both /v1/chat/completions format (choices[0].logprobs)
+        and legacy /completion format (completion_probabilities).
+        """
         logprobs = []
+        # /v1/chat/completions format
+        choices = data.get("choices", [])
+        if choices:
+            lp_data = choices[0].get("logprobs", {})
+            if lp_data and lp_data.get("content"):
+                for tok in lp_data["content"]:
+                    lp = tok.get("logprob")
+                    if lp is not None:
+                        logprobs.append(lp)
+                return logprobs
+
+        # Legacy /completion format fallback
         for tok in data.get("completion_probabilities", []):
             probs = tok.get("probs", [])
             if probs:
@@ -249,74 +292,117 @@ class LLMAdapter:
         return logprobs
 
     def _send_request(self, request_body: dict) -> dict:
-        """Send a single request to llama-server with retry on connection errors."""
+        """Send request to LLM server with retry.
+
+        Supports both llama.cpp (/completion) and Fox (/v1/completions).
+        Uses manual ChatML formatting for thinking mode control.
+        """
+        # Detect Fox vs llama.cpp: Fox uses /v1/completions with OpenAI format
+        use_fox = os.environ.get("ATLAS_USE_FOX", "0") == "1"
+        if use_fox:
+            endpoint = f"{self.runner.llm_url}/v1/completions"
+            # Convert llama.cpp format to OpenAI format
+            if "n_predict" in request_body:
+                request_body["max_tokens"] = request_body.pop("n_predict")
+            request_body.pop("cache_prompt", None)
+            request_body.pop("n_probs", None)
+            request_body.setdefault("model", os.environ.get("ATLAS_MODEL_NAME", "default"))
+        else:
+            endpoint = f"{self.runner.llm_url}/completion"
+
         last_error = None
-        for attempt in range(self.max_retries):
+        max_attempts = self.max_retries + 3
+        for attempt in range(max_attempts):
             try:
                 req = urllib.request.Request(
-                    f"{self.runner.llm_url}/completion",
+                    endpoint,
                     data=json.dumps(request_body).encode('utf-8'),
                     headers={'Content-Type': 'application/json'}
                 )
-                with urllib.request.urlopen(req, timeout=600) as resp:
-                    return json.loads(resp.read().decode('utf-8'))
+                if LLMAdapter._parallel_mode:
+                    with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                        return json.loads(resp.read().decode('utf-8'))
+                else:
+                    with LLMAdapter._llm_lock:
+                        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                            return json.loads(resp.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code == 503 and attempt < max_attempts - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                if attempt < max_attempts - 1:
+                    time.sleep(10 * (2 ** min(attempt, 3)))
+            except (ConnectionError, OSError, urllib.error.URLError) as e:
+                last_error = e
+                if attempt < max_attempts - 1:
+                    time.sleep(5 * (attempt + 1))
             except Exception as e:
                 last_error = e
-                if attempt < self.max_retries - 1:
-                    wait = 10 * (2 ** attempt)
-                    time.sleep(wait)
+                if attempt < max_attempts - 1:
+                    time.sleep(10 * (2 ** min(attempt, 3)))
         raise LLMConnectionError(
-            f"LLM call failed after {self.max_retries} retries: {last_error}"
+            f"LLM call failed after {max_attempts} retries: {last_error}"
         )
 
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
         self.call_count += 1
+
+        # With --jinja enabled on llama-server, the model naturally uses
+        # <think>...</think> tags for reasoning via the /completion endpoint.
+        # No pre-fill needed — the chat template handles thinking mode.
+
         request_body = {
             "prompt": prompt,
             "temperature": temperature,
             "n_predict": max_tokens,
             "stream": False,
             "cache_prompt": False,
-            "stop": ["<|im_end|>", "<|im_start|>"],
+            "stop": ["\n\n\n\n"],
             "n_probs": 1,
+            "top_k": 20,
+            "top_p": 0.95,
         }
         if seed is not None:
             request_body["seed"] = seed
 
         start_time = time.time()
         data = self._send_request(request_body)
-        content = data.get("content", "")
-        tokens = data.get("tokens_predicted", 0)
+
+        # Parse response — Fox returns OpenAI format, llama.cpp returns legacy
+        if "choices" in data:
+            # Fox / OpenAI format
+            content = data["choices"][0].get("text", "")
+            tokens = data.get("usage", {}).get("completion_tokens", 0)
+        else:
+            # llama.cpp legacy format
+            content = data.get("content", "")
+            tokens = data.get("tokens_predicted", 0)
         self.last_logprobs = self._parse_logprobs(data)
 
-        # --- Budget Forcing enforcement ---
-        # If the model spent most of its budget thinking and produced little
-        # useful output, retry with nothink to get an actual answer.
-        thinking, output = extract_thinking(content)
-        thinking_heavy = (
-            len(thinking) > 0
-            and tokens > 0
-            and len(output) < self.MIN_OUTPUT_CHARS
-        )
-
-        if thinking_heavy and "/nothink" not in prompt:
-            # Retry: inject /nothink into the system prompt
-            nothink_prompt = prompt.replace(
-                "<|im_end|>\n<|im_start|>user",
-                " /nothink<|im_end|>\n<|im_start|>user",
-                1,
-            )
-            request_body["prompt"] = nothink_prompt
-            data = self._send_request(request_body)
-            content = data.get("content", "")
-            tokens += data.get("tokens_predicted", 0)
-            self.last_logprobs = self._parse_logprobs(data)
-
-        # Strip think blocks from final output
+        # Strip thinking blocks. With --jinja, the model wraps reasoning
+        # in <think>...</think> tags naturally. Strip them to get clean code.
         content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
+
+        # Handle orphaned </think> (from nothink pre-fill or partial output)
+        if '</think>' in content and '<think>' not in content:
+            content = content[content.index('</think>') + len('</think>'):].strip()
+
+        # Handle unclosed <think> (token budget exhausted during thinking)
         if '<think>' in content:
-            content = content[:content.index('<think>')].strip()
+            after_think = content[content.index('<think>') + len('<think>'):].strip()
+            before_think = content[:content.index('<think>')].strip()
+            after_has_code = '```' in after_think or 'def ' in after_think or 'class ' in after_think
+            before_has_code = '```' in before_think or 'def ' in before_think or 'class ' in before_think
+            if after_has_code and not before_has_code:
+                content = after_think
+            elif before_has_code and not after_has_code:
+                content = before_think
+            elif after_has_code and before_has_code:
+                content = after_think if len(after_think) > len(before_think) else before_think
+            else:
+                content = ""
 
         t_ms = (time.time() - start_time) * 1000
         self.total_tokens += tokens
@@ -380,19 +466,63 @@ class SandboxAdapter:
         return self_verify_execute(results, self.majority_threshold)
 
 
-class EmbedAdapter:
-    """Adapts extract_embedding_urllib to V3 EmbedCallable."""
+class SStarSandboxAdapter:
+    """Dedicated sandbox adapter for S* tiebreaking.
 
-    def __init__(self, llama_url: str):
+    Unlike SandboxAdapter which uses the task's test cases, this adapter
+    runs code with a specific stdin input and returns (ran_ok, stdout, stderr).
+    This enables S* to generate distinguishing inputs for stdio-mode tasks.
+    """
+
+    def __init__(self, task: BenchmarkTask, timeout_sec: int = 10,
+                 memory_mb: int = 512):
+        self.task = task
+        self.timeout_sec = timeout_sec
+        self.memory_mb = memory_mb
+
+    def __call__(self, code: str, test_input: str) -> Tuple[bool, str, str]:
+        code = wrap_class_solution(code, self.task)
+        if self.task.eval_mode == "stdio":
+            # Run with the specific distinguishing input as stdin
+            passed, stdout, stderr, _ = execute_code_stdio(
+                code, [test_input], ["__S_STAR_NO_EXPECTED__"],
+                timeout_sec=self.timeout_sec, memory_mb=self.memory_mb,
+            )
+            # For S*, "passed" means "ran without crash and produced output"
+            ran_ok = bool(stdout.strip()) and not stderr.strip()
+            return ran_ok, stdout, stderr
+        else:
+            # Function mode: test_input is test code
+            passed, stdout, stderr, _ = execute_code(
+                code, test_input,
+                timeout_sec=self.timeout_sec, memory_mb=self.memory_mb,
+            )
+            return passed, stdout, stderr
+
+
+class EmbedAdapter:
+    """Adapts extract_embedding_urllib to V3 EmbedCallable.
+
+    Retries up to 3 times with backoff to handle transient 503/timeout
+    errors when llama-server is busy with generation requests.
+    """
+
+    def __init__(self, llama_url: str, max_retries: int = 3):
         self.llama_url = llama_url
         self.call_count = 0
+        self.max_retries = max_retries
 
     def __call__(self, text: str) -> List[float]:
         self.call_count += 1
-        emb = extract_embedding_urllib(text, self.llama_url)
-        if emb is None:
-            raise RuntimeError("Embedding extraction failed")
-        return emb
+        for attempt in range(self.max_retries):
+            emb = extract_embedding_urllib(text, self.llama_url)
+            if emb is not None:
+                return emb
+            if attempt < self.max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+        raise RuntimeError(
+            f"Embedding extraction failed after {self.max_retries} retries"
+        )
 
 
 # --- V3 Pipeline Orchestrator -------------------------------------------------
@@ -409,16 +539,21 @@ class V3Pipeline:
                  enable_phase1: bool = True,
                  enable_phase2: bool = True,
                  enable_phase3: bool = True,
-                 enable_feedback: bool = False):
+                 enable_feedback: bool = False,
+                 selection_strategy: str = "lens"):
         self.runner = runner
         self.telemetry_dir = telemetry_dir
         self.llama_url = llama_url
         self.enable_phase1 = enable_phase1
         self.enable_phase2 = enable_phase2
         self.enable_phase3 = enable_phase3
+        self.selection_strategy = selection_strategy
 
         # Read V3 config from atlas.conf (with defaults)
         self._v3_conf = self._load_v3_config()
+
+        # Embedding store for post-hoc analysis (V3.1 Section 5.2)
+        self._emb_writer = EmbeddingWriter(telemetry_dir / "embeddings.emb")
 
         # Initialize V3 components
         self._init_phase1(telemetry_dir)
@@ -486,6 +621,7 @@ class V3Pipeline:
                 enabled=self.enable_phase1,
                 num_plans=self._v3_conf.get("ps_num_plans", 3),
             ),
+            budget_forcing=self.budget_forcing,
             telemetry_dir=telemetry_dir,
         )
         self.div_sampling = DivSampling(
@@ -588,15 +724,23 @@ class V3Pipeline:
             "telemetry": {},
         }
 
+        # Per-phase latency tracking
+        latency = {}
+
         # ===== PROBE: Quick candidate for Lens energy estimation =====
-        # Generate a single nothink candidate to get energy signal for Phase 2
+        # Generate a single candidate to get energy signal for Phase 2
         # adaptive K allocation and Budget Forcing tier selection.
+        # Uses "standard" tier (up to 2048 thinking tokens) — matches
+        # Qwen3.5 published benchmark settings where thinking is enabled.
+        # Gives the model enough reasoning budget to solve harder tasks
+        # at probe, reducing cascade into Phase 3.
         probe_candidate = None
         probe_energy_raw = None
 
         if self.enable_phase1:
+            probe_start = time.time()
             try:
-                chatml = self.budget_forcing.format_chatml(task.prompt, "nothink")
+                chatml = self.budget_forcing.format_chatml(task.prompt, "standard")
                 response, tokens, t_ms = llm(
                     chatml, BASE_TEMPERATURE, MAX_TOKENS, 42,
                 )
@@ -628,11 +772,55 @@ class V3Pipeline:
                 raise
             except Exception as e:
                 result["telemetry"]["probe_error"] = str(e)
+            latency["probe_ms"] = (time.time() - probe_start) * 1000
 
-        # ===== Phase 2: Adaptive K + Budget Tier + Early Stopping =====
-        if self.enable_phase2 and probe_energy_raw is not None:
-            # Blend-ASC: determine how many candidates to generate
-            k, budget_tier = self.blend_asc.allocate(
+        # ===== Sandbox-test probe for data-driven early exit =====
+        # Instead of predicting difficulty from energy (unreliable on 9B),
+        # test the probe directly: if it passes, skip PlanSearch/DivSampling.
+        probe_passed_sandbox = False
+        if probe_candidate and probe_candidate.get("code"):
+            try:
+                probe_sandbox = SandboxAdapter(task)
+                passed, stdout, stderr = probe_sandbox(
+                    probe_candidate["code"], "",
+                )
+                probe_candidate["passed"] = passed
+                probe_candidate["stdout"] = stdout or ""
+                probe_candidate["stderr"] = stderr or ""
+                probe_passed_sandbox = passed
+            except Exception as e:
+                probe_candidate["passed"] = False
+                probe_candidate["stdout"] = ""
+                probe_candidate["stderr"] = str(e)
+            # Store embedding early (overlaps with probe sandbox test)
+            try:
+                emb = embed(probe_candidate["code"])
+                label = "PASS" if probe_passed_sandbox else "FAIL"
+                self._emb_writer.write(task_id, 0, label, emb)
+            except Exception:
+                pass
+            result["telemetry"]["probe_sandbox_passed"] = probe_passed_sandbox
+
+        # ===== Phase 2: Adaptive K + Budget Tier =====
+        phase2_start = time.time()
+        if probe_passed_sandbox:
+            # Data-driven early exit: probe already passes sandbox.
+            # No need to generate more candidates.
+            k = 1
+            budget_tier = "nothink"
+            bf_tier = self.budget_forcing.select_tier()
+            result["telemetry"]["probe_early_exit"] = True
+        elif self.enable_phase2 and probe_energy_raw is not None:
+            # Probe FAILED sandbox — we need diverse candidates.
+            # Energy-based k allocation (BlendASC) is uninformative for
+            # short probe code on 9B (raw ~1-4, all normalize to <0.05,
+            # always mapping to k=1). Use default k=3 so PlanSearch runs.
+            k = 3
+            budget_tier = "standard"
+            bf_tier = self.budget_forcing.select_tier()
+
+            # Log BlendASC/ReASC evaluations for telemetry (not gating)
+            k_blend, tier_blend = self.blend_asc.allocate(
                 raw_energy=probe_energy_raw,
                 task_id=task_id,
                 probe_tokens=(
@@ -644,29 +832,25 @@ class V3Pipeline:
                     if probe_candidate else 0.0
                 ),
             )
-            # Budget Forcing: select thinking tier for remaining generations
-            bf_tier = self.budget_forcing.select_tier(
-                raw_energy=probe_energy_raw,
-            )
+            result["telemetry"]["blend_asc_k"] = k_blend
+            result["telemetry"]["blend_asc_tier"] = tier_blend
 
-            # ReASC: early stopping — if task is easy and model is confident,
-            # skip generating more candidates (just use the probe)
             should_stop, reasc_reason = self.reasc.evaluate(
                 probe_energy_raw, llm.last_logprobs, task_id=task_id,
             )
-            if should_stop:
-                k = 1
-                result["telemetry"]["reasc_stopped"] = True
-                result["telemetry"]["reasc_reason"] = reasc_reason
+            result["telemetry"]["reasc_stopped"] = should_stop
+            result["telemetry"]["reasc_reason"] = reasc_reason
         else:
             k = 3
             budget_tier = "standard"
             bf_tier = self.budget_forcing.select_tier()
 
+        latency["phase2_alloc_ms"] = (time.time() - phase2_start) * 1000
         result["telemetry"]["adaptive_k"] = k
         result["telemetry"]["budget_tier"] = budget_tier
 
         # ===== Phase 1: Build candidate pool =====
+        phase1_start = time.time()
         candidates = []
         constraints = []
 
@@ -691,12 +875,22 @@ class V3Pipeline:
                 if ace_context:
                     problem_with_context = f"{task.prompt}\n\n{ace_context}"
 
+                # PlanSearch does multiple sequential LLM calls (constraint
+                # extraction + plan construction + code gen). Use a longer
+                # timeout to handle long competition prompts at 9B speed.
+                ps_llm = LLMAdapter(self.runner, timeout=300)
                 ps_result = self.plan_search.generate(
                     problem=problem_with_context, task_id=task_id,
-                    llm_call=llm, num_plans=remaining_k,
+                    llm_call=ps_llm, num_plans=remaining_k,
                 )
+                result["total_tokens"] += ps_llm.total_tokens
                 for cs in ps_result.constraint_sets:
                     constraints.extend(cs.constraints)
+                # Log constraint sets for qualitative analysis (V3.1 Section 5.3)
+                result["telemetry"]["plansearch_constraints"] = [
+                    {"plan_index": i, "constraints": cs.constraints}
+                    for i, cs in enumerate(ps_result.constraint_sets)
+                ]
                 for i, code in enumerate(ps_result.candidates):
                     if not code:
                         continue
@@ -716,14 +910,14 @@ class V3Pipeline:
                         "energy_norm": energy_norm,
                         "passed": None,
                     })
-                result["total_tokens"] += ps_result.total_tokens
-                result["telemetry"]["plansearch_tokens"] = ps_result.total_tokens
+                result["telemetry"]["plansearch_tokens"] = ps_llm.total_tokens
             except Exception as e:
                 result["telemetry"]["plansearch_error"] = str(e)
 
-        # Fill remaining slots with DivSampling + Budget Forcing
+        # Fill remaining slots with DivSampling + Budget Forcing (parallel)
         if self.enable_phase1 and len(candidates) < k:
-            for extra_idx in range(len(candidates), k):
+            def _generate_div_candidate(extra_idx):
+                """Generate a single DivSampling candidate (thread-safe)."""
                 try:
                     perturbed = self.div_sampling.apply(
                         task.prompt, candidate_index=extra_idx,
@@ -733,21 +927,22 @@ class V3Pipeline:
                         perturbed, bf_tier,
                     )
                     max_tok = self.budget_forcing.get_max_tokens(bf_tier)
-                    response, tokens, t_ms = llm(
+                    # Each thread creates its own LLMAdapter for thread safety
+                    thread_llm = LLMAdapter(self.runner)
+                    response, tokens, t_ms = thread_llm(
                         chatml, DIVERSITY_TEMPERATURE, max_tok,
                         42 + extra_idx,
                     )
                     code = extract_code(response)
                     if not code:
-                        continue
+                        return None
                     try:
                         energy_raw, energy_norm = score_candidate(
                             code, RAG_API_URL,
                         )
                     except Exception:
                         energy_raw, energy_norm = 0.0, 0.5
-                    candidates.append({
-                        "index": len(candidates),
+                    return {
                         "code": code,
                         "response": response,
                         "tokens": tokens,
@@ -755,17 +950,32 @@ class V3Pipeline:
                         "energy": energy_raw,
                         "energy_norm": energy_norm,
                         "passed": None,
-                    })
-                    result["total_tokens"] += tokens
+                    }
                 except Exception:
-                    continue
+                    return None
+
+            fill_indices = list(range(len(candidates), k))
+            with ThreadPoolExecutor(max_workers=min(len(fill_indices), 3)) as pool:
+                futures = {pool.submit(_generate_div_candidate, idx): idx
+                           for idx in fill_indices}
+                for future in as_completed(futures):
+                    cand = future.result()
+                    if cand:
+                        cand["index"] = len(candidates)
+                        candidates.append(cand)
+                        result["total_tokens"] += cand["tokens"]
 
         # Fallback: if no candidates at all, direct generation
+        # Use BudgetForcing "standard" tier — allows thinking (up to 2048
+        # tokens). Published Qwen3.5 benchmarks use full thinking mode
+        # with temp=0.6 (65.6% LCB v6 with thinking vs ~39% without).
         if not candidates:
             try:
-                response, tokens, t_ms = self.runner._call_llm(
-                    task.prompt, temperature=BASE_TEMPERATURE,
-                    max_tokens=MAX_TOKENS, seed=42,
+                chatml = self.budget_forcing.format_chatml(
+                    task.prompt, "standard",
+                )
+                response, tokens, t_ms = llm(
+                    chatml, BASE_TEMPERATURE, MAX_TOKENS, 42,
                 )
                 code = extract_code(response)
                 try:
@@ -799,27 +1009,78 @@ class V3Pipeline:
             except Exception:
                 pass
 
+        latency["phase1_gen_ms"] = (time.time() - phase1_start) * 1000
         result["candidates_generated"] = len(candidates)
 
-        # ===== Test ALL candidates in sandbox =====
+        # ===== Test ALL candidates in sandbox (pipelined, V3.1 4.2) =====
+        # Sandbox tests + embedding storage run in parallel threads.
+        # Candidates sorted by energy (low=easy first) for early-exit potential.
+        sandbox_start = time.time()
         candidates.sort(key=lambda c: c["energy"])
         passing_candidates = []
 
-        for cand in candidates:
-            if not cand["code"]:
+        def _test_and_embed(cand):
+            """Sandbox test + embedding storage for one candidate."""
+            if not cand.get("code"):
                 cand["passed"] = False
-                continue
+                return cand
+            # Skip sandbox test if already tested (e.g., probe early exit)
+            if cand.get("passed") is not None:
+                return cand
             try:
-                passed, stdout, stderr = sandbox(cand["code"], "")
+                task_sandbox = SandboxAdapter(task)
+                passed, stdout, stderr = task_sandbox(cand["code"], "")
                 cand["passed"] = passed
                 cand["stdout"] = stdout or ""
                 cand["stderr"] = stderr or ""
-                if passed:
-                    passing_candidates.append(cand)
             except Exception as e:
                 cand["passed"] = False
                 cand["stdout"] = ""
                 cand["stderr"] = str(e)
+            # Inline embedding storage (overlaps with other sandbox tests)
+            try:
+                emb = embed(cand["code"])
+                label = "PASS" if cand.get("passed") else "FAIL"
+                self._emb_writer.write(task_id, cand["index"], label, emb)
+            except Exception:
+                pass
+            return cand
+
+        n_workers = min(len(candidates), 3) if len(candidates) > 1 else 1
+        if n_workers > 1:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futures = {pool.submit(_test_and_embed, c): c for c in candidates}
+                for future in as_completed(futures):
+                    cand = future.result()
+                    if cand.get("passed"):
+                        passing_candidates.append(cand)
+        else:
+            for cand in candidates:
+                cand = _test_and_embed(cand)
+                if cand.get("passed"):
+                    passing_candidates.append(cand)
+
+        latency["sandbox_ms"] = (time.time() - sandbox_start) * 1000
+
+        # Log per-candidate energies, pass/fail, AND code for analysis.
+        # Storing all candidate codes enables ablation replay: run once with
+        # full pipeline, then derive other conditions by replaying selection
+        # strategies on stored candidates (3.5x faster than 6 separate runs).
+        result["telemetry"]["candidate_energies"] = [
+            {"index": c["index"], "energy": c["energy"], "passed": c.get("passed")}
+            for c in candidates
+        ]
+        result["telemetry"]["all_candidates"] = [
+            {
+                "index": c["index"],
+                "code": c.get("code", ""),
+                "energy": c["energy"],
+                "energy_norm": c.get("energy_norm", 0.5),
+                "passed": c.get("passed"),
+                "tokens": c.get("tokens", 0),
+            }
+            for c in candidates
+        ]
 
         # Store best candidate code even on failure (for feedback + analysis)
         if candidates and not passing_candidates:
@@ -830,9 +1091,21 @@ class V3Pipeline:
             result["passed"] = True
             result["phase_solved"] = "phase1"
 
+            # Build CandidateInfo objects for strategy-based selection
+            candidate_infos = [
+                CandidateInfo(
+                    index=c["index"], code=c["code"],
+                    energy=c["energy"], passed=True,
+                    logprobs=llm.last_logprobs if c["index"] == candidates[-1]["index"] else None,
+                )
+                for c in passing_candidates
+            ]
+
             if len(passing_candidates) >= 2 and self.enable_phase2:
                 # S* tiebreaking: generate edge-case inputs to distinguish
                 # the top-2 passing candidates by energy
+                # Use dedicated S* sandbox that pipes specific stdin for stdio tasks
+                s_star_sandbox = SStarSandboxAdapter(task)
                 try:
                     s_candidates = [
                         CandidateScore(
@@ -843,7 +1116,7 @@ class V3Pipeline:
                     ]
                     tb_result = self.s_star.tiebreak(
                         candidates=s_candidates, problem=task.prompt,
-                        llm_call=llm, sandbox_run=sandbox,
+                        llm_call=llm, sandbox_run=s_star_sandbox,
                         task_id=task_id,
                     )
                     if tb_result.triggered and tb_result.winner_index >= 0:
@@ -855,20 +1128,38 @@ class V3Pipeline:
                         result["code"] = winner["code"]
                         result["telemetry"]["s_star_triggered"] = True
                     else:
-                        result["code"] = passing_candidates[0]["code"]
+                        # Use selection strategy
+                        selected = select_candidate(
+                            candidate_infos, strategy=self.selection_strategy,
+                            seed=42,
+                        )
+                        result["code"] = selected.code if selected else passing_candidates[0]["code"]
                 except Exception:
-                    result["code"] = passing_candidates[0]["code"]
+                    selected = select_candidate(
+                        candidate_infos, strategy=self.selection_strategy,
+                        seed=42,
+                    )
+                    result["code"] = selected.code if selected else passing_candidates[0]["code"]
             else:
-                result["code"] = passing_candidates[0]["code"]
+                selected = select_candidate(
+                    candidate_infos, strategy=self.selection_strategy,
+                    seed=42,
+                )
+                result["code"] = selected.code if selected else passing_candidates[0]["code"]
 
-            result["total_tokens"] = llm.total_tokens
+            result["telemetry"]["selection_strategy"] = self.selection_strategy
+
+            result["telemetry"]["latency"] = latency
+            result["total_tokens"] = max(result["total_tokens"], llm.total_tokens)
             result["total_time_ms"] = (time.time() - start_time) * 1000
             self._record_feedback(task_id, result)
             self._log_v3_event(task_id, result)
             return result
 
         # ===== Phase 3: Refinement cascade =====
+        phase3_start = time.time()
         if not self.enable_phase3:
+            result["telemetry"]["latency"] = latency
             result["total_time_ms"] = (time.time() - start_time) * 1000
             self._record_feedback(task_id, result)
             self._log_v3_event(task_id, result)
@@ -885,9 +1176,11 @@ class V3Pipeline:
         ]
 
         # --- Self-Test Generation (generate ONCE, cache for all iterations) ---
+        selftest_start = time.time()
         self_tests = self.self_test_gen.generate(
             problem=task.prompt, llm_call=llm, task_id=task_id,
         )
+        latency["self_test_gen_ms"] = (time.time() - selftest_start) * 1000
         result["telemetry"]["self_tests_generated"] = len(self_tests.test_cases)
 
         # Create self-verify sandbox if we have self-tests
@@ -903,105 +1196,127 @@ class V3Pipeline:
             self_verify_sandbox = sandbox
             result["telemetry"]["self_test_fallback"] = True
 
-        # Step 3a: PR-CoT Quick Repair (uses self-verify sandbox)
+        # Steps 3a/3b/3c: Run repair strategies SEQUENTIALLY
+        # Priority order: PR-CoT (cheapest, 2-6 calls), Refinement Loop
+        # (3-15 calls), Derivation Chains (most expensive, up to 17 calls).
+        # Stop on first successful fix — saves ~29-33 LLM calls on average
+        # vs parallel execution which wastes calls on losing strategies.
+        phase3_extra_tokens = 0
+        phase3_strategies_tried = []
+
+        # --- Strategy 1: PR-CoT quick repair (2-6 LLM calls) ---
         if failing:
+            phase3_strategies_tried.append("pr_cot")
+            pr_llm = LLMAdapter(self.runner, timeout=300)
             try:
                 best_failing = failing[0]
                 error_msg = best_failing.error_output or "All test cases failed"
+
+                # Enrich problem context with metacognitive warnings
+                # and ACE principles for better-guided repairs
+                enriched_problem = task.prompt
+                if metacog_warnings:
+                    enriched_problem += "\n\nKnown pitfalls for this problem type:"
+                    for w in metacog_warnings:
+                        enriched_problem += f"\n- {w}"
+                if ace_context:
+                    enriched_problem += f"\n\n{ace_context}"
+
                 repair_result = self.pr_cot.repair(
-                    problem=task.prompt,
+                    problem=enriched_problem,
                     code=best_failing.code,
                     error=error_msg,
-                    llm_call=llm,
+                    llm_call=pr_llm,
                     task_id=task_id,
                 )
+                phase3_extra_tokens += pr_llm.total_tokens
                 for repair_code in repair_result.repairs:
                     if not repair_code:
                         continue
                     try:
-                        passed, stdout, stderr = self_verify_sandbox(repair_code, "")
-                        if passed:
-                            # Self-tests pass — verify with real tests for final score
-                            real_passed, _, _ = sandbox(repair_code, "")
-                            if real_passed:
-                                result["passed"] = True
-                                result["code"] = repair_code
-                                result["phase_solved"] = "pr_cot"
-                                break
+                        # Test repairs directly against real sandbox.
+                        # Self-test gating was filtering valid repairs on 9B
+                        # (0/15 success rate). Direct sandbox testing is more
+                        # reliable — costs a few extra sandbox calls but
+                        # eliminates false-negative self-test rejections.
+                        real_passed, _, _ = sandbox(repair_code, "")
+                        if real_passed:
+                            result["passed"] = True
+                            result["code"] = repair_code
+                            result["phase_solved"] = "pr_cot"
+                            self._learn_from_success(task, task_id, "pr_cot")
+                            break
                     except Exception:
                         continue
             except Exception as e:
                 result["telemetry"]["pr_cot_error"] = str(e)
 
-        if result["passed"]:
-            self._learn_from_success(task, task_id, "pr_cot")
-            result["total_tokens"] = llm.total_tokens
-            result["total_time_ms"] = (time.time() - start_time) * 1000
-            self._record_feedback(task_id, result)
-            self._log_v3_event(task_id, result)
-            return result
+        # --- Strategy 2: Refinement Loop (3-15 LLM calls) ---
+        if not result["passed"] and failing:
+            phase3_strategies_tried.append("refinement")
+            ref_llm = LLMAdapter(self.runner, timeout=300)
+            try:
+                ref_result = self.refinement_loop.run(
+                    problem=task.prompt,
+                    failing_candidates=failing,
+                    original_constraints=constraints,
+                    llm_call=ref_llm,
+                    sandbox_run=self_verify_sandbox,
+                    embed_call=embed,
+                    metacognitive_warnings=metacog_warnings,
+                    task_id=task_id,
+                )
+                phase3_extra_tokens += ref_llm.total_tokens
+                if ref_result.solved:
+                    real_passed, _, _ = sandbox(ref_result.winning_code, "")
+                    if real_passed:
+                        result["passed"] = True
+                        result["code"] = ref_result.winning_code
+                        result["phase_solved"] = "refinement"
+                        result["telemetry"]["refinement_iterations"] = ref_result.total_iterations
+                        self._learn_from_success(task, task_id, "refinement")
+            except Exception as e:
+                result["telemetry"]["refinement_error"] = str(e)
 
-        # Step 3b: Full Refinement Loop (uses self-verify sandbox)
-        try:
-            ref_result = self.refinement_loop.run(
-                problem=task.prompt,
-                failing_candidates=failing,
-                original_constraints=constraints,
-                llm_call=llm,
-                sandbox_run=self_verify_sandbox,  # Self-verify, not real tests
-                embed_call=embed,
-                metacognitive_warnings=metacog_warnings,
-                task_id=task_id,
-            )
-            if ref_result.solved:
-                # Self-tests pass — verify with real tests for final score
-                real_passed, _, _ = sandbox(ref_result.winning_code, "")
-                if real_passed:
-                    result["passed"] = True
-                    result["code"] = ref_result.winning_code
-                    result["phase_solved"] = "refinement"
-                    result["telemetry"]["refinement_iterations"] = ref_result.total_iterations
-        except Exception as e:
-            result["telemetry"]["refinement_error"] = str(e)
+        # --- Strategy 3: Derivation Chains (up to 17 LLM calls) ---
+        if not result["passed"]:
+            phase3_strategies_tried.append("derivation")
+            dc_llm = LLMAdapter(self.runner, timeout=300)
+            try:
+                failure_context = "; ".join(
+                    f"Candidate {c['index']}: {c.get('stderr', 'failed')[:200]}"
+                    for c in candidates if c.get("passed") is False
+                )
+                # Enrich with metacognitive context for derivation
+                dc_problem = task.prompt
+                if metacog_warnings:
+                    dc_problem += "\n\nKnown pitfalls for this problem type:"
+                    for w in metacog_warnings:
+                        dc_problem += f"\n- {w}"
 
-        if result["passed"]:
-            self._learn_from_success(task, task_id, "refinement")
-            result["total_tokens"] = llm.total_tokens
-            result["total_time_ms"] = (time.time() - start_time) * 1000
-            self._record_feedback(task_id, result)
-            self._log_v3_event(task_id, result)
-            return result
-
-        # Step 3c: Derivation Chains (real sandbox — sub-problems have own test cases)
-        try:
-            failure_context = "; ".join(
-                f"Candidate {c['index']}: {c.get('stderr', 'failed')[:200]}"
-                for c in candidates if c.get("passed") is False
-            )
-            dc_result = self.derivation_chains.solve(
-                problem=task.prompt,
-                failure_context=failure_context,
-                llm_call=llm,
-                sandbox_run=sandbox,
-                task_id=task_id,
-            )
-            if dc_result.solved and dc_result.final_code:
-                try:
-                    # Verify with real tests for final score
+                dc_result = self.derivation_chains.solve(
+                    problem=dc_problem,
+                    failure_context=failure_context,
+                    llm_call=dc_llm,
+                    sandbox_run=sandbox,
+                    task_id=task_id,
+                )
+                phase3_extra_tokens += dc_llm.total_tokens
+                if dc_result.solved and dc_result.final_code:
                     passed, stdout, stderr = sandbox(dc_result.final_code, "")
                     if passed:
                         result["passed"] = True
                         result["code"] = dc_result.final_code
                         result["phase_solved"] = "derivation"
-                except Exception:
-                    pass
-        except Exception as e:
-            result["telemetry"]["derivation_error"] = str(e)
+                        self._learn_from_success(task, task_id, "derivation")
+            except Exception as e:
+                result["telemetry"]["derivation_error"] = str(e)
 
-        if result["passed"]:
-            self._learn_from_success(task, task_id, "derivation")
-
-        result["total_tokens"] = llm.total_tokens
+        result["telemetry"]["phase3_strategies_tried"] = phase3_strategies_tried
+        result["total_tokens"] += phase3_extra_tokens
+        latency["phase3_total_ms"] = (time.time() - phase3_start) * 1000
+        result["telemetry"]["latency"] = latency
+        result["total_tokens"] = max(result["total_tokens"], llm.total_tokens)
         result["total_time_ms"] = (time.time() - start_time) * 1000
         self._record_feedback(task_id, result)
         self._log_v3_event(task_id, result)
@@ -1102,7 +1417,11 @@ class V3Pipeline:
         return categories
 
     def _log_v3_event(self, task_id: str, result: Dict) -> None:
-        """Log a V3 pipeline event to JSONL."""
+        """Log a unified V3 pipeline event to JSONL.
+
+        Consolidates all per-task telemetry into a single event for
+        the analysis pipeline (V3.1 Section 5.1).
+        """
         event = {
             "task_id": task_id,
             "passed": result["passed"],
@@ -1110,8 +1429,13 @@ class V3Pipeline:
             "candidates_generated": result["candidates_generated"],
             "total_tokens": result["total_tokens"],
             "total_time_ms": result["total_time_ms"],
+            "selection_strategy": self.selection_strategy,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        # Merge all telemetry sub-fields into the event
+        telemetry = result.get("telemetry", {})
+        for key, value in telemetry.items():
+            event[key] = value
         try:
             append_jsonl(self.telemetry_dir / "v3_events.jsonl", event)
         except Exception:
@@ -1144,7 +1468,7 @@ class V3BenchmarkRunner:
 
     def __init__(self, run_dir: Path, enable_phase1=True,
                  enable_phase2=True, enable_phase3=True,
-                 enable_feedback=False):
+                 enable_feedback=False, selection_strategy="lens"):
         self.run_dir = Path(run_dir)
         self.telemetry_dir = self.run_dir / "telemetry"
         self.telemetry_dir.mkdir(parents=True, exist_ok=True)
@@ -1155,6 +1479,7 @@ class V3BenchmarkRunner:
             enable_phase2=enable_phase2,
             enable_phase3=enable_phase3,
             enable_feedback=enable_feedback,
+            selection_strategy=selection_strategy,
         )
         self._start_time = time.time()
 
@@ -1169,7 +1494,11 @@ class V3BenchmarkRunner:
 
     def run_lcb(self, tasks: List[BenchmarkTask],
                 phase_name: str = "v3_lcb") -> Dict[str, Dict]:
-        """Run LiveCodeBench tasks through V3 pipeline."""
+        """Run LiveCodeBench tasks through V3 pipeline.
+
+        When ATLAS_LLM_PARALLEL=1, runs multiple tasks concurrently using
+        ATLAS_PARALLEL_TASKS workers (default 4). Otherwise runs sequentially.
+        """
         phase_dir = self.run_dir / phase_name
         phase_dir.mkdir(parents=True, exist_ok=True)
         per_task_dir = phase_dir / "per_task"
@@ -1193,44 +1522,18 @@ class V3BenchmarkRunner:
             except Exception:
                 pass
 
-        for idx, task in enumerate(remaining):
-            task_start = time.time()
+        parallel_tasks = int(os.environ.get("ATLAS_PARALLEL_TASKS", "4"))
+        use_parallel = LLMAdapter._parallel_mode and parallel_tasks > 1
 
-            try:
-                task_result = self.pipeline.run_task(task, task_id=task.task_id)
-            except Exception as e:
-                task_result = {
-                    "task_id": task.task_id,
-                    "passed": False,
-                    "code": "",
-                    "phase_solved": "error",
-                    "candidates_generated": 0,
-                    "total_tokens": 0,
-                    "total_time_ms": (time.time() - task_start) * 1000,
-                    "error": str(e),
-                    "telemetry": {},
-                }
+        if use_parallel:
+            print(f"  PARALLEL MODE: {parallel_tasks} concurrent tasks")
+            self._run_parallel(remaining, results, per_task_dir, total, done,
+                               parallel_tasks)
+        else:
+            self._run_serial(remaining, results, per_task_dir, total, done)
 
-            results[task.task_id] = task_result
-
-            # Save per-task result atomically
-            safe_name = task.task_id.replace('/', '_')
-            atomic_write_json(per_task_dir / f"{safe_name}.json", task_result)
-
-            done += 1
-            status = "PASS" if task_result["passed"] else "FAIL"
-            phase = task_result.get("phase_solved", "?")
-            elapsed = time.time() - self._start_time
-            rate = done / (elapsed / 3600) if elapsed > 0 else 0
-            tokens = task_result.get("total_tokens", 0)
-            print(
-                f"  [{done}/{total}] {task.task_id}: {status} "
-                f"(via {phase}, {tokens} tok) "
-                f"[{rate:.0f} tasks/hr]",
-                flush=True,
-            )
-
-        # Save phase summary
+        # Save phase summary (done counter updated by reference via results dict)
+        done = len(results)
         passed = sum(1 for r in results.values() if r.get("passed"))
         summary = {
             "phase": phase_name,
@@ -1242,6 +1545,89 @@ class V3BenchmarkRunner:
         atomic_write_json(phase_dir / "results.json", summary)
 
         return results
+
+    def _process_one_task(self, task: BenchmarkTask) -> Dict:
+        """Run a single task through the pipeline (thread-safe)."""
+        task_start = time.time()
+        try:
+            return self.pipeline.run_task(task, task_id=task.task_id)
+        except Exception as e:
+            return {
+                "task_id": task.task_id,
+                "passed": False,
+                "code": "",
+                "phase_solved": "error",
+                "candidates_generated": 0,
+                "total_tokens": 0,
+                "total_time_ms": (time.time() - task_start) * 1000,
+                "error": str(e),
+                "telemetry": {},
+            }
+
+    def _save_and_log(self, task_result: Dict, per_task_dir: Path,
+                      done: int, total: int) -> None:
+        """Save result atomically and print progress."""
+        task_id = task_result["task_id"]
+        safe_name = task_id.replace('/', '_')
+        atomic_write_json(per_task_dir / f"{safe_name}.json", task_result)
+
+        status = "PASS" if task_result["passed"] else "FAIL"
+        phase = task_result.get("phase_solved", "?")
+        elapsed = time.time() - self._start_time
+        rate = done / (elapsed / 3600) if elapsed > 0 else 0
+        tokens = task_result.get("total_tokens", 0)
+        print(
+            f"  [{done}/{total}] {task_id}: {status} "
+            f"(via {phase}, {tokens} tok) "
+            f"[{rate:.0f} tasks/hr]",
+            flush=True,
+        )
+
+    def _run_serial(self, remaining, results, per_task_dir, total, done):
+        """Process tasks one at a time (safe fallback)."""
+        for task in remaining:
+            task_result = self._process_one_task(task)
+            results[task.task_id] = task_result
+            done += 1
+            self._save_and_log(task_result, per_task_dir, done, total)
+
+    def _run_parallel(self, remaining, results, per_task_dir, total, done,
+                      max_workers):
+        """Process tasks concurrently using ThreadPoolExecutor.
+
+        Each task gets its own LLMAdapter (per run_task), so thread safety
+        relies on:
+          - llama-server handling concurrent /completion requests (--no-cache-prompt)
+          - atomic_write_json for per-task results (temp file + rename)
+          - EmbeddingWriter._lock for binary embedding file
+          - append_jsonl for JSONL telemetry (small writes are atomic on Linux)
+          - print() with flush=True (inherently thread-safe in CPython via GIL)
+        """
+        _done_lock = threading.Lock()
+        _done_counter = [done]  # mutable container for closure
+
+        def process_and_save(task):
+            task_result = self._process_one_task(task)
+            with _done_lock:
+                results[task.task_id] = task_result
+                _done_counter[0] += 1
+                current_done = _done_counter[0]
+            self._save_and_log(task_result, per_task_dir, current_done, total)
+            return task_result
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(process_and_save, task): task
+                for task in remaining
+            }
+            for future in as_completed(futures):
+                task = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    # Should not happen (process_and_save catches exceptions)
+                    print(f"  UNEXPECTED ERROR on {task.task_id}: {e}",
+                          flush=True)
 
     def _phase_breakdown(self, results: Dict[str, Dict]) -> Dict:
         """Compute breakdown of which phase solved each task."""
@@ -1270,7 +1656,8 @@ def load_lcb_tasks():
 
 def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
                      enable_phase1=True, enable_phase2=True,
-                     enable_phase3=True):
+                     enable_phase3=True, selection_strategy="lens",
+                     enable_feedback=False):
     """Run V3 benchmark on LiveCodeBench."""
     if run_id is None:
         run_id = f"v3_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1286,6 +1673,8 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         "enable_phase1": enable_phase1,
         "enable_phase2": enable_phase2,
         "enable_phase3": enable_phase3,
+        "selection_strategy": selection_strategy,
+        "enable_feedback": enable_feedback,
         "smoke_only": smoke_only,
         "max_tasks": max_tasks,
     }
@@ -1320,22 +1709,29 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     except Exception:
         print("  RAG API: WARNING — lens scoring unavailable")
 
-    # Check Lens model availability
-    try:
-        test_body = json.dumps({"text": "test"}).encode("utf-8")
-        req = urllib.request.Request(
-            f"{RAG_API_URL}/internal/lens/score-text",
-            data=test_body,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            lens_data = json.loads(resp.read().decode('utf-8'))
-        if lens_data.get("error"):
-            print(f"  Lens model: NOT LOADED ({lens_data['error']})")
-            print("    Phase 2 (adaptive K) will use default k=3")
-        else:
-            print(f"  Lens model: OK (energy={lens_data.get('energy', '?')})")
-    except Exception:
+    # Check Lens model availability (retry once after short delay)
+    lens_ok = False
+    for lens_attempt in range(2):
+        try:
+            test_body = json.dumps({"text": "test"}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{RAG_API_URL}/internal/lens/score-text",
+                data=test_body,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                lens_data = json.loads(resp.read().decode('utf-8'))
+            if lens_data.get("error"):
+                print(f"  Lens model: NOT LOADED ({lens_data['error']})")
+                print("    Phase 2 (adaptive K) will use default k=3")
+            else:
+                print(f"  Lens model: OK (energy={lens_data.get('energy', '?')})")
+            lens_ok = True
+            break
+        except Exception:
+            if lens_attempt == 0:
+                time.sleep(3)
+    if not lens_ok:
         print("  Lens model: UNAVAILABLE — Phase 2 will use default k=3")
 
     # Load dataset
@@ -1359,6 +1755,8 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         enable_phase1=enable_phase1,
         enable_phase2=enable_phase2,
         enable_phase3=enable_phase3,
+        selection_strategy=selection_strategy,
+        enable_feedback=enable_feedback,
     ) as runner:
         results = runner.run_lcb(tasks)
 
@@ -1414,6 +1812,11 @@ def main():
                         help="Disable Phase 3 features")
     parser.add_argument("--baseline", action="store_true",
                         help="Baseline mode: all V3 features OFF (equivalent to V2)")
+    parser.add_argument("--selection-strategy", type=str, default="lens",
+                        choices=["lens", "random", "logprob", "oracle"],
+                        help="Candidate selection strategy (default: lens)")
+    parser.add_argument("--enable-feedback", action="store_true",
+                        help="Enable Lens Evolution (Phase 4): online C(x) retrain during benchmark")
     args = parser.parse_args()
 
     if args.baseline:
@@ -1428,6 +1831,8 @@ def main():
         enable_phase1=not args.no_phase1,
         enable_phase2=not args.no_phase2,
         enable_phase3=not args.no_phase3,
+        selection_strategy=args.selection_strategy,
+        enable_feedback=args.enable_feedback,
     )
 
     if run_dir:

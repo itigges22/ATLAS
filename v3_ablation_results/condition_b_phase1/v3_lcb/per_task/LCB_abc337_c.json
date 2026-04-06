@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc337_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    A = list(map(int, input[1:]))\n\n    next_person = {}\n    front = -1\n\n    for i in range(N):\n        if A[i] == -1:\n            front = i + 1  # person numbers are 1-based\n        else:\n            next_person[A[i]] = i + 1  # A[i] is the current person, i+1 is the next\n\n    result = []\n    current = front\n    while current != -1:\n        result.append(str(current))\n        current = next_person.get(current, -1)\n\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1071,
+  "total_time_ms": 19616.98865890503,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 847
+  }
+}

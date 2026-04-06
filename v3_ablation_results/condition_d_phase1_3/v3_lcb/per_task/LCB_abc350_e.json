@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc350_e",
+  "passed": false,
+  "code": "import sys\nimport functools\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1000000)\n    N, A, X, Y = map(int, sys.stdin.read().split())\n\n    @functools.lru_cache(maxsize=None)\n    def dp(n):\n        if n == 0:\n            return 0.0\n        # Option 1: Pay X yen to divide by A\n        cost1 = X + dp(n // A)\n        # Option 2: Pay Y yen to roll the die\n        cost2 = Y\n        for b in range(1, 7):\n            cost2 += dp(n // b) / 6.0\n        return min(cost1, cost2)\n\n    result = dp(N)\n    print(\"{0:.15f}\".format(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53972,
+  "total_time_ms": 906016.9072151184,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1976,
+    "self_tests_generated": 5
+  }
+}

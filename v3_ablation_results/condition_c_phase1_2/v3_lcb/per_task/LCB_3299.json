@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3299",
+  "passed": false,
+  "code": "from collections import Counter\nfrom typing import List\n\nclass Solution:\n    def maximumLength(self, nums: List[int]) -> int:\n        count = Counter(nums)\n        max_len = 0\n        unique_nums = sorted(count.keys())\n        \n        for num in unique_nums:\n            current = num\n            length = 1\n            while current in count:\n                next_val = current * current\n                if next_val not in count:\n                    break\n                length += 2\n                current = next_val\n            max_len = max(max_len, length)\n        \n        return max_len",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 133,
+  "total_time_ms": 62343.430042266846,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

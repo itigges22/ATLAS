@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc353_d",
+  "passed": true,
+  "code": "import sys\nimport math\n\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    max_len = max(len(str(x)) for x in A)\n    pow10 = [1] * (max_len + 1)\n    for i in range(1, max_len + 1):\n        pow10[i] = (pow10[i - 1] * 10) % MOD\n\n    # Convert A to strings for length\n    A_str = [str(x) for x in A]\n    len_A = [len(x) for x in A_str]\n\n    # Prefix sums\n    sum_A = [0] * (N + 1)\n    sum_pow10 = [0] * (N + 1)\n    for i in range(N - 1, -1, -1):\n        sum_A[i] = (sum_A[i + 1] + A[i]) % MOD\n        sum_pow10[i] = (sum_pow10[i + 1] + pow10[len_A[i]]) % MOD\n\n    total = 0\n    for i in range(N - 1):\n        l = len_A[i]\n        contrib1 = (A[i] * sum_pow10[i + 1]) % MOD\n        contrib2 = sum_A[i + 1]\n        total = (total + contrib1 + contrib2) % MOD\n\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2839,
+  "total_time_ms": 185484.09914970398,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2231
+  }
+}

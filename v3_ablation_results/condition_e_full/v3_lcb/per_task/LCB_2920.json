@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2920",
+  "passed": true,
+  "code": "class Solution:\n    def minimumSeconds(self, nums: List[int]) -> int:\n        from collections import defaultdict\n\n        n = len(nums)\n        if n == 1:\n            return 0\n\n        pos = defaultdict(list)\n        for i, num in enumerate(nums):\n            pos[num].append(i)\n\n        min_time = float('inf')\n        for num, indices in pos.items():\n            max_gap = 0\n            for i in range(len(indices)):\n                gap = (indices[i] - indices[i - 1] - 1) % n\n                max_gap = max(max_gap, gap)\n            max_gap = max(max_gap, (indices[0] + n - indices[-1] - 1) % n)\n            time = (max_gap + 1) // 2\n            min_time = min(min_time, time)\n        return min_time",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 191,
+  "total_time_ms": 6100.043535232544,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

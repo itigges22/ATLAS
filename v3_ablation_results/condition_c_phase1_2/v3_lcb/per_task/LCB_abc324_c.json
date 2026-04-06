@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc324_c",
+  "passed": true,
+  "code": "import sys\n\ndef is_valid(s, t):\n    len_s = len(s)\n    len_t = len(t)\n    \n    # Case 1: s == t\n    if s == t:\n        return True\n    \n    # Case 2: s is obtained by inserting one character into t\n    if len_s == len_t + 1:\n        i = 0\n        j = 0\n        diff = 0\n        while i < len_s and j < len_t:\n            if s[i] == t[j]:\n                i += 1\n                j += 1\n            else:\n                i += 1\n                diff += 1\n                if diff > 1:\n                    return False\n        return True\n    \n    # Case 3: s is obtained by deleting one character from t\n    if len_s == len_t - 1:\n        i = 0\n        j = 0\n        diff = 0\n        while i < len_s and j < len_t:\n            if s[i] == t[j]:\n                i += 1\n                j += 1\n            else:\n                j += 1\n                diff += 1\n                if diff > 1:\n                    return False\n        return True\n    \n    # Case 4: s is obtained by changing one character in t\n    if len_s == len_t:\n        diff = 0\n        for a, b in zip(s, t):\n            if a != b:\n                diff += 1\n                if diff > 1:\n                    return False\n        return True\n    \n    return False\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T_prime = data[1]\n    S_list = data[2:]\n    \n    result = []\n    for idx, s in enumerate(S_list, 1):\n        if is_valid(s, T_prime):\n            result.append(idx)\n    \n    print(len(result))\n    if result:\n        print(' '.join(map(str, result)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6074,
+  "total_time_ms": 97313.52734565735,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5753
+  }
+}

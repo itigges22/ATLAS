@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc304_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    D = float(data[1])\n    \n    coords = []\n    for i in range(N):\n        x = int(data[2 + 2 * i])\n        y = int(data[3 + 2 * i])\n        coords.append((x, y))\n    \n    # Initialize infection status\n    infected = [False] * N\n    infected[0] = True  # Person 1 is infected\n    \n    # BFS queue\n    queue = deque([0])\n    \n    # BFS to spread the infection\n    while queue:\n        i = queue.popleft()\n        for j in range(N):\n            if not infected[j]:\n                dx = coords[i][0] - coords[j][0]\n                dy = coords[i][1] - coords[j][1]\n                dist_sq = dx * dx + dy * dy\n                if dist_sq <= D * D:\n                    infected[j] = True\n                    queue.append(j)\n    \n    for status in infected:\n        print(\"Yes\" if status else \"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 17964,
+  "total_time_ms": 283614.0675544739,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 660,
+    "self_tests_generated": 5
+  }
+}

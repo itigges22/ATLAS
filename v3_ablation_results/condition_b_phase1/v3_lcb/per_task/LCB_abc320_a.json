@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc320_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nA, B = map(int, input().split())\nresult = pow(A, B) + pow(B, A)\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 327,
+  "total_time_ms": 5583.805799484253,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 284
+  }
+}

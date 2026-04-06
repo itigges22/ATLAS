@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc342_e",
+  "passed": false,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n\n    trains = defaultdict(list)\n\n    for _ in range(M):\n        l = int(data[idx])\n        idx += 1\n        d = int(data[idx])\n        idx += 1\n        k = int(data[idx])\n        idx += 1\n        c = int(data[idx])\n        idx += 1\n        A = int(data[idx])\n        idx += 1\n        B = int(data[idx])\n        idx += 1\n\n        # Generate all departure times and store the train info\n        for t in range(l, l + (k - 1) * d + 1, d):\n            trains[A].append((B, t, t + c))\n\n    # Dijkstra's algorithm modified to find the latest departure time\n    # We use a max-heap (simulated with negative values in a min-heap)\n    # We track the latest time we can arrive at each station\n    import heapq\n\n    max_time = [-float('inf')] * (N + 1)\n    max_time[N] = float('inf')  # We can always arrive at station N at any time\n    heap = []\n    heapq.heappush(heap, (-float('inf'), N))  # Use max-heap by pushing negative times\n\n    while heap:\n        current_time_neg, u = heapq.heappop(heap)\n        current_time = -current_time_neg\n\n        if current_time < max_time[u]:\n            continue  # Skip outdated entries\n\n        for v, dep_time, arr_time in trains[u]:\n            # To reach v from u, we must arrive at u before dep_time\n            # The latest time we can arrive at u is current_time\n            # So, the latest time we can depart from u is min(current_time, dep_time)\n            # Then, the latest time we can arrive at v is min(current_time, dep_time) + c\n            new_time = min(current_time, dep_time) + c\n\n            if new_time > max_time[v]:\n                max_time[v] = new_time\n                heapq.heappush(heap, (-new_time, v))\n\n    # Output the results\n    for i in range(1, N):\n        if max_time[i] == -float('inf'):\n            print(\"Unreachable\")\n        else:\n            print(max_time[i])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 7678,
+  "total_time_ms": 157533.88953208923,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7233
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc354_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().splitlines()\n    N = int(data[0])\n    users = []\n    for line in data[1:]:\n        name, rating = line.split()\n        users.append((name, int(rating)))\n    \n    # Sort lexicographically by name\n    users.sort(key=lambda x: x[0])\n    \n    # Calculate total rating\n    total_rating = sum(rating for _, rating in users)\n    \n    # Find the winner index\n    winner_index = total_rating % N\n    \n    # Output the winner's name\n    print(users[winner_index][0])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 162,
+  "total_time_ms": 2688.9572143554688,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

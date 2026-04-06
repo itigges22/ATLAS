@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc361_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\na, b, c, d, e, f = map(int, input().split())\ng, h, i, j, k, l = map(int, input().split())\n\nx_start = max(a, g)\nx_end = min(d, j)\nx_overlap = x_end > x_start\n\ny_start = max(b, h)\ny_end = min(e, k)\ny_overlap = y_end > y_start\n\nz_start = max(c, i)\nz_end = min(f, l)\nz_overlap = z_end > z_start\n\nif x_overlap and y_overlap and z_overlap:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1514,
+  "total_time_ms": 23519.86002922058,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1212
+  }
+}

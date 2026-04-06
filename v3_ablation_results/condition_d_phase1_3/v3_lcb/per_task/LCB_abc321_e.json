@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc321_e",
+  "passed": false,
+  "code": "import sys\nimport math\nfrom collections import deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    T = int(data[0])\n    idx = 1\n    results = []\n    \n    for _ in range(T):\n        N = int(data[idx])\n        X = int(data[idx+1])\n        K = int(data[idx+2])\n        idx += 3\n        \n        # BFS to find all nodes at distance K from X\n        visited = set()\n        queue = deque()\n        queue.append((X, 0))\n        visited.add(X)\n        count = 0\n        \n        while queue:\n            node, dist = queue.popleft()\n            if dist == K:\n                count += 1\n            elif dist < K:\n                # Move to parent\n                parent = node // 2\n                if parent not in visited:\n                    visited.add(parent)\n                    queue.append((parent, dist + 1))\n                # Move to children\n                child1 = node * 2\n                if child1 <= N and child1 not in visited:\n                    visited.add(child1)\n                    queue.append((child1, dist + 1))\n                child2 = node * 2 + 1\n                if child2 <= N and child2 not in visited:\n                    visited.add(child2)\n                    queue.append((child2, dist + 1))\n        \n        results.append(str(count))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 58438,
+  "total_time_ms": 1265819.2687034607,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 984,
+    "self_tests_generated": 5
+  }
+}

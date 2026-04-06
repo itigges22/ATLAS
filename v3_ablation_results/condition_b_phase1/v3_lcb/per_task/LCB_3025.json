@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3025",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minOperations(self, nums: List[int], target: int) -> int:\n        # Count the frequency of each power of two in nums\n        count = [0] * 32\n        for num in nums:\n            for i in range(32):\n                if num == (1 << i):\n                    count[i] += 1\n                    break\n        \n        # Convert target to binary and count the required powers of two\n        required = [0] * 32\n        for i in range(32):\n            if (target >> i) & 1:\n                required[i] = 1\n        \n        operations = 0\n        for i in range(32):\n            # If we need this power of two, check if we have it\n            if required[i]:\n                if count[i] > 0:\n                    count[i] -= 1\n                else:\n                    # We need to split a higher power\n                    # Find the next higher power that we have\n                    j = i + 1\n                    while j < 32 and count[j] == 0:\n                        j += 1\n                    if j == 32:\n                        return -1\n                    # Split the higher power into two lower ones\n                    count[j] -= 1\n                    count[j - 1] += 2\n                    operations += (j - i)\n                    # Now we have the required power, use it\n                    count[j - 1] -= 1\n            # If we have extra of this power, carry it to the next higher power\n            if count[i] >= 2:\n                count[i + 1] += count[i] // 2\n                count[i] %= 2\n        \n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2431,
+  "total_time_ms": 43247.09630012512,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2091
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc346_e",
+  "passed": false,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    M = int(data[2])\n    \n    row_color = [0] * (H + 1)  # 1-based indexing\n    col_color = [0] * (W + 1)\n    \n    row_time = [0] * (H + 1)\n    col_time = [0] * (W + 1)\n    \n    idx = 3\n    for _ in range(M):\n        T = int(data[idx])\n        A = int(data[idx + 1])\n        X = int(data[idx + 2])\n        idx += 3\n        \n        if T == 1:\n            row_color[A] = X\n            row_time[A] = _\n        else:\n            col_color[A] = X\n            col_time[A] = _\n    \n    color_count = defaultdict(int)\n    \n    # Count cells with color from rows\n    for r in range(1, H + 1):\n        color = row_color[r]\n        time = row_time[r]\n        # Count columns that were not overwritten by a later column operation\n        cnt = 0\n        for c in range(1, W + 1):\n            if col_time[c] < time:\n                cnt += 1\n        color_count[color] += cnt\n    \n    # Count cells with color from columns\n    for c in range(1, W + 1):\n        color = col_color[c]\n        time = col_time[c]\n        # Count rows that were not overwritten by a later row operation\n        cnt = 0\n        for r in range(1, H + 1):\n            if row_time[r] < time:\n                cnt += 1\n        color_count[color] += cnt\n    \n    # Output\n    res = []\n    for color in sorted(color_count):\n        if color_count[color] > 0:\n            res.append(f\"{color} {color_count[color]}\")\n    \n    print(len(res))\n    for line in res:\n        print(line)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 477,
+  "total_time_ms": 7156.0680866241455,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

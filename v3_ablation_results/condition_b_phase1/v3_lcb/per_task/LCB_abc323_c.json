@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc323_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n    \n    A = list(map(int, data[idx:idx+M]))\n    idx += M\n    \n    S = data[idx:idx+N]\n    \n    # Precompute current scores\n    current_scores = []\n    for i in range(N):\n        score = i + 1  # bonus score\n        for j in range(M):\n            if S[i][j] == 'o':\n                score += A[j]\n        current_scores.append(score)\n    \n    # For each player, determine the minimum number of problems to solve\n    for i in range(N):\n        # Current score of player i\n        curr_score = current_scores[i]\n        # List of unsolved problems for player i\n        unsolved = [A[j] for j in range(M) if S[i][j] == 'x']\n        # Sort unsolved problems in descending order (greedy approach)\n        unsolved.sort(reverse=True)\n        \n        # Target is to exceed the max score of other players\n        target = max(current_scores[:i] + current_scores[i+1:])\n        \n        # How many problems need to be solved\n        needed = 0\n        total = curr_score\n        while total <= target and needed < len(unsolved):\n            total += unsolved[needed]\n            needed += 1\n        print(needed)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1224,
+  "total_time_ms": 21457.979202270508,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 943
+  }
+}
