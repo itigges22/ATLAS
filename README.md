@@ -129,6 +129,8 @@ The interactive CLI has been validated across 8 difficulty levels × 3 iteration
 
 5-language integration: Python, Rust, Go, C, Shell — **all pass** (compile + run).
 
+> **Note from Isaac:** I am very skeptical that it can accomplish all of this at 100%. V3.1 will include a more robust set of reliability testing.
+
 </details>
 
 Full training data and benchmark traces: [ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)
