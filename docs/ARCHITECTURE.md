@@ -34,109 +34,6 @@ graph TB
 
 Services run as containers via Docker Compose (recommended) or as local processes via the `atlas` launcher. Only llama-server uses the GPU. Everything else runs on CPU.
 
-### Component Detail
-
-```mermaid
-graph LR
-    subgraph proxy["atlas-proxy (Go)"]
-        direction TB
-        Grammar["Grammar Engine\njson_object schema"]
-        TierClass["Tier Classifier\nT0-T3 heuristics"]
-        AgentLoop["Agent Loop\nturn mgmt, trimming"]
-        Tools["Tool Executor\n8 tools"]
-        VerifyRepair["Verify-Repair Pipeline\nscore → sandbox → fix"]
-        BestK["Best-of-K\nparallel candidates"]
-        AiderFmt["Aider Formatter\nwhole-file output"]
-        Perms["Permission System\nallow/deny patterns"]
-        ProjDetect["Project Detector\nlang, framework, build cmd"]
-        V3Adapter["V3 Adapter\nconstraint extraction"]
-        V3Bridge["V3 Bridge\nSSE streaming to Python"]
-        BuildVerify["Build Verifier\nper-language syntax"]
-        Parallel["Parallel Tasks\ntopo sort, sub-agents"]
-    end
-
-    subgraph v3["v3-service (Python)"]
-        direction TB
-        PS["PlanSearch (1A)\n3 constraint-based plans"]
-        DS["DivSampling (1B)\n12 perturbations"]
-        BF["BudgetForcing (1C)\n5 tiers, Wait injection"]
-        BASC["BlendASC (2A)\nadaptive K allocation"]
-        REASC["ReASC (2B)\nearly stopping"]
-        SSTAR["S* (2C)\ndifferential tiebreaking"]
-        CS["CandidateSelection\n4 strategies"]
-        FA["FailureAnalysis (3A)\n6 failure categories"]
-        CR["ConstraintRefinement (3B)\ncosine filtering"]
-        PRCOT["PR-CoT (3C)\n4 perspectives"]
-        DC["DerivationChains (3D)\nsub-problem decomposition"]
-        RL["RefinementLoop (3E)\norchestrator"]
-        MC["Metacognitive (3F)\nfailure pattern library"]
-        ACE["ACE Pipeline (3G)\nplaybook learning"]
-        STG["SelfTestGen\nmodel-generated tests"]
-        LF["LensFeedback\nonline recalibration"]
-        ES["EmbeddingStore\nbinary persistence"]
-    end
-
-    subgraph lens["geometric-lens (Python)"]
-        direction TB
-        CX["C(x) Cost Field\n4096→512→128→1 MLP"]
-        GX["G(x) XGBoost\nPCA(128) + classifier"]
-        MT["Metric Tensor\ndiagonal G(x), PCA"]
-        EE["Embedding Extractor\nllama-server /embedding"]
-        SVC["Service Layer\nevaluate_combined()"]
-        EWC["EWC\ncontinual learning"]
-        RB["Replay Buffer\ndomain-stratified"]
-        CORR["Correction Engine\nnatural gradient"]
-        TR["Training Pipeline\ncontrastive loss"]
-        subgraph rag["RAG / PageIndex"]
-            AST["AST Parser\ntree-sitter"]
-            BM25["BM25 Index\ninverted index"]
-            TreeS["Tree Search\nLLM-guided traversal"]
-            Hybrid["Hybrid Retriever\nrouting logic"]
-        end
-        subgraph router["Confidence Router"]
-            Thompson["Thompson Sampling\nBeta posteriors"]
-            DiffEst["Difficulty Estimator\n4-signal fusion"]
-            SigCol["Signal Collector"]
-            FeedRec["Feedback Recorder"]
-        end
-        subgraph pcache["Pattern Cache"]
-            PStore["Pattern Store\nRedis STM/LTM"]
-            PMatch["Pattern Matcher\nBM25 over patterns"]
-            PExtract["Pattern Extractor\nLLM-driven"]
-            CoOccur["Co-occurrence Graph"]
-        end
-    end
-
-    subgraph sb["sandbox (Python)"]
-        direction TB
-        ExecPy["Python Executor\npylint + pytest"]
-        ExecJS["JavaScript Executor\nNode.js 20"]
-        ExecTS["TypeScript Executor\ntsc + tsx"]
-        ExecGo["Go Executor\nGo 1.22"]
-        ExecRust["Rust Executor\nrustc stable"]
-        ExecC["C/C++ Executor\ngcc/g++"]
-        ExecBash["Bash Executor"]
-        SynCheck["Syntax Checker\nper-language AST"]
-        ErrClass["Error Classifier\n15 error types"]
-    end
-
-    subgraph llm["llama-server (C++)"]
-        direction TB
-        CUDA["CUDA Inference\nn-gpu-layers 99"]
-        GrammarEng["Grammar Engine\njson_object + GBNF"]
-        ChatAPI["/v1/chat/completions"]
-        CompAPI["/completion\n(raw, no template)"]
-        EmbedAPI["/embedding\n4096-dim self-embed"]
-        Health["/health"]
-    end
-
-    style proxy fill:#1a3a5c,color:#fff
-    style v3 fill:#2d5016,color:#fff
-    style lens fill:#2d5016,color:#fff
-    style sb fill:#2d5016,color:#fff
-    style llm fill:#5c1a1a,color:#fff
-```
-
 ---
 
 ## 2. Services
@@ -151,9 +48,50 @@ graph LR
 
 ---
 
-## 3. Agent Loop (Outer Layer)
+## 3. atlas-proxy (Outer Layer)
 
-The proxy receives chat completion requests from Aider and runs an internal agent loop:
+The proxy receives chat completion requests from Aider and runs an internal agent loop.
+
+```mermaid
+graph LR
+    subgraph proxy["atlas-proxy internal components"]
+        direction TB
+        subgraph core["Core Loop"]
+            Grammar["Grammar Engine\njson_object + GBNF schema"]
+            AgentLoop["Agent Loop\nturn mgmt, msg trimming"]
+            TierClass["Tier Classifier\nT0-T3 heuristics"]
+        end
+        subgraph tools["Tool Layer"]
+            ReadF["read_file"]
+            WriteF["write_file\n→ V3 for T2"]
+            EditF["edit_file\nold_str/new_str"]
+            DeleteF["delete_file"]
+            RunCmd["run_command\n5 min cap"]
+            SearchF["search_files\nregex, 200 max"]
+            ListDir["list_directory"]
+            PlanT["plan_tasks\nparallel, topo sort"]
+        end
+        subgraph pipeline["Verify-Repair"]
+            VR["Verify-Repair Loop\nscore → sandbox → fix × 3"]
+            BOK["Best-of-K\nparallel candidates"]
+            BV["Build Verifier\nper-language syntax"]
+        end
+        subgraph format["I/O"]
+            AiderFmt["Aider Formatter\nwhole-file output"]
+            V3Adapt["V3 Adapter\nconstraint extraction"]
+            V3Bridge["V3 Bridge\nSSE streaming"]
+            ProjDet["Project Detector\nlang, framework, cmds"]
+            Perms["Permissions\nallow/deny patterns"]
+        end
+    end
+
+    style core fill:#1a3a5c,color:#fff
+    style tools fill:#333,color:#fff
+    style pipeline fill:#2d5016,color:#fff
+    style format fill:#555,color:#fff
+```
+
+### Agent Loop Flow
 
 ```mermaid
 flowchart TD
@@ -255,6 +193,8 @@ Each `write_file`/`edit_file` call is classified independently:
 
 Activates inside `write_file`/`edit_file` executors for T2+ files. The pipeline has four phases with early exits at every stage.
 
+### Pipeline Flow
+
 ```mermaid
 flowchart TD
     Entry["T2 file detected"] --> Probe["Phase 0: Probe\nlight tier (1024 thinking)"]
@@ -287,7 +227,7 @@ flowchart TD
 
     AnyPass -->|"0 passed"| FA["Phase 3: Failure Analysis\n(categorize failures)"]
     FA --> Meta["Metacognitive Evaluation\n(inject compensating constraints)"]
-    Meta --> PRCOT["PR-CoT Repair\n(4 perspectives × analysis + repair\n= 8 LLM calls)"]
+    Meta --> PRCOT["PR-CoT Repair\n(4 perspectives x analysis + repair\n= 8 LLM calls)"]
     PRCOT --> PRPass{"PR-CoT\npassed?"}
     PRPass -->|"Yes"| Done
 
@@ -318,25 +258,17 @@ flowchart TD
     style Meta fill:#5c3a1a,color:#fff
 ```
 
-### Phase 0: Probe
+Legend: blue = generation, green = verification/selection, brown = repair.
 
-Generates a single baseline candidate with progressive retry:
-1. **Light tier** (1024 thinking tokens)
-2. **Standard tier** (2048 thinking tokens) if light fails
-3. **/nothink** (0 thinking tokens) as final fallback
+### Phase Details
 
-The probe is scored with C(x)/G(x) and tested in the sandbox. If it passes, the pipeline exits immediately — no further candidates are generated.
+**Phase 0: Probe** generates a single baseline candidate with progressive retry (light → standard → /nothink). Scored with C(x)/G(x) and tested in sandbox. If it passes, pipeline exits immediately.
 
-### Phase 1: Constraint-Driven Generation
+**Phase 1: Constraint-Driven Generation**
 
-**PlanSearch** generates 3 structurally different implementation plans by extracting distinct constraint sets from the problem. Each plan approaches the problem differently (e.g., iterative vs recursive vs mathematical).
-
-**DivSampling** applies perturbation diversity across 12 dimensions:
-- 4 roles: competitive_programmer, systems_engineer, mathematician, pragmatist
-- 4 instructions: step_by_step, edge_case_first, complexity_aware, constraint_driven
-- 4 styles: functional, pythonic, optimize_iteratively, structured
-
-**Budget Forcing** controls thinking token allocation per candidate:
+- **PlanSearch** generates 3 structurally different implementation plans by extracting distinct constraint sets
+- **DivSampling** applies perturbation diversity: 4 roles (competitive_programmer, systems_engineer, mathematician, pragmatist) + 4 instructions (step_by_step, edge_case_first, complexity_aware, constraint_driven) + 4 styles (functional, pythonic, optimize_iteratively, structured)
+- **Budget Forcing** controls thinking token allocation:
 
 | Tier | Thinking Tokens | Wait Injection |
 |------|----------------|----------------|
@@ -346,52 +278,23 @@ The probe is scored with C(x)/G(x) and tested in the sandbox. If it passes, the 
 | hard | 4,096 | If thinking ends < 1,024 tokens |
 | extreme | 8,192 | If thinking ends < 2,048 tokens |
 
-Wait injection appends "Wait, let me reconsider.\n" to force the model to think longer when it stops too early. Tier selection is driven by C(x) energy: lower energy (easier problems) get lower tiers.
+Wait injection appends "Wait, let me reconsider.\n" to force longer thinking. Tier selection driven by C(x) energy.
 
-### Phase 2: Verification and Selection
+**Phase 2: Verification and Selection**
 
-**Build Verification** runs per-language syntax checks:
-- Python: `python -m py_compile`
-- TypeScript: `npx tsc --noEmit`
-- JavaScript: `node --check`
-- Go: `go build .`
-- Rust: `cargo check`
-- C/C++: `gcc/g++ -fsyntax-only`
-- Shell: `bash -n`
+- **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Rust (`cargo check`), C/C++ (`gcc/g++ -fsyntax-only`), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
+- **S* Tiebreaking** (2+ passing): generates edge-case inputs, runs both candidates, majority wins
+- **Lens Selection** (1 passing or fallback): sort by C(x) energy, lowest wins
 
-Framework-specific overrides exist for Next.js, React, Flask, Django, and Express.
+**Phase 3: Repair** (if 0/K pass) — three strategies, sequential with early exit:
 
-**C(x)/G(x) Scoring** evaluates each candidate via Geometric Lens (single embedding extraction per candidate).
+- **Failure Analysis**: categorize failures (wrong_algorithm, implementation_bug, edge_case_miss, time_limit, format_error, partial_correct)
+- **Metacognitive Evaluation**: inject compensating constraints from known Qwen3.5 failure patterns
+- **PR-CoT**: 4 perspectives (logical_consistency, information_completeness, biases, alternative_solutions) x (analysis + repair) = ~8 LLM calls, up to 3 rounds
+- **Refinement Loop**: Failure Analysis → Constraint Refinement → Code Gen → Test → Learn. 2 iterations, 120s budget, ~5+ LLM calls each. Cosine distance filtering (>= 0.15) prevents hypothesis repetition
+- **Derivation Chains**: decompose into up to 5 sub-problems, sandbox-verify each, compose final. ~7+ LLM calls
 
-**S* Tiebreaking** activates when 2+ candidates pass sandbox testing. It generates edge-case inputs where candidates produce different outputs, runs both in the sandbox, and picks the majority winner. This resolves ties that energy scoring alone cannot.
-
-**Lens Selection** is the fallback: sort by C(x) energy (lower = better), pick the winner.
-
-### Phase 3: Repair (if 0/K pass)
-
-Three repair strategies run sequentially. Each exits early if the repaired code passes.
-
-**Failure Analysis** categorizes why each candidate failed (wrong_algorithm, implementation_bug, edge_case_miss, time_limit, format_error, partial_correct) and extracts violated constraints.
-
-**Metacognitive Evaluation** models Qwen3.5's known failure patterns per problem category and injects compensating constraints into repair prompts.
-
-**PR-CoT Repair** (Progressive Repair with Chain-of-Thought):
-- 4 analysis perspectives: logical_consistency, information_completeness, biases, alternative_solutions
-- Each perspective generates an analysis + repair attempt
-- ~8 LLM calls per attempt, up to 3 rounds
-
-**Refinement Loop** orchestrates iterative repair:
-- Failure Analysis → Constraint Refinement → Code Generation → Sandbox Test → Learn
-- 2 iterations max, 120 second time budget
-- ~5+ LLM calls per iteration
-- Constraint refinement uses cosine distance filtering (>= 0.15) to prevent hypothesis repetition
-
-**Derivation Chains** decompose the problem into up to 5 sub-problems:
-- Each sub-problem is solved and sandbox-verified independently
-- Solutions are composed into a final candidate
-- ~7+ LLM calls total (1 decomposition + 5 per-step + 1 composition)
-
-### V3 Module Dependency Map
+### Module Map
 
 19 Python modules in `benchmark/v3/` orchestrated by `v3-service/main.py`:
 
@@ -446,7 +349,7 @@ graph TD
     style ES fill:#333,color:#fff
 ```
 
-Color key: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 3 (repair), gray = utilities.
+Legend: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 3 (repair), gray = utilities.
 
 ---
 
@@ -454,115 +357,134 @@ Color key: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Pha
 
 Neural scoring system that evaluates code quality without executing it. Runs entirely on CPU. Also serves as the RAG API for project indexing, retrieval, confidence routing, and pattern caching.
 
+### Scoring Models
+
 ```mermaid
-graph TB
-    subgraph scoring["Scoring Models"]
-        CX["C(x) Cost Field\n4096→512→128→1 MLP\nSiLU + Softplus"]
-        GX["G(x) XGBoost\nPCA(128) + classifier"]
-        MT["Metric Tensor\ndiagonal G(x) in PCA space\n(code exists, not deployed)"]
-        CORR["Correction Engine\nnatural gradient: -α·G⁻¹·∇C"]
-    end
-
-    subgraph training["Training & Continual Learning"]
-        TR["Training Pipeline\ncontrastive ranking loss"]
-        EWC["EWC\nFisher information\ncatastrophic forgetting prevention"]
-        RB["Replay Buffer\ndomain-stratified\n30% old / 70% new"]
-    end
-
-    subgraph embed["Embedding Layer"]
-        EE["Embedding Extractor\nllama-server /embedding\n4096-dim"]
-    end
-
-    subgraph retrieval["RAG / PageIndex V2"]
-        AST["AST Parser\ntree-sitter Python"]
-        TB2["Tree Builder\nhierarchical code index"]
-        BM25["BM25 Index\ninverted index, k1=1.5"]
-        SUM["Summarizer\nLLM-generated node summaries"]
-        PERS["Persistence\nJSON to disk"]
-        BM25S["BM25 Searcher\nmin_score=0.1"]
-        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6"]
-        HYB["Hybrid Retriever\nroute: bm25_first / tree_only / both"]
-    end
-
-    subgraph routing["Confidence Router"]
-        SIG["Signal Collector\n4 signals"]
-        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
-        TS["Thompson Sampling\nBeta(α,β) posteriors"]
-        FB["Feedback Recorder\nRedis-backed"]
-        FC["Fallback Chain\nCACHE→FAST→STANDARD→HARD"]
-    end
-
-    subgraph cache["Pattern Cache"]
-        PS2["Pattern Store\nRedis STM/LTM/PERSISTENT"]
-        PM["Pattern Matcher\nBM25 over summaries"]
-        PE["Pattern Extractor\nLLM-driven"]
-        PSC["Pattern Scorer\nEbbinghaus decay"]
-        COO["Co-occurrence Graph"]
-    end
-
-    subgraph service["Service Layer (service.py)"]
-        SVC["evaluate_combined()\nevaluate_energy()\nevaluate_gx()\nreload_weights()"]
-    end
-
-    EE --> CX
-    EE --> GX
-    CX --> SVC
+graph LR
+    EE["Embedding Extractor\nllama-server /embedding\n4096-dim"] --> CX["C(x) Cost Field\n4096→512→128→1\nSiLU + Softplus"]
+    EE --> GX["G(x) XGBoost\nPCA(128) + classifier"]
+    CX --> SVC["Service Layer\nevaluate_combined()"]
     GX --> SVC
-    TR --> CX
-    EWC --> TR
-    RB --> TR
-    SIG --> DIFF
-    DIFF --> TS
-    TS --> FC
+    SVC --> V{"Verdict"}
+    V -->|">= 0.7"| LC["likely_correct"]
+    V -->|">= 0.3"| UN["uncertain"]
+    V -->|"< 0.3"| LI["likely_incorrect"]
 
-    style scoring fill:#2d5016,color:#fff
-    style training fill:#1a3a5c,color:#fff
-    style embed fill:#333,color:#fff
-    style retrieval fill:#1a3a5c,color:#fff
-    style routing fill:#5c3a1a,color:#fff
-    style cache fill:#5c3a1a,color:#fff
-    style service fill:#333,color:#fff
+    TR["Training Pipeline\ncontrastive ranking loss"] --> CX
+    EWC["EWC\nFisher information\nprevents catastrophic forgetting"] --> TR
+    RB["Replay Buffer\ndomain-stratified\n30% old / 70% new"] --> TR
+
+    MT["Metric Tensor\ndiagonal G(x) in PCA space\n(code exists, not deployed)"] -.-> CORR["Correction Engine\n-α · G⁻¹ · ∇C"]
+
+    style EE fill:#333,color:#fff
+    style CX fill:#2d5016,color:#fff
+    style GX fill:#2d5016,color:#fff
+    style SVC fill:#333,color:#fff
+    style TR fill:#1a3a5c,color:#fff
+    style EWC fill:#1a3a5c,color:#fff
+    style RB fill:#1a3a5c,color:#fff
+    style MT fill:#555,color:#ccc
+    style CORR fill:#555,color:#ccc
 ```
 
-### C(x) Cost Field
+| Model | Architecture | Training Data | Performance |
+|-------|-------------|---------------|-------------|
+| **C(x)** | 4096→512→128→1 MLP (SiLU, Softplus) | 597 LCB embeddings (504 PASS, 93 FAIL) | Val AUC 0.9467, sep 2.04x |
+| **G(x)** | PCA(4096→128) + XGBoost | 13,398 embeddings (4,835 PASS, 8,563 FAIL) | PCA 80.8% variance |
 
-| Property | Value |
-|----------|-------|
-| Architecture | 4096 → 512 → 128 → 1 MLP |
-| Activations | SiLU (hidden), Softplus (output, ensures positive energy) |
-| Parameters | 2,163,457 (~8.7 MB) |
-| Input | 4096-dim self-embeddings from llama-server |
-| Output | Scalar energy (lower = more likely correct) |
-| Training | Contrastive ranking loss on 597 LCB embeddings (504 PASS, 93 FAIL) |
-| Performance | Val AUC 0.9467, separation ratio 2.04x |
-| Normalization | Sigmoid: `1 / (1 + exp(-(energy - 19.0) / 2.0))` → [0, 1] |
-
-### G(x) Quality Prediction
-
-| Property | Value |
-|----------|-------|
-| Architecture | PCA (4096 → 128 dims) + XGBoost classifier |
-| Training data | 13,398 embeddings (4,835 PASS, 8,563 FAIL) |
-| Output | PASS probability [0, 1] |
-| PCA variance explained | 80.8% |
-
-**Verdict thresholds:**
-- `gx_score >= 0.7` → "likely_correct"
-- `gx_score >= 0.3` → "uncertain"
-- `gx_score < 0.3` → "likely_incorrect"
+C(x) normalization: `1 / (1 + exp(-(energy - 19.0) / 2.0))` → [0, 1]. Parameters: 2,163,457 (~8.7 MB).
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, the service degrades gracefully: C(x) returns neutral energy, G(x) returns `gx_score: 0.5` and `verdict: "unavailable"`. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
-### Combined Scoring Flow
+### RAG / PageIndex V2
 
-1. Extract a single 4096-dim embedding from llama-server (one call, shared by both models)
-2. C(x): forward through MLP → raw energy → sigmoid normalization
-3. G(x): PCA projection → XGBoost → PASS probability
-4. Combine into verdict
+```mermaid
+graph LR
+    subgraph indexing["Indexing Pipeline"]
+        AST["AST Parser\ntree-sitter Python"] --> TB["Tree Builder\nhierarchical index"]
+        TB --> BM25I["BM25 Index\ninverted index, k1=1.5"]
+        TB --> SUM["Summarizer\nLLM-generated summaries"]
+        BM25I --> PERS["Persistence\nJSON to disk"]
+        SUM --> PERS
+    end
+
+    subgraph retrieval["Retrieval"]
+        BM25S["BM25 Searcher\nmin_score=0.1, top_k=20"]
+        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6, max_calls=40"]
+        HYB["Hybrid Retriever\nroutes: bm25_first / tree_only / both"]
+        BM25S --> HYB
+        TreeS --> HYB
+    end
+
+    style indexing fill:#1a3a5c,color:#fff
+    style retrieval fill:#2d5016,color:#fff
+```
+
+### Confidence Router & Pattern Cache
+
+```mermaid
+graph LR
+    subgraph router["Confidence Router"]
+        SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
+        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
+        TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
+        FB["Feedback Recorder\nRedis-backed"]
+        FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
+        SIG --> DIFF --> TS --> FC
+        FB --> TS
+    end
+
+    subgraph cache["Pattern Cache"]
+        PS["Pattern Store\nRedis: STM (100) / LTM / PERSISTENT"]
+        PM["Pattern Matcher\nBM25 over summaries"]
+        PE["Pattern Extractor\nLLM-driven"]
+        PSC["Pattern Scorer\nEbbinghaus decay"]
+        COO["Co-occurrence Graph\nlinked pattern retrieval"]
+        PE --> PS
+        PS --> PM
+        PM --> PSC
+        PS --> COO
+    end
+
+    style router fill:#5c3a1a,color:#fff
+    style cache fill:#5c3a1a,color:#fff
+```
+
+4 routes with cost-weighted Thompson Sampling: CACHE_HIT (cost=1, k=0) → FAST_PATH (cost=50, k=1) → STANDARD (cost=300, k=5) → HARD_PATH (cost=1500, k=20).
 
 ---
 
-## 6. VRAM Budget
+## 6. Sandbox
+
+Isolated code execution with compilation, testing, and linting.
+
+```mermaid
+graph LR
+    subgraph executors["Language Executors"]
+        Py["Python\npylint (0-10) + pytest"]
+        JS["JavaScript\nNode.js 20"]
+        TS["TypeScript\ntsc --noEmit + tsx"]
+        Go["Go 1.22\ngo build + run"]
+        Rust["Rust stable\nrustc + run"]
+        C["C / C++\ngcc/g++ -Wall"]
+        Bash["Bash\nbash -n + run"]
+    end
+
+    subgraph support["Support"]
+        Syn["Syntax Checker\nper-language AST validation"]
+        Err["Error Classifier\n15 types: SyntaxError, NameError\nTypeError, CompileError, Timeout..."]
+        Trunc["Output Truncation\nstdout: 4000 chars\nstderr: 2000 chars"]
+    end
+
+    style executors fill:#2d5016,color:#fff
+    style support fill:#333,color:#fff
+```
+
+Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 60s. Max memory: 512 MB. Workspace: `/tmp/sandbox` (tmpfs).
+
+---
+
+## 7. VRAM Budget
 
 Running on RTX 5060 Ti 16GB with Docker Compose defaults (32K context):
 
@@ -581,11 +503,9 @@ All computation outside of llama-server runs on CPU. The GPU is used exclusively
 
 ---
 
-## 7. Deployment
+## 8. Deployment
 
 ### Docker Compose (Recommended)
-
-`docker-compose.yml` defines all 5 services with health checks, dependency ordering, and GPU passthrough:
 
 ```mermaid
 graph TD
@@ -606,7 +526,7 @@ graph TD
 
 ### Bare Metal
 
-The `atlas` CLI (`pip install -e .`) talks directly to services on their default ports. The bash launcher script (`~/.local/bin/atlas`) can start all services as local processes and launch Aider, or detect a running Docker Compose stack and connect to it.
+The `atlas` CLI (`pip install -e .`) talks directly to services on their default ports. The bash launcher script can start all services as local processes and launch Aider, or detect a running Docker Compose stack and connect to it.
 
 ### K3s
 
@@ -614,45 +534,97 @@ Manifests in `k8s/templates/` are processed by `scripts/generate-manifests.sh` f
 
 ---
 
-## 8. Data Flow
+## 9. Data Flow
 
-### T1: Simple File (Config, CSS, Markdown, Short Files)
+### T1: Simple File Write
 
-```
-User prompt → Aider → atlas-proxy → llama-server (json_object) →
-  model emits write_file → direct write to disk → Aider applies
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as Aider
+    participant P as atlas-proxy :8090
+    participant L as llama-server :8080
+
+    U->>A: "Create a config file"
+    A->>P: POST /v1/chat/completions (SSE)
+    P->>L: POST /v1/chat/completions<br/>response_format: json_object
+    L-->>P: {"type":"tool_call","name":"write_file","args":{...}}
+    Note over P: Tier = T1 (config file)<br/>Direct write, no V3
+    P-->>P: Write file to disk
+    P-->>A: SSE stream: file content
+    A-->>U: File created
 ```
 
 One LLM call. No V3 overhead.
 
-### T2: Feature File (50+ Lines with Logic)
+### T2: Feature File Write
 
-```
-User prompt → Aider → atlas-proxy → llama-server (json_object) →
-  model emits write_file → tier = T2 →
-    v3-service: Probe → [early exit if passes] →
-      PlanSearch → DivSampling → Budget Forcing →
-      Build Verify → C(x)/G(x) Score → Sandbox Test →
-      [S* tiebreak or Lens select if any pass] →
-      [Phase 3 repair if 0/K pass] →
-    winning code returned → atlas-proxy writes to disk → Aider applies
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as Aider
+    participant P as atlas-proxy :8090
+    participant L as llama-server :8080
+    participant V as v3-service :8070
+    participant G as geometric-lens :8099
+    participant S as sandbox :30820
+
+    U->>A: "Create a REST API handler"
+    A->>P: POST /v1/chat/completions (SSE)
+    P->>L: POST /v1/chat/completions<br/>response_format: json_object
+    L-->>P: {"type":"tool_call","name":"write_file","args":{...}}
+    Note over P: Tier = T2 (50+ lines, logic)<br/>Route to V3
+
+    P->>V: POST /v3/generate (SSE)
+    Note over V: Phase 0: Probe
+    V->>L: POST /v1/chat/completions (generate code)
+    L-->>V: probe candidate
+    V->>L: POST /embedding (4096-dim)
+    L-->>V: embedding vector
+    V->>G: POST /internal/lens/gx-score
+    G-->>V: {cx_energy, gx_score, verdict}
+    V->>S: POST /execute (test probe)
+    S-->>V: {success: false}
+
+    Note over V: Phase 1: PlanSearch + DivSampling
+    V->>L: POST /v1/chat/completions (x K candidates)
+    L-->>V: K candidates
+    V->>S: POST /execute (test each)
+    S-->>V: {success: true} for candidate 2
+
+    Note over V: Phase 2: Lens select winner
+    V->>G: POST /internal/lens/gx-score
+    G-->>V: scores
+
+    V-->>P: SSE result: winning code
+    P-->>P: Write file to disk
+    P-->>A: SSE stream: file content
+    A-->>U: File created
 ```
 
 Minimum 3 llama-server calls (1 probe generation + 1 self-test generation + 1 embedding extraction). Maximum 30+ if Phase 3 repair engages all strategies.
 
 ### Edit Existing Code
 
-```
-User prompt → Aider → atlas-proxy → llama-server (json_object) →
-  model emits edit_file(old_str, new_str) → proxy applies replacement →
-  Aider applies
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as Aider
+    participant P as atlas-proxy :8090
+    participant L as llama-server :8080
+
+    U->>A: "Fix the bug in auth.py"
+    A->>P: POST /v1/chat/completions (SSE)
+    P->>L: POST /v1/chat/completions<br/>response_format: json_object
+    L-->>P: {"type":"tool_call","name":"read_file","args":{"path":"auth.py"}}
+    P-->>P: Read file from disk
+    P->>L: POST /v1/chat/completions (with file content)
+    L-->>P: {"type":"tool_call","name":"edit_file","args":{"old_str":"...","new_str":"..."}}
+    P-->>P: Apply old_str→new_str replacement
+    P->>L: POST /v1/chat/completions (with edit result)
+    L-->>P: {"type":"done","summary":"Fixed auth bug"}
+    P-->>A: SSE stream: edited content
+    A-->>U: File updated
 ```
 
 Existing files over 100 lines are rejected for `write_file` — the model must use `edit_file` with targeted changes.
-
-### Delete
-
-```
-User prompt → atlas-proxy → model emits delete_file →
-  proxy deletes from disk → forces agent loop exit → Aider sees file gone
-```
