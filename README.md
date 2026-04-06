@@ -139,10 +139,10 @@ Full training data and benchmark traces: [ATLAS Dataset on HuggingFace](https://
 
 ```mermaid
 flowchart LR
-  Probe["Probe"] --> GL1["C(x) Score"] --> SB1["Sandbox"] --> Pass1{"Pass?"}
+  Probe["Probe"] --> GL1["C(x)/G(x) Score"] --> SB1["Sandbox"] --> Pass1{"Pass?"}
   Pass1 -->|"Yes"| Done["Write Winner"]
   Pass1 -->|"No"| PS["PlanSearch"] --> DS["DivSampling"] --> BF["Budget Forcing"] --> GL2["Score + Test K"] --> Pass2{"Any pass?"}
-  Pass2 -->|"Yes"| Select["Best-of-K"] --> Done
+  Pass2 -->|"Yes"| Select["Best-of-K\nC(x)/G(x) select"] --> Done
   Pass2 -->|"No"| PR["PR-CoT Repair"] --> RL["Refinement Loop"] --> DC["Derivation Chains"] --> Done
 
   style Probe fill:#1a3a5c,color:#fff
