@@ -103,13 +103,15 @@ Raw ablation data: [`v3_ablation_results/`](v3_ablation_results/) | Full traces:
 
 ### Cost and Performance Context
 
-| System | LCB pass@1 | Est. cost/task | Notes |
-|--------|-----------|----------------|-------|
-| DeepSeek V3.2 Reasoning | 86.2% | ~$0.002 | API, single-shot (low cost due to aggressive pricing strategy) |
-| GPT-5 (high) | 84.6% | ~$0.043 | API, single-shot |
-| **ATLAS V3, Qwen3-14B (pass@1-v(k=3))** | **74.6%** | **~$0.004** | **Local electricity only, best-of-3 + repair pipeline** |
-| Claude 4.5 Sonnet | 71.4% | ~$0.066 | API, single-shot |
-| Claude 4 Sonnet | 65.5% | ~$0.066 | API, single-shot |
+| System | LCB Score | Method | Est. cost/task |
+|--------|-----------|--------|----------------|
+| DeepSeek V3.2 Reasoning | 86.2% | pass@1, single-shot | ~$0.002 |
+| GPT-5 (high) | 84.6% | pass@1, single-shot | ~$0.043 |
+| **ATLAS V3, Qwen3-14B** | **74.6%** | **pass@1-v(k=3), best-of-3 + repair** | **~$0.004** |
+| Claude 4.5 Sonnet | 71.4% | pass@1, single-shot | ~$0.066 |
+| Claude 4 Sonnet | 65.5% | pass@1, single-shot | ~$0.066 |
+
+> **Not an apples-to-apples comparison.** ATLAS uses best-of-3 candidate generation with iterative repair (pass@1-v(k=3)) while the other systems use single-shot pass@1. ATLAS trades compute time for accuracy — the pipeline takes longer per task but runs locally at electricity cost. See [methodology](docs/reports/V3_ABLATION_STUDY.md#2-methodology) for details.
 
 > DeepSeek's cost is lower than ATLAS despite being an API because DeepSeek operates at subsidized pricing — their per-token costs are significantly below market rate as a growth strategy. ATLAS's cost is pure electricity (~$0.12/kWh × 165W GPU × 1h 55m for 599 tasks). ATLAS trades latency for privacy — no data leaves the machine.
 
