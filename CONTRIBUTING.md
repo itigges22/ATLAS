@@ -217,11 +217,11 @@ Releases are handled by maintainers:
 
 ## License
 
-This project is licensed under the **ATLAS Source Available License v1.0** (see [LICENSE](LICENSE)).
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** (see [LICENSE](LICENSE)).
 
 By submitting a contribution (pull request, patch, or any other form), you agree to the following terms:
 
-- Your contributions are accepted under the same license as the project: the ATLAS Source Available License v1.0.
+- Your contributions are accepted under the same license as the project: AGPL-3.0.
 - You retain copyright of your contributions.
 - You grant the project maintainer (Isaac Tigges) a perpetual, irrevocable, worldwide, royalty-free license to use, modify, and distribute your contributions under the project license.
 - You represent that you have the legal right to grant this license and that your contributions do not infringe on any third-party rights.
