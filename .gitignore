@@ -129,7 +129,7 @@ templates/qdrant-deployment.yaml.tmpl
 templates/embedding-deployment.yaml.tmpl
 
 # ----- Local data (not for git — user provides their own models) -----
-models/
+/models/
 
 # ----- Benchmark -----
 benchmark/datasets/.cache/

@@ -1,0 +1,16 @@
+{
+  "separation": 1.2675687963898303,
+  "dim_std": 3.847313642501831,
+  "max_min_ratio": 848.715087890625,
+  "pass_correctability": 22.00824080467224,
+  "fail_correctability": 22.7722589302063,
+  "n_samples": 13398,
+  "n_pass": 4835,
+  "n_fail": 8563,
+  "original_dim": 4096,
+  "pca_dim": 128,
+  "pca_explained_variance": 0.8078998923301697,
+  "architecture": "pca_supcon_lda_init",
+  "method": "pca_128_supcon_lda",
+  "timestamp": "2026-03-28T16:06:39"
+}

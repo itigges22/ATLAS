@@ -1,0 +1,17 @@
+{
+  "seed": 777,
+  "val_auc": 0.9466666666666667,
+  "train_auc": 0.9326732673267327,
+  "pass_energy_mean": 0.5897916172231946,
+  "pass_energy_std": 0.06722227617459238,
+  "fail_energy_mean": 1.204379480372193,
+  "fail_energy_std": 0.3741535683026271,
+  "separation_ratio": 2.042042384465461,
+  "cv_mean_auc": 0.8545,
+  "cv_std": 0.0919,
+  "n_train": 479,
+  "n_val": 118,
+  "dim": 4096,
+  "n_pass": 504,
+  "n_fail": 93
+}

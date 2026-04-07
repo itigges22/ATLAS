@@ -1,0 +1,11 @@
+{
+  "val_auc": 0.82453125,
+  "pass_energy_mean": 13.200915893912315,
+  "fail_energy_mean": 24.85996934056282,
+  "n_samples": 800,
+  "n_pass": 400,
+  "n_fail": 400,
+  "dim": 4096,
+  "model": "Qwen3.5-9B (Fox)",
+  "timestamp": "2026-03-27T21:13:33"
+}
