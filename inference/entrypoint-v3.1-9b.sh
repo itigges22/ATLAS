@@ -28,6 +28,7 @@ KV_CACHE_V="${KV_CACHE_TYPE_V:-q4_0}"
 KV_FLAGS="-ctk $KV_CACHE_K -ctv $KV_CACHE_V"
 PARALLEL="${PARALLEL_SLOTS:-4}"
 MODEL_FILE="${MODEL_PATH:-/models/Qwen3.5-9B-Q6_K.gguf}"
+PORT="${PORT:-8080}"
 
 export GGML_CUDA_NO_PINNED="${GGML_CUDA_NO_PINNED:-0}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
@@ -48,7 +49,7 @@ exec /usr/local/bin/llama-server \
   --cont-batching \
   -ngl 99 \
   --host 0.0.0.0 \
-  --port 8000 \
+  --port $PORT \
   --flash-attn on \
   --mlock \
   -b 4096 \
