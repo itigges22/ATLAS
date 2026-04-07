@@ -360,6 +360,29 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 
 ## Aider Issues
 
+### `atlas` Shows REPL Instead of Aider (No File Read/Write)
+
+**Symptom:** Running `atlas` shows the built-in REPL with a `Model`, `Speed`, `Lens`, `Sandbox` status block and a `◆` prompt. Typing requests works but no files are created or modified. `--message` flag is ignored.
+
+**Cause:** The `atlas` command auto-detects the proxy and Aider. If either is missing, it falls back to the built-in REPL which supports `/solve` and `/bench` but not file operations.
+
+**Fix:**
+1. Ensure the proxy is running: `curl -s http://localhost:8090/health`
+2. Ensure Aider is installed: `pip install aider-chat`
+3. Ensure services are up: `docker compose ps` (all should show "healthy")
+
+If the proxy is healthy and Aider is installed, `atlas` will automatically launch Aider with the full agent loop (tool calls, file read/write, V3 pipeline).
+
+### `.env.example` Missing After Clone
+
+**Symptom:** `cp .env.example .env` fails with "No such file or directory".
+
+**Fix:** This was fixed in V3.0.1. If you cloned before the fix, pull the latest:
+```bash
+git pull
+cp .env.example .env
+```
+
 ### Aider Disconnects on Long Tasks
 
 **Symptom:** Aider times out or disconnects before the agent loop completes, especially during V3 pipeline phases.
