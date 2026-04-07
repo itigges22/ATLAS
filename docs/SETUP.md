@@ -86,11 +86,13 @@ curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Quick functional test
+# Quick functional test (requires aider: pip install aider-chat)
 atlas --message "Create hello.py that prints hello world"
 ```
 
 All health endpoints should return `{"status": "ok"}` or `{"status": "healthy"}`.
+
+> **Note:** The `atlas` command auto-detects the proxy and launches Aider for the full agent loop (tool calls, V3 pipeline, file read/write). If Aider is not installed, it falls back to the built-in REPL which supports `/solve` and `/bench` but not file operations. Install Aider for the full experience: `pip install aider-chat`
 
 ### Stopping
 

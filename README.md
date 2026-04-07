@@ -48,8 +48,8 @@ mkdir -p models
 wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
      -O models/Qwen3.5-9B-Q6_K.gguf
 
-# 3. Install the ATLAS CLI
-pip install -e .
+# 3. Install the ATLAS CLI + Aider
+pip install -e . aider-chat
 
 # 4. Configure environment
 cp .env.example .env

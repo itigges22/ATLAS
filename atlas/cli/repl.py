@@ -1,10 +1,92 @@
-"""Interactive REPL — the main ATLAS interface."""
+"""Interactive REPL — the main ATLAS interface.
+
+Routes to Aider (agent loop) when the proxy is available,
+falls back to the built-in REPL for direct LLM interaction.
+"""
 
 import sys
 import os
+import shutil
+import subprocess
 
 from atlas.cli import display, client
 from atlas.cli.commands import solve, status, bench
+
+
+PROXY_URL = os.environ.get("ATLAS_PROXY_URL", "http://localhost:8090")
+
+
+def _proxy_available() -> bool:
+    """Check if atlas-proxy is reachable."""
+    import urllib.request
+    import urllib.error
+    try:
+        req = urllib.request.Request(f"{PROXY_URL}/health")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _find_aider() -> str | None:
+    """Find aider binary on PATH."""
+    return shutil.which("aider")
+
+
+def _find_atlas_dir() -> str:
+    """Find the ATLAS project root (where .aider.model.settings.yml lives)."""
+    # Walk up from this file to find the repo root
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(5):
+        if os.path.exists(os.path.join(d, ".aider.model.settings.yml")):
+            return d
+        d = os.path.dirname(d)
+    # Fallback: check if CWD has it
+    if os.path.exists(".aider.model.settings.yml"):
+        return os.getcwd()
+    return ""
+
+
+def launch_aider(extra_args: list[str] | None = None):
+    """Launch Aider connected to the ATLAS proxy."""
+    aider_bin = _find_aider()
+    if not aider_bin:
+        display.error("Aider not found. Install with: pip install aider-chat")
+        display.info("Falling back to built-in REPL...")
+        return False
+
+    atlas_dir = _find_atlas_dir()
+    settings_file = os.path.join(atlas_dir, ".aider.model.settings.yml") if atlas_dir else ""
+    metadata_file = os.path.join(atlas_dir, ".aider.model.metadata.json") if atlas_dir else ""
+
+    env = os.environ.copy()
+    env["OPENAI_API_BASE"] = PROXY_URL
+    env["OPENAI_API_KEY"] = "atlas-local"
+
+    cmd = [
+        aider_bin,
+        "--model", "openai/atlas",
+        "--edit-format", "whole",
+        "--no-show-model-warnings",
+        "--no-check-update",
+        "--no-auto-commits",
+        "--no-pretty",
+    ]
+
+    if settings_file and os.path.exists(settings_file):
+        cmd.extend(["--model-settings-file", settings_file])
+    if metadata_file and os.path.exists(metadata_file):
+        cmd.extend(["--model-metadata-file", metadata_file])
+
+    # Pass through any extra args (--message, filenames, etc.)
+    if extra_args:
+        cmd.extend(extra_args)
+
+    try:
+        result = subprocess.run(cmd, env=env)
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        sys.exit(0)
 
 
 def startup_checks() -> bool:
@@ -89,7 +171,22 @@ def handle_command(line: str):
 
 
 def run():
-    """Main entry point."""
+    """Main entry point.
+
+    If the atlas-proxy is running and Aider is installed, launches Aider
+    connected to the proxy (full agent loop with tool calls).
+
+    Otherwise, falls back to the built-in REPL for direct LLM interaction.
+    """
+    # Collect any CLI args (--message, filenames, etc.)
+    extra_args = sys.argv[1:] if len(sys.argv) > 1 else None
+
+    # If proxy is available and aider is installed, use the agent loop
+    if _proxy_available() and _find_aider():
+        launch_aider(extra_args)
+        return
+
+    # Fall back to built-in REPL
     display.banner()
 
     if not startup_checks():
