@@ -4,14 +4,13 @@ services:
     build:
       context: ./inference
       dockerfile: Dockerfile.v31
-    # GPU access: works with Docker (nvidia runtime) and Podman (--device)
-    devices:
-      - /dev/nvidia0:/dev/nvidia0
-      - /dev/nvidiactl:/dev/nvidiactl
-      - /dev/nvidia-uvm:/dev/nvidia-uvm
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       - ${ATLAS_MODELS_DIR:-./models}:/models:ro
     command: >
@@ -23,6 +22,9 @@ services:
       --no-mmap
     ports:
       - "${ATLAS_LLAMA_PORT:-8080}:8080"
+    ulimits:
+      memlock: -1
+      stack: 67108864
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s

@@ -1,4 +1,4 @@
-FROM docker.io/nvidia/cuda:12.8.0-devel-rockylinux9 AS builder
+FROM docker.io/nvidia/cuda:12.9.0-devel-rockylinux9 AS builder
 RUN dnf install -y git cmake gcc-c++ && dnf clean all
 RUN git clone https://github.com/ggml-org/llama.cpp /llama.cpp && \
     cd /llama.cpp && \
@@ -8,10 +8,10 @@ RUN git clone https://github.com/ggml-org/llama.cpp /llama.cpp && \
     # See: patches/fix-embeddings-spec-decode.patch for details.
     sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
         tools/server/server-context.cpp && \
-    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES=120 && \
+    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES=120;121 && \
     cmake --build build --config Release -j$(nproc)
 
-FROM docker.io/nvidia/cuda:12.8.0-runtime-rockylinux9
+FROM docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 RUN mkdir -p /models /templates
