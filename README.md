@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/LiveCodeBench-74.6%25_pass%401--v(k%3D3)-green" alt="LCB"/>
   <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
-  <img src="https://img.shields.io/badge/license-Source%20Available-blue" alt="License"/>
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
 </p>
 
 <h1 align="center">A.T.L.A.S.</h1>
@@ -243,6 +243,7 @@ For a complete guide to every directory and file, see **[docs/MAP.md](docs/MAP.m
 - **CLI reliability testing**: Expand 8-level test to 10 iterations, target L6 ≥ 90%
 - **Fox optimization**: C-side sampler chain for grammar speed (14→50 tok/s target)
 - **Geometric Lens**: Further improving Geometric Lens datasets through V3.1 full-suite benchmark data
+- **ROCm support**: AMD GPU inference via llama.cpp ROCm backend (expanding beyond NVIDIA-only)
 - **Target**: 80-90% LCB pass@1-v(k=3)
 
 ---
@@ -261,7 +262,7 @@ For a complete guide to every directory and file, see **[docs/MAP.md](docs/MAP.m
 
 ## License
 
-Licensed under the [A.T.L.A.S Source Available License v1.0](LICENSE).
+Licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE). Commercial licensing available — contact the copyright holder for details.
 
 ## Contributing
 
