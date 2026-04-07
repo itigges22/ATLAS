@@ -11,7 +11,7 @@ class ServerConfig(BaseModel):
 
 
 class LlamaConfig(BaseModel):
-    base_url: str = "http://llama-service:8000"
+    base_url: str = os.environ.get("LLAMA_URL", "http://llama-server:8080")
 
 
 class LimitsConfig(BaseModel):
