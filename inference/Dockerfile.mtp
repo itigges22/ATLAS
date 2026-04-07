@@ -5,7 +5,7 @@ ENV TMPDIR=/llama.cpp/tmp
 COPY --from=mtp-src . /llama.cpp
 RUN cd /llama.cpp && \
     mkdir -p /llama.cpp/tmp && \
-    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES=120;121 && \
+    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="120;121" && \
     cmake --build build --config Release -j5
 
 FROM docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9

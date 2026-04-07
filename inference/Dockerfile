@@ -8,7 +8,7 @@ RUN git clone https://github.com/ggml-org/llama.cpp /llama.cpp && \
     # See: patches/fix-embeddings-spec-decode.patch for details.
     sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
         tools/server/server-context.cpp && \
-    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES=120;121 && \
+    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="120;121" && \
     cmake --build build --config Release -j$(nproc)
 
 FROM docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9
