@@ -6,7 +6,7 @@ from typing import Dict, Optional
 
 
 class ServerConfig(BaseModel):
-    port: int = 8001
+    port: int = 8099
     host: str = "0.0.0.0"
 
 

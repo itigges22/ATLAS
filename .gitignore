@@ -157,6 +157,7 @@ v2_5_1/
 !.aider.model.metadata.json
 
 # ----- Go build artifacts -----
+atlas-proxy/atlas-proxy
 atlas-proxy/atlas-proxy-v2
 atlas-proxy/cmd/
 
