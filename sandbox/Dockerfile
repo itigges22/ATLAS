@@ -19,7 +19,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && node --version && npm --version
 
 # Install Go 1.22
-RUN curl -fsSL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz | tar -C /usr/local -xz
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL https://go.dev/dl/go1.22.10.linux-${ARCH}.tar.gz | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN go version
 
