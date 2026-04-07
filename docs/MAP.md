@@ -13,7 +13,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
 - [`atlas.conf.example`](#root-config) — K3s deployment configuration template
 - [`docker-compose.yml`](#root-config) — 5-service Docker Compose stack
 - [`pyproject.toml`](#root-config) — Python package definition (atlas CLI entry point)
-- [`LICENSE`](#root-docs) — ATLAS Source Available License v1.0
+- [`LICENSE`](#root-docs) — GNU Affero General Public License v3.0 (AGPL-3.0)
 - [`README.md`](#root-docs) — Project overview, benchmarks, setup
 - [`CHANGELOG.md`](#root-docs) — Release history
 - [`CODE_OF_CONDUCT.md`](#root-docs) — Community guidelines
@@ -248,7 +248,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
 |------|-------------|
 | [`README.md`](../README.md) | Project overview, 74.6% LCB benchmark, setup instructions, hardware requirements |
 | [`CHANGELOG.md`](../CHANGELOG.md) | Release history: V3.0.1 (2026-04-05), V3.0, V2.5, V2 |
-| [`LICENSE`](../LICENSE) | ATLAS Source Available License v1.0 — free for personal/research, restricted commercial |
+| [`LICENSE`](../LICENSE) | GNU Affero General Public License v3.0 (AGPL-3.0) |
 | [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) | Contributor Covenant Code of Conduct |
 | [`CONTRIBUTING.md`](../CONTRIBUTING.md) | How to contribute: fork, branch, test, PR workflow |
 
