@@ -7,7 +7,7 @@ COPY *.go ./
 RUN go build -o atlas-proxy-v2 .
 
 FROM docker.io/alpine:3.20
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl bash
 COPY --from=builder /build/atlas-proxy-v2 /usr/local/bin/atlas-proxy-v2
 
 EXPOSE 8090

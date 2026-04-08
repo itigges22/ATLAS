@@ -496,7 +496,12 @@ func runInternalAgentLoop(req ChatRequest, tier Tier, w http.ResponseWriter, flu
 		workingDir = extractWorkingDir(req.Messages)
 	}
 	if workingDir == "" {
-		workingDir = "/tmp"
+		// In Docker, the project is mounted at /workspace
+		if info, err := os.Stat("/workspace"); err == nil && info.IsDir() {
+			workingDir = "/workspace"
+		} else {
+			workingDir = "/tmp"
+		}
 	}
 
 	log.Printf("  agent loop: user=%s workdir=%s tier=%s",

@@ -104,6 +104,8 @@ services:
       - atlas
 
   # --- ATLAS Proxy v2 (agent loop + grammar + Aider format) ---
+  # The proxy needs access to your project files for read_file, write_file, etc.
+  # Set ATLAS_PROJECT_DIR to your project path, or it defaults to the current directory.
   atlas-proxy:
     build:
       context: ./atlas-proxy
@@ -116,6 +118,9 @@ services:
       - ATLAS_V3_URL=http://v3-service:8070
       - ATLAS_AGENT_LOOP=1
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+    volumes:
+      - ${ATLAS_PROJECT_DIR:-.}:/workspace
+    working_dir: /workspace
     ports:
       - "${ATLAS_PROXY_PORT:-8090}:8090"
     depends_on:
