@@ -14,6 +14,7 @@ import subprocess
 import time
 import signal
 import atexit
+from typing import Optional, List
 
 from atlas.cli import display, client
 from atlas.cli.commands import solve, status, bench
@@ -41,12 +42,12 @@ def _check_url(url: str, timeout: int = 3) -> bool:
         return False
 
 
-def _find_aider() -> str | None:
+def _find_aider() -> Optional[str]:
     """Find aider binary on PATH."""
     return shutil.which("aider")
 
 
-def _find_go() -> str | None:
+def _find_go() -> Optional[str]:
     """Find go binary on PATH."""
     return shutil.which("go")
 
@@ -64,7 +65,7 @@ def _find_atlas_dir() -> str:
     return ""
 
 
-def _find_proxy_binary(atlas_dir: str) -> str | None:
+def _find_proxy_binary(atlas_dir: str) -> Optional[str]:
     """Find or build the atlas-proxy-v2 binary."""
     # Check PATH first
     on_path = shutil.which("atlas-proxy-v2")
@@ -82,7 +83,7 @@ def _find_proxy_binary(atlas_dir: str) -> str | None:
     return None
 
 
-def _build_proxy(atlas_dir: str) -> str | None:
+def _build_proxy(atlas_dir: str) -> Optional[str]:
     """Build atlas-proxy-v2 from source using Go."""
     go_bin = _find_go()
     if not go_bin or not atlas_dir:
@@ -193,7 +194,7 @@ def _ensure_proxy() -> bool:
     return False
 
 
-def launch_aider(extra_args: list[str] | None = None):
+def launch_aider(extra_args: Optional[List[str]] = None):
     """Launch Aider connected to the ATLAS proxy."""
     aider_bin = _find_aider()
     if not aider_bin:
