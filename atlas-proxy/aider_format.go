@@ -499,6 +499,9 @@ func runInternalAgentLoop(req ChatRequest, tier Tier, w http.ResponseWriter, flu
 		// In Docker, the project is mounted at /workspace
 		if info, err := os.Stat("/workspace"); err == nil && info.IsDir() {
 			workingDir = "/workspace"
+		} else if cwd, err := os.Getwd(); err == nil && cwd != "/" {
+			// Bare metal: use the process working directory
+			workingDir = cwd
 		} else {
 			workingDir = "/tmp"
 		}

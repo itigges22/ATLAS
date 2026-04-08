@@ -134,6 +134,7 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
         _proxy_process = subprocess.Popen(
             [proxy_bin],
             env=env,
+            cwd=os.getcwd(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
