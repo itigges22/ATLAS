@@ -51,17 +51,21 @@ wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K
 # 3. Install the ATLAS CLI + Aider
 pip install -e . aider-chat
 
-# 4. Configure environment
+# 4. (Recommended) Install Go 1.24+ for full file access from any directory
+#    https://go.dev/dl/ — without Go, file access is limited to ATLAS_PROJECT_DIR
+
+# 5. Configure environment
 cp .env.example .env
 # Defaults work if your model is in ./models/ — edit .env only if you changed the path
 
-# 5. Start all services (requires NVIDIA GPU — model loading takes ~2 minutes)
+# 6. Start all services (requires NVIDIA GPU — model loading takes ~2 minutes)
 docker compose up -d         # or: podman-compose up -d
 
-# 6. Verify everything is healthy (wait for all services to show "healthy")
+# 7. Verify everything is healthy (wait for all services to show "healthy")
 docker compose ps
 
-# 7. Start coding
+# 8. Start coding (from your project directory)
+cd /path/to/your/project
 atlas
 ```
 

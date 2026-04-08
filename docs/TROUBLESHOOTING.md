@@ -373,6 +373,27 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 
 If the proxy is healthy and Aider is installed, `atlas` will automatically launch Aider with the full agent loop (tool calls, file read/write, V3 pipeline).
 
+If Go 1.24+ is installed, `atlas` can also build and launch the proxy automatically — you don't need to start it manually.
+
+### Proxy Lists Wrong Directory or `/tmp`
+
+**Symptom:** The model lists files from `/tmp` or the ATLAS repo instead of your project. `write_file` creates files in the wrong location.
+
+**Cause:** The Docker Compose proxy runs inside a container and can only see the directory mounted at startup. If you're working in a different directory, the proxy can't see it.
+
+**Fix (recommended):** Install Go 1.24+ ([https://go.dev/dl/](https://go.dev/dl/)). The `atlas` CLI will automatically build and launch the proxy locally in your current directory with full file access. No Docker mount needed.
+
+**Fix (without Go):** Set `ATLAS_PROJECT_DIR` in your `.env` to your project path, then restart the proxy:
+```bash
+# In .env:
+ATLAS_PROJECT_DIR=/path/to/your/project
+
+# Restart proxy to pick up new mount:
+docker compose up -d atlas-proxy
+```
+
+You must update this and restart each time you switch project directories. This is a limitation of running the proxy inside Docker.
+
 ### `.env.example` Missing After Clone
 
 **Symptom:** `cp .env.example .env` fails with "No such file or directory".

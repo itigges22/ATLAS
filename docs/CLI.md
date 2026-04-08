@@ -15,12 +15,14 @@ cd /path/to/your/project
 atlas
 ```
 
-The `atlas` command automatically detects the deployment mode:
+The `atlas` command automatically detects what's available and launches the best configuration:
 
-- **Docker Compose**: If a running Docker Compose stack is detected, ATLAS connects to the containerized services
-- **Bare metal**: If no Docker stack is found, ATLAS starts llama-server, Geometric Lens, V3 Pipeline, and Proxy v2 as local processes
+1. **Proxy already running** (any method) → connects Aider immediately
+2. **Go installed** (1.24+) → builds and launches the proxy locally as a background process, then connects Aider. The proxy runs in your current directory with full file access.
+3. **Docker Compose proxy only** (no Go) → connects to the containerized proxy. File access is limited to the directory set in `ATLAS_PROJECT_DIR` (defaults to the ATLAS repo root).
+4. **Nothing available** → falls back to the built-in REPL (`/solve`, `/bench` only, no file operations)
 
-Both paths end the same way: Aider launches connected to the ATLAS proxy, with grammar-constrained tool calls and V3 pipeline integration.
+> **For the best experience, install Go 1.24+.** The local proxy runs in whatever directory you're in when you type `atlas`, so it can always see your project files. The Docker Compose proxy can only see the directory that was mounted when the containers started. See [Proxy File Access](#proxy-file-access) below.
 
 ### Usage Modes
 
@@ -37,21 +39,24 @@ Any arguments after `atlas` are passed through to Aider.
 
 ```mermaid
 flowchart TD
-    Start["atlas command"] --> Detect{"Docker Compose\nstack running?"}
-    Detect -->|"Yes"| DPort["Discover proxy port\nfrom compose"] --> Launch["Launch Aider\nconnected to proxy"]
-    Detect -->|"No"| Bare["Start bare-metal services"]
+    Start["atlas command"] --> ProxyUp{"Proxy already\nrunning?"}
+    ProxyUp -->|"Yes"| Launch["Launch Aider\nconnected to proxy"]
+    ProxyUp -->|"No"| GoCheck{"Go 1.24+\ninstalled?"}
 
-    Bare --> LL["Start llama-server\n(120s health timeout)"]
-    LL --> Lens["Start Geometric Lens\n(30s timeout)"]
-    Lens --> V3["Start V3 Pipeline\n(15s timeout)"]
-    V3 --> Proxy["Start Proxy v2\n(30s timeout)"]
-    Proxy --> Launch
+    GoCheck -->|"Yes"| Build["Build proxy from source\n(~10s first time)"]
+    Build --> Local["Launch proxy locally\n(runs in your CWD)"]
+    Local --> Launch
 
-    Launch --> Aider["Aider session\nOpenAI API → proxy:8090\nGrammar: json_object\nEdit format: whole"]
+    GoCheck -->|"No"| Docker{"Docker proxy\nrunning?"}
+    Docker -->|"Yes"| Launch
+    Docker -->|"No"| REPL["Fall back to built-in REPL\n(/solve, /bench only)"]
+
+    Launch --> Aider["Aider session\nFull file access\nV3 pipeline\nTool calls"]
 
     style Start fill:#1a3a5c,color:#fff
     style Aider fill:#333,color:#fff
     style Launch fill:#2d5016,color:#fff
+    style REPL fill:#5c3a1a,color:#fff
 ```
 
 ### Startup Banner
@@ -258,6 +263,49 @@ All standard Aider commands work through ATLAS:
 | `/undo` | Undo last change |
 | `/run <command>` | Run a shell command |
 | `/help` | Show all commands |
+
+---
+
+## Proxy File Access
+
+The proxy executes all file operations (`read_file`, `write_file`, `edit_file`, `run_command`, etc.) on the filesystem where it's running. How it accesses your project files depends on how it's launched:
+
+### Local Proxy (Go installed) — Recommended
+
+When Go 1.24+ is installed, `atlas` builds and launches the proxy as a local process. It runs in your **current working directory**, so it can read and write any file you can. This works from any directory:
+
+```bash
+cd ~/projects/my-app
+atlas    # proxy sees ~/projects/my-app/
+cd ~/projects/other-app
+atlas    # proxy sees ~/projects/other-app/
+```
+
+**Install Go:** [https://go.dev/dl/](https://go.dev/dl/) — the proxy builds automatically on first run (~10 seconds).
+
+### Docker Compose Proxy (No Go) — Limited
+
+Without Go, the proxy runs inside a Docker container. It can only see files in the directory that was mounted when the containers started. By default, this is the ATLAS repo root (wherever you ran `docker compose up`).
+
+To use ATLAS in a different project directory, set `ATLAS_PROJECT_DIR` in your `.env` before starting:
+
+```bash
+# In your .env file:
+ATLAS_PROJECT_DIR=/home/username/projects/my-app
+
+# Then restart the proxy to pick up the new mount:
+docker compose up -d atlas-proxy
+```
+
+**Limitation:** You must update `ATLAS_PROJECT_DIR` and restart the proxy each time you switch projects. This is why Go is recommended — the local proxy has no such limitation.
+
+### Which Mode Am I Using?
+
+| Sign | Mode |
+|------|------|
+| `atlas` prints "Starting local proxy..." | Local (Go) — full CWD access |
+| `atlas` connects immediately without printing proxy startup | Pre-existing proxy (local or Docker) |
+| Proxy lists files from wrong directory or `/tmp` | Docker proxy without correct mount — install Go or set `ATLAS_PROJECT_DIR` |
 
 ---
 
