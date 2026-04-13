@@ -2,8 +2,9 @@
 
 Trains C(x) with contrastive ranking loss on PASS/FAIL embedding pairs.
 
-Note: G(x) metric tensor training was removed in V3.1 — V2.5.1 ablation
-confirmed zero contribution at any correction strength (5.2M dead params).
+Note: G(x) metric tensor training was removed — V2.5.1 ablation confirmed
+zero contribution at any correction strength (5.2M dead params). G(x)
+quality scoring uses XGBoost instead.
 
 Designed to run inside the geometric-lens container where torch is available.
 """
@@ -227,7 +228,7 @@ def load_cost_field(save_dir=None, dim=None):
     """Load trained C(x) model weights.
 
     If dim is None, infers from saved weights. Falls back to EMBEDDING_DIM
-    env var (default 768).
+    env var (code default 768, but Qwen3.5-9B uses 4096).
     """
     if save_dir is None:
         save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -287,7 +288,7 @@ def retrain_cost_field_bce(
     - epoch_num: Training epoch number for replay buffer tracking.
 
     Args:
-        embeddings: List of float lists, each 5120-dim.
+        embeddings: List of float lists, each 4096-dim (Qwen3.5-9B).
         labels: List of "PASS" or "FAIL" strings.
         epochs: Maximum training epochs.
         lr: Learning rate. If None, selected adaptively based on dataset size.

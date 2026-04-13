@@ -271,21 +271,8 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		}
 	}
 
-	// DEV NOTE — Fox (Rust inference server) is disabled for now.
-	// Fox has PagedAttention, prefix caching, continuous batching, and we added
-	// grammar support + CUDA GPU offloading. However Fox's async Tokio engine loop
-	// adds ~20ms overhead per token (tokio::spawn_blocking per decode step), giving
-	// ~14 tok/s with grammar vs llama-server's 51 tok/s on the same GPU.
-	//
-	// To fix: move sampling entirely to the C side via llama_sampler_chain.
-	// The SamplerChain code exists in fox/src/engine/grammar.rs but Fox's engine
-	// still calls spawn_blocking per decode step. The fix is to run the decode loop
-	// on a dedicated OS thread instead of the Tokio pool, eliminating the async
-	// scheduling overhead. Once Fox hits 40+ tok/s with grammar, it becomes the
-	// sole backend (grammar + batching + prefix caching in one server).
-	//
-	// For now: llama-server handles all inference (grammar-constrained agent loop
-	// calls at 51 tok/s, and free-form V3 pipeline calls).
+	// llama-server handles all inference (grammar-constrained agent loop
+	// calls and free-form V3 pipeline calls). Qwen3.5-9B at ~51 tok/s.
 
 	// llama-server at InferenceURL (or ATLAS_LLAMA_URL override)
 	// Uses response_format: json_object for grammar enforcement — 100% valid JSON
@@ -325,7 +312,7 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		return "", 0, fmt.Errorf("LLM returned %d: %s", resp.StatusCode, truncateStr(string(respBody), 500))
 	}
 
-	// Both Fox and llama-server use /v1/chat/completions format:
+	// llama-server uses /v1/chat/completions format:
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
@@ -350,8 +337,6 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 	return content, tokens, nil
 }
 
-// callLLMWithGBNF is no longer needed — grammar is integrated in callLLMConstrained
-// when ATLAS_LLAMA_URL is set. Kept as comment for reference.
 
 // ---------------------------------------------------------------------------
 // Permission checking

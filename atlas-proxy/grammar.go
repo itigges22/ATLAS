@@ -10,12 +10,12 @@ import (
 // JSON Schema generation for constrained output
 // ---------------------------------------------------------------------------
 
-// buildToolCallSchema generates the JSON Schema that constrains model output
-// to exactly one of: tool_call, text, or done.
+// buildToolCallSchema generates the JSON Schema that describes the valid output
+// format: exactly one of tool_call, text, or done.
 //
-// Passed to llama-server as the "json_schema" parameter, which forces
-// every token through grammar-guided decoding. The model cannot produce
-// invalid JSON — structural correctness is guaranteed.
+// The actual constraint is enforced by response_format: json_object in the
+// LLM request. This schema is available for reference but not directly
+// passed to llama-server.
 func buildToolCallSchema() map[string]interface{} {
 	toolNames := make([]interface{}, 0, len(toolRegistry))
 	for name := range toolRegistry {
@@ -89,8 +89,8 @@ func buildToolCallSchemaJSON() string {
 // ---------------------------------------------------------------------------
 
 // buildGBNFGrammar generates a GBNF grammar string that constrains output
-// to the same tool_call/text/done union. Used as fallback if llama-server's
-// json_schema oneOf support is insufficient.
+// to the same tool_call/text/done union. Currently unused; kept as
+// reference in case json_object mode needs to be replaced with GBNF.
 func buildGBNFGrammar() string {
 	var sb strings.Builder
 

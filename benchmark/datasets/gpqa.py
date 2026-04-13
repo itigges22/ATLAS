@@ -1,11 +1,11 @@
 """
 GPQA Diamond dataset loader.
 
-Downloads GPQA Diamond (198 graduate-level multiple choice questions) via
-the HuggingFace rows API. Questions cover biology, physics, and chemistry
-and are designed to be "Google-proof".
+Downloads GPQA Diamond (198 graduate-level multiple choice questions) from
+OpenAI's public blob storage as CSV. Questions cover biology, physics, and
+chemistry and are designed to be "Google-proof".
 
-Source: https://huggingface.co/datasets/Idavidrein/gpqa
+Source: https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv
 """
 
 import csv

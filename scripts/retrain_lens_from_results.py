@@ -25,9 +25,9 @@ import urllib.error
 
 RESULTS_DIR = os.environ.get(
     "RESULTS_DIR",
-    "" + ATLAS_DIR + "/benchmark/results/v3_full_14b_final/v3_lcb/per_task",
+    "" + ATLAS_DIR + "/benchmark/results/v3_lcb/per_task",
 )
-LLAMA_URL = os.environ.get("LLAMA_URL", "http://10.42.0.134:8000")
+LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
 SAVE_PATH = os.environ.get(
     "SAVE_PATH",
     "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models/cost_field.pt",

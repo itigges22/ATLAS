@@ -55,7 +55,7 @@ class ElasticWeightConsolidation:
 
         Args:
             model: CostField model (nn.Module).
-            embeddings: List of float lists (5120-dim each).
+            embeddings: List of float lists (4096-dim each).
             labels: List of "PASS" or "FAIL" strings.
             n_samples: Max samples to use for Fisher computation.
         """

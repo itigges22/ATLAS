@@ -2,7 +2,7 @@
 
 Architecture: ℝ^4096 → ℝ^512 → ℝ^128 → ℝ^1
 Activations: SiLU, SiLU, Softplus (ensures positive output)
-Total params: ~2.7M (~10MB FP32)
+Total params: ~2.16M (8.3MB FP32)
 """
 
 import torch

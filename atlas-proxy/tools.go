@@ -750,8 +750,8 @@ func planTasksTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			// Placeholder — parallel execution implemented in parallel.go
-			// For now, return acknowledgment
+			// Returns pending status — parallel execution is defined in
+			// parallel.go (executePlanTasksTool) but not yet wired in
 			results := make([]TaskStatus, len(input.Tasks))
 			for i, t := range input.Tasks {
 				results[i] = TaskStatus{

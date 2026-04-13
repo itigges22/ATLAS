@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import os
 ATLAS_DIR = os.environ.get("ATLAS_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-"""Retrain C(x) cost field using Fox 9B embeddings.
+"""Retrain C(x) cost field using llama-server 9B embeddings.
 
 Collects code + pass/fail labels from ablation results,
-embeds each through Fox at localhost:8080, then trains
+embeds each through llama-server at localhost:8080, then trains
 the cost field to discriminate PASS vs FAIL.
 """
 
@@ -19,15 +19,15 @@ from urllib.request import Request, urlopen
 # Add geometric-lens to path for imports
 sys.path.insert(0, '" + ATLAS_DIR + "/geometric-lens')
 
-FOX_URL = "http://localhost:8080/embedding"
+LLAMA_EMBED_URL = "http://localhost:8080/embedding"
 MODELS_DIR = "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models"
 DATA_DIR = "" + ATLAS_DIR + "/v3_ablation_results/condition_a"
 
 
-def get_fox_embedding(text: str, retries=2) -> list:
-    """Get 4096-dim embedding from Fox 9B."""
+def get_llama_embedding(text: str, retries=2) -> list:
+    """Get 4096-dim embedding from llama-server (Qwen3.5-9B)."""
     payload = json.dumps({"content": text}).encode()
-    req = Request(FOX_URL, data=payload, headers={"Content-Type": "application/json"})
+    req = Request(LLAMA_EMBED_URL, data=payload, headers={"Content-Type": "application/json"})
     for attempt in range(retries + 1):
         try:
             with urlopen(req, timeout=30) as resp:
@@ -97,7 +97,7 @@ def collect_samples():
 
 
 def embed_samples(samples):
-    """Embed all code samples through Fox."""
+    """Embed all code samples through llama-server."""
     embeddings = []
     labels = []
     total = len(samples)
@@ -107,7 +107,7 @@ def embed_samples(samples):
             print(f"  Embedding {i+1}/{total}...", flush=True)
 
         try:
-            emb = get_fox_embedding(s["code"])
+            emb = get_llama_embedding(s["code"])
             embeddings.append(emb)
             labels.append(s["label"])
         except Exception as e:
@@ -273,7 +273,7 @@ def compute_auc(scores, labels):
 
 def main():
     print("=" * 60)
-    print("C(x) Cost Field Retraining — Fox 9B Embeddings")
+    print("C(x) Cost Field Retraining — llama-server 9B Embeddings")
     print("=" * 60)
 
     # Step 1: Collect labeled code
@@ -296,8 +296,8 @@ def main():
     n_fail = sum(1 for s in samples if s["label"] == "FAIL")
     print(f"  After balancing: {len(samples)} samples ({n_pass} PASS, {n_fail} FAIL)")
 
-    # Step 2: Embed through Fox
-    print("\n[2/4] Embedding through Fox 9B (this takes a few minutes)...")
+    # Step 2: Embed through llama-server
+    print("\n[2/4] Embedding through llama-server (this takes a few minutes)...")
     start = time.time()
     embeddings, labels = embed_samples(samples)
     elapsed = time.time() - start
@@ -305,14 +305,14 @@ def main():
     print(f"  Embedding dim: {len(embeddings[0])}")
 
     # Save embeddings for future use
-    emb_path = os.path.join(MODELS_DIR, "training_embeddings_fox9b.json")
+    emb_path = os.path.join(MODELS_DIR, "training_embeddings_llama9b.json")
     print(f"\n[3/4] Saving embeddings to {emb_path}...")
     with open(emb_path, 'w') as f:
         json.dump({
             "embeddings": embeddings,
             "labels": labels,
             "dim": len(embeddings[0]),
-            "model": "Qwen3.5-9B (Fox)",
+            "model": "Qwen3.5-9B (llama-server)",
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "n_pass": sum(1 for l in labels if l == "PASS"),
             "n_fail": sum(1 for l in labels if l == "FAIL"),
@@ -347,7 +347,7 @@ def main():
         "n_pass": sum(1 for l in labels if l == "PASS"),
         "n_fail": sum(1 for l in labels if l == "FAIL"),
         "dim": len(embeddings[0]),
-        "model": "Qwen3.5-9B (Fox)",
+        "model": "Qwen3.5-9B (llama-server)",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     stats_path = os.path.join(MODELS_DIR, "retrain_stats.json")
@@ -356,7 +356,7 @@ def main():
     print(f"  Saved stats to {stats_path}")
 
     # Hot reload
-    print("\n  Attempting hot reload via RAG API...")
+    print("\n  Attempting hot reload via Geometric Lens...")
     try:
         req = Request("http://localhost:31144/internal/lens/reload",
                        method="POST",

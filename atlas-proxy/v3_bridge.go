@@ -95,7 +95,7 @@ func callV3GenerateStreaming(v3URL string, req V3GenerateRequest, onProgress V3P
 	return result, nil
 }
 
-// callV3Score sends code to the RAG API for C(x)/G(x) scoring.
+// callV3Score sends code to the Geometric Lens for C(x)/G(x) scoring.
 func callV3Score(lensURL, code string) (*LensScore, error) {
 	body, _ := json.Marshal(map[string]string{"text": code})
 

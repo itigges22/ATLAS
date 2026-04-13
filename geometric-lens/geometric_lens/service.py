@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded models (CPU only)
 _cost_field = None
-_metric_tensor = None  # PCAMetricTensor wrapper (legacy)
+_metric_tensor = None  # PCAMetricTensor wrapper (legacy, replaced by XGBoost G(x))
 _gx_xgboost = None        # XGBoost G(x) classifier
 _gx_pca_components = None  # PCA projection matrix, numpy (128, 4096)
 _gx_pca_mean = None        # PCA mean vector, numpy (4096,)
@@ -31,7 +31,7 @@ def is_enabled() -> bool:
 
 
 def _ensure_models_loaded():
-    """Lazy-load C(x) cost field and G(x) metric tensor on first use."""
+    """Lazy-load C(x) cost field and G(x) models (XGBoost preferred, metric tensor legacy) on first use."""
     global _cost_field, _metric_tensor, _models_loaded, _load_attempted
     global _gx_xgboost, _gx_pca_components, _gx_pca_mean, _gx_top_dims
 
@@ -184,7 +184,7 @@ def get_geometric_energy(query: str) -> float:
         elapsed_ms = (time.monotonic() - start) * 1000
 
         # Normalize energy to [0, 1] using sigmoid-like scaling
-        # Fox 9B retrained: PASS ~13.2, FAIL ~24.9, midpoint ~19.0
+        # Qwen3.5-9B C(x) retrained: PASS ~13.2, FAIL ~24.9, midpoint ~19.0
         normalized = 1.0 / (1.0 + 2.718 ** (-(energy - 19.0) / 2.0))
 
         logger.debug(

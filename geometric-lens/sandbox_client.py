@@ -1,7 +1,7 @@
 """Async sandbox client for geometric-lens.
 
 Calls the sandbox service to execute code and returns structured results.
-Used by the verify-repair-retry loop in the RAG pipeline.
+Used by the verify-repair-retry loop in the completion pipeline.
 """
 
 import os

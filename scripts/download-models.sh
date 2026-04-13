@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ATLAS Model Downloader
-# Downloads Qwen3-14B and draft model for speculative decoding
+# Downloads model files (Qwen3.5-9B for V3.1, or Qwen3-14B for legacy V3.0)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/config.sh"

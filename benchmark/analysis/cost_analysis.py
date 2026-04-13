@@ -277,7 +277,7 @@ class CostAnalyzer:
             f"- **Tokens per Watt-Hour:** {metrics.tokens_per_watt_hour:,.0f}",
             f"- **Tasks per Watt-Hour:** {metrics.tasks_per_watt_hour:.2f}",
             "",
-            "*These are novel metrics establishing ATLAS V1 baselines.*",
+            "*These are novel metrics establishing ATLAS baselines.*",
             "",
             "### Cloud API Cost Comparison",
             "",

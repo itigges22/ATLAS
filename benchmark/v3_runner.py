@@ -24,7 +24,7 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
         - 3F: Metacognitive compensations
         - 3B: Constraint refinement
         - 3D: Derivation chains (if complex)
-        - 3E: Loop orchestration (max 5 iterations)
+        - 3E: Loop orchestration (max 2 iterations)
       - 3G: ACE learning from successes
 
 Telemetry: results/<run_id>/telemetry/v3_events.jsonl
@@ -294,7 +294,7 @@ class LLMAdapter:
     def _send_request(self, request_body: dict) -> dict:
         """Send request to LLM server with retry.
 
-        Supports both llama.cpp (/completion) and Fox (/v1/completions).
+        Supports llama.cpp (/completion) and legacy Fox (/v1/completions, unused).
         Uses manual ChatML formatting for thinking mode control.
         """
         # Detect Fox vs llama.cpp: Fox uses /v1/completions with OpenAI format
@@ -1705,9 +1705,9 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         req = urllib.request.Request(f"{RAG_API_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-        print(f"  RAG API: OK ({data.get('status', '?')})")
+        print(f"  Geometric Lens: OK ({data.get('status', '?')})")
     except Exception:
-        print("  RAG API: WARNING — lens scoring unavailable")
+        print("  Geometric Lens: WARNING — lens scoring unavailable")
 
     # Check Lens model availability (retry once after short delay)
     lens_ok = False

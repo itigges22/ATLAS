@@ -8,10 +8,10 @@ Paper: Wang et al. (arxiv:2502.11027, Dec 2025)
 Config: [div_sampling] in atlas.conf
 Telemetry: telemetry/div_sampling_events.jsonl
 
-Perturbation Categories:
-  - Role assignments (>=4): different expert personas
-  - Instruction rephrasing (>=3): different thinking strategies
-  - Style variations (>=3): different coding approaches
+Perturbation Categories (12 total: 4 + 4 + 4):
+  - Role assignments (4): different expert personas
+  - Instruction rephrasing (4): different thinking strategies
+  - Style variations (4): functional, pythonic, optimize_iteratively, structured
 """
 
 import json

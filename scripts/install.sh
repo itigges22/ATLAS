@@ -530,7 +530,7 @@ main() {
     echo "Service endpoints:"
     echo "  API Portal:  http://${ATLAS_NODE_IP}:${ATLAS_API_PORTAL_NODEPORT}"
     echo "  LLM Proxy:   http://${ATLAS_NODE_IP}:${ATLAS_LLM_PROXY_NODEPORT}"
-    echo "  RAG API:     http://${ATLAS_NODE_IP}:${ATLAS_RAG_API_NODEPORT}"
+    echo "  Geometric Lens: http://${ATLAS_NODE_IP}:${ATLAS_RAG_API_NODEPORT}"
     echo "  Dashboard:   http://${ATLAS_NODE_IP}:${ATLAS_DASHBOARD_NODEPORT}"
     echo ""
 }

@@ -1,1 +1,1 @@
-"""Geometric Lens — C(x) cost field + G(x) metric tensor for code quality estimation."""
+"""Geometric Lens — C(x) cost field + G(x) XGBoost ensemble for code quality estimation."""

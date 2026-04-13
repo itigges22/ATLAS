@@ -233,8 +233,8 @@ type AgentContext struct {
 	// Configuration
 	Tier           Tier
 	MaxTurns       int
-	WorkingDir     string       // Temp dir for agent operations
-	RealProjectDir string       // Actual project directory on disk (for delete_file)
+	WorkingDir     string       // Project directory for agent operations
+	RealProjectDir string       // Same as WorkingDir; kept for delete_file compatibility
 	PermissionMode PermissionMode
 	YoloMode       bool
 

@@ -5,7 +5,9 @@ Downloads LiveCodeBench code generation problems via the HuggingFace rows API.
 LiveCodeBench contains competitive programming problems from LeetCode,
 Codeforces, and AtCoder with stdin/stdout evaluation.
 
-Source: https://huggingface.co/datasets/livecodebench/code_generation_lite
+Sources (tried in order):
+  - https://huggingface.co/datasets/livecodebench/code_generation_lite
+  - https://huggingface.co/datasets/bzantium/livecodebench (mirror)
 """
 
 import json

@@ -284,7 +284,7 @@ def compare_with_baseline(
         Markdown comparison table
     """
     if baseline_pass1 is None:
-        # Use Qwen3-14B baselines from config
+        # Use baselines from config
         baselines = config.qwen3_14b_baselines
         key = f"{result.dataset}_pass1"
         baseline_pass1 = baselines.get(key, 0.0)
@@ -301,8 +301,8 @@ def compare_with_baseline(
     lines = [
         "## Comparison with Baseline",
         "",
-        "| Metric | ATLAS V1 | Qwen3-14B Baseline | Difference |",
-        "|--------|----------|-------------------|------------|",
+        "| Metric | ATLAS | Baseline | Difference |",
+        "|--------|-------|----------|------------|",
         f"| pass@1 | {result.pass_at_1:.1%} | {baseline_pass1:.1%} | {diff_str} |",
     ]
 

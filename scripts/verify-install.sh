@@ -217,7 +217,7 @@ main() {
     echo "Service Health:"
     check_service "LLM Server" "http://localhost:${ATLAS_LLAMA_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "API Portal" "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
-    check_service "RAG API" "http://localhost:${ATLAS_RAG_API_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "Geometric Lens" "http://localhost:${ATLAS_RAG_API_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "LLM Proxy" "http://localhost:${ATLAS_LLM_PROXY_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "Sandbox" "http://localhost:${ATLAS_SANDBOX_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "Dashboard" "http://localhost:${ATLAS_DASHBOARD_NODEPORT}/" "$ATLAS_HEALTH_CHECK_TIMEOUT"

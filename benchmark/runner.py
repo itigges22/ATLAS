@@ -53,7 +53,7 @@ def extract_code(response: str) -> str:
     - Markdown code blocks (```python ... ```)
     - Plain code blocks (``` ... ```)
     - Raw code without blocks
-    - Qwen3 <think>...</think> blocks (stripped before extraction)
+    - Qwen3.5 <think>...</think> blocks (stripped before extraction)
 
     Args:
         response: Raw LLM response text
@@ -61,13 +61,13 @@ def extract_code(response: str) -> str:
     Returns:
         Extracted Python code
     """
-    # Strip Qwen3 thinking blocks first - they can consume tokens
+    # Strip Qwen3.5 thinking blocks first - they can consume tokens
     # before the actual code output
     think_pattern = r'<think>.*?</think>'
     response = re.sub(think_pattern, '', response, flags=re.DOTALL).strip()
 
     # Safety net: strip unclosed <think> tags (edge case where
-    # --reasoning-format deepseek doesn't fully strip thinking)
+    # thinking mode doesn't fully strip thinking)
     if '<think>' in response and '</think>' not in response:
         response = response[:response.index('<think>')].strip()
 
@@ -373,17 +373,14 @@ class BenchmarkRunner:
         if self.client is not None:
             self.client.close()
 
-    # System prompt baked into ChatML — matches Qwen3-custom.jinja template.
+    # System prompt baked into ChatML for the /completion endpoint.
     _SYSTEM_PROMPT = "You are an expert programmer. Respond directly and concisely. /nothink"
 
     def _format_chatml(self, user_content: str) -> str:
         """Format a user message as a ChatML prompt for the /completion endpoint.
 
-        Uses the /completion endpoint instead of /v1/chat/completions because
-        llama.cpp's chat endpoint has a bug where speculative decoding gets 0%
-        draft acceptance (token mismatch between main and draft model in the
-        chat template processing path). The raw /completion endpoint works
-        correctly and achieves full spec decode throughput.
+        Uses the /completion endpoint instead of /v1/chat/completions for
+        direct control over prompt formatting and thinking mode (/nothink).
         """
         return (
             f"<|im_start|>system\n{self._SYSTEM_PROMPT}<|im_end|>\n"
@@ -467,8 +464,8 @@ class BenchmarkRunner:
                 content = data.get("content", "")
                 tokens = data.get("tokens_predicted", 0)
 
-                # Strip empty think blocks that Qwen3 may emit despite /nothink
-                # (e.g. "<think>\n\n</think>\n\n" — 4 tokens, harmless)
+                # Strip empty think blocks that Qwen3.5 may emit despite /nothink
+                # (e.g. "<think>\n\n</think>\n\n" - 4 tokens, harmless)
                 content = re.sub(r'^<think>\s*</think>\s*', '', content)
 
                 return content, tokens, inference_time_ms

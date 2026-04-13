@@ -1,5 +1,5 @@
 """
-Custom benchmark tasks for ATLAS V1.
+Custom benchmark tasks for ATLAS.
 
 Contains 100 carefully designed coding tasks across 6 categories.
 """

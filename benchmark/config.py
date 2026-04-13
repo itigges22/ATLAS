@@ -114,7 +114,7 @@ class BenchmarkConfig:
     @property
     def model_name(self) -> str:
         """Main model filename."""
-        return self._conf.get("ATLAS_MAIN_MODEL", "Qwen3-14B-Q4_K_M.gguf")
+        return self._conf.get("ATLAS_MAIN_MODEL", "Qwen3.5-9B-Q6_K.gguf")
 
     @property
     def default_timeout_seconds(self) -> int:
@@ -156,7 +156,6 @@ class BenchmarkConfig:
         """Expected GPU lifetime in hours (5 years, 8 hours/day)."""
         return 5 * 365 * 8
 
-    # Cloud API pricing (per 1M tokens as of 2024)
     @property
     def cloud_pricing(self) -> dict:
         """Cloud API pricing per 1M tokens (input/output)."""
@@ -167,10 +166,9 @@ class BenchmarkConfig:
             "claude-haiku": {"input": 0.25, "output": 1.25}
         }
 
-    # Published baselines for comparison
     @property
     def qwen3_14b_baselines(self) -> dict:
-        """Published Qwen3-14B baseline scores."""
+        """Published Qwen3 baseline scores (retained for V1/V2 comparison)."""
         return {
             "humaneval_pass1": 0.67,       # ~65-70%
             "mbpp_pass1": 0.734,           # 73.4% per tech report (3-shot)

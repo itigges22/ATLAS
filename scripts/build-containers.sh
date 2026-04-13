@@ -97,7 +97,7 @@ main() {
     # Atlas services (in k8s/atlas)
     declare -a ATLAS_IMAGES=(
         "sandbox:$K8S_DIR/atlas/sandbox"
-        # atlas-trainer: V1 LoRA training, moved to atlas/v1_archived/ (V2 uses frozen model)
+        # atlas-trainer: V1 LoRA training, moved to atlas/v1_archived/ (V3.1 uses frozen model)
     )
 
     # Build all core images

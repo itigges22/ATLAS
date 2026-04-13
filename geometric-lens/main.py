@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    logger.info("RAG API starting up")
+    logger.info("Geometric Lens API starting up")
     logger.info(f"Llama server: {config.llama.base_url}")
 
     # Cleanup expired projects on startup
@@ -61,13 +61,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    logger.info("RAG API shutting down")
+    logger.info("Geometric Lens API shutting down")
 
 
 app = FastAPI(
-    title="RAG API",
-    description="RAG-enhanced API for code-aware LLM interactions",
-    version="1.0.0",
+    title="Geometric Lens API",
+    description="Geometric Lens API for code-aware LLM interactions with RAG, Pattern Cache, and Confidence Router",
+    version="3.0.1",
     lifespan=lifespan
 )
 
@@ -202,8 +202,8 @@ async def health():
 async def root():
     """Root endpoint."""
     return {
-        "service": "RAG API",
-        "version": "1.0.0",
+        "service": "Geometric Lens API",
+        "version": "3.0.1",
         "endpoints": {
             "sync": "POST /v1/projects/sync",
             "chat": "POST /v1/chat/completions",
@@ -853,7 +853,7 @@ async def lens_score_text(request: LensScoreTextRequest):
         with torch.no_grad():
             energy = lens_service._cost_field(x).item()
 
-        # Fox 9B retrained: PASS ~13.2, FAIL ~24.9, midpoint ~19.0
+        # Qwen3.5-9B C(x) retrained: PASS ~13.2, FAIL ~24.9, midpoint ~19.0
         normalized = 1.0 / (1.0 + 2.718 ** (-(energy - 19.0) / 2.0))
         normalized = min(1.0, max(0.0, normalized))
 

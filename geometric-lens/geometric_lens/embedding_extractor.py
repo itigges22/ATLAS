@@ -23,7 +23,7 @@ def _get_embed_url() -> str:
 def extract_embedding(text: str) -> List[float]:
     """Extract an embedding vector from llama-server.
 
-    Handles both pooled responses (flat list) from models like nomic-embed
+    Handles both pooled responses (flat list) from self-embedding endpoints
     and per-token responses (nested list) that need mean pooling.
 
     Returns:
@@ -39,7 +39,7 @@ def extract_embedding(text: str) -> List[float]:
     # Response: [{"index": 0, "embedding": <flat list or nested list>}]
     raw = data[0]["embedding"]
 
-    # Pooled: flat list of floats (e.g. nomic-embed-text)
+    # Pooled: flat list of floats (e.g. llama-server self-embeddings)
     if not isinstance(raw[0], list):
         return raw
 

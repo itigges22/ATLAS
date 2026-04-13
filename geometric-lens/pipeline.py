@@ -1,4 +1,4 @@
-"""RAG pipeline — retrieval orchestration with PageIndex, Pattern Cache, and Confidence Router."""
+"""Geometric Lens pipeline — retrieval orchestration with PageIndex, Pattern Cache, and Confidence Router."""
 
 import asyncio
 import os

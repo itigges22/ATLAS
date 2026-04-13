@@ -511,8 +511,7 @@ func runInternalAgentLoop(req ChatRequest, tier Tier, w http.ResponseWriter, flu
 		truncate(userMessage, 80), workingDir, tier)
 
 	// Create agent context — workingDir is the real project path
-	// collectAgentResults will override WorkingDir with tempDir for tool execution
-	// but RealProjectDir stays set for delete_file
+	// RealProjectDir stays set for delete_file
 	ctx := NewAgentContext(workingDir, tier)
 	ctx.RealProjectDir = workingDir
 	ctx.InferenceURL = inferenceURL

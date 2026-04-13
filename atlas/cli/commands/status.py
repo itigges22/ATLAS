@@ -7,12 +7,12 @@ def status():
     """Check and display health of all services."""
     display.separator()
 
-    # Fox
-    ok, detail = client.check_fox()
+    # llama-server
+    ok, detail = client.check_llama()
     if ok:
-        display.success(f"Fox: {detail}")
+        display.success(f"llama-server: {detail}")
     else:
-        display.error(f"Fox: {detail}")
+        display.error(f"llama-server: {detail}")
 
     # geometric-lens
     ok, detail = client.check_rag_api()

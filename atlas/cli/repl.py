@@ -3,8 +3,7 @@
 Proxy launch strategy:
 1. If atlas-proxy is already running (any method) → use it
 2. If Go is installed → build and launch proxy locally (full CWD file access)
-3. If Docker Compose proxy is running → use it (file access limited to ATLAS_PROJECT_DIR mount)
-4. Fall back to built-in REPL (no file operations, /solve and /bench only)
+3. Fall back to built-in REPL (no file operations, /solve and /bench only)
 """
 
 import sys
@@ -171,7 +170,7 @@ def _ensure_proxy() -> bool:
     """Ensure atlas-proxy is running, launching it locally if needed.
 
     Strategy:
-    1. Already running on PROXY_PORT → use it (Docker Compose or bare metal)
+    1. Already running on PROXY_PORT → use it
     2. Go available → build (if needed) and launch locally from CWD
     3. Nothing available → return False
     """
@@ -239,20 +238,20 @@ def launch_aider(extra_args: Optional[List[str]] = None):
 
 def startup_checks() -> bool:
     """Run startup health checks."""
-    fox_ok, fox_model = client.check_fox()
+    llm_ok, llm_model = client.check_llama()
     rag_ok, _ = client.check_rag_api()
     sandbox_ok, _ = client.check_sandbox()
 
-    if fox_ok:
+    if llm_ok:
         display.status_block(
-            model=fox_model,
-            speed="47 tok/s",
+            model=llm_model,
+            speed="~51 tok/s",
             lens="connected" if rag_ok else "unavailable",
             sandbox="ready" if sandbox_ok else "unavailable",
         )
     else:
-        display.error(f"Fox not running — {fox_model}")
-        display.info("Start Fox first: fox serve --model-path <model.gguf>")
+        display.error(f"llama-server not running — {llm_model}")
+        display.info("Start llama-server first (see inference/ entrypoints)")
         return False
 
     if not rag_ok:
@@ -322,7 +321,7 @@ def run():
     """Main entry point.
 
     Launch strategy:
-    1. Check if proxy is running or can be started locally (Go) or via Docker
+    1. Check if proxy is running or can be started locally (Go)
     2. If proxy + Aider available → launch Aider (full coding assistant)
     3. Otherwise → fall back to built-in REPL (/solve, /bench only)
     """
@@ -336,7 +335,7 @@ def run():
     # Fall back to built-in REPL
     if _find_aider() and not _check_url(PROXY_URL):
         display.warn("Proxy not available — Aider needs the proxy for file operations.")
-        display.info("Start services first: docker compose up -d")
+        display.info("Start services first, or ensure the proxy is running.")
         display.info("Or install Go 1.24+ for automatic local proxy: https://go.dev/dl/")
         display.separator()
 

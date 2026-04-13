@@ -187,7 +187,7 @@ func joinStrings(ss []string) string {
 }
 
 // executePlanTasksTool is the full implementation of the plan_tasks tool executor.
-// It replaces the placeholder in tools.go when parallel.go is loaded.
+// Note: not currently wired into the tool registry; tools.go has a placeholder.
 func executePlanTasksTool(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 	var input PlanTasksInput
 	if err := json.Unmarshal(rawInput, &input); err != nil {

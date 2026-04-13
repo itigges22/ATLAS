@@ -88,10 +88,10 @@ for s in slots:
 "
 echo ""
 
-# Test 6: RAG API health (if available)
-echo "--- Test 6: RAG API ---"
+# Test 6: Geometric Lens health (if available)
+echo "--- Test 6: Geometric Lens ---"
 RAG_HEALTH=$(curl -s --max-time 5 "$RAG_URL/health" 2>/dev/null || echo '{"status":"unreachable"}')
-echo "$RAG_HEALTH" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'RAG API: {d.get(\"status\",\"unknown\")}')" 2>/dev/null || echo "RAG API: unreachable"
+echo "$RAG_HEALTH" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Geometric Lens: {d.get(\"status\",\"unknown\")}')" 2>/dev/null || echo "Geometric Lens: unreachable"
 echo ""
 
 echo "=== Smoke Test Complete ==="

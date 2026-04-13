@@ -1,9 +1,9 @@
 // atlas-proxy: Production inference proxy for ATLAS.
 //
-// Sits between Aider (or any OpenAI client) and Fox (local LLM).
+// Sits between Aider (or any OpenAI client) and llama-server (local LLM).
 // Implements a verify-repair pipeline inspired by Claude Code:
 //
-//   1. Forward request to Fox (stream or batch)
+//   1. Forward request to llama-server (stream or batch)
 //   2. Detect code in response
 //   3. Score with C(x)+G(x) quality gate
 //   4. Sandbox-test code (if applicable)
@@ -356,7 +356,7 @@ func buildRepairPrompt(code string, analysis ErrorAnalysis, attempt int) string 
 }
 
 // ---------------------------------------------------------------------------
-// Fox communication
+// LLM communication (llama-server)
 // ---------------------------------------------------------------------------
 
 func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
@@ -393,7 +393,7 @@ func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("Fox HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		return nil, fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
 	}
 
 	var chatResp ChatResponse
@@ -1079,7 +1079,7 @@ func bestOfK(ctx context.Context, req ChatRequest, k int) (*ChatResponse, *LensS
 
 	results := make(chan candidate, k)
 
-	// Fire all K candidates in parallel — Fox has --parallel 4
+	// Fire all K candidates in parallel — llama-server has --parallel 4
 	for i := 0; i < k; i++ {
 		go func(idx int) {
 			attempt := req
@@ -1276,7 +1276,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Forward to Fox
+	// Forward to LLM
 	resp, err := forwardToFox(ctx, req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("upstream error: %v", err), 502)
@@ -1545,7 +1545,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 		}
 	}
 
-	// Agent loop: GBNF-constrained tool calls inside the proxy.
+	// Agent loop: JSON-constrained tool calls inside the proxy (response_format: json_object).
 	// The proxy runs an internal agent loop (tools.go, agent.go), executes
 	// file operations internally, then formats results for Aider's whole-file format.
 	// Enabled via ATLAS_AGENT_LOOP=1. For T2/T3, runs V3 pipeline inside write_file.
@@ -2170,7 +2170,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	client := &http.Client{Timeout: 300 * time.Second}
 	foxResp, err := client.Do(foxReq)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Fox error: %v", err), 502)
+		http.Error(w, fmt.Sprintf("LLM error: %v", err), 502)
 		return
 	}
 	defer foxResp.Body.Close()
@@ -2178,14 +2178,14 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	// SSE headers already set above — reuse flusher
 	if foxResp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(foxResp.Body)
-		log.Printf("  Fox error: %s", truncate(string(raw), 100))
+		log.Printf("  LLM error: %s", truncate(string(raw), 100))
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 		return
 		return
 	}
 
-	// Stream from Fox, intercept [DONE], accumulate content
+	// Stream from LLM, intercept [DONE], accumulate content
 	var fullContent strings.Builder
 	scanner := bufio.NewScanner(foxResp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
@@ -2219,7 +2219,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 		}
 	}
 
-	// Stream is done from Fox. Client hasn't received [DONE] yet.
+	// Stream is done from LLM. Client hasn't received [DONE] yet.
 	content := fullContent.String()
 
 	// Empty response retry — if model produced nothing (think-only), retry non-streamed
@@ -2515,7 +2515,7 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/v1/agent", handleAgent) // New tool-based agent endpoint
 
-	// Catch-all: proxy to Fox
+	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("passthrough: %s %s", r.Method, r.URL.Path)
 		body, _ := io.ReadAll(r.Body)
@@ -2541,7 +2541,7 @@ func main() {
 	})
 
 	addr := ":" + proxyPort
-	log.Printf("ATLAS Proxy v2.0 starting on %s", addr)
+	log.Printf("ATLAS Proxy v3.0.1 starting on %s", addr)
 	log.Printf("  Inference: %s", inferenceURL)
 	log.Printf("  Geometric Lens: %s", lensURL)
 	log.Printf("  Sandbox: %s", sandboxURL)
@@ -2665,7 +2665,7 @@ func (t Tier) NeedsSpec() bool  { return t >= Tier2Medium }
 func (t Tier) NeedsBOK() bool   { return t >= Tier3Hard }
 
 // classifyIntent uses the model itself to determine complexity tier.
-// Single Fox call with constrained output — returns in ~200ms on GPU.
+// Single LLM call with constrained output — returns in ~200ms on GPU.
 func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 	if len(messages) == 0 {
 		return Tier0Conversational

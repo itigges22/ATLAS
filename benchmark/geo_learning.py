@@ -8,8 +8,7 @@ import urllib.error
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Embedding dimension is model-dependent (5120 for Qwen3-14B,
-# 4096 for Qwen3.5-9B). Not used functionally — kept for documentation.
+# Embedding dimension is 4096 for Qwen3.5-9B (current V3.1 model).
 
 
 # --- Embedding extraction -----------------------------------------------------
@@ -18,8 +17,8 @@ def extract_embedding_urllib(text: str, llama_url: str) -> Optional[List[float]]
     """
     Extract embedding from LLM server.
 
-    Supports both llama.cpp (/embedding) and Fox (/v1/embeddings) endpoints.
-    Set ATLAS_USE_FOX=1 to use Fox's OpenAI-compatible endpoint.
+    Supports llama.cpp (/embedding) and legacy Fox (/v1/embeddings, unused).
+    Fox path gated behind ATLAS_USE_FOX=1 (default: 0, off).
 
     Args:
         text: Input text to embed.

@@ -28,9 +28,8 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     if max_tasks > 0:
         cmd.extend(["--max-tasks", str(max_tasks)])
 
-    # Set Fox environment
+    # Set LLM environment
     env = os.environ.copy()
-    env["ATLAS_USE_FOX"] = "1"
     env["ATLAS_MODEL_NAME"] = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
     env["LLAMA_URL"] = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
     env["ATLAS_LLM_PARALLEL"] = "1"

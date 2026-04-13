@@ -63,10 +63,10 @@ DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
 
 
-# --- LLM Adapter (calls llama-server /v1/completions) ---------------------------------
+# --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
 
 class LLMAdapter:
-    """Calls Fox's /v1/completions with ChatML prompt."""
+    """Calls llama-server's /v1/chat/completions, parsing ChatML prompts into messages."""
 
     _lock = threading.Lock()
 
@@ -117,10 +117,10 @@ class LLMAdapter:
         return content, tokens, t_ms
 
     def _send(self, body: dict) -> dict:
-        """Send to Fox via /v1/chat/completions.
+        """Send to llama-server via /v1/chat/completions.
 
         V3 modules generate ChatML prompts. We parse them into messages format
-        for Fox's chat endpoint. ChatML format:
+        for the chat endpoint. ChatML format:
             <|im_start|>system\n...\n<|im_end|>\n<|im_start|>user\n...\n<|im_end|>\n<|im_start|>assistant\n
         """
         prompt = body.pop("prompt", "")
@@ -188,7 +188,7 @@ class LLMAdapter:
 # --- Sandbox Adapter (calls sandbox /execute) ---------------------------------
 
 class SandboxAdapter:
-    """Calls the K3s sandbox for code execution."""
+    """Calls the sandbox service for code execution."""
 
     def __call__(self, code: str, test_input: str = "") -> Tuple[bool, str, str]:
         body = {

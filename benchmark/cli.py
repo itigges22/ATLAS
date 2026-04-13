@@ -414,7 +414,7 @@ def analyze_results(input_dir: Path, output_dir: Path):
     # Generate combined report
     report_file = output_dir / "analysis_report.md"
     with open(report_file, 'w') as f:
-        f.write("# ATLAS V1 Benchmark Analysis Report\n\n")
+        f.write("# ATLAS Benchmark Analysis Report\n\n")
         f.write(f"Generated: {datetime.now().isoformat()}\n\n")
 
         for run_file in run_files:
@@ -457,7 +457,7 @@ def cost_analysis(input_dir: Path, output_dir: Path):
 
     report_file = output_dir / "cost_analysis.md"
     with open(report_file, 'w') as f:
-        f.write("# ATLAS V1 Cost Analysis\n\n")
+        f.write("# ATLAS Cost Analysis\n\n")
         f.write(f"Generated: {datetime.now().isoformat()}\n\n")
 
         for run_file in run_files:

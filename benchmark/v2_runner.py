@@ -77,7 +77,7 @@ def collect_v2_telemetry(task_id, benchmark, result):
 
 
 def query_v2_signals(prompt):
-    """Query RAG API internal endpoints for V2 signal data."""
+    """Query Geometric Lens internal endpoints for V2 signal data."""
     signals = {
         "cache_hit": False, "cache_score": 0.0,
         "retrieval_confidence": 0.0, "query_complexity": 0.0,
@@ -197,13 +197,8 @@ def _trigger_retrain(tracker, max_epoch):
 def _should_think(task, mode, signals):
     """Decide whether to enable thinking mode for a task.
 
-    Currently disabled globally: Qwen3-14B thinking causes runaway chains
-    on competitive programming (10+ min, 20K+ tokens) with no accuracy gain.
-    All tasks use /nothink. The router, lens, and full infrastructure remain
-    active — only the thinking toggle is off.
-
-    The think plumbing is preserved so thinking can be re-enabled per
-    eval_mode or per route once token budget controls are in place.
+    Currently disabled globally for V2 runner. The V3 runner uses
+    Budget Forcing (Feature 1C) for thinking mode control instead.
     """
     return False
 
@@ -433,10 +428,10 @@ class V2BenchmarkRunner:
         """Run a task with best-of-K lens-guided selection.
 
         Generates K candidates at temperature>0 using pipelined requests
-        (overlapping generation via ThreadPoolExecutor + --parallel 2 on
-        llama-server). Scores each with the Geometric Lens, then for code
-        tasks tries sandbox in energy-sorted order (early exit on first
-        pass). For non-code tasks, returns the lowest-energy candidate.
+        (overlapping generation via ThreadPoolExecutor). Scores each with
+        the Geometric Lens, then for code tasks tries sandbox in energy-sorted
+        order (early exit on first pass). For non-code tasks, returns the
+        lowest-energy candidate.
         """
         import hashlib
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -447,7 +442,7 @@ class V2BenchmarkRunner:
         candidates = []
 
         # Phase 1: Generate K candidates with pipelined requests.
-        # With --parallel 2 and --cont-batching on llama-server, queuing
+        # With --parallel 4 and --cont-batching on llama-server, queuing
         # requests early means the server starts prompt processing for N+1
         # while N is still generating. cache_prompt=True lets the server
         # reuse the KV cache for the shared prompt across candidates.
@@ -483,7 +478,7 @@ class V2BenchmarkRunner:
                     "code_hash": "error", "passed": False,
                 }
 
-        # Use 2 workers to match --parallel 2 on llama-server.
+        # Use 2 workers for pipelined generation.
         # Requests are queued with 100ms stagger so the server starts
         # processing the next request before the current one finishes.
         with ThreadPoolExecutor(max_workers=2) as pool:

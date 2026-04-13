@@ -1,7 +1,7 @@
 """V3 Metacognitive Model (Feature 3F) — Failure Pattern Modeling.
 
-Builds an explicit model of Qwen3-14B-Q4_K_M's systematic failure patterns
-per problem category. Stores patterns as a JSON lookup table and injects
+Builds an explicit model of the LLM's systematic failure patterns per
+problem category. Stores patterns as a JSON lookup table and injects
 compensating constraints before generation for known weaknesses.
 
 Config: [metacognitive] in atlas.conf
@@ -169,7 +169,7 @@ def parse_patterns(response: str) -> List[FailurePattern]:
 # ---------------------------------------------------------------------------
 
 class MetacognitiveProfile:
-    """Explicit model of Qwen3-14B's systematic failure patterns.
+    """Explicit model of the LLM's systematic failure patterns.
 
     When enabled, maintains a profile of category-specific weaknesses and
     provides compensating constraints during generation.

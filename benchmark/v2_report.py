@@ -274,7 +274,7 @@ def generate_report(run_dir: Path) -> Path:
 **Run ID:** {run_id}
 **Total Runtime:** {runtime_str}
 **Benchmark Suite:** LiveCodeBench v5, GPQA Diamond, IFBench, Custom, SciCode
-**Hardware:** RTX 5060 Ti 16GB, Qwen3-14B-Q4_K_M, 5 vCores, 14GB RAM
+**Hardware:** RTX 5060 Ti 16GB, Qwen3.5-9B-Q6_K, 5 vCores, 14GB RAM
 
 *All results from a single benchmark run. Not averaged across multiple runs; variance unknown.*
 
@@ -343,7 +343,7 @@ For reference only -- not a direct comparison (different hardware, inference sta
 |-------|-------------|--------------|-------------------|
 | Claude Sonnet 4.5 | ~55% | ~60% | ~40% |
 | GPT-4o | ~50% | ~53% | ~35% |
-| **ATLAS V2 (Qwen3-14B)** | **{p1_r}** | **{p3_r}** | **{p6_r}** |
+| **ATLAS V2 (Qwen3.5-9B)** | **{p1_r}** | **{p3_r}** | **{p6_r}** |
 """
 
     # Learning curve section

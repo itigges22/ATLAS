@@ -207,7 +207,7 @@ def get_model_info() -> Dict[str, str]:
     quantization = ""
 
     # Extract quantization from model filename
-    # e.g., "Qwen3-14B-Q4_K_M.gguf" -> "Q4_K_M"
+    # e.g., "Qwen3.5-9B-Q6_K.gguf" -> "Q6_K"
     match = re.search(r'(Q\d+_K(?:_[A-Z])?)', model_name, re.IGNORECASE)
     if match:
         quantization = match.group(1).upper()

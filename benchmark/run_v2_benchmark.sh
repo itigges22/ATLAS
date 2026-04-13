@@ -29,13 +29,13 @@ if ! curl -s --max-time 5 http://localhost:32735/health > /dev/null 2>&1; then
 fi
 echo "  llama-server: OK"
 
-# Check RAG API is reachable
-echo "Checking RAG API..."
+# Check Geometric Lens is reachable
+echo "Checking Geometric Lens..."
 if ! curl -s --max-time 5 http://localhost:31144/health > /dev/null 2>&1; then
-    echo "WARNING: RAG API not reachable at localhost:31144"
+    echo "WARNING: Geometric Lens not reachable at localhost:31144"
     echo "V2 telemetry will be incomplete"
 fi
-echo "  RAG API: OK"
+echo "  Geometric Lens: OK"
 echo ""
 
 # Run the benchmark

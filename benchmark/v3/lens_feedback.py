@@ -1,7 +1,7 @@
 """V3 Lens Feedback — Online recalibration of C(x) during benchmarks.
 
 After each task completes, records the final candidate's embedding + PASS/FAIL
-label. Every N tasks, triggers Lens retrain via the RAG API endpoint. After
+label. Every N tasks, triggers Lens retrain via the Geometric Lens endpoint. After
 retrain, recomputes sigmoid midpoint/steepness from the new energy distribution
 and propagates to Blend-ASC and Budget Forcing in-memory.
 
