@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+- Added multilingual documentation: Simplified Chinese (zh-CN), Japanese (ja), Korean (ko) for README, SETUP, and TROUBLESHOOTING
+- Added language selector badges to README
+- Added star history chart to Latest News section
+- Rewrote README contributing section to encourage issue reports and community feedback
+- Fixed V3_1_STATUS.md false claims about speed optimizations that were never applied to code
+
+### Code Accuracy Audit
+- Audited and corrected comments across 72 files for V3.0.1 accuracy
+- Updated model references: Qwen3-14B to Qwen3.5-9B, embedding dimensions 5120 to 4096
+- Renamed service references: rag-api to geometric-lens, Fox to llama-server
+- Corrected G(x) XGBoost status: deployed and active (was incorrectly described as removed)
+- Fixed normalization comments from "Fox 9B" to "Qwen3.5-9B C(x)"
+- Marked legacy Fox code paths as unused in benchmark runner and geo_learning
+
+### Test Fixes
+- Fixed embedding dimensions in test fixtures (5120 to 4096)
+- Fixed geometric-lens port in test conftest (8001 to 8099)
+- Updated DivSampling test assertions to match actual 4+4+4 perturbation counts
+- Corrected G(x) cost field parameter count: ~2.16M / 8.3MB (was ~2.7M / 10MB)
+
 ## [3.0.1] - 2026-04-05
 
 ### Tool-Call Agent Loop Architecture
@@ -7,7 +30,7 @@
 - Grammar-constrained output via llama-server `response_format:json_object` — 100% valid JSON
 - 8 tool definitions: `read_file`, `write_file`, `edit_file`, `delete_file`, `run_command`, `search_files`, `list_directory`, `plan_tasks`
 - Per-file tier classification: T1 (config/data) writes directly, T2 (logic/features) routes through V3 pipeline
-- 3400+ lines new Go code across 14 files in `atlas-proxy/`
+- 3400+ lines new Go code across 12 files in `atlas-proxy/`
 
 ### V3 Pipeline Integration
 - All 14 V3 steps wired into `write_file`/`edit_file` executors for T2/T3 files
@@ -63,7 +86,7 @@
 - GitHub Issue #12 / PR #13: `docker image exists` → `docker image inspect` in build script
 
 ### Cleanup
-- Removed 62 stale test directories, old v1 proxy binary, dead G(x) training scripts
+- Removed 62 stale test directories, old v1 proxy binary, dead G(x) metric tensor training scripts
 - Removed stale tests for deleted services (api-portal, dashboard, embedding-service, task-worker)
 - Removed root-level development artifacts (bubble_sort.py, snake_game.py, etc.)
 - All hardcoded `/home/isaac/` paths replaced with `$HOME` or `ATLAS_DIR` env vars
