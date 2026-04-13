@@ -33,6 +33,14 @@ ATLAS is a fully self-hosted coding assistant powered by intelligent inference i
 - **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
 
+<a href="https://star-history.com/#itigges22/ATLAS&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=itigges22/ATLAS&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=itigges22/ATLAS&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=itigges22/ATLAS&type=Date" width="100%" />
+  </picture>
+</a>
+
 ---
 
 ## 🧱 What ATLAS Does
