@@ -70,7 +70,7 @@ class TestLlamaChatCompletion:
         assert "choices" in data, "Response should have 'choices' field"
         assert len(data["choices"]) > 0, "Should have at least one choice"
         message = data["choices"][0].get("message", {})
-        # Qwen3 may put response in "content" or "reasoning_content"
+        # Qwen3.5-9B may put response in "content" or "reasoning_content"
         content = message.get("content", "") or message.get("reasoning_content", "")
         assert len(content) > 0 or data.get("usage", {}).get("completion_tokens", 0) > 0, \
             f"Response should have content or tokens: {data}"
@@ -126,7 +126,7 @@ class TestLlamaChatCompletion:
                         continue  # Skip malformed SSE lines (expected)
 
             assert len(chunks) > 0, "Should receive at least one chunk"
-            # Chunks should have delta content or reasoning_content (Qwen3)
+            # Chunks should have delta content or reasoning_content (Qwen3.5-9B)
             has_content = any(
                 c.get("choices", [{}])[0].get("delta", {}).get("content") or
                 c.get("choices", [{}])[0].get("delta", {}).get("reasoning_content")
@@ -189,7 +189,7 @@ class TestLlamaChatCompletion:
         )
         assert response.status_code == 200
         message = response.json()["choices"][0]["message"]
-        # Qwen3 may use "content" or "reasoning_content"
+        # Qwen3.5-9B may use "content" or "reasoning_content"
         content = (message.get("content", "") or message.get("reasoning_content", "") or "").lower()
         # Check if the model acknowledged the system instruction in any way
         # A more reliable test: the response should be influenced by the system message
@@ -228,13 +228,12 @@ class TestLlamaServerFeatures:
                 assert flash is True, "Flash attention should be enabled"
 
     def test_speculative_decoding_check(self, llama_client: httpx.Client):
-        """Check if speculative decoding is configured."""
+        """Check speculative decoding status (not used in V3.0.1)."""
         response = llama_client.get("/props", timeout=10.0)
         if response.status_code == 200:
             data = response.json()
-            # Check for draft model configuration
+            # V3.0.1 uses Qwen3.5-9B without spec decode
             draft = data.get("draft_model") or data.get("speculative")
-            # This is informational - speculative decoding is optional
             if draft:
                 print(f"Speculative decoding configured: {draft}")
 
@@ -308,7 +307,7 @@ class TestLlamaChatCompletionAdvanced:
         )
         assert response.status_code == 200
         message = response.json()["choices"][0]["message"]
-        # Qwen3 may use "content" or "reasoning_content"
+        # Qwen3.5-9B may use "content" or "reasoning_content"
         content = message.get("content", "") or message.get("reasoning_content", "") or ""
         # Model should return a response - don't require "Bob" since model may vary
         assert response.status_code == 200, "Multi-turn should work"

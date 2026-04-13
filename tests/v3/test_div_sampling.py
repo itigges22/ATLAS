@@ -77,16 +77,16 @@ class TestAC1B1PerturbationLibrary:
         roles = [p for p in DEFAULT_PERTURBATIONS if p.category == "role"]
         assert len(roles) >= 4, f"Expected >=4 role perturbations, got {len(roles)}"
 
-    def test_instruction_category_has_at_least_3(self):
+    def test_instruction_category_has_at_least_4(self):
         instr = [p for p in DEFAULT_PERTURBATIONS if p.category == "instruction"]
-        assert len(instr) >= 3, (
-            f"Expected >=3 instruction perturbations, got {len(instr)}"
+        assert len(instr) >= 4, (
+            f"Expected >=4 instruction perturbations, got {len(instr)}"
         )
 
-    def test_style_category_has_at_least_3(self):
+    def test_style_category_has_at_least_4(self):
         styles = [p for p in DEFAULT_PERTURBATIONS if p.category == "style"]
-        assert len(styles) >= 3, (
-            f"Expected >=3 style perturbations, got {len(styles)}"
+        assert len(styles) >= 4, (
+            f"Expected >=4 style perturbations, got {len(styles)}"
         )
 
     def test_all_perturbations_have_text(self):
@@ -100,8 +100,8 @@ class TestAC1B1PerturbationLibrary:
     def test_class_reports_correct_counts(self, ds_enabled):
         counts = ds_enabled.get_category_counts()
         assert counts.get("role", 0) >= 4
-        assert counts.get("instruction", 0) >= 3
-        assert counts.get("style", 0) >= 3
+        assert counts.get("instruction", 0) >= 4
+        assert counts.get("style", 0) >= 4
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ class TestAC1B4Improvement:
         categories = ds_enabled.get_category_counts()
         assert len(categories) >= 3, "Need at least 3 categories"
         for cat, count in categories.items():
-            assert count >= 3, f"Category {cat} has only {count} perturbations"
+            assert count >= 4, f"Category {cat} has only {count} perturbations"
 
 
 # ---------------------------------------------------------------------------

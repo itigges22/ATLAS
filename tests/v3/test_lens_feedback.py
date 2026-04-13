@@ -23,7 +23,7 @@ def telemetry_dir(tmp_path):
 
 @pytest.fixture
 def dummy_embedding():
-    return [0.1] * 5120
+    return [0.1] * 4096
 
 
 def make_collector(telemetry_dir, enabled=True, interval=5, min_pass=2,

@@ -231,7 +231,7 @@ class TestPhase4Performance:
         elapsed = time.time() - start
         print(f"\n3-domain retrain cycle: {elapsed:.1f}s")
 
-        # Small dim should be very fast; 5120-dim target is < 5 min
+        # Small dim should be very fast; 4096-dim target is < 5 min
         assert elapsed < 60, f"Retrain cycle took {elapsed:.1f}s"
 
 

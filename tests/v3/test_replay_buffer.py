@@ -404,9 +404,9 @@ class TestReplayBufferEdgeCases:
 
 class TestStorageOverhead:
     def test_full_buffer_size_estimate(self):
-        """Verify 5000 entries with 5120-dim embeddings fit under 50 MiB compressed."""
-        # Each entry: 5120 floats * ~8 chars each + overhead ≈ 45KB per entry
-        # 5000 * 45KB ≈ 225MB raw JSON (too large)
+        """Verify 5000 entries with 4096-dim embeddings fit under 50 MiB compressed."""
+        # Each entry: 4096 floats * ~8 chars each + overhead ≈ 36KB per entry
+        # 5000 * 36KB ≈ 180MB raw JSON (too large)
         # But in practice, embeddings compress well with gzip
         # For now just verify the in-memory structure is reasonable
         buf = ReplayBuffer(max_size=100)

@@ -38,7 +38,7 @@ IN_CLUSTER = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token
 
 if IN_CLUSTER:
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://api-portal:3000")
-    RAG_API_URL = os.environ.get("RAG_API_URL", "http://geometric-lens:8001")
+    RAG_API_URL = os.environ.get("RAG_API_URL", "http://geometric-lens:8099")
     LLAMA_URL = os.environ.get("LLAMA_URL", "http://llama-service:8000")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://llm-proxy:8000")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
@@ -106,7 +106,7 @@ if _HAS_INFRA_DEPS:
 
     @pytest.fixture(scope="session")
     def rag_api_client() -> Generator:
-        """HTTP client for RAG API service."""
+        """HTTP client for Geometric Lens service."""
         with httpx.Client(base_url=RAG_API_URL, timeout=DEFAULT_TIMEOUT) as client:
             yield client
 

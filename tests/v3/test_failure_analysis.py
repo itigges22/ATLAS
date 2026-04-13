@@ -44,7 +44,7 @@ class MockLLM:
 class MockEmbed:
     """Mock embedding callable that returns fixed-size vectors."""
 
-    def __init__(self, dim: int = 5120):
+    def __init__(self, dim: int = 4096):
         self.dim = dim
         self.calls: list = []
 

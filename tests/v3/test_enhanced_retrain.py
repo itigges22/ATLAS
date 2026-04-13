@@ -327,7 +327,7 @@ class TestRetrainPerformance:
         elapsed = time.time() - start
 
         # Small dim model should be very fast (<10s)
-        # Full 5120-dim model target is <5 minutes
+        # Full 4096-dim model target is <5 minutes
         assert elapsed < 30, f"Retrain took {elapsed:.1f}s (target <30s for small model)"
 
 

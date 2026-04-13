@@ -320,7 +320,7 @@ class TestEWCPersistence:
             assert os.path.exists(path)
 
     def test_storage_size(self):
-        """AC-4A-EWC-3: EWC storage < 30 MB for full 5120-dim model."""
+        """AC-4A-EWC-3: EWC storage < 30 MB for full 4096-dim model."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "ewc_state.pt")
 
@@ -335,11 +335,11 @@ class TestEWCPersistence:
             size_bytes = os.path.getsize(path)
             n_params = sum(p.numel() for p in model.parameters())
 
-            # Scale estimate for 5120-dim model (~2.7M params):
+            # Scale estimate for 4096-dim model (~2.2M params):
             # Each param stored twice (Fisher + reference) * 4 bytes = 8 bytes/param
-            # 2.7M * 8 = ~22 MB, well under 30 MB
+            # 2.2M * 8 = ~18 MB, well under 30 MB
             bytes_per_param = size_bytes / n_params
-            estimated_full_size_mb = bytes_per_param * 2_700_000 / (1024 * 1024)
+            estimated_full_size_mb = bytes_per_param * 2_200_000 / (1024 * 1024)
             assert estimated_full_size_mb < 30, f"Estimated full size: {estimated_full_size_mb:.1f} MB"
 
 
@@ -373,7 +373,7 @@ class TestEWCStats:
 class TestEWCPerformance:
     def test_fisher_computation_speed(self):
         """AC-4A-EWC-2: Fisher should compute in < 60s for small model.
-        Full 5120-dim model tested separately if needed."""
+        Full 4096-dim model tested separately if needed."""
         model = make_model(dim=64)
         embeddings, labels = make_data(n=100, dim=64)
 

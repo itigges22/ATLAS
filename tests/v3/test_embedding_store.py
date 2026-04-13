@@ -51,15 +51,15 @@ class TestEmbeddingStore:
         with tempfile.NamedTemporaryFile(suffix=".emb", delete=False) as f:
             path = Path(f.name)
 
-        emb = [float(i) * 0.001 for i in range(5120)]  # real dim
+        emb = [float(i) * 0.001 for i in range(4096)]  # real dim (Qwen3.5-9B)
         with EmbeddingWriter(path) as writer:
             writer.write("LCB_3033", 0, "PASS", emb)
 
         reader = EmbeddingReader(path)
         records = reader.read_all()
         assert len(records) == 1
-        assert len(records[0]["embedding"]) == 5120
-        assert abs(records[0]["embedding"][5119] - 5.119) < 0.001
+        assert len(records[0]["embedding"]) == 4096
+        assert abs(records[0]["embedding"][4095] - 4.095) < 0.001
 
         path.unlink()
 
