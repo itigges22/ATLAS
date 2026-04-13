@@ -333,7 +333,7 @@ scripts/verify-install.sh
 Any NVIDIA GPU with 16GB+ VRAM and CUDA support. Tested on:
 - RTX 5060 Ti 16GB (primary development GPU)
 
-AMD and Intel GPUs are not supported (llama.cpp CUDA backend required).
+AMD and Intel GPUs are not yet tested. llama.cpp supports ROCm and other backends — ROCm support is a V3.1 priority.
 
 ---
 

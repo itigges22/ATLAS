@@ -7,20 +7,19 @@ System architecture for ATLAS V3.0.1. Two-layer design: an outer agent loop hand
 ## 1. System Overview
 
 ```mermaid
-graph TB
-    User["User"] --> Aider["Aider (TUI)"]
-    Aider <-->|"OpenAI-compatible API\nSSE stream"| Proxy["atlas-proxy\n(Go, port 8090)"]
+graph LR
+    User["User"] --> Aider["Aider"] --> Proxy["atlas-proxy\n:8090"]
 
-    subgraph outer["Outer Layer: Agent Loop"]
-        Proxy -->|"response_format: json_object\ngrammar-constrained"| LLM["llama-server\n(C++, port 8080)\nQwen3.5-9B-Q6_K\nCUDA + grammar"]
-        Proxy -->|"T2 write_file / edit_file"| V3Service["v3-service\n(Python, port 8070)\nV3 Pipeline"]
+    subgraph outer["Outer Layer"]
+        Proxy -->|"grammar JSON"| LLM["llama-server\n:8080"]
+        Proxy -->|"T2 files"| V3Service["v3-service\n:8070"]
     end
 
-    subgraph inner["Inner Layer: V3 Pipeline"]
-        V3Service -->|"PlanSearch, DivSampling\nBudget Forcing, PR-CoT"| LLM
-        V3Service -->|"C(x)/G(x) scoring\nembedding extraction"| Lens["geometric-lens\n(Python, port 8099)\nCost Field + XGBoost"]
-        V3Service -->|"build verification\ntest execution"| Sandbox["sandbox\n(Python, port 30820)\n8 languages"]
-        Lens -->|"embedding requests"| LLM
+    subgraph inner["Inner Layer"]
+        V3Service --> LLM
+        V3Service --> Lens["geometric-lens\n:8099"]
+        V3Service --> Sandbox["sandbox\n:30820"]
+        Lens --> LLM
     end
 
     style User fill:#333,color:#fff
@@ -54,36 +53,20 @@ The proxy receives chat completion requests from Aider and runs an internal agen
 
 ```mermaid
 graph LR
-    subgraph proxy["atlas-proxy internal components"]
-        direction TB
-        subgraph core["Core Loop"]
-            Grammar["Grammar Engine\njson_object + GBNF schema"]
-            AgentLoop["Agent Loop\nturn mgmt, msg trimming"]
-            TierClass["Tier Classifier\nT0-T3 heuristics"]
-        end
-        subgraph tools["Tool Layer"]
-            ReadF["read_file"]
-            WriteF["write_file\n→ V3 for T2"]
-            EditF["edit_file\nold_str/new_str"]
-            DeleteF["delete_file"]
-            RunCmd["run_command\n5 min cap"]
-            SearchF["search_files\nregex, 200 max"]
-            ListDir["list_directory"]
-            PlanT["plan_tasks\nparallel, topo sort"]
-        end
-        subgraph pipeline["Verify-Repair"]
-            VR["Verify-Repair Loop\nscore → sandbox → fix × 3"]
-            BOK["Best-of-K\nparallel candidates"]
-            BV["Build Verifier\nper-language syntax"]
-        end
-        subgraph format["I/O"]
-            AiderFmt["Aider Formatter\nwhole-file output"]
-            V3Adapt["V3 Adapter\nconstraint extraction"]
-            V3Bridge["V3 Bridge\nSSE streaming"]
-            ProjDet["Project Detector\nlang, framework, cmds"]
-            Perms["Permissions\nallow/deny patterns"]
-        end
+    subgraph core["Core Loop"]
+        Grammar["Grammar"] --> AgentLoop["Agent Loop"] --> TierClass["Tier Classifier"]
     end
+    subgraph tools["Tools"]
+        ReadF["read_file"] ~~~ WriteF["write_file"] ~~~ EditF["edit_file"] ~~~ RunCmd["run_command"]
+    end
+    subgraph pipeline["Verify-Repair"]
+        VR["Verify-Repair"] --> BOK["Best-of-K"] --> BV["Build Verifier"]
+    end
+    subgraph format["I/O"]
+        AiderFmt["Aider Fmt"] --> V3Bridge["V3 Bridge"] --> ProjDet["Project Detector"]
+    end
+
+    core --> tools --> pipeline --> format
 
     style core fill:#1a3a5c,color:#fff
     style tools fill:#333,color:#fff
@@ -94,33 +77,23 @@ graph LR
 ### Agent Loop Flow
 
 ```mermaid
-flowchart TD
-    Start["Aider sends message"] --> Build["Build system prompt\n(/nothink + tools + project context)"]
-    Build --> Schema["Generate JSON schema\nfrom tool registry"]
-    Schema --> Call["Call llama-server\nresponse_format: json_object"]
-    Call --> Parse["Parse constrained JSON response"]
-    Parse --> Route{Response type?}
+flowchart LR
+    Start["Aider msg"] --> Build["Build prompt"] --> Call["llama-server"] --> Parse["Parse JSON"]
+    Parse --> Route{Type?}
 
-    Route -->|"tool_call"| Tier{"T2 file?"}
-    Tier -->|"Yes"| V3["Route to V3 Pipeline"]
-    Tier -->|"No"| Exec["Execute tool directly"]
-    V3 --> Result["Append result to messages"]
-    Exec --> Result
-    Result --> Budget{"Exploration\nbudget?"}
-    Budget -->|"< 4 reads"| Call
-    Budget -->|"4 reads"| Warn["Inject: write your changes now"] --> Call
-    Budget -->|"5+ reads"| Skip["Skip read, inject warning"] --> Call
+    Route -->|"tool_call"| Tier{"T2?"}
+    Tier -->|"Yes"| V3["V3 Pipeline"] --> Result["Append result"]
+    Tier -->|"No"| Exec["Execute tool"] --> Result
+    Result --> Budget{"Budget?"}
+    Budget -->|"< 4"| Call
+    Budget -->|"4"| Warn["Nudge: write now"] --> Call
+    Budget -->|"5+"| Skip["Skip read"] --> Call
 
-    Route -->|"text"| Stream["Stream text to Aider"] --> Call
-    Route -->|"done"| Done["Stream summary, end"]
-
-    Call --> ErrCheck{"3 consecutive\nfailures?"}
-    ErrCheck -->|"Yes"| Stop["Stop: too many failures"]
-    ErrCheck -->|"No"| Parse
+    Route -->|"text"| Stream["Stream"] --> Call
+    Route -->|"done"| Done["End"]
 
     style Start fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
-    style Stop fill:#5c1a1a,color:#fff
     style V3 fill:#2d5016,color:#fff
 ```
 
@@ -196,47 +169,24 @@ Activates inside `write_file`/`edit_file` executors for T2+ files. The pipeline 
 ### Pipeline Flow
 
 ```mermaid
-flowchart TD
-    Entry["T2 file detected"] --> Probe["Phase 0: Probe\nlight tier (1024 thinking)"]
-    Probe --> ProbeRetry{"Probe\nfailed?"}
-    ProbeRetry -->|"Yes"| Standard["Retry: standard tier\n(2048 thinking)"]
-    ProbeRetry -->|"No"| Score1
+flowchart LR
+    Entry["T2 detected"] --> Probe["Probe"] --> Score1["C(x)/G(x)"] --> SB1["Sandbox"]
+    SB1 --> Pass1{"Pass?"}
+    Pass1 -->|"Yes"| Done["Done"]
 
-    Standard --> StdRetry{"Still\nfailed?"}
-    StdRetry -->|"Yes"| NoThink["Retry: /nothink\n(0 thinking)"]
-    StdRetry -->|"No"| Score1
+    Pass1 -->|"No"| PS["PlanSearch"] --> DS["DivSampling"] --> BF["BudgetForcing"] --> Build["Build Check"] --> Score2["Score K"] --> SB2["Test K"]
 
-    NoThink --> Score1["C(x)/G(x) Score\n+ Self-test generation"]
-    Score1 --> SB1["Sandbox test probe"]
-    SB1 --> Pass1{"Probe\npassed?"}
-    Pass1 -->|"Yes"| Done["Return winning code"]
+    SB2 --> AnyPass{"Passed?"}
+    AnyPass -->|"2+"| SStar["S* Tiebreak"] --> Done
+    AnyPass -->|"1"| Select["Lens Select"] --> Done
 
-    Pass1 -->|"No"| Alloc["Phase 2: BlendASC\nAdaptive K allocation"]
-    Alloc --> PS["Phase 1: PlanSearch\n(3 structural plans)"]
-    PS --> DS["DivSampling\n(12 perturbations:\n4 role + 4 instruction + 4 style)"]
-    DS --> BF["Budget Forcing\n(5 tiers: nothink → extreme)"]
-    BF --> Build["Build Verification\n(per-language syntax check)"]
-    Build --> Score2["C(x)/G(x) Score all K"]
-    Score2 --> SB2["Sandbox test all K"]
-
-    SB2 --> AnyPass{"Any\npassed?"}
-    AnyPass -->|"2+ passed"| SStar["S* Tiebreaking\n(edge-case differential testing)"]
-    AnyPass -->|"1 passed"| Select["Lens Selection\n(lowest C(x) energy)"]
-    SStar --> Done
-    Select --> Done
-
-    AnyPass -->|"0 passed"| FA["Phase 3: Failure Analysis\n(categorize failures)"]
-    FA --> Meta["Metacognitive Evaluation\n(inject compensating constraints)"]
-    Meta --> PRCOT["PR-CoT Repair\n(4 perspectives x analysis + repair\n= 8 LLM calls)"]
-    PRCOT --> PRPass{"PR-CoT\npassed?"}
+    AnyPass -->|"0"| FA["Failure Analysis"] --> PRCOT["PR-CoT"]
+    PRCOT --> PRPass{"Pass?"}
     PRPass -->|"Yes"| Done
-
-    PRPass -->|"No"| Refine["Refinement Loop\n(constraint refinement + code gen\n2 iterations, 5+ LLM calls each)"]
-    Refine --> RefPass{"Refinement\npassed?"}
+    PRPass -->|"No"| Refine["Refinement"]
+    Refine --> RefPass{"Pass?"}
     RefPass -->|"Yes"| Done
-
-    RefPass -->|"No"| Derive["Derivation Chains\n(decompose into sub-problems\nsandbox-verify each step\n7+ LLM calls)"]
-    Derive --> Done
+    RefPass -->|"No"| Derive["Derivation"] --> Done
 
     style Entry fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
@@ -255,7 +205,6 @@ flowchart TD
     style Refine fill:#5c3a1a,color:#fff
     style Derive fill:#5c3a1a,color:#fff
     style FA fill:#5c3a1a,color:#fff
-    style Meta fill:#5c3a1a,color:#fff
 ```
 
 Legend: blue = generation, green = verification/selection, brown = repair.
@@ -299,26 +248,24 @@ Wait injection appends "Wait, let me reconsider.\n" to force longer thinking. Ti
 19 Python modules in `benchmark/v3/` orchestrated by `v3-service/main.py`:
 
 ```mermaid
-graph TD
-    Main["v3-service/main.py\nHTTP wrapper + pipeline orchestrator"]
-
-    Main --> PS["plan_search.py\nPlanSearch (1A)\n3 plans, 3-step pipeline"]
-    Main --> DS["div_sampling.py\nDivSampling (1B)\n12 perturbations"]
-    Main --> BF["budget_forcing.py\nBudgetForcing (1C)\n5 tiers, Wait injection"]
-    Main --> BASC["blend_asc.py\nBlendASC (2A)\nadaptive K from energy"]
-    Main --> REASC["reasc.py\nReASC (2B)\nearly stopping"]
-    Main --> SSTAR["s_star.py\nS* (2C)\ndifferential tiebreaking"]
-    Main --> CS["candidate_selection.py\n4 strategies:\nlens, random, logprob, oracle"]
-    Main --> FA["failure_analysis.py\nFailureAnalyzer (3A)\n6 failure categories"]
-    Main --> CR["constraint_refinement.py\nConstraintRefiner (3B)\ncosine distance filtering"]
-    Main --> PRCOT["pr_cot.py\nPR-CoT (3C)\n4 perspectives"]
-    Main --> DC["derivation_chains.py\nDerivationChains (3D)\nsub-problem decomposition"]
-    Main --> RL["refinement_loop.py\nRefinementLoop (3E)\norchestrator"]
-    Main --> MC["metacognitive.py\nMetacognitiveProfile (3F)\nfailure pattern library"]
-    Main --> ACE["ace_pipeline.py\nACE (3G)\nplaybook learning"]
-    Main --> STG["self_test_gen.py\nSelfTestGen\nmodel-generated tests"]
-    Main --> LF["lens_feedback.py\nLensFeedbackCollector\nonline recalibration"]
-    Main --> ES["embedding_store.py\nEmbeddingWriter/Reader\nbinary persistence"]
+graph LR
+    Main["main.py"] --> PS["PlanSearch 1A"]
+    Main --> DS["DivSampling 1B"]
+    Main --> BF["BudgetForcing 1C"]
+    Main --> BASC["BlendASC 2A"]
+    Main --> REASC["ReASC 2B"]
+    Main --> SSTAR["S* 2C"]
+    Main --> CS["CandidateSelection"]
+    Main --> FA["FailureAnalysis 3A"]
+    Main --> CR["ConstraintRefiner 3B"]
+    Main --> PRCOT["PR-CoT 3C"]
+    Main --> DC["DerivationChains 3D"]
+    Main --> RL["RefinementLoop 3E"]
+    Main --> MC["Metacognitive 3F"]
+    Main --> ACE["ACE 3G"]
+    Main --> STG["SelfTestGen"]
+    Main --> LF["LensFeedback"]
+    Main --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR
@@ -327,7 +274,6 @@ graph TD
     REASC --> BF
     LF --> BASC
     LF --> BF
-    CR -.->|"cosine distance"| FA
 
     style Main fill:#333,color:#fff
     style PS fill:#1a3a5c,color:#fff
@@ -355,7 +301,17 @@ Legend: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 
 
 ## 5. Geometric Lens
 
-Neural scoring system that evaluates code quality without executing it. Runs entirely on CPU. Also serves as the RAG API for project indexing, retrieval, confidence routing, and pattern caching.
+Neural scoring system that evaluates code quality without executing it by analyzing the geometric structure of model embeddings. Runs entirely on CPU. Also serves as the RAG API for project indexing, retrieval, confidence routing, and pattern caching.
+
+#### Why "Geometric Lens"?
+
+The core idea behind the Geometric Lens comes from a simple premise: stop scaling models and start wrapping them in intelligent infrastructure. Jose Crespo's ["Everyone's Wrong About AI Programming"](https://www.josecrespophd.org/p/everyones-wrong-about-ai-programming) argues that AI-generated code drifts toward errors because current LLMs operate in flat embedding spaces where correct and incorrect code paths cost the same. The solution is to build an energy landscape around the model where correct code is "downhill" and incorrect code is "uphill."
+
+Anthropic's [Manipulating Manifolds](https://transformer-circuits.pub/2025/linebreaks/index.html) research provides evidence that transformers already create manipulable geometric structures in their embedding space - the raw material is already there. Bar et al.'s [Geometric Unification of Generative AI](https://arxiv.org/html/2510.00666v1) formalizes how distance functions on data manifolds can be learned and used for scoring.
+
+ATLAS implements this with two complementary models. C(x) is a learned energy function (4096-to-512-to-128-to-1 MLP) over the model's own embeddings. Each code candidate gets embedded by llama-server, and C(x) scores where it sits in that geometry. Low energy means the candidate clusters with known-correct code. High energy means it clusters with known-incorrect code. No external oracle, no execution required - just the geometry of the model's own representations.
+
+G(x) is the metric tensor - a diagonal tensor in PCA-reduced embedding space that captures how the energy landscape curves in different directions. Where C(x) answers "how good is this candidate?", G(x) answers "which direction should we move to improve it?" The correction engine uses G(x) to compute geometry-aware gradient steps (`-α · G⁻¹ · ∇C`), steering candidates downhill toward correctness along the natural curvature of the manifold rather than taking naive gradient steps. G(x) is implemented and deployed in V3.0.1.
 
 ### Scoring Models
 
@@ -508,12 +464,10 @@ All computation outside of llama-server runs on CPU. The GPU is used exclusively
 ### Docker Compose (Recommended)
 
 ```mermaid
-graph TD
-    LLM["llama-server\n(starts first)"] -->|"healthy"| GL["geometric-lens"]
-    LLM -->|"healthy"| V3["v3-service"]
-    GL -->|"healthy"| AP["atlas-proxy\n(depends on all 4)"]
-    V3 -->|"healthy"| AP
-    SB["sandbox\n(no dependencies)"] -->|"healthy"| AP
+graph LR
+    LLM["llama-server"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
+    LLM -->|"healthy"| V3["v3-service"] -->|"healthy"| AP
+    SB["sandbox"] -->|"healthy"| AP
 
     style LLM fill:#5c1a1a,color:#fff
     style GL fill:#2d5016,color:#fff

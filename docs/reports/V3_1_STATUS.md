@@ -154,8 +154,8 @@
 - **PlanSearch on 9B**: Working. Generates 2 constraint sets + 3 candidates. 9-13K tokens per hard task. 300s timeout.
 - **Full pipeline 5-task**: 5/5 (100%), 3 phase1 + 1 refinement + 1 PlanSearch-contributed
 - **Full pipeline 10-task (verify_maxtok)**: 10/10 (100.0%), 9 phase1 + 1 pr_cot. Zero errors. Both prior timeouts (LCB/1883_C, LCB/1899_B) now pass.
-- **Speed**: Easy tasks ~10-25s (probe with "light" thinking), hard tasks ~5-11 min (2.5x faster than before)
-- **Speed optimizations (2026-03-15)**: Probe "nothink"→"light" tier, Phase 3 budgets reduced (refinement 5→2 iters/120s, PR-CoT 3→2 rounds, derivation 5→3 subproblems), EmbedAdapter retry logic (3x with backoff), Phase 0 C(x) deployed (AUC 0.9467)
-- **Phase 3 empirical (9B)**: 0% success rate on 60-task gx-phase1 run (PR-CoT 0/15, refinement 0/15, derivation 0/16). Budgets reduced to minimize waste without removing capability.
+- **Speed**: Easy tasks ~10-25s (probe with "standard" thinking), hard tasks ~5-11 min (2.5x faster than before)
+- **Speed optimizations (2026-03-15)**: EmbedAdapter retry logic (3x with backoff), Phase 0 C(x) deployed (AUC 0.9467). Phase 3 defaults unchanged: refinement 2 iters/120s, PR-CoT 3 rounds, derivation 5 subproblems. Probe uses "standard" tier (2048 tokens).
+- **Phase 3 empirical (9B)**: 0% success rate on 60-task gx-phase1 run (PR-CoT 0/15, refinement 0/15, derivation 0/16).
 - **Embedding storage fixed**: EmbedAdapter retry logic produces 3.0 embeddings/task (was 0.3/task before)
 - **Disk**: ~20 GB free on /home
