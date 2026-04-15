@@ -2,6 +2,9 @@
   <img src="docs/images/banner.png" alt="ATLAS Banner"/>
 </p>
 
+<h1 align="center">A.T.L.A.S.</h1>
+<p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
+
 <p align="center">
   <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
@@ -15,10 +18,13 @@
   <a href="docs/lang/ko/README.md"><img src="https://img.shields.io/badge/문서-한국어-orange" alt="한국어"/></a>
 </p>
 
-<h1 align="center">A.T.L.A.S.</h1>
-<p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
-ATLAS is a fully self-hosted coding assistant powered by intelligent inference infrastructure. We wrap a frozen local model in constraint-driven generation, energy-based verification, and self-verified repair - no fine-tuning, no API calls, no cloud. ATLAS exists to prove that meaningful AI tooling doesn't require frontier models, cloud APIs, or massive budgets - just smart infrastructure around capable open-weight models.
+## 🌎 What is ATLAS?
+ATLAS is a self-hosted coding assistant built on intelligent inference infrastructure. You point it at an open-weight model running locally, and it turns that model into something that competes with frontier systems, with no fine-tuning, no API calls, and no cloud in between.
+
+Instead of training a larger model or routing to a hosted one, ATLAS wraps a frozen local model in a pipeline that plans before generating, verifies its own output against constraints it extracts from the problem, scores candidates with an energy-based lens, and repairs failures through self-generated test feedback. The weights never change. The intelligence lives in the scaffolding around them.
+
+The result is a serious coding assistant that runs on a single consumer GPU for fractions of a cent per task. Nothing leaves your machine, no vendor can pull the model out from under you, and the entire stack is open source. One model, one GPU, no one else's infrastructure in the loop.
 
 ---
 
