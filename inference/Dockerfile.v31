@@ -1,4 +1,16 @@
 FROM docker.io/nvidia/cuda:12.9.0-devel-rockylinux9 AS builder
+# CUDA compute capability of the target GPU. Override at build time:
+#   podman build --build-arg CUDA_ARCH=89 -f Dockerfile.v31
+# Common values:
+#   60,61 = Pascal (GTX 10xx, Tesla P4/P40)
+#   70    = Volta (V100)
+#   75    = Turing (RTX 20xx, T4)
+#   80,86 = Ampere (A100, RTX 30xx)
+#   89    = Ada Lovelace (RTX 40xx, L4)
+#   90    = Hopper (H100)
+#   100,120,121 = Blackwell (B100, RTX 50xx)
+# Multiple archs can be passed semicolon-separated, e.g. "86;89;90".
+ARG CUDA_ARCH=120;121
 RUN dnf install -y git cmake gcc-c++ && dnf clean all
 # Use /llama.cpp/tmp for build temp to avoid /tmp space exhaustion
 ENV TMPDIR=/llama.cpp/tmp
@@ -10,7 +22,7 @@ RUN git clone https://github.com/ggml-org/llama.cpp /llama.cpp && \
     # If the patch target line doesn't exist in newer versions, the sed is a no-op.
     sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
         tools/server/server-context.cpp 2>/dev/null || true && \
-    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="120;121" && \
+    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" && \
     cmake --build build --config Release -j5
 
 FROM docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9

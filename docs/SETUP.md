@@ -335,6 +335,34 @@ Any NVIDIA GPU with 16GB+ VRAM and CUDA support. Tested on:
 
 AMD and Intel GPUs are not yet tested. llama.cpp supports ROCm and other backends — ROCm support is a V3.1 priority.
 
+#### CUDA Compute Capability (Dockerfile.v31)
+
+`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default is `120;121` (Blackwell, RTX 50xx). If you see build failures like `nvcc fatal: unsupported gpu architecture` or runtime errors like `no kernel image available for execution`, your GPU needs a different arch.
+
+Override at build time with `--build-arg CUDA_ARCH=<value>`:
+
+```bash
+# Single arch — RTX 4060/4070/4080/4090 (Ada Lovelace)
+podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
+
+# Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
+podman build --build-arg CUDA_ARCH="86;89;90" -f inference/Dockerfile.v31 -t llama-server:local inference/
+```
+
+Common values:
+
+| Arch | Architecture | Cards |
+|------|--------------|-------|
+| `60`, `61` | Pascal | GTX 10xx, Tesla P4/P40 |
+| `70` | Volta | V100 |
+| `75` | Turing | RTX 20xx, T4 |
+| `80`, `86` | Ampere | A100, RTX 30xx |
+| `89` | Ada Lovelace | RTX 40xx, L4 |
+| `90` | Hopper | H100 |
+| `100`, `120`, `121` | Blackwell | B100, RTX 50xx |
+
+Your GPU's compute capability: `nvidia-smi --query-gpu=compute_cap --format=csv` (drop the dot — `8.9` → `89`).
+
 ---
 
 ## Geometric Lens Weights (Optional)
