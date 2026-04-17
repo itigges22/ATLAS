@@ -92,7 +92,7 @@ ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or 
 ## ⚠️ Known Limitations
 
 - **Tested on NVIDIA only** - ATLAS uses llama.cpp for inference, which supports multiple accelerator backends. ROCm support is a V3.1 priority.
-- **9B model not formally benchmarked** - the CLI ships Qwen3.5-9B with the full V3 pipeline, but formal LiveCodeBench scores are from the 14B model. 9B benchmarks are V3.1 work.
+- **9B model not formally benchmarked** - the CLI ships Qwen3.5-9B with the full V3 pipeline, but formal LiveCodeBench scores are from the 14B model. 9B benchmarks are V3.1 work. For the V3 (14B) benchmark results, methodology, and ablation analysis, see [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw benchmark traces are published on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 - **Complex feature additions can fail** - adding features to existing projects succeeds ~67% of the time. The model sometimes over-explores instead of writing code.
 - **Grammar-constrained inference speed** - ~51 tok/s on llama-server. Faster grammar integration is planned for V3.1.
 
