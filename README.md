@@ -110,10 +110,14 @@ ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or 
 **V3.0.1** - Current release. Interactive CLI, Docker Compose deployment, V3 pipeline integration.
 
 **V3.1** - In progress.
-- ROCm support - AMD GPU inference via llama.cpp ROCm backend
-- Formal 9B benchmarks - LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B
-- CLI reliability - expanded testing, targeting L6 ≥ 90%
-- Grammar speed - C-side sampler chain for faster constrained decoding
+- ROCm support - AMD GPU inference via llama.cpp ROCm backend.
+- Formal 9B benchmarks - LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B.
+- CLI reliability - expanded testing, targeting L6 ≥ 90%.
+- Grammar speed - C-side sampler chain for faster constrained decoding.
+- Structural code reasoning - tree-sitter + solver-backed (Prolog or Z3) call graph for reachability queries, scoped context injection, and real cyclomatic complexity. **Bottleneck it solves:** L6 tasks (modifying existing codebases) currently burn agent turns and tokens as the model manually explores unfamiliar projects through the MCP loop. A call graph with canned reachability queries ("who calls X?", "is this path reachable from main?") lets the pipeline skip the exploration and hand the model a scoped context window instead. Also upgrades tier classification from pattern matching to true complexity and lets candidate verification catch structural bugs the sandbox can't. Language-dependent — ships with Python and JS/TS adapters, pluggable rules for others. Inspired by [Dmitri Sotnikov's chiasmus](https://github.com/yogthos/chiasmus/tree/main).
+
+**V3.2** - Exploratory.
+- [Reasoning with Sampling](https://arxiv.org/abs/2510.14901) - MCMC over logits during decoding so bad token trajectories are pruned before completion. **Bottleneck it solves:** today every PlanSearch candidate runs to the full 8K-token budget before the Geometric Lens can score and reject it, which wastes compute on trajectories that were already going off the rails at token 500. In-generation backtracking kills bad candidates early; the saved compute buys more attempts at harder problems. Complementary to G(x)'s post-hoc ranking — token-block level pruning vs whole-candidate level selection. Requires DeltaNet state checkpoint/restore in our patched llama.cpp (hybrid architecture has a non-trivially reversible recurrent state, so it's inference-only but more invasive than a sampler tweak).
 
 ---
 
