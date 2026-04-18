@@ -36,6 +36,9 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
 - **2026-03-29** - ["A $500 GPU Just Outscored Claude Sonnet on Coding Benchmarks"](https://aivy.com.au/news/atlas-500-gpu-outperforms-claude-sonnet-coding/) - Aivy
 - **2026-03-28** - ["Why a $500 GPU Can Beat Claude Sonnet on Coding Benchmarks"](https://medium.com/data-science-collective/why-a-500-gpu-can-beat-claude-sonnet-on-coding-benchmarks-6c8169ffe4fe) - Data Science Collective
 - **2026-03-27** - ["ATLAS: A $500 GPU Outperforms Claude Sonnet"](https://clauday.com/article/b92c5551-b490-4d76-ae3d-d8dedf10d88b) - Clauday
+- **2026-03-27** - ["ATLAS – lokal AI-koding på 5000kr GPU slår Claude på benchmark"](https://www.jansverre.net/atlas-lokal-ai-koding-pa-500-gpu-slar-claude-pa-benchmark/) - jansverre.net (Norwegian)
+- **2026-03-26** - ["Local LLM Coding: $500 GPU Beats Claude: Not the Story"](https://novaknown.com/2026/03/26/local-llm-coding/) - Sarah Fraser, novaknown.com
+- **2026-03-26** - ["ATLAS: How a $500 GPU Achieves 74.6% LiveCodeBench Performance Through Intelligent Infrastructure"](https://techplanet.today/post/atlas-how-a-500-gpu-achieves-746-livecodebench-performance-through-intelligent-infrastructure) - TechPlanet
 - **2026-03-26** - [Hacker News front page](https://news.ycombinator.com/item?id=47533297) - 489 points, 285 comments
 - **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
@@ -86,7 +89,7 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
   - b. [Streaming output](docs/CLI.md#how-streaming-works) - real-time response via SSE
   - c. [Project-aware context](docs/CLI.md#proxy-file-access) - automatic file discovery and injection
 
-Full documentation - setup guides, architecture, configuration, troubleshooting, benchmark reports, and the [research that informs each component](docs/sources.md) - lives in the [docs/](docs/) directory.
+Full documentation - setup guides, architecture, configuration, troubleshooting, benchmark reports, and the [research that informs each component](docs/SOURCES.md) - lives in the [docs/](docs/) directory.
 
 ---
 
