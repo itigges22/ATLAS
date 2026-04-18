@@ -62,11 +62,20 @@ V3.0.1 ships C(x) (MLP cost field) and G(x) (XGBoost quality prediction).
 
 ### Pattern Cache & Memory (shipped)
 
-The V3.0.1 Confidence Router uses a pattern cache with tiered decay (CACHE_HIT / FAST_PATH / STANDARD / HARD_PATH).
+The V3.0.1 Confidence Router uses a pattern cache with tiered decay (CACHE_HIT / FAST_PATH / STANDARD / HARD_PATH), co-occurrence graph, and STM→LTM promotion.
 
 - **Ebbinghaus, 1885.** *Über das Gedächtnis* (On Memory). The forgetting curve — memory strength decays roughly exponentially with time. Underlies the tiered decay schedule.
 - **ACT-R** (Anderson et al.). Adaptive Control of Thought-Rational. ~30-day half-life for activation — numeric baseline for cache decay.
 - **Luhmann, N.** *Zettelkasten System.* Knowledge management via displacement and organic pruning — conceptual model for cache eviction.
+- **Behrouz et al. (Google Research), 2025.** *Titans: Learning to Memorize at Test Time.* arXiv [2501.00663](https://arxiv.org/abs/2501.00663). Surprise-based memory. **Implemented in V3.0.1** via category-surprise momentum in `geometric-lens/cache/consolidator.py`.
+- **Park et al., 2025.** *Memoria: Human-Inspired Memory Architecture.* arXiv [2310.03052](https://arxiv.org/abs/2310.03052). Hebbian learning + lifespan-based memory. **Implemented in V3.0.1** via the `Count(i,j) / Count(i,i)` edge-weight formulation in `geometric-lens/cache/co_occurrence.py` and the STM→LTM promotion criteria in `consolidator.py`.
+
+### Lens Evolution — continual learning (shipped)
+
+Phase 4 of the V3 PRD. V3.0.1 retrains C(x) across domains without wiping prior knowledge using EWC + replay buffer. Code lives in `geometric-lens/geometric_lens/{ewc,replay_buffer,training}.py`; validation in `tests/v3/test_phase4_validation.py`.
+
+- **Kirkpatrick et al., 2017.** *Overcoming Catastrophic Forgetting in Neural Networks (EWC).* PNAS, [doi:10.1073/pnas.1611835114](https://doi.org/10.1073/pnas.1611835114). **Primary citation for V3.0.1 EWC** — diagonal Fisher penalty added during C(x) retraining to protect prior-domain weights.
+- **Lin, 1992 / Parisi et al., 2019.** Experience Replay / continual learning surveys. Basis for the domain-stratified replay buffer that samples representative pass/fail pairs from every domain C(x) has trained on.
 
 ### Design constraints (shipped)
 
@@ -99,14 +108,6 @@ Research that informs planned work. None of these are part of V3.0.1; they are h
 ### V3.2 (exploratory)
 
 - **Karan & Chatterji, 2025.** *Reasoning with Sampling: Your Base Model is Smarter Than You Think.* arXiv [2510.14901](https://arxiv.org/abs/2510.14901). MCMC over logits during decoding — tracked as [issue #40](https://github.com/itigges22/ATLAS/issues/40).
-
-### Future Lens evolution (Phase 4, not yet scheduled)
-
-V3 PRD Phase 4 ("Lens Evolution") is not shipped in V3.0.1. These papers will become active when that phase starts.
-
-- **Kirkpatrick et al., 2017.** *Overcoming Catastrophic Forgetting in Neural Networks (EWC).* PNAS, [doi:10.1073/pnas.1611835114](https://doi.org/10.1073/pnas.1611835114). The retraining recipe for when we update the Lens without wiping prior knowledge.
-- **Behrouz et al. (Google Research), 2025.** *Titans: Learning to Memorize at Test Time.* arXiv [2501.00663](https://arxiv.org/abs/2501.00663). Surprise-based memory — direction for future cache upgrades.
-- **Park et al., 2025.** *Memoria: Human-Inspired Memory Architecture.* arXiv [2310.03052](https://arxiv.org/abs/2310.03052). Hebbian learning + lifespan-based memory — alternative design space for the cache.
 
 ---
 
