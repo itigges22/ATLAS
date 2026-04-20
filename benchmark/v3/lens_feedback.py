@@ -29,7 +29,7 @@ class LensFeedbackConfig:
     retrain_interval: int = 50
     min_pass: int = 5
     min_fail: int = 5
-    rag_api_url: str = "http://geometric-lens.atlas.svc.cluster.local:8001"
+    rag_api_url: str = "http://geometric-lens.atlas.svc.cluster.local:8099"
     domain: str = "LCB"
     use_replay: bool = True
     use_ewc: bool = True
