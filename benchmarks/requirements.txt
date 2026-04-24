@@ -1,0 +1,15 @@
+# ATLAS V3.0.1 Benchmark Suite dependencies
+# Install: pip install -r benchmarks/requirements.txt
+
+# IFEval evaluation (Google)
+langdetect
+nltk
+immutabledict
+absl-py
+
+# IFBench evaluation (Allen AI)
+emoji
+syllapy
+
+# Dataset loading
+pyarrow

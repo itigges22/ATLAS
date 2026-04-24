@@ -10,7 +10,7 @@ from .humaneval import HumanEvalDataset
 from .mbpp import MBPPDataset
 from .evalplus_humaneval import HumanEvalPlusDataset
 from .evalplus_mbpp import MBPPPlusDataset
-from .livecodebench import LiveCodeBenchDataset
+from .livecodebench import LiveCodeBenchDataset, LiveCodeBenchV6Dataset
 from .scicode import SciCodeDataset
 from .gpqa import GPQADiamondDataset
 from .ifbench import IFBenchDataset
@@ -25,4 +25,5 @@ __all__ = [
     "SciCodeDataset",
     "GPQADiamondDataset",
     "IFBenchDataset",
+    "LiveCodeBenchV6Dataset",
 ]

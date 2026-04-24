@@ -94,11 +94,15 @@ from benchmark.v3.embedding_store import EmbeddingWriter
 
 RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
 LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '32735')}")
-# Published Qwen3.5 benchmarks use: temp=0.6, top_k=20, top_p=0.95,
-# max_tokens=32768+, thinking mode enabled. Match their settings.
+# Qwen3.5-9B published sampling for thinking-mode benchmarks.
+# Must stay identical between the baseline runner (benchmarks/v301_runner.py)
+# and this V3 runner so baseline vs ATLAS delta is apples-to-apples.
 MAX_TOKENS = 8192
-BASE_TEMPERATURE = 0.6  # Qwen3.5 recommended for coding with thinking
-DIVERSITY_TEMPERATURE = 0.8  # Slightly higher for candidate diversity
+BASE_TEMPERATURE = 1.0       # Qwen3.5 published (was 0.6; updated 2026-04-18)
+DIVERSITY_TEMPERATURE = 1.2  # Slightly higher than base for candidate diversity
+TOP_P = 0.95
+TOP_K = 20
+PRESENCE_PENALTY = 1.5       # Qwen3.5 published
 
 
 # --- Atomic I/O (reused from v2_runner) ----------------------------------------
@@ -249,7 +253,7 @@ class LLMAdapter:
     _parallel_mode = os.environ.get("ATLAS_LLM_PARALLEL", "0") == "1"
 
     def __init__(self, runner: BenchmarkRunner, max_retries: int = 2,
-                 timeout: int = 900):
+                 timeout: int = 1800):
         self.runner = runner
         self.max_retries = max_retries
         # Scale timeout by parallel tasks — shared GPU bandwidth means each
@@ -361,8 +365,9 @@ class LLMAdapter:
             "cache_prompt": False,
             "stop": ["\n\n\n\n"],
             "n_probs": 1,
-            "top_k": 20,
-            "top_p": 0.95,
+            "top_k": TOP_K,
+            "top_p": TOP_P,
+            "presence_penalty": PRESENCE_PENALTY,
         }
         if seed is not None:
             request_body["seed"] = seed
@@ -483,13 +488,29 @@ class SStarSandboxAdapter:
     def __call__(self, code: str, test_input: str) -> Tuple[bool, str, str]:
         code = wrap_class_solution(code, self.task)
         if self.task.eval_mode == "stdio":
-            # Run with the specific distinguishing input as stdin
-            passed, stdout, stderr, _ = execute_code_stdio(
-                code, [test_input], ["__S_STAR_NO_EXPECTED__"],
-                timeout_sec=self.timeout_sec, memory_mb=self.memory_mb,
-            )
-            # For S*, "passed" means "ran without crash and produced output"
-            ran_ok = bool(stdout.strip()) and not stderr.strip()
+            # Run with the specific distinguishing input as stdin.
+            # We don't check correctness here — S* only cares whether
+            # the code runs and produces output (for tiebreaking).
+            import subprocess, tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                f.write(code)
+                f.flush()
+                try:
+                    proc = subprocess.run(
+                        ['python3', f.name],
+                        input=test_input, capture_output=True, text=True,
+                        timeout=self.timeout_sec,
+                    )
+                    stdout = proc.stdout
+                    stderr = proc.stderr
+                    ran_ok = proc.returncode == 0 and bool(stdout.strip())
+                except subprocess.TimeoutExpired:
+                    stdout, stderr, ran_ok = "", "timeout", False
+                except Exception as e:
+                    stdout, stderr, ran_ok = "", str(e), False
+                finally:
+                    import os
+                    os.unlink(f.name)
             return ran_ok, stdout, stderr
         else:
             # Function mode: test_input is test code
@@ -878,7 +899,7 @@ class V3Pipeline:
                 # PlanSearch does multiple sequential LLM calls (constraint
                 # extraction + plan construction + code gen). Use a longer
                 # timeout to handle long competition prompts at 9B speed.
-                ps_llm = LLMAdapter(self.runner, timeout=300)
+                ps_llm = LLMAdapter(self.runner, timeout=1800)
                 ps_result = self.plan_search.generate(
                     problem=problem_with_context, task_id=task_id,
                     llm_call=ps_llm, num_plans=remaining_k,
@@ -1207,7 +1228,7 @@ class V3Pipeline:
         # --- Strategy 1: PR-CoT quick repair (2-6 LLM calls) ---
         if failing:
             phase3_strategies_tried.append("pr_cot")
-            pr_llm = LLMAdapter(self.runner, timeout=300)
+            pr_llm = LLMAdapter(self.runner, timeout=1800)
             try:
                 best_failing = failing[0]
                 error_msg = best_failing.error_output or "All test cases failed"
@@ -1254,7 +1275,7 @@ class V3Pipeline:
         # --- Strategy 2: Refinement Loop (3-15 LLM calls) ---
         if not result["passed"] and failing:
             phase3_strategies_tried.append("refinement")
-            ref_llm = LLMAdapter(self.runner, timeout=300)
+            ref_llm = LLMAdapter(self.runner, timeout=1800)
             try:
                 ref_result = self.refinement_loop.run(
                     problem=task.prompt,
@@ -1281,7 +1302,7 @@ class V3Pipeline:
         # --- Strategy 3: Derivation Chains (up to 17 LLM calls) ---
         if not result["passed"]:
             phase3_strategies_tried.append("derivation")
-            dc_llm = LLMAdapter(self.runner, timeout=300)
+            dc_llm = LLMAdapter(self.runner, timeout=1800)
             try:
                 failure_context = "; ".join(
                     f"Candidate {c['index']}: {c.get('stderr', 'failed')[:200]}"

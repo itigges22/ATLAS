@@ -1,0 +1,69 @@
+benchmark: ifbench
+section: section_b_instruction_following
+version: "3.0.1"
+
+model:
+  name: Qwen3.5-9B-Q6_K
+  file: Qwen3.5-9B-Q6_K.gguf
+  sha256: 91898433cf5ce0a8f45516a4cc3e9343b6e01d052d01f684309098c66a326c59
+  quantization: Q6_K
+  context_length: 16384
+  parallel_slots: 1
+
+pipeline:
+  name: ATLAS V3.0.1
+  mode: baseline (raw model, natural thinking)
+  components_enabled:
+    plan_search: false
+    budget_forcing: false
+    geometric_lens: false
+  rationale: >
+    Baseline run with natural thinking — matches Qwen's methodology.
+    A subsequent ATLAS pipeline run will use the same thinking config
+    plus PlanSearch, candidate selection, verify-repair, and Lens scoring.
+    Delta = what the pipeline adds over the raw model.
+
+server_config:
+  image: localhost/llama-server:mtp
+  flags:
+    - "--jinja"              # Native template handles <think> tags
+    - "--flash-attn on"
+    - "--parallel 1"
+    - "--cont-batching"
+    - "--embeddings"
+    - "-c 16384"
+    - "-ctk q8_0 -ctv q4_0"
+  not_used:
+    - "--reasoning off"           # Prevents planning, hurts constraint tasks
+    - "--reasoning-budget N"      # Cuts thinking mid-thought, produces garbage
+
+sampling:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192               # Full budget (matches Qwen)
+  thinking_budget: natural       # No cap — server strips <think> blocks
+  seed: 42
+
+evaluation:
+  format: free-form text with verifiable constraints
+  scoring: loose prompt-level accuracy (Qwen's reported metric)
+  scoring_alt: strict prompt-level, instruction-level (both modes)
+  evaluator: official Allen AI IFBench (58 constraint types)
+  ci_method: bootstrap n=1000
+  note: >
+    V3.0.1 uses official allenai/IFBench evaluation library.
+    Earlier custom checker returned 100% false positives on unknown
+    constraint types — fixed in this version.
+
+baseline:
+  source: "Qwen3.5-9B model card (https://huggingface.co/Qwen/Qwen3.5-9B)"
+  score: 64.5
+  conditions: "bf16, thinking mode enabled, 8192 token budget"
+
+hardware:
+  gpu: "NVIDIA GeForce RTX 5060 Ti 16GB"
+  vram_used: "~11 GB"
+  platform: "K3s cluster, llama-server container"
+
+estimated_time: "~60 hours (~12 min/task average with natural thinking)"

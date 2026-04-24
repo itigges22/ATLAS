@@ -1,0 +1,48 @@
+benchmark: livecodebench_v6
+section: section_d_reasoning_coding
+version: "3.0.1"
+
+model:
+  name: Qwen3.5-9B-Q6_K
+  quantization: Q6_K
+
+pipeline:
+  name: ATLAS V3.0.1
+  mode: cli
+  components_enabled:
+    plan_search: true
+    budget_forcing: true
+    geometric_lens: true
+    div_sampling: true
+    blend_asc: true
+    reasc: true
+    s_star: true
+    pr_cot_repair: true
+    refinement_loop: true
+  rationale: >
+    Full V3 pipeline — code generation benchmark evaluated via sandbox.
+    This is how ATLAS is actually used for coding tasks.
+    Uses the existing v3_runner.py with LiveCodeBenchV6Dataset.
+
+sampling:
+  temperature: 0.6
+  diversity_temperature: 0.8
+  max_tokens: 8192
+  seed: 42
+
+evaluation:
+  format: stdin/stdout code execution
+  scoring: pass@1
+  sandbox: K3s sandbox pod (port 30820)
+  ci_method: bootstrap n=1000
+
+baseline:
+  source: "Qwen3.5-9B model card"
+  score: 65.6
+  conditions: "bf16, thinking mode, LCB v6"
+  note: "V3 was measured on v5 (74.6%). v6 is newer problem set."
+
+hardware:
+  gpu: "NVIDIA GeForce RTX 5060 Ti 16GB"
+  vram_used: "~11 GB"
+  platform: "K3s cluster, llama-server + sandbox containers"

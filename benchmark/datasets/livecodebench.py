@@ -272,8 +272,28 @@ class LiveCodeBenchDataset(BaseDataset):
         return "medium"
 
 
+class LiveCodeBenchV6Dataset(LiveCodeBenchDataset):
+    """LiveCodeBench release_v6 (1055 tasks)."""
+
+    CONFIG = "release_v6"
+    FILENAME = "livecodebench_v6.jsonl"
+
+    @property
+    def name(self) -> str:
+        return "livecodebench_v6"
+
+    @property
+    def expected_count(self) -> int:
+        return 1055
+
+
 if __name__ == "__main__":
-    dataset = LiveCodeBenchDataset()
+    import sys
+    version = sys.argv[1] if len(sys.argv) > 1 else "v5"
+    if version == "v6":
+        dataset = LiveCodeBenchV6Dataset()
+    else:
+        dataset = LiveCodeBenchDataset()
     dataset.load()
     print(dataset.summary())
     print(f"\nTotal tasks: {len(dataset)}")

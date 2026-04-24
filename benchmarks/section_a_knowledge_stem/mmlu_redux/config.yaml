@@ -1,0 +1,29 @@
+benchmark: mmlu_redux
+section: section_a_knowledge_stem
+version: "3.0.1"
+
+model:
+  name: Qwen3.5-9B-Q6_K
+  quantization: Q6_K
+
+pipeline:
+  name: ATLAS V3.0.1
+  mode: raw_pipeline
+  thinking: disabled (nothink)
+
+sampling:
+  temperature: 0.6
+  top_p: 0.95
+  max_tokens: 1024
+  seed: 42
+
+evaluation:
+  format: MCQ (A-D, 4 options)
+  scoring: accuracy
+  ci_method: bootstrap n=1000
+  note: "Using edinburgh-dawg/mmlu-redux-2.0 (5700 re-annotated questions)"
+
+baseline:
+  source: "Qwen3.5-9B model card"
+  score: 91.1
+  conditions: "bf16, thinking mode"
