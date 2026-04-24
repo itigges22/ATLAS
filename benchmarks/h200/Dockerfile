@@ -33,7 +33,7 @@ FROM docker.io/nvidia/cuda:12.9.0-runtime-ubuntu22.04
 # Ubuntu 22.04 ships Python 3.10 by default — use it directly (no deadsnakes PPA).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        python3 python3-pip \
+        libgomp1 python3 python3-pip \
         wget curl jq ca-certificates \
         git \
     && rm -rf /var/lib/apt/lists/* \
