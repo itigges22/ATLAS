@@ -1,0 +1,74 @@
+# .dockerignore for the ATLAS benchmark image build.
+#
+# Placed in benchmarks/h200/ so it applies when the Dockerfile is referenced
+# via `-f benchmarks/h200/Dockerfile .` from the repo root.
+#
+# NOTE: podman / docker evaluate .dockerignore relative to the BUILD CONTEXT,
+# not the Dockerfile location. Since we build with "." as the context, the
+# repo root must ALSO have a matching .dockerignore if running from root.
+# Keep this file as a reference and also write root .dockerignore via
+# the build flow; we duplicate patterns in the root for safety.
+
+# Keep the image lean: exclude everything that isn't source code.
+
+# Git / version control
+.git/
+.gitignore
+
+# Benchmark runtime state — we want FRESH runs in the container.
+# Any responses.jsonl, traces, logs, or progress files from prior runs
+# would pollute the container's starting state.
+benchmarks/**/responses.jsonl
+benchmarks/**/responses.jsonl.bak*
+benchmarks/**/responses.jsonl.pre*
+benchmarks/**/traces/
+benchmarks/**/progress.json
+benchmarks/**/results.json
+benchmarks/logs/
+benchmarks/**/REPORT.md
+benchmarks/**/*.cache
+
+# NLTK data gets installed at image-build time via pip — we don't ship
+# local copies.
+benchmarks/**/.nltk_data/
+benchmark/**/.nltk_data/
+
+# Dataset caches — these get re-downloaded from HuggingFace at runtime.
+# Baking the 4.5GB LiveCodeBench v6 cache into the image would be a
+# colossal waste of space and transfer time.
+benchmark/datasets/.cache/
+benchmarks/datasets/.cache/
+**/datasets/.cache/
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+
+# Large artifacts that don't belong in the image
+models/*.gguf
+models/*.bin
+*.tar.gz
+
+# Docs, screenshots, local notes — not needed inside the container
+DELETE_BEFORE_PUSH/
+docs/images/
+*.pdf
+*.docx
+
+# Other parts of the repo the benchmark container doesn't need
+atlas/
+atlas-proxy/
+rag-api/
+geometric-lens/
+sandbox/
+inference/
+tests/
+
+# OS / editor junk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
