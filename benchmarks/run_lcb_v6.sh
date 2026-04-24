@@ -30,7 +30,7 @@ export ATLAS_LCB_VERSION=v6
 
 # Enable parallel task dispatch (server runs --parallel 4)
 export ATLAS_LLM_PARALLEL=1
-export ATLAS_PARALLEL_TASKS=4
+: "${ATLAS_PARALLEL_TASKS:=4}"; export ATLAS_PARALLEL_TASKS
 
 # Run through V3 pipeline
 python -c "

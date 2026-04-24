@@ -38,7 +38,7 @@ for bench in "${BENCHMARKS[@]}"; do
     log="benchmarks/logs/full/${bench}_$(date +%Y%m%d_%H%M%S).log"
     start_time=$(date +%s)
     echo "[$bench] Running full dataset (no task limit)..."
-    BENCHMARK_PARALLEL=4 python -m benchmarks.v301_runner --benchmark $bench > "$log" 2>&1
+    BENCHMARK_PARALLEL=${BENCHMARK_PARALLEL:-4} python -m benchmarks.v301_runner --benchmark $bench > "$log" 2>&1
     end_time=$(date +%s)
     elapsed=$((end_time - start_time))
 
