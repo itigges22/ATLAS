@@ -82,10 +82,19 @@ if ! curl -s "http://localhost:${SERVER_PORT}/health" 2>/dev/null | grep -q ok; 
     exit 1
 fi
 
+# Both runners read LLAMA_URL (not ATLAS_LLM_URL) — keep both for safety.
+export LLAMA_URL="http://localhost:${SERVER_PORT}"
 export ATLAS_LLM_URL="http://localhost:${SERVER_PORT}"
 export BENCHMARK_PARALLEL
 export ATLAS_LLM_PARALLEL
 export ATLAS_PARALLEL_TASKS
+# The V3 pipeline gracefully degrades when the Geometric Lens service is
+# unavailable (score_candidate returns neutral energy). We set the env var
+# explicitly so the v3_runner.py preflight prints a clear WARNING rather
+# than silently falling back. Numbers will be "V3 minus Lens" — acceptable
+# for V3.1 since the Lens is trained on Q6_K embeddings, which matches our
+# current Q6_K inference, but running it as a separate service is V3.2 work.
+export GEOMETRIC_LENS_ENABLED
 
 # 4. Optional smoke test (set SKIP_SMOKE=1 to skip)
 if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
@@ -137,13 +146,15 @@ echo "Pull it back via: runpodctl receive / ssh rsync / web download"
 echo "============================================="
 
 if [[ "$SHUTDOWN_ON_COMPLETE" == "1" ]]; then
-    echo "SHUTDOWN_ON_COMPLETE=1 — stopping pod in 60s. Ctrl-C to abort."
+    echo "SHUTDOWN_ON_COMPLETE=1 — exiting entrypoint in 60s."
+    echo "Note: to actually stop a RunPod pod and halt billing, use the RunPod"
+    echo "web UI, or call runpodctl stop <pod-id> from outside. Container exit"
+    echo "alone does not stop the pod."
     sleep 60
-    # RunPod handles pod stop via API; sudo shutdown works on most providers.
-    sudo shutdown -h now 2>/dev/null || shutdown -h now 2>/dev/null || true
+    exit 0
 else
     echo "SHUTDOWN_ON_COMPLETE=0 — container will stay alive for you to rsync results."
     # Keep container alive so RunPod doesn't terminate and lose results.
-    # Tail the llama log to keep PID 1 attached. Ctrl-C or stop pod when done.
+    # Tail the llama log to keep PID 1 attached. Stop the pod from RunPod UI when done.
     exec tail -f "$LLAMA_LOG"
 fi

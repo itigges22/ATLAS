@@ -1,16 +1,11 @@
 # ATLAS benchmark runner image for RunPod / Lambda / any cloud NVIDIA pod.
 #
 # Two stages:
-#  1. Build llama.cpp from source for Hopper (H100/H200). CUDA_ARCH arg
-#     lets you retarget (89 for RTX 40xx, 90 for Hopper, 120;121 for Blackwell).
-#  2. Slim runtime image that contains llama-server + Python ATLAS runner.
+#  1. Build llama.cpp from source for the target GPU (CUDA_ARCH arg).
+#  2. Slim runtime image with llama-server + Python ATLAS runner + preloaded NLTK data.
 #
-# Default entrypoint runs the ATLAS V3 pipeline on Q6_K weights.
-# Baseline numbers are cited from Qwen's published model card.
-#
-# Model weights are NOT baked into the image — either:
-#   - Mount a RunPod network volume at /workspace/models/
-#   - Or let the entrypoint download on first run (set DOWNLOAD_MODEL=1)
+# Model weights are NOT baked in — mount a volume at /workspace/models or
+# set DOWNLOAD_MODEL=1 to let the entrypoint fetch on first run.
 
 # ---------- stage 1: build llama.cpp ----------
 FROM docker.io/nvidia/cuda:12.9.0-devel-ubuntu22.04 AS builder
@@ -35,19 +30,24 @@ RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp /llama.cpp && \
 # ---------- stage 2: runtime image ----------
 FROM docker.io/nvidia/cuda:12.9.0-runtime-ubuntu22.04
 
-# Python + utils
+# Ubuntu 22.04 ships Python 3.10 by default — use it directly (no deadsnakes PPA).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        python3.11 python3-pip python3.11-venv \
+        python3 python3-pip \
         wget curl jq ca-certificates \
         git \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
-# Python packages for the ATLAS runner (stdlib-heavy, minimal deps)
-RUN pip install --no-cache-dir --break-system-packages \
+# Python packages for the ATLAS runner. Python 3.10 on 22.04 is pre-PEP-668
+# so no --break-system-packages flag needed.
+RUN pip3 install --no-cache-dir \
     langdetect nltk immutabledict absl-py emoji syllapy pyarrow numpy
+
+# Preload NLTK tokenizer data — IFEval/IFBench evaluators call
+# nltk.word_tokenize() which needs 'punkt' and 'punkt_tab'. Baking this in
+# avoids a runtime download attempt that may fail silently.
+RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('averaged_perceptron_tagger_eng', quiet=True)"
 
 # llama-server binary from builder
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
@@ -57,7 +57,7 @@ WORKDIR /workspace/ATLAS
 COPY benchmarks/ ./benchmarks/
 COPY benchmark/ ./benchmark/
 
-# Default paths (override at runtime with -e or RunPod env vars)
+# Default paths and knobs (override at runtime)
 ENV MODEL_PATH=/workspace/models/Qwen3.5-9B-Q6_K.gguf \
     MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf" \
     DOWNLOAD_MODEL=0 \
@@ -69,14 +69,17 @@ ENV MODEL_PATH=/workspace/models/Qwen3.5-9B-Q6_K.gguf \
     ATLAS_PARALLEL_TASKS=16 \
     MODE=atlas_only \
     RESULT_TAR=/workspace/results/atlas_results.tar.gz \
-    SHUTDOWN_ON_COMPLETE=0
+    SHUTDOWN_ON_COMPLETE=0 \
+    SKIP_SMOKE=0 \
+    LLAMA_URL=http://localhost:8000 \
+    RAG_API_URL=http://localhost:31144 \
+    GEOMETRIC_LENS_ENABLED=false
 
 RUN mkdir -p /workspace/models /workspace/results
 
 COPY benchmarks/h200/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# llama-server health port
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]
