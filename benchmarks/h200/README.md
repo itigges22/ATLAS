@@ -1,6 +1,8 @@
 # H200 SXM Benchmark Runbook
 
-One-shot guide to finishing the V3.1 baseline and/or ATLAS pipeline runs on a rented H200 SXM. Target total cost: under $100 at $3.99/hr.
+One-shot guide to running the **ATLAS V3 pipeline** on a rented H200 SXM. Target total cost: under $100 at $3.99/hr.
+
+**Baseline strategy:** we don't run baseline ourselves — Qwen's published numbers (bf16, their internal stack) are the reference. ATLAS runs on **Q6_K / llama.cpp** — identical to what users ship with. The delta vs Qwen's bf16 baseline is a **conservative lower bound** on what the pipeline adds, because ATLAS is running quantized against a full-precision reference. Keeps the Geometric Lens in-distribution (trained on Q6_K embeddings) with no retraining required.
 
 ## Files in this directory
 

@@ -1,14 +1,21 @@
 #!/bin/bash
 # Runs on the rented H200 SXM.
-# Builds llama.cpp container, starts server with parallel 16, runs baseline then ATLAS V3.
+# Builds llama.cpp container, starts server with parallel 16, runs ATLAS V3.
 # Usage (from ATLAS repo root on the H200):
 #   ./benchmarks/h200/launch_on_h200.sh [baseline_only|atlas_only|all]
 #
-# Default: all (baseline + ATLAS)
+# Default: atlas_only.
+#
+# Why atlas_only: baseline numbers are cited from Qwen's published model card
+# (bf16, their internal stack). ATLAS runs on Q6_K/llama.cpp — the same config
+# shipped to users — on H200. The delta vs Qwen's bf16 baseline is a
+# conservative lower bound on what the pipeline adds, since ATLAS is running
+# quantized against a full-precision baseline. Keeps the Geometric Lens in
+# distribution (Lens was trained on Q6_K embeddings) without any retraining.
 
 set -euo pipefail
 
-MODE="${1:-all}"
+MODE="${1:-atlas_only}"
 MODEL_PATH="${MODEL_PATH:-$PWD/models/Qwen3.5-9B-Q6_K.gguf}"
 IMAGE_TAG="${IMAGE_TAG:-llama-server:h200}"
 SERVER_PORT="${SERVER_PORT:-32735}"
