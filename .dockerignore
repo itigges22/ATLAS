@@ -58,10 +58,10 @@ docs/images/
 *.docx
 
 # Other parts of the repo the benchmark container doesn't need
+# (geometric-lens is INCLUDED now so ATLAS V3 can run the Lens in-container)
 atlas/
 atlas-proxy/
 rag-api/
-geometric-lens/
 sandbox/
 inference/
 tests/

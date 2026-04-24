@@ -48,6 +48,39 @@ echo "Model present: $(ls -lh "$MODEL_PATH" | awk '{print $5}')"
 
 # 2. Start llama-server in background
 echo ""
+echo "--- Starting Geometric Lens service on port ${LENS_PORT:-31144} ---"
+LENS_LOG=/tmp/lens-service.log
+cd /workspace/ATLAS/geometric-lens
+GEOMETRIC_LENS_ENABLED=true \
+LLAMA_URL="http://localhost:${SERVER_PORT}" \
+LLAMA_EMBED_URL="http://localhost:${SERVER_PORT}" \
+PROJECT_DATA_DIR=/data/projects \
+nohup python -m uvicorn main:app --host 0.0.0.0 --port "${LENS_PORT:-31144}" \
+    > "$LENS_LOG" 2>&1 &
+LENS_PID=$!
+cd /workspace/ATLAS
+echo "Lens service PID: $LENS_PID (log: $LENS_LOG)"
+
+# 2a. Wait for Lens health (much faster to start than llama-server since no model load)
+echo "--- Waiting for Lens service (timeout 120s) ---"
+for i in $(seq 1 24); do
+    if curl -s --max-time 2 "http://localhost:${LENS_PORT:-31144}/health" 2>/dev/null | grep -qE "ok|healthy"; then
+        echo "Lens service healthy after ${i}×5s."
+        break
+    fi
+    printf "."
+    sleep 5
+done
+if ! curl -s "http://localhost:${LENS_PORT:-31144}/health" 2>/dev/null | grep -qE "ok|healthy"; then
+    echo "WARNING: Lens service did not come up — ATLAS will run without Lens scoring."
+    echo "Lens service log tail:"
+    tail -30 "$LENS_LOG" >&2 || true
+    # Don't exit; V3 pipeline degrades gracefully without Lens.
+    export GEOMETRIC_LENS_ENABLED=false
+fi
+
+# 2b. Start llama-server
+echo ""
 echo "--- Starting llama-server ---"
 LLAMA_LOG=/tmp/llama-server.log
 nohup /usr/local/bin/llama-server \
@@ -64,12 +97,12 @@ nohup /usr/local/bin/llama-server \
 LLAMA_PID=$!
 echo "llama-server PID: $LLAMA_PID (log: $LLAMA_LOG)"
 
-# 3. Wait for healthy
+# 3. Wait for llama-server healthy
 echo ""
-echo "--- Waiting for server to be healthy (timeout 600s) ---"
+echo "--- Waiting for llama-server to be healthy (timeout 600s) ---"
 for i in $(seq 1 120); do
     if curl -s --max-time 2 "http://localhost:${SERVER_PORT}/health" 2>/dev/null | grep -q ok; then
-        echo "Server healthy after ${i}×5s."
+        echo "llama-server healthy after ${i}×5s."
         break
     fi
     printf "."
@@ -85,13 +118,15 @@ fi
 # Both runners read LLAMA_URL (not ATLAS_LLM_URL) — keep both for safety.
 export LLAMA_URL="http://localhost:${SERVER_PORT}"
 export ATLAS_LLM_URL="http://localhost:${SERVER_PORT}"
+export RAG_API_URL="http://localhost:${LENS_PORT:-31144}"
 export BENCHMARK_PARALLEL
 export ATLAS_LLM_PARALLEL
 export ATLAS_PARALLEL_TASKS
-# The V3 pipeline gracefully degrades when the Geometric Lens service is
-# unavailable (score_candidate returns neutral energy). We set the env var
-# explicitly so the v3_runner.py preflight prints a clear WARNING rather
-# than silently falling back. Numbers will be "V3 minus Lens" — acceptable
+export GEOMETRIC_LENS_ENABLED
+# The V3 pipeline uses the Lens when GEOMETRIC_LENS_ENABLED=true and degrades
+# gracefully if the Lens service dies mid-run. The entrypoint sets GEOMETRIC_LENS_ENABLED=false
+# above if the Lens failed to start so the pipeline doesn't waste time calling a dead service.
+# Numbers when Lens is live = full ATLAS V3. Numbers when Lens is down = "V3 minus Lens" — acceptable
 # for V3.1 since the Lens is trained on Q6_K embeddings, which matches our
 # current Q6_K inference, but running it as a separate service is V3.2 work.
 export GEOMETRIC_LENS_ENABLED

@@ -44,6 +44,13 @@ RUN apt-get update && \
 RUN pip3 install --no-cache-dir \
     langdetect nltk immutabledict absl-py emoji syllapy pyarrow numpy
 
+# Geometric Lens service deps (torch CPU is ~200MB; ATLAS V3 needs C(x) and G(x)).
+RUN pip3 install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+    "torch>=2.10.0" \
+    xgboost scikit-learn \
+    fastapi uvicorn pydantic httpx pyyaml python-multipart tiktoken \
+    redis tree-sitter tree-sitter-python
+
 # Preload NLTK tokenizer data — IFEval/IFBench evaluators call
 # nltk.word_tokenize() which needs 'punkt' and 'punkt_tab'. Baking this in
 # avoids a runtime download attempt that may fail silently.
@@ -52,10 +59,24 @@ RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('p
 # llama-server binary from builder
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 
-# ATLAS code — copy benchmarks/ and benchmark/ dirs into /workspace/ATLAS/
+# ATLAS code — copy benchmarks/, benchmark/, and geometric-lens/ into the image
 WORKDIR /workspace/ATLAS
 COPY benchmarks/ ./benchmarks/
 COPY benchmark/ ./benchmark/
+COPY geometric-lens/ ./geometric-lens/
+
+# Download Geometric Lens model weights from HuggingFace at BUILD time so the
+# image is self-contained. Total ~10MB (C(x) MLP + G(x) XGBoost) — small enough
+# to bake in. Placed in the path the service expects.
+RUN mkdir -p /workspace/ATLAS/geometric-lens/geometric_lens/models && \
+    cd /workspace/ATLAS/geometric-lens/geometric_lens/models && \
+    wget -q --show-progress \
+        "https://huggingface.co/datasets/itigges22/ATLAS/resolve/main/models/cost_field.pt" \
+        -O cost_field.pt && \
+    wget -q --show-progress \
+        "https://huggingface.co/datasets/itigges22/ATLAS/resolve/main/models/gx_xgboost.pkl" \
+        -O gx_xgboost.pkl && \
+    ls -lh cost_field.pt gx_xgboost.pkl
 
 # Default paths and knobs (override at runtime)
 ENV MODEL_PATH=/workspace/models/Qwen3.5-9B-Q6_K.gguf \
@@ -73,13 +94,14 @@ ENV MODEL_PATH=/workspace/models/Qwen3.5-9B-Q6_K.gguf \
     SKIP_SMOKE=0 \
     LLAMA_URL=http://localhost:8000 \
     RAG_API_URL=http://localhost:31144 \
-    GEOMETRIC_LENS_ENABLED=false
+    GEOMETRIC_LENS_ENABLED=true \
+    LENS_PORT=31144
 
-RUN mkdir -p /workspace/models /workspace/results
+RUN mkdir -p /workspace/models /workspace/results /data/projects
 
 COPY benchmarks/h200/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 8000
+EXPOSE 8000 31144
 
 ENTRYPOINT ["/entrypoint.sh"]
