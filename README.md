@@ -79,10 +79,10 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
   - b. Compilation and linting - syntax verification before scoring
   - c. Test running - executes generated and existing test suites
 
-5. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on a single consumer GPU.
-  - a. CUDA acceleration - quantized model inference (Q6_K / Q4_K_M)
-  - b. Grammar-constrained decoding - structured output at the token level
-  - c. Self-embeddings - embedding extraction without a separate model
+5. **[vLLM](docs/CONFIGURATION.md#6-vllm)** - local LLM inference on a single consumer GPU.
+  - a. CUDA + PagedAttention - AWQ-quantized model inference, parallel decoding
+  - b. OpenAI-compatible API - `/v1/chat/completions` for the runners and proxy
+  - c. Dedicated embed instance - 4096-dim hidden states for the Geometric Lens
 
 6. **[Interactive CLI](docs/CLI.md)** - type `atlas` in any project directory and start building.
   - a. [Tool-call agent loop](docs/CLI.md#streaming-output) - read, write, edit, delete, run commands
@@ -101,10 +101,9 @@ ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or 
 
 ## ⚠️ Known Limitations
 
-- **Tested on NVIDIA only** - ATLAS uses llama.cpp for inference, which supports multiple accelerator backends. ROCm support is a V3.1 priority.
+- **Tested on NVIDIA only** - ATLAS uses vLLM for inference; vLLM supports CUDA and (via Triton) ROCm. AMD validation is V3.1 work.
 - **9B model not formally benchmarked** - the CLI ships Qwen3.5-9B with the full V3 pipeline, but formal LiveCodeBench scores are from the 14B model. 9B benchmarks are V3.1 work. For the V3 (14B) benchmark results, methodology, and ablation analysis, see [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw benchmark traces are published on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 - **Complex feature additions can fail** - adding features to existing projects succeeds ~67% of the time. The model sometimes over-explores instead of writing code.
-- **Grammar-constrained inference speed** - ~51 tok/s on llama-server. Faster grammar integration is planned for V3.1.
 
 ---
 
@@ -113,7 +112,8 @@ ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or 
 **V3.0.1** - Current release. Interactive CLI, Docker Compose deployment, V3 pipeline integration.
 
 **V3.1** - In progress.
-- ROCm support - AMD GPU inference via llama.cpp ROCm backend.
+- Inference backend ported from llama.cpp to vLLM (PagedAttention, AWQ Q4 weights, two-instance gen+embed setup). Major throughput gains expected on H100 from going parallel 32+ instead of llama.cpp's 7.85 tok/s/slot ceiling at parallel 16.
+- ROCm support - AMD GPU inference via vLLM/Triton on ROCm.
 - Formal 9B benchmarks - LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B.
 - CLI reliability - expanded testing, targeting L6 ≥ 90%.
 - Grammar speed - C-side sampler chain for faster constrained decoding.

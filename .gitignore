@@ -132,6 +132,12 @@ templates/embedding-deployment.yaml.tmpl
 # ----- Local data (not for git — user provides their own models) -----
 /models/
 
+# vLLM / HuggingFace caches (docker-compose mounts these into containers
+# at /root/.cache/huggingface; defaulting to ./.cache/huggingface keeps
+# them under the repo for easy cleanup but should never be committed)
+.cache/
+**/.cache/huggingface/
+
 # ----- Benchmark -----
 benchmark/datasets/.cache/
 benchmark/results/
