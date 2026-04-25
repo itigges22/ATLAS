@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### vLLM Migration (replaces llama.cpp / llama-server stack)
+- Inference backend ported from llama.cpp to vLLM 0.17+ (Qwen3.5 DeltaNet hybrid kernels via Triton).
+- **Two vLLM instances** — vLLM serves only one task per process, so generation runs on port 8000 (`--reasoning-parser qwen3 --enable-prefix-caching`) and embeddings on port 8001 (`--runner pooling --convert embed` returning 4096-dim hidden states for the Geometric Lens). Same model weights, two processes.
+- **Model**: switched from GGUF Q6_K to AWQ Q4 (`QuantTrio/Qwen3.5-9B-AWQ`, ~12 GiB) since vLLM doesn't load GGUF natively.
+- **Endpoints**: dropped llama.cpp-only `/completion` and `/embedding`; everything now uses `/v1/chat/completions`, `/v1/completions`, and `/v1/embeddings` (OpenAI-compatible).
+- **`/nothink` injection removed**: Qwen3.5 dropped the soft `/think` and `/nothink` commands. Thinking is now controlled via the request body field `chat_template_kwargs.enable_thinking`.
+- **`inference/` directory deleted entirely**: 4 Dockerfiles, 6 entrypoints, jinja templates, and the llama.cpp embeddings/spec-decode patch all removed. The single source of truth is now `benchmarks/h200/{Dockerfile,entrypoint.sh,preflight.sh}`.
+- **Pre-flight script** (`benchmarks/h200/preflight.sh`): hits gen + embed + Lens with real requests before the benchmark sweep starts. Refuses to run if any service is misconfigured.
+- **Wire test suite** (`tests/integration/test_vllm_wire.py`): 9 tests covering chat completions, raw completions with token_logprobs, thinking on/off, reasoning_content split, missing-parser fallback, 503 retry, embeddings (single + batch), and the legacy `cache_prompt` kwarg back-compat path.
+- **CI workflow** (`.github/workflows/vllm-wire.yml`): runs the wire tests + 854 unit tests + docker-compose YAML validation + `bash -n` on every entrypoint script on every push and PR.
+- **Lens chat clients fixed**: `pattern_extractor.py`, `summarizer.py`, `tree_search.py` all sent `model="default"` which vLLM rejects. Now read `LLAMA_GEN_MODEL` (default `qwen3.5-9b`).
+- **Config split**: `LLAMA_URL` is split into `LLAMA_GEN_URL` and `LLAMA_EMBED_URL`; old name stays as fallback for backwards compat. `ATLAS_INFERENCE_URL` → 8000 not 8080.
+- **Lens port aligned to 31144**: container, docker-compose, atlas.conf.example, benchmark configs, and all docs now use the same port (was 8099 in some places).
+- **HF auth**: docker-compose threads `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` through to both vLLM instances for gated/private repos.
+- **`.env.example`** rewritten with the new vLLM knobs (`ATLAS_GEN_*`, `ATLAS_EMBED_*`).
+- Install/uninstall/verify scripts now check for the AWQ model directory instead of `*.gguf` files.
+- Memory note saved: `memory/project_vllm_migration.md`.
+
 ### Documentation
 - Added multilingual documentation: Simplified Chinese (zh-CN), Japanese (ja), Korean (ko) for README, SETUP, and TROUBLESHOOTING
 - Added language selector badges to README
