@@ -1747,8 +1747,13 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     try:
         req = urllib.request.Request(f"{LLAMA_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        print(f"  vLLM gen instance: OK ({data.get('status', '?')})")
+            # vLLM 0.17+ /health returns HTTP 200 with an empty body (it's
+            # a readiness probe, not a structured status report). Don't try
+            # to parse JSON — a 200 reply is the success signal.
+            status_code = resp.status
+        if status_code != 200:
+            raise RuntimeError(f"unexpected status {status_code}")
+        print("  vLLM gen instance: OK")
     except Exception as e:
         print(f"  vLLM gen instance: FAILED ({e})")
         print("  Aborting benchmark — vLLM gen instance not reachable")
@@ -1757,6 +1762,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     try:
         req = urllib.request.Request(f"{RAG_API_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
+            # Lens /health (FastAPI) returns JSON {"status":"healthy",...}.
             data = json.loads(resp.read().decode('utf-8'))
         print(f"  Geometric Lens: OK ({data.get('status', '?')})")
     except Exception:

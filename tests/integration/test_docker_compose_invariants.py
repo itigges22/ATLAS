@@ -1125,6 +1125,41 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_v3_runner_preflight_tolerates_empty_vllm_health_body():
+    """vLLM 0.17+ `/health` returns HTTP 200 with an *empty* body — it's
+    a readiness probe, not a structured status report. The previous
+    `v3_runner.py` preflight called `json.loads(resp.read())` on the
+    response and aborted the benchmark with `JSONDecodeError` on every
+    healthy vLLM stack — a real bug that would prevent any benchmark
+    from starting.
+
+    Pin: the gen-side preflight may not call `json.loads` on the
+    `/health` response. (The Lens preflight is fine to parse JSON
+    since FastAPI Lens does return `{"status":"healthy",...}`.)"""
+    src = (PROJECT_ROOT / "benchmark" / "v3_runner.py").read_text()
+    # Find the preflight block — anchored on the actual /health call.
+    # The block runs from the LLAMA_URL/health line up to (but not
+    # including) the next /health probe (RAG_API_URL/health for Lens).
+    preflight_match = re.search(
+        r"urllib\.request\.Request\(f\"\{LLAMA_URL\}/health\"\).*?(?=urllib\.request\.Request\(f\"\{RAG_API_URL\})",
+        src,
+        re.DOTALL,
+    )
+    assert preflight_match, "Could not locate the vLLM gen-instance preflight block"
+    gen_block = preflight_match.group(0)
+    # The gen-instance preflight must inspect the HTTP status code, not
+    # try to parse a body that real vLLM doesn't send.
+    assert "json.loads" not in gen_block, (
+        "v3_runner.py vLLM gen-instance preflight still calls json.loads "
+        "on /health — but vLLM 0.17+ returns 200 with an empty body, "
+        "so this aborts every benchmark. Use resp.status instead."
+    )
+    assert "resp.status" in gen_block or "status_code" in gen_block, (
+        "v3_runner.py vLLM gen-instance preflight must inspect the HTTP "
+        "status code (e.g. resp.status == 200) to confirm readiness"
+    )
+
+
 def test_lens_retriever_defaults_match_vllm_gen_service():
     """`geometric-lens/retriever/hybrid.py` and `tree_search.py` used to
     hardcode `llama_url: str = "http://llama-service:8000"` as the kwarg
