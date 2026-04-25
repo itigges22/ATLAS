@@ -150,6 +150,26 @@ def test_h200_dockerfile_installs_xgboost():
     assert "xgboost" in df, "benchmarks/h200/Dockerfile must install xgboost"
 
 
+def test_makefile_targets_present():
+    """The Makefile gives users a one-command surface for the most common
+    operations. Verify the targets the docs reference still exist."""
+    makefile = (PROJECT_ROOT / "Makefile").read_text()
+    for target in ("help:", "test:", "wire-tests:", "unit-tests:", "lint:",
+                   "up:", "down:", "logs:", "model:", "preflight:",
+                   "dev-install:", "install:", "clean:"):
+        assert target in makefile, f"Makefile missing target: {target}"
+
+
+def test_makefile_model_target_pulls_awq():
+    """`make model` must pull the AWQ build, not the GGUF build. A wrong
+    target here means users following 'make up && make model' end up with
+    a model vLLM can't load."""
+    makefile = (PROJECT_ROOT / "Makefile").read_text()
+    assert "QuantTrio/Qwen3.5-9B-AWQ" in makefile
+    assert "huggingface-cli download" in makefile
+    assert ".gguf" not in makefile, "Makefile must not reference GGUF"
+
+
 def test_preflight_script_uses_correct_vllm_shape():
     """The pre-flight script's curl bodies must match vLLM's contract.
     If they drift from what the runners send, preflight could pass but
