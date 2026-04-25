@@ -1502,6 +1502,35 @@ def test_docs_do_not_link_to_deleted_scripts_or_dirs():
         )
 
 
+def test_run_lcb_v6_tolerates_empty_vllm_health_body():
+    """`benchmarks/run_lcb_v6.sh` had the same root cause as stages
+    113/114/126, fourth surface affected: lines 35 and 39 did
+    `curl -s ... /health | grep -q ok`. vLLM `/health` returns 200
+    with an empty body, so `grep -q ok` matches nothing — the gen
+    probe (`if ! ...; then exit 1`) hard-aborted the LCB v6 sweep on
+    every healthy stack, and the embed probe printed a misleading
+    "vLLM embed instance not healthy" warning.
+
+    Pin: the probes must use `curl -sf` (status-code only) and may
+    not pipe the body to `grep`."""
+    src = (PROJECT_ROOT / "benchmarks" / "run_lcb_v6.sh").read_text()
+    # Locate the sanity-check block.
+    block_match = re.search(
+        r"# Sanity:.*?(?=\n\n|\Z)",
+        src,
+        re.DOTALL,
+    )
+    assert block_match, "Could not locate the sanity-check block in run_lcb_v6.sh"
+    block = block_match.group(0)
+    assert "grep -q ok" not in block, (
+        "run_lcb_v6.sh sanity-check still pipes /health through `grep -q ok` — "
+        "vLLM returns empty 200, this fails on healthy stacks"
+    )
+    assert "curl -sf" in block, (
+        "run_lcb_v6.sh sanity-check must use `curl -sf` for the readiness probe"
+    )
+
+
 def test_check_status_sh_tolerates_empty_vllm_health_body():
     """`benchmarks/check_status.sh` had the same root cause as stages
     113/114: it piped `curl -s {GEN,EMBED}_URL/health` into

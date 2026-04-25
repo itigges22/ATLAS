@@ -31,12 +31,15 @@ echo "Embed URL: $LLAMA_EMBED_URL"
 echo "Parallel:  $ATLAS_PARALLEL_TASKS"
 echo "=========================================="
 
-# Sanity: gen + embed both reachable.
-if ! curl -s --max-time 5 "$LLAMA_GEN_URL/health" | grep -q ok; then
+# Sanity: gen + embed both reachable. vLLM `/health` returns HTTP 200
+# with an EMPTY body (it's a readiness probe, not a structured status
+# report) — so don't grep the body, check the HTTP status code via
+# `curl -sf` (fails on non-2xx).
+if ! curl -sf --max-time 5 "$LLAMA_GEN_URL/health" >/dev/null 2>&1; then
     echo "ERROR: vLLM gen instance not healthy at $LLAMA_GEN_URL" >&2
     exit 1
 fi
-if ! curl -s --max-time 5 "$LLAMA_EMBED_URL/health" | grep -q ok; then
+if ! curl -sf --max-time 5 "$LLAMA_EMBED_URL/health" >/dev/null 2>&1; then
     echo "WARNING: vLLM embed instance not healthy at $LLAMA_EMBED_URL — Lens scoring will be unavailable." >&2
 fi
 
