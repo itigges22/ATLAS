@@ -57,13 +57,12 @@ docs/images/
 *.pdf
 *.docx
 
-# Other parts of the repo the benchmark container doesn't need
+# Other parts of the repo the benchmark container doesn't need.
+# geometric-lens IS included (Dockerfile COPYs it for in-container Lens).
+# inference/ was deleted in the vLLM cutover.
 atlas/
 atlas-proxy/
-rag-api/
-geometric-lens/
 sandbox/
-inference/
 tests/
 
 # OS / editor junk

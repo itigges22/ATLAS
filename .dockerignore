@@ -58,12 +58,11 @@ docs/images/
 *.docx
 
 # Other parts of the repo the benchmark container doesn't need
-# (geometric-lens is INCLUDED now so ATLAS V3 can run the Lens in-container)
+# (geometric-lens IS included so ATLAS V3 can run the Lens in-container).
+# inference/ was removed in the vLLM cutover — no longer present in the repo.
 atlas/
 atlas-proxy/
-rag-api/
 sandbox/
-inference/
 tests/
 
 # OS / editor junk
