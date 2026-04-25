@@ -1125,6 +1125,66 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_map_md_does_not_list_deleted_h200_artifacts():
+    """`docs/MAP.md` is the canonical "where does X live in this repo"
+    map. After the vLLM cutover, `benchmarks/h200/` contains only the
+    single-image build (`Dockerfile`), the entrypoint that drives both
+    vLLM instances + Lens (`entrypoint.sh`), preflight, and a few
+    runner scripts. The previous MAP listing carried over the V3.0-era
+    catalog: `Dockerfile.v31`, `Dockerfile.mtp`, `entrypoint-v3.1-9b.sh`,
+    `entrypoint-v3-specdec.sh`, `entrypoint-embed.sh`, `entrypoint-mtp.sh`,
+    `patches/fix-embeddings-spec-decode.patch`,
+    `templates/Qwen3-{custom,no-think}.jinja` — eight entries pointing
+    at files that don't exist on disk.
+
+    Pin: every `benchmarks/h200/<x>` link in MAP.md must reference a
+    file that actually exists; the deleted V3.0 artifacts must not
+    reappear in the listing."""
+    map_md = (PROJECT_ROOT / "docs" / "MAP.md").read_text()
+    deleted = [
+        "Dockerfile.v31",
+        "Dockerfile.mtp",
+        "entrypoint-v3.1-9b.sh",
+        "entrypoint-v3-specdec.sh",
+        "entrypoint-embed.sh",
+        "entrypoint-mtp.sh",
+        "fix-embeddings-spec-decode.patch",
+        "Qwen3-custom.jinja",
+        "Qwen3-no-think.jinja",
+    ]
+    h200_section_match = re.search(
+        r"benchmarks/h200/.*?(?=\n- \[|\Z)",
+        map_md,
+        re.DOTALL,
+    )
+    assert h200_section_match, "Could not locate the benchmarks/h200/ block in MAP.md"
+    section = h200_section_match.group(0)
+    for name in deleted:
+        assert name not in section, (
+            f"docs/MAP.md still lists `{name}` under benchmarks/h200/, "
+            f"but that file does not exist in the repo (verified: it was "
+            f"removed in the V3.0 → V3.0.1 cutover)"
+        )
+
+    # Positive assertion — the entries that ARE in the section must all
+    # name files that exist on disk.
+    h200_dir = PROJECT_ROOT / "benchmarks" / "h200"
+    bullet_re = re.compile(r"\[`([^`]+)`\]")
+    for match in bullet_re.finditer(section):
+        listed = match.group(1)
+        # Skip the section header itself (`benchmarks/h200/`) and any
+        # back-link anchors that don't resolve to files.
+        if listed.endswith("/"):
+            continue
+        # Strip benchmarks/h200/ prefix if present, otherwise treat as
+        # a bare filename relative to that dir.
+        relative = listed.replace("benchmarks/h200/", "")
+        assert (h200_dir / relative).exists(), (
+            f"docs/MAP.md lists `{listed}` but {h200_dir / relative} "
+            f"does not exist on disk"
+        )
+
+
 def test_atlas_cli_check_llama_tolerates_empty_vllm_health_body():
     """Same root cause as `test_v3_runner_preflight_tolerates_empty_vllm_health_body`,
     different surface: `atlas/cli/client.py:check_llama` used to call

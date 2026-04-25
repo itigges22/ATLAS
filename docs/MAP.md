@@ -157,17 +157,13 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`executor_server.py`](#sandbox) — FastAPI server, 8 language executors, linting, error classification
   - [`Dockerfile`](#sandbox) — Container build (Python, Node, Go, Rust, gcc)
 - [`benchmarks/h200/`](#inference) — vLLM container build (replaces the deleted `inference/` dir)
-  - [`Dockerfile.v31`](#inference) — V3.1 9B model build (used by docker-compose)
-  - [`Dockerfile`](#inference) — Base vLLM build
-  - [`Dockerfile.mtp`](#inference) — Multi-Token Prediction experimental build
-  - [`entrypoint-v3.1-9b.sh`](#inference) — K3s 9B entrypoint (flash-attn, mlock, 4 slots)
-  - [`entrypoint-v3-specdec.sh`](#inference) — K3s 14B + spec decode entrypoint
-  - [`entrypoint.sh`](#inference) — Default entrypoint
-  - [`entrypoint-embed.sh`](#inference) — Dedicated embedding server entrypoint
-  - [`entrypoint-mtp.sh`](#inference) — MTP experimental entrypoint
-  - [`patches/fix-embeddings-spec-decode.patch`](#inference) — Fix for embeddings + spec decode conflict
-  - [`templates/Qwen3-custom.jinja`](#inference) — Custom Qwen3 chat template
-  - [`templates/Qwen3-no-think.jinja`](#inference) — Qwen3 template with thinking suppressed
+  - [`Dockerfile`](#inference) — Single vLLM image (pip-installs `vllm==0.17.1`, content-patches transformers, no native compilation)
+  - [`entrypoint.sh`](#inference) — Starts gen on 8000 + embed on 8001 + Lens, runs preflight, dispatches the benchmark sweep based on `$MODE`
+  - [`preflight.sh`](#inference) — Hits gen + embed + Lens with real requests; refuses the sweep on misconfiguration
+  - [`launch_on_h200.sh`](#inference) — Cloud-pod runner: builds the image, starts the container with the right `-e` env, exposes 8000/8001/31144
+  - [`transfer_to_h200.sh`](#inference) — rsyncs the AWQ model dir + Lens tree to a remote pod
+  - [`watchdog.sh`](#inference) — Monitors the container during long sweeps
+  - [`runpod_quickstart.md`](#inference) — RunPod-specific deploy recipe
 - [`scripts/`](#scripts) — Build, deploy, and training automation
   - [`install.sh`](#scripts) — K3s + GPU Operator installation
   - [`uninstall.sh`](#scripts) — K3s teardown
