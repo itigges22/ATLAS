@@ -155,7 +155,7 @@ nohup vllm serve "$MODEL_PATH" \
     --host 0.0.0.0 \
     --max-num-seqs "$GEN_MAX_NUM_SEQS" \
     --max-model-len "$GEN_MAX_MODEL_LEN" \
-    --max-num-batched-tokens "${GEN_MAX_NUM_BATCHED_TOKENS:-8192}" \
+    --max-num-batched-tokens "${GEN_MAX_NUM_BATCHED_TOKENS:-$GEN_MAX_MODEL_LEN}" \
     --gpu-memory-utilization "$GEN_GPU_MEM_UTIL" \
     --tensor-parallel-size 1 \
     --enable-prefix-caching \

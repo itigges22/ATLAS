@@ -21,7 +21,7 @@ services:
       --host 0.0.0.0 --port 8000
       --max-num-seqs ${ATLAS_GEN_MAX_NUM_SEQS:-32}
       --max-model-len ${ATLAS_GEN_CTX_SIZE:-32768}
-      --max-num-batched-tokens ${ATLAS_GEN_MAX_NUM_BATCHED_TOKENS:-8192}
+      --max-num-batched-tokens ${ATLAS_GEN_MAX_NUM_BATCHED_TOKENS:-${ATLAS_GEN_CTX_SIZE:-32768}}
       --gpu-memory-utilization ${ATLAS_GEN_GPU_MEM:-0.55}
       --tensor-parallel-size 1
       --enable-prefix-caching
