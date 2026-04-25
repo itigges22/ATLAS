@@ -13,6 +13,11 @@ set -euo pipefail
 
 LLAMA_URL="${1:-${LLAMA_GEN_URL:-${LLAMA_URL:-http://localhost:8000}}}"
 API_URL="$LLAMA_URL/v1/chat/completions"
+# Match whatever name vLLM was started with (entrypoint defaults to qwen3.5-9b
+# but can be overridden via -e LLAMA_GEN_MODEL=...). vLLM rejects unknown
+# served names with HTTP 4xx, so a hardcoded value here would break any
+# pod that customized the model name.
+MODEL_NAME="${LLAMA_GEN_MODEL:-qwen3.5-9b}"
 RESULTS_DIR="benchmark/results/latency_$(date -u +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 
@@ -43,7 +48,7 @@ echo "Sending identical prompt twice to verify vLLM automatic prefix caching..."
 FIRST=$(curl -sf "$API_URL" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"qwen3.5-9b\",
+        \"model\": \"$MODEL_NAME\",
         \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}],
         \"max_tokens\": 50,
         \"temperature\": 0.0,
@@ -56,7 +61,7 @@ echo "  First request (cold): ${FIRST_TIME}s"
 SECOND=$(curl -sf "$API_URL" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"qwen3.5-9b\",
+        \"model\": \"$MODEL_NAME\",
         \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}],
         \"max_tokens\": 50,
         \"temperature\": 0.6,
@@ -88,7 +93,7 @@ for k in "${K_VALUES[@]}"; do
             RESP=$(curl -sf "$API_URL" \
                 -H "Content-Type: application/json" \
                 -d "{
-                    \"model\": \"qwen3.5-9b\",
+                    \"model\": \"$MODEL_NAME\",
                     \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}],
                     \"max_tokens\": $N_PREDICT,
                     \"temperature\": $temp,
