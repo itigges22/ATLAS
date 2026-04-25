@@ -249,11 +249,15 @@ class LLMAdapter:
     reasoning from starving code generation. The deprecated `/nothink`
     soft-command from llama.cpp is *not* used — Qwen3.5 dropped support.
 
-    Request serialization: DeltaNet hybrid architecture (Qwen3.5-9B) hangs
-    when multiple slots generate simultaneously via cont-batching. A class-level
-    lock ensures only one /v1/completions request is in-flight at a time, giving
-    full single-slot throughput (~47 tok/s) while keeping 4 slots for connection
-    acceptance and prompt caching.
+    Request serialization (legacy path only): the V3.0 llama.cpp deployment
+    of Qwen3.5-9B's DeltaNet hybrid architecture hung when multiple slots
+    generated simultaneously via cont-batching, so a class-level
+    threading.Lock served all requests one at a time. Under vLLM (default
+    `ATLAS_LLM_PARALLEL=1`) PagedAttention handles concurrent slots cleanly
+    and the lock is bypassed entirely; the only path that still acquires it
+    is the explicit `ATLAS_LLM_PARALLEL=0` opt-out for connecting this
+    adapter to a llama.cpp-shaped backend. Throughput on vLLM varies with
+    concurrency, GPU, and quant — no single tok/s figure applies.
     """
 
     # Thinking consumes too much if it's >80% of tokens and output is tiny

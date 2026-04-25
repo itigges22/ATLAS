@@ -1125,6 +1125,45 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_v3_runner_llm_adapter_docstring_matches_lock_behavior():
+    """`benchmark/v3_runner.py LLMAdapter` had a docstring that presented
+    the class-level `threading.Lock()` as the always-engaged mechanism
+    that "gives full single-slot throughput (~47 tok/s)." The actual code
+    block ~80 lines below only acquires the lock when
+    `LLMAdapter._parallel_mode == False` (i.e. the legacy llama.cpp opt-out
+    path); under vLLM (the default `ATLAS_LLM_PARALLEL=1`) PagedAttention
+    handles concurrent slots and the lock is bypassed. The docstring
+    contradicted the comment 7 lines below it and quoted the dead
+    llama-server `~47 tok/s` figure.
+
+    Pin: the docstring must not present the lock as always-engaged and
+    must not quote `~47 tok/s` as if it were a vLLM throughput number."""
+    src = (PROJECT_ROOT / "benchmark" / "v3_runner.py").read_text()
+    # Locate the LLMAdapter class docstring.
+    cls_match = re.search(
+        r"class LLMAdapter[^\n]*:\s*\n\s*\"\"\"(.*?)\"\"\"",
+        src,
+        re.DOTALL,
+    )
+    assert cls_match, "Could not locate LLMAdapter class docstring"
+    docstring = cls_match.group(1)
+    assert "~47 tok/s" not in docstring, (
+        "LLMAdapter docstring still quotes the dead llama-server "
+        "`~47 tok/s` figure; vLLM throughput is concurrency- and "
+        "GPU-dependent"
+    )
+    # Phrasings that would assert the lock is always engaged:
+    bad_present_tense = [
+        r"A class-level\s+lock ensures only one .* request is in-flight",
+    ]
+    for pattern in bad_present_tense:
+        assert not re.search(pattern, docstring), (
+            "LLMAdapter docstring still presents the threading.Lock as "
+            "always-engaged — but `_parallel_mode=True` (vLLM default) "
+            "bypasses the lock entirely"
+        )
+
+
 def test_no_stale_51_toks_claim_in_user_facing_surfaces():
     """Several user-facing surfaces (atlas-proxy comment, CLI.md REPL
     output snippet, three translation READMEs) carried a stale
