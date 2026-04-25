@@ -472,7 +472,6 @@ All ports and URLs are configurable:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ATLAS_LLAMA_BIN` | `~/llama-cpp-mtp/build/bin/vLLM` | Path to vLLM binary |
 | `ATLAS_MODEL_PATH` | `~/models/Qwen3.5-9B-AWQ` | Full path to the AWQ model directory (a directory of safetensors shards; vLLM does not load GGUF) |
 
 ---

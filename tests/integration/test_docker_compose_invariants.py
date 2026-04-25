@@ -1123,3 +1123,29 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     preflight = (PROJECT_ROOT / "benchmarks" / "h200" / "preflight.sh").read_text()
     assert 'LLAMA_GEN_MODEL:=qwen3.5-9b' in preflight
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
+
+
+def test_docs_have_no_pre_vllm_residue():
+    """docs/CLI.md used to document an `ATLAS_LLAMA_BIN` env var pointing at
+    `~/llama-cpp-mtp/build/bin/...`. Both the variable and the path are dead
+    weight under vLLM (vLLM is `pip install vllm`, not a build artifact, and
+    nothing in the codebase reads ATLAS_LLAMA_BIN). Leaving stale rows around
+    misleads users into thinking the knob does something.
+
+    Pin: no doc may reference the legacy llama-cpp-mtp build path or the
+    dead ATLAS_LLAMA_BIN environment variable."""
+    cli_md = (PROJECT_ROOT / "docs" / "CLI.md").read_text()
+    assert "ATLAS_LLAMA_BIN" not in cli_md, (
+        "ATLAS_LLAMA_BIN is dead (no code reads it); remove the row"
+    )
+    assert "llama-cpp-mtp" not in cli_md, (
+        "Pre-vLLM build path leaked into CLI.md; remove it"
+    )
+
+    # Also sanity-check the rest of the docs tree.
+    for md in (PROJECT_ROOT / "docs").rglob("*.md"):
+        text = md.read_text()
+        assert "ATLAS_LLAMA_BIN" not in text, (
+            f"{md.relative_to(PROJECT_ROOT)} still mentions ATLAS_LLAMA_BIN; "
+            "the var is read nowhere in the codebase"
+        )
