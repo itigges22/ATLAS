@@ -72,10 +72,10 @@ DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
 
 
-# --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
+# --- LLM Adapter (calls vLLM /v1/chat/completions) ----------------------------
 
 class LLMAdapter:
-    """Calls llama-server's /v1/chat/completions, parsing ChatML prompts into messages."""
+    """Calls vLLM's /v1/chat/completions, parsing ChatML prompts into messages."""
 
     _lock = threading.Lock()
 
@@ -126,7 +126,7 @@ class LLMAdapter:
         return content, tokens, t_ms
 
     def _send(self, body: dict) -> dict:
-        """Send to llama-server via /v1/chat/completions.
+        """Send to vLLM via /v1/chat/completions.
 
         V3 modules generate ChatML prompts. We parse them into messages format
         for the chat endpoint. ChatML format:
