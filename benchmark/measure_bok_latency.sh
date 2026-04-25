@@ -38,17 +38,16 @@ echo ""
 
 # Prompt cache verification
 echo "=== Prompt Cache Verification ==="
-echo "Sending identical prompt twice to check cache_prompt behavior..."
+echo "Sending identical prompt twice to verify vLLM automatic prefix caching..."
 
 FIRST=$(curl -sf "$API_URL" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"qwen3-14b\",
+        \"model\": \"qwen3.5-9b\",
         \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}],
         \"max_tokens\": 50,
         \"temperature\": 0.0,
-        \"stream\": false,
-        \"cache_prompt\": true
+        \"stream\": false
     }" -w '\n%{time_total}' 2>/dev/null)
 
 FIRST_TIME=$(echo "$FIRST" | tail -1)
@@ -57,13 +56,12 @@ echo "  First request (cold): ${FIRST_TIME}s"
 SECOND=$(curl -sf "$API_URL" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"qwen3-14b\",
+        \"model\": \"qwen3.5-9b\",
         \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}],
         \"max_tokens\": 50,
         \"temperature\": 0.6,
         \"seed\": 42,
-        \"stream\": false,
-        \"cache_prompt\": true
+        \"stream\": false
     }" -w '\n%{time_total}' 2>/dev/null)
 
 SECOND_TIME=$(echo "$SECOND" | tail -1)
@@ -90,13 +88,12 @@ for k in "${K_VALUES[@]}"; do
             RESP=$(curl -sf "$API_URL" \
                 -H "Content-Type: application/json" \
                 -d "{
-                    \"model\": \"qwen3-14b\",
+                    \"model\": \"qwen3.5-9b\",
                     \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}],
                     \"max_tokens\": $N_PREDICT,
                     \"temperature\": $temp,
                     \"seed\": $SEED,
-                    \"stream\": false,
-                    \"cache_prompt\": true
+                    \"stream\": false
                 }" 2>/dev/null)
 
             # Extract content and hash it for diversity check
