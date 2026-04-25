@@ -58,6 +58,8 @@ echo "--- starting container ---"
 $CRT rm -f atlas-bench 2>/dev/null || true
 $CRT run -d --name atlas-bench \
     --gpus all \
+    --ulimit memlock=-1 \
+    --ulimit stack=67108864 \
     -p "${GEN_PORT}:8000" \
     -p "${EMBED_PORT}:8001" \
     -p "${LENS_PORT}:31144" \
