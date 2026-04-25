@@ -356,9 +356,11 @@ class BudgetForcing:
             # Pre-fill closed think block to force-skip thinking on Qwen3.5+
             assistant_prefix = "<think>\n\n</think>\n\n"
         else:
-            # With --jinja enabled, the model naturally uses <think> tags.
-            # Do NOT pre-fill <think>\n — it breaks the tag structure
-            # (response won't include opening <think>, only </think>).
+            # Qwen3.5's chat template emits `<think>...</think>` blocks by
+            # default when thinking is enabled; vLLM applies that template
+            # automatically (no flag to toggle). Do NOT pre-fill `<think>\n`
+            # — it would break the tag structure (response would omit the
+            # opening `<think>` and emit only `</think>`).
             assistant_prefix = ""
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"

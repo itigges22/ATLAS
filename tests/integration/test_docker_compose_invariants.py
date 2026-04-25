@@ -1125,6 +1125,32 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_v3_code_does_not_reference_dead_jinja_flag():
+    """`benchmark/v3/budget_forcing.py` and `benchmark/v3_runner.py` used to
+    have explanatory comments that read 'With --jinja enabled, the model
+    naturally uses <think> tags' — `--jinja` was a llama-server CLI flag
+    that toggled jinja chat-template processing. Under vLLM there is no
+    such flag (jinja templates are always applied via `--reasoning-parser`,
+    and `/v1/completions` skips the parser entirely). The comment misled
+    future readers into believing they could control the behavior with a
+    CLI flag that doesn't exist.
+
+    Pin: V3 code in `benchmark/v3*` may not reference `--jinja` outside
+    a deliberate disclaimer (we don't expect any callers to mention it
+    at all)."""
+    files = [
+        PROJECT_ROOT / "benchmark" / "v3" / "budget_forcing.py",
+        PROJECT_ROOT / "benchmark" / "v3_runner.py",
+    ]
+    for f in files:
+        src = f.read_text()
+        assert "--jinja" not in src, (
+            f"{f.relative_to(PROJECT_ROOT)} still references the dead "
+            f"`--jinja` llama-server flag; under vLLM jinja templates are "
+            f"always applied (no such CLI knob)"
+        )
+
+
 def test_architecture_budget_forcing_table_matches_code():
     """ARCHITECTURE.md's Budget Forcing tier table used to claim the nothink
     tier injected `/nothink prompt` as a wait-injection — wrong on two counts:

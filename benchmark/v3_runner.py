@@ -415,8 +415,10 @@ class LLMAdapter:
         tokens = data.get("usage", {}).get("completion_tokens", 0)
         self.last_logprobs = self._parse_logprobs(data)
 
-        # Strip thinking blocks. With --jinja, the model wraps reasoning
-        # in <think>...</think> tags naturally. Strip them to get clean code.
+        # Strip thinking blocks. Qwen3.5's chat template wraps reasoning in
+        # <think>...</think> tags by default; on /v1/completions vLLM skips
+        # the reasoning-parser (that's a /v1/chat/completions feature) so the
+        # tags flow through inline. Strip them to get clean code.
         content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
 
         # Handle orphaned </think> from the nothink-tier `<think>\n\n</think>\n\n`
