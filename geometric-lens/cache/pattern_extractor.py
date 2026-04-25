@@ -144,6 +144,10 @@ async def _llm_extract(
                     ],
                     "max_tokens": 200,
                     "temperature": 0.1,
+                    # Qwen3.5 emits <think> blocks unless explicitly disabled.
+                    # With max_tokens=200 the entire budget would go to reasoning,
+                    # leaving an empty content field.
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             response.raise_for_status()

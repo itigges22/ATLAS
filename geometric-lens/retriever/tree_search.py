@@ -177,6 +177,10 @@ class TreeSearcher:
                         ],
                         "max_tokens": 50,
                         "temperature": 0.0,
+                        # JSON-only response in 50 tokens. Qwen3.5 thinking would
+                        # eat the entire budget and the JSON parser downstream
+                        # would always see an empty/truncated payload.
+                        "chat_template_kwargs": {"enable_thinking": False},
                     },
                 )
                 response.raise_for_status()

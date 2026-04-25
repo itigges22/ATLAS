@@ -296,6 +296,29 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_lens_chat_clients_disable_thinking():
+    """All three Geometric Lens chat clients (pattern_extractor, summarizer,
+    tree_search) hit /v1/chat/completions with very small max_tokens (50-200).
+    On Qwen3.5, leaving thinking enabled fills the entire budget with <think>
+    blocks and returns empty content. Each client must explicitly set
+    chat_template_kwargs.enable_thinking=False on its outgoing request body."""
+    files = [
+        PROJECT_ROOT / "geometric-lens" / "cache" / "pattern_extractor.py",
+        PROJECT_ROOT / "geometric-lens" / "indexer" / "summarizer.py",
+        PROJECT_ROOT / "geometric-lens" / "retriever" / "tree_search.py",
+    ]
+    for f in files:
+        src = f.read_text()
+        assert "/v1/chat/completions" in src, f"{f.name} should hit chat completions"
+        assert "chat_template_kwargs" in src, (
+            f"{f.name} must set chat_template_kwargs in its request body"
+        )
+        assert "enable_thinking" in src, (
+            f"{f.name} must set enable_thinking to silence Qwen3.5 reasoning "
+            "(small max_tokens budgets get eaten by <think> blocks)"
+        )
+
+
 def test_dockerfile_default_model_names_match_preflight_defaults():
     """The Dockerfile ENV defaults for LLAMA_GEN_MODEL / LLAMA_EMBED_MODEL
     must match the fallbacks preflight.sh assumes (`qwen3.5-9b` and

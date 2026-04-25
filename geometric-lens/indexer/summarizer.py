@@ -168,6 +168,10 @@ async def _llm_summarize(
                     ],
                     "max_tokens": 100,
                     "temperature": 0.1,
+                    # Disable Qwen3.5 reasoning — 100 tokens is far below the
+                    # model's typical thinking budget, so leaving it on produces
+                    # empty content with all tokens spent on <think>.
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             response.raise_for_status()
