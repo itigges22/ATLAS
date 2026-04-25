@@ -39,7 +39,7 @@ User → Aider → ATLAS Proxy (:8090) → vLLM gen   (:8000)
 atlas
 
 # Or manually
-atlas-proxy                          # starts proxy on :8090
+atlas-proxy-v2                       # starts proxy on :8090
 OPENAI_API_BASE=http://localhost:8090 aider --model openai/atlas
 ```
 
@@ -57,6 +57,13 @@ OPENAI_API_BASE=http://localhost:8090 aider --model openai/atlas
 
 ## Build
 
+The Python launcher (`atlas/cli/repl.py`) searches `~/.local/bin/atlas-proxy-v2`
+and rebuilds from source if it's missing — so the binary must land at exactly
+that path.
+
 ```bash
-cd atlas-proxy && go build -o ~/.local/bin/atlas-proxy .
+cd atlas-proxy && go build -o ~/.local/bin/atlas-proxy-v2 .
 ```
+
+Run directly with `atlas-proxy-v2` (or just run `atlas`, which will rebuild
+on first invocation if Go is on `$PATH`).

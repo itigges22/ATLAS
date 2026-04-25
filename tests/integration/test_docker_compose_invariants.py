@@ -337,6 +337,40 @@ def test_makefile_lint_and_ci_lint_cover_same_scripts():
         assert must_have in mf_scripts, f"{must_have} must be lint-checked"
 
 
+def test_atlas_proxy_build_target_matches_launcher_expectation():
+    """`atlas/cli/repl.py` searches `~/.local/bin/atlas-proxy-v2` for the
+    proxy binary and rebuilds from source to that exact path if it's
+    missing. atlas-proxy/README.md previously instructed users to:
+
+        go build -o ~/.local/bin/atlas-proxy .
+
+    Wrong filename. A user following the README would land a working
+    binary at `~/.local/bin/atlas-proxy`, then run `atlas`, and the
+    Python launcher would not find it, claim the proxy isn't built,
+    and try to rebuild — confusing error path.
+
+    Pin: every fenced `go build` recipe in the proxy's docs has to write
+    to the same path the launcher reads."""
+    readme = (PROJECT_ROOT / "atlas-proxy" / "README.md").read_text()
+    repl_py = (PROJECT_ROOT / "atlas" / "cli" / "repl.py").read_text()
+
+    # The Python launcher's expectation:
+    assert "atlas-proxy-v2" in repl_py, (
+        "atlas/cli/repl.py is supposed to expect the `atlas-proxy-v2` binary "
+        "name — if that's no longer true, this whole test needs revisiting"
+    )
+
+    import re
+    # Every `go build -o ...` line in the README must end in `atlas-proxy-v2`.
+    builds = re.findall(r"go build [^\n]*-o ([^\s]+)", readme)
+    assert builds, "atlas-proxy/README.md should still contain at least one go build recipe"
+    for path in builds:
+        assert path.endswith("atlas-proxy-v2"), (
+            f"atlas-proxy/README.md `go build -o {path}` produces a binary "
+            "the Python launcher won't find — must end in atlas-proxy-v2"
+        )
+
+
 def test_atlas_proxy_readme_matches_actual_env_vars():
     """atlas-proxy/README.md's "Configuration" table must list the env vars
     the proxy actually reads, with the same defaults the code uses. The
