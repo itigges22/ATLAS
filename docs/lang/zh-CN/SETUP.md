@@ -72,12 +72,12 @@ atlas
 ### 首次运行说明
 
 1. Docker 从源码构建 5 个容器镜像：
-   - **llama-server** - 编译 llama.cpp 并启用 CUDA（最慢，约 5-10 分钟）
+   - **vLLM** - 编译 vLLM 并启用 CUDA（最慢，约 5-10 分钟）
    - **geometric-lens** - 安装 PyTorch CPU + FastAPI
    - **v3-service** - 安装 PyTorch CPU + benchmark 模块
    - **sandbox** - 安装 Node.js、Go、Rust、gcc
    - **atlas-proxy** - 编译 Go 二进制文件
-2. llama-server 将 7GB 模型加载到 GPU 显存中（约 1-2 分钟）
+2. vLLM 将 7GB 模型加载到 GPU 显存中（约 1-2 分钟）
 3. 所有服务开始健康检查
 4. 当全部 5 个服务报告健康后，`atlas` 连接并启动 Aider
 
@@ -87,7 +87,7 @@ atlas
 
 ```bash
 # 逐个检查每个服务
-curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
+curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
 curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
@@ -111,7 +111,7 @@ docker compose down --rmi all  # 停止并删除镜像（下次启动时重新�
 ### 查看日志
 
 ```bash
-docker compose logs -f llama-server    # 跟踪 llama-server 日志
+docker compose logs -f vLLM    # 跟踪 vLLM 日志
 docker compose logs -f geometric-lens  # 跟踪 Lens 日志
 docker compose logs -f v3-service      # 跟踪 V3 Pipeline 日志
 docker compose logs -f atlas-proxy     # 跟踪代理日志
@@ -139,7 +139,7 @@ docker compose up -d
 | 要求 | 详情 |
 |------|------|
 | **Go 1.24+** | 用于构建 atlas-proxy |
-| **llama.cpp** | 从源码编译并启用 CUDA（参见 [llama.cpp 构建说明](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)） |
+| **vLLM** | 从源码编译并启用 CUDA（参见 [vLLM 构建说明](https://github.com/ggml-org/vLLM?tab=readme-ov-file#build)） |
 | **Aider** | `pip install aider-chat` |
 | **Node.js 20+** | 沙箱执行 JavaScript/TypeScript 所需 |
 | **Rust** | 沙箱执行 Rust 所需 |
@@ -177,23 +177,23 @@ pip install fastapi uvicorn pylint pytest pydantic
 在不同的终端中分别启动每个服务（或使用 `&` 并重定向到日志文件）：
 
 ```bash
-# 终端 1：llama-server（GPU）
-llama-server \
+# 终端 1：vLLM（GPU）
+vLLM \
   --model models/Qwen3.5-9B-Q6_K.gguf \
   --host 0.0.0.0 --port 8080 \
   --ctx-size 32768 --n-gpu-layers 99 --no-mmap
 
 # 终端 2：Geometric Lens
 cd geometric-lens
-LLAMA_URL=http://localhost:8080 \
-LLAMA_EMBED_URL=http://localhost:8080 \
+LLAMA_URL=http://localhost:8000 \
+LLAMA_EMBED_URL=http://localhost:8000 \
 GEOMETRIC_LENS_ENABLED=true \
 PROJECT_DATA_DIR=/tmp/atlas-projects \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # 终端 3：V3 Pipeline
 cd v3-service
-ATLAS_INFERENCE_URL=http://localhost:8080 \
+ATLAS_INFERENCE_URL=http://localhost:8000 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
@@ -204,8 +204,8 @@ python executor_server.py
 
 # 终端 5：atlas-proxy
 ATLAS_PROXY_PORT=8090 \
-ATLAS_INFERENCE_URL=http://localhost:8080 \
-ATLAS_LLAMA_URL=http://localhost:8080 \
+ATLAS_INFERENCE_URL=http://localhost:8000 \
+ATLAS_LLAMA_URL=http://localhost:8000 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
@@ -335,7 +335,7 @@ scripts/verify-install.sh
 任何具有 16GB+ 显存和 CUDA 支持的 NVIDIA GPU。已测试：
 - RTX 5060 Ti 16GB（主要开发用 GPU）
 
-AMD 和 Intel GPU 尚未测试。llama.cpp 支持 ROCm 和其他后端 - ROCm 支持是 V3.1 的优先事项。
+AMD 和 Intel GPU 尚未测试。vLLM 支持 ROCm 和其他后端 - ROCm 支持是 V3.1 的优先事项。
 
 ---
 

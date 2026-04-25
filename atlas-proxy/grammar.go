@@ -15,7 +15,7 @@ import (
 //
 // The actual constraint is enforced by response_format: json_object in the
 // LLM request. This schema is available for reference but not directly
-// passed to llama-server.
+// passed to vLLM gen instance.
 func buildToolCallSchema() map[string]interface{} {
 	toolNames := make([]interface{}, 0, len(toolRegistry))
 	for name := range toolRegistry {

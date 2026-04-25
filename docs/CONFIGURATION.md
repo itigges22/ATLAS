@@ -26,13 +26,13 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | Model filename (must exist in ATLAS_MODELS_DIR) |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses |
 | `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens |
-| `ATLAS_LLAMA_PORT` | `8080` | llama-server host port |
+| `ATLAS_GEN_PORT` | `8000` | vLLM host port |
 | `ATLAS_LENS_PORT` | `8099` | Geometric Lens host port |
 | `ATLAS_V3_PORT` | `8070` | V3 Pipeline service host port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port (container listens on 8020) |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (Aider connects here) |
 
-Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are hardcoded in `docker-compose.yml` and do not need to be configured by users.
+Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://vllm-gen:8000`). These are hardcoded in `docker-compose.yml` and do not need to be configured by users.
 
 ---
 
@@ -45,13 +45,13 @@ The Go proxy that runs the agent loop, routes tool calls, and translates between
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_PROXY_PORT` | `8090` | Port to listen on |
-| `ATLAS_INFERENCE_URL` | `http://localhost:8080` | llama-server endpoint for generation |
-| `ATLAS_LLAMA_URL` | (falls back to ATLAS_INFERENCE_URL) | llama-server endpoint for grammar-constrained calls |
+| `ATLAS_INFERENCE_URL` | `http://localhost:8000` | vLLM endpoint for generation |
+| `ATLAS_LLAMA_URL` | (falls back to ATLAS_INFERENCE_URL) | vLLM endpoint for grammar-constrained calls |
 | `ATLAS_LENS_URL` | `http://localhost:8099` | Geometric Lens scoring endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox code execution endpoint |
 | `ATLAS_V3_URL` | `http://localhost:8070` | V3 Pipeline service endpoint |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API responses |
-| `ATLAS_AGENT_LOOP` | (unset) | Set to `1` to enable tool-call agent loop. When unset or any other value, proxy forwards to llama-server directly. |
+| `ATLAS_AGENT_LOOP` | (unset) | Set to `1` to enable tool-call agent loop. When unset or any other value, proxy forwards to vLLM directly. |
 | `ATLAS_V3_CLI` | (unset) | Set to `1` to enable V3 CLI mode (routes all generation through V3 service) |
 
 ### Internal Settings (not configurable via env)
@@ -72,8 +72,8 @@ The Go proxy that runs the agent loop, routes tool calls, and translates between
 | Command stderr limit | 4,000 chars | Prevents context flooding |
 | Search results limit | 200 matches | Prevents context flooding |
 | File search skip | Files > 1 MB | Performance |
-| max_tokens | 32,768 | Sent to llama-server |
-| temperature | 0.3 | Sent to llama-server |
+| max_tokens | 32,768 | Sent to vLLM |
+| temperature | 0.3 | Sent to vLLM |
 
 ---
 
@@ -85,7 +85,7 @@ Python HTTP service that orchestrates the V3 code generation pipeline (PlanSearc
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_INFERENCE_URL` | `http://localhost:8080` | llama-server endpoint for generation and embeddings |
+| `ATLAS_INFERENCE_URL` | `http://localhost:8000` | vLLM endpoint for generation and embeddings |
 | `ATLAS_LENS_URL` | `http://localhost:8099` | Geometric Lens endpoint for C(x)/G(x) scoring |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox endpoint for code execution |
 | `ATLAS_V3_PORT` | `8070` | Port to listen on |
@@ -120,11 +120,11 @@ Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence r
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GEOMETRIC_LENS_ENABLED` | `false` | Enable C(x)/G(x) scoring. Docker Compose sets this to `true`. |
-| `LLAMA_URL` | `http://llama-service:8000` | llama-server endpoint. Docker Compose overrides to `http://llama-server:8080`. |
+| `LLAMA_URL` | `http://llama-service:8000` | vLLM endpoint. Docker Compose overrides to `http://vllm-gen:8000`. |
 | `LLAMA_EMBED_URL` | (falls back to LLAMA_URL) | Embedding endpoint. Set separately if using a dedicated embedding server. |
 | `PROJECT_DATA_DIR` | `/data/projects` | Directory for project index storage |
 | `REDIS_URL` | `redis://redis:6379` | Redis connection for confidence router and pattern cache. Features using Redis degrade gracefully if unavailable. |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8080` | Allowed CORS origins (comma-separated) |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8000` | Allowed CORS origins (comma-separated) |
 | `CONFIG_PATH` | `/app/config/config.yaml` | Path to YAML config file (optional, defaults used if missing) |
 | `API_KEYS_PATH` | `/app/secrets/api-keys.json` | Path to API keys JSON (optional) |
 | `API_PORTAL_URL` | `http://api-portal:3000` | API portal URL (K3s deployment only) |
@@ -179,9 +179,9 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 
 ---
 
-## 6. llama-server
+## 6. vLLM
 
-C++ inference server (llama.cpp) with CUDA GPU acceleration and grammar-constrained JSON output.
+C++ inference server (vLLM) with CUDA GPU acceleration and grammar-constrained JSON output.
 
 ### Docker Compose Flags
 
@@ -191,7 +191,7 @@ Used when running via `docker compose up`:
 |------|-------|-------------|
 | `--model` | `/models/${ATLAS_MODEL_FILE}` | Path to GGUF model (inside container) |
 | `--host` | `0.0.0.0` | Listen on all interfaces |
-| `--port` | `8080` | Listen port |
+| `--port` | `8000` | Listen port |
 | `--ctx-size` | `${ATLAS_CTX_SIZE:-32768}` | Context window in tokens |
 | `--n-gpu-layers` | `99` | Offload all layers to GPU |
 | `--no-mmap` | — | Disable mmap for stability |
@@ -226,7 +226,7 @@ The standalone Python REPL (`pip install -e . && atlas`) reads these variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_INFERENCE_URL` | `http://localhost:8080` | llama-server endpoint |
+| `ATLAS_INFERENCE_URL` | `http://localhost:8000` | vLLM endpoint |
 | `ATLAS_RAG_URL` | `http://localhost:8099` | Geometric Lens endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox endpoint |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API calls |
@@ -257,7 +257,7 @@ Two files in the project root control how Aider interacts with the ATLAS proxy:
 | `use_repo_map` | `true` | Include repository file tree in context |
 | `send_undo_reply` | `true` | Notify model when user undoes a change |
 | `examples_as_sys_msg` | `true` | Put few-shot examples in system prompt |
-| `max_tokens` | `32768` | Must match llama-server context window |
+| `max_tokens` | `32768` | Must match vLLM context window |
 | `temperature` | `0.3` | Low temperature for deterministic tool calls |
 | `streaming` | `true` | Enable SSE streaming for real-time output |
 

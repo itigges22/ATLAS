@@ -8,7 +8,7 @@ API endpoints for each ATLAS service. All services communicate over HTTP/JSON. S
 
 ## atlas-proxy (Port 8090)
 
-The main entry point. Wraps llama-server with an agent loop, grammar-constrained tool calls, Lens scoring, and sandbox verification. This is what Aider connects to.
+The main entry point. Wraps vLLM with an agent loop, grammar-constrained tool calls, Lens scoring, and sandbox verification. This is what Aider connects to.
 
 ### POST /v1/chat/completions
 
@@ -119,7 +119,7 @@ curl http://localhost:8090/health
 }
 ```
 
-> **Note:** `/chat/completions` and `/models` (without `/v1/` prefix) are aliases for their `/v1/` counterparts. Any unmatched path is proxied directly to llama-server.
+> **Note:** `/chat/completions` and `/models` (without `/v1/` prefix) are aliases for their `/v1/` counterparts. Any unmatched path is proxied directly to vLLM.
 
 ---
 
@@ -404,39 +404,51 @@ curl http://localhost:30820/health
 
 ---
 
-## llama-server (Port 8080)
+## vLLM gen (Port 8000) and vLLM embed (Port 8001)
 
-Standard llama.cpp server API. See [llama.cpp documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+ATLAS runs **two** vLLM instances. The gen instance handles chat completions
+and raw completions; the embed instance is dedicated to `/v1/embeddings`
+because vLLM serves only one task per process. See the
+[vLLM OpenAI-compatible server docs](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html)
+for the full API reference.
 
-### POST /v1/chat/completions
+### POST /v1/chat/completions (gen instance)
 
-OpenAI-compatible chat completions with `response_format` support for grammar-constrained JSON output.
+OpenAI-compatible chat completions. With `--reasoning-parser qwen3`, thinking
+content lands in `choices[0].message.reasoning_content` rather than `content`.
+Disable thinking via `chat_template_kwargs.enable_thinking=false`.
 
 **Example:**
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen3.5-9B-Q6_K",
-    "messages": [{"role":"user","content":"/nothink\nSay hello"}],
+    "model": "qwen3.5-9b",
+    "messages": [{"role":"user","content":"Say hello"}],
     "max_tokens": 50,
-    "response_format": {"type": "json_object"}
+    "chat_template_kwargs": {"enable_thinking": false}
   }'
 ```
 
-### POST /completion
+### POST /v1/completions (gen instance)
 
-Raw completion endpoint (no chat template). Used internally by the benchmark runner.
+Raw completion endpoint (no chat template applied). The V3 pipeline uses this
+because it builds ChatML strings directly.
 
-### POST /embedding
+### POST /v1/embeddings (embed instance)
 
-Generate embeddings for input text. Used by Geometric Lens for C(x)/G(x) scoring.
+OpenAI-compatible embeddings. Returns 4096-dim hidden states for Qwen3.5-9B.
+
+```bash
+curl http://localhost:8001/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.5-9b-embed","input":"def add(a,b): return a+b"}'
+```
 
 ### GET /health
 
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8000/health   # gen
+curl http://localhost:8001/health   # embed
 # {"status":"ok"}
 ```
-
-> llama-server exposes many more endpoints. See the [llama.cpp server docs](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) for the full API reference.

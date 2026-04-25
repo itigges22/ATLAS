@@ -39,7 +39,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`__init__.py`](#atlas-cli)
   - [`cli/`](#atlas-cli)
     - [`repl.py`](#atlas-cli) — Interactive REPL entry point
-    - [`client.py`](#atlas-cli) — HTTP client for llama-server, Lens, sandbox
+    - [`client.py`](#atlas-cli) — HTTP client for vLLM, Lens, sandbox
     - [`display.py`](#atlas-cli) — Terminal output formatting and colors
     - [`__init__.py`](#atlas-cli), [`__main__.py`](#atlas-cli)
     - [`commands/`](#atlas-cli)
@@ -117,7 +117,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
     - [`metric_tensor.py`](#geometric-lens-models) — G(x): diagonal metric tensor + PCA
     - [`service.py`](#geometric-lens-models) — Service layer: evaluate_combined(), scoring API
     - [`training.py`](#geometric-lens-models) — Training pipeline: contrastive loss, retraining
-    - [`embedding_extractor.py`](#geometric-lens-models) — llama-server /v1/embeddings client
+    - [`embedding_extractor.py`](#geometric-lens-models) — vLLM /v1/embeddings client
     - [`ewc.py`](#geometric-lens-models) — Elastic Weight Consolidation
     - [`correction.py`](#geometric-lens-models) — Natural gradient correction engine
     - [`replay_buffer.py`](#geometric-lens-models) — Domain-stratified experience replay
@@ -156,9 +156,9 @@ Every file in the repository. Click any directory in the tree to jump to its des
 - [`sandbox/`](#sandbox) — Isolated code execution
   - [`executor_server.py`](#sandbox) — FastAPI server, 8 language executors, linting, error classification
   - [`Dockerfile`](#sandbox) — Container build (Python, Node, Go, Rust, gcc)
-- [`inference/`](#inference) — llama-server configuration
+- [`inference/`](#inference) — vLLM configuration
   - [`Dockerfile.v31`](#inference) — V3.1 9B model build (used by docker-compose)
-  - [`Dockerfile`](#inference) — Base llama.cpp build
+  - [`Dockerfile`](#inference) — Base vLLM build
   - [`Dockerfile.mtp`](#inference) — Multi-Token Prediction experimental build
   - [`entrypoint-v3.1-9b.sh`](#inference) — K3s 9B entrypoint (flash-attn, mlock, 4 slots)
   - [`entrypoint-v3-specdec.sh`](#inference) — K3s 14B + spec decode entrypoint
@@ -191,7 +191,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`validate_tests.py`](#tests) — Test runner entry point
   - [`conftest.py`](#tests) — Pytest shared fixtures
   - [`infrastructure/`](#tests)
-    - [`test_llm.py`](#tests) — llama-server connectivity tests
+    - [`test_llm.py`](#tests) — vLLM connectivity tests
     - [`test_sandbox.py`](#tests) — Sandbox connectivity tests
   - [`integration/`](#tests)
     - [`test_e2e_flow.py`](#tests) — End-to-end pipeline flow test
@@ -237,7 +237,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
 | [`.aider.model.settings.yml`](../.aider.model.settings.yml) | Aider behavior: whole-file edit format, repo map enabled, streaming on, temperature 0.3 |
 | [`.env.example`](../.env.example) | Docker Compose env template: model path, ports (8080/8099/8070/30820/8090), context size |
 | [`atlas.conf.example`](../atlas.conf.example) | K3s deployment config: model, GPU layers, parallel slots, NodePorts, namespace |
-| [`docker-compose.yml`](../docker-compose.yml) | 5-service stack: llama-server, geometric-lens, v3-service, sandbox, atlas-proxy |
+| [`docker-compose.yml`](../docker-compose.yml) | 5-service stack: vLLM, geometric-lens, v3-service, sandbox, atlas-proxy |
 | [`pyproject.toml`](../pyproject.toml) | Python package: `atlas` CLI entry point (`atlas.cli.repl:run`), requires Python >= 3.9 |
 | [`.gitignore`](../.gitignore) | Ignores: model weights, __pycache__, .aider* (except config files), logs, .env |
 
@@ -282,11 +282,11 @@ Standalone REPL for direct interaction with ATLAS services (without Aider).
 | File | Description |
 |------|-------------|
 | [`cli/repl.py`](../atlas/cli/repl.py) | Main entry point (`atlas` command). Interactive REPL with /solve, /bench, /status, /help. Pipe mode support. |
-| [`cli/client.py`](../atlas/cli/client.py) | HTTP client for llama-server, Geometric Lens, sandbox. Health checks, generation (batch + streaming), scoring, sandbox execution. |
+| [`cli/client.py`](../atlas/cli/client.py) | HTTP client for vLLM, Geometric Lens, sandbox. Health checks, generation (batch + streaming), scoring, sandbox execution. |
 | [`cli/display.py`](../atlas/cli/display.py) | Terminal formatting: banner, colors, status blocks, prompts, separators |
 | [`cli/commands/solve.py`](../atlas/cli/commands/solve.py) | /solve: generate code from LLM, extract from think blocks, score via Lens, test via sandbox |
 | [`cli/commands/bench.py`](../atlas/cli/commands/bench.py) | /bench: delegates to benchmark.v3_runner with dataset/strategy/task-count args |
-| [`cli/commands/status.py`](../atlas/cli/commands/status.py) | /status: check health of llama-server, Lens, sandbox |
+| [`cli/commands/status.py`](../atlas/cli/commands/status.py) | /status: check health of vLLM, Lens, sandbox |
 
 <a id="benchmark"></a>
 <a id="benchmark-core"></a>
@@ -391,7 +391,7 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`metric_tensor.py`](../geometric-lens/geometric_lens/metric_tensor.py) | G(x): PCA(4096->128) + diagonal metric tensor + input-dependent modulation. Code exists, not deployed. |
 | [`service.py`](../geometric-lens/geometric_lens/service.py) | Service layer: lazy model loading, evaluate_combined() (single embedding for C(x)+G(x)), verdict thresholds, hot-reload |
 | [`training.py`](../geometric-lens/geometric_lens/training.py) | train_cost_field() (200 epochs), retrain_cost_field_bce() (production retrain with class weights, early stopping) |
-| [`embedding_extractor.py`](../geometric-lens/geometric_lens/embedding_extractor.py) | Calls llama-server POST /v1/embeddings, handles pooled and per-token responses, mean pooling |
+| [`embedding_extractor.py`](../geometric-lens/geometric_lens/embedding_extractor.py) | Calls vLLM POST /v1/embeddings, handles pooled and per-token responses, mean pooling |
 | [`ewc.py`](../geometric-lens/geometric_lens/ewc.py) | Elastic Weight Consolidation: Fisher Information Matrix, penalty term, prevents catastrophic forgetting |
 | [`correction.py`](../geometric-lens/geometric_lens/correction.py) | Natural gradient correction: -alpha * G_inv * grad_C. PCA projection/unprojection. Correctability score. |
 | [`replay_buffer.py`](../geometric-lens/geometric_lens/replay_buffer.py) | Domain-stratified reservoir sampling. 30% old / 70% new training mix. JSON persistence. |
@@ -457,16 +457,16 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`Dockerfile`](../sandbox/Dockerfile) | Python 3.11-slim + Node.js 20 + Go 1.22 + Rust stable + gcc/g++. tmpfs workspace, read-only root. |
 
 <a id="inference"></a>
-### inference/ — llama-server Configuration
+### inference/ — vLLM Configuration
 
 | File | Description |
 |------|-------------|
-| [`Dockerfile.v31`](../inference/Dockerfile.v31) | V3.1 9B model Docker build. Used by docker-compose. Builds llama.cpp from source with CUDA. |
-| [`Dockerfile`](../inference/Dockerfile) | Base llama.cpp build with CUDA support. |
-| [`Dockerfile.mtp`](../inference/Dockerfile.mtp) | Multi-Token Prediction experimental build. |
+| [`Dockerfile.v31`](../benchmarks/h200/Dockerfile) | V3.1 9B model Docker build. Used by docker-compose. Builds vLLM from source with CUDA. |
+| [`Dockerfile`](../benchmarks/h200/Dockerfile) | Base vLLM build with CUDA support. |
+| [`Dockerfile.mtp`](../benchmarks/h200/Dockerfile) | Multi-Token Prediction experimental build. |
 | [`entrypoint-v3.1-9b.sh`](../inference/entrypoint-v3.1-9b.sh) | K3s 9B production entrypoint: flash-attn, mlock, --parallel 4, KV quant (q8_0/q4_0), embeddings, 160K context. |
 | [`entrypoint-v3-specdec.sh`](../inference/entrypoint-v3-specdec.sh) | K3s 14B + spec decode entrypoint: Qwen3-14B main + Qwen3-0.6B draft, embeddings patch. |
-| [`entrypoint.sh`](../inference/entrypoint.sh) | Default entrypoint: basic llama-server launch with configurable flags. |
+| [`entrypoint.sh`](../inference/entrypoint.sh) | Default entrypoint: basic vLLM launch with configurable flags. |
 | [`entrypoint-embed.sh`](../inference/entrypoint-embed.sh) | Dedicated embedding server entrypoint (nomic-embed-text-v1.5). |
 | [`entrypoint-mtp.sh`](../inference/entrypoint-mtp.sh) | MTP experimental entrypoint. |
 | [`patches/fix-embeddings-spec-decode.patch`](../inference/patches/fix-embeddings-spec-decode.patch) | One-line patch: prevents embedding=true from poisoning draft model context in spec decode. |
@@ -505,7 +505,7 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`validate_tests.py`](../tests/validate_tests.py) | Test runner entry point |
 | [`conftest.py`](../tests/conftest.py) | Pytest shared fixtures |
 | **infrastructure/** | |
-| [`test_llm.py`](../tests/infrastructure/test_llm.py) | llama-server health and generation tests |
+| [`test_llm.py`](../tests/infrastructure/test_llm.py) | vLLM health and generation tests |
 | [`test_sandbox.py`](../tests/infrastructure/test_sandbox.py) | Sandbox execution tests |
 | **integration/** | |
 | [`test_e2e_flow.py`](../tests/integration/test_e2e_flow.py) | End-to-end pipeline flow test |

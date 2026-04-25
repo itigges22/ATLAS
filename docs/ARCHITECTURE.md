@@ -11,7 +11,7 @@ graph LR
     User["User"] --> Aider["Aider"] --> Proxy["atlas-proxy\n:8090"]
 
     subgraph outer["Outer Layer"]
-        Proxy -->|"grammar JSON"| LLM["llama-server\n:8080"]
+        Proxy -->|"grammar JSON"| LLM["vLLM\n:8080"]
         Proxy -->|"T2 files"| V3Service["v3-service\n:8070"]
     end
 
@@ -31,7 +31,7 @@ graph LR
     style Sandbox fill:#2d5016,color:#fff
 ```
 
-Services run as containers via Docker Compose (recommended) or as local processes via the `atlas` launcher. Only llama-server uses the GPU. Everything else runs on CPU.
+Services run as containers via Docker Compose (recommended) or as local processes via the `atlas` launcher. Only vLLM uses the GPU. Everything else runs on CPU.
 
 ---
 
@@ -39,7 +39,7 @@ Services run as containers via Docker Compose (recommended) or as local processe
 
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
-| **llama-server** | 8080 | C++ (llama.cpp) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
+| **vLLM** | 8080 | C++ (vLLM) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, Aider format translation |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
@@ -78,7 +78,7 @@ graph LR
 
 ```mermaid
 flowchart LR
-    Start["Aider msg"] --> Build["Build prompt"] --> Call["llama-server"] --> Parse["Parse JSON"]
+    Start["Aider msg"] --> Build["Build prompt"] --> Call["vLLM"] --> Parse["Parse JSON"]
     Parse --> Route{Type?}
 
     Route -->|"tool_call"| Tier{"T2?"}
@@ -99,7 +99,7 @@ flowchart LR
 
 ### Grammar Enforcement
 
-llama-server's `response_format: {"type": "json_object"}` forces every model output to be exactly one of three valid JSON shapes:
+vLLM's `response_format: {"type": "json_object"}` forces every model output to be exactly one of three valid JSON shapes:
 
 ```json
 {"type": "tool_call", "name": "<tool_name>", "args": {...}}
@@ -107,7 +107,7 @@ llama-server's `response_format: {"type": "json_object"}` forces every model out
 {"type": "done", "summary": "<summary>"}
 ```
 
-The JSON schema uses `oneOf` with `additionalProperties: false` and enumerates tool names from the registry. The model cannot produce invalid JSON — token generation is grammar-constrained at the llama-server level.
+The JSON schema uses `oneOf` with `additionalProperties: false` and enumerates tool names from the registry. The model cannot produce invalid JSON — token generation is grammar-constrained at the vLLM level.
 
 ### Tools
 
@@ -309,7 +309,7 @@ The core idea behind the Geometric Lens comes from a simple premise: stop scalin
 
 Anthropic's [Manipulating Manifolds](https://transformer-circuits.pub/2025/linebreaks/index.html) research provides evidence that transformers already create manipulable geometric structures in their embedding space - the raw material is already there. Bar et al.'s [Geometric Unification of Generative AI](https://arxiv.org/html/2510.00666v1) formalizes how distance functions on data manifolds can be learned and used for scoring.
 
-ATLAS implements this with two complementary models. C(x) is a learned energy function (4096-to-512-to-128-to-1 MLP) over the model's own embeddings. Each code candidate gets embedded by llama-server, and C(x) scores where it sits in that geometry. Low energy means the candidate clusters with known-correct code. High energy means it clusters with known-incorrect code. No external oracle, no execution required - just the geometry of the model's own representations.
+ATLAS implements this with two complementary models. C(x) is a learned energy function (4096-to-512-to-128-to-1 MLP) over the model's own embeddings. Each code candidate gets embedded by vLLM, and C(x) scores where it sits in that geometry. Low energy means the candidate clusters with known-correct code. High energy means it clusters with known-incorrect code. No external oracle, no execution required - just the geometry of the model's own representations.
 
 G(x) is the metric tensor - a diagonal tensor in PCA-reduced embedding space that captures how the energy landscape curves in different directions. Where C(x) answers "how good is this candidate?", G(x) answers "which direction should we move to improve it?" The correction engine uses G(x) to compute geometry-aware gradient steps (`-α · G⁻¹ · ∇C`), steering candidates downhill toward correctness along the natural curvature of the manifold rather than taking naive gradient steps. G(x) is implemented and deployed in V3.0.1.
 
@@ -317,7 +317,7 @@ G(x) is the metric tensor - a diagonal tensor in PCA-reduced embedding space tha
 
 ```mermaid
 graph LR
-    EE["Embedding Extractor\nllama-server /embedding\n4096-dim"] --> CX["C(x) Cost Field\n4096→512→128→1\nSiLU + Softplus"]
+    EE["Embedding Extractor\nvLLM /embedding\n4096-dim"] --> CX["C(x) Cost Field\n4096→512→128→1\nSiLU + Softplus"]
     EE --> GX["G(x) XGBoost\nPCA(128) + classifier"]
     CX --> SVC["Service Layer\nevaluate_combined()"]
     GX --> SVC
@@ -448,14 +448,14 @@ Running on RTX 5060 Ti 16GB with Docker Compose defaults (32K context):
 |-----------|------|
 | Qwen3.5-9B-Q6_K model weights | ~6.9 GB |
 | KV cache (32K context) | ~1.3 GB |
-| **Total llama-server** | **~8.2 GB** |
+| **Total vLLM** | **~8.2 GB** |
 | Geometric Lens | 0 (CPU-only, ~12 MB RAM for models, ~128 MB for PyTorch runtime) |
 | v3-service | 0 (CPU-only) |
 | sandbox | 0 (CPU-only) |
 | atlas-proxy | 0 (Go binary, ~30 MB RAM) |
 | **Free VRAM** | **~7.8 GB** |
 
-All computation outside of llama-server runs on CPU. The GPU is used exclusively for LLM inference and embedding extraction.
+All computation outside of vLLM runs on CPU. The GPU is used exclusively for LLM inference and embedding extraction.
 
 ---
 
@@ -465,7 +465,7 @@ All computation outside of llama-server runs on CPU. The GPU is used exclusively
 
 ```mermaid
 graph LR
-    LLM["llama-server"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
+    LLM["vLLM"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
     LLM -->|"healthy"| V3["v3-service"] -->|"healthy"| AP
     SB["sandbox"] -->|"healthy"| AP
 
@@ -476,7 +476,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` and `sandbox` start independently (no dependencies). `geometric-lens` and `v3-service` wait for `llama-server` to be healthy. `atlas-proxy` waits for all four services. First run builds container images (several minutes); subsequent starts are fast.
+`vLLM` and `sandbox` start independently (no dependencies). `geometric-lens` and `v3-service` wait for `vLLM` to be healthy. `atlas-proxy` waits for all four services. First run builds container images (several minutes); subsequent starts are fast.
 
 ### Bare Metal
 
@@ -497,7 +497,7 @@ sequenceDiagram
     participant U as User
     participant A as Aider
     participant P as atlas-proxy :8090
-    participant L as llama-server :8080
+    participant L as vLLM :8080
 
     U->>A: "Create a config file"
     A->>P: POST /v1/chat/completions (SSE)
@@ -518,7 +518,7 @@ sequenceDiagram
     participant U as User
     participant A as Aider
     participant P as atlas-proxy :8090
-    participant L as llama-server :8080
+    participant L as vLLM :8080
     participant V as v3-service :8070
     participant G as geometric-lens :8099
     participant S as sandbox :30820
@@ -556,7 +556,7 @@ sequenceDiagram
     A-->>U: File created
 ```
 
-Minimum 3 llama-server calls (1 probe generation + 1 self-test generation + 1 embedding extraction). Maximum 30+ if Phase 3 repair engages all strategies.
+Minimum 3 vLLM calls (1 probe generation + 1 self-test generation + 1 embedding extraction). Maximum 30+ if Phase 3 repair engages all strategies.
 
 ### Edit Existing Code
 
@@ -565,7 +565,7 @@ sequenceDiagram
     participant U as User
     participant A as Aider
     participant P as atlas-proxy :8090
-    participant L as llama-server :8080
+    participant L as vLLM :8080
 
     U->>A: "Fix the bug in auth.py"
     A->>P: POST /v1/chat/completions (SSE)

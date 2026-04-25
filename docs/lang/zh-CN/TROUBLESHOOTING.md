@@ -15,7 +15,7 @@ ATLAS V3.0.1 的常见问题与解决方案，按服务分类。
 docker compose ps
 
 # 逐个健康检查
-curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
+curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
 curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
@@ -48,7 +48,7 @@ atlas-proxy 的健康检查端点会报告所有上游服务的状态：
 
 ### 容器中未检测到 GPU
 
-**现象：** llama-server 容器启动但模型在 CPU 上加载（非常慢，约 2 tok/s）。主机上 `nvidia-smi` 能看到 GPU 但容器内无法访问。
+**现象：** vLLM 容器启动但模型在 CPU 上加载（非常慢，约 2 tok/s）。主机上 `nvidia-smi` 能看到 GPU 但容器内无法访问。
 
 **解决方法：** 安装 NVIDIA Container Toolkit：
 
@@ -75,11 +75,11 @@ podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi
 
 ### 首次构建失败（找不到 CUDA）
 
-**现象：** `docker compose build` 在 llama-server 编译过程中出现 CUDA 相关错误。
+**现象：** `docker compose build` 在 vLLM 编译过程中出现 CUDA 相关错误。
 
-**解决方法：** llama-server 的 Dockerfile 在 `nvidia/cuda:12.8.0-devel` 基础镜像中构建 llama.cpp，因此构建时不需要主机 GPU 访问即可使用 CUDA 头文件。常见的构建失败原因：
+**解决方法：** vLLM 的 Dockerfile 在 `nvidia/cuda:12.8.0-devel` 基础镜像中构建 vLLM，因此构建时不需要主机 GPU 访问即可使用 CUDA 头文件。常见的构建失败原因：
 1. 磁盘空间不足（构建产物需要约 5GB）
-2. 下载 CUDA 基础镜像或克隆 llama.cpp 时的网络问题
+2. 下载 CUDA 基础镜像或克隆 vLLM 时的网络问题
 3. Podman 非 root 构建可能因权限问题失败 - 尝试使用 `podman-compose build` 加上 `--podman-build-args="--format docker"`
 
 ### SELinux 阻止容器访问（Fedora/RHEL）
@@ -114,29 +114,29 @@ docker network create atlas
 lsof -i :8080
 
 # 在 .env 中更改端口
-ATLAS_LLAMA_PORT=8081    # llama-server 使用不同端口
+ATLAS_LLAMA_PORT=8081    # vLLM 使用不同端口
 ```
 
 所有端口均可通过 `.env` 配置。参见 [CONFIGURATION.md](../../CONFIGURATION.md)。
 
 ---
 
-## llama-server 问题
+## vLLM 问题
 
 ### 模型在 CPU 而非 GPU 上加载
 
-**现象：** 生成速度约 2 tok/s 而非约 50 tok/s。`nvidia-smi` 未显示 llama-server 使用 GPU。
+**现象：** 生成速度约 2 tok/s 而非约 50 tok/s。`nvidia-smi` 未显示 vLLM 使用 GPU。
 
 **解决方法：** 确保设置了 `--n-gpu-layers 99`（将所有层卸载到 GPU）。Docker Compose 中这是默认设置。裸机部署时，请检查启动命令：
 ```bash
-ps aux | grep llama-server | grep 'n-gpu-layers'
+ps aux | grep vLLM | grep 'n-gpu-layers'
 ```
 
 如果使用 Docker，请确保已配置 NVIDIA 容器运行时（参见上方 GPU 章节）。
 
 ### 模型文件未找到
 
-**现象：** llama-server 立即退出，报错 "failed to load model" 或类似信息。
+**现象：** vLLM 立即退出，报错 "failed to load model" 或类似信息。
 
 **解决方法：** 检查模型路径：
 ```bash
@@ -151,7 +151,7 @@ ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
 
 ### 显存不足
 
-**现象：** llama-server 启动后不久崩溃或被 OOMKill。`nvidia-smi` 显示显存接近 100%。
+**现象：** vLLM 启动后不久崩溃或被 OOMKill。`nvidia-smi` 显示显存接近 100%。
 
 **解决方法：** 9B Q6_K 模型需要约 8.2 GB 显存（模型 + KV 缓存）。请确保：
 1. 没有其他 GPU 进程在运行（`nvidia-smi` - 检查其他 CUDA 进程）
@@ -167,9 +167,9 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **现象：** 模型输出 `<think>` 标签或原始文本，而非 JSON 工具调用。
 
-**解决方法：** 当 `ATLAS_AGENT_LOOP=1` 时，代理会自动设置 `response_format: {"type": "json_object"}`。如果直接使用 llama-server，请在请求中包含该参数：
+**解决方法：** 当 `ATLAS_AGENT_LOOP=1` 时，代理会自动设置 `response_format: {"type": "json_object"}`。如果直接使用 vLLM，请在请求中包含该参数：
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen3.5-9B-Q6_K",
@@ -179,7 +179,7 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-如果返回的是原始文本而非 JSON，说明你的 llama.cpp 构建不支持 `response_format`。请从最新源码重新构建。
+如果返回的是原始文本而非 JSON，说明你的 vLLM 构建不支持 `response_format`。请从最新源码重新构建。
 
 ### 上下文窗口过小
 
@@ -191,7 +191,7 @@ curl http://localhost:8080/v1/chat/completions \
 grep CTX_SIZE .env
 
 # 裸机
-ps aux | grep llama-server | grep ctx-size
+ps aux | grep vLLM | grep ctx-size
 ```
 
 ---
@@ -200,7 +200,7 @@ ps aux | grep llama-server | grep ctx-size
 
 ### 代理循环未激活
 
-**现象：** 请求直接发送到 llama-server。没有工具调用、没有流式状态图标、没有 V3 Pipeline。
+**现象：** 请求直接发送到 vLLM。没有工具调用、没有流式状态图标、没有 V3 Pipeline。
 
 **解决方法：** 设置 `ATLAS_AGENT_LOOP=1`。`atlas` 启动器会自动执行此操作。如果手动运行代理：
 ```bash
@@ -283,7 +283,7 @@ docker compose logs geometric-lens
 ```
 
 常见原因：
-- Lens 无法连接到 llama-server（检查 `LLAMA_URL` 环境变量）
+- Lens 无法连接到 vLLM（检查 `LLAMA_URL` 环境变量）
 - 模型权重文件缺失（服务会优雅降级 - 如果你尚未训练自定义模型，这是预期行为）
 
 ### 所有分数接近 0.5
@@ -305,17 +305,17 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **现象：** Lens 日志显示 "embedding extraction failed" 或超时等错误。
 
-**原因：** Lens 调用 llama-server 的 `/v1/embeddings` 端点。如果 llama-server 过载或该端点未启用，则会失败。
+**原因：** Lens 调用 vLLM 的 `/v1/embeddings` 端点。如果 vLLM 过载或该端点未启用，则会失败。
 
 **解决方法：**
 ```bash
 # 直接测试嵌入端点
-curl -s http://localhost:8080/v1/embeddings \
+curl -s http://localhost:8000/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"input": "test"}' | python3 -m json.tool
 ```
 
-对于生成模型的自嵌入，`/v1/embeddings` 端点在 llama.cpp 中无需特殊标志即可使用。在 K3s 中，入口脚本显式设置了 `--embeddings` 标志以获得完整的嵌入支持。
+对于生成模型的自嵌入，`/v1/embeddings` 端点在 vLLM 中无需特殊标志即可使用。在 K3s 中，入口脚本显式设置了 `--embeddings` 标志以获得完整的嵌入支持。
 
 ---
 
@@ -451,7 +451,7 @@ ls -la .aider.model.settings.yml .aider.model.metadata.json
 ### 生成速度慢（约 2 tok/s）
 
 模型正在 CPU 而非 GPU 上运行。请检查：
-1. `nvidia-smi` - llama-server 是否列为 GPU 进程？
+1. `nvidia-smi` - vLLM 是否列为 GPU 进程？
 2. `--n-gpu-layers 99` - 所有层是否已卸载到 GPU？
 3. NVIDIA Container Toolkit - 容器运行时是否已配置 GPU 访问？
 
@@ -474,7 +474,7 @@ ls -la .aider.model.settings.yml .aider.model.metadata.json
 **现象：** 系统变得卡顿或服务被 OOMKill。
 
 **预期内存使用：**
-- llama-server：约 8 GB（模型在显存中，仅占少量系统内存）
+- vLLM：约 8 GB（模型在显存中，仅占少量系统内存）
 - geometric-lens：约 200 MB（PyTorch 运行时 + 模型）
 - v3-service：约 150 MB（PyTorch 运行时）
 - sandbox：约 100 MB（基础值，编译时会有峰值）

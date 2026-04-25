@@ -67,13 +67,13 @@ flowchart TD
   / _ \ | | | |__ / _ \\__ \
  /_/ \_\|_| |____/_/ \_\___/
 
-  ✓ llama-server (port 8080)
+  ✓ vLLM (port 8080)
   ✓ Geometric Lens (port 8099)
   ✓ V3 Pipeline (port 8070)
   ✓ Proxy v2 (port 8090)
 
 [atlas] Stack ready. Launching aider...
-  llama-server → V3 Pipeline → Proxy v2 → Aider
+  vLLM → V3 Pipeline → Proxy v2 → Aider
   Grammar: response_format:json_object | V3 on T2+ files
   Context: 32K | GPU: RTX 5060 Ti | ~51 tok/s
 ```
@@ -82,7 +82,7 @@ Each service is health-checked via `GET /health` before proceeding:
 
 | Service | Port | Health Timeout |
 |---------|------|---------------|
-| llama-server | 8080 | 120s (model loading is slow) |
+| vLLM | 8080 | 120s (model loading is slow) |
 | Geometric Lens | 8099 | 30s |
 | V3 Pipeline | 8070 | 15s |
 | Proxy v2 | 8090 | 30s |
@@ -130,7 +130,7 @@ The proxy wraps each status update in OpenAI-compatible SSE chunks:
 sequenceDiagram
     participant A as Aider
     participant P as atlas-proxy
-    participant L as llama-server
+    participant L as vLLM
 
     A->>P: POST /v1/chat/completions (stream=true)
     P->>L: POST /v1/chat/completions (json_object)
@@ -333,14 +333,14 @@ Plain text input (no `/` prefix) is treated as a coding problem and solved direc
 ### REPL Health Checks
 
 On startup, the REPL checks:
-- **llama-server** at `ATLAS_INFERENCE_URL` (default: localhost:8080) — required, exits if unavailable
+- **vLLM** at `ATLAS_INFERENCE_URL` (default: localhost:8080) — required, exits if unavailable
 - **Geometric Lens** at `ATLAS_RAG_URL` (default: localhost:8099) — optional, warns "Lens unavailable — verification disabled"
 - **Sandbox** at `ATLAS_SANDBOX_URL` (default: localhost:30820) — optional, warns "Sandbox unavailable — code testing disabled"
 
 ### Solve Pipeline
 
 When you type a problem or use `/solve`:
-1. Generate code from llama-server (streaming if interactive, batch if piped)
+1. Generate code from vLLM (streaming if interactive, batch if piped)
 2. Extract code (handles `<think>` blocks, markdown fences, raw code)
 3. Score via Geometric Lens (C(x)/G(x) energy + verdict)
 4. Test via sandbox (if test cases available)
@@ -378,9 +378,9 @@ Generation parameters: `max_tokens=8192`, `temperature=0.6`, `top_k=20`, `top_p=
 
 ## Troubleshooting
 
-### llama-server fails to start (120s timeout)
+### vLLM fails to start (120s timeout)
 
-**Symptom:** `✗ llama-server failed to start (120s timeout)`
+**Symptom:** `✗ vLLM failed to start (120s timeout)`
 
 **Common causes:**
 - **GPU not detected**: Check `nvidia-smi` — driver must be installed and GPU visible
@@ -388,7 +388,7 @@ Generation parameters: `max_tokens=8192`, `temperature=0.6`, `top_k=20`, `top_p=
 - **Insufficient VRAM**: The 9B Q6_K model needs ~8.2 GB VRAM. Run `nvidia-smi` to check available memory. Close other GPU processes.
 - **Port conflict**: Another process may be using port 8080. Check with `lsof -i :8080`
 
-**Debug:** Check `logs/llama-server.log` for the actual error.
+**Debug:** Check `logs/vLLM.log` for the actual error.
 
 ### Geometric Lens reports "unavailable"
 
@@ -397,7 +397,7 @@ Generation parameters: `max_tokens=8192`, `temperature=0.6`, `top_k=20`, `top_p=
 This is non-fatal. ATLAS still works but skips C(x)/G(x) scoring and Lens-based candidate selection. The V3 pipeline falls back to sandbox-only verification.
 
 **Common causes:**
-- Lens service failed to connect to llama-server (check `logs/geometric-lens.log`)
+- Lens service failed to connect to vLLM (check `logs/geometric-lens.log`)
 - Model weight files missing from the models directory (service degrades gracefully)
 
 ### Sandbox reports "unavailable"
@@ -444,7 +444,7 @@ All ports and URLs are configurable:
 
 | Variable | Default | Used By | Purpose |
 |----------|---------|---------|---------|
-| `ATLAS_INFERENCE_URL` | `http://localhost:8080` | proxy, v3-service, Python CLI | llama-server endpoint |
+| `ATLAS_INFERENCE_URL` | `http://localhost:8000` | proxy, v3-service, Python CLI | vLLM endpoint |
 | `ATLAS_RAG_URL` | `http://localhost:8099` | Python CLI | Geometric Lens endpoint |
 | `ATLAS_LENS_URL` | `http://localhost:8099` | proxy, v3-service | Geometric Lens endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | proxy, v3-service, Python CLI | Sandbox endpoint |
@@ -461,7 +461,7 @@ All ports and URLs are configurable:
 | `ATLAS_AGENT_LOOP` | `1` | Enable agent loop in proxy (`1` = on) |
 | `ATLAS_PROXY_PORT` | `8090` | Proxy listening port |
 | `ATLAS_V3_PORT` | `8070` | V3 service listening port |
-| `ATLAS_LLAMA_PORT` | `8080` | llama-server listening port |
+| `ATLAS_GEN_PORT` | `8000` | vLLM listening port |
 | `ATLAS_LENS_PORT` | `8099` | Geometric Lens listening port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port |
 | `GEOMETRIC_LENS_ENABLED` | `true` | Enable/disable Lens scoring |
@@ -470,7 +470,7 @@ All ports and URLs are configurable:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ATLAS_LLAMA_BIN` | `~/llama-cpp-mtp/build/bin/llama-server` | Path to llama-server binary |
+| `ATLAS_LLAMA_BIN` | `~/llama-cpp-mtp/build/bin/vLLM` | Path to vLLM binary |
 | `ATLAS_MODEL_PATH` | `~/models/Qwen3.5-9B-Q6_K.gguf` | Full path to model file |
 
 ---
@@ -489,7 +489,7 @@ Controls how Aider interacts with the ATLAS proxy:
   send_undo_reply: true        # Notify model when user undoes changes
   examples_as_sys_msg: true    # Include examples in system prompt
   extra_params:
-    max_tokens: 32768          # Match llama-server context window
+    max_tokens: 32768          # Match vLLM context window
     temperature: 0.3           # Low temp for deterministic output
   cache_control: false         # No Anthropic-style caching
   caches_by_default: false

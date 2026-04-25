@@ -72,12 +72,12 @@ atlas
 ### 初回実行時の動作
 
 1. Docker が 5 つのコンテナイメージをソースからビルドします:
-   - **llama-server** -- llama.cpp を CUDA でコンパイル (最も遅い、約 5-10 分)
+   - **vLLM** -- vLLM を CUDA でコンパイル (最も遅い、約 5-10 分)
    - **geometric-lens** -- PyTorch CPU + FastAPI をインストール
    - **v3-service** -- PyTorch CPU + ベンチマークモジュールをインストール
    - **sandbox** -- Node.js、Go、Rust、gcc をインストール
    - **atlas-proxy** -- Go バイナリをコンパイル
-2. llama-server が 7GB のモデルを GPU VRAM にロード (約 1-2 分)
+2. vLLM が 7GB のモデルを GPU VRAM にロード (約 1-2 分)
 3. 全サービスがヘルスチェックを開始
 4. 5 つのサービスすべてが正常と報告されると、`atlas` が接続して Aider を起動
 
@@ -87,7 +87,7 @@ atlas
 
 ```bash
 # 各サービスを個別に確認
-curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
+curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
 curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
@@ -111,7 +111,7 @@ docker compose down --rmi all  # 停止してイメージも削除 (次回起動
 ### ログの確認
 
 ```bash
-docker compose logs -f llama-server    # llama-server のログをフォロー
+docker compose logs -f vLLM    # vLLM のログをフォロー
 docker compose logs -f geometric-lens  # Lens のログをフォロー
 docker compose logs -f v3-service      # V3 パイプラインのログをフォロー
 docker compose logs -f atlas-proxy     # プロキシのログをフォロー
@@ -139,7 +139,7 @@ docker compose up -d
 | 要件 | 詳細 |
 |------|------|
 | **Go 1.24+** | atlas-proxy のビルド用 |
-| **llama.cpp** | CUDA 付きでソースからビルド ([llama.cpp ビルド手順](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) を参照) |
+| **vLLM** | CUDA 付きでソースからビルド ([vLLM ビルド手順](https://github.com/ggml-org/vLLM?tab=readme-ov-file#build) を参照) |
 | **Aider** | `pip install aider-chat` |
 | **Node.js 20+** | サンドボックスの JavaScript/TypeScript 実行に必要 |
 | **Rust** | サンドボックスの Rust 実行に必要 |
@@ -177,23 +177,23 @@ pip install fastapi uvicorn pylint pytest pydantic
 各サービスを別々のターミナルで起動します (または `&` を使ってログファイルにリダイレクトします):
 
 ```bash
-# ターミナル 1: llama-server (GPU)
-llama-server \
+# ターミナル 1: vLLM (GPU)
+vLLM \
   --model models/Qwen3.5-9B-Q6_K.gguf \
   --host 0.0.0.0 --port 8080 \
   --ctx-size 32768 --n-gpu-layers 99 --no-mmap
 
 # ターミナル 2: Geometric Lens
 cd geometric-lens
-LLAMA_URL=http://localhost:8080 \
-LLAMA_EMBED_URL=http://localhost:8080 \
+LLAMA_URL=http://localhost:8000 \
+LLAMA_EMBED_URL=http://localhost:8000 \
 GEOMETRIC_LENS_ENABLED=true \
 PROJECT_DATA_DIR=/tmp/atlas-projects \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # ターミナル 3: V3 パイプライン
 cd v3-service
-ATLAS_INFERENCE_URL=http://localhost:8080 \
+ATLAS_INFERENCE_URL=http://localhost:8000 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
@@ -204,8 +204,8 @@ python executor_server.py
 
 # ターミナル 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
-ATLAS_INFERENCE_URL=http://localhost:8080 \
-ATLAS_LLAMA_URL=http://localhost:8080 \
+ATLAS_INFERENCE_URL=http://localhost:8000 \
+ATLAS_LLAMA_URL=http://localhost:8000 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
@@ -335,7 +335,7 @@ scripts/verify-install.sh
 16GB 以上の VRAM と CUDA サポートを持つ任意の NVIDIA GPU。テスト済み:
 - RTX 5060 Ti 16GB (主要開発 GPU)
 
-AMD および Intel GPU は未テストです。llama.cpp は ROCm やその他のバックエンドをサポートしています -- ROCm サポートは V3.1 の優先事項です。
+AMD および Intel GPU は未テストです。vLLM は ROCm やその他のバックエンドをサポートしています -- ROCm サポートは V3.1 の優先事項です。
 
 ---
 

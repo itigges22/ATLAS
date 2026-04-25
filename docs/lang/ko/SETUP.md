@@ -72,12 +72,12 @@ atlas
 ### 첫 실행 시 동작
 
 1. Docker가 소스에서 5개의 컨테이너 이미지를 빌드합니다:
-   - **llama-server** - CUDA로 llama.cpp를 컴파일합니다 (가장 느림, 약 5-10분)
+   - **vLLM** - CUDA로 vLLM를 컴파일합니다 (가장 느림, 약 5-10분)
    - **geometric-lens** - PyTorch CPU + FastAPI를 설치합니다
    - **v3-service** - PyTorch CPU + 벤치마크 모듈을 설치합니다
    - **sandbox** - Node.js, Go, Rust, gcc를 설치합니다
    - **atlas-proxy** - Go 바이너리를 컴파일합니다
-2. llama-server가 7GB 모델을 GPU VRAM에 로드합니다 (약 1-2분)
+2. vLLM가 7GB 모델을 GPU VRAM에 로드합니다 (약 1-2분)
 3. 모든 서비스가 헬스 체크를 시작합니다
 4. 5개 서비스가 모두 정상으로 보고되면, `atlas`가 연결되어 Aider를 실행합니다
 
@@ -87,7 +87,7 @@ atlas
 
 ```bash
 # 각 서비스를 개별적으로 확인
-curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
+curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
 curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
@@ -111,7 +111,7 @@ docker compose down --rmi all  # 중지 및 이미지 삭제 (다음 시작 시 
 ### 로그 확인
 
 ```bash
-docker compose logs -f llama-server    # llama-server 로그 실시간 확인
+docker compose logs -f vLLM    # vLLM 로그 실시간 확인
 docker compose logs -f geometric-lens  # Lens 로그 실시간 확인
 docker compose logs -f v3-service      # V3 파이프라인 로그 실시간 확인
 docker compose logs -f atlas-proxy     # 프록시 로그 실시간 확인
@@ -139,7 +139,7 @@ docker compose up -d
 | 요구 사항 | 세부 내용 |
 |-----------|----------|
 | **Go 1.24+** | atlas-proxy 빌드용 |
-| **llama.cpp** | CUDA로 소스 빌드 필요 ([llama.cpp 빌드 안내](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) 참조) |
+| **vLLM** | CUDA로 소스 빌드 필요 ([vLLM 빌드 안내](https://github.com/ggml-org/vLLM?tab=readme-ov-file#build) 참조) |
 | **Aider** | `pip install aider-chat` |
 | **Node.js 20+** | 샌드박스의 JavaScript/TypeScript 실행에 필요 |
 | **Rust** | 샌드박스의 Rust 실행에 필요 |
@@ -177,23 +177,23 @@ pip install fastapi uvicorn pylint pytest pydantic
 각 서비스를 별도의 터미널에서 시작합니다 (또는 `&`와 로그 파일 리다이렉션 사용):
 
 ```bash
-# 터미널 1: llama-server (GPU)
-llama-server \
+# 터미널 1: vLLM (GPU)
+vLLM \
   --model models/Qwen3.5-9B-Q6_K.gguf \
   --host 0.0.0.0 --port 8080 \
   --ctx-size 32768 --n-gpu-layers 99 --no-mmap
 
 # 터미널 2: Geometric Lens
 cd geometric-lens
-LLAMA_URL=http://localhost:8080 \
-LLAMA_EMBED_URL=http://localhost:8080 \
+LLAMA_URL=http://localhost:8000 \
+LLAMA_EMBED_URL=http://localhost:8000 \
 GEOMETRIC_LENS_ENABLED=true \
 PROJECT_DATA_DIR=/tmp/atlas-projects \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # 터미널 3: V3 파이프라인
 cd v3-service
-ATLAS_INFERENCE_URL=http://localhost:8080 \
+ATLAS_INFERENCE_URL=http://localhost:8000 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
@@ -204,8 +204,8 @@ python executor_server.py
 
 # 터미널 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
-ATLAS_INFERENCE_URL=http://localhost:8080 \
-ATLAS_LLAMA_URL=http://localhost:8080 \
+ATLAS_INFERENCE_URL=http://localhost:8000 \
+ATLAS_LLAMA_URL=http://localhost:8000 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
@@ -335,7 +335,7 @@ scripts/verify-install.sh
 16GB 이상의 VRAM과 CUDA를 지원하는 모든 NVIDIA GPU에서 사용 가능합니다. 테스트 완료:
 - RTX 5060 Ti 16GB (주 개발 GPU)
 
-AMD 및 Intel GPU는 아직 테스트되지 않았습니다. llama.cpp는 ROCm 및 기타 백엔드를 지원하며, ROCm 지원은 V3.1의 우선 과제입니다.
+AMD 및 Intel GPU는 아직 테스트되지 않았습니다. vLLM는 ROCm 및 기타 백엔드를 지원하며, ROCm 지원은 V3.1의 우선 과제입니다.
 
 ---
 

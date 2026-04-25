@@ -13,7 +13,7 @@ Run these first to identify where the problem is:
 docker compose ps
 
 # Individual health checks
-curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
+curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
 curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
@@ -46,7 +46,7 @@ If any field is `false`, that service is the problem.
 
 ### GPU Not Detected in Container
 
-**Symptom:** llama-server container starts but model loads on CPU (very slow, ~2 tok/s). `nvidia-smi` shows the GPU from the host but the container can't see it.
+**Symptom:** vLLM container starts but model loads on CPU (very slow, ~2 tok/s). `nvidia-smi` shows the GPU from the host but the container can't see it.
 
 **Fix:** Install NVIDIA Container Toolkit:
 
@@ -73,11 +73,11 @@ podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi
 
 ### First Build Fails (CUDA Not Found)
 
-**Symptom:** `docker compose build` fails with CUDA-related errors during llama-server compilation.
+**Symptom:** `docker compose build` fails with CUDA-related errors during vLLM compilation.
 
-**Fix:** The llama-server Dockerfile builds llama.cpp inside a `nvidia/cuda:12.8.0-devel` base image, so CUDA headers are available during build without host GPU access. Common causes of build failure:
+**Fix:** The vLLM Dockerfile builds vLLM inside a `nvidia/cuda:12.8.0-devel` base image, so CUDA headers are available during build without host GPU access. Common causes of build failure:
 1. Insufficient disk space (~5GB needed for build artifacts)
-2. Network issues downloading the CUDA base image or cloning llama.cpp
+2. Network issues downloading the CUDA base image or cloning vLLM
 3. Podman rootless builds may fail with permission issues — try `podman-compose build` with `--podman-build-args="--format docker"`
 
 ### SELinux Blocking Container Access (Fedora/RHEL)
@@ -112,29 +112,29 @@ docker network create atlas
 lsof -i :8080
 
 # Change port in .env
-ATLAS_LLAMA_PORT=8081    # Different port for llama-server
+ATLAS_GEN_PORT=8081    # Different port for vLLM
 ```
 
 All ports are configurable via `.env`. See [CONFIGURATION.md](CONFIGURATION.md).
 
 ---
 
-## llama-server Issues
+## vLLM Issues
 
 ### Model Loading on CPU Instead of GPU
 
-**Symptom:** Generation at ~2 tok/s instead of ~50 tok/s. `nvidia-smi` doesn't show llama-server using the GPU.
+**Symptom:** Generation at ~2 tok/s instead of ~50 tok/s. `nvidia-smi` doesn't show vLLM using the GPU.
 
 **Fix:** Ensure `--n-gpu-layers 99` is set (offloads all layers to GPU). In Docker Compose this is the default. For bare metal, check the command:
 ```bash
-ps aux | grep llama-server | grep 'n-gpu-layers'
+ps aux | grep vLLM | grep 'n-gpu-layers'
 ```
 
 If using Docker, ensure the NVIDIA container runtime is configured (see GPU section above).
 
 ### Model File Not Found
 
-**Symptom:** llama-server exits immediately with "failed to load model" or similar.
+**Symptom:** vLLM exits immediately with "failed to load model" or similar.
 
 **Fix:** Check the model path:
 ```bash
@@ -149,7 +149,7 @@ The filename must match `ATLAS_MODEL_FILE` in `.env` (default: `Qwen3.5-9B-Q6_K.
 
 ### Out of VRAM
 
-**Symptom:** llama-server crashes or gets OOMKilled shortly after starting. `nvidia-smi` shows VRAM near 100%.
+**Symptom:** vLLM crashes or gets OOMKilled shortly after starting. `nvidia-smi` shows VRAM near 100%.
 
 **Fix:** The 9B Q6_K model needs ~8.2 GB VRAM (model + KV cache). Ensure:
 1. No other GPU processes are running (`nvidia-smi` — check for other CUDA processes)
@@ -165,9 +165,9 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **Symptom:** Model outputs `<think>` tags or raw text instead of JSON tool calls.
 
-**Fix:** The proxy sets `response_format: {"type": "json_object"}` automatically when `ATLAS_AGENT_LOOP=1`. If using llama-server directly, include it in your request:
+**Fix:** The proxy sets `response_format: {"type": "json_object"}` automatically when `ATLAS_AGENT_LOOP=1`. If using vLLM directly, include it in your request:
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen3.5-9B-Q6_K",
@@ -177,7 +177,7 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-If this returns raw text instead of JSON, your llama.cpp build doesn't support `response_format`. Rebuild from the latest source.
+If this returns raw text instead of JSON, your vLLM build doesn't support `response_format`. Rebuild from the latest source.
 
 ### Context Window Too Small
 
@@ -189,7 +189,7 @@ If this returns raw text instead of JSON, your llama.cpp build doesn't support `
 grep CTX_SIZE .env
 
 # Bare metal
-ps aux | grep llama-server | grep ctx-size
+ps aux | grep vLLM | grep ctx-size
 ```
 
 ---
@@ -198,7 +198,7 @@ ps aux | grep llama-server | grep ctx-size
 
 ### Agent Loop Not Activating
 
-**Symptom:** Requests go directly to llama-server. No tool calls, no streaming status icons, no V3 pipeline.
+**Symptom:** Requests go directly to vLLM. No tool calls, no streaming status icons, no V3 pipeline.
 
 **Fix:** Set `ATLAS_AGENT_LOOP=1`. The `atlas` launcher does this automatically. If running the proxy manually:
 ```bash
@@ -281,7 +281,7 @@ docker compose logs geometric-lens
 ```
 
 Common causes:
-- Lens can't connect to llama-server (check `LLAMA_URL` env var)
+- Lens can't connect to vLLM (check `LLAMA_URL` env var)
 - Model weight files missing (service degrades gracefully — this is expected if you haven't trained custom models)
 
 ### All Scores Near 0.5
@@ -303,17 +303,17 @@ If `enabled: false` or `cx_energy: 0.0`, the models aren't loaded. This is expec
 
 **Symptom:** Lens logs show errors like "embedding extraction failed" or timeouts.
 
-**Cause:** Lens calls llama-server's `/v1/embeddings` endpoint. If llama-server is overloaded or the endpoint isn't enabled, this fails.
+**Cause:** Lens calls vLLM's `/v1/embeddings` endpoint. If vLLM is overloaded or the endpoint isn't enabled, this fails.
 
 **Fix:**
 ```bash
 # Test embedding endpoint directly
-curl -s http://localhost:8080/v1/embeddings \
+curl -s http://localhost:8000/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"input": "test"}' | python3 -m json.tool
 ```
 
-The `/v1/embeddings` endpoint is available in llama.cpp without special flags for self-embeddings from generation models. In K3s, the `--embeddings` flag is set explicitly in the entrypoint for full embedding support.
+The `/v1/embeddings` endpoint is available in vLLM without special flags for self-embeddings from generation models. In K3s, the `--embeddings` flag is set explicitly in the entrypoint for full embedding support.
 
 ---
 
@@ -449,7 +449,7 @@ These are included in the repository. If missing, re-clone or restore from backu
 ### Slow Generation (~2 tok/s)
 
 The model is running on CPU instead of GPU. Check:
-1. `nvidia-smi` — is llama-server listed as a GPU process?
+1. `nvidia-smi` — is vLLM listed as a GPU process?
 2. `--n-gpu-layers 99` — are all layers offloaded?
 3. NVIDIA Container Toolkit — is the container runtime configured for GPU access?
 
@@ -472,7 +472,7 @@ To get faster (but lower quality) results:
 **Symptom:** System becomes sluggish or services get OOMKilled.
 
 **Expected RAM usage:**
-- llama-server: ~8 GB (model in VRAM, minimal RAM)
+- vLLM: ~8 GB (model in VRAM, minimal RAM)
 - geometric-lens: ~200 MB (PyTorch runtime + models)
 - v3-service: ~150 MB (PyTorch runtime)
 - sandbox: ~100 MB (base, spikes during compilation)

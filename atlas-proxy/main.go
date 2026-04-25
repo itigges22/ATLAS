@@ -1,9 +1,9 @@
 // atlas-proxy: Production inference proxy for ATLAS.
 //
-// Sits between Aider (or any OpenAI client) and llama-server (local LLM).
+// Sits between Aider (or any OpenAI client) and vLLM gen instance (local LLM).
 // Implements a verify-repair pipeline inspired by Claude Code:
 //
-//   1. Forward request to llama-server (stream or batch)
+//   1. Forward request to vLLM gen instance (stream or batch)
 //   2. Detect code in response
 //   3. Score with C(x)+G(x) quality gate
 //   4. Sandbox-test code (if applicable)
@@ -356,7 +356,7 @@ func buildRepairPrompt(code string, analysis ErrorAnalysis, attempt int) string 
 }
 
 // ---------------------------------------------------------------------------
-// LLM communication (llama-server)
+// LLM communication (vLLM gen instance)
 // ---------------------------------------------------------------------------
 
 func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
@@ -1079,7 +1079,7 @@ func bestOfK(ctx context.Context, req ChatRequest, k int) (*ChatResponse, *LensS
 
 	results := make(chan candidate, k)
 
-	// Fire all K candidates in parallel — llama-server has --parallel 4
+	// Fire all K candidates in parallel — vLLM gen instance has --parallel 4
 	for i := 0; i < k; i++ {
 		go func(idx int) {
 			attempt := req
@@ -2515,7 +2515,7 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/v1/agent", handleAgent) // New tool-based agent endpoint
 
-	// Catch-all: proxy to llama-server
+	// Catch-all: proxy to vLLM gen instance
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("passthrough: %s %s", r.Method, r.URL.Path)
 		body, _ := io.ReadAll(r.Body)

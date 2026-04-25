@@ -69,15 +69,15 @@ atlas
 
 ### What Happens on First Run
 
-1. Docker builds 5 container images from source:
-   - **llama-server** — compiles llama.cpp with CUDA (slowest, ~5-10 min)
+1. Docker builds the local images:
+   - **vllm-gen** + **vllm-embed** — pulled prebuilt from `vllm/vllm-openai:latest` (no compile step)
    - **geometric-lens** — installs PyTorch CPU + FastAPI
    - **v3-service** — installs PyTorch CPU + benchmark modules
    - **sandbox** — installs Node.js, Go, Rust, gcc
    - **atlas-proxy** — compiles Go binary
-2. llama-server loads the 7GB model into GPU VRAM (~1-2 min)
+2. vLLM gen + embed each load the AWQ weights into GPU VRAM (~1-2 min each)
 3. All services start health checks
-4. Once all 5 services report healthy, `atlas` connects and launches Aider
+4. Once vllm-gen, vllm-embed, geometric-lens, v3-service, sandbox, and atlas-proxy all report healthy, `atlas` connects and launches Aider
 
 Subsequent `docker compose up -d` starts are fast (seconds) since images are cached.
 
@@ -85,7 +85,7 @@ Subsequent `docker compose up -d` starts are fast (seconds) since images are cac
 
 ```bash
 # Check each service individually
-curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
+curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
 curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
@@ -109,7 +109,8 @@ docker compose down --rmi all  # Stop and remove images (next start rebuilds)
 ### Viewing Logs
 
 ```bash
-docker compose logs -f llama-server    # Follow llama-server logs
+docker compose logs -f vllm-gen        # Follow vLLM gen logs
+docker compose logs -f vllm-embed      # Follow vLLM embed logs
 docker compose logs -f geometric-lens  # Follow Lens logs
 docker compose logs -f v3-service      # Follow V3 pipeline logs
 docker compose logs -f atlas-proxy     # Follow proxy logs
@@ -137,7 +138,7 @@ Run all services as local processes without containers. Useful for development o
 | Requirement | Details |
 |-------------|---------|
 | **Go 1.24+** | For building atlas-proxy |
-| **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
+| **vLLM** | `pip install -U --pre vllm` (>=0.17 for Qwen3.5 DeltaNet support; CUDA 12.8) |
 | **Aider** | `pip install aider-chat` |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
@@ -150,21 +151,22 @@ git clone https://github.com/itigges22/ATLAS.git
 cd ATLAS
 pip install -e .
 
-# 2. Download model weights
-mkdir -p models
-wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
-     -O models/Qwen3.5-9B-Q6_K.gguf
+# 2. Download AWQ-quantized model weights (~12GB, vLLM-compatible)
+#    Use the HuggingFace CLI rather than wget — model is sharded.
+pip install huggingface_hub
+huggingface-cli download QuantTrio/Qwen3.5-9B-AWQ --local-dir models/Qwen3.5-9B-AWQ
 
-# 3. Build atlas-proxy
+# 3. Install vLLM (nightly required for Qwen3.5 DeltaNet kernels)
+pip install -U --pre --index-url https://pypi.org/simple \
+    --extra-index-url https://wheels.vllm.ai/nightly "vllm>=0.17.0"
+
+# 4. Build atlas-proxy
 cd atlas-proxy
 go build -o ~/.local/bin/atlas-proxy-v2 .
 cd ..
 
-# 4. Install geometric-lens Python dependencies
+# 5. Install geometric-lens Python dependencies
 pip install -r geometric-lens/requirements.txt
-
-# 5. Install V3 service PyTorch (CPU only)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # 6. Install sandbox dependencies
 pip install fastapi uvicorn pylint pytest pydantic
@@ -172,45 +174,66 @@ pip install fastapi uvicorn pylint pytest pydantic
 
 ### Start Services
 
-Start each service in a separate terminal (or use `&` and redirect to log files):
+vLLM serves only one task per process, so the inference layer runs as **two**
+vLLM instances side by side: one for chat completions, one for embeddings.
 
 ```bash
-# Terminal 1: llama-server (GPU)
-llama-server \
-  --model models/Qwen3.5-9B-Q6_K.gguf \
-  --host 0.0.0.0 --port 8080 \
-  --ctx-size 32768 --n-gpu-layers 99 --no-mmap
+# Terminal 1: vLLM gen (chat completions on port 8000)
+vllm serve models/Qwen3.5-9B-AWQ \
+  --served-model-name qwen3.5-9b \
+  --host 0.0.0.0 --port 8000 \
+  --max-num-seqs 32 --max-model-len 32768 \
+  --gpu-memory-utilization 0.55 \
+  --tensor-parallel-size 1 \
+  --enable-prefix-caching --reasoning-parser qwen3 \
+  --trust-remote-code
 
-# Terminal 2: Geometric Lens
+# Terminal 2: vLLM embed (4096-dim hidden states for the Lens, on port 8001)
+vllm serve models/Qwen3.5-9B-AWQ \
+  --served-model-name qwen3.5-9b-embed \
+  --task embed \
+  --host 0.0.0.0 --port 8001 \
+  --max-num-seqs 8 --max-model-len 4096 \
+  --gpu-memory-utilization 0.20 \
+  --tensor-parallel-size 1 \
+  --trust-remote-code
+
+# Terminal 3: Geometric Lens
 cd geometric-lens
-LLAMA_URL=http://localhost:8080 \
-LLAMA_EMBED_URL=http://localhost:8080 \
+LLAMA_GEN_URL=http://localhost:8000 \
+LLAMA_EMBED_URL=http://localhost:8001 \
 GEOMETRIC_LENS_ENABLED=true \
 PROJECT_DATA_DIR=/tmp/atlas-projects \
-python -m uvicorn main:app --host 0.0.0.0 --port 8099
+python -m uvicorn main:app --host 0.0.0.0 --port 31144
 
-# Terminal 3: V3 Pipeline
+# Terminal 4: V3 Pipeline
 cd v3-service
-ATLAS_INFERENCE_URL=http://localhost:8080 \
-ATLAS_LENS_URL=http://localhost:8099 \
+LLAMA_GEN_URL=http://localhost:8000 \
+LLAMA_EMBED_URL=http://localhost:8001 \
+ATLAS_LENS_URL=http://localhost:31144 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
 
-# Terminal 4: Sandbox
+# Terminal 5: Sandbox
 cd sandbox
 python executor_server.py
 
-# Terminal 5: atlas-proxy
+# Terminal 6: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
-ATLAS_INFERENCE_URL=http://localhost:8080 \
-ATLAS_LLAMA_URL=http://localhost:8080 \
-ATLAS_LENS_URL=http://localhost:8099 \
+LLAMA_GEN_URL=http://localhost:8000 \
+LLAMA_EMBED_URL=http://localhost:8001 \
+ATLAS_LENS_URL=http://localhost:31144 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
 ATLAS_AGENT_LOOP=1 \
-ATLAS_MODEL_NAME=Qwen3.5-9B-Q6_K \
+LLAMA_GEN_MODEL=qwen3.5-9b \
+LLAMA_EMBED_MODEL=qwen3.5-9b-embed \
 atlas-proxy-v2
 ```
+
+> **VRAM**: 16 GB consumer cards fit only the gen instance at concurrency 1-4.
+> Embed needs another ~5-8 GB; for full Lens-on benchmarks you need 24 GB+
+> (e.g. 4090, A40) or run gen-only with `GEOMETRIC_LENS_ENABLED=false`.
 
 > **Note:** The sandbox listens on port **8020** in bare-metal mode (no Docker port remapping). The proxy's `ATLAS_SANDBOX_URL` must use port 8020, not 30820.
 
@@ -333,20 +356,20 @@ scripts/verify-install.sh
 Any NVIDIA GPU with 16GB+ VRAM and CUDA support. Tested on:
 - RTX 5060 Ti 16GB (primary development GPU)
 
-AMD and Intel GPUs are not yet tested. llama.cpp supports ROCm and other backends — ROCm support is a V3.1 priority.
+AMD and Intel GPUs are not yet tested. vLLM supports ROCm and other backends — ROCm support is a V3.1 priority.
 
 #### CUDA Compute Capability (Dockerfile.v31)
 
-`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default is `120;121` (Blackwell, RTX 50xx). If you see build failures like `nvcc fatal: unsupported gpu architecture` or runtime errors like `no kernel image available for execution`, your GPU needs a different arch.
+`benchmarks/h200/Dockerfile` compiles vLLM for a specific CUDA compute capability. The default is `120;121` (Blackwell, RTX 50xx). If you see build failures like `nvcc fatal: unsupported gpu architecture` or runtime errors like `no kernel image available for execution`, your GPU needs a different arch.
 
 Override at build time with `--build-arg CUDA_ARCH=<value>`:
 
 ```bash
 # Single arch — RTX 4060/4070/4080/4090 (Ada Lovelace)
-podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
+podman build --build-arg CUDA_ARCH=89 -f benchmarks/h200/Dockerfile -t vLLM:local inference/
 
 # Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
-podman build --build-arg CUDA_ARCH="86;89;90" -f inference/Dockerfile.v31 -t llama-server:local inference/
+podman build --build-arg CUDA_ARCH="86;89;90" -f benchmarks/h200/Dockerfile -t vLLM:local inference/
 ```
 
 Common values:

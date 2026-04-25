@@ -271,10 +271,10 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		}
 	}
 
-	// llama-server handles all inference (grammar-constrained agent loop
+	// vLLM gen instance handles all inference (grammar-constrained agent loop
 	// calls and free-form V3 pipeline calls). Qwen3.5-9B at ~51 tok/s.
 
-	// llama-server at InferenceURL (or ATLAS_LLAMA_URL override)
+	// vLLM gen instance at InferenceURL (or ATLAS_LLAMA_URL override)
 	// Uses response_format: json_object for grammar enforcement — 100% valid JSON
 	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
 
@@ -312,7 +312,7 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		return "", 0, fmt.Errorf("LLM returned %d: %s", resp.StatusCode, truncateStr(string(respBody), 500))
 	}
 
-	// llama-server uses /v1/chat/completions format:
+	// vLLM gen instance uses /v1/chat/completions format:
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
