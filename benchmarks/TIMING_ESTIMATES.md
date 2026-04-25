@@ -1,7 +1,7 @@
 # ATLAS V3.0.1 Benchmark Timing Estimates
 
 **Based on observed throughput: ~10 tok/s for thinking mode, ~48 tok/s for nothink**
-**Hardware: RTX 5060 Ti 16GB, Qwen3.5-9B-Q6_K, --parallel 1**
+**Hardware: RTX 5060 Ti 16GB, Qwen3.5-9B-AWQ, --max-num-seqs 32**
 
 ## Per-question timing
 

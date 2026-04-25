@@ -32,27 +32,34 @@ Build time: ~5-10 min (compiles llama.cpp from source). Image size: ~3GB (no mod
 
 1. **Templates → New Template**
    - Container Image: `ghcr.io/itigges22/atlas-bench:h200` (or wherever you pushed)
-   - Container Disk: 50 GB minimum (for model + intermediate files)
-   - Volume: Optional — attach a 20 GB persistent volume mounted at `/workspace/models` to cache the model across pods
+   - Container Disk: 50 GB minimum (model is ~12 GiB AWQ + intermediate files)
+   - Volume: Optional — attach a 20 GB persistent volume mounted at `/workspace/models` to cache the AWQ shards across pods
    - Environment Variables:
      ```
-     MODEL_PATH=/workspace/models/Qwen3.5-9B-Q6_K.gguf
-     DOWNLOAD_MODEL=1          # let entrypoint fetch on first run, or set to 0 if mounted
-     SERVER_PARALLEL=16        # drop to 4 on consumer cards, keep at 16 on H200
-     SERVER_CONTEXT=262144     # = SERVER_PARALLEL × 16384 for a 16K/slot ctx
+     MODEL_NAME=QuantTrio/Qwen3.5-9B-AWQ
+     MODEL_PATH=/workspace/models/Qwen3.5-9B-AWQ
+     DOWNLOAD_MODEL=1          # let entrypoint fetch from HF on first run; 0 if mounted
+     # HF_TOKEN=hf_...          # only if pulling a gated repo
+     GEN_MAX_NUM_SEQS=32       # vLLM concurrent slots (drop to 4-8 on consumer cards)
+     GEN_MAX_MODEL_LEN=32768   # per-slot context window
+     GEN_GPU_MEM_UTIL=0.55     # fraction of VRAM for the gen instance
+     EMBED_MAX_NUM_SEQS=8
+     EMBED_MAX_MODEL_LEN=4096
+     EMBED_GPU_MEM_UTIL=0.20
      BENCHMARK_PARALLEL=16
      ATLAS_PARALLEL_TASKS=16
      MODE=atlas_only           # atlas_only | baseline_only | all
      SHUTDOWN_ON_COMPLETE=0    # 0 = stay alive after results (so you can rsync them)
      ```
-   - Exposed Ports: `8000/http` (optional — lets you hit the llama-server from the web terminal)
+   - Exposed Ports: `8000/http` (vLLM gen) and `8001/http` (vLLM embed) — let you probe vLLM directly from the web terminal.
 
 2. **Deploy → pick H200 SXM** (or H100, A100, whatever you want)
 
 3. **Connect to pod** (web terminal or SSH) once it's `Running`. The container entrypoint starts automatically. Watch progress:
    ```bash
-   tail -f /tmp/llama-server.log
-   # and
+   tail -f /tmp/vllm-gen.log    # gen instance
+   tail -f /tmp/vllm-embed.log  # embed instance
+   tail -f /tmp/lens-service.log
    tail -f /workspace/results/logs/*/atlas_lcb.log
    ```
 
@@ -82,7 +89,7 @@ Tips to stay under $100:
 ## Troubleshooting
 
 - **"no nvidia-smi"**: pod doesn't have GPU. Pick a GPU template.
-- **llama-server OOM**: drop `SERVER_PARALLEL` to 8 or 4, recalculate `SERVER_CONTEXT` (= SERVER_PARALLEL × 16384).
-- **Smoke test fails**: check `/tmp/llama-server.log` for missing flags or wrong CUDA arch. You may need to rebuild the image with the correct `CUDA_ARCH`.
+- **vLLM OOM**: drop `GEN_MAX_NUM_SEQS` to 8 or 4, drop `GEN_MAX_MODEL_LEN` to 16384, or lower `GEN_GPU_MEM_UTIL` to 0.45. On a single 16 GB card you may need to disable the embed instance entirely (`GEOMETRIC_LENS_ENABLED=false`).
+- **Smoke test fails**: check `/tmp/vllm-gen.log` (and `/tmp/vllm-embed.log`) for the actual error. Common ones: AWQ download failed (set HF_TOKEN), model not found at MODEL_PATH, or insufficient CUDA driver (need 12.8+).
 - **Slow download**: RunPod has cached HuggingFace hits — first download might be fast if the node has seen it before.
 - **Container exits immediately**: check Pod Logs. Most likely the model failed to download. Set `DOWNLOAD_MODEL=0` and mount a volume instead.

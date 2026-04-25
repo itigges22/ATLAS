@@ -34,10 +34,12 @@ for local development).
 
 ## Quantization disclosure
 
-The Qwen3.5-9B model card baselines use full bf16 precision. ATLAS uses Q6_K
-quantization, which retains 6-bit precision per weight. Q6_K is considered
-near-lossless for most tasks but may have a small quality impact on 
-knowledge-heavy benchmarks.
+The Qwen3.5-9B model card baselines use full bf16 precision. ATLAS uses
+AWQ-Q4 quantization (`QuantTrio/Qwen3.5-9B-AWQ` from HuggingFace), which
+quantizes weights to 4-bit using the activation-aware weight quantization
+scheme. AWQ-Q4 is more aggressive than Q6_K (the prior llama.cpp quant) but
+preserves accuracy well on instruction-following and reasoning tasks; it
+may have a measurable quality impact on knowledge-heavy benchmarks.
 
 ## Sampling parameter disclosure
 
@@ -65,7 +67,7 @@ is needed to accommodate both thinking (~2000-5000 tokens) and the answer.
 
 ## Caveats included in every report
 
-1. Quantization gap (Q6_K vs bf16)
+1. Quantization gap (AWQ-Q4 vs bf16)
 2. Sampling parameter divergence
 3. Thinking mode handling
 4. Pipeline components enabled/disabled
