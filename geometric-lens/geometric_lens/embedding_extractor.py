@@ -15,11 +15,11 @@ def _get_embed_url() -> str:
     Resolves in this order:
       LLAMA_EMBED_URL  → dedicated vLLM embed instance (port 8001 by convention)
       LLAMA_URL        → legacy single-server fallback
-      default          → http://llama-service:8001
+      default          → http://vllm-embed:8001 (matches docker-compose service name)
     """
     return os.environ.get(
         "LLAMA_EMBED_URL",
-        os.environ.get("LLAMA_URL", "http://llama-service:8001"),
+        os.environ.get("LLAMA_URL", "http://vllm-embed:8001"),
     )
 
 

@@ -248,6 +248,39 @@ def test_v301_completion_nothink_disables_thinking(mock_vllm):
 # geometric_lens.embedding_extractor — /v1/embeddings
 # ---------------------------------------------------------------------------
 
+def test_v301_chat_retries_on_503(mock_vllm):
+    """vLLM returns 503 when warming up or all slots busy. The runner must
+    back off and retry rather than failing the whole task."""
+    from benchmarks.v301_runner import LLMClient
+
+    # Patch the handler to fail twice with 503, then succeed on the third call.
+    call_count = {"n": 0}
+    BaseHandler = mock_vllm.make_handler()
+
+    class Flaky(BaseHandler):
+        def do_POST(self):
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                self.send_response(503)
+                self.end_headers()
+                return
+            BaseHandler.do_POST(self)
+
+    import threading
+    from http.server import HTTPServer
+    server = HTTPServer(("127.0.0.1", 0), Flaky)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        c = LLMClient(url=f"http://127.0.0.1:{port}", max_retries=5)
+        content, _, _, _ = c.chat([{"role": "user", "content": "hi"}], max_tokens=8)
+        assert content == "ok"
+        assert call_count["n"] == 3, f"expected 2 retries + 1 success, got {call_count['n']} calls"
+    finally:
+        server.shutdown()
+
+
 def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     monkeypatch.setenv("LLAMA_EMBED_URL", mock_vllm.url)
     monkeypatch.setenv("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")

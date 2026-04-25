@@ -39,8 +39,8 @@ IN_CLUSTER = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token
 if IN_CLUSTER:
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://api-portal:3000")
     RAG_API_URL = os.environ.get("RAG_API_URL", "http://geometric-lens:31144")
-    LLAMA_URL = os.environ.get("LLAMA_GEN_URL", os.environ.get("LLAMA_URL", "http://llama-gen-service:8000"))
-    LLAMA_EMBED_URL = os.environ.get("LLAMA_EMBED_URL", "http://llama-embed-service:8001")
+    LLAMA_URL = os.environ.get("LLAMA_GEN_URL", os.environ.get("LLAMA_URL", "http://vllm-gen:8000"))
+    LLAMA_EMBED_URL = os.environ.get("LLAMA_EMBED_URL", "http://vllm-embed:8001")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://llm-proxy:8000")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://atlas-dashboard:3001")

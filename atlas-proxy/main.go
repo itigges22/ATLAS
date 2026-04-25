@@ -38,11 +38,14 @@ import (
 // ---------------------------------------------------------------------------
 
 var (
-	inferenceURL = envOr("ATLAS_INFERENCE_URL", "http://localhost:8080")
-	lensURL     = envOr("ATLAS_LENS_URL", "http://localhost:8099")
+	// vLLM gen instance — chat completions, raw completions.
+	inferenceURL = firstEnv([]string{"LLAMA_GEN_URL", "ATLAS_INFERENCE_URL"}, "http://localhost:8000")
+	// vLLM embed instance — only used when the proxy proxies embedding requests.
+	embedURL = firstEnv([]string{"LLAMA_EMBED_URL", "ATLAS_EMBED_URL"}, "http://localhost:8001")
+	lensURL     = envOr("ATLAS_LENS_URL", "http://localhost:31144")
 	sandboxURL = envOr("ATLAS_SANDBOX_URL", "http://localhost:30820")
 	proxyPort  = envOr("ATLAS_PROXY_PORT", "8090")
-	modelName  = envOr("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+	modelName  = firstEnv([]string{"LLAMA_GEN_MODEL", "ATLAS_MODEL_NAME"}, "qwen3.5-9b")
 )
 
 const (
@@ -58,6 +61,18 @@ var v3ServiceURL = envOr("ATLAS_V3_URL", "http://localhost:8070")
 // Session state: track whether last response was V3 delivery
 // to prevent double-request triggering another full pipeline run
 var lastWasV3 sync.Map // key: remote IP, value: time.Time
+
+// firstEnv returns the first non-empty value from the listed env vars,
+// falling back to `fallback` if none are set. Useful for back-compat
+// with older env var names (e.g. ATLAS_INFERENCE_URL → LLAMA_GEN_URL).
+func firstEnv(keys []string, fallback string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return fallback
+}
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
