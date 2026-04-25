@@ -233,6 +233,28 @@ pip install -U "vllm==0.17.1"
 
 See [vllm-project/vllm#37749](https://github.com/vllm-project/vllm/issues/37749).
 
+### Chunked-Prefill Errors on Long Prompts
+
+**Symptom:** vLLM errors out on long prompts (>~32K tokens) with messages
+mentioning SSM state, Mamba cache, or chunked prefill incompatibility.
+
+**Why:** Qwen3.5's Gated DeltaNet uses an SSM state alongside standard KV
+cache. The SSM state cannot be chunked, which makes vLLM's chunked-prefill
+optimization incompatible with this architecture (see
+[vllm-project/vllm RFC #37995](https://github.com/vllm-project/vllm/issues/37995)).
+
+**Fix:** Disable chunked prefill explicitly:
+```bash
+vllm serve ... --no-enable-chunked-prefill
+```
+Note that with chunked prefill disabled, `--max-num-batched-tokens` must be
+at least your longest prompt — bump it to `--max-model-len` if you see
+"prompt longer than batched tokens" errors after disabling chunked prefill.
+
+The ATLAS default config doesn't set this flag because the vLLM v1 engine
+auto-detects Qwen3.5 and routes around chunking internally. If your vLLM
+version isn't doing the auto-detection, add the flag.
+
 ### KV Cache Memory Overestimation (Hybrid Mamba)
 
 **Symptom:** vLLM reports much higher KV cache utilization than `nvidia-smi`
