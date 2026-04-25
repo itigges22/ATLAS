@@ -70,11 +70,23 @@ jobs:
         run: python -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
 
       - name: Validate shell scripts
+        # Keep this list in sync with the `lint` target in the Makefile —
+        # both should cover every shell script the user (or installer) runs.
+        # Without scripts/install.sh + verify-install.sh in here, a syntax
+        # bug in the K8s install path would only surface at deploy time.
         run: |
           for f in benchmarks/h200/entrypoint.sh \
                    benchmarks/h200/preflight.sh \
                    benchmarks/h200/launch_on_h200.sh \
                    benchmarks/run_lcb_v6.sh \
-                   benchmarks/run_full_baseline.sh; do
+                   benchmarks/run_full_baseline.sh \
+                   benchmark/measure_bok_latency.sh \
+                   scripts/install.sh \
+                   scripts/uninstall.sh \
+                   scripts/verify-install.sh \
+                   scripts/download-models.sh \
+                   scripts/lib/config.sh \
+                   scripts/generate-manifests.sh \
+                   scripts/build-containers.sh; do
             bash -n "$f" && echo "OK: $f"
           done

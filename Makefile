@@ -55,10 +55,14 @@ lint:
 	          benchmarks/h200/launch_on_h200.sh \
 	          benchmarks/run_lcb_v6.sh \
 	          benchmarks/run_full_baseline.sh \
+	          benchmark/measure_bok_latency.sh \
 	          scripts/install.sh \
 	          scripts/verify-install.sh \
 	          scripts/uninstall.sh \
-	          scripts/download-models.sh; do \
+	          scripts/download-models.sh \
+	          scripts/lib/config.sh \
+	          scripts/generate-manifests.sh \
+	          scripts/build-containers.sh; do \
 	    bash -n "$$f" && echo "OK: $$f"; \
 	done
 	@python -c "import yaml; yaml.safe_load(open('docker-compose.yml')); print('OK: docker-compose.yml')"

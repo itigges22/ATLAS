@@ -296,6 +296,47 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_makefile_lint_and_ci_lint_cover_same_scripts():
+    """The Makefile `lint` target and the GitHub Actions shell-validate step
+    must stay in sync — otherwise a script lint-clean for one path but broken
+    for the other gives the user a different verdict than CI does, and a
+    syntax bug in (e.g.) scripts/install.sh sails through PR review only to
+    surface at deploy time. Diff the two script lists and require equality."""
+    import re
+
+    def _scripts_in(text: str) -> set:
+        # Both lists are bash for-loops with one path per line ending in `\`,
+        # plus a final entry without the trailing backslash. Each path begins
+        # with a directory segment (`scripts/`, `benchmarks/`, `benchmark/`)
+        # and ends in `.sh`. Require the leading slash so we don't pick up
+        # bare basenames that appear in surrounding comments.
+        return set(re.findall(r"\b[\w./-]*?/[\w.-]+\.sh\b", text))
+
+    makefile = (PROJECT_ROOT / "Makefile").read_text()
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "vllm-wire.yml").read_text()
+
+    # Restrict to the lint sections (rough but sufficient).
+    mf_lint = makefile.split("lint:", 1)[1].split("\nup:", 1)[0]
+    wf_lint = workflow.split("Validate shell scripts", 1)[1].split("\n      - name", 1)[0]
+
+    mf_scripts = _scripts_in(mf_lint)
+    wf_scripts = _scripts_in(wf_lint)
+
+    only_mf = mf_scripts - wf_scripts
+    only_wf = wf_scripts - mf_scripts
+    assert not only_mf and not only_wf, (
+        f"Makefile lint and CI shell-validate diverged:\n"
+        f"  only in Makefile: {sorted(only_mf)}\n"
+        f"  only in CI:       {sorted(only_wf)}\n"
+        "Bring them back into agreement so users and CI see the same verdict."
+    )
+    # And: the union must include the most user-visible installer paths.
+    for must_have in ("scripts/install.sh", "scripts/verify-install.sh",
+                      "benchmarks/h200/entrypoint.sh",
+                      "benchmarks/h200/preflight.sh"):
+        assert must_have in mf_scripts, f"{must_have} must be lint-checked"
+
+
 def test_install_sh_guards_against_missing_manifests_dir():
     """`scripts/install.sh` references `$K8S_DIR/manifests/*.yaml` for the
     K8s deployment path, but the repo currently does NOT ship any manifests/
