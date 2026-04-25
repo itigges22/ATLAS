@@ -202,11 +202,12 @@ curl http://localhost:8070/health
 
 ---
 
-## Geometric Lens (Port 8099)
+## Geometric Lens (Port 31144)
 
 Energy-based code scoring using C(x) cost field and G(x) quality prediction. Also serves as the RAG API for project indexing and retrieval.
 
-> **Internal port note:** The container runs uvicorn on port 8001. Docker Compose maps this to 8099 on the host.
+> The container listens on port 31144 internally (matches docker-compose host
+> mapping and the entrypoint defaults). Override via `ATLAS_LENS_PORT`.
 
 ### POST /internal/lens/gx-score
 
@@ -244,7 +245,7 @@ When Lens is disabled, returns `enabled: false` with neutral defaults (`cx_energ
 
 **Example:**
 ```bash
-curl http://localhost:8099/internal/lens/gx-score \
+curl http://localhost:31144/internal/lens/gx-score \
   -H "Content-Type: application/json" \
   -d '{"text": "print(\"hello world\")"}'
 ```
@@ -252,7 +253,7 @@ curl http://localhost:8099/internal/lens/gx-score \
 ### GET /health
 
 ```bash
-curl http://localhost:8099/health
+curl http://localhost:31144/health
 # {"status": "healthy", "service": "geometric-lens"}
 ```
 

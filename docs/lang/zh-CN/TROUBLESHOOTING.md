@@ -16,7 +16,7 @@ docker compose ps
 
 # 逐个健康检查
 curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
-curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
+curl -s http://localhost:31144/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy（显示所有服务状态）
@@ -278,7 +278,7 @@ docker compose logs atlas-proxy | grep "write_file"
 
 **解决方法：** 检查 Lens 健康状态和日志：
 ```bash
-curl -s http://localhost:8099/health
+curl -s http://localhost:31144/health
 docker compose logs geometric-lens
 ```
 
@@ -294,7 +294,7 @@ docker compose logs geometric-lens
 
 **验证方法：**
 ```bash
-curl -s http://localhost:8099/internal/lens/gx-score \
+curl -s http://localhost:31144/internal/lens/gx-score \
   -H "Content-Type: application/json" \
   -d '{"text": "print(1)"}' | python3 -m json.tool
 ```

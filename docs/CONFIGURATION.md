@@ -27,7 +27,7 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses |
 | `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens |
 | `ATLAS_GEN_PORT` | `8000` | vLLM host port |
-| `ATLAS_LENS_PORT` | `8099` | Geometric Lens host port |
+| `ATLAS_LENS_PORT` | `31144` | Geometric Lens host port |
 | `ATLAS_V3_PORT` | `8070` | V3 Pipeline service host port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port (container listens on 8020) |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (Aider connects here) |
@@ -47,7 +47,7 @@ The Go proxy that runs the agent loop, routes tool calls, and translates between
 | `ATLAS_PROXY_PORT` | `8090` | Port to listen on |
 | `ATLAS_INFERENCE_URL` | `http://localhost:8000` | vLLM endpoint for generation |
 | `ATLAS_LLAMA_URL` | (falls back to ATLAS_INFERENCE_URL) | vLLM endpoint for grammar-constrained calls |
-| `ATLAS_LENS_URL` | `http://localhost:8099` | Geometric Lens scoring endpoint |
+| `ATLAS_LENS_URL` | `http://localhost:31144` | Geometric Lens scoring endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox code execution endpoint |
 | `ATLAS_V3_URL` | `http://localhost:8070` | V3 Pipeline service endpoint |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API responses |
@@ -86,7 +86,7 @@ Python HTTP service that orchestrates the V3 code generation pipeline (PlanSearc
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_INFERENCE_URL` | `http://localhost:8000` | vLLM endpoint for generation and embeddings |
-| `ATLAS_LENS_URL` | `http://localhost:8099` | Geometric Lens endpoint for C(x)/G(x) scoring |
+| `ATLAS_LENS_URL` | `http://localhost:31144` | Geometric Lens endpoint for C(x)/G(x) scoring |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox endpoint for code execution |
 | `ATLAS_V3_PORT` | `8070` | Port to listen on |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API calls |
@@ -227,7 +227,7 @@ The standalone Python REPL (`pip install -e . && atlas`) reads these variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_INFERENCE_URL` | `http://localhost:8000` | vLLM endpoint |
-| `ATLAS_RAG_URL` | `http://localhost:8099` | Geometric Lens endpoint |
+| `ATLAS_RAG_URL` | `http://localhost:31144` | Geometric Lens endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox endpoint |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API calls |
 

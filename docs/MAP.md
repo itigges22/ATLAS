@@ -110,7 +110,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`sandbox_client.py`](#geometric-lens-core) — Sandbox HTTP client
   - [`sandbox_analysis.py`](#geometric-lens-core) — Sandbox result analysis
   - [`requirements.txt`](#geometric-lens-core) — Python dependencies (CPU PyTorch)
-  - [`Dockerfile`](#geometric-lens-core) — Container build (port 8099)
+  - [`Dockerfile`](#geometric-lens-core) — Container build (port 31144)
   - [`.dockerignore`](#geometric-lens-core)
   - [`geometric_lens/`](#geometric-lens-models) — Scoring models
     - [`cost_field.py`](#geometric-lens-models) — C(x): 4096->512->128->1 MLP
@@ -235,7 +235,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
 |------|-------------|
 | [`.aider.model.metadata.json`](../.aider.model.metadata.json) | Aider model metadata: token limits (32K), cost ($0 — local), provider (openai) |
 | [`.aider.model.settings.yml`](../.aider.model.settings.yml) | Aider behavior: whole-file edit format, repo map enabled, streaming on, temperature 0.3 |
-| [`.env.example`](../.env.example) | Docker Compose env template: model path, ports (8080/8099/8070/30820/8090), context size |
+| [`.env.example`](../.env.example) | Docker Compose env template: model path, ports (8000/31144/8070/30820/8090), context size |
 | [`atlas.conf.example`](../atlas.conf.example) | K3s deployment config: model, GPU layers, parallel slots, NodePorts, namespace |
 | [`docker-compose.yml`](../docker-compose.yml) | 5-service stack: vLLM, geometric-lens, v3-service, sandbox, atlas-proxy |
 | [`pyproject.toml`](../pyproject.toml) | Python package: `atlas` CLI entry point (`atlas.cli.repl:run`), requires Python >= 3.9 |
@@ -380,7 +380,7 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`sandbox_client.py`](../geometric-lens/sandbox_client.py) | HTTP client for sandbox code execution |
 | [`sandbox_analysis.py`](../geometric-lens/sandbox_analysis.py) | Classify sandbox execution results |
 | [`requirements.txt`](../geometric-lens/requirements.txt) | Dependencies: FastAPI, uvicorn, torch (CPU), pydantic, redis, tree-sitter |
-| [`Dockerfile`](../geometric-lens/Dockerfile) | Python 3.11-slim, CPU PyTorch, port 8099 |
+| [`Dockerfile`](../geometric-lens/Dockerfile) | Python 3.11-slim, CPU PyTorch, port 31144 |
 
 <a id="geometric-lens-models"></a>
 ### geometric-lens/geometric_lens/ — Scoring Models

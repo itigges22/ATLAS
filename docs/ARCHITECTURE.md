@@ -17,7 +17,7 @@ graph LR
 
     subgraph inner["Inner Layer"]
         V3Service --> LLM
-        V3Service --> Lens["geometric-lens\n:8099"]
+        V3Service --> Lens["geometric-lens\n:31144"]
         V3Service --> Sandbox["sandbox\n:30820"]
         Lens --> LLM
     end
@@ -42,7 +42,7 @@ Services run as containers via Docker Compose (recommended) or as local processe
 | **vLLM** | 8080 | C++ (vLLM) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, Aider format translation |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
+| **geometric-lens** | 31144 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
 | **sandbox** | 30820 (host) / 8020 (container) | Python (FastAPI) | Isolated code execution, compilation, linting, test running |
 
 ---
@@ -520,7 +520,7 @@ sequenceDiagram
     participant P as atlas-proxy :8090
     participant L as vLLM :8080
     participant V as v3-service :8070
-    participant G as geometric-lens :8099
+    participant G as geometric-lens :31144
     participant S as sandbox :30820
 
     U->>A: "Create a REST API handler"

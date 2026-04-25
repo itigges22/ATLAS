@@ -88,7 +88,7 @@ atlas
 ```bash
 # 각 서비스를 개별적으로 확인
 curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
-curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
+curl -s http://localhost:31144/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
@@ -189,12 +189,12 @@ LLAMA_URL=http://localhost:8000 \
 LLAMA_EMBED_URL=http://localhost:8000 \
 GEOMETRIC_LENS_ENABLED=true \
 PROJECT_DATA_DIR=/tmp/atlas-projects \
-python -m uvicorn main:app --host 0.0.0.0 --port 8099
+python -m uvicorn main:app --host 0.0.0.0 --port 31144
 
 # 터미널 3: V3 파이프라인
 cd v3-service
 ATLAS_INFERENCE_URL=http://localhost:8000 \
-ATLAS_LENS_URL=http://localhost:8099 \
+ATLAS_LENS_URL=http://localhost:31144 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
 
@@ -206,7 +206,7 @@ python executor_server.py
 ATLAS_PROXY_PORT=8090 \
 ATLAS_INFERENCE_URL=http://localhost:8000 \
 ATLAS_LLAMA_URL=http://localhost:8000 \
-ATLAS_LENS_URL=http://localhost:8099 \
+ATLAS_LENS_URL=http://localhost:31144 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
 ATLAS_AGENT_LOOP=1 \

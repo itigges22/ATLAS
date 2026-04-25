@@ -68,7 +68,7 @@ flowchart TD
  /_/ \_\|_| |____/_/ \_\___/
 
   ✓ vLLM (port 8080)
-  ✓ Geometric Lens (port 8099)
+  ✓ Geometric Lens (port 31144)
   ✓ V3 Pipeline (port 8070)
   ✓ Proxy v2 (port 8090)
 
@@ -83,7 +83,7 @@ Each service is health-checked via `GET /health` before proceeding:
 | Service | Port | Health Timeout |
 |---------|------|---------------|
 | vLLM | 8080 | 120s (model loading is slow) |
-| Geometric Lens | 8099 | 30s |
+| Geometric Lens | 31144 | 30s |
 | V3 Pipeline | 8070 | 15s |
 | Proxy v2 | 8090 | 30s |
 
@@ -334,7 +334,7 @@ Plain text input (no `/` prefix) is treated as a coding problem and solved direc
 
 On startup, the REPL checks:
 - **vLLM** at `ATLAS_INFERENCE_URL` (default: localhost:8080) — required, exits if unavailable
-- **Geometric Lens** at `ATLAS_RAG_URL` (default: localhost:8099) — optional, warns "Lens unavailable — verification disabled"
+- **Geometric Lens** at `ATLAS_RAG_URL` (default: localhost:31144) — optional, warns "Lens unavailable — verification disabled"
 - **Sandbox** at `ATLAS_SANDBOX_URL` (default: localhost:30820) — optional, warns "Sandbox unavailable — code testing disabled"
 
 ### Solve Pipeline
@@ -445,8 +445,8 @@ All ports and URLs are configurable:
 | Variable | Default | Used By | Purpose |
 |----------|---------|---------|---------|
 | `ATLAS_INFERENCE_URL` | `http://localhost:8000` | proxy, v3-service, Python CLI | vLLM endpoint |
-| `ATLAS_RAG_URL` | `http://localhost:8099` | Python CLI | Geometric Lens endpoint |
-| `ATLAS_LENS_URL` | `http://localhost:8099` | proxy, v3-service | Geometric Lens endpoint |
+| `ATLAS_RAG_URL` | `http://localhost:31144` | Python CLI | Geometric Lens endpoint |
+| `ATLAS_LENS_URL` | `http://localhost:31144` | proxy, v3-service | Geometric Lens endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | proxy, v3-service, Python CLI | Sandbox endpoint |
 | `ATLAS_V3_URL` | `http://localhost:8070` | proxy | V3 Pipeline endpoint |
 
@@ -462,7 +462,7 @@ All ports and URLs are configurable:
 | `ATLAS_PROXY_PORT` | `8090` | Proxy listening port |
 | `ATLAS_V3_PORT` | `8070` | V3 service listening port |
 | `ATLAS_GEN_PORT` | `8000` | vLLM listening port |
-| `ATLAS_LENS_PORT` | `8099` | Geometric Lens listening port |
+| `ATLAS_LENS_PORT` | `31144` | Geometric Lens listening port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port |
 | `GEOMETRIC_LENS_ENABLED` | `true` | Enable/disable Lens scoring |
 

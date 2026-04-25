@@ -14,7 +14,7 @@ docker compose ps
 
 # Individual health checks
 curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
-curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
+curl -s http://localhost:31144/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy (shows all service statuses)
@@ -276,7 +276,7 @@ If V3 is unreachable, the proxy falls back to direct write silently.
 
 **Fix:** Check Lens health and logs:
 ```bash
-curl -s http://localhost:8099/health
+curl -s http://localhost:31144/health
 docker compose logs geometric-lens
 ```
 
@@ -292,7 +292,7 @@ Common causes:
 
 **Verify:**
 ```bash
-curl -s http://localhost:8099/internal/lens/gx-score \
+curl -s http://localhost:31144/internal/lens/gx-score \
   -H "Content-Type: application/json" \
   -d '{"text": "print(1)"}' | python3 -m json.tool
 ```

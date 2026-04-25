@@ -86,7 +86,7 @@ Subsequent `docker compose up -d` starts are fast (seconds) since images are cac
 ```bash
 # Check each service individually
 curl -s http://localhost:8000/health | python3 -m json.tool   # vLLM
-curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
+curl -s http://localhost:31144/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
