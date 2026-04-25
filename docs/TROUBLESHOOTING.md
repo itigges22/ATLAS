@@ -203,6 +203,20 @@ docker compose build --no-cache geometric-lens
 docker compose up -d geometric-lens
 ```
 
+### CUDA Illegal Memory Access (RTX 3090 Ti on WSL2)
+
+**Symptom:** vLLM crashes during model load with
+`torch.AcceleratorError: CUDA error: an illegal memory access was encountered`.
+
+**Affected:** RTX 3090 Ti running WSL2 (Ubuntu 24.04) with vLLM 0.17.0+.
+Both BF16 and AWQ quantizations are affected. Native Linux on the same
+GPU and other GPU architectures (H100, H200, RTX 5090, etc.) appear
+unaffected.
+
+**Workaround:** None confirmed in upstream. Switching from WSL2 to native
+Linux on the same hardware resolves it for affected users; otherwise
+running on a different GPU. Track [vllm-project/vllm#36408](https://github.com/vllm-project/vllm/issues/36408).
+
 ### vLLM 0.18.0+ Engine Crash on Qwen3.5
 
 **Symptom:** vLLM logs `EngineCore encountered an issue` during startup,
