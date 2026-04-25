@@ -159,7 +159,7 @@ huggingface-cli download QuantTrio/Qwen3.5-9B-AWQ --local-dir models/Qwen3.5-9B-
 
 # 3. Install vLLM (nightly required for Qwen3.5 DeltaNet kernels)
 pip install -U --pre --index-url https://pypi.org/simple \
-    --extra-index-url https://wheels.vllm.ai/nightly "vllm>=0.17.0"
+    --extra-index-url https://wheels.vllm.ai/nightly "vllm==0.17.1"  # 0.18.0 has a Qwen3.5-specific regression — see vllm-project/vllm#37749
 
 # 4. Build atlas-proxy
 cd atlas-proxy

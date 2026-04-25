@@ -22,11 +22,14 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/bin/python
 
-# vLLM nightly (required for Qwen3.5 DeltaNet support — needs >=0.16.0rc2.dev447).
-# Build reproducibility: pin to a known-good range. Override with --build-arg
-# VLLM_SPEC="vllm==0.17.x" to lock to a specific release once your validated
-# version is identified.
-ARG VLLM_SPEC="vllm>=0.17.0"
+# vLLM 0.17.1 is the last known-working version for Qwen3.5 — v0.18.0 ships
+# a regression where the engine core dies during initialization for Qwen3.5
+# specifically (other Qwen variants are fine). Pin tightly until upstream
+# fixes it; override via --build-arg if you've validated a newer release.
+#   See https://github.com/vllm-project/vllm/issues/37749
+#
+# Range >=0.17.0,<0.18 is also acceptable — both 0.17.0 and 0.17.1 work.
+ARG VLLM_SPEC="vllm==0.17.1"
 RUN pip3 install --no-cache-dir -U \
         --pre \
         --index-url https://pypi.org/simple \

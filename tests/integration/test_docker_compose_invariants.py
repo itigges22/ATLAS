@@ -125,6 +125,21 @@ def test_no_legacy_llama_server_service(compose):
     assert "llama-server" not in services, "llama-server service must not exist"
 
 
+def test_dockerfile_pins_working_vllm_version():
+    """vLLM 0.18.0 has a regression where the engine crashes during init
+    on Qwen3.5 models. Pin tightly to a known-working version (0.17.x)
+    until upstream fixes it. This test fails CI if anyone bumps the pin
+    to a known-broken range.
+    See https://github.com/vllm-project/vllm/issues/37749."""
+    df = (PROJECT_ROOT / "benchmarks" / "h200" / "Dockerfile").read_text()
+    # Must explicitly pin within the 0.17.x line.
+    assert "vllm==0.17" in df or "vllm>=0.17.0,<0.18" in df, (
+        "Dockerfile must pin vLLM to 0.17.x — 0.18+ crashes on Qwen3.5 "
+        "(vllm-project/vllm#37749). If you've validated a newer release, "
+        "update both the pin and this test."
+    )
+
+
 def test_max_num_batched_tokens_set_for_deltanet_alignment(compose):
     """Qwen3.5's Gated DeltaNet layers force vLLM to align the block_size
     to 2096 tokens when prefix caching is enabled. The default

@@ -203,6 +203,36 @@ docker compose build --no-cache geometric-lens
 docker compose up -d geometric-lens
 ```
 
+### vLLM 0.18.0+ Engine Crash on Qwen3.5
+
+**Symptom:** vLLM logs `EngineCore encountered an issue` during startup,
+the container restarts repeatedly, model loading and `torch.compile`
+appear to succeed before the engine dies. Affects Qwen3.5 specifically;
+other Qwen variants (Qwen3-embedding, Qwen3-reranker) keep working.
+
+**Fix:** Pin `vllm==0.17.1` until upstream resolves the regression. The
+ATLAS Dockerfile already pins this, but if you're installing vLLM
+separately:
+```bash
+pip install -U "vllm==0.17.1"
+```
+
+See [vllm-project/vllm#37749](https://github.com/vllm-project/vllm/issues/37749).
+
+### KV Cache Memory Overestimation (Hybrid Mamba)
+
+**Symptom:** vLLM reports much higher KV cache utilization than `nvidia-smi`
+shows the GPU actually using. Concurrency caps lower than expected for the
+configured `--gpu-memory-utilization`.
+
+**Fix:** This is a known vLLM-side overestimation for hybrid Mamba/attention
+models like Qwen3.5 — the profiler treats Mamba's constant-size state as if
+it scaled like attention's KV cache (~7x overestimation). Workaround: bump
+`--gpu-memory-utilization` higher than you'd otherwise need (the real KV
+footprint is much smaller than vLLM thinks).
+
+See [vllm-project/vllm#37121](https://github.com/vllm-project/vllm/issues/37121).
+
 ### vLLM Crashes on Startup with `block_size > max_num_batched_tokens`
 
 **Symptom:** vLLM exits during config validation with an error like:
