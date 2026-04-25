@@ -125,6 +125,36 @@ def test_no_legacy_llama_server_service(compose):
     assert "llama-server" not in services, "llama-server service must not exist"
 
 
+def test_vllm_services_have_required_runtime_limits(compose):
+    """vLLM needs three things from Docker that the defaults don't give:
+      - --shm-size >= ~8 GB (CUDA IPC; default 64 MB causes Bus error)
+      - --ulimit memlock=-1 (KV cache pinning; default 64 KB → silent slowdown)
+      - --ulimit stack=67108864 (deeper recursion in compile)
+    Both vllm-gen and vllm-embed must have all three. Stages 59 + 60 added
+    them; this test ensures they don't disappear in a future PR."""
+    for svc in ("vllm-gen", "vllm-embed"):
+        s = compose["services"][svc]
+        # shm_size accepts "8gb" or 8589934592 etc.
+        shm = s.get("shm_size")
+        assert shm is not None, f"{svc} missing shm_size (vLLM CUDA IPC needs >=8 GB)"
+        # docker-compose preserves the string form; just assert non-trivial.
+        shm_str = str(shm).lower()
+        assert any(unit in shm_str for unit in ("g", "gi", "1073741824")), (
+            f"{svc} shm_size looks too small: {shm}"
+        )
+
+        ulimits = s.get("ulimits") or {}
+        assert "memlock" in ulimits, f"{svc} missing ulimits.memlock (vLLM needs unlimited)"
+        memlock = ulimits["memlock"]
+        # docker-compose accepts -1 (number) or {soft:-1, hard:-1}; verify either.
+        if isinstance(memlock, dict):
+            assert memlock.get("soft") in (-1, "-1") and memlock.get("hard") in (-1, "-1"), (
+                f"{svc} memlock not unlimited: {memlock}"
+            )
+        else:
+            assert memlock in (-1, "-1"), f"{svc} memlock not unlimited: {memlock}"
+
+
 def test_vllm_gen_waits_for_embed_to_be_healthy(compose):
     """vLLM gen and embed both claim GPU memory at startup. Without
     serialization the two CUDA initializations can race — the second
