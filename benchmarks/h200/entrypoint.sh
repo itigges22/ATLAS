@@ -1,137 +1,186 @@
 #!/bin/bash
-# ATLAS benchmark runner entrypoint.
-# Designed for RunPod / Lambda / any cloud NVIDIA pod with this image.
+# ATLAS benchmark runner entrypoint (vLLM-based).
 #
-# Environment variables (with sensible defaults in the Dockerfile):
-#   MODEL_PATH       — where the GGUF lives (default /workspace/models/...)
-#   MODEL_URL        — where to download it from if DOWNLOAD_MODEL=1
-#   DOWNLOAD_MODEL   — 1 to fetch model if not present, 0 to require it mounted
-#   SERVER_PORT      — llama-server port (default 8000)
-#   SERVER_PARALLEL  — slots (default 16 for H200; drop to 4 on consumer GPUs)
-#   SERVER_CONTEXT   — total KV context (default 262144 = 16K per slot)
-#   BENCHMARK_PARALLEL — runner thread count (match SERVER_PARALLEL)
-#   ATLAS_PARALLEL_TASKS — V3 pipeline concurrent tasks
-#   MODE             — atlas_only | baseline_only | all (default atlas_only)
-#   RESULT_TAR       — where to write the final archive
-#   SHUTDOWN_ON_COMPLETE — 1 = sudo shutdown after results, 0 = leave running
+# Brings up three services in this order:
+#   1. Geometric Lens (FastAPI on port 31144) — fast, no model load
+#   2. vLLM EMBED instance on $EMBED_PORT (--task embed, 4096-dim hidden states)
+#   3. vLLM GEN instance on $GEN_PORT (--reasoning-parser qwen3, prefix caching)
+#
+# Why this order: Lens starts instantly. EMBED instance is smaller and used by Lens
+# for code-to-embedding extraction. GEN is the largest and most expensive — start
+# last so we don't burn GPU minutes if the smaller pieces fail health checks.
+#
+# Environment variables (defaults set in Dockerfile ENV):
+#   MODEL_NAME         — HF model id (QuantTrio/Qwen3.5-9B-AWQ)
+#   MODEL_PATH         — local cache path (/workspace/models/Qwen3.5-9B-AWQ)
+#   DOWNLOAD_MODEL     — 1 to fetch from HF on first run, 0 to require mounted
+#   GEN_PORT           — vLLM gen port (8000)
+#   EMBED_PORT         — vLLM embed port (8001)
+#   GEN_MAX_NUM_SEQS   — concurrent gen requests (32 for H100, drop to 4-8 on consumer)
+#   GEN_MAX_MODEL_LEN  — gen context (32768; raise for long V3 traces)
+#   GEN_GPU_MEM_UTIL   — fraction of VRAM gen instance can claim (0.55)
+#   EMBED_*            — same shape, smaller values
+#   MODE               — atlas_only | baseline_only | all
+#   SKIP_SMOKE         — 1 to skip the C-Eval pre-flight test
 
 set -euo pipefail
 
 echo "============================================="
-echo "ATLAS Benchmark Runner — container entrypoint"
+echo "ATLAS Benchmark Runner (vLLM) — entrypoint"
 echo "============================================="
 date
-echo "Mode:              $MODE"
-echo "Model path:        $MODEL_PATH"
-echo "Server parallel:   $SERVER_PARALLEL"
-echo "Server context:    $SERVER_CONTEXT"
+echo "Mode:               $MODE"
+echo "Model:              $MODEL_NAME"
+echo "Model path:         $MODEL_PATH"
+echo "Gen port/seqs/len:  $GEN_PORT / $GEN_MAX_NUM_SEQS / $GEN_MAX_MODEL_LEN"
+echo "Embed port/seqs/len: $EMBED_PORT / $EMBED_MAX_NUM_SEQS / $EMBED_MAX_MODEL_LEN"
 echo "Benchmark parallel: $BENCHMARK_PARALLEL"
 echo "---------------------------------------------"
 nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv || echo "no nvidia-smi"
 echo "============================================="
 echo ""
 
-# 1. Ensure model is present
-if [[ ! -f "$MODEL_PATH" ]]; then
+# 1. Ensure model is present. AWQ is ~12 GiB; pulling on first run is fine for
+#    cloud pods. For repeat runs, mount a volume at /workspace/models to avoid the download.
+if [[ ! -d "$MODEL_PATH" || -z "$(ls -A "$MODEL_PATH" 2>/dev/null)" ]]; then
     if [[ "$DOWNLOAD_MODEL" == "1" ]]; then
-        echo "--- Downloading model from $MODEL_URL (~7GB) ---"
-        mkdir -p "$(dirname "$MODEL_PATH")"
-        wget --progress=dot:giga -O "$MODEL_PATH" "$MODEL_URL"
+        echo "--- Downloading $MODEL_NAME from HuggingFace (~12 GiB) ---"
+        mkdir -p "$MODEL_PATH"
+        # Use the HF hub CLI rather than wget per-file — there are many shards.
+        pip3 install -q huggingface_hub
+        python -c "
+from huggingface_hub import snapshot_download
+import os
+snapshot_download(
+    repo_id='$MODEL_NAME',
+    local_dir='$MODEL_PATH',
+    local_dir_use_symlinks=False,
+    max_workers=8,
+)
+print('download complete')
+"
     else
         echo "ERROR: Model not found at $MODEL_PATH and DOWNLOAD_MODEL=0." >&2
         echo "Mount a volume at /workspace/models or set DOWNLOAD_MODEL=1." >&2
         exit 1
     fi
 fi
+echo "Model present at $MODEL_PATH ($(du -sh "$MODEL_PATH" | cut -f1))"
 
-echo "Model present: $(ls -lh "$MODEL_PATH" | awk '{print $5}')"
+# 1a. Clear flashinfer cache — required when an old container layer carried a
+#     stale cache that breaks ninja build. Cheap to do unconditionally.
+rm -rf "$HOME/.cache/flashinfer" 2>/dev/null || true
 
-# 2. Start llama-server in background
+# 2. Geometric Lens service (FastAPI). Boots in ~5s — start it first.
 echo ""
 echo "--- Starting Geometric Lens service on port ${LENS_PORT:-31144} ---"
 LENS_LOG=/tmp/lens-service.log
 cd /workspace/ATLAS/geometric-lens
 GEOMETRIC_LENS_ENABLED=true \
-LLAMA_URL="http://localhost:${SERVER_PORT}" \
-LLAMA_EMBED_URL="http://localhost:${SERVER_PORT}" \
+LLAMA_URL="http://localhost:${EMBED_PORT}" \
+LLAMA_EMBED_URL="http://localhost:${EMBED_PORT}" \
 PROJECT_DATA_DIR=/data/projects \
 nohup python -m uvicorn main:app --host 0.0.0.0 --port "${LENS_PORT:-31144}" \
     > "$LENS_LOG" 2>&1 &
 LENS_PID=$!
 cd /workspace/ATLAS
-echo "Lens service PID: $LENS_PID (log: $LENS_LOG)"
+echo "Lens PID: $LENS_PID (log: $LENS_LOG)"
 
-# 2a. Wait for Lens health (much faster to start than llama-server since no model load)
-echo "--- Waiting for Lens service (timeout 120s) ---"
+# Wait for Lens health (fast).
 for i in $(seq 1 24); do
     if curl -s --max-time 2 "http://localhost:${LENS_PORT:-31144}/health" 2>/dev/null | grep -qE "ok|healthy"; then
-        echo "Lens service healthy after ${i}×5s."
+        echo "Lens healthy after ${i}x5s."
         break
     fi
     printf "."
     sleep 5
 done
 if ! curl -s "http://localhost:${LENS_PORT:-31144}/health" 2>/dev/null | grep -qE "ok|healthy"; then
-    echo "WARNING: Lens service did not come up — ATLAS will run without Lens scoring."
-    echo "Lens service log tail:"
+    echo "WARNING: Lens did not come up — V3 will run with GEOMETRIC_LENS_ENABLED=false."
     tail -30 "$LENS_LOG" >&2 || true
-    # Don't exit; V3 pipeline degrades gracefully without Lens.
     export GEOMETRIC_LENS_ENABLED=false
 fi
 
-# 2b. Start llama-server
+# 3. vLLM EMBED instance. Smaller, starts faster than gen.
 echo ""
-echo "--- Starting llama-server ---"
-LLAMA_LOG=/tmp/llama-server.log
-nohup /usr/local/bin/llama-server \
-    -m "$MODEL_PATH" \
-    -c "$SERVER_CONTEXT" \
-    -ctk q8_0 -ctv q4_0 \
-    --parallel "$SERVER_PARALLEL" --cont-batching -ngl 99 \
-    --host 0.0.0.0 --port "$SERVER_PORT" \
-    --flash-attn on --mlock \
-    -b 4096 -ub 4096 \
-    --ctx-checkpoints 0 --no-cache-prompt \
-    --embeddings --jinja --no-warmup \
-    > "$LLAMA_LOG" 2>&1 &
-LLAMA_PID=$!
-echo "llama-server PID: $LLAMA_PID (log: $LLAMA_LOG)"
+echo "--- Starting vLLM EMBED on port $EMBED_PORT ---"
+EMBED_LOG=/tmp/vllm-embed.log
+nohup vllm serve "$MODEL_PATH" \
+    --served-model-name qwen3.5-9b-embed \
+    --task embed \
+    --port "$EMBED_PORT" \
+    --host 0.0.0.0 \
+    --max-num-seqs "$EMBED_MAX_NUM_SEQS" \
+    --max-model-len "$EMBED_MAX_MODEL_LEN" \
+    --gpu-memory-utilization "$EMBED_GPU_MEM_UTIL" \
+    --tensor-parallel-size 1 \
+    --trust-remote-code \
+    > "$EMBED_LOG" 2>&1 &
+EMBED_PID=$!
+echo "vLLM EMBED PID: $EMBED_PID (log: $EMBED_LOG)"
 
-# 3. Wait for llama-server healthy
-echo ""
-echo "--- Waiting for llama-server to be healthy (timeout 600s) ---"
+# Wait for embed health (model load takes 30-90s for AWQ).
+echo "--- Waiting for vLLM EMBED health (timeout 600s) ---"
 for i in $(seq 1 120); do
-    if curl -s --max-time 2 "http://localhost:${SERVER_PORT}/health" 2>/dev/null | grep -q ok; then
-        echo "llama-server healthy after ${i}×5s."
+    if curl -s --max-time 2 "http://localhost:${EMBED_PORT}/health" 2>/dev/null | grep -q ok; then
+        echo "vLLM EMBED healthy after ${i}x5s."
         break
     fi
     printf "."
     sleep 5
 done
-if ! curl -s "http://localhost:${SERVER_PORT}/health" 2>/dev/null | grep -q ok; then
+if ! curl -s "http://localhost:${EMBED_PORT}/health" 2>/dev/null | grep -q ok; then
     echo ""
-    echo "ERROR: llama-server did not come up. Tail of log:" >&2
-    tail -30 "$LLAMA_LOG" >&2
+    echo "ERROR: vLLM EMBED did not come up. Tail of log:" >&2
+    tail -60 "$EMBED_LOG" >&2
     exit 1
 fi
 
-# Both runners read LLAMA_URL (not ATLAS_LLM_URL) — keep both for safety.
-export LLAMA_URL="http://localhost:${SERVER_PORT}"
-export ATLAS_LLM_URL="http://localhost:${SERVER_PORT}"
-export RAG_API_URL="http://localhost:${LENS_PORT:-31144}"
-export BENCHMARK_PARALLEL
-export ATLAS_LLM_PARALLEL
-export ATLAS_PARALLEL_TASKS
-export GEOMETRIC_LENS_ENABLED
-# The V3 pipeline uses the Lens when GEOMETRIC_LENS_ENABLED=true and degrades
-# gracefully if the Lens service dies mid-run. The entrypoint sets GEOMETRIC_LENS_ENABLED=false
-# above if the Lens failed to start so the pipeline doesn't waste time calling a dead service.
-# Numbers when Lens is live = full ATLAS V3. Numbers when Lens is down = "V3 minus Lens" — acceptable
-# for V3.1 since the Lens is trained on Q6_K embeddings, which matches our
-# current Q6_K inference, but running it as a separate service is V3.2 work.
-export GEOMETRIC_LENS_ENABLED
+# 4. vLLM GEN instance — main inference engine.
+echo ""
+echo "--- Starting vLLM GEN on port $GEN_PORT ---"
+GEN_LOG=/tmp/vllm-gen.log
+nohup vllm serve "$MODEL_PATH" \
+    --served-model-name qwen3.5-9b \
+    --port "$GEN_PORT" \
+    --host 0.0.0.0 \
+    --max-num-seqs "$GEN_MAX_NUM_SEQS" \
+    --max-model-len "$GEN_MAX_MODEL_LEN" \
+    --gpu-memory-utilization "$GEN_GPU_MEM_UTIL" \
+    --tensor-parallel-size 1 \
+    --enable-prefix-caching \
+    --reasoning-parser qwen3 \
+    --trust-remote-code \
+    > "$GEN_LOG" 2>&1 &
+GEN_PID=$!
+echo "vLLM GEN PID: $GEN_PID (log: $GEN_LOG)"
 
-# 4. Optional smoke test (set SKIP_SMOKE=1 to skip)
+echo "--- Waiting for vLLM GEN health (timeout 600s) ---"
+for i in $(seq 1 120); do
+    if curl -s --max-time 2 "http://localhost:${GEN_PORT}/health" 2>/dev/null | grep -q ok; then
+        echo "vLLM GEN healthy after ${i}x5s."
+        break
+    fi
+    printf "."
+    sleep 5
+done
+if ! curl -s "http://localhost:${GEN_PORT}/health" 2>/dev/null | grep -q ok; then
+    echo ""
+    echo "ERROR: vLLM GEN did not come up. Tail of log:" >&2
+    tail -60 "$GEN_LOG" >&2
+    exit 1
+fi
+
+# Export URLs for runners.
+export LLAMA_GEN_URL="http://localhost:${GEN_PORT}"
+export LLAMA_EMBED_URL="http://localhost:${EMBED_PORT}"
+# Backwards-compat: many runners still read LLAMA_URL.
+export LLAMA_URL="$LLAMA_GEN_URL"
+export ATLAS_LLM_URL="$LLAMA_GEN_URL"
+export RAG_API_URL="http://localhost:${LENS_PORT:-31144}"
+export BENCHMARK_PARALLEL ATLAS_LLM_PARALLEL ATLAS_PARALLEL_TASKS GEOMETRIC_LENS_ENABLED
+
+# 5. Optional smoke test (set SKIP_SMOKE=1 to skip).
 if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
     echo ""
     echo "--- Smoke test: 3 C-Eval tasks ---"
@@ -143,7 +192,7 @@ if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
     rm -rf /tmp/smoke_out
 fi
 
-# 5. Run the benchmarks
+# 6. Run the benchmarks.
 LOG_DIR="/workspace/results/logs/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 
@@ -159,7 +208,7 @@ if [[ "$MODE" == "atlas_only" || "$MODE" == "all" ]]; then
     ./benchmarks/run_lcb_v6.sh 2>&1 | tee "$LOG_DIR/atlas_lcb.log" || true
 fi
 
-# 6. Archive results
+# 7. Archive results.
 echo ""
 echo "--- Archiving results ---"
 mkdir -p "$(dirname "$RESULT_TAR")"
@@ -168,28 +217,23 @@ tar czf "$RESULT_TAR" \
     benchmarks/section_*/*/results.json \
     benchmarks/section_*/*/traces \
     benchmarks/logs \
+    benchmark/results \
     2>/dev/null || true
 ls -lh "$RESULT_TAR" || true
 
-# 7. Stop llama-server cleanly
-kill "$LLAMA_PID" 2>/dev/null || true
+# 8. Stop vLLM cleanly.
+kill "$GEN_PID" "$EMBED_PID" 2>/dev/null || true
 
 echo ""
 echo "============================================="
-echo "Done. Results tarball: $RESULT_TAR"
-echo "Pull it back via: runpodctl receive / ssh rsync / web download"
+echo "Done. Results: $RESULT_TAR"
 echo "============================================="
 
 if [[ "$SHUTDOWN_ON_COMPLETE" == "1" ]]; then
-    echo "SHUTDOWN_ON_COMPLETE=1 — exiting entrypoint in 60s."
-    echo "Note: to actually stop a RunPod pod and halt billing, use the RunPod"
-    echo "web UI, or call runpodctl stop <pod-id> from outside. Container exit"
-    echo "alone does not stop the pod."
+    echo "SHUTDOWN_ON_COMPLETE=1 — exiting in 60s."
     sleep 60
     exit 0
 else
-    echo "SHUTDOWN_ON_COMPLETE=0 — container will stay alive for you to rsync results."
-    # Keep container alive so RunPod doesn't terminate and lose results.
-    # Tail the llama log to keep PID 1 attached. Stop the pod from RunPod UI when done.
-    exec tail -f "$LLAMA_LOG"
+    echo "Container will stay alive — rsync results, then stop the pod."
+    exec tail -f "$GEN_LOG"
 fi

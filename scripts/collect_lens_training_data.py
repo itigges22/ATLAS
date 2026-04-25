@@ -21,14 +21,18 @@ import urllib.request
 import urllib.error
 import glob
 
-LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
+LLAMA_URL = os.environ.get(
+    "LLAMA_EMBED_URL",
+    os.environ.get("LLAMA_URL", "http://localhost:8001"),
+)
+EMBED_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
 
 
 def extract_embedding(text: str, max_retries: int = 5) -> list:
-    """Extract embedding from llama-server with retries."""
-    body = json.dumps({"content": text}).encode("utf-8")
+    """Extract embedding from a vLLM /v1/embeddings instance with retries."""
+    body = json.dumps({"model": EMBED_MODEL, "input": text}).encode("utf-8")
     req = urllib.request.Request(
-        f"{LLAMA_URL}/embedding",
+        f"{LLAMA_URL}/v1/embeddings",
         data=body,
         headers={"Content-Type": "application/json"},
     )
@@ -36,10 +40,7 @@ def extract_embedding(text: str, max_retries: int = 5) -> list:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            emb = data[0]["embedding"][0] if isinstance(data, list) else data.get("embedding", [])
-            if isinstance(emb[0], list):
-                emb = emb[0]
-            return emb
+            return data["data"][0]["embedding"]
         except Exception as e:
             if attempt < max_retries - 1:
                 wait = 2 ** attempt

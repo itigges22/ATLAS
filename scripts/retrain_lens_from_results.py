@@ -27,7 +27,11 @@ RESULTS_DIR = os.environ.get(
     "RESULTS_DIR",
     "" + ATLAS_DIR + "/benchmark/results/v3_lcb/per_task",
 )
-LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
+LLAMA_URL = os.environ.get(
+    "LLAMA_EMBED_URL",
+    os.environ.get("LLAMA_URL", "http://localhost:8001"),
+)
+EMBED_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
 SAVE_PATH = os.environ.get(
     "SAVE_PATH",
     "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models/cost_field.pt",
@@ -36,32 +40,22 @@ MAX_TASKS = int(os.environ.get("MAX_TASKS", "0"))  # 0 = all
 
 
 def get_embedding(text: str, url: str) -> list:
-    """Get embedding vector from llama-server /embedding endpoint.
+    """Get embedding vector from a vLLM /v1/embeddings endpoint.
 
-    Response format: [{"index": 0, "embedding": [[d0, d1, ...]]}]
-    May also be: {"embedding": [d0, d1, ...]} depending on server version.
+    Response format: {"data": [{"embedding": [d0, d1, ...], "index": 0}], ...}
     """
-    body = json.dumps({"content": text}).encode("utf-8")
+    body = json.dumps({"model": EMBED_MODEL, "input": text}).encode("utf-8")
     req = urllib.request.Request(
-        f"{url}/embedding",
+        f"{url}/v1/embeddings",
         data=body,
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-
-    # Handle list response: [{"index": 0, "embedding": [[...]]}]
-    if isinstance(data, list) and data:
-        emb = data[0].get("embedding", [])
-    elif isinstance(data, dict):
-        emb = data.get("embedding", [])
-    else:
+    try:
+        return data["data"][0]["embedding"]
+    except (KeyError, IndexError, TypeError):
         return []
-
-    # Unwrap nested list: [[d0, d1, ...]] -> [d0, d1, ...]
-    if emb and isinstance(emb[0], list):
-        emb = emb[0]
-    return emb
 
 
 def load_results(results_dir: str, max_tasks: int = 0) -> tuple:

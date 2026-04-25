@@ -1,4 +1,4 @@
-"""Extract embeddings from llama-server's /embedding endpoint."""
+"""Extract embeddings from vLLM's /v1/embeddings endpoint (OpenAI-compatible)."""
 
 import json
 import logging
@@ -10,61 +10,72 @@ logger = logging.getLogger(__name__)
 
 
 def _get_embed_url() -> str:
-    """Return the URL for the embedding server.
+    """Return the base URL for the embedding server.
 
-    Uses LLAMA_EMBED_URL if set, otherwise falls back to LLAMA_URL.
+    Resolves in this order:
+      LLAMA_EMBED_URL  → dedicated vLLM embed instance (port 8001 by convention)
+      LLAMA_URL        → legacy single-server fallback
+      default          → http://llama-service:8001
     """
     return os.environ.get(
         "LLAMA_EMBED_URL",
-        os.environ.get("LLAMA_URL", "http://llama-service:8000"),
+        os.environ.get("LLAMA_URL", "http://llama-service:8001"),
     )
 
 
-def extract_embedding(text: str) -> List[float]:
-    """Extract an embedding vector from llama-server.
+def _get_embed_model() -> str:
+    """Model name to send in the vLLM request. Must match --served-model-name
+    on the embed instance (default: qwen3.5-9b-embed)."""
+    return os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
 
-    Handles both pooled responses (flat list) from self-embedding endpoints
-    and per-token responses (nested list) that need mean pooling.
+
+def extract_embedding(text: str) -> List[float]:
+    """Extract an embedding vector from a vLLM embed instance.
+
+    vLLM's /v1/embeddings is OpenAI-compatible and returns pooled sentence
+    embeddings. For Qwen3.5-9B in --task embed mode, that's a 4096-dim float
+    vector matching the hidden state dimension.
 
     Returns:
-        List of floats with model-native dimensionality.
+        List of floats (4096-dim for Qwen3.5-9B).
     """
-    url = f"{_get_embed_url()}/embedding"
-    payload = json.dumps({"content": text}).encode()
+    url = f"{_get_embed_url()}/v1/embeddings"
+    payload = json.dumps({
+        "model": _get_embed_model(),
+        "input": text,
+    }).encode()
     req = Request(url, data=payload, headers={"Content-Type": "application/json"})
 
     with urlopen(req, timeout=120) as resp:
         data = json.loads(resp.read())
 
-    # Response: [{"index": 0, "embedding": <flat list or nested list>}]
-    raw = data[0]["embedding"]
-
-    # Pooled: flat list of floats (e.g. llama-server self-embeddings)
-    if not isinstance(raw[0], list):
-        return raw
-
-    # Per-token: mean-pool across tokens
-    per_token = raw
-    n_tokens = len(per_token)
-
-    if n_tokens == 0:
-        raise ValueError("No token embeddings returned")
-
-    dim = len(per_token[0])
-
-    pooled = [0.0] * dim
-    for tok_emb in per_token:
-        for i, v in enumerate(tok_emb):
-            pooled[i] += v
-    for i in range(dim):
-        pooled[i] /= n_tokens
-
-    return pooled
+    # OpenAI format: {"data": [{"embedding": [...], "index": 0, "object": "embedding"}], ...}
+    raw = data["data"][0]["embedding"]
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("Empty embedding returned from vLLM")
+    return raw
 
 
 def extract_embeddings_batch(texts: List[str]) -> List[List[float]]:
-    """Extract embeddings for multiple texts sequentially."""
-    results = []
-    for text in texts:
-        results.append(extract_embedding(text))
-    return results
+    """Extract embeddings for multiple texts in a single batched request.
+
+    vLLM's embeddings endpoint accepts a list of inputs and returns one
+    embedding per input — much faster than one HTTP round-trip per text.
+    """
+    if not texts:
+        return []
+
+    url = f"{_get_embed_url()}/v1/embeddings"
+    payload = json.dumps({
+        "model": _get_embed_model(),
+        "input": texts,
+    }).encode()
+    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
+
+    with urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read())
+
+    items = data["data"]
+    # vLLM returns items with explicit `index` field — sort to be safe.
+    items.sort(key=lambda x: x.get("index", 0))
+    return [it["embedding"] for it in items]

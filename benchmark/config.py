@@ -92,29 +92,55 @@ class BenchmarkConfig:
 
     @property
     def llama_url(self) -> str:
-        """URL for llama-server."""
-        # Check environment first
-        url = os.environ.get("LLAMA_URL")
+        """URL for the vLLM gen instance.
+
+        Resolution order:
+          LLAMA_GEN_URL → vLLM gen instance (port 8000 by convention)
+          LLAMA_URL     → legacy single-server fallback
+          K8s service   → http://llama-gen-service:8000 inside the cluster
+          NodePort      → http://localhost:{ATLAS_LLAMA_NODEPORT|8000}
+        """
+        url = os.environ.get("LLAMA_GEN_URL") or os.environ.get("LLAMA_URL")
         if url:
             return url
 
-        # Check if running in cluster
         if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
-            return "http://llama-service:8000"
+            return "http://llama-gen-service:8000"
 
-        # Use NodePort from config
-        port = self._conf.get("ATLAS_LLAMA_NODEPORT", "32735")
+        port = self._conf.get("ATLAS_LLAMA_NODEPORT", "8000")
+        return f"http://localhost:{port}"
+
+    @property
+    def llama_embed_url(self) -> str:
+        """URL for the vLLM embed instance (separate process from gen).
+
+        vLLM serves only one task per instance, so embeddings need a dedicated
+        process. Defaults to port 8001 alongside gen on 8000.
+        """
+        url = os.environ.get("LLAMA_EMBED_URL")
+        if url:
+            return url
+
+        if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
+            return "http://llama-embed-service:8001"
+
+        port = self._conf.get("ATLAS_LLAMA_EMBED_NODEPORT", "8001")
         return f"http://localhost:{port}"
 
     @property
     def llama_api_url(self) -> str:
-        """URL for llama-server OpenAI-compatible API."""
+        """URL for the gen instance's OpenAI-compatible API."""
         return f"{self.llama_url}/v1"
 
     @property
     def model_name(self) -> str:
-        """Main model filename."""
-        return self._conf.get("ATLAS_MAIN_MODEL", "Qwen3.5-9B-Q6_K.gguf")
+        """vLLM served-model-name for the gen instance."""
+        return self._conf.get("ATLAS_MAIN_MODEL", os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b"))
+
+    @property
+    def embed_model_name(self) -> str:
+        """vLLM served-model-name for the embed instance."""
+        return self._conf.get("ATLAS_EMBED_MODEL", os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed"))
 
     @property
     def default_timeout_seconds(self) -> int:

@@ -53,8 +53,17 @@ from benchmark.v3.candidate_selection import CandidateInfo, select_candidate
 
 # --- Configuration -----------------------------------------------------------
 
-INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
+INFERENCE_URL = os.environ.get(
+    "LLAMA_GEN_URL",
+    os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8000"),
+)
+EMBED_URL = os.environ.get(
+    "LLAMA_EMBED_URL",
+    os.environ.get("ATLAS_EMBED_URL", "http://localhost:8001"),
+)
+GEN_MODEL_NAME = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
+EMBED_MODEL_NAME = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
+LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:31144")
 SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
 PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
 
@@ -140,23 +149,21 @@ class LLMAdapter:
                 messages.append({"role": role, "content": content})
             i += 2
 
-        # If parsing failed, just send as user message
+        # If parsing failed, just send as user message.
         if not messages:
             print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
-            messages = [{"role": "user", "content": "/nothink\n" + prompt}]
+            messages = [{"role": "user", "content": prompt}]
         else:
             print(f"  [LLM] Parsed {len(messages)} messages from ChatML", flush=True)
-            # Ensure /nothink in last user message
-            for msg in messages:
-                if msg["role"] == "user" and not msg["content"].startswith("/nothink"):
-                    msg["content"] = "/nothink\n" + msg["content"]
 
         chat_body = {
-            "model": model_name,
+            "model": model_name or GEN_MODEL_NAME,
             "messages": messages,
             "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
             "temperature": body.get("temperature", 0.6),
             "stream": False,
+            # Qwen3.5 has no /nothink soft command. Disable thinking via kwarg.
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         if "seed" in body:
             chat_body["seed"] = body["seed"]
@@ -212,13 +219,13 @@ class SandboxAdapter:
 # --- Embedding Adapter --------------------------------------------------------
 
 class EmbedAdapter:
-    """Calls llama-server /v1/embeddings for code embeddings."""
+    """Calls vLLM /v1/embeddings on the dedicated embed instance."""
 
     def __call__(self, text: str) -> List[float]:
-        body = {"model": "default", "input": text}
+        body = {"model": EMBED_MODEL_NAME, "input": text}
         try:
             req = urllib.request.Request(
-                f"{INFERENCE_URL}/v1/embeddings",
+                f"{EMBED_URL}/v1/embeddings",
                 data=json.dumps(body).encode(),
                 headers={"Content-Type": "application/json"},
             )

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import os
 ATLAS_DIR = os.environ.get("ATLAS_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-"""Retrain C(x) cost field using llama-server 9B embeddings.
+"""Retrain C(x) cost field using vLLM 9B embeddings.
 
-Collects code + pass/fail labels from ablation results,
-embeds each through llama-server at localhost:8080, then trains
-the cost field to discriminate PASS vs FAIL.
+Collects code + pass/fail labels from ablation results, embeds each via the
+vLLM /v1/embeddings endpoint (qwen3.5-9b-embed instance, port 8001 by default),
+then trains the cost field to discriminate PASS vs FAIL.
 """
 
 import json
@@ -19,31 +19,24 @@ from urllib.request import Request, urlopen
 # Add geometric-lens to path for imports
 sys.path.insert(0, '" + ATLAS_DIR + "/geometric-lens')
 
-LLAMA_EMBED_URL = "http://localhost:8080/embedding"
+LLAMA_EMBED_URL = os.environ.get(
+    "LLAMA_EMBED_URL",
+    os.environ.get("LLAMA_URL", "http://localhost:8001"),
+).rstrip("/") + "/v1/embeddings"
+EMBED_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
 MODELS_DIR = "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models"
 DATA_DIR = "" + ATLAS_DIR + "/v3_ablation_results/condition_a"
 
 
 def get_llama_embedding(text: str, retries=2) -> list:
-    """Get 4096-dim embedding from llama-server (Qwen3.5-9B)."""
-    payload = json.dumps({"content": text}).encode()
+    """Get 4096-dim embedding from a vLLM embed instance."""
+    payload = json.dumps({"model": EMBED_MODEL, "input": text}).encode()
     req = Request(LLAMA_EMBED_URL, data=payload, headers={"Content-Type": "application/json"})
     for attempt in range(retries + 1):
         try:
             with urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read())
-            emb = data[0]["embedding"]
-            if isinstance(emb[0], list):
-                # Per-token: mean pool
-                dim = len(emb[0])
-                pooled = [0.0] * dim
-                for tok in emb:
-                    for i, v in enumerate(tok):
-                        pooled[i] += v
-                for i in range(dim):
-                    pooled[i] /= len(emb)
-                return pooled
-            return emb
+            return data["data"][0]["embedding"]
         except Exception as e:
             if attempt < retries:
                 print(f"  Retry {attempt+1}: {e}")

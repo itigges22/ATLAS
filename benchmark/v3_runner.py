@@ -93,7 +93,14 @@ from benchmark.v3.embedding_store import EmbeddingWriter
 # --- Constants ----------------------------------------------------------------
 
 RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
-LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '32735')}")
+# vLLM gen instance (port 8000 by default). Falls back to LLAMA_URL for backwards compat.
+LLAMA_URL = os.environ.get(
+    "LLAMA_GEN_URL",
+    os.environ.get(
+        "LLAMA_URL",
+        f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '8000')}",
+    ),
+)
 # Qwen3.5-9B published sampling for thinking-mode benchmarks.
 # Must stay identical between the baseline runner (benchmarks/v301_runner.py)
 # and this V3 runner so baseline vs ATLAS delta is apples-to-apples.
@@ -269,50 +276,54 @@ class LLMAdapter:
 
     @staticmethod
     def _parse_logprobs(data: dict) -> List[float]:
-        """Extract per-token log-probabilities from llama-server response.
+        """Extract per-token log-probabilities from a vLLM response.
 
-        Handles both /v1/chat/completions format (choices[0].logprobs)
-        and legacy /completion format (completion_probabilities).
+        vLLM /v1/completions returns logprobs at choices[0].logprobs.token_logprobs
+        (a list of floats, one per generated token). /v1/chat/completions returns
+        them at choices[0].logprobs.content (list of dicts with 'logprob' key).
+        Handle both for safety.
         """
         logprobs = []
-        # /v1/chat/completions format
         choices = data.get("choices", [])
-        if choices:
-            lp_data = choices[0].get("logprobs", {})
-            if lp_data and lp_data.get("content"):
-                for tok in lp_data["content"]:
-                    lp = tok.get("logprob")
-                    if lp is not None:
-                        logprobs.append(lp)
-                return logprobs
+        if not choices:
+            return logprobs
+        lp_data = choices[0].get("logprobs") or {}
 
-        # Legacy /completion format fallback
-        for tok in data.get("completion_probabilities", []):
-            probs = tok.get("probs", [])
-            if probs:
-                p = probs[0].get("prob", 0.0)
-                if p > 0:
-                    logprobs.append(math.log(p))
+        # /v1/completions: token_logprobs is a flat list of floats.
+        token_logprobs = lp_data.get("token_logprobs") if isinstance(lp_data, dict) else None
+        if token_logprobs:
+            for lp in token_logprobs:
+                if lp is not None:
+                    logprobs.append(lp)
+            return logprobs
+
+        # /v1/chat/completions: content is a list of {token, logprob, ...} dicts.
+        content = lp_data.get("content") if isinstance(lp_data, dict) else None
+        if content:
+            for tok in content:
+                lp = tok.get("logprob")
+                if lp is not None:
+                    logprobs.append(lp)
         return logprobs
 
     def _send_request(self, request_body: dict) -> dict:
-        """Send request to LLM server with retry.
+        """Send a /v1/completions request to vLLM with retry.
 
-        Supports llama.cpp (/completion) and legacy Fox (/v1/completions, unused).
-        Uses manual ChatML formatting for thinking mode control.
+        V3 components build ChatML prompts manually (see component code), so
+        we use /v1/completions which tokenizes the prompt as-is rather than
+        applying a chat template. This preserves the existing prompt-construction
+        code and gives V3 full control over thinking-mode formatting.
         """
-        # Detect Fox vs llama.cpp: Fox uses /v1/completions with OpenAI format
-        use_fox = os.environ.get("ATLAS_USE_FOX", "0") == "1"
-        if use_fox:
-            endpoint = f"{self.runner.llm_url}/v1/completions"
-            # Convert llama.cpp format to OpenAI format
-            if "n_predict" in request_body:
-                request_body["max_tokens"] = request_body.pop("n_predict")
-            request_body.pop("cache_prompt", None)
-            request_body.pop("n_probs", None)
-            request_body.setdefault("model", os.environ.get("ATLAS_MODEL_NAME", "default"))
-        else:
-            endpoint = f"{self.runner.llm_url}/completion"
+        endpoint = f"{self.runner.llm_url}/v1/completions"
+        # Translate llama.cpp-style fields if a caller still uses them.
+        if "n_predict" in request_body:
+            request_body["max_tokens"] = request_body.pop("n_predict")
+        request_body.pop("cache_prompt", None)
+        # vLLM /v1/completions logprobs param: integer N → top-N alternatives per token.
+        if "n_probs" in request_body:
+            n_probs = request_body.pop("n_probs")
+            request_body.setdefault("logprobs", n_probs if n_probs else 1)
+        request_body.setdefault("model", os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b"))
 
         last_error = None
         max_attempts = self.max_retries + 3
@@ -353,18 +364,19 @@ class LLMAdapter:
                  max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
         self.call_count += 1
 
-        # With --jinja enabled on llama-server, the model naturally uses
-        # <think>...</think> tags for reasoning via the /completion endpoint.
-        # No pre-fill needed — the chat template handles thinking mode.
+        # V3 components hand us ready-to-tokenize ChatML strings. We send
+        # them via /v1/completions which tokenizes the prompt as-is — vLLM
+        # does not apply a chat template here, so V3's manually-built prompt
+        # (with <think> tags or thinking-disabled prefix as needed) goes
+        # straight to the model.
 
         request_body = {
             "prompt": prompt,
             "temperature": temperature,
-            "n_predict": max_tokens,
+            "max_tokens": max_tokens,
             "stream": False,
-            "cache_prompt": False,
             "stop": ["\n\n\n\n"],
-            "n_probs": 1,
+            "logprobs": 1,
             "top_k": TOP_K,
             "top_p": TOP_P,
             "presence_penalty": PRESENCE_PENALTY,
@@ -375,15 +387,10 @@ class LLMAdapter:
         start_time = time.time()
         data = self._send_request(request_body)
 
-        # Parse response — Fox returns OpenAI format, llama.cpp returns legacy
-        if "choices" in data:
-            # Fox / OpenAI format
-            content = data["choices"][0].get("text", "")
-            tokens = data.get("usage", {}).get("completion_tokens", 0)
-        else:
-            # llama.cpp legacy format
-            content = data.get("content", "")
-            tokens = data.get("tokens_predicted", 0)
+        # vLLM /v1/completions returns OpenAI format.
+        choices = data.get("choices", [])
+        content = choices[0].get("text", "") if choices else ""
+        tokens = data.get("usage", {}).get("completion_tokens", 0)
         self.last_logprobs = self._parse_logprobs(data)
 
         # Strip thinking blocks. With --jinja, the model wraps reasoning

@@ -40,7 +40,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # --- Configuration -----------------------------------------------------------
 
-LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
+LLAMA_URL = os.environ.get("LLAMA_GEN_URL", os.environ.get("LLAMA_URL", "http://localhost:8000"))
+LLAMA_GEN_MODEL = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
 SEED = 42
 MAX_TOKENS_MCQ = 12288  # High — Qwen3.5 uses thinking tokens from this budget; 8192 too short for hard GPQA
 # Qwen3.5-9B published sampling for thinking-mode benchmarks:
@@ -110,7 +111,7 @@ class LLMClient:
             (content, reasoning_content, tokens_used, latency_ms)
         """
         body = {
-            "model": "Qwen3.5-9B-Q6_K.gguf",
+            "model": LLAMA_GEN_MODEL,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -118,7 +119,7 @@ class LLMClient:
             "top_k": TOP_K,
             "presence_penalty": PRESENCE_PENALTY,
             "stream": False,
-            # Force thinking on — v3.1-9b image has it disabled by default
+            # Force thinking on — vLLM with --reasoning-parser qwen3 surfaces it in reasoning_content.
             "chat_template_kwargs": {"enable_thinking": True},
         }
         if seed is not None:
@@ -164,32 +165,30 @@ class LLMClient:
                            temperature: float = TEMPERATURE,
                            max_tokens: int = 1024,
                            seed: int = None) -> Tuple[str, int, float]:
-        """Send a /completion request with ChatML + /nothink.
+        """Send a chat completion with thinking disabled.
 
-        Much faster than chat() because thinking mode is disabled.
-        Use for large MCQ benchmarks where thinking would be too slow.
+        Much faster than chat() because thinking is off. Use for large MCQ
+        benchmarks where thinking would be too slow.
+
+        On vLLM the soft `/nothink` command was removed in Qwen3.5 — disable
+        thinking via chat_template_kwargs.enable_thinking instead.
 
         Returns:
             (content, tokens_used, latency_ms)
         """
-        # V3 CLI nothink tier: pre-fill closed think block to force-skip thinking
-        # on Qwen3.5+. Model sees "I already thought" and jumps to output.
-        prompt = (
-            f"<|im_start|>system\n{system} /nothink<|im_end|>\n"
-            f"<|im_start|>user\n{user}<|im_end|>\n"
-            f"<|im_start|>assistant\n"
-            f"<think>\n\n</think>\n\n"
-        )
         body = {
-            "prompt": prompt,
+            "model": LLAMA_GEN_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
             "temperature": temperature,
-            "n_predict": max_tokens,
+            "max_tokens": max_tokens,
             "stream": False,
-            "cache_prompt": False,
-            "stop": ["<|im_end|>", "<|im_start|>"],
             "top_k": TOP_K,
             "top_p": TOP_P,
             "presence_penalty": PRESENCE_PENALTY,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         if seed is not None:
             body["seed"] = seed
@@ -199,7 +198,7 @@ class LLMClient:
             try:
                 start = time.time()
                 req = urllib.request.Request(
-                    f"{self.url}/completion",
+                    f"{self.url}/v1/chat/completions",
                     data=json.dumps(body).encode('utf-8'),
                     headers={'Content-Type': 'application/json'}
                 )
@@ -207,20 +206,17 @@ class LLMClient:
                     data = json.loads(resp.read().decode('utf-8'))
 
                 latency_ms = (time.time() - start) * 1000
-                content = data.get("content", "")
-                tokens = data.get("tokens_predicted", 0)
+                choice = data['choices'][0]['message']
+                content = choice.get('content', '') or ''
+                tokens = data.get('usage', {}).get('completion_tokens', 0)
 
-                # Strip think blocks (V3 approach)
+                # Defensive: strip any leaked think markers.
                 content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
-                # Orphaned </think> (from pre-fill that got swallowed)
                 if '</think>' in content and '<think>' not in content:
                     content = content[content.index('</think>') + len('</think>'):].strip()
-                # Unclosed <think> (budget exhausted)
                 if '<think>' in content:
                     content = content[content.index('<think>') + len('<think>'):].strip()
-                content = content.strip()
-
-                return content, tokens, latency_ms
+                return content.strip(), tokens, latency_ms
 
             except urllib.error.HTTPError as e:
                 last_error = f"HTTP {e.code}: {e.reason}"
@@ -463,13 +459,13 @@ class BenchmarkRunner:
                         valid_options: str = "ABCDEFGHIJ") -> Dict[str, Any]:
         """Run MCQ benchmark with thinking disabled (fast mode).
 
-        Uses /completion endpoint with ChatML + /nothink prefix.
+        Uses /v1/chat/completions with chat_template_kwargs.enable_thinking=false.
         Much faster (~10-20s per question vs ~300s with thinking).
         Use for large benchmarks (1000+ questions).
 
         Args:
             tasks: List of dicts with task_id, prompt, correct_answer
-            system_prompt: System prompt (without /nothink, added automatically)
+            system_prompt: System prompt
             valid_options: Valid answer letters (default: A-J for 10-option MCQ)
         """
         self.start_time = datetime.now(timezone.utc)

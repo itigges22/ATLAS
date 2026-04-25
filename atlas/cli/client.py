@@ -1,4 +1,4 @@
-"""HTTP client for llama-server, geometric-lens, and sandbox. Pure urllib, no dependencies."""
+"""HTTP client for vLLM (gen + embed), geometric-lens, and sandbox. Pure urllib, no dependencies."""
 
 import json
 import os
@@ -6,10 +6,20 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Tuple
 
-INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-RAG_API_URL = os.environ.get("ATLAS_RAG_URL", "http://localhost:8099")
+# vLLM gen instance (port 8000 by default).
+INFERENCE_URL = os.environ.get(
+    "LLAMA_GEN_URL",
+    os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8000"),
+)
+# vLLM embed instance (port 8001 by default).
+EMBED_URL = os.environ.get(
+    "LLAMA_EMBED_URL",
+    os.environ.get("ATLAS_EMBED_URL", INFERENCE_URL),
+)
+RAG_API_URL = os.environ.get("ATLAS_LENS_URL", os.environ.get("ATLAS_RAG_URL", "http://localhost:31144"))
 SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
-MODEL_NAME = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+MODEL_NAME = os.environ.get("LLAMA_GEN_MODEL", os.environ.get("ATLAS_MODEL_NAME", "qwen3.5-9b"))
+EMBED_MODEL_NAME = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
 
 
 def _post(url: str, body: dict, timeout: int = 120) -> dict:
@@ -32,10 +42,20 @@ def _get(url: str, timeout: int = 10) -> dict:
 # --- Health checks ---
 
 def check_llama() -> Tuple[bool, str]:
-    """Check llama-server health."""
+    """Check llama-server health and get model name."""
     try:
-        d = _get(f"{INFERENCE_URL}/health")
-        model = d.get("model_name", "unknown")
+        _get(f"{INFERENCE_URL}/health")
+        # /health doesn't return model name — get it from /v1/models
+        try:
+            models = _get(f"{INFERENCE_URL}/v1/models")
+            model_list = models.get("models", models.get("data", []))
+            if model_list:
+                m = model_list[0]
+                model = m.get("id", m.get("model", m.get("name", "unknown")))
+            else:
+                model = "connected"
+        except Exception:
+            model = "connected"
         return True, model
     except Exception as e:
         return False, str(e)
@@ -134,10 +154,14 @@ def generate_stream(prompt: str, max_tokens: int = 8192,
 # --- Embeddings ---
 
 def get_embedding(text: str) -> Optional[List[float]]:
-    """Get embedding from llama-server /embedding endpoint."""
+    """Get embedding from vLLM /v1/embeddings (OpenAI-compatible)."""
     try:
-        d = _post(f"{INFERENCE_URL}/embedding", {"content": text}, timeout=30)
-        return d[0]["embedding"]
+        d = _post(
+            f"{EMBED_URL}/v1/embeddings",
+            {"model": EMBED_MODEL_NAME, "input": text},
+            timeout=30,
+        )
+        return d["data"][0]["embedding"]
     except Exception:
         return None
 

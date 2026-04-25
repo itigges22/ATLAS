@@ -15,32 +15,21 @@ from typing import Dict, List, Optional, Tuple
 
 def extract_embedding_urllib(text: str, llama_url: str) -> Optional[List[float]]:
     """
-    Extract embedding from LLM server.
-
-    Supports llama.cpp (/embedding) and legacy Fox (/v1/embeddings, unused).
-    Fox path gated behind ATLAS_USE_FOX=1 (default: 0, off).
+    Extract embedding from a vLLM /v1/embeddings endpoint (OpenAI-compatible).
 
     Args:
         text: Input text to embed.
-        llama_url: Base URL for server (e.g. "http://localhost:8080").
+        llama_url: Base URL of the vLLM embed instance (port 8001 by convention).
 
     Returns:
-        List of floats, or None on failure.
+        4096-dim float list, or None on failure.
     """
     import os
-    use_fox = os.environ.get("ATLAS_USE_FOX", "0") == "1"
-
-    if use_fox:
-        # Fox: OpenAI-compatible /v1/embeddings
-        body = json.dumps({
-            "model": os.environ.get("ATLAS_MODEL_NAME", "default"),
-            "input": text,
-        }).encode("utf-8")
-        endpoint = f"{llama_url}/v1/embeddings"
-    else:
-        # llama.cpp: /embedding
-        body = json.dumps({"content": text}).encode("utf-8")
-        endpoint = f"{llama_url}/embedding"
+    body = json.dumps({
+        "model": os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed"),
+        "input": text,
+    }).encode("utf-8")
+    endpoint = f"{llama_url}/v1/embeddings"
 
     req = urllib.request.Request(
         endpoint,
@@ -53,35 +42,10 @@ def extract_embedding_urllib(text: str, llama_url: str) -> Optional[List[float]]
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
         return None
 
-    if use_fox:
-        # Fox response: {"data": [{"embedding": [d0, d1, ...]}]}
-        try:
-            return data["data"][0]["embedding"]
-        except (KeyError, IndexError, TypeError):
-            return None
-    else:
-        # llama.cpp response: [{"index": 0, "embedding": [[d0, ...], ...]}]
-        try:
-            token_vectors = data[0]["embedding"]
-        except (KeyError, IndexError, TypeError):
-            return None
-
-        if not token_vectors:
-            return None
-
-        if not isinstance(token_vectors[0], list):
-            return token_vectors
-
-        n_tokens = len(token_vectors)
-        n_dims = len(token_vectors[0])
-        pooled = [0.0] * n_dims
-        for vec in token_vectors:
-            for i, v in enumerate(vec):
-                pooled[i] += v
-        for i in range(n_dims):
-            pooled[i] /= n_tokens
-
-        return pooled
+    try:
+        return data["data"][0]["embedding"]
+    except (KeyError, IndexError, TypeError):
+        return None
 
 
 # --- Spearman rank correlation ------------------------------------------------

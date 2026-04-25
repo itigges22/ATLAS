@@ -373,20 +373,8 @@ class BenchmarkRunner:
         if self.client is not None:
             self.client.close()
 
-    # System prompt baked into ChatML for the /completion endpoint.
-    _SYSTEM_PROMPT = "You are an expert programmer. Respond directly and concisely. /nothink"
-
-    def _format_chatml(self, user_content: str) -> str:
-        """Format a user message as a ChatML prompt for the /completion endpoint.
-
-        Uses the /completion endpoint instead of /v1/chat/completions for
-        direct control over prompt formatting and thinking mode (/nothink).
-        """
-        return (
-            f"<|im_start|>system\n{self._SYSTEM_PROMPT}<|im_end|>\n"
-            f"<|im_start|>user\n{user_content}<|im_end|>\n"
-            f"<|im_start|>assistant\n"
-        )
+    _SYSTEM_PROMPT = "You are an expert programmer. Respond directly and concisely."
+    _MODEL_NAME = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
 
     def _call_llm(
         self,
@@ -399,21 +387,20 @@ class BenchmarkRunner:
         think: bool = False
     ) -> Tuple[str, int, float]:
         """
-        Call the LLM API with retry logic.
+        Call the vLLM /v1/chat/completions endpoint with retry logic.
 
         Args:
             prompt: The prompt to send
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             error_context: Previous error for verify-repair loop retry
-            seed: Random seed for reproducible but diverse generation
-            cache_prompt: Enable KV cache reuse for shared prompt prefixes
-            think: Unused (thinking is always disabled)
+            seed: Random seed
+            cache_prompt: Ignored (vLLM handles prefix caching server-side via --enable-prefix-caching)
+            think: Enable Qwen3.5 thinking mode (default off for code-gen — wastes tokens)
 
         Returns:
             Tuple of (response_text, tokens_generated, inference_time_ms)
         """
-        # Build the full prompt with error context if provided
         if error_context:
             user_content = (
                 f"{prompt}\n\n"
@@ -423,16 +410,17 @@ class BenchmarkRunner:
         else:
             user_content = prompt
 
-        # Format as ChatML for the raw /completion endpoint
-        formatted_prompt = self._format_chatml(user_content)
-
         request_body = {
-            "prompt": formatted_prompt,
+            "model": self._MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": self._SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
             "temperature": temperature,
-            "n_predict": max_tokens,
+            "max_tokens": max_tokens,
             "stream": False,
-            "cache_prompt": cache_prompt,
-            "stop": ["<|im_end|>", "<|im_start|>"],
+            # Qwen3.5 has no /think /nothink soft commands — control via this kwarg.
+            "chat_template_kwargs": {"enable_thinking": bool(think)},
         }
         if seed is not None:
             request_body["seed"] = seed
@@ -444,15 +432,14 @@ class BenchmarkRunner:
 
                 if HAS_HTTPX and self.client is not None:
                     response = self.client.post(
-                        f"{self.llm_url}/completion",
+                        f"{self.llm_url}/v1/chat/completions",
                         json=request_body
                     )
                     response.raise_for_status()
                     data = response.json()
                 else:
-                    # Fall back to urllib
                     req = urllib.request.Request(
-                        f"{self.llm_url}/completion",
+                        f"{self.llm_url}/v1/chat/completions",
                         data=json.dumps(request_body).encode('utf-8'),
                         headers={'Content-Type': 'application/json'}
                     )
@@ -461,11 +448,14 @@ class BenchmarkRunner:
 
                 inference_time_ms = (time.time() - start_time) * 1000
 
-                content = data.get("content", "")
-                tokens = data.get("tokens_predicted", 0)
+                choice = data['choices'][0]['message']
+                content = choice.get('content', '') or ''
+                # vLLM with --reasoning-parser qwen3 surfaces thinking separately;
+                # we don't include it in the returned content (extract_code() will
+                # also strip <think> blocks if any leak through).
+                tokens = data.get('usage', {}).get('completion_tokens', 0)
 
-                # Strip empty think blocks that Qwen3.5 may emit despite /nothink
-                # (e.g. "<think>\n\n</think>\n\n" - 4 tokens, harmless)
+                # Strip empty/orphan think markers if they leak through.
                 content = re.sub(r'^<think>\s*</think>\s*', '', content)
 
                 return content, tokens, inference_time_ms
