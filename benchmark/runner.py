@@ -425,6 +425,14 @@ class BenchmarkRunner:
         if seed is not None:
             request_body["seed"] = seed
 
+        # vLLM HTTP error categorization. 4xx errors (with the noted
+        # exceptions for transient ones) are permanent: a malformed prompt,
+        # an unknown served-model-name, or a validation failure won't
+        # recover by waiting. Retrying them just delays the user from
+        # learning the call is doomed. 408/429/5xx are transient and worth
+        # retrying with backoff.
+        _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
         last_error = None
         for attempt in range(self.max_retries):
             try:
@@ -462,13 +470,26 @@ class BenchmarkRunner:
 
             except urllib.error.HTTPError as e:
                 last_error = f"HTTP {e.code}: {e.reason}"
+                if e.code not in _RETRYABLE_STATUS:
+                    raise LLMConnectionError(
+                        f"vLLM rejected request with HTTP {e.code} {e.reason} — "
+                        f"this is permanent (see vLLM logs). Body keys: "
+                        f"{list(request_body.keys())}"
+                    )
             except urllib.error.URLError as e:
                 last_error = f"URL error: {str(e)}"
             except Exception as e:
                 if HAS_HTTPX:
                     import httpx as httpx_module
                     if isinstance(e, httpx_module.HTTPStatusError):
-                        last_error = f"HTTP {e.response.status_code}: {e.response.text}"
+                        code = e.response.status_code
+                        last_error = f"HTTP {code}: {e.response.text}"
+                        if code not in _RETRYABLE_STATUS:
+                            raise LLMConnectionError(
+                                f"vLLM rejected request with HTTP {code} — "
+                                f"permanent (see response body): "
+                                f"{e.response.text[:200]}"
+                            )
                     elif isinstance(e, httpx_module.RequestError):
                         last_error = f"Request error: {str(e)}"
                     else:

@@ -429,6 +429,64 @@ def test_v301_chat_retries_on_503(mock_vllm):
         server.shutdown()
 
 
+def test_v3_adapter_fails_fast_on_400_prompt_too_long(mock_vllm):
+    """vLLM returns HTTP 400 when prompt + max_tokens exceeds max-model-len,
+    or when the served-model-name in the body doesn't match what vLLM is
+    serving. Earlier iterations retried 4xx the same way as 5xx — N times
+    with exponential backoff (10s, 20s, 40s, ...) — so a single doomed call
+    cost 1-3 minutes before the user saw the error. With the typical 5+
+    parallel tasks of a benchmark sweep, an 8K-prompt run against a 4K
+    embed instance would silently waste 10-15 minutes of GPU time before
+    a single error surfaced.
+
+    Permanent 4xx must fail-fast with a clear LLMConnectionError. Only
+    408/425/429 + 5xx should retry with backoff."""
+    from benchmark.runner import BenchmarkRunner, LLMConnectionError
+    import time
+
+    BaseHandler = mock_vllm.make_handler()
+    call_count = {"n": 0}
+
+    class Always400(BaseHandler):
+        def do_POST(self):
+            call_count["n"] += 1
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"object":"error","message":"prompt too long"}')
+
+    import threading
+    from http.server import HTTPServer
+    server = HTTPServer(("127.0.0.1", 0), Always400)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        runner = BenchmarkRunner(
+            llm_url=f"http://127.0.0.1:{port}",
+            max_retries=4, retry_delay=2,
+        )
+        start = time.time()
+        with pytest.raises(LLMConnectionError) as exc_info:
+            runner._call_llm(
+                prompt="x" * 100, temperature=0.0, max_tokens=8,
+                think=False,
+            )
+        elapsed = time.time() - start
+        # First-attempt-fail. With backoff, retrying 4 times would take
+        # 2+4+6+8 = 20s of sleep alone.
+        assert call_count["n"] == 1, (
+            f"4xx must fail-fast on first attempt, but the runner retried "
+            f"{call_count['n']} times — wasting GPU time on a permanent error."
+        )
+        assert elapsed < 1.0, (
+            f"4xx fail-fast must return immediately; took {elapsed:.2f}s."
+        )
+        assert "permanent" in str(exc_info.value).lower()
+    finally:
+        server.shutdown()
+
+
 def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     monkeypatch.setenv("LLAMA_EMBED_URL", mock_vllm.url)
     monkeypatch.setenv("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")

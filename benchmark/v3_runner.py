@@ -349,6 +349,20 @@ class LLMAdapter:
                             return json.loads(resp.read().decode('utf-8'))
             except urllib.error.HTTPError as e:
                 last_error = e
+                # Permanent 4xx errors (validation, prompt-too-long, unknown
+                # served-model-name) won't recover on retry — the prompt
+                # body never changes here. Fail-fast and propagate so the
+                # caller sees the failure quickly instead of waiting through
+                # exponential backoff. 408/425/429 + 5xx remain retryable.
+                _retryable = {408, 425, 429, 500, 502, 503, 504}
+                if e.code not in _retryable:
+                    raise LLMConnectionError(
+                        f"vLLM rejected /v1/completions with HTTP {e.code} "
+                        f"{e.reason} — permanent. Likely causes: prompt + "
+                        f"max_tokens > max-model-len, served-model-name "
+                        f"mismatch, or chat_template_kwargs the build "
+                        f"doesn't recognize."
+                    )
                 if e.code == 503 and attempt < max_attempts - 1:
                     time.sleep(2 * (attempt + 1))
                     continue
