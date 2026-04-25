@@ -118,6 +118,11 @@ class BenchmarkConfig:
 
         vLLM serves only one task per instance, so embeddings need a dedicated
         process. Defaults to port 8001 alongside gen on 8000.
+
+        NodePort resolution mirrors llama_url's order — prefer the new
+        ATLAS_VLLM_EMBED_NODEPORT, fall back to ATLAS_LLAMA_EMBED_NODEPORT
+        (a name no atlas.conf actually shipped with, but kept for safety
+        if anyone wrote it locally during the migration), then 8001.
         """
         url = os.environ.get("LLAMA_EMBED_URL")
         if url:
@@ -126,7 +131,8 @@ class BenchmarkConfig:
         if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
             return "http://vllm-embed:8001"
 
-        port = self._conf.get("ATLAS_LLAMA_EMBED_NODEPORT", "8001")
+        port = (self._conf.get("ATLAS_VLLM_EMBED_NODEPORT")
+                or self._conf.get("ATLAS_LLAMA_EMBED_NODEPORT", "8001"))
         return f"http://localhost:{port}"
 
     @property

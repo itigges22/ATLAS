@@ -461,6 +461,49 @@ def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     assert body["input"] == ["a", "b"]
 
 
+def test_benchmark_config_prefers_vllm_embed_nodeport(monkeypatch, tmp_path):
+    """benchmark/config.py llama_embed_url must prefer ATLAS_VLLM_EMBED_NODEPORT
+    over the legacy ATLAS_LLAMA_EMBED_NODEPORT alias. atlas.conf.example sets
+    only the new name (32736); a config that didn't migrate would silently
+    return port 8001 regardless of what the user wrote.
+
+    Mirrors stage 44's gen-side fix; the embed equivalent was missed.
+    Drive BenchmarkConfig with a fake atlas.conf and assert the resolution
+    order is [VLLM] → [LLAMA] → 8001."""
+    # Force the env vars off so only the conf file is consulted.
+    monkeypatch.delenv("LLAMA_EMBED_URL", raising=False)
+
+    import sys
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from benchmark.config import BenchmarkConfig
+
+    # Build BenchmarkConfig instances without running the real __init__
+    # (which would parse atlas.conf and bring in unrelated env state). We
+    # only care about the resolution logic in the llama_embed_url property.
+    def make_cfg(d):
+        c = BenchmarkConfig.__new__(BenchmarkConfig)
+        c._conf = d
+        c._root = PROJECT_ROOT
+        return c
+
+    # 1. New name wins when both are set.
+    c = make_cfg({"ATLAS_VLLM_EMBED_NODEPORT": "32736",
+                  "ATLAS_LLAMA_EMBED_NODEPORT": "9999"})
+    assert c.llama_embed_url == "http://localhost:32736", (
+        "ATLAS_VLLM_EMBED_NODEPORT must take precedence over the legacy alias"
+    )
+
+    # 2. Legacy alias is honored if only it is set.
+    c = make_cfg({"ATLAS_LLAMA_EMBED_NODEPORT": "32737"})
+    assert c.llama_embed_url == "http://localhost:32737", (
+        "ATLAS_LLAMA_EMBED_NODEPORT must still resolve when the new name is absent"
+    )
+
+    # 3. Default (8001) when neither is set.
+    c = make_cfg({})
+    assert c.llama_embed_url == "http://localhost:8001"
+
+
 def test_v3_service_adapter_propagates_sampling_params(monkeypatch, mock_vllm):
     """v3-service/main.py LLMAdapter must propagate top_k/top_p/stop/seed
     from its internal body dict to the chat_completions request. Earlier
