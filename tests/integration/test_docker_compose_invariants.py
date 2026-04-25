@@ -296,6 +296,28 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_lens_chat_request_schema_accepts_chat_template_kwargs():
+    """The Geometric Lens proxy at /v1/chat/completions sits between callers
+    and the vLLM gen instance. Pydantic's default `extra="ignore"` means any
+    field not declared on ChatRequest is silently dropped before hand-off to
+    `forward_to_llama`. Without an explicit `chat_template_kwargs` field a
+    caller passing {"enable_thinking": False} would have it stripped at the
+    proxy boundary and Qwen3.5 would still emit full <think> blocks. The
+    field must be declared, and the request handler must forward it through
+    its kwargs dict to `forward_to_llama` / `forward_to_llama_stream`."""
+    main_src = (PROJECT_ROOT / "geometric-lens" / "main.py").read_text()
+    # Field declared on the schema...
+    assert "chat_template_kwargs:" in main_src, (
+        "ChatRequest must declare chat_template_kwargs so Pydantic doesn't "
+        "drop it before hand-off to forward_to_llama"
+    )
+    # ...and forwarded to the kwargs dict in the chat handler.
+    assert 'kwargs["chat_template_kwargs"]' in main_src, (
+        "chat_completions handler must forward request.chat_template_kwargs "
+        "into the kwargs dict it passes to forward_to_llama"
+    )
+
+
 def test_lens_chat_clients_disable_thinking():
     """All three Geometric Lens chat clients (pattern_extractor, summarizer,
     tree_search) hit /v1/chat/completions with very small max_tokens (50-200).

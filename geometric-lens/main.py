@@ -189,6 +189,11 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     stream: bool = False
+    # vLLM-specific. Without this declared field Pydantic drops unknown keys,
+    # so callers passing {"enable_thinking": false} would silently leak full
+    # <think> blocks to the client. Declared as Dict[str, Any] so any future
+    # vLLM template kwarg passes through untouched.
+    chat_template_kwargs: Optional[Dict[str, Any]] = None
 
 
 # Endpoints
@@ -438,6 +443,8 @@ async def chat_completions(
         kwargs["temperature"] = request.temperature
     if request.top_p is not None:
         kwargs["top_p"] = request.top_p
+    if request.chat_template_kwargs is not None:
+        kwargs["chat_template_kwargs"] = request.chat_template_kwargs
 
     request_type = "rag_completion" if request.project_id else "chat_completion"
 
