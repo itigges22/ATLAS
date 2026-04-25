@@ -352,7 +352,7 @@ def test_user_facing_docs_have_no_stale_q6_k_refs():
     translated = [
         f"docs/lang/{lang}/{name}"
         for lang in ("ja", "ko", "zh-CN")
-        for name in ("README.md", "SETUP.md")
+        for name in ("README.md", "SETUP.md", "TROUBLESHOOTING.md")
     ]
     for rel in english + translated:
         src = (PROJECT_ROOT / rel).read_text()

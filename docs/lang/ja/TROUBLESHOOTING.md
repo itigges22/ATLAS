@@ -138,22 +138,22 @@ Docker を使用している場合、NVIDIA コンテナランタイムが設定
 
 **症状:** vLLM が "failed to load model" などのメッセージで即座に終了する。
 
-**修正:** モデルパスを確認してください:
+**修正:** モデルディレクトリを確認してください (vLLM は単一の GGUF ファイルではなく、AWQ-Q4 safetensors シャードのディレクトリを直接使用します):
 ```bash
 # Docker Compose -- モデルは ATLAS_MODELS_DIR (デフォルト: ./models/) にある必要があります
-ls -la models/Qwen3.5-9B-Q6_K.gguf
+ls -la models/Qwen3.5-9B-AWQ/
 
 # ベアメタル -- ATLAS_MODEL_PATH を確認
-ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
+ls -la ~/models/Qwen3.5-9B-AWQ/
 ```
 
-ファイル名は `.env` の `ATLAS_MODEL_FILE` (デフォルト: `Qwen3.5-9B-Q6_K.gguf`) と一致する必要があります。
+パスは `.env` の `ATLAS_MODEL_PATH` (デフォルト: `/models/Qwen3.5-9B-AWQ`) と一致する必要があります。`make model` を実行して HuggingFace から取得できます。
 
 ### VRAM 不足
 
 **症状:** vLLM が起動直後にクラッシュまたは OOMKilled される。`nvidia-smi` で VRAM がほぼ 100% を表示。
 
-**修正:** 9B Q6_K モデルには約 8.2 GB の VRAM が必要です (モデル + KV キャッシュ)。以下を確認してください:
+**修正:** 9B AWQ-Q4 ビルドは gen で約 12 GB、embed サイドカーで約 3 GB の VRAM が必要です (両方とも同じ GPU を共有)。以下を確認してください:
 1. 他の GPU プロセスが実行されていない (`nvidia-smi` -- 他の CUDA プロセスを確認)
 2. 16GB 以上の VRAM がある
 3. コンテキストサイズが大きすぎない (デフォルトの 32K で問題なし、VRAM を確認せずに増やさないでください)
@@ -172,9 +172,10 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen3.5-9B-Q6_K",
+    "model": "qwen3.5-9b",
     "messages": [{"role":"user","content":"Say hi"}],
     "max_tokens": 50,
+    "chat_template_kwargs": {"enable_thinking": false},
     "response_format": {"type": "json_object"}
   }'
 ```

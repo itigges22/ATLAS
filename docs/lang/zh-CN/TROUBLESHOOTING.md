@@ -138,22 +138,22 @@ ps aux | grep vLLM | grep 'n-gpu-layers'
 
 **现象：** vLLM 立即退出，报错 "failed to load model" 或类似信息。
 
-**解决方法：** 检查模型路径：
+**解决方法：** 检查模型目录（vLLM 直接使用 AWQ-Q4 safetensors 分片目录，而不是单个 GGUF 文件）：
 ```bash
 # Docker Compose - 模型必须在 ATLAS_MODELS_DIR 中（默认：./models/）
-ls -la models/Qwen3.5-9B-Q6_K.gguf
+ls -la models/Qwen3.5-9B-AWQ/
 
 # 裸机 - 检查 ATLAS_MODEL_PATH
-ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
+ls -la ~/models/Qwen3.5-9B-AWQ/
 ```
 
-文件名必须与 `.env` 中的 `ATLAS_MODEL_FILE` 匹配（默认：`Qwen3.5-9B-Q6_K.gguf`）。
+路径必须与 `.env` 中的 `ATLAS_MODEL_PATH` 匹配（默认：`/models/Qwen3.5-9B-AWQ`）。运行 `make model` 从 HuggingFace 拉取。
 
 ### 显存不足
 
 **现象：** vLLM 启动后不久崩溃或被 OOMKill。`nvidia-smi` 显示显存接近 100%。
 
-**解决方法：** 9B Q6_K 模型需要约 8.2 GB 显存（模型 + KV 缓存）。请确保：
+**解决方法：** 9B AWQ-Q4 构建需要 gen 约 12 GB，embed 旁车约 3 GB 显存（两者共享同一 GPU）。请确保：
 1. 没有其他 GPU 进程在运行（`nvidia-smi` - 检查其他 CUDA 进程）
 2. 你有 16GB+ 显存
 3. 上下文大小未设置过高（默认 32K 即可，增大前请检查显存）
@@ -172,9 +172,10 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen3.5-9B-Q6_K",
+    "model": "qwen3.5-9b",
     "messages": [{"role":"user","content":"Say hi"}],
     "max_tokens": 50,
+    "chat_template_kwargs": {"enable_thinking": false},
     "response_format": {"type": "json_object"}
   }'
 ```
