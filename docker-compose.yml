@@ -43,6 +43,12 @@ services:
       timeout: 10s
       retries: 20
       start_period: 240s
+    # Wait for the embed instance to claim its VRAM slice before gen starts
+    # claiming its larger one — avoids races during simultaneous CUDA init.
+    # Matches the order benchmarks/h200/entrypoint.sh uses on cloud pods.
+    depends_on:
+      vllm-embed:
+        condition: service_healthy
     networks:
       - atlas
 

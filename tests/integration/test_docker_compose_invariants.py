@@ -125,6 +125,26 @@ def test_no_legacy_llama_server_service(compose):
     assert "llama-server" not in services, "llama-server service must not exist"
 
 
+def test_vllm_gen_waits_for_embed_to_be_healthy(compose):
+    """vLLM gen and embed both claim GPU memory at startup. Without
+    serialization the two CUDA initializations can race — the second
+    one to allocate sees less memory than vLLM expected from
+    --gpu-memory-utilization (computed against TOTAL memory but
+    transient allocator state can lie). The H100 entrypoint serializes
+    them already; docker-compose must do the same via depends_on."""
+    deps = compose["services"]["vllm-gen"].get("depends_on") or {}
+    assert "vllm-embed" in deps, (
+        "vllm-gen must depend_on vllm-embed (with service_healthy) "
+        "to avoid GPU init races"
+    )
+    # When depends_on is a dict-with-conditions, verify the condition.
+    if isinstance(deps, dict):
+        cond = deps["vllm-embed"].get("condition")
+        assert cond == "service_healthy", (
+            f"vllm-gen→vllm-embed dep must use service_healthy, got: {cond}"
+        )
+
+
 def test_dockerfile_pins_working_vllm_version():
     """vLLM 0.18.0 has a regression where the engine crashes during init
     on Qwen3.5 models. Pin tightly to a known-working version (0.17.x)
