@@ -131,3 +131,20 @@ def test_no_gguf_in_default_paths(compose):
         cmd = compose["services"][svc]["command"]
         assert ".gguf" not in cmd, f"{svc} command references a .gguf file"
         assert "AWQ" in cmd, f"{svc} command should reference the AWQ model"
+
+
+def test_lens_requirements_have_xgboost():
+    """G(x) is loaded as an XGBClassifier at Lens startup. Without xgboost
+    installed, the Lens silently degrades to C(x)-only scoring and the V3
+    candidate-selection signal weakens. The standalone geometric-lens/
+    Dockerfile installs from this file; the benchmarks/h200/Dockerfile
+    installs xgboost separately. Keep them in sync."""
+    reqs = (PROJECT_ROOT / "geometric-lens" / "requirements.txt").read_text()
+    assert "xgboost" in reqs, "xgboost must be in geometric-lens/requirements.txt for G(x)"
+    assert "scikit-learn" in reqs, "scikit-learn is needed by xgboost's sklearn-compatible API"
+
+
+def test_h200_dockerfile_installs_xgboost():
+    """The cloud-pod image must install xgboost too — same reason."""
+    df = (PROJECT_ROOT / "benchmarks" / "h200" / "Dockerfile").read_text()
+    assert "xgboost" in df, "benchmarks/h200/Dockerfile must install xgboost"
