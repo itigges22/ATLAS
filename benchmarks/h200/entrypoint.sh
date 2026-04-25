@@ -24,7 +24,53 @@
 #   MODE               — atlas_only | baseline_only | all
 #   SKIP_SMOKE         — 1 to skip the C-Eval pre-flight test
 
-set -euo pipefail
+set -uo pipefail
+# (note: dropped -e — a single benchmark failure should not kill the whole sweep
+# before we can snapshot what already finished. We still propagate failures for
+# the steps that gate everything else, by checking $? explicitly.)
+
+# ============================================================
+# Spot-reclaim resilience: SIGTERM handler + periodic snapshots
+# ============================================================
+# RunPod / Lambda / spot reclaim sends SIGTERM ~1-2 min before the kill.
+# Every cent of GPU time we just spent is lost unless we snapshot.
+#
+# Three save points:
+#   1) `snapshot.sh --label=preflight` after services are up + manifest captured
+#   2) Background `snapshot_loop` every $SNAPSHOT_INTERVAL_SEC during the sweep
+#   3) `snapshot.sh --label=sigterm` from the trap, then exit fast
+# Final snapshot is `--label=final` and runs at end of normal flow.
+
+: "${SNAPSHOT_INTERVAL_SEC:=900}"   # default 15 min; balance disk + safety
+SNAPSHOT_LOOP_PID=""
+RESULT_DIR="${RESULT_DIR:-/workspace/results}"
+mkdir -p "$RESULT_DIR"
+
+snapshot_now() {
+    local label="${1:-adhoc}"
+    "/workspace/ATLAS/benchmarks/h200/snapshot.sh" "--label=${label}" || \
+        echo "[entrypoint] WARN: snapshot --label=${label} failed (continuing)"
+}
+
+snapshot_loop() {
+    # Background. Re-runs every SNAPSHOT_INTERVAL_SEC.
+    while true; do
+        sleep "$SNAPSHOT_INTERVAL_SEC"
+        SNAPSHOT_QUIET=1 \
+            "/workspace/ATLAS/benchmarks/h200/snapshot.sh" --label=periodic \
+            >/dev/null 2>&1 || true
+    done
+}
+
+on_sigterm() {
+    echo ""
+    echo "[entrypoint] SIGTERM received — snapshotting before exit"
+    [[ -n "$SNAPSHOT_LOOP_PID" ]] && kill "$SNAPSHOT_LOOP_PID" 2>/dev/null || true
+    snapshot_now sigterm
+    echo "[entrypoint] SIGTERM snapshot done; exiting"
+    exit 143
+}
+trap on_sigterm SIGTERM SIGINT
 
 echo "============================================="
 echo "ATLAS Benchmark Runner (vLLM) — entrypoint"
@@ -223,8 +269,15 @@ echo "--- Pre-flight: vLLM gen + embed + Lens end-to-end ---"
 if ! ./benchmarks/h200/preflight.sh; then
     echo "Pre-flight failed. Refusing to start the benchmark sweep." >&2
     echo "Inspect the logs above and the service log files in /tmp/." >&2
+    snapshot_now preflight-fail   # capture the manifest + logs anyway, useful for debugging
     exit 1
 fi
+
+# 5a.1. Manifest snapshot. Captures git SHA, model SHA, vLLM version,
+#       hardware fingerprint — everything needed to reproduce. Cheap (~2s).
+echo ""
+echo "--- Capturing reproducibility manifest ---"
+snapshot_now preflight
 
 # 5b. Optional smoke test (set SKIP_SMOKE=1 to skip).
 if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
@@ -238,34 +291,46 @@ if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
     rm -rf /tmp/smoke_out
 fi
 
-# 6. Run the benchmarks.
+# 6. Run the benchmarks. Periodic snapshots run in the background so a
+#    spot reclaim mid-sweep loses at most ~$SNAPSHOT_INTERVAL_SEC of work.
 LOG_DIR="/workspace/results/logs/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
+
+echo ""
+echo "--- Starting periodic snapshot loop (every ${SNAPSHOT_INTERVAL_SEC}s) ---"
+snapshot_loop &
+SNAPSHOT_LOOP_PID=$!
+echo "snapshot_loop PID: $SNAPSHOT_LOOP_PID"
 
 if [[ "$MODE" == "baseline_only" || "$MODE" == "all" ]]; then
     echo ""
     echo "--- Running baseline ---"
     ./benchmarks/run_full_baseline.sh 2>&1 | tee "$LOG_DIR/baseline.log" || true
+    snapshot_now baseline-done
 fi
 
 if [[ "$MODE" == "atlas_only" || "$MODE" == "all" ]]; then
     echo ""
     echo "--- Running ATLAS V3 pipeline (LCB v6) ---"
     ./benchmarks/run_lcb_v6.sh 2>&1 | tee "$LOG_DIR/atlas_lcb.log" || true
+    snapshot_now atlas-done
 fi
 
-# 7. Archive results.
+# Stop the periodic snapshot loop now that benchmarks are done.
+kill "$SNAPSHOT_LOOP_PID" 2>/dev/null || true
+SNAPSHOT_LOOP_PID=""
+
+# 7. Final archive — everything we want preserved.
 echo ""
-echo "--- Archiving results ---"
-mkdir -p "$(dirname "$RESULT_TAR")"
-tar czf "$RESULT_TAR" \
-    benchmarks/section_*/*/responses.jsonl \
-    benchmarks/section_*/*/results.json \
-    benchmarks/section_*/*/traces \
-    benchmarks/logs \
-    benchmark/results \
-    2>/dev/null || true
-ls -lh "$RESULT_TAR" || true
+echo "--- Final snapshot ---"
+snapshot_now final
+# RESULT_TAR is the legacy single-tarball convention; symlink to the latest
+# final tarball so existing docs (`runpodctl receive ...`) keep working.
+LATEST_FINAL=$(ls -1t "$RESULT_DIR"/atlas_results_*_final.tar.gz 2>/dev/null | head -1)
+if [[ -n "$LATEST_FINAL" ]]; then
+    ln -sf "$(basename "$LATEST_FINAL")" "$RESULT_TAR"
+    ls -lh "$RESULT_TAR" || true
+fi
 
 # 8. Stop vLLM cleanly. EMBED_PID is empty when SKIP_EMBED=1; the
 # `kill ""` would normally complain, so guard with -n test.
