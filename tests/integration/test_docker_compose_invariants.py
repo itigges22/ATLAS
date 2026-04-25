@@ -148,3 +148,26 @@ def test_h200_dockerfile_installs_xgboost():
     """The cloud-pod image must install xgboost too — same reason."""
     df = (PROJECT_ROOT / "benchmarks" / "h200" / "Dockerfile").read_text()
     assert "xgboost" in df, "benchmarks/h200/Dockerfile must install xgboost"
+
+
+def test_preflight_script_uses_correct_vllm_shape():
+    """The pre-flight script's curl bodies must match vLLM's contract.
+    If they drift from what the runners send, preflight could pass but
+    the live benchmark would fail (or vice-versa)."""
+    preflight = (PROJECT_ROOT / "benchmarks" / "h200" / "preflight.sh").read_text()
+    # Chat completions request must use the modern thinking-disable kwarg.
+    assert "chat_template_kwargs" in preflight, (
+        "preflight gen test must use chat_template_kwargs (Qwen3.5 has no /nothink)"
+    )
+    assert "/nothink" not in preflight, (
+        "preflight must not use the deprecated /nothink soft command"
+    )
+    # Embed test must verify 4096 dimensions (the Lens C(x) is trained on 4096-dim).
+    assert "4096" in preflight, (
+        "preflight must verify the embed instance returns 4096-dim vectors"
+    )
+    # Endpoints we hit must be the OpenAI-compatible ones, not llama.cpp /completion.
+    assert "/v1/chat/completions" in preflight
+    assert "/v1/embeddings" in preflight
+    # Lens score endpoint
+    assert "/internal/lens/score-text" in preflight

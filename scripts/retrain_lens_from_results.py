@@ -10,7 +10,7 @@ Usage:
     python3 scripts/retrain_lens_from_results.py [--results-dir DIR] [--llama-url URL]
 
 Needs:
-    - vLLM embed instance running with /embedding endpoint
+    - vLLM embed instance running with /v1/embeddings endpoint
     - V3 benchmark results with per-task JSON files (code + pass/fail)
     - torch (run inside geometric-lens container or a torch-enabled environment)
 """
