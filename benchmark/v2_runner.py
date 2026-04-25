@@ -442,10 +442,12 @@ class V2BenchmarkRunner:
         candidates = []
 
         # Phase 1: Generate K candidates with pipelined requests.
-        # With --parallel 4 and --cont-batching on vLLM gen instance, queuing
-        # requests early means the server starts prompt processing for N+1
-        # while N is still generating. cache_prompt=True lets the server
-        # reuse the KV cache for the shared prompt across candidates.
+        # vLLM's PagedAttention + --enable-prefix-caching handle this cleanly:
+        # the K candidates share the same prompt prefix, vLLM detects it via
+        # automatic prefix caching, and reuses the KV cache without us having
+        # to pass anything per-request. cache_prompt=True below is a legacy
+        # llama.cpp kwarg that's silently ignored on the vLLM path — kept for
+        # signature back-compat; see test_runner_call_llm_ignores_legacy_cache_prompt_kwarg.
         def _generate_one(index):
             """Generate a single candidate (runs in thread pool)."""
             seed = index * 42 + 1  # Deterministic but diverse seeds
