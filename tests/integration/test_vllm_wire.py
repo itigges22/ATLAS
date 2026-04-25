@@ -231,6 +231,38 @@ def test_v3_adapter_translates_n_predict_and_drops_cache_prompt(mock_vllm):
 # benchmarks.v301_runner.LLMClient — chat with thinking, and completion_nothink
 # ---------------------------------------------------------------------------
 
+def test_v3_adapter_handles_missing_logprobs(mock_vllm):
+    """If a future vLLM upgrade or config change drops logprobs from
+    the response, the V3 adapter must not crash. last_logprobs should
+    just come back empty — Phase 2 candidate scoring degrades to
+    sandbox-only signal."""
+    from benchmark.runner import BenchmarkRunner
+    from benchmark.v3_runner import LLMAdapter
+
+    # vLLM /v1/completions response with no logprobs field at all.
+    mock_vllm.completion_response = {
+        "id": "cmpl-no-lp",
+        "object": "text_completion",
+        "created": 0,
+        "model": "qwen3.5-9b",
+        "choices": [{
+            "index": 0,
+            "text": "print('no logprobs')",
+            "finish_reason": "stop",
+            # logprobs key intentionally absent
+        }],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+    }
+
+    r = BenchmarkRunner(llm_url=mock_vllm.url)
+    adapter = LLMAdapter(r)
+    content, tokens, _ = adapter("PROMPT", temperature=0, max_tokens=64, seed=None)
+
+    assert content == "print('no logprobs')"
+    assert tokens == 3
+    assert adapter.last_logprobs == []  # graceful empty, not a crash
+
+
 def test_v301_chat_thinking_on(mock_vllm):
     from benchmarks.v301_runner import LLMClient
 
