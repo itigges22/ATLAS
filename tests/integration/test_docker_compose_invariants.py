@@ -1631,6 +1631,44 @@ def test_v3_runner_preflight_tolerates_empty_vllm_health_body():
     )
 
 
+def test_runners_consult_atlas_lens_url_first():
+    """`benchmark/v3_runner.py:95` and `benchmark/v2_runner.py:51` used
+    to read only `RAG_API_URL` when resolving the Lens URL — but every
+    other surface in the codebase (`atlas/cli/client.py`,
+    `benchmark/v3/lens_feedback.py`, `atlas-proxy/main.go`,
+    `v3-service/main.py`, `atlas/cli/repl.py`, `docker-compose.yml`)
+    reads `ATLAS_LENS_URL`. A user who configured the Lens URL via
+    the canonical name (e.g. `ATLAS_LENS_URL=http://my-lens:31144`)
+    and then ran `python -m benchmark.v3_runner` from the host would
+    have the override silently ignored — the runners fell back to
+    `localhost:31144` regardless.
+
+    Pin: both runners must consult `ATLAS_LENS_URL` in their
+    resolution chain (`ATLAS_LENS_URL → ATLAS_RAG_URL → RAG_API_URL
+    → localhost:31144`)."""
+    files = [
+        PROJECT_ROOT / "benchmark" / "v3_runner.py",
+        PROJECT_ROOT / "benchmark" / "v2_runner.py",
+    ]
+    for f in files:
+        src = f.read_text()
+        # The block that defines RAG_API_URL must consult ATLAS_LENS_URL.
+        rag_block = re.search(
+            r"RAG_API_URL\s*=\s*os\.environ\.get\([^)]+(?:\)[^)]*){0,4}\)",
+            src,
+            re.DOTALL,
+        )
+        assert rag_block, (
+            f"{f.relative_to(PROJECT_ROOT)} must define RAG_API_URL via os.environ.get"
+        )
+        block_text = rag_block.group(0)
+        assert "ATLAS_LENS_URL" in block_text, (
+            f"{f.relative_to(PROJECT_ROOT)} RAG_API_URL resolution must "
+            f"consult ATLAS_LENS_URL first (canonical env name across "
+            f"the codebase) — currently only reads {block_text!r}"
+        )
+
+
 def test_lens_feedback_default_url_matches_docker_compose():
     """`benchmark/v3/lens_feedback.py LensFeedbackConfig` had a hardcoded
     `rag_api_url: str = "http://geometric-lens.atlas.svc.cluster.local:31144"`

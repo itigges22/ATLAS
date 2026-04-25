@@ -48,7 +48,16 @@ from benchmark.best_of_k import score_candidate, get_temperature, BestOfKTracker
 
 # --- Constants ----------------------------------------------------------------
 
-RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
+# Lens URL resolution mirrors atlas/cli/client.py and benchmark/v3/lens_feedback.py.
+# ATLAS_LENS_URL is the canonical env name; RAG_API_URL kept as a back-compat
+# alias from the cloud-pod entrypoint.
+RAG_API_URL = os.environ.get(
+    "ATLAS_LENS_URL",
+    os.environ.get(
+        "ATLAS_RAG_URL",
+        os.environ.get("RAG_API_URL", "http://localhost:31144"),
+    ),
+)
 MAX_TOKENS = 16384
 TEMPERATURE = 0.0
 

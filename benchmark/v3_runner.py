@@ -92,7 +92,18 @@ from benchmark.v3.embedding_store import EmbeddingWriter
 
 # --- Constants ----------------------------------------------------------------
 
-RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
+# Lens URL resolution mirrors atlas/cli/client.py and benchmark/v3/lens_feedback.py:
+# ATLAS_LENS_URL is the canonical env name across the codebase (docker-compose,
+# atlas-proxy, v3-service, REPL all read it). RAG_API_URL kept as a back-compat
+# alias since benchmarks/h200/entrypoint.sh exports that name. Final fallback
+# is the host port that maps to the geometric-lens container.
+RAG_API_URL = os.environ.get(
+    "ATLAS_LENS_URL",
+    os.environ.get(
+        "ATLAS_RAG_URL",
+        os.environ.get("RAG_API_URL", "http://localhost:31144"),
+    ),
+)
 # vLLM gen instance (port 8000 by default).
 # Resolution order (most-preferred first):
 #   LLAMA_GEN_URL                 — current name
