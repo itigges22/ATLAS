@@ -443,6 +443,49 @@ def test_config_sh_validates_vllm_embed_nodeport():
     )
 
 
+def test_env_example_documents_user_tunable_compose_vars():
+    """User-tunable knobs that docker-compose.yml reads from the host
+    environment must appear in .env.example so a fresh user copying it can
+    discover them. The script previously drifted: `ATLAS_HF_CACHE` (which
+    persists the ~12 GiB HuggingFace download cache between container
+    restarts) and `ATLAS_LENS_MODELS` (Lens model artifact bind mount)
+    were referenced by compose but never mentioned in .env.example, so a
+    user who didn't read the YAML would re-download the model every time
+    the container was recreated.
+
+    Bind-mount paths and host port knobs must be present. Inter-container
+    service URLs (like ATLAS_INFERENCE_URL hardcoded to vllm-gen:8000) and
+    feature toggles set by compose's environment block (ATLAS_AGENT_LOOP)
+    are excluded — those are not user-tunable from .env."""
+    import re
+
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text()
+    env = (PROJECT_ROOT / ".env.example").read_text()
+
+    # All `${ATLAS_X:-default}` references that compose actually substitutes.
+    used = set(re.findall(r"\$\{(ATLAS_[A-Z0-9_]+)", compose))
+
+    # Inter-container URLs and the agent toggle aren't user knobs.
+    not_user_tunable = {
+        "ATLAS_AGENT_LOOP",
+        "ATLAS_INFERENCE_URL",   # hardcoded http://vllm-gen:8000 in compose env
+        "ATLAS_LENS_URL",        # hardcoded http://geometric-lens:31144
+        "ATLAS_LLAMA_URL",       # back-compat alias for ATLAS_INFERENCE_URL
+        "ATLAS_SANDBOX_URL",     # hardcoded http://sandbox:8020
+        "ATLAS_V3_URL",          # hardcoded http://v3-service:8070
+    }
+    user_knobs = used - not_user_tunable
+
+    documented = set(re.findall(r"^\s*#?\s*(ATLAS_[A-Z0-9_]+)\s*=", env, re.MULTILINE))
+
+    missing = user_knobs - documented
+    assert not missing, (
+        f".env.example is missing user-tunable compose vars: {sorted(missing)}\n"
+        "Add a section for each so users discovering the knob via .env.example "
+        "see what they can override and what the defaults are."
+    )
+
+
 def test_v3_service_dockerfile_has_no_unused_heavy_deps():
     """v3-service is a thin stdlib http.server front-end for the V3 pipeline
     modules. None of those modules import torch, numpy, or any ML lib — they
