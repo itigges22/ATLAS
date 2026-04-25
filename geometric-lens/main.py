@@ -28,11 +28,24 @@ from indexer.bm25_index import BM25Index
 from indexer.summarizer import summarize_tree, collect_summaries
 from indexer.persistence import save_index, load_index, delete_index
 
-# Redis for task queue
+# Redis for task queue. Lazy `from_url` always succeeds — it doesn't open
+# a connection until first command — so the existing `if not redis_client:`
+# guards at the /v1/tasks/* handlers were dead defensive code (a Redis
+# instance is truthy). Ping at startup so the guards can actually trigger
+# the intended 503 path on docker-compose deployments where no Redis
+# service is shipped.
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-except Exception:
+    redis_client.ping()
+except Exception as e:
+    # logger isn't configured yet at import time; print to stderr instead.
+    import sys as _sys
+    print(
+        f"[lens] Redis unreachable at {REDIS_URL} ({e}); "
+        "task-queue and metrics endpoints will return 503.",
+        file=_sys.stderr,
+    )
     redis_client = None
 
 # Configure logging

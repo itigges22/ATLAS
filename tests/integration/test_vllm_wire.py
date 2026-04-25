@@ -574,6 +574,37 @@ def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     assert body["input"] == ["a", "b"]
 
 
+def test_lens_redis_gate_actually_checks_reachability(monkeypatch, tmp_path):
+    """`geometric-lens/main.py` had `redis_client = redis.from_url(REDIS_URL)`
+    wrapped in try/except, but `redis.from_url` is lazy — it returns a
+    truthy Redis instance even when REDIS_URL points at nothing. So the
+    `if not redis_client:` guards on the task-queue endpoints (which were
+    intended to surface a clean 503 on docker-compose deployments where
+    Redis isn't shipped) never fired. Stage 105 added a startup ping so
+    the gate sees None on unreachable Redis.
+
+    Drive a Lens module load against a closed-port Redis URL and assert
+    redis_client ends up None — meaning the downstream `if not redis_client:`
+    handlers will return their 503 path."""
+    sys.path.insert(0, str(PROJECT_ROOT / "geometric-lens"))
+
+    # Closed port → ping fails → gate flips redis_client to None.
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1")
+    monkeypatch.setenv("PROJECT_DATA_DIR", str(tmp_path / "projects"))
+
+    for mod in ("config", "main", "storage"):
+        if mod in sys.modules:
+            del sys.modules[mod]
+    import importlib
+    main_mod = importlib.import_module("main")
+
+    assert main_mod.redis_client is None, (
+        "Lens should set redis_client=None when Redis is unreachable, "
+        "so the `if not redis_client:` guards on /v1/tasks/* and /v1/queue/* "
+        "actually fire instead of crashing on first hset/hget"
+    )
+
+
 def test_lens_validate_key_falls_back_to_local_file(monkeypatch, tmp_path):
     """Lens main.py:validate_key_with_portal had a stale "Fall through to
     check if it's a legacy key" comment but no actual fallback —
