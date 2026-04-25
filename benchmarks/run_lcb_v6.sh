@@ -1,59 +1,63 @@
 #!/bin/bash
-# Run LiveCodeBench v6 through the ATLAS V3 pipeline
+# Run LiveCodeBench v6 through the ATLAS V3 pipeline against vLLM.
 #
-# This uses the existing v3_runner.py (benchmark/v3_runner.py) which handles:
-# - PlanSearch for constraint generation
-# - DivSampling for candidate diversity
-# - Budget Forcing for token control
-# - Sandbox code execution and verification
-# - Geometric Lens scoring
-# - Phase 2/3 adaptive compute and refinement
-#
-# The only change from v5: dataset loader uses release_v6
+# vLLM gen + embed instances are brought up by the container entrypoint
+# (benchmarks/h200/entrypoint.sh) before this script is invoked, so we
+# don't need to start or restart anything here — just point the V3
+# runner at LLAMA_GEN_URL and let it dispatch.
 #
 # Usage:
-#   nohup ./run_lcb_v6.sh > logs/lcb_v6.log 2>&1 &
-#   ./run_lcb_v6.sh --smoke       # 10-task smoke test
-#   ./run_lcb_v6.sh --max-tasks 50  # limited run
+#   ./run_lcb_v6.sh                    # full 1054-task LCB v6 sweep
+#   ./run_lcb_v6.sh --smoke            # 10-task smoke
+#   ./run_lcb_v6.sh --max-tasks 50     # limited
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "=========================================="
-echo "LiveCodeBench v6 — ATLAS V3 Pipeline"
-echo "Started: $(date)"
-echo "=========================================="
-
-# Temporarily patch the v3_runner to load v6 dataset
-# This is done via environment variable to avoid modifying production code
+: "${LLAMA_GEN_URL:=${LLAMA_URL:-http://localhost:8000}}"
+: "${LLAMA_EMBED_URL:=http://localhost:8001}"
+: "${ATLAS_PARALLEL_TASKS:=16}"
+export LLAMA_GEN_URL LLAMA_EMBED_URL ATLAS_PARALLEL_TASKS
+# Back-compat — runners that still read LLAMA_URL get the gen URL.
+export LLAMA_URL="$LLAMA_GEN_URL"
+export ATLAS_LLM_PARALLEL=1
 export ATLAS_LCB_VERSION=v6
 
-# Enable parallel task dispatch (server runs --parallel 4)
-export ATLAS_LLM_PARALLEL=1
-: "${ATLAS_PARALLEL_TASKS:=4}"; export ATLAS_PARALLEL_TASKS
+echo "=========================================="
+echo "LiveCodeBench v6 — ATLAS V3 Pipeline (vLLM)"
+echo "Started: $(date)"
+echo "Gen URL:   $LLAMA_GEN_URL"
+echo "Embed URL: $LLAMA_EMBED_URL"
+echo "Parallel:  $ATLAS_PARALLEL_TASKS"
+echo "=========================================="
 
-# Run through V3 pipeline
+# Sanity: gen + embed both reachable.
+if ! curl -s --max-time 5 "$LLAMA_GEN_URL/health" | grep -q ok; then
+    echo "ERROR: vLLM gen instance not healthy at $LLAMA_GEN_URL" >&2
+    exit 1
+fi
+if ! curl -s --max-time 5 "$LLAMA_EMBED_URL/health" | grep -q ok; then
+    echo "WARNING: vLLM embed instance not healthy at $LLAMA_EMBED_URL — Lens scoring will be unavailable." >&2
+fi
+
 python -c "
-import sys
+import sys, datetime
 sys.path.insert(0, '.')
 from benchmark.v3_runner import run_v3_benchmark
 from benchmark.datasets.livecodebench import LiveCodeBenchV6Dataset
 
-# Monkey-patch the load function
 import benchmark.v3_runner as runner
-original_load = runner.load_lcb_tasks
 def load_v6():
     ds = LiveCodeBenchV6Dataset()
     ds.load()
     return ds.tasks
 runner.load_lcb_tasks = load_v6
 
-# Parse args and run
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--smoke', action='store_true')
 parser.add_argument('--max-tasks', type=int, default=None)
-parser.add_argument('--run-id', default='lcb_v6_$(date +%Y%m%d_%H%M%S)')
+parser.add_argument('--run-id', default='lcb_v6_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
 args, _ = parser.parse_known_args()
 
 run_v3_benchmark(

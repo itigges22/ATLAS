@@ -15,7 +15,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
 
     Delegates to the V3 runner but displays progress inline.
     """
-    display.phase(f"Benchmark: {dataset}")
+    display.phase_label(f"Benchmark: {dataset}")
 
     # Build runner command
     run_id = f"bench_{dataset}_{int(time.time())}"
@@ -28,10 +28,17 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     if max_tasks > 0:
         cmd.extend(["--max-tasks", str(max_tasks)])
 
-    # Set LLM environment
+    # Set vLLM environment.
     env = os.environ.copy()
-    env["ATLAS_MODEL_NAME"] = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
-    env["LLAMA_URL"] = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
+    env["LLAMA_GEN_MODEL"] = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
+    env["LLAMA_EMBED_MODEL"] = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
+    gen_url = os.environ.get(
+        "LLAMA_GEN_URL",
+        os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8000"),
+    )
+    env["LLAMA_GEN_URL"] = gen_url
+    env["LLAMA_URL"] = gen_url  # back-compat for code paths still reading LLAMA_URL
+    env["LLAMA_EMBED_URL"] = os.environ.get("LLAMA_EMBED_URL", "http://localhost:8001")
     env["ATLAS_LLM_PARALLEL"] = "1"
     env["ATLAS_PARALLEL_TASKS"] = "1"
 
@@ -63,7 +70,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
                 display.progress_bar(task_count, total, pass_count, line.split("]")[-1].strip()[:40])
             elif "BENCHMARK COMPLETE" in line:
                 display.progress_done()
-                display.newline()
+                print()
     except KeyboardInterrupt:
         proc.terminate()
         display.warn("Benchmark interrupted")
