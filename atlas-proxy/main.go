@@ -380,22 +380,26 @@ func buildRepairPrompt(code string, analysis ErrorAnalysis, attempt int) string 
 // LLM communication (vLLM gen instance)
 // ---------------------------------------------------------------------------
 
-func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+// applyVllmDefaults stamps the request shape vLLM expects whenever ATLAS
+// proxies a chat completion to the gen instance: pin the served model name
+// and disable Qwen3.5 reasoning unless the caller explicitly opted in.
+//
+// Without this, requests that bypass forwardToFox (the streaming fallback
+// in handleStreamingChat, the spec-generator in the V3 pipeline, etc.)
+// would ship with thinking on, burn the entire max_tokens budget on a
+// <think> block, and return empty content — the proxy's response stream
+// would then be silently empty for the user.
+func applyVllmDefaults(req *ChatRequest) {
 	req.Model = modelName
-
-	// Disable thinking via chat_template_kwargs (Qwen3.5 + vLLM 0.17+).
-	// The deprecated /nothink soft-command no longer works on Qwen3.5 — vLLM
-	// would emit <think> blocks that we'd then strip in postprocessing,
-	// wasting hundreds of tokens per call. Setting enable_thinking=false in
-	// chat_template_kwargs makes the Jinja chat template produce the closed
-	// <think></think> prefix server-side, so the model never enters reasoning.
-	// Caller-supplied kwargs win — JSON-mode call sites can still pass
-	// enable_thinking=true for cases where reasoning output is wanted.
 	if req.ChatTemplateKwargs == nil {
 		req.ChatTemplateKwargs = map[string]interface{}{"enable_thinking": false}
 	} else if _, ok := req.ChatTemplateKwargs["enable_thinking"]; !ok {
 		req.ChatTemplateKwargs["enable_thinking"] = false
 	}
+}
+
+func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	applyVllmDefaults(&req)
 
 	body, _ := json.Marshal(req)
 
@@ -1494,7 +1498,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 			MaxTokens:   400,
 			Temperature: 0.2,
 		}
-		specReq.Model = modelName
+		applyVllmDefaults(&specReq)
 		specBody, _ := json.Marshal(specReq)
 
 		specHttpReq, err := http.NewRequestWithContext(r.Context(), "POST", inferenceURL+"/v1/chat/completions", bytes.NewReader(specBody))
@@ -2180,6 +2184,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 		log.Printf("  buffered generation failed — falling back to stream")
 	}
 
+	applyVllmDefaults(&req)
 	body, _ := json.Marshal(req)
 
 	foxReq, err := http.NewRequestWithContext(r.Context(), "POST", inferenceURL+"/v1/chat/completions", bytes.NewReader(body))

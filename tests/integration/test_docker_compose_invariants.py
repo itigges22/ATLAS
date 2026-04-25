@@ -296,6 +296,36 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_atlas_proxy_applies_vllm_defaults_to_all_chat_posts():
+    """The atlas-proxy has three places that POST to /v1/chat/completions:
+    `forwardToFox` (the canonical helper), the spec generator, and the
+    streaming-handler fallback. Earlier iterations only set
+    enable_thinking=false in forwardToFox — the other two paths shipped
+    Qwen3.5 requests with thinking enabled, then stripped <think> blocks
+    after the fact (or, in streaming mode, left them in the response).
+    The helper `applyVllmDefaults` must be applied to every direct POST
+    so all three paths agree on the request shape."""
+    src = (PROJECT_ROOT / "atlas-proxy" / "main.go").read_text()
+    # Helper must exist.
+    assert "func applyVllmDefaults(req *ChatRequest)" in src, (
+        "atlas-proxy must define an applyVllmDefaults helper to ensure"
+        " every chat POST sends enable_thinking=false consistently"
+    )
+    # Helper must set the kwarg.
+    helper_start = src.index("func applyVllmDefaults")
+    helper_end = src.index("\n}", helper_start)
+    helper_body = src[helper_start:helper_end]
+    assert "enable_thinking" in helper_body, (
+        "applyVllmDefaults must set chat_template_kwargs.enable_thinking"
+    )
+    # Count callers — must be at least 3 (forwardToFox + spec + streaming).
+    apply_calls = src.count("applyVllmDefaults(&")
+    assert apply_calls >= 3, (
+        f"applyVllmDefaults should be called from forwardToFox + spec generator "
+        f"+ streaming fallback (3 sites), found {apply_calls}"
+    )
+
+
 def test_verify_install_sends_valid_vllm_chat_request():
     """`scripts/verify-install.sh` includes a smoke check that POSTs to
     /v1/chat/completions. vLLM 4xx's any request without a `model` field
