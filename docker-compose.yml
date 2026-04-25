@@ -14,7 +14,7 @@ services:
               capabilities: [gpu]
     volumes:
       - ${ATLAS_MODELS_DIR:-./models}:/models:ro
-      - ${ATLAS_HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+      - ${ATLAS_HF_CACHE:-./.cache/huggingface}:/root/.cache/huggingface
     command: >
       --model ${ATLAS_MODEL_PATH:-/models/Qwen3.5-9B-AWQ}
       --served-model-name ${ATLAS_GEN_MODEL_NAME:-qwen3.5-9b}
@@ -28,6 +28,8 @@ services:
       --trust-remote-code
     environment:
       - OMP_NUM_THREADS=4
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     ports:
       - "${ATLAS_GEN_PORT:-8000}:8000"
     ulimits:
@@ -56,7 +58,7 @@ services:
               capabilities: [gpu]
     volumes:
       - ${ATLAS_MODELS_DIR:-./models}:/models:ro
-      - ${ATLAS_HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+      - ${ATLAS_HF_CACHE:-./.cache/huggingface}:/root/.cache/huggingface
     command: >
       --model ${ATLAS_MODEL_PATH:-/models/Qwen3.5-9B-AWQ}
       --served-model-name ${ATLAS_EMBED_MODEL_NAME:-qwen3.5-9b-embed}
@@ -67,6 +69,9 @@ services:
       --gpu-memory-utilization ${ATLAS_EMBED_GPU_MEM:-0.20}
       --tensor-parallel-size 1
       --trust-remote-code
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     ports:
       - "${ATLAS_EMBED_PORT:-8001}:8001"
     ulimits:
