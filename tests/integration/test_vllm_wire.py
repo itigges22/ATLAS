@@ -177,6 +177,33 @@ def test_runner_call_llm_sends_chat_completions(mock_vllm):
 # benchmark.v3_runner LLMAdapter — /v1/completions with logprobs
 # ---------------------------------------------------------------------------
 
+def test_runner_call_llm_ignores_legacy_cache_prompt_kwarg(mock_vllm):
+    """benchmark/v2_runner.py still passes cache_prompt=True through to the
+    runner — the kwarg now just gets silently ignored (vLLM's prefix caching
+    is enabled at server level, not per-request). Verify this back-compat
+    path doesn't blow up and that the cache_prompt field never leaks into
+    the outgoing request body."""
+    from benchmark.runner import BenchmarkRunner
+
+    r = BenchmarkRunner(llm_url=mock_vllm.url)
+    # All the kwargs v2_runner uses, including cache_prompt=True.
+    content, tokens, _ = r._call_llm(
+        "test prompt",
+        temperature=0,
+        max_tokens=32,
+        cache_prompt=True,
+        seed=42,
+        think=False,
+    )
+    assert content == "ok"
+    assert tokens == 1
+    body = mock_vllm.last_body
+    # cache_prompt must not appear in the wire request.
+    assert "cache_prompt" not in body
+    assert body["seed"] == 42
+    assert body["max_tokens"] == 32
+
+
 def test_v3_adapter_translates_n_predict_and_drops_cache_prompt(mock_vllm):
     from benchmark.runner import BenchmarkRunner
     from benchmark.v3_runner import LLMAdapter
