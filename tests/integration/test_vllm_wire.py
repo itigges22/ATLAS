@@ -461,6 +461,44 @@ def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     assert body["input"] == ["a", "b"]
 
 
+def test_v3_llm_adapter_parallel_default_for_vllm(monkeypatch):
+    """`ATLAS_LLM_PARALLEL=1` is the correct default for vLLM deploys: the
+    DeltaNet multi-slot hang that motivated the lock under llama.cpp doesn't
+    occur on vLLM (PagedAttention handles concurrent slots cleanly). Earlier
+    iterations defaulted to "0", which silently serialized every benchmark
+    invocation that wasn't started through the CLI or cloud-pod entrypoint
+    — completely defeating vLLM's concurrency.
+
+    The flag is read once at class-import time (module-level), so toggling
+    monkeypatch.setenv after import has no effect on `_parallel_mode`. Drive
+    the default by reloading the module under each env state."""
+    import importlib, sys
+
+    # Default = unset → must be parallel.
+    monkeypatch.delenv("ATLAS_LLM_PARALLEL", raising=False)
+    if "benchmark.v3_runner" in sys.modules:
+        del sys.modules["benchmark.v3_runner"]
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from benchmark.v3_runner import LLMAdapter as A_default
+    assert A_default._parallel_mode is True, (
+        "Unset ATLAS_LLM_PARALLEL must default to parallel=True for vLLM"
+    )
+
+    # Explicit opt-out still respected.
+    monkeypatch.setenv("ATLAS_LLM_PARALLEL", "0")
+    del sys.modules["benchmark.v3_runner"]
+    from benchmark.v3_runner import LLMAdapter as A_off
+    assert A_off._parallel_mode is False, (
+        "Explicit ATLAS_LLM_PARALLEL=0 must still serialize"
+    )
+
+    # Explicit opt-in agrees with the default.
+    monkeypatch.setenv("ATLAS_LLM_PARALLEL", "1")
+    del sys.modules["benchmark.v3_runner"]
+    from benchmark.v3_runner import LLMAdapter as A_on
+    assert A_on._parallel_mode is True
+
+
 def test_benchmark_config_prefers_vllm_embed_nodeport(monkeypatch, tmp_path):
     """benchmark/config.py llama_embed_url must prefer ATLAS_VLLM_EMBED_NODEPORT
     over the legacy ATLAS_LLAMA_EMBED_NODEPORT alias. atlas.conf.example sets

@@ -260,10 +260,10 @@ class LLMAdapter:
 
     # Serialize LLM requests to avoid DeltaNet multi-slot generation hang.
     # On vLLM the hang doesn't occur (PagedAttention handles concurrent slots
-    # cleanly), so ATLAS_LLM_PARALLEL=1 is the new default for vLLM deploys.
-    # The lock is preserved for back-compat with single-slot setups.
+    # cleanly), so ATLAS_LLM_PARALLEL=1 is the default — set =0 only when
+    # forcing single-slot behavior for a llama.cpp-shaped backend.
     _llm_lock = threading.Lock()
-    _parallel_mode = os.environ.get("ATLAS_LLM_PARALLEL", "0") == "1"
+    _parallel_mode = os.environ.get("ATLAS_LLM_PARALLEL", "1") == "1"
 
     def __init__(self, runner: BenchmarkRunner, max_retries: int = 2,
                  timeout: int = 1800):
