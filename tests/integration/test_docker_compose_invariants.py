@@ -1125,6 +1125,38 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_readme_roadmap_drops_dead_c_side_sampler_bullet():
+    """The README.md V3.1 roadmap had a "Grammar speed - C-side sampler
+    chain for faster constrained decoding" bullet — that was a llama.cpp-
+    era goal. Under vLLM, constrained decoding is already Triton-backed
+    (FlashInfer/Outlines integrated into the engine), so there is no
+    "switch to C-side for speed" path. The bullet promises a feature
+    that doesn't have a vLLM-shaped equivalent.
+
+    Pin: neither the English README nor the three translations may
+    list this dead roadmap item."""
+    files = [
+        PROJECT_ROOT / "README.md",
+        PROJECT_ROOT / "docs" / "lang" / "ja" / "README.md",
+        PROJECT_ROOT / "docs" / "lang" / "ko" / "README.md",
+        PROJECT_ROOT / "docs" / "lang" / "zh-CN" / "README.md",
+    ]
+    bad_phrases = [
+        "C-side sampler chain",
+        "C サイドサンプラーチェーン",
+        "C 사이드 샘플러 체인",
+        "C 端采样器链",
+    ]
+    for f in files:
+        text = f.read_text()
+        for phrase in bad_phrases:
+            assert phrase not in text, (
+                f"{f.relative_to(PROJECT_ROOT)} still lists the dead "
+                f"`{phrase}` roadmap bullet — that was a llama.cpp-era "
+                f"goal with no vLLM equivalent"
+            )
+
+
 def test_docs_do_not_call_grammar_go_a_gbnf_generator():
     """Stage 120 deleted `buildGBNFGrammar()` from atlas-proxy/grammar.go.
     `docs/MAP.md` and the three translation README "What ATLAS Does"

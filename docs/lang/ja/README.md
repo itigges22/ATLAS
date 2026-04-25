@@ -94,7 +94,6 @@ ATLAS には、16GB 以上の VRAM を持つ GPU、Docker (nvidia-container-tool
 - ROCm サポート - vLLM ROCm バックエンドによる AMD GPU 推論
 - 正式な 9B ベンチマーク - Qwen3.5-9B での LiveCodeBench、GPQA Diamond、SciCode
 - CLI の信頼性 - テスト拡充、L6 >= 90% を目標
-- 文法速度 - より高速な制約デコーディングのための C サイドサンプラーチェーン
 
 ---
 

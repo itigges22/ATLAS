@@ -116,7 +116,6 @@ ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or 
 - ROCm support - AMD GPU inference via vLLM/Triton on ROCm.
 - Formal 9B benchmarks - LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B.
 - CLI reliability - expanded testing, targeting L6 ≥ 90%.
-- Grammar speed - C-side sampler chain for faster constrained decoding.
 - Structural code reasoning - tree-sitter + solver-backed call graph for reachability queries and scoped context injection, so the model stops burning agent turns exploring unfamiliar codebases on L6 tasks. Tracked as [issue #39](https://github.com/itigges22/ATLAS/issues/39); inspired by [Dmitri Sotnikov's chiasmus](https://github.com/yogthos/chiasmus/tree/main).
 
 **V3.2** - Exploratory.

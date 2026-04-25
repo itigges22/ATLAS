@@ -94,7 +94,6 @@ ATLAS 需要一块 16GB+ 显存的 GPU、Docker（配合 nvidia-container-toolki
 - ROCm 支持 - 通过 vLLM ROCm 后端实现 AMD GPU 推理
 - 正式 9B 基准测试 - 在 Qwen3.5-9B 上运行 LiveCodeBench、GPQA Diamond、SciCode
 - 命令行可靠性 - 扩展测试，目标 L6 >= 90%
-- 语法速度 - C 端采样器链，实现更快的约束解码
 
 ---
 
