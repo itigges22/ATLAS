@@ -1125,6 +1125,42 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_lens_retriever_defaults_match_vllm_gen_service():
+    """`geometric-lens/retriever/hybrid.py` and `tree_search.py` used to
+    hardcode `llama_url: str = "http://llama-service:8000"` as the kwarg
+    default. `llama-service` is a legacy K3s service name from the V3.0
+    llama.cpp deployment — docker-compose ships the gen instance under the
+    service name `vllm-gen` (port 8000). Although every current call site
+    in `main.py` and `pipeline.py` passes `config.llama.base_url`
+    explicitly (which resolves correctly via env), a bare instantiation
+    or a future contributor's test fixture would silently land on a
+    nonexistent host and time out at request time rather than fail at
+    construction.
+
+    Pin: neither retriever may default to `llama-service:8000`. The
+    default resolution chain must mirror `geometric_lens/config.py`:
+    `LLAMA_GEN_URL → LLAMA_URL → http://vllm-gen:8000`."""
+    files = [
+        PROJECT_ROOT / "geometric-lens" / "retriever" / "hybrid.py",
+        PROJECT_ROOT / "geometric-lens" / "retriever" / "tree_search.py",
+    ]
+    for f in files:
+        src = f.read_text()
+        assert "llama-service" not in src, (
+            f"{f.relative_to(PROJECT_ROOT)} still references the legacy "
+            f"K3s service name `llama-service`; docker-compose uses "
+            f"`vllm-gen` for the gen instance"
+        )
+        assert "vllm-gen:8000" in src, (
+            f"{f.relative_to(PROJECT_ROOT)} must default to "
+            f"`http://vllm-gen:8000` when no llama_url is passed"
+        )
+        assert "LLAMA_GEN_URL" in src, (
+            f"{f.relative_to(PROJECT_ROOT)} must consult LLAMA_GEN_URL "
+            f"via os.environ to mirror config.py's resolution chain"
+        )
+
+
 def test_v3_code_does_not_reference_dead_jinja_flag():
     """`benchmark/v3/budget_forcing.py` and `benchmark/v3_runner.py` used to
     have explanatory comments that read 'With --jinja enabled, the model

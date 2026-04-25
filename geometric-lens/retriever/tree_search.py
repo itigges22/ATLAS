@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 # vLLM rejects unknown model names — must match --served-model-name.
 GEN_MODEL = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
 
+# Default vLLM gen URL when caller doesn't pass one. Mirrors the resolution
+# chain in `geometric_lens/config.py` so a bare instantiation lands on the
+# right host on docker-compose (service name: vllm-gen).
+_DEFAULT_LLAMA_URL = os.environ.get(
+    "LLAMA_GEN_URL",
+    os.environ.get("LLAMA_URL", "http://vllm-gen:8000"),
+)
+
 # Relevance score threshold for expanding a child node
 EXPAND_THRESHOLD = 6
 # High-confidence threshold — stop exploring siblings
@@ -28,9 +36,9 @@ MAX_REASONING_CALLS = 40
 class TreeSearcher:
     """LLM-guided tree traversal retriever."""
 
-    def __init__(self, root: TreeNode, llama_url: str = "http://llama-service:8000"):
+    def __init__(self, root: TreeNode, llama_url: Optional[str] = None):
         self.root = root
-        self.llama_url = llama_url
+        self.llama_url = llama_url or _DEFAULT_LLAMA_URL
         self._call_count = 0
 
     async def search(

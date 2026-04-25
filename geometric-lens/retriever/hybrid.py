@@ -1,6 +1,7 @@
 """Hybrid retriever: routes between BM25 and tree search, merges results."""
 
 import logging
+import os
 import re
 from typing import List, Dict, Any, Optional
 
@@ -13,6 +14,14 @@ logger = logging.getLogger(__name__)
 
 # BM25 score threshold for skipping tree search entirely
 BM25_SKIP_TREE_THRESHOLD = 3.0
+
+# Default vLLM gen URL when caller doesn't pass one. Mirrors the resolution
+# chain in `geometric_lens/config.py` so a bare instantiation lands on the
+# right host on docker-compose (service name: vllm-gen).
+_DEFAULT_LLAMA_URL = os.environ.get(
+    "LLAMA_GEN_URL",
+    os.environ.get("LLAMA_URL", "http://vllm-gen:8000"),
+)
 
 
 class HybridRetriever:
@@ -29,13 +38,14 @@ class HybridRetriever:
         self,
         tree_index: TreeIndex,
         bm25_index: BM25Index,
-        llama_url: str = "http://llama-service:8000",
+        llama_url: Optional[str] = None,
     ):
         self.tree_index = tree_index
         self.bm25_index = bm25_index
         self.bm25_searcher = BM25Searcher(bm25_index)
-        self.tree_searcher = TreeSearcher(tree_index.root, llama_url)
-        self.llama_url = llama_url
+        resolved_url = llama_url or _DEFAULT_LLAMA_URL
+        self.tree_searcher = TreeSearcher(tree_index.root, resolved_url)
+        self.llama_url = resolved_url
 
     async def search(
         self,
