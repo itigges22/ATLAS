@@ -1,6 +1,6 @@
 # ATLAS V3.0.1 Benchmark Suite
 
-Benchmark evaluation of ATLAS V3.0.1 pipeline on Qwen3.5-9B-Q6_K against
+Benchmark evaluation of ATLAS V3.0.1 pipeline on Qwen3.5-9B-AWQ against
 the Qwen3.5-9B model card baselines (26 benchmarks).
 
 ## Setup
