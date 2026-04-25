@@ -275,6 +275,38 @@ def test_preflight_script_uses_correct_vllm_shape():
     assert "/internal/lens/score-text" in preflight
 
 
+def test_launch_on_h200_forwards_model_and_parallel_env():
+    """benchmarks/h200/launch_on_h200.sh starts the cloud-pod container with
+    a curated set of `-e VAR=...` exports. The entrypoint inside the
+    container (stage 63) uses LLAMA_GEN_MODEL / LLAMA_EMBED_MODEL to set
+    `--served-model-name`, and the V3 runners use ATLAS_LLM_PARALLEL /
+    ATLAS_PARALLEL_TASKS / BENCHMARK_PARALLEL to size concurrency.
+
+    If the launcher swallows any of these, a host-side `LLAMA_GEN_MODEL=foo
+    ./launch_on_h200.sh` invocation never reaches the container — vLLM
+    serves under the default name and any client passing `model=foo`
+    gets a 4xx model-not-found. Pin the forwarding so this can't regress."""
+    src = (PROJECT_ROOT / "benchmarks" / "h200" / "launch_on_h200.sh").read_text()
+    must_forward = [
+        "LLAMA_GEN_MODEL", "LLAMA_EMBED_MODEL",
+        "ATLAS_LLM_PARALLEL", "ATLAS_PARALLEL_TASKS",
+        "BENCHMARK_PARALLEL",
+        "GEN_MAX_NUM_SEQS", "GEN_MAX_MODEL_LEN", "GEN_GPU_MEM_UTIL",
+        "GEN_MAX_NUM_BATCHED_TOKENS", "GEN_SWAP_SPACE_GB",
+        "EMBED_MAX_NUM_SEQS", "EMBED_MAX_MODEL_LEN", "EMBED_GPU_MEM_UTIL",
+        "EMBED_MAX_NUM_BATCHED_TOKENS",
+        "HF_TOKEN",
+    ]
+    for var in must_forward:
+        # Match `-e VAR=...` in the docker run invocation (with optional
+        # whitespace), so a future formatting change still passes.
+        assert f'-e {var}=' in src, (
+            f"launch_on_h200.sh must forward {var} into the container "
+            "(entrypoint or runners read it; without forwarding, host-side "
+            "overrides silently fall back to defaults inside the container)"
+        )
+
+
 def test_entrypoint_served_model_name_flows_from_env():
     """The vLLM `--served-model-name` must come from $LLAMA_GEN_MODEL /
     $LLAMA_EMBED_MODEL, not be hardcoded. Otherwise a user customizing
