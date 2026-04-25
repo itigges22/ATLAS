@@ -41,9 +41,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest httpx
+          # Just what the wire tests + Python unit tests need.
+          # Skip aider-chat (huge transitive deps including playwright) by
+          # using --no-deps when installing the project — CI doesn't run the
+          # CLI, only the benchmark/Lens/runner Python paths.
+          pip install pytest httpx pyyaml
           pip install --extra-index-url https://download.pytorch.org/whl/cpu "torch>=2.0"
-          pip install -e .
+          pip install --no-deps -e .
 
       - name: Run vLLM wire tests
         run: python -m pytest tests/integration/test_vllm_wire.py -v --tb=short
