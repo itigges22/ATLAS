@@ -339,7 +339,7 @@ class BudgetForcing:
             tier: Budget tier name.
 
         Returns:
-            Full ChatML-formatted prompt string for the /completion endpoint.
+            Full ChatML-formatted prompt string for the /v1/completions endpoint.
         """
         system = get_system_prompt(tier)
         if tier == "nothink":

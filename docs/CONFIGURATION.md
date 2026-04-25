@@ -181,42 +181,42 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 
 ## 6. vLLM
 
-C++ inference server (vLLM) with CUDA GPU acceleration and grammar-constrained JSON output.
+vLLM serves AWQ-quantized Qwen3.5-9B with PagedAttention for high-concurrency
+generation and a dedicated `/v1/embeddings` endpoint for the Geometric Lens.
+Two instances run side-by-side because vLLM is single-task per process.
 
-### Docker Compose Flags
-
-Used when running via `docker compose up`:
+### vLLM gen instance (port 8000)
 
 | Flag | Value | Description |
 |------|-------|-------------|
-| `--model` | `/models/${ATLAS_MODEL_FILE}` | Path to GGUF model (inside container) |
+| `--model` | `${ATLAS_MODEL_PATH:-/models/Qwen3.5-9B-AWQ}` | Path to AWQ weights directory (safetensors shards inside) |
+| `--served-model-name` | `${ATLAS_GEN_MODEL_NAME:-qwen3.5-9b}` | What clients send in the `model` request field |
 | `--host` | `0.0.0.0` | Listen on all interfaces |
-| `--port` | `8000` | Listen port |
-| `--ctx-size` | `${ATLAS_CTX_SIZE:-32768}` | Context window in tokens |
-| `--n-gpu-layers` | `99` | Offload all layers to GPU |
-| `--no-mmap` | — | Disable mmap for stability |
+| `--port` | `8000` | Listen port (host-mapped to `${ATLAS_GEN_PORT:-8000}`) |
+| `--max-num-seqs` | `${ATLAS_GEN_MAX_NUM_SEQS:-32}` | Concurrent decode slots |
+| `--max-model-len` | `${ATLAS_GEN_CTX_SIZE:-32768}` | Per-slot context window |
+| `--gpu-memory-utilization` | `${ATLAS_GEN_GPU_MEM:-0.55}` | Fraction of total VRAM to claim |
+| `--tensor-parallel-size` | `1` | Single-GPU. Increase for multi-GPU sharding. |
+| `--enable-prefix-caching` | — | Reuse KV cache across requests with shared prefixes |
+| `--reasoning-parser` | `qwen3` | Surfaces thinking in `reasoning_content` (Qwen3.5 dropped soft `/think`/`/nothink` commands) |
+| `--trust-remote-code` | — | Required for Qwen3.5 DeltaNet hybrid kernels |
 
-### K3s Entrypoint Flags (Additional)
-
-The K3s deployment (`inference/entrypoint-v3.1-9b.sh`) uses additional flags for production performance:
+### vLLM embed instance (port 8001)
 
 | Flag | Value | Description |
 |------|-------|-------------|
-| `--parallel` | `4` | Parallel request slots |
-| `--cont-batching` | — | Enable continuous batching |
-| `--flash-attn` | `on` | Enable flash attention |
-| `--mlock` | — | Lock model in RAM (prevents swapping) |
-| `-b` | `4096` | Batch size |
-| `-ub` | `4096` | Micro-batch size |
-| `-ctk` | `q8_0` | KV cache key quantization |
-| `-ctv` | `q4_0` | KV cache value quantization |
-| `--embeddings` | — | Enable self-embedding endpoint |
-| `--no-cache-prompt` | — | Disable prompt caching |
-| `--ctx-checkpoints` | `0` | Disable context checkpoints |
-| `--jinja` | — | Enable Jinja template support |
-| `--port` | `8000` | K3s uses port 8000 (not 8080) |
+| `--model` | same as gen | Same weights, loaded as a separate process |
+| `--served-model-name` | `${ATLAS_EMBED_MODEL_NAME:-qwen3.5-9b-embed}` | Distinct from gen so the runner can route correctly |
+| `--runner pooling` | — | Current API for serving a generation model via /v1/embeddings (replaces deprecated `--task embed`) |
+| `--convert embed` | — | Tells vLLM to expose pooled hidden-state embeddings |
+| `--max-num-seqs` | `${ATLAS_EMBED_MAX_NUM_SEQS:-8}` | Lens calls are short so batch is small |
+| `--max-model-len` | `${ATLAS_EMBED_CTX_SIZE:-4096}` | Embed inputs are code snippets, no long prompts |
+| `--gpu-memory-utilization` | `${ATLAS_EMBED_GPU_MEM:-0.20}` | Together with gen's 0.55, targets ~80GB H100 |
 
-> **Note:** Docker Compose uses a simpler configuration optimized for single-user local use. K3s uses the full production configuration with flash attention, KV cache quantization, and multi-slot parallelism.
+> **Sizing for smaller GPUs:** on 16GB cards, drop the gen instance to
+> `--max-num-seqs 4 --max-model-len 16384 --gpu-memory-utilization 0.85`
+> and disable the embed instance entirely (`docker compose up --scale vllm-embed=0`,
+> set `GEOMETRIC_LENS_ENABLED=false`).
 
 ---
 

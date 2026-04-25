@@ -244,7 +244,7 @@ class LLMAdapter:
 
     Request serialization: DeltaNet hybrid architecture (Qwen3.5-9B) hangs
     when multiple slots generate simultaneously via cont-batching. A class-level
-    lock ensures only one /completion request is in-flight at a time, giving
+    lock ensures only one /v1/completions request is in-flight at a time, giving
     full single-slot throughput (~47 tok/s) while keeping 4 slots for connection
     acceptance and prompt caching.
     """
@@ -254,8 +254,9 @@ class LLMAdapter:
     MIN_OUTPUT_CHARS = 50
 
     # Serialize LLM requests to avoid DeltaNet multi-slot generation hang.
-    # Set ATLAS_LLM_PARALLEL=1 to disable the lock (requires --no-cache-prompt
-    # on vLLM gen instance to prevent checkpoint restore hang).
+    # On vLLM the hang doesn't occur (PagedAttention handles concurrent slots
+    # cleanly), so ATLAS_LLM_PARALLEL=1 is the new default for vLLM deploys.
+    # The lock is preserved for back-compat with single-slot setups.
     _llm_lock = threading.Lock()
     _parallel_mode = os.environ.get("ATLAS_LLM_PARALLEL", "0") == "1"
 
@@ -1625,7 +1626,7 @@ class V3BenchmarkRunner:
 
         Each task gets its own LLMAdapter (per run_task), so thread safety
         relies on:
-          - vLLM gen instance handling concurrent /completion requests (--no-cache-prompt)
+          - vLLM gen instance handling concurrent /v1/completions requests (PagedAttention)
           - atomic_write_json for per-task results (temp file + rename)
           - EmbeddingWriter._lock for binary embedding file
           - append_jsonl for JSONL telemetry (small writes are atomic on Linux)
