@@ -36,6 +36,7 @@
 - **`benchmark/measure_bok_latency.sh`**: default URL `localhost:32735` (old NodePort) → `LLAMA_GEN_URL` chain → `localhost:8000`.
 - **`atlas/cli/repl.py`**: status block speed string `"~51 tok/s"` (llama.cpp single-slot rate) → `"vLLM (PagedAttention)"` since vLLM per-slot throughput varies wildly with concurrency/GPU/quant — no honest single number to display.
 - **`.dockerignore` cleanup**: dropped dead `inference/` and `rag-api/` exclusions; removed an actively-misleading `geometric-lens/` exclusion in `benchmarks/h200/.dockerignore` (the Dockerfile COPYs that directory in).
+- **Cloud-pod entrypoint `--served-model-name` flows from env**: previously hardcoded to `qwen3.5-9b` / `qwen3.5-9b-embed`, while preflight.sh and the Lens chat clients read `$LLAMA_GEN_MODEL` / `$LLAMA_EMBED_MODEL`. A user customizing the served name via `docker run -e LLAMA_GEN_MODEL=...` would have vLLM serving under the hardcoded name while every consumer asked for the customized one (vLLM rejects unknown names with a 4xx). Now both `vllm serve --served-model-name` invocations interpolate the env var, the entrypoint exports it (plus `LENS_URL`) before invoking preflight + runners, and the Dockerfile sets explicit defaults. Two new invariant tests pin this in place.
 - Memory note saved: `memory/project_vllm_migration.md`.
 
 ### Documentation

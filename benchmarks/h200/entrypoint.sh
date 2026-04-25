@@ -113,7 +113,7 @@ EMBED_LOG=/tmp/vllm-embed.log
 # model via /v1/embeddings. The older --task embed still works but is
 # deprecated in vLLM 0.17+.
 nohup vllm serve "$MODEL_PATH" \
-    --served-model-name qwen3.5-9b-embed \
+    --served-model-name "${LLAMA_EMBED_MODEL:-qwen3.5-9b-embed}" \
     --runner pooling \
     --convert embed \
     --port "$EMBED_PORT" \
@@ -150,7 +150,7 @@ echo ""
 echo "--- Starting vLLM GEN on port $GEN_PORT ---"
 GEN_LOG=/tmp/vllm-gen.log
 nohup vllm serve "$MODEL_PATH" \
-    --served-model-name qwen3.5-9b \
+    --served-model-name "${LLAMA_GEN_MODEL:-qwen3.5-9b}" \
     --port "$GEN_PORT" \
     --host 0.0.0.0 \
     --max-num-seqs "$GEN_MAX_NUM_SEQS" \
@@ -189,6 +189,11 @@ export LLAMA_EMBED_URL="http://localhost:${EMBED_PORT}"
 export LLAMA_URL="$LLAMA_GEN_URL"
 export ATLAS_LLM_URL="$LLAMA_GEN_URL"
 export RAG_API_URL="http://localhost:${LENS_PORT:-31144}"
+export LENS_URL="$RAG_API_URL"
+# Model names must reach preflight + runners; they were used as --served-model-name
+# above, and the OpenAI-compatible API rejects unknown names with a 4xx.
+export LLAMA_GEN_MODEL="${LLAMA_GEN_MODEL:-qwen3.5-9b}"
+export LLAMA_EMBED_MODEL="${LLAMA_EMBED_MODEL:-qwen3.5-9b-embed}"
 export BENCHMARK_PARALLEL ATLAS_LLM_PARALLEL ATLAS_PARALLEL_TASKS GEOMETRIC_LENS_ENABLED
 
 # 5a. Pre-flight: hit each service end-to-end before committing GPU time

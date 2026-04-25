@@ -273,3 +273,37 @@ def test_preflight_script_uses_correct_vllm_shape():
     assert "/v1/embeddings" in preflight
     # Lens score endpoint
     assert "/internal/lens/score-text" in preflight
+
+
+def test_entrypoint_served_model_name_flows_from_env():
+    """The vLLM `--served-model-name` must come from $LLAMA_GEN_MODEL /
+    $LLAMA_EMBED_MODEL, not be hardcoded. Otherwise a user customizing
+    LLAMA_GEN_MODEL via `docker run -e` ends up with vLLM serving the
+    hardcoded name while preflight + runners ask for the customized one,
+    which vLLM rejects with a 4xx."""
+    entrypoint = (PROJECT_ROOT / "benchmarks" / "h200" / "entrypoint.sh").read_text()
+    # Both vllm serve calls must reference the env var (with sensible default).
+    assert '--served-model-name "${LLAMA_GEN_MODEL:-qwen3.5-9b}"' in entrypoint, (
+        "gen --served-model-name must flow from $LLAMA_GEN_MODEL"
+    )
+    assert '--served-model-name "${LLAMA_EMBED_MODEL:-qwen3.5-9b-embed}"' in entrypoint, (
+        "embed --served-model-name must flow from $LLAMA_EMBED_MODEL"
+    )
+    # And the same vars must be exported so preflight + runner subprocesses see them.
+    assert "export LLAMA_GEN_MODEL" in entrypoint
+    assert "export LLAMA_EMBED_MODEL" in entrypoint
+    # Preflight reads LENS_URL; entrypoint must export it (RAG_API_URL alone is not enough).
+    assert "export LENS_URL" in entrypoint
+
+
+def test_dockerfile_default_model_names_match_preflight_defaults():
+    """The Dockerfile ENV defaults for LLAMA_GEN_MODEL / LLAMA_EMBED_MODEL
+    must match the fallbacks preflight.sh assumes (`qwen3.5-9b` and
+    `qwen3.5-9b-embed`). If they drift, a fresh container with no overrides
+    would fail preflight on a 404 model-not-found."""
+    df = (PROJECT_ROOT / "benchmarks" / "h200" / "Dockerfile").read_text()
+    assert "LLAMA_GEN_MODEL=qwen3.5-9b" in df
+    assert "LLAMA_EMBED_MODEL=qwen3.5-9b-embed" in df
+    preflight = (PROJECT_ROOT / "benchmarks" / "h200" / "preflight.sh").read_text()
+    assert 'LLAMA_GEN_MODEL:=qwen3.5-9b' in preflight
+    assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
