@@ -33,7 +33,9 @@ def extract_embedding(text: str) -> List[float]:
     """Extract an embedding vector from a vLLM embed instance.
 
     vLLM's /v1/embeddings is OpenAI-compatible and returns pooled sentence
-    embeddings. For Qwen3.5-9B in --task embed mode, that's a 4096-dim float
+    embeddings. The embed instance must be started with `--runner pooling
+    --convert embed` (the current API; the deprecated `--task embed` was
+    removed in vLLM 0.17+). For Qwen3.5-9B that yields a 4096-dim float
     vector matching the hidden state dimension.
 
     Returns:

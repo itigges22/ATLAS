@@ -1125,6 +1125,36 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_lens_embedding_extractor_uses_current_vllm_api_name():
+    """`geometric-lens/geometric_lens/embedding_extractor.py` is the entry
+    point used by every C(x)/G(x) scoring path in the Lens. Its docstring
+    used to say "For Qwen3.5-9B in --task embed mode, that's a 4096-dim
+    float vector" — but `--task embed` was deprecated in vLLM 0.17 in
+    favor of `--runner pooling --convert embed` (the docker-compose
+    command was migrated in stage 19). The docstring stayed behind, so
+    a reader debugging "why is the Lens getting empty embeddings?"
+    would search vLLM docs for `--task embed`, find a deprecation
+    notice, and have no clear next step.
+
+    Pin: the docstring must reference the current API name and may not
+    present `--task embed` as if it were live."""
+    src = (PROJECT_ROOT / "geometric-lens" / "geometric_lens" / "embedding_extractor.py").read_text()
+    # The deprecated form (anywhere in the file) is forbidden — except
+    # inside a deliberate "the deprecated `--task embed`" disclaimer.
+    bad_pattern = re.compile(r"in --task embed mode")
+    assert not bad_pattern.search(src), (
+        "embedding_extractor.py still presents `--task embed` as a live "
+        "vLLM mode in its docstring; vLLM 0.17+ uses "
+        "`--runner pooling --convert embed`"
+    )
+    # Docstring formatting (line wraps, indents) varies — match the API
+    # phrase across any whitespace.
+    assert re.search(r"--runner\s+pooling\s+--convert\s+embed", src), (
+        "embedding_extractor.py docstring must name the current "
+        "vLLM API (`--runner pooling --convert embed`)"
+    )
+
+
 def test_docs_do_not_link_to_deleted_scripts_or_dirs():
     """The V3.0 → V3.0.1 cutover deleted several scripts and directories
     that the docs (`MAP.md`, `ARCHITECTURE.md`) used to link to:
