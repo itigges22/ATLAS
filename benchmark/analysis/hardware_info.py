@@ -185,15 +185,16 @@ def get_k3s_version() -> str:
 
 def get_llama_cpp_version() -> str:
     """
-    Get llama.cpp version from running server.
-
-    Returns:
-        llama.cpp version or commit hash
+    Legacy hook (kept for back-compat with code expecting `llama_cpp_version`
+    on hardware-info dicts). vLLM doesn't expose a llama.cpp version, so we
+    return the vLLM version string instead — same role: identifies which
+    inference engine produced the run.
     """
-    # Try to get from vLLM gen instance
-    # This would require querying the running server
-    # For now, return empty - can be populated from server response
-    return ""
+    try:
+        import vllm  # type: ignore
+        return getattr(vllm, "__version__", "")
+    except Exception:
+        return ""
 
 
 def get_model_info() -> Dict[str, str]:
@@ -280,7 +281,7 @@ def hardware_info_to_markdown(info: HardwareInfo) -> str:
         "",
         "### Software",
         f"- K3s: {info.k3s_version or 'N/A'}",
-        f"- llama.cpp: {info.llama_cpp_version or 'N/A'}",
+        f"- vLLM: {info.llama_cpp_version or 'N/A'}",
         "",
         "### Model",
         f"- Name: {info.model_name or 'N/A'}",

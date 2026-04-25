@@ -322,7 +322,7 @@ class HardwareInfo:
         os_name: Operating system name
         kernel_version: OS kernel version
         k3s_version: K3s version
-        llama_cpp_version: llama.cpp version/commit
+        llama_cpp_version: inference engine version (kept name for back-compat — now reports vLLM version)
         model_name: LLM model name
         model_quantization: Model quantization type
         context_length: Context length setting
