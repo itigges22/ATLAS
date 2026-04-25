@@ -1,8 +1,8 @@
 #!/bin/bash
-# Transfer the ATLAS benchmark state and model file to a rented H200 instance.
+# Transfer the ATLAS benchmark code + AWQ model weights to a rented H200/H100 pod.
 # Run locally from the ATLAS repo root: ./benchmarks/h200/transfer_to_h200.sh
 #
-# Edit H200_USER, H200_HOST, H200_SSH_KEY, REMOTE_DIR below before running.
+# Edit H200_USER, H200_HOST, H200_SSH_KEY, REMOTE_DIR below (or set as env vars).
 
 set -euo pipefail
 
@@ -11,6 +11,7 @@ H200_USER="${H200_USER:-ubuntu}"
 H200_HOST="${H200_HOST:-}"                          # e.g. 203.0.113.5 or H200-vast.ai.example
 H200_SSH_KEY="${H200_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 REMOTE_DIR="${REMOTE_DIR:-~/ATLAS}"
+LOCAL_MODEL_DIR="${LOCAL_MODEL_DIR:-./models/Qwen3.5-9B-AWQ}"
 # ====================================
 
 if [[ -z "$H200_HOST" ]]; then
@@ -18,24 +19,31 @@ if [[ -z "$H200_HOST" ]]; then
     exit 1
 fi
 
+if [[ ! -d "$LOCAL_MODEL_DIR" ]]; then
+    echo "ERROR: AWQ model not found at $LOCAL_MODEL_DIR" >&2
+    echo "Pull it first:  make model" >&2
+    exit 1
+fi
+
 SSH="ssh -i $H200_SSH_KEY -o StrictHostKeyChecking=accept-new $H200_USER@$H200_HOST"
 RSYNC_SSH="ssh -i $H200_SSH_KEY -o StrictHostKeyChecking=accept-new"
 
 echo "========================================"
-echo "Transfer to H200: $H200_USER@$H200_HOST"
-echo "Remote dir:       $REMOTE_DIR"
+echo "Transfer to $H200_USER@$H200_HOST"
+echo "Remote dir:  $REMOTE_DIR"
+echo "Local model: $LOCAL_MODEL_DIR"
 echo "========================================"
 
 # 1. Create remote tree
 echo ""
 echo "--- creating remote directories ---"
-$SSH "mkdir -p $REMOTE_DIR/models $REMOTE_DIR/benchmarks $REMOTE_DIR/benchmark $REMOTE_DIR/inference"
+$SSH "mkdir -p $REMOTE_DIR/models $REMOTE_DIR/benchmarks $REMOTE_DIR/benchmark"
 
-# 2. Send model (this is the big one, ~7GB)
+# 2. Send AWQ model directory (sharded safetensors, ~12 GiB)
 echo ""
-echo "--- sending model (~7GB, this may take 10-20 min) ---"
+echo "--- sending AWQ model (~12 GiB, this may take 15-30 min) ---"
 rsync -avz --progress -e "$RSYNC_SSH" \
-    /home/isaac/models/Qwen3.5-9B-Q6_K.gguf \
+    "$LOCAL_MODEL_DIR" \
     "$H200_USER@$H200_HOST:$REMOTE_DIR/models/"
 
 # 3. Send code + current state + scripts
@@ -68,17 +76,19 @@ rsync -avz --progress -e "$RSYNC_SSH" \
     ./benchmark \
     "$H200_USER@$H200_HOST:$REMOTE_DIR/"
 
+# Geometric Lens (needed for V3 pipeline scoring)
 rsync -avz --progress -e "$RSYNC_SSH" \
-    ./inference/Dockerfile.v31 \
-    "$H200_USER@$H200_HOST:$REMOTE_DIR/inference/"
+    --exclude '__pycache__' --exclude '*.pyc' \
+    ./geometric-lens \
+    "$H200_USER@$H200_HOST:$REMOTE_DIR/"
 
 # 4. Confirm
 echo ""
 echo "--- verifying remote ---"
-$SSH "cd $REMOTE_DIR && ls -la models/ && echo '---' && ls benchmarks/section_*/*/responses.jsonl 2>/dev/null | head -5 && echo '---' && du -sh ."
+$SSH "cd $REMOTE_DIR && du -sh models/Qwen3.5-9B-AWQ/ && echo '---' && ls benchmarks/section_*/*/responses.jsonl 2>/dev/null | head -5 && echo '---' && du -sh ."
 
 echo ""
 echo "========================================"
-echo "Transfer complete. Next step: SSH to the H200 and run"
+echo "Transfer complete. Next step: SSH to the pod and run"
 echo "  cd $REMOTE_DIR && ./benchmarks/h200/launch_on_h200.sh"
 echo "========================================"

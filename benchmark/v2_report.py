@@ -274,7 +274,7 @@ def generate_report(run_dir: Path) -> Path:
 **Run ID:** {run_id}
 **Total Runtime:** {runtime_str}
 **Benchmark Suite:** LiveCodeBench v5, GPQA Diamond, IFBench, Custom, SciCode
-**Hardware:** RTX 5060 Ti 16GB, Qwen3.5-9B-Q6_K, 5 vCores, 14GB RAM
+**Hardware:** RTX 5060 Ti 16GB, Qwen3.5-9B-AWQ, 5 vCores, 14GB RAM
 
 *All results from a single benchmark run. Not averaged across multiple runs; variance unknown.*
 

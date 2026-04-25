@@ -607,7 +607,7 @@ class BenchmarkRunner:
         results = {
             "benchmark": self.benchmark_name,
             "section": self.section_name,
-            "model": "Qwen3.5-9B-Q6_K",
+            "model": LLAMA_GEN_MODEL,
             "pipeline": "ATLAS V3.0.1",
             "total_tasks": len(self.results),
             "correct": sum(1 for r in self.results if r > 0),
@@ -657,7 +657,7 @@ class BenchmarkRunner:
         report = f"""# {self.benchmark_name.upper()} — ATLAS V3.0.1 Benchmark Report
 
 **Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}
-**Model:** Qwen3.5-9B-Q6_K (Q6_K quantization)
+**Model:** Qwen3.5-9B-AWQ (AWQ-Q4 quantization)
 **Pipeline:** ATLAS V3.0.1
 **Seed:** {SEED}
 
@@ -692,7 +692,7 @@ would be corrupted by the CLI's tool-calling behavior.
 - Seed: {SEED}
 
 ### Known caveats
-- **Quantization gap:** Qwen baseline uses full bf16; ATLAS uses Q6_K quantization
+- **Quantization gap:** Qwen baseline uses full bf16; ATLAS uses AWQ-Q4 quantization
 - **Sampling divergence:** Qwen uses temp=1.0/top_p=0.95/top_k=20/presence_penalty=1.5;
   ATLAS uses temp={TEMPERATURE}/top_p={TOP_P}
 - **Pipeline overhead:** ATLAS wraps the model with PlanSearch, Budget Forcing,
@@ -886,7 +886,7 @@ would be corrupted by the CLI's tool-calling behavior.
         results = {
             "benchmark": self.benchmark_name,
             "section": self.section_name,
-            "model": "Qwen3.5-9B-Q6_K",
+            "model": LLAMA_GEN_MODEL,
             "pipeline": "ATLAS V3.0.1",
             "total_prompts": n,
             "strict_prompt_accuracy": round(strict_prompt_acc, 2),
@@ -948,7 +948,7 @@ would be corrupted by the CLI's tool-calling behavior.
         report = f"""# IFEVAL — ATLAS V3.0.1 Benchmark Report
 
 **Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}
-**Model:** Qwen3.5-9B-Q6_K (Q6_K quantization)
+**Model:** Qwen3.5-9B-AWQ (AWQ-Q4 quantization)
 **Pipeline:** ATLAS V3.0.1
 **Seed:** {SEED}
 
@@ -987,7 +987,7 @@ checking library from the IFEval paper (Zhou et al., 2023).
 - Seed: {SEED}
 
 ### Known caveats
-- **Quantization gap:** Qwen baseline uses full bf16; ATLAS uses Q6_K
+- **Quantization gap:** Qwen baseline uses full bf16; ATLAS uses AWQ-Q4
 - **Sampling divergence:** Qwen uses different sampling params
 - **System prompt:** Simple "Follow the instructions exactly as given."
 - **Checking library:** Official Google IFEval code (Apache 2.0)
@@ -1142,7 +1142,7 @@ checking library from the IFEval paper (Zhou et al., 2023).
         results = {
             "benchmark": self.benchmark_name,
             "section": self.section_name,
-            "model": "Qwen3.5-9B-Q6_K",
+            "model": LLAMA_GEN_MODEL,
             "pipeline": "ATLAS V3.0.1",
             "total_prompts": n,
             "strict_prompt_accuracy": round(strict_prompt_acc, 2),

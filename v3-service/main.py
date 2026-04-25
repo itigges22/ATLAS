@@ -133,7 +133,12 @@ class LLMAdapter:
             <|im_start|>system\n...\n<|im_end|>\n<|im_start|>user\n...\n<|im_end|>\n<|im_start|>assistant\n
         """
         prompt = body.pop("prompt", "")
-        model_name = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+        # Use the vLLM gen instance's served-model-name. ATLAS_MODEL_NAME
+        # is kept as a fallback for backwards compat with older deployments.
+        model_name = os.environ.get(
+            "LLAMA_GEN_MODEL",
+            os.environ.get("ATLAS_MODEL_NAME", GEN_MODEL_NAME),
+        )
 
         # Parse ChatML into messages
         messages = []
