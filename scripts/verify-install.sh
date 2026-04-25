@@ -155,6 +155,44 @@ check_e2e() {
     fi
 }
 
+verify_docker_compose() {
+    # Health-check each docker-compose service via /health curl on its host
+    # port. Names match docker-compose.yml service names; ports match
+    # ATLAS_*_PORT defaults from .env.example.
+    echo ""
+    echo "Container Status (docker compose ps):"
+    docker compose ps --status running --format \
+        "{{.Service}}: {{.State}} ({{.Status}})" 2>/dev/null
+
+    echo ""
+    echo "Service Health:"
+    check_service "vLLM gen"        "http://localhost:${ATLAS_GEN_PORT:-8000}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "vLLM embed"      "http://localhost:${ATLAS_EMBED_PORT:-8001}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "Geometric Lens"  "http://localhost:${ATLAS_LENS_PORT:-31144}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "V3 Pipeline"     "http://localhost:${ATLAS_V3_PORT:-8070}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "Sandbox"         "http://localhost:${ATLAS_SANDBOX_PORT:-30820}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "atlas-proxy"     "http://localhost:${ATLAS_PROXY_PORT:-8090}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+
+    echo ""
+    echo "Functional Tests:"
+    check_llm_inference
+
+    echo ""
+    echo "=========================================="
+    echo "  Verification Summary"
+    echo "=========================================="
+    echo "  Passed:   $PASSED"
+    echo "  Warnings: $WARNINGS"
+    echo "  Failed:   $FAILED"
+    if [[ $FAILED -gt 0 ]]; then
+        echo ""
+        echo "Some checks failed. Inspect logs with:"
+        echo "    docker compose logs --tail 100"
+        return 1
+    fi
+    return 0
+}
+
 main() {
     echo "=========================================="
     echo "  ATLAS Installation Verifier"
@@ -164,6 +202,30 @@ main() {
     echo "  Namespace:   $ATLAS_NAMESPACE"
     echo "  Models dir:  $ATLAS_MODELS_DIR"
     echo ""
+
+    # Detect deployment mode. The legacy K8s path needs kubectl + manifests/
+    # (which V3.0.1 doesn't ship — see scripts/install.sh stage 73). A
+    # docker-compose deployment exposes the same services on the same ports
+    # but via container DNS instead of Kubernetes pod labels — verify those
+    # via /health curl instead of `kubectl get pod`.
+    if docker compose ps --status running --quiet vllm-gen 2>/dev/null \
+       | grep -q . ; then
+        echo "Detected docker-compose deployment (vllm-gen container running)."
+        verify_docker_compose
+        return $?
+    elif [[ -z "${KUBECONFIG:-}" ]] && [[ ! -d "$K8S_DIR/manifests" ]]; then
+        # No K8s manifests AND no docker-compose stack → nothing to verify.
+        echo -e "${RED}✗${NC} No deployment detected."
+        echo ""
+        echo "ATLAS V3.0.1 ships docker-compose as the canonical deployment:"
+        echo "    cp .env.example .env       # edit HF_TOKEN, model paths"
+        echo "    make model                  # pull QuantTrio/Qwen3.5-9B-AWQ"
+        echo "    make up                     # bring the stack up"
+        echo ""
+        echo "Then re-run this script. (K8s manifests have not yet been ported"
+        echo "from the V3.0 llama.cpp stack — see docs/SETUP.md Method 3.)"
+        exit 1
+    fi
 
     # Check kubeconfig
     echo "Kubernetes Cluster:"

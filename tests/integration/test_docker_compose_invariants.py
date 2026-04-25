@@ -622,6 +622,49 @@ def test_user_facing_docs_have_no_stale_q6_k_refs():
         )
 
 
+def test_verify_install_sh_supports_docker_compose():
+    """`scripts/verify-install.sh` was hardcoded for the K8s install path:
+    it required a kubeconfig and bailed if there wasn't one. Since stage
+    73 confirmed K8s manifests don't ship in V3.0.1, every docker-compose
+    user running `verify-install.sh` saw a confusing "No kubeconfig
+    found" failure even though their stack was perfectly healthy.
+
+    Pin: the script must detect docker-compose mode (via
+    `docker compose ps --status running --quiet vllm-gen`) and run an
+    HTTP-based verifier instead of demanding kubeconfig.
+
+    Also: when neither K8s manifests nor a docker-compose stack is
+    present, the script must surface a "use make up" message rather than
+    drowning the user in K8s diagnostics."""
+    src = (PROJECT_ROOT / "scripts" / "verify-install.sh").read_text()
+
+    # New verify_docker_compose function exists.
+    assert "verify_docker_compose()" in src, (
+        "verify-install.sh must define a verify_docker_compose function "
+        "for the docker-compose deployment path"
+    )
+
+    # main() detects compose before falling through to K8s.
+    assert "docker compose ps" in src, (
+        "verify-install.sh must check `docker compose ps` for vllm-gen "
+        "before requiring a kubeconfig"
+    )
+
+    # The new code must health-check the actual compose service ports.
+    for service in ("vllm-gen", "vllm-embed", "Geometric Lens",
+                    "atlas-proxy"):
+        assert service in src, (
+            f"verify_docker_compose must check {service} health endpoint"
+        )
+
+    # And it must reach all four canonical ports the compose stack exposes.
+    for port_var in ("ATLAS_GEN_PORT", "ATLAS_EMBED_PORT", "ATLAS_LENS_PORT",
+                     "ATLAS_PROXY_PORT"):
+        assert port_var in src, (
+            f"verify-install.sh must consult {port_var} for the compose path"
+        )
+
+
 def test_install_sh_guards_against_missing_manifests_dir():
     """`scripts/install.sh` references `$K8S_DIR/manifests/*.yaml` for the
     K8s deployment path, but the repo currently does NOT ship any manifests/
