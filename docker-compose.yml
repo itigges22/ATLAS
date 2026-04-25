@@ -113,9 +113,21 @@ services:
       - LLAMA_EMBED_MODEL=${ATLAS_EMBED_MODEL_NAME:-qwen3.5-9b-embed}
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
+      # Path inside the container where load_api_keys() reads
+      # api-keys.json. The default matches the bind-mount below;
+      # users supplying their own auth file just drop it at
+      # ATLAS_LENS_SECRETS/api-keys.json on the host.
+      - API_KEYS_PATH=/app/secrets/api-keys.json
     volumes:
       - lens-data:/data/projects
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+      # Optional auth file mount. The path defaults to ./.secrets/lens
+      # which is empty (or missing) by default — load_api_keys() returns
+      # an empty dict in that case, and verify_api_key falls back to the
+      # api-portal validation path. To enable local-file auth, place an
+      # api-keys.json in this directory; the lens picks it up via the
+      # legacy-key fallback (see geometric-lens/main.py).
+      - ${ATLAS_LENS_SECRETS:-./.secrets/lens}:/app/secrets:ro
     ports:
       - "${ATLAS_LENS_PORT:-31144}:31144"
     depends_on:
