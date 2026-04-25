@@ -23,6 +23,7 @@ services:
       --max-model-len ${ATLAS_GEN_CTX_SIZE:-32768}
       --max-num-batched-tokens ${ATLAS_GEN_MAX_NUM_BATCHED_TOKENS:-${ATLAS_GEN_CTX_SIZE:-32768}}
       --gpu-memory-utilization ${ATLAS_GEN_GPU_MEM:-0.55}
+      --swap-space ${ATLAS_GEN_SWAP_SPACE_GB:-4}
       --tensor-parallel-size 1
       --enable-prefix-caching
       --reasoning-parser qwen3

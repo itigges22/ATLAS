@@ -289,6 +289,28 @@ vllm serve ... --max-num-batched-tokens 8192
 This is a known [vLLM issue](https://github.com/vllm-project/vllm/issues/36697)
 with hybrid Mamba models.
 
+### Wanting Higher Throughput at Greedy Decoding
+
+The QuantTrio Qwen3.5-9B-AWQ model card recommends Multi-Token Prediction
+speculative decoding for ~1.5–2x throughput at `temperature=0`:
+
+```bash
+vllm serve ... \
+    --speculative-config '{"method":"qwen3_next_mtp","num_speculative_tokens":2}'
+```
+
+ATLAS's default config doesn't enable this because the V3 pipeline runs
+most generation at `temperature ≥ 0.6` (DivSampling, candidate generation),
+where speculative decoding's win shrinks because the speculation is rarely
+accepted. If your workload is mostly deterministic (greedy MCQ runs at
+`temperature=0`, single-shot completions), enabling MTP is worth the
+~5–10% extra VRAM cost for the draft tokens.
+
+The model card also recommends `--enable-auto-tool-choice --tool-call-parser qwen3_coder`
+for OpenAI-style tool calling. ATLAS uses its own grammar-constrained tool
+calling via the proxy, so these aren't needed for ATLAS itself, but enabling
+them lets you hit the gen instance directly with OpenAI tool-calling clients.
+
 ### Embed Instance Returns 0-dim Vectors
 
 **Symptom:** `/v1/embeddings` returns `{"data": [{"embedding": []}]}` or wrong dimensionality.
