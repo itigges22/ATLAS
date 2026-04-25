@@ -112,13 +112,22 @@ validate_config() {
     # outside the 30000-32767 K8s NodePort range would slip through
     # validation and only surface at `kubectl apply` time as an
     # opaque "invalid value" error.
+    #
+    # All references use `${VAR:-}` expansion: any var the user's
+    # atlas.conf doesn't define becomes an empty string (and the loop
+    # below skips empties), instead of triggering `set -u`'s "unbound
+    # variable" abort. This matters because (a) atlas.conf.example
+    # itself doesn't currently set ATLAS_RAG_API_NODEPORT, and (b) the
+    # legacy api-portal/dashboard/llm-proxy services have been removed
+    # from the V3.0.1 docker-compose stack, so a docker-compose user
+    # sourcing config.sh shouldn't be forced to keep stale K8s vars.
     local ports=(
-        "$ATLAS_API_PORTAL_NODEPORT"
-        "$ATLAS_LLM_PROXY_NODEPORT"
-        "$ATLAS_RAG_API_NODEPORT"
-        "$ATLAS_DASHBOARD_NODEPORT"
-        "${ATLAS_VLLM_GEN_NODEPORT:-${ATLAS_LLAMA_NODEPORT}}"
-        "$ATLAS_SANDBOX_NODEPORT"
+        "${ATLAS_API_PORTAL_NODEPORT:-}"
+        "${ATLAS_LLM_PROXY_NODEPORT:-}"
+        "${ATLAS_RAG_API_NODEPORT:-}"
+        "${ATLAS_DASHBOARD_NODEPORT:-}"
+        "${ATLAS_VLLM_GEN_NODEPORT:-${ATLAS_LLAMA_NODEPORT:-}}"
+        "${ATLAS_SANDBOX_NODEPORT:-}"
     )
     if [[ -n "${ATLAS_VLLM_EMBED_NODEPORT:-}" ]]; then
         ports+=("$ATLAS_VLLM_EMBED_NODEPORT")
@@ -126,6 +135,8 @@ validate_config() {
 
     local seen=()
     for port in "${ports[@]}"; do
+        # Skip empties from unset legacy vars.
+        [[ -z "$port" ]] && continue
         if [[ " ${seen[*]} " =~ " ${port} " ]]; then
             echo -e "${RED}[ERROR]${NC} Duplicate NodePort: $port"
             errors=$((errors + 1))
@@ -135,6 +146,7 @@ validate_config() {
 
     # Validate NodePort range (30000-32767)
     for port in "${ports[@]}"; do
+        [[ -z "$port" ]] && continue
         if [[ $port -lt 30000 ]] || [[ $port -gt 32767 ]]; then
             echo -e "${RED}[ERROR]${NC} NodePort $port out of range (30000-32767)"
             errors=$((errors + 1))

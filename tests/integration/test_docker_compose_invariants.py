@@ -693,6 +693,51 @@ def test_install_sh_guards_against_missing_manifests_dir():
     )
 
 
+def test_config_sh_validate_config_tolerates_unset_legacy_vars():
+    """`validate_config` previously dereferenced `$ATLAS_RAG_API_NODEPORT`
+    (and other legacy K8s NodePort vars) bare. Under `set -u` (which
+    install.sh and verify-install.sh both enable), an unset var aborts
+    the script — and atlas.conf.example doesn't define
+    ATLAS_RAG_API_NODEPORT at all. Anyone sourcing config.sh from those
+    scripts hit "ATLAS_RAG_API_NODEPORT: unbound variable" before any
+    real work happened.
+
+    Pin: validate_config must use `${VAR:-}` expansion + skip empty
+    values in the loop, so the function returns rc=0 even when several
+    legacy K8s vars are unset."""
+    import subprocess
+    import textwrap
+
+    config_sh = PROJECT_ROOT / "scripts" / "lib" / "config.sh"
+
+    # Source under `set -euo pipefail`, deliberately unset every legacy
+    # K8s NodePort var, then call validate_config and check rc.
+    script = textwrap.dedent(f"""
+    set -euo pipefail
+    source {config_sh}
+    unset ATLAS_API_PORTAL_NODEPORT ATLAS_LLM_PROXY_NODEPORT \\
+          ATLAS_RAG_API_NODEPORT ATLAS_DASHBOARD_NODEPORT
+    # Keep just the vLLM ones a docker-compose user might set.
+    export ATLAS_VLLM_GEN_NODEPORT=32735
+    export ATLAS_VLLM_EMBED_NODEPORT=32736
+    export ATLAS_SANDBOX_NODEPORT=30820
+    validate_config
+    echo "rc=$?"
+    """).strip()
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30,
+    )
+    combined = out.stdout + out.stderr
+    assert "unbound variable" not in combined, (
+        f"validate_config still aborts when legacy NodePort vars are unset:\n"
+        f"{combined}"
+    )
+    assert "rc=0" in combined or out.returncode == 0, (
+        f"validate_config should accept the docker-compose subset of vars; "
+        f"got:\n{combined}"
+    )
+
+
 def test_config_sh_validates_vllm_embed_nodeport():
     """`scripts/lib/config.sh validate_config` must include the embed NodePort
     in its dedup + range check. Earlier iterations only listed ATLAS_LLAMA_NODEPORT
