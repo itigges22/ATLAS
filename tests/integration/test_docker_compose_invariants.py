@@ -337,6 +337,30 @@ def test_makefile_lint_and_ci_lint_cover_same_scripts():
         assert must_have in mf_scripts, f"{must_have} must be lint-checked"
 
 
+def test_troubleshooting_does_not_reference_llama_cpp_flags():
+    """`docs/TROUBLESHOOTING.md`'s Performance section steered users to
+    debug `--n-gpu-layers 99`, a llama.cpp flag with no vLLM equivalent
+    (vLLM auto-offloads every layer when CUDA is reachable). Quoting
+    llama.cpp flags as troubleshooting steps for a vLLM stack misleads
+    users into chasing a knob that doesn't exist.
+
+    Forbid the llama.cpp-specific `--n-gpu-layers` flag, except inside an
+    explanation of why it doesn't apply (a "no `--n-gpu-layers` knob"
+    explainer is the *fix*). Same for the obsolete "grammar enforcement"
+    throughput claim."""
+    src = (PROJECT_ROOT / "docs" / "TROUBLESHOOTING.md").read_text()
+    # Allow the explanatory pattern that explicitly disclaims the flag.
+    body = src.replace("there is no `--n-gpu-layers` knob", "")
+    assert "--n-gpu-layers" not in body, (
+        "TROUBLESHOOTING.md must not steer users to debug --n-gpu-layers; "
+        "it's a llama.cpp flag with no vLLM analogue"
+    )
+    assert "with grammar enforcement" not in src, (
+        "TROUBLESHOOTING.md must not quote 'grammar enforcement' throughput — "
+        "vLLM uses guided_choice/response_format, not llama.cpp grammars"
+    )
+
+
 def test_user_facing_docs_have_no_stale_q6_k_refs():
     """The user-facing docs — English plus the ja/ko/zh-CN translations —
     must not steer fresh users to a Qwen3.5-9B-Q6_K GGUF download or use

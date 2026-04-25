@@ -577,14 +577,16 @@ These are included in the repository. If missing, re-clone or restore from backu
 
 ## Performance
 
-### Slow Generation (~2 tok/s)
+### Slow Generation (single-digit tok/s)
 
-The model is running on CPU instead of GPU. Check:
-1. `nvidia-smi` — is vLLM listed as a GPU process?
-2. `--n-gpu-layers 99` — are all layers offloaded?
-3. NVIDIA Container Toolkit — is the container runtime configured for GPU access?
+vLLM picks up the GPU automatically — there is no `--n-gpu-layers` knob; all layers go to GPU once `--gpu-memory-utilization` reserves a workable slice. If generation is still slow, check (in order):
 
-**Expected performance:** ~51 tok/s on RTX 5060 Ti 16GB with grammar enforcement.
+1. `nvidia-smi` — does the `python3` (vllm) process appear in the GPU process list? If not, the container can't see the GPU. Verify `nvidia-container-toolkit` is installed and the runtime is `nvidia` (`docker compose` uses `deploy.resources.reservations.devices` for this; `podman` needs `--device nvidia.com/gpu=all`).
+2. `docker logs vllm-gen | grep -i 'cpu\|device'` — at startup vLLM logs the device it's using. If you see "Falling back to CPU", the GPU was visible but rejected (driver too old, compute capability too low, or quantization not supported on that arch).
+3. Concurrency: vLLM's PagedAttention scales with concurrent requests. If `ATLAS_LLM_PARALLEL=0` or `ATLAS_GEN_MAX_NUM_SEQS=1` is set, you're effectively single-slot — raise both for batched throughput.
+4. KV cache paging: `nvidia-smi` shows VRAM at 100% but throughput is low → the KV cache is paging to system RAM. Drop `ATLAS_GEN_CTX_SIZE` (default 32768) or `ATLAS_GEN_MAX_NUM_SEQS` until VRAM headroom returns.
+
+**Expected performance:** vLLM AWQ-Q4 throughput varies wildly with concurrency, prompt length, and quantization arch (Qwen3.5 DeltaNet hybrid kernels are Triton-compiled at first request, so the first generation is slower than subsequent ones). There is no honest single number to quote — measure your workload with `benchmark/measure_bok_latency.sh`.
 
 ### V3 Pipeline Takes Several Minutes
 
