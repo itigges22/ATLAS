@@ -38,16 +38,18 @@ IN_CLUSTER = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token
 
 if IN_CLUSTER:
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://api-portal:3000")
-    RAG_API_URL = os.environ.get("RAG_API_URL", "http://geometric-lens:8099")
-    LLAMA_URL = os.environ.get("LLAMA_URL", "http://llama-service:8000")
+    RAG_API_URL = os.environ.get("RAG_API_URL", "http://geometric-lens:31144")
+    LLAMA_URL = os.environ.get("LLAMA_GEN_URL", os.environ.get("LLAMA_URL", "http://llama-gen-service:8000"))
+    LLAMA_EMBED_URL = os.environ.get("LLAMA_EMBED_URL", "http://llama-embed-service:8001")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://llm-proxy:8000")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://atlas-dashboard:3001")
 else:
-    # Running locally - use NodePort or port-forward
+    # Running locally — use NodePort or direct port (vLLM on 8000/8001 in container, or NodePort).
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://localhost:30000")
     RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
-    LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
+    LLAMA_URL = os.environ.get("LLAMA_GEN_URL", os.environ.get("LLAMA_URL", "http://localhost:8000"))
+    LLAMA_EMBED_URL = os.environ.get("LLAMA_EMBED_URL", "http://localhost:8001")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://localhost:30080")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://localhost:30820")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:30001")
@@ -112,8 +114,18 @@ if _HAS_INFRA_DEPS:
 
     @pytest.fixture(scope="session")
     def llama_client() -> Generator:
-        """HTTP client for llama-server (direct, no proxy)."""
+        """HTTP client for the vLLM gen instance (direct, no proxy).
+
+        Name kept for backwards compat with existing tests; under the hood
+        this hits whichever inference backend is running (vLLM 0.17+).
+        """
         with httpx.Client(base_url=LLAMA_URL, timeout=LLM_TIMEOUT) as client:
+            yield client
+
+    @pytest.fixture(scope="session")
+    def llama_embed_client() -> Generator:
+        """HTTP client for the vLLM embed instance (port 8001 by default)."""
+        with httpx.Client(base_url=LLAMA_EMBED_URL, timeout=LLM_TIMEOUT) as client:
             yield client
 
     @pytest.fixture(scope="session")

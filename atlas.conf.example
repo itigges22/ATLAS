@@ -63,27 +63,32 @@ ATLAS_PVC_PROJECTS_SIZE="20Gi"
 ATLAS_PVC_API_PORTAL_SIZE="5Gi"
 
 #-------------------------------------------
-# Model Configuration
+# Model Configuration (vLLM)
 #-------------------------------------------
-# Main model filename (must exist in ATLAS_MODELS_DIR)
-ATLAS_MAIN_MODEL="Qwen3-14B-Q4_K_M.gguf"
+# vLLM AWQ-quantized weights directory (must contain config.json + .safetensors).
+# Default mounts /models from ATLAS_MODELS_DIR.
+ATLAS_MODEL_PATH="/models/Qwen3.5-9B-AWQ"
 
-# Draft model for speculative decoding (leave empty to disable)
-ATLAS_DRAFT_MODEL="Qwen3-0.6B-Q8_0.gguf"
+# served-model-name on each vLLM instance — these are what code sends in
+# the "model" field of /v1/{chat,completions,embeddings} requests.
+ATLAS_GEN_MODEL_NAME="qwen3.5-9b"
+ATLAS_EMBED_MODEL_NAME="qwen3.5-9b-embed"
 
-# Context window size (tokens)
-# V3 uses --parallel 1 with 16384 context; set higher if using --parallel 2
-ATLAS_CONTEXT_LENGTH=40960
+# Generation instance: max concurrent requests + per-request context.
+# H100 80GB comfortably handles 32 concurrent slots at 32K each. Drop to
+# 4-8 slots on consumer 16GB cards.
+ATLAS_GEN_MAX_NUM_SEQS=32
+ATLAS_GEN_CTX_SIZE=32768
+ATLAS_GEN_GPU_MEM=0.55
 
-# GPU layers to offload (99 = all layers)
-ATLAS_GPU_LAYERS=99
+# Embed instance: smaller — Lens calls embed code snippets only, no long prompts.
+ATLAS_EMBED_MAX_NUM_SEQS=8
+ATLAS_EMBED_CTX_SIZE=4096
+ATLAS_EMBED_GPU_MEM=0.20
 
-# Parallel inference slots
-# V3 requires --parallel 1 (VRAM too tight for 2 draft KV contexts with self-embeddings)
-ATLAS_PARALLEL_SLOTS=1
-
-# Flash attention (recommended for better performance)
-ATLAS_FLASH_ATTENTION=true
+# Ports (default 8000 for gen, 8001 for embed).
+ATLAS_GEN_PORT=8000
+ATLAS_EMBED_PORT=8001
 
 #-------------------------------------------
 # Resource Limits
@@ -307,17 +312,12 @@ ATLAS_V3_SELECTION_STRATEGY="lens"
 ATLAS_V3_ENABLE_FEEDBACK=false
 
 #-------------------------------------------
-# Cache Manager — Proactive llama-server memory management
+# Cache Manager — DEPRECATED (llama-server only)
 #-------------------------------------------
-# Two-tier system: slot erase (fast, no downtime) + pod restart (slow, ~90s)
-# Run: python3 scripts/llama-cache-manager.py --daemon
-ATLAS_CACHE_MANAGER_ENABLED=true
-ATLAS_CACHE_MANAGER_SOFT_THRESHOLD_MB=8192
-ATLAS_CACHE_MANAGER_HARD_THRESHOLD_MB=10240
-ATLAS_CACHE_MANAGER_CHECK_INTERVAL_SEC=30
-ATLAS_CACHE_MANAGER_ERASE_COOLDOWN_SEC=60
-ATLAS_CACHE_MANAGER_RESTART_COOLDOWN_SEC=300
-ATLAS_CACHE_MANAGER_WARMUP_ENABLED=true
+# vLLM manages its KV cache internally via PagedAttention; the standalone
+# cache manager that ran against llama-server is no longer applicable.
+# Settings preserved here for reference only — no daemon to run.
+ATLAS_CACHE_MANAGER_ENABLED=false
 
 #-------------------------------------------
 # Advanced (usually don't change)

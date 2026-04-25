@@ -1,8 +1,13 @@
 """
-Tests for llama-server LLM inference service.
+Tests for the vLLM inference backend (gen + embed instances).
 
-Validates model loading, chat completions, streaming,
-and various generation parameters.
+Validates model loading, chat completions, streaming, generation
+parameters, and the dedicated /v1/embeddings instance the Geometric
+Lens depends on.
+
+Tests that probed llama.cpp-only endpoints (/props, /slots) are kept
+but skip silently when the endpoint isn't present (vLLM doesn't
+implement them).
 """
 
 import json
@@ -547,3 +552,77 @@ class TestLlamaStreamingAdvanced:
                     found_done = True
                     break
         assert found_done, "Streaming should end with [DONE]"
+
+
+
+class TestVllmEmbeddings:
+    """Tests for the dedicated vLLM embed instance.
+
+    These hit the embed-only process (port 8001 by default). The Geometric
+    Lens C(x) MLP depends on the 4096-dim hidden states this instance returns.
+    """
+
+    def test_embed_health(self, llama_embed_client: httpx.Client):
+        """Embed instance health endpoint should return 200."""
+        response = llama_embed_client.get("/health")
+        assert response.status_code == 200
+
+    def test_embed_returns_4096_dims(self, llama_embed_client: httpx.Client):
+        """Qwen3.5-9B in --task embed mode must return 4096-dim vectors.
+        The Lens C(x) MLP is trained on this dimensionality — anything
+        else means the Lens silently breaks."""
+        response = llama_embed_client.post(
+            "/v1/embeddings",
+            json={"model": "qwen3.5-9b-embed", "input": "def hello(): return 1"},
+            timeout=60.0,
+        )
+        assert response.status_code == 200, f"embeddings call failed: {response.text}"
+        data = response.json()
+        assert "data" in data and len(data["data"]) == 1
+        emb = data["data"][0]["embedding"]
+        assert isinstance(emb, list) and emb, "embedding should be a non-empty list"
+        assert len(emb) == 4096, f"expected 4096 dims, got {len(emb)}"
+        assert all(isinstance(v, (int, float)) for v in emb[:8])
+
+    def test_embed_batch_input(self, llama_embed_client: httpx.Client):
+        """Batched embeddings should return one vector per input, in order."""
+        inputs = ["alpha", "beta", "gamma"]
+        response = llama_embed_client.post(
+            "/v1/embeddings",
+            json={"model": "qwen3.5-9b-embed", "input": inputs},
+            timeout=60.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["data"]) == len(inputs)
+        # Each item should carry an explicit index 0..N-1.
+        indices = sorted(item.get("index", -1) for item in data["data"])
+        assert indices == list(range(len(inputs)))
+
+
+class TestVllmThinkingControl:
+    """Qwen3.5 dropped /think and /nothink soft commands. Verify the
+    chat_template_kwargs.enable_thinking knob works on the gen instance."""
+
+    def test_thinking_disabled_short_response(self, llama_client: httpx.Client):
+        """With thinking disabled the model should answer immediately
+        without emitting <think> blocks."""
+        response = llama_client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "What is 2+2? Answer with one digit."}],
+                "max_tokens": 32,
+                "temperature": 0,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            timeout=120.0,
+        )
+        assert response.status_code == 200, f"thinking-off call failed: {response.text}"
+        msg = response.json()["choices"][0]["message"]
+        content = msg.get("content", "") or ""
+        # vLLM with --reasoning-parser qwen3 puts thinking text in
+        # reasoning_content, not content. With thinking disabled,
+        # reasoning_content should be empty or None.
+        reasoning = msg.get("reasoning_content") or ""
+        assert "<think>" not in content, "leaked <think> in content"
+        assert reasoning == "" or reasoning is None, f"reasoning_content should be empty when disabled: {reasoning!r}"

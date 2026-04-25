@@ -64,6 +64,6 @@ baseline:
 hardware:
   gpu: "NVIDIA GeForce RTX 5060 Ti 16GB"
   vram_used: "~11 GB"
-  platform: "K3s cluster, llama-server container"
+  platform: "K3s cluster, vLLM container"
 
 estimated_time: "~60 hours (~12 min/task average with natural thinking)"

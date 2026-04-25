@@ -1,9 +1,10 @@
 services:
-  # --- LLM Inference (CUDA + grammar support) ---
-  llama-server:
-    build:
-      context: ./inference
-      dockerfile: Dockerfile.v31
+  # --- vLLM GEN instance (text generation, OpenAI-compatible) ---
+  # Serves /v1/chat/completions and /v1/completions for the runners and proxy.
+  # Uses --reasoning-parser qwen3 so thinking tokens land in `reasoning_content`
+  # and don't pollute the answer string.
+  vllm-gen:
+    image: vllm/vllm-openai:latest
     deploy:
       resources:
         reservations:
@@ -13,24 +14,70 @@ services:
               capabilities: [gpu]
     volumes:
       - ${ATLAS_MODELS_DIR:-./models}:/models:ro
+      - ${ATLAS_HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
     command: >
-      /llama-server
-      --model /models/${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}
-      --host 0.0.0.0 --port 8080
-      --ctx-size ${ATLAS_CTX_SIZE:-32768}
-      --n-gpu-layers 99
-      --no-mmap
+      --model ${ATLAS_MODEL_PATH:-/models/Qwen3.5-9B-AWQ}
+      --served-model-name ${ATLAS_GEN_MODEL_NAME:-qwen3.5-9b}
+      --host 0.0.0.0 --port 8000
+      --max-num-seqs ${ATLAS_GEN_MAX_NUM_SEQS:-32}
+      --max-model-len ${ATLAS_GEN_CTX_SIZE:-32768}
+      --gpu-memory-utilization ${ATLAS_GEN_GPU_MEM:-0.55}
+      --tensor-parallel-size 1
+      --enable-prefix-caching
+      --reasoning-parser qwen3
+      --trust-remote-code
+    environment:
+      - OMP_NUM_THREADS=4
     ports:
-      - "${ATLAS_LLAMA_PORT:-8080}:8080"
+      - "${ATLAS_GEN_PORT:-8000}:8000"
     ulimits:
       memlock: -1
       stack: 67108864
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 10
-      start_period: 120s
+      retries: 20
+      start_period: 240s
+    networks:
+      - atlas
+
+  # --- vLLM EMBED instance (4096-dim hidden states for the Lens) ---
+  # vLLM is single-task per process — runs alongside vllm-gen sharing the GPU.
+  # max_model_len is small (4096) because Lens calls only embed code snippets.
+  vllm-embed:
+    image: vllm/vllm-openai:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ${ATLAS_MODELS_DIR:-./models}:/models:ro
+      - ${ATLAS_HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+    command: >
+      --model ${ATLAS_MODEL_PATH:-/models/Qwen3.5-9B-AWQ}
+      --served-model-name ${ATLAS_EMBED_MODEL_NAME:-qwen3.5-9b-embed}
+      --task embed
+      --host 0.0.0.0 --port 8001
+      --max-num-seqs ${ATLAS_EMBED_MAX_NUM_SEQS:-8}
+      --max-model-len ${ATLAS_EMBED_CTX_SIZE:-4096}
+      --gpu-memory-utilization ${ATLAS_EMBED_GPU_MEM:-0.20}
+      --tensor-parallel-size 1
+      --trust-remote-code
+    ports:
+      - "${ATLAS_EMBED_PORT:-8001}:8001"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 240s
     networks:
       - atlas
 
@@ -39,20 +86,25 @@ services:
     build:
       context: ./geometric-lens
     environment:
-      - LLAMA_URL=http://llama-server:8080
-      - LLAMA_EMBED_URL=http://llama-server:8080
+      - LLAMA_GEN_URL=http://vllm-gen:8000
+      - LLAMA_EMBED_URL=http://vllm-embed:8001
+      - LLAMA_URL=http://vllm-gen:8000  # back-compat for code paths still reading LLAMA_URL
+      - LLAMA_GEN_MODEL=${ATLAS_GEN_MODEL_NAME:-qwen3.5-9b}
+      - LLAMA_EMBED_MODEL=${ATLAS_EMBED_MODEL_NAME:-qwen3.5-9b-embed}
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
     volumes:
       - lens-data:/data/projects
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
     ports:
-      - "${ATLAS_LENS_PORT:-8099}:8099"
+      - "${ATLAS_LENS_PORT:-31144}:31144"
     depends_on:
-      llama-server:
+      vllm-gen:
+        condition: service_healthy
+      vllm-embed:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:31144/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -65,14 +117,18 @@ services:
       context: .
       dockerfile: v3-service/Dockerfile
     environment:
-      - ATLAS_INFERENCE_URL=http://llama-server:8080
-      - ATLAS_LENS_URL=http://geometric-lens:8099
+      - LLAMA_GEN_URL=http://vllm-gen:8000
+      - LLAMA_EMBED_URL=http://vllm-embed:8001
+      - ATLAS_LENS_URL=http://geometric-lens:31144
       - ATLAS_SANDBOX_URL=http://sandbox:8020
-      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      - LLAMA_GEN_MODEL=${ATLAS_GEN_MODEL_NAME:-qwen3.5-9b}
+      - LLAMA_EMBED_MODEL=${ATLAS_EMBED_MODEL_NAME:-qwen3.5-9b-embed}
     ports:
       - "${ATLAS_V3_PORT:-8070}:8070"
     depends_on:
-      llama-server:
+      vllm-gen:
+        condition: service_healthy
+      vllm-embed:
         condition: service_healthy
       geometric-lens:
         condition: service_healthy
@@ -104,27 +160,27 @@ services:
       - atlas
 
   # --- ATLAS Proxy v2 (agent loop + grammar + Aider format) ---
-  # The proxy needs access to your project files for read_file, write_file, etc.
-  # Set ATLAS_PROJECT_DIR to your project path, or it defaults to the current directory.
   atlas-proxy:
     build:
       context: ./atlas-proxy
     environment:
       - ATLAS_PROXY_PORT=8090
-      - ATLAS_INFERENCE_URL=http://llama-server:8080
-      - ATLAS_LLAMA_URL=http://llama-server:8080
-      - ATLAS_LENS_URL=http://geometric-lens:8099
+      - LLAMA_GEN_URL=http://vllm-gen:8000
+      - LLAMA_EMBED_URL=http://vllm-embed:8001
+      - ATLAS_INFERENCE_URL=http://vllm-gen:8000  # back-compat
+      - ATLAS_LLAMA_URL=http://vllm-gen:8000  # back-compat
+      - ATLAS_LENS_URL=http://geometric-lens:31144
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_V3_URL=http://v3-service:8070
       - ATLAS_AGENT_LOOP=1
-      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      - LLAMA_GEN_MODEL=${ATLAS_GEN_MODEL_NAME:-qwen3.5-9b}
     volumes:
       - ${ATLAS_PROJECT_DIR:-.}:/workspace
     working_dir: /workspace
     ports:
       - "${ATLAS_PROXY_PORT:-8090}:8090"
     depends_on:
-      llama-server:
+      vllm-gen:
         condition: service_healthy
       geometric-lens:
         condition: service_healthy
