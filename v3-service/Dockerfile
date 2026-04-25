@@ -1,5 +1,11 @@
 FROM docker.io/python:3.11-slim
 
+# Unbuffered stdout/stderr so `docker logs` shows progress in real-time.
+# Without this, Python block-buffers when stdout is a pipe and the user
+# sees stale logs for seconds at a time.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
 # Install system deps

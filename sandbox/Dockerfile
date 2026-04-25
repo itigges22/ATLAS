@@ -1,5 +1,9 @@
 FROM docker.io/python:3.11-slim
 
+# Real-time logs from the sandbox executor.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
 # Install system dependencies and language runtimes

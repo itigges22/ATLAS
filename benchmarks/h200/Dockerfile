@@ -14,6 +14,11 @@
 FROM docker.io/nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
 # Ubuntu 22.04 ships Python 3.10 by default.
+# Real-time logs in `docker logs` / `kubectl logs` — without these, Python
+# block-buffers when stdout is a pipe and progress lines stall.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libgomp1 python3 python3-pip python3-dev \

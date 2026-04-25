@@ -1,5 +1,10 @@
 FROM docker.io/python:3.11-slim
 
+# Real-time logs in docker — without these, output stalls under pipe
+# buffering and `docker compose logs` shows stale Lens activity.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
 # Install curl for healthcheck
