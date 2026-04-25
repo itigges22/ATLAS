@@ -1029,7 +1029,10 @@ checking library from the IFEval paper (Zhou et al., 2023).
             prompts = prompts[:self.limit]
             print(f"[limit] Running {len(prompts)}/{total} tasks")
 
-        system_prompt = "/nothink\nFollow the instructions exactly as given."
+        # The system prompt for IFBench is inlined per-task at line ~1051;
+        # the previous module-level `system_prompt = "/nothink\nFollow ..."`
+        # was a Qwen2 holdover (the `/nothink` soft-command no longer works
+        # on Qwen3.5) AND was never read by the closure below.
 
         attempted = 0
         attempted_lock = threading.Lock()

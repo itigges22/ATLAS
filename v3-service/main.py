@@ -370,7 +370,10 @@ class V3PipelineService:
 
         if not probe_code:
             emit("probe_failed", "No code extracted from probe")
-            # Generate with /nothink
+            # Retry with the nothink budget tier — format_chatml prefills
+            # `<think>\n\n</think>\n\n` at the start of the assistant turn,
+            # which is the actual no-think mechanism on Qwen3.5 (the legacy
+            # `/nothink` soft-command was dropped by the model).
             chatml = self.budget_forcing.format_chatml(problem, "nothink")
             response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
             probe_code = extract_code(response)

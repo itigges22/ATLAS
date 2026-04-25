@@ -343,9 +343,12 @@ class SelfTestGen:
         )
 
         # Wrap in ChatML so LLMAdapter's Budget Forcing enforcement works.
-        # Without ChatML, the /nothink retry can't inject into the prompt
-        # (pattern mismatch on <|im_end|>\n<|im_start|>user), and the model
-        # burns all tokens on <think> with nothing left for test cases.
+        # The runtime detects budget exhaustion and re-issues the call with
+        # the nothink-tier `<think>\n\n</think>\n\n` assistant prefill (see
+        # benchmark/v3/budget_forcing.py:format_chatml). That prefill needs a
+        # well-formed ChatML envelope to splice into; without one, Qwen3.5
+        # would burn all tokens on a runaway <think> block with no test
+        # cases left in the response.
         prompt = (
             "<|im_start|>system\n"
             "You are an expert programmer generating test cases."
