@@ -102,7 +102,7 @@ check_models() {
 # LLM inference test
 check_llm_inference() {
     local response=$(curl -sf --max-time "$ATLAS_LLM_TIMEOUT" \
-        -X POST "http://localhost:${ATLAS_LLAMA_NODEPORT}/v1/chat/completions" \
+        -X POST "http://localhost:${ATLAS_VLLM_GEN_NODEPORT:-${ATLAS_LLAMA_NODEPORT}}/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d '{"messages":[{"role":"user","content":"Say hello"}],"max_tokens":10}' 2>/dev/null)
 
@@ -219,7 +219,7 @@ main() {
     # Service health endpoints - using NodePort values from config
     echo ""
     echo "Service Health:"
-    check_service "LLM Server" "http://localhost:${ATLAS_LLAMA_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "LLM Server" "http://localhost:${ATLAS_VLLM_GEN_NODEPORT:-${ATLAS_LLAMA_NODEPORT}}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "API Portal" "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "Geometric Lens" "http://localhost:${ATLAS_RAG_API_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "LLM Proxy" "http://localhost:${ATLAS_LLM_PROXY_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"

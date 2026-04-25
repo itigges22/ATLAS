@@ -98,7 +98,7 @@ class BenchmarkConfig:
           LLAMA_GEN_URL → vLLM gen instance (port 8000 by convention)
           LLAMA_URL     → legacy single-server fallback
           K8s service   → http://vllm-gen:8000 inside the cluster
-          NodePort      → http://localhost:{ATLAS_LLAMA_NODEPORT|8000}
+          NodePort      → http://localhost:{ATLAS_VLLM_GEN_NODEPORT|ATLAS_LLAMA_NODEPORT|8000}
         """
         url = os.environ.get("LLAMA_GEN_URL") or os.environ.get("LLAMA_URL")
         if url:
@@ -107,7 +107,9 @@ class BenchmarkConfig:
         if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
             return "http://vllm-gen:8000"
 
-        port = self._conf.get("ATLAS_LLAMA_NODEPORT", "8000")
+        # Prefer the new name; fall back to the old alias for back-compat.
+        port = (self._conf.get("ATLAS_VLLM_GEN_NODEPORT")
+                or self._conf.get("ATLAS_LLAMA_NODEPORT", "8000"))
         return f"http://localhost:{port}"
 
     @property

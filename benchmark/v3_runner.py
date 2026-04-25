@@ -93,13 +93,18 @@ from benchmark.v3.embedding_store import EmbeddingWriter
 # --- Constants ----------------------------------------------------------------
 
 RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
-# vLLM gen instance (port 8000 by default). Falls back to LLAMA_URL for backwards compat.
+# vLLM gen instance (port 8000 by default).
+# Resolution order (most-preferred first):
+#   LLAMA_GEN_URL                 — current name
+#   LLAMA_URL                     — legacy single-server fallback
+#   ATLAS_VLLM_GEN_NODEPORT       — current K3s NodePort name
+#   ATLAS_LLAMA_NODEPORT          — back-compat alias
+#   8000                          — final default
+_NODEPORT = (config._conf.get("ATLAS_VLLM_GEN_NODEPORT")
+             or config._conf.get("ATLAS_LLAMA_NODEPORT", "8000"))
 LLAMA_URL = os.environ.get(
     "LLAMA_GEN_URL",
-    os.environ.get(
-        "LLAMA_URL",
-        f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '8000')}",
-    ),
+    os.environ.get("LLAMA_URL", f"http://localhost:{_NODEPORT}"),
 )
 # Qwen3.5-9B published sampling for thinking-mode benchmarks.
 # Must stay identical between the baseline runner (benchmarks/v301_runner.py)
