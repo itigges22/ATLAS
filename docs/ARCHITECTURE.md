@@ -212,7 +212,7 @@ Legend: blue = generation, green = verification/selection, brown = repair.
 
 ### Phase Details
 
-**Phase 0: Probe** generates a single baseline candidate with progressive retry (light → standard → /nothink). Scored with C(x)/G(x) and tested in sandbox. If it passes, pipeline exits immediately.
+**Phase 0: Probe** generates a single baseline candidate with progressive retry (light → standard → nothink budget tier). Scored with C(x)/G(x) and tested in sandbox. If it passes, pipeline exits immediately.
 
 **Phase 1: Constraint-Driven Generation**
 
@@ -222,13 +222,13 @@ Legend: blue = generation, green = verification/selection, brown = repair.
 
 | Tier | Thinking Tokens | Wait Injection |
 |------|----------------|----------------|
-| nothink | 0 | /nothink prompt |
+| nothink | 0 | None (suppressed via prefill) |
 | light | 1,024 | None |
 | standard | 2,048 | If thinking ends < 512 tokens |
 | hard | 4,096 | If thinking ends < 1,024 tokens |
 | extreme | 8,192 | If thinking ends < 2,048 tokens |
 
-Wait injection appends "Wait, let me reconsider.\n" to force longer thinking. Tier selection driven by C(x) energy.
+Wait injection appends "Wait, let me reconsider.\n" to force longer thinking. The nothink tier suppresses reasoning via a `<think>\n\n</think>\n\n` assistant prefill (Qwen3.5 dropped the legacy `/nothink` soft-command, so the prefill is the only working mechanism). Tier selection driven by C(x) energy.
 
 **Phase 2: Verification and Selection**
 

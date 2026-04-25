@@ -1125,6 +1125,45 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_architecture_budget_forcing_table_matches_code():
+    """ARCHITECTURE.md's Budget Forcing tier table used to claim the nothink
+    tier injected `/nothink prompt` as a wait-injection — wrong on two counts:
+    (a) BUDGET_TIERS["nothink"] has inject_wait=False (no wait injection
+    happens for nothink, same as light), and (b) Qwen3.5 dropped the literal
+    `/nothink` soft-command anyway — the real suppression mechanism is the
+    `<think>\\n\\n</think>\\n\\n` assistant prefill emitted by format_chatml
+    when the tier is "nothink".
+
+    The Phase 0 probe paragraph also referenced the retry order as
+    `light → standard → /nothink`, where `/nothink` (slash-prefixed) read as
+    the deprecated soft-command rather than the budget-tier name.
+
+    Pin: the Budget Forcing table's nothink row must not promise a
+    `/nothink prompt` wait-injection, and Phase 0's retry order must not
+    use the slash-prefixed `/nothink` form."""
+    arch = (PROJECT_ROOT / "docs" / "ARCHITECTURE.md").read_text()
+    nothink_row_match = re.search(r"^\| nothink \| 0 \| (.+?) \|$", arch, re.MULTILINE)
+    assert nothink_row_match, (
+        "Budget Forcing table no longer has a 'nothink | 0 | ...' row in "
+        "the expected format — adapt the test if the table shape changed"
+    )
+    wait_cell = nothink_row_match.group(1)
+    assert "/nothink" not in wait_cell, (
+        "nothink row's Wait Injection cell still claims '/nothink prompt'; "
+        "the soft-command was dropped by Qwen3.5 and BUDGET_TIERS['nothink'] "
+        "has inject_wait=False — the cell should say 'None' (with optional "
+        "explanation that suppression is via prefill)"
+    )
+    # Phase 0 paragraph: tier list must not use the slash-prefixed form.
+    phase0_match = re.search(r"\*\*Phase 0: Probe\*\* generates.*?\.", arch, re.DOTALL)
+    assert phase0_match, "Could not locate the Phase 0 Probe paragraph"
+    phase0_text = phase0_match.group(0)
+    assert "/nothink" not in phase0_text, (
+        "Phase 0 retry order references the deprecated `/nothink` "
+        "soft-command — should be the unprefixed `nothink` tier name"
+    )
+
+
 def test_docs_have_no_pre_vllm_residue():
     """docs/CLI.md used to document an `ATLAS_LLAMA_BIN` env var pointing at
     `~/llama-cpp-mtp/build/bin/...`. Both the variable and the path are dead
