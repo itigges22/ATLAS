@@ -123,8 +123,10 @@ Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence r
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GEOMETRIC_LENS_ENABLED` | `false` | Enable C(x)/G(x) scoring. Docker Compose sets this to `true`. |
-| `LLAMA_URL` | `http://llama-service:8000` | vLLM endpoint. Docker Compose overrides to `http://vllm-gen:8000`. |
-| `LLAMA_EMBED_URL` | (falls back to LLAMA_URL) | Embedding endpoint. Set separately if using a dedicated embedding server. |
+| `LLAMA_GEN_URL` | `http://vllm-gen:8000` | vLLM gen instance for chat completions (Docker Compose service-name DNS). The Lens reads this first; `LLAMA_URL` is checked as a legacy fallback only. |
+| `LLAMA_EMBED_URL` | `http://vllm-embed:8001` | vLLM embed instance for `/v1/embeddings` (4096-dim hidden states). Always a separate process — vLLM serves only one task per instance. |
+| `LLAMA_GEN_MODEL` | `qwen3.5-9b` | `--served-model-name` of the gen instance. Must match what the gen container was started with. |
+| `LLAMA_EMBED_MODEL` | `qwen3.5-9b-embed` | `--served-model-name` of the embed instance. |
 | `PROJECT_DATA_DIR` | `/data/projects` | Directory for project index storage |
 | `REDIS_URL` | `redis://redis:6379` | Redis connection for confidence router and pattern cache. Features using Redis degrade gracefully if unavailable. |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8000` | Allowed CORS origins (comma-separated) |
