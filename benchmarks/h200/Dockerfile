@@ -22,12 +22,15 @@ RUN apt-get update && \
     && ln -sf /usr/bin/python3 /usr/bin/python
 
 # vLLM nightly (required for Qwen3.5 DeltaNet support — needs >=0.16.0rc2.dev447).
-# Pin to a known-good nightly to make builds reproducible; bump as needed.
+# Build reproducibility: pin to a known-good range. Override with --build-arg
+# VLLM_SPEC="vllm==0.17.x" to lock to a specific release once your validated
+# version is identified.
+ARG VLLM_SPEC="vllm>=0.17.0"
 RUN pip3 install --no-cache-dir -U \
         --pre \
         --index-url https://pypi.org/simple \
         --extra-index-url https://wheels.vllm.ai/nightly \
-        "vllm>=0.17.0"
+        "${VLLM_SPEC}"
 
 # Qwen3.5 needs a transformers build with the partial_rotary_factor fix.
 # Install from the upstream commit that the QuantTrio AWQ recipe was validated against,

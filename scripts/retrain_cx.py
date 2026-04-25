@@ -90,7 +90,7 @@ def collect_samples():
 
 
 def embed_samples(samples):
-    """Embed all code samples through llama-server."""
+    """Embed all code samples through vLLM embed instance."""
     embeddings = []
     labels = []
     total = len(samples)
@@ -266,7 +266,7 @@ def compute_auc(scores, labels):
 
 def main():
     print("=" * 60)
-    print("C(x) Cost Field Retraining — llama-server 9B Embeddings")
+    print("C(x) Cost Field Retraining — vLLM embed instance 9B Embeddings")
     print("=" * 60)
 
     # Step 1: Collect labeled code
@@ -289,8 +289,8 @@ def main():
     n_fail = sum(1 for s in samples if s["label"] == "FAIL")
     print(f"  After balancing: {len(samples)} samples ({n_pass} PASS, {n_fail} FAIL)")
 
-    # Step 2: Embed through llama-server
-    print("\n[2/4] Embedding through llama-server (this takes a few minutes)...")
+    # Step 2: Embed through vLLM embed instance
+    print("\n[2/4] Embedding through vLLM embed instance (this takes a few minutes)...")
     start = time.time()
     embeddings, labels = embed_samples(samples)
     elapsed = time.time() - start
@@ -305,7 +305,7 @@ def main():
             "embeddings": embeddings,
             "labels": labels,
             "dim": len(embeddings[0]),
-            "model": "Qwen3.5-9B (llama-server)",
+            "model": "Qwen3.5-9B (vLLM embed instance)",
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "n_pass": sum(1 for l in labels if l == "PASS"),
             "n_fail": sum(1 for l in labels if l == "FAIL"),
@@ -340,7 +340,7 @@ def main():
         "n_pass": sum(1 for l in labels if l == "PASS"),
         "n_fail": sum(1 for l in labels if l == "FAIL"),
         "dim": len(embeddings[0]),
-        "model": "Qwen3.5-9B (llama-server)",
+        "model": "Qwen3.5-9B (vLLM embed instance)",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     stats_path = os.path.join(MODELS_DIR, "retrain_stats.json")

@@ -11,10 +11,11 @@ model:
 pipeline:
   name: ATLAS V3.0.1
   mode: raw_pipeline
-  thinking: disabled (nothink via /completion endpoint)
+  thinking: disabled (chat_template_kwargs.enable_thinking=false)
   rationale: >
     12K+ questions — thinking mode infeasible (would take 1000+ hours).
-    Uses /completion with ChatML + /nothink prefix for speed.
+    Uses /v1/chat/completions with chat_template_kwargs.enable_thinking=false
+    (Qwen3.5 dropped /think /nothink soft commands in favor of this kwarg).
 
 sampling:
   temperature: 0.6

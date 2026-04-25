@@ -28,9 +28,9 @@ echo "Results: $RESULTS_DIR"
 echo ""
 
 # Check server health
-echo "Checking llama-server health..."
+echo "Checking vLLM gen instance health..."
 if ! curl -sf "$LLAMA_URL/health" > /dev/null 2>&1; then
-    echo "ERROR: llama-server not responding at $LLAMA_URL"
+    echo "ERROR: vLLM gen instance not responding at $LLAMA_URL"
     exit 1
 fi
 echo "Server OK"

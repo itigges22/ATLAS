@@ -3,14 +3,14 @@ import os
 ATLAS_DIR = os.environ.get("ATLAS_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 """Retrain Geometric Lens C(x) from V3 benchmark results.
 
-Harvests embeddings from the running llama-server for all tasks with code,
+Harvests embeddings from the running vLLM embed instance for all tasks with code,
 then trains C(x) using retrain_cost_field_bce.
 
 Usage:
     python3 scripts/retrain_lens_from_results.py [--results-dir DIR] [--llama-url URL]
 
 Needs:
-    - llama-server running with /embedding endpoint
+    - vLLM embed instance running with /embedding endpoint
     - V3 benchmark results with per-task JSON files (code + pass/fail)
     - torch (run inside geometric-lens container or a torch-enabled environment)
 """

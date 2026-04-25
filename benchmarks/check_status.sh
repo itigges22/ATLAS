@@ -29,11 +29,13 @@ done
 
 # Check model status
 echo "--- Infrastructure ---"
-health=$(curl -s http://localhost:32735/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "DOWN")
-echo "  llama-server: $health"
+GEN_URL="${LLAMA_GEN_URL:-${LLAMA_URL:-http://localhost:8000}}"
+EMBED_URL="${LLAMA_EMBED_URL:-http://localhost:8001}"
+gen=$(curl -s "$GEN_URL/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "DOWN")
+echo "  vllm-gen: $gen"
+
+embed=$(curl -s "$EMBED_URL/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "DOWN")
+echo "  vllm-embed: $embed"
 
 sandbox=$(curl -s http://localhost:30820/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "DOWN")
 echo "  sandbox: $sandbox"
-
-slot=$(curl -s http://localhost:32735/slots 2>/dev/null | python3 -c "import sys,json; s=json.load(sys.stdin)[0]; print(f'processing={s.get(\"is_processing\",False)}')" 2>/dev/null || echo "N/A")
-echo "  slot: $slot"
