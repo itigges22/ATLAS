@@ -376,8 +376,11 @@ func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) b
 func buildSystemPrompt(ctx *AgentContext) string {
 	var sb strings.Builder
 
-	// /nothink suppresses Qwen3.5's <think> mode — critical for JSON output
-	sb.WriteString("/nothink\nYou are ATLAS, a coding assistant that creates and modifies code by calling tools. ")
+	// Thinking is disabled at the request layer (forwardToFox sets
+	// chat_template_kwargs.enable_thinking=false), so the system prompt no
+	// longer needs the deprecated /nothink soft-command — Qwen3.5 dropped
+	// support for it and would just tokenize it as plain text.
+	sb.WriteString("You are ATLAS, a coding assistant that creates and modifies code by calling tools. ")
 	sb.WriteString("You have access to the filesystem and can run commands to verify your work.\n")
 	sb.WriteString("You MUST respond with ONLY a single valid JSON object, no other text.\n\n")
 

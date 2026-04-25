@@ -108,6 +108,12 @@ type ChatRequest struct {
 	Temperature float64       `json:"temperature,omitempty"`
 	Stream      bool          `json:"stream,omitempty"`
 	Stop        []string      `json:"stop,omitempty"`
+
+	// vLLM-specific. Qwen3.5 dropped the /think and /nothink soft commands;
+	// thinking is now controlled via chat_template_kwargs.enable_thinking.
+	// Pointer-to-bool so the zero value omits cleanly via omitempty (a plain
+	// bool can't distinguish "false" from "unset" for back-compat backends).
+	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
 }
 
 type ChatChoice struct {
@@ -377,18 +383,18 @@ func buildRepairPrompt(code string, analysis ErrorAnalysis, attempt int) string 
 func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	req.Model = modelName
 
-	// Inject /nothink into the LAST user message (not necessarily the last message)
-	// to prevent Qwen3.5 from wasting tokens on <think> blocks
-	if len(req.Messages) > 0 {
-		for i := len(req.Messages) - 1; i >= 0; i-- {
-			if req.Messages[i].Role == "user" && !strings.Contains(req.Messages[i].Content, "/nothink") {
-				req.Messages[i] = ChatMessage{
-					Role:    "user",
-					Content: "/nothink\n" + req.Messages[i].Content,
-				}
-				break
-			}
-		}
+	// Disable thinking via chat_template_kwargs (Qwen3.5 + vLLM 0.17+).
+	// The deprecated /nothink soft-command no longer works on Qwen3.5 — vLLM
+	// would emit <think> blocks that we'd then strip in postprocessing,
+	// wasting hundreds of tokens per call. Setting enable_thinking=false in
+	// chat_template_kwargs makes the Jinja chat template produce the closed
+	// <think></think> prefix server-side, so the model never enters reasoning.
+	// Caller-supplied kwargs win — JSON-mode call sites can still pass
+	// enable_thinking=true for cases where reasoning output is wanted.
+	if req.ChatTemplateKwargs == nil {
+		req.ChatTemplateKwargs = map[string]interface{}{"enable_thinking": false}
+	} else if _, ok := req.ChatTemplateKwargs["enable_thinking"]; !ok {
+		req.ChatTemplateKwargs["enable_thinking"] = false
 	}
 
 	body, _ := json.Marshal(req)
@@ -1750,7 +1756,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 					Model: modelName,
 					Messages: []ChatMessage{
 						{Role: "system", Content: "You create single files. Return the file in the exact format requested."},
-						{Role: "user", Content: "/nothink\n" + singlePrompt},
+						{Role: "user", Content: singlePrompt},
 					},
 					MaxTokens:   4096,
 					Temperature: 0.3,
@@ -1801,8 +1807,10 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	// This ensures Aider sees properly formatted whole-file output
 	if tier >= Tier1Simple {
 		log.Printf("  buffered generation for format-repair...")
-		// Deep-copy messages so forwardToFox's /nothink injection doesn't
-		// mutate the original req.Messages (needed for filename extraction later)
+		// Deep-copy messages so any in-flight mutation by forwardToFox doesn't
+		// leak back to the original req.Messages (needed for filename extraction
+		// later). Thinking is now disabled via chat_template_kwargs, not by
+		// rewriting message content, but keeping the copy is still cheap insurance.
 		bufMsgs := make([]ChatMessage, len(req.Messages))
 		copy(bufMsgs, req.Messages)
 		bufReq := req
@@ -1901,7 +1909,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 				reformatReq := ChatRequest{
 					Model: modelName,
 					Messages: []ChatMessage{
-						{Role: "user", Content: fmt.Sprintf("/nothink\nReformat this code as a file listing. Output ONLY this exact format:\n%s\n```%s\n<the code>\n```\n\nHere is the code to reformat:\n%s", userHintFilename, lang, content)},
+						{Role: "user", Content: fmt.Sprintf("Reformat this code as a file listing. Output ONLY this exact format:\n%s\n```%s\n<the code>\n```\n\nHere is the code to reformat:\n%s", userHintFilename, lang, content)},
 					},
 					MaxTokens: 4096, Temperature: 0, Stream: false,
 				}
@@ -1974,7 +1982,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 					break
 				}
 				correction := fmt.Sprintf(
-					"/nothink\nThis code is missing %s. Add it to the code below and return the COMPLETE updated file.\n\nRequirements:\n- %s\n- import json at the top\n- Use json.dump() to save and json.load() to read\n- Use open() for file I/O\n\nExisting code:\n```\n%s\n```\n\nReturn the complete updated file with the feature added.",
+					"This code is missing %s. Add it to the code below and return the COMPLETE updated file.\n\nRequirements:\n- %s\n- import json at the top\n- Use json.dump() to save and json.load() to read\n- Use open() for file I/O\n\nExisting code:\n```\n%s\n```\n\nReturn the complete updated file with the feature added.",
 					featureMissing, featureUserMsg, existingCode,
 				)
 				retryReq := ChatRequest{
