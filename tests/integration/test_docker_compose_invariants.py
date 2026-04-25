@@ -296,6 +296,32 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_v3_service_dockerfile_has_no_unused_heavy_deps():
+    """v3-service is a thin stdlib http.server front-end for the V3 pipeline
+    modules. None of those modules import torch, numpy, or any ML lib — they
+    only marshal text through vLLM. Earlier iterations of this Dockerfile
+    installed the ~2 GiB torch CPU wheel, slowing `docker compose build` by
+    minutes and ballooning the image.
+
+    Pin: this Dockerfile must NOT install torch (or numpy/scipy). If a future
+    feature genuinely needs them, the test should be updated alongside the
+    real change so the cost is visible at PR review time."""
+    df = (PROJECT_ROOT / "v3-service" / "Dockerfile").read_text()
+    forbidden = ["torch", "numpy", "scipy", "tensorflow"]
+    for dep in forbidden:
+        # Allow the dep name in comments (the rationale lives there) — only
+        # block actual `pip install` lines that would pull it.
+        for line in df.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if "pip install" in stripped:
+                assert dep not in stripped, (
+                    f"v3-service/Dockerfile must not pip-install {dep}; nothing in "
+                    "v3-service or benchmark/v3 actually imports it"
+                )
+
+
 def test_atlas_proxy_applies_vllm_defaults_to_all_chat_posts():
     """The atlas-proxy has three places that POST to /v1/chat/completions:
     `forwardToFox` (the canonical helper), the spec generator, and the
