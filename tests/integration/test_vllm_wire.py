@@ -574,6 +574,34 @@ def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     assert body["input"] == ["a", "b"]
 
 
+def test_budget_forcing_nothink_prompt_has_no_dead_soft_command():
+    """`benchmark/v3/budget_forcing.py:_SYSTEM_PROMPT_NOTHINK` had a literal
+    `/nothink` suffix carried over from the llama.cpp era. Qwen3.5 dropped
+    soft-command support, so the suffix is dead text — ~3 wasted prompt
+    tokens with no effect on reasoning. The actual no-think mechanism on
+    Qwen3.5 is the assistant `<think>\\n\\n</think>\\n\\n` prefill in
+    format_chatml(). Pin: the system prompt must not end with `/nothink`."""
+    sys.path.insert(0, str(PROJECT_ROOT))
+    if "benchmark.v3.budget_forcing" in sys.modules:
+        del sys.modules["benchmark.v3.budget_forcing"]
+    from benchmark.v3 import budget_forcing as bf
+
+    assert "/nothink" not in bf._SYSTEM_PROMPT_NOTHINK, (
+        "_SYSTEM_PROMPT_NOTHINK must not end with the dead `/nothink` "
+        "soft-command — Qwen3.5 ignores it. Disable thinking via the "
+        "format_chatml `<think></think>` assistant prefill instead."
+    )
+
+    # The format_chatml nothink path must still pre-fill the closed think
+    # block (that's what actually disables reasoning on Qwen3.5).
+    bf_inst = bf.BudgetForcing(bf.BudgetForcingConfig(enabled=True))
+    chatml = bf_inst.format_chatml("hi", "nothink")
+    assert "<think>\n\n</think>\n\n" in chatml, (
+        "format_chatml(\"nothink\") must still emit the closed-think "
+        "prefill — that's the actual no-think mechanism on Qwen3.5"
+    )
+
+
 def test_v3_llm_adapter_parallel_default_for_vllm(monkeypatch):
     """`ATLAS_LLM_PARALLEL=1` is the correct default for vLLM deploys: the
     DeltaNet multi-slot hang that motivated the lock under llama.cpp doesn't

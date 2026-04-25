@@ -244,8 +244,10 @@ class LLMAdapter:
 
     Budget Forcing enforcement: if the model's <think> block consumes >80%
     of the token budget and no useful output remains, the call is retried
-    with /nothink injected into the prompt. This prevents infinite reasoning
-    from starving code generation.
+    with the nothink tier (assistant `<think>\n\n</think>\n\n` prefill, see
+    benchmark/v3/budget_forcing.py:format_chatml). This prevents infinite
+    reasoning from starving code generation. The deprecated `/nothink`
+    soft-command from llama.cpp is *not* used — Qwen3.5 dropped support.
 
     Request serialization: DeltaNet hybrid architecture (Qwen3.5-9B) hangs
     when multiple slots generate simultaneously via cont-batching. A class-level
@@ -417,7 +419,8 @@ class LLMAdapter:
         # in <think>...</think> tags naturally. Strip them to get clean code.
         content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
 
-        # Handle orphaned </think> (from nothink pre-fill or partial output)
+        # Handle orphaned </think> from the nothink-tier `<think>\n\n</think>\n\n`
+        # prefill (or from a response truncated mid-thinking).
         if '</think>' in content and '<think>' not in content:
             content = content[content.index('</think>') + len('</think>'):].strip()
 

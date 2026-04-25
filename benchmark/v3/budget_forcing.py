@@ -8,11 +8,17 @@ Config: [budget_forcing] in atlas.conf
 Telemetry: telemetry/budget_forcing_events.jsonl
 
 Budget Tiers:
-  nothink  — 0 thinking tokens, /nothink system prompt
+  nothink  — 0 thinking tokens, suppressed via assistant `<think>\n\n</think>\n\n` prefill
   light    — up to 1024 thinking tokens, no Wait injection
   standard — up to 2048 thinking tokens, Wait at <512
   hard     — up to 4096 thinking tokens, Wait at <1024
   extreme  — up to 8192 thinking tokens, Wait at <2048
+
+  Qwen3.5 dropped the /think and /nothink soft-commands — Budget Forcing
+  no longer injects them. The nothink tier disables reasoning by
+  prefilling a closed think block (`<think>\n\n</think>\n\n`) at the start
+  of the assistant turn (see format_chatml below); the model then resumes
+  generation outside the think block and emits answer text directly.
 
 Energy-to-tier mapping uses normalized Lens energy (sigmoid scale 0-1):
   energy < 0.10 → nothink  (easy, don't waste tokens)
@@ -81,9 +87,13 @@ BUDGET_TIERS: Dict[str, Dict] = {
 
 VALID_TIERS = frozenset(BUDGET_TIERS.keys())
 
-# System prompts per tier category
+# System prompts per tier category. The actual no-think mechanism on
+# Qwen3.5 is the `<think>\n\n</think>\n\n` assistant prefill in
+# format_chatml() — the system prompt no longer carries a `/nothink`
+# soft-command (Qwen3.5 dropped support for it, so any literal `/nothink`
+# string here would just consume ~3 tokens with no effect on reasoning).
 _SYSTEM_PROMPT_NOTHINK = (
-    "You are an expert programmer. Respond directly and concisely. /nothink"
+    "You are an expert programmer. Respond directly and concisely."
 )
 _SYSTEM_PROMPT_THINK = (
     "You are an expert programmer. Think step by step about the problem "
