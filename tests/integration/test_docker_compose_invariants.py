@@ -1502,6 +1502,38 @@ def test_docs_do_not_link_to_deleted_scripts_or_dirs():
         )
 
 
+def test_check_status_sh_tolerates_empty_vllm_health_body():
+    """`benchmarks/check_status.sh` had the same root cause as stages
+    113/114: it piped `curl -s {GEN,EMBED}_URL/health` into
+    `python3 -c "import json; print(json.load(sys.stdin).get('status','?'))"`.
+    vLLM `/health` returns 200 with an empty body, so `json.load`
+    raises JSONDecodeError and the `|| echo DOWN` fallback fires —
+    healthy vLLM gen + embed both report as `DOWN` on every run.
+
+    Pin: the `vllm-gen` / `vllm-embed` probes in `check_status.sh`
+    must not pipe `/health` through `json.load`. A `curl -sf` exit-
+    code check is the right primitive."""
+    src = (PROJECT_ROOT / "benchmarks" / "check_status.sh").read_text()
+    # Locate the infrastructure block.
+    infra_match = re.search(
+        r"--- Infrastructure ---.*?(?=\Z)",
+        src,
+        re.DOTALL,
+    )
+    assert infra_match, "Could not locate the Infrastructure block in check_status.sh"
+    infra = infra_match.group(0)
+    assert "json.load(sys.stdin)" not in infra, (
+        "check_status.sh Infrastructure block still pipes /health "
+        "through `json.load` — vLLM returns empty 200, this would "
+        "JSONDecodeError and report healthy services as DOWN"
+    )
+    # Positive: it must use curl-based status check.
+    assert "curl -sf" in infra, (
+        "check_status.sh Infrastructure block must use `curl -sf` "
+        "for readiness probes (status-code only)"
+    )
+
+
 def test_atlas_cli_check_llama_tolerates_empty_vllm_health_body():
     """Same root cause as `test_v3_runner_preflight_tolerates_empty_vllm_health_body`,
     different surface: `atlas/cli/client.py:check_llama` used to call

@@ -27,15 +27,24 @@ for section in benchmarks/section_*/; do
     echo ""
 done
 
-# Check model status
+# Check model status. vLLM `/health` returns 200 with an EMPTY body
+# (it's a readiness probe, not a structured status report) so don't
+# try to json.load — that would JSONDecodeError on every healthy
+# stack and falsely report DOWN. Just check HTTP success via curl -sf.
+# Sandbox + Lens are FastAPI services that DO return JSON, but we
+# only need readiness here, so the same approach is fine.
 echo "--- Infrastructure ---"
 GEN_URL="${LLAMA_GEN_URL:-${LLAMA_URL:-http://localhost:8000}}"
 EMBED_URL="${LLAMA_EMBED_URL:-http://localhost:8001}"
-gen=$(curl -s "$GEN_URL/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "DOWN")
-echo "  vllm-gen: $gen"
 
-embed=$(curl -s "$EMBED_URL/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "DOWN")
-echo "  vllm-embed: $embed"
+probe() {
+    if curl -sf --max-time 2 "$1/health" >/dev/null 2>&1; then
+        echo "UP"
+    else
+        echo "DOWN"
+    fi
+}
 
-sandbox=$(curl -s http://localhost:30820/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "DOWN")
-echo "  sandbox: $sandbox"
+echo "  vllm-gen: $(probe "$GEN_URL")"
+echo "  vllm-embed: $(probe "$EMBED_URL")"
+echo "  sandbox: $(probe http://localhost:30820)"
