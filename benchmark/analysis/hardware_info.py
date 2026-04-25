@@ -205,13 +205,29 @@ def get_model_info() -> Dict[str, str]:
         Dictionary with model name and quantization
     """
     model_name = config.model_name
+    # Also consult the model PATH if configured — vLLM's served-model-name
+    # is typically a short alias (`qwen3.5-9b`) that drops the quantization
+    # suffix, but the path on disk (`/models/Qwen3.5-9B-AWQ`) keeps it.
+    model_path = (os.environ.get("ATLAS_MODEL_PATH")
+                  or os.environ.get("MODEL_PATH")
+                  or "")
+    haystack = f"{model_name} {model_path}"
     quantization = ""
 
-    # Extract quantization from model filename
-    # e.g., "Qwen3.5-9B-Q6_K.gguf" -> "Q6_K"
-    match = re.search(r'(Q\d+_K(?:_[A-Z])?)', model_name, re.IGNORECASE)
-    if match:
-        quantization = match.group(1).upper()
+    # AWQ family (vLLM-native, the V3.0.1+ default — `Qwen3.5-9B-AWQ` etc.).
+    if re.search(r'\b[Aa][Ww][Qq]\b', haystack):
+        # AWQ shipped builds default to 4-bit; surface that explicitly.
+        quantization = "AWQ-Q4"
+    # GPTQ family.
+    elif re.search(r'\bGPTQ\b', haystack, re.IGNORECASE):
+        quantization = "GPTQ"
+    # GGUF k-quants (legacy llama.cpp builds — `Qwen3.5-9B-Q6_K.gguf`).
+    elif (m := re.search(r'(Q\d+_K(?:_[A-Z])?)', haystack, re.IGNORECASE)):
+        quantization = m.group(1).upper()
+    # FP8 / FP16 / BF16 — common when running a checkpoint without a quant
+    # suffix (vLLM's --dtype default is `auto`, often picking BF16).
+    elif (m := re.search(r'\b(FP8|FP16|BF16)\b', haystack, re.IGNORECASE)):
+        quantization = m.group(1).upper()
 
     return {
         "name": model_name,

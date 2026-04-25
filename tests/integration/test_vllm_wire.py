@@ -574,6 +574,53 @@ def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     assert body["input"] == ["a", "b"]
 
 
+def test_hardware_info_detects_awq_quantization(monkeypatch):
+    """`benchmark/analysis/hardware_info.py:get_model_info` previously only
+    extracted GGUF k-quants from the model name (`Q6_K`, `Q4_K_M`). After
+    the vLLM cutover, the served-model-name is a short alias like
+    `qwen3.5-9b` — no suffix — so the regex never matched and benchmark
+    reports always wrote `quantization=""`. Stage 94 added detection for
+    the AWQ / GPTQ / FP8 / FP16 families and consulted ATLAS_MODEL_PATH
+    (which keeps the suffix even when the served-name doesn't). Verify
+    each path."""
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+    # Reload to pick up monkeypatches.
+    import importlib
+    if "benchmark.config" in sys.modules:
+        del sys.modules["benchmark.config"]
+    if "benchmark.analysis.hardware_info" in sys.modules:
+        del sys.modules["benchmark.analysis.hardware_info"]
+    from benchmark.analysis import hardware_info as hi
+
+    cases = [
+        # (env LLAMA_GEN_MODEL, env ATLAS_MODEL_PATH, expected quantization)
+        ("qwen3.5-9b", "/models/Qwen3.5-9B-AWQ", "AWQ-Q4"),
+        ("qwen3.5-9b-AWQ", "", "AWQ-Q4"),
+        ("Qwen3.5-9B-Q6_K", "", "Q6_K"),
+        ("Qwen3.5-9B-Q4_K_M.gguf", "", "Q4_K_M"),
+        ("DeepSeek-Coder-GPTQ", "", "GPTQ"),
+        ("Qwen2.5-Coder-FP8", "", "FP8"),
+        # No quantization markers anywhere → empty (no false positive).
+        ("qwen3.5-9b", "", ""),
+    ]
+    for model_name, model_path, expected in cases:
+        monkeypatch.setenv("LLAMA_GEN_MODEL", model_name)
+        if model_path:
+            monkeypatch.setenv("ATLAS_MODEL_PATH", model_path)
+        else:
+            monkeypatch.delenv("ATLAS_MODEL_PATH", raising=False)
+        # Reset the cached config since model_name reads it.
+        if "benchmark.config" in sys.modules:
+            importlib.reload(sys.modules["benchmark.config"])
+        importlib.reload(hi)
+        info = hi.get_model_info()
+        assert info["quantization"] == expected, (
+            f"model={model_name!r} path={model_path!r}: expected "
+            f"quantization={expected!r}, got {info['quantization']!r}"
+        )
+
+
 def test_budget_forcing_nothink_prompt_has_no_dead_soft_command():
     """`benchmark/v3/budget_forcing.py:_SYSTEM_PROMPT_NOTHINK` had a literal
     `/nothink` suffix carried over from the llama.cpp era. Qwen3.5 dropped
