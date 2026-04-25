@@ -126,14 +126,14 @@ ATLAS_EMBED_PORT=8001  # vLLM embed インスタンス (デフォルト 8001)
 
 ### モデルが GPU ではなく CPU で読み込まれている
 
-**症状:** 約 50 tok/s ではなく約 2 tok/s で生成される。`nvidia-smi` で vLLM が GPU を使用していない。
+**症状:** 1 桁の tok/s しか出ない、`nvidia-smi` で vLLM が GPU プロセスとして表示されない。
 
-**修正:** `--n-gpu-layers 99` が設定されていることを確認してください (全レイヤーを GPU にオフロード)。Docker Compose ではこれがデフォルトです。ベアメタルの場合、コマンドを確認してください:
-```bash
-ps aux | grep vLLM | grep 'n-gpu-layers'
-```
+**修正:** vLLM は GPU を自動的に拾います -- `--n-gpu-layers` というつまみは存在しません。`--gpu-memory-utilization` で実用的なスライスを確保すれば、すべてのレイヤーが GPU に乗ります。それでも遅い場合は (順番に) 確認:
 
-Docker を使用している場合、NVIDIA コンテナランタイムが設定されていることを確認してください (上記の GPU セクションを参照)。
+1. `nvidia-smi` で `python3` (vllm) プロセスが GPU プロセスリストに表示されるか? 表示されない場合、コンテナが GPU を見えていません。`nvidia-container-toolkit` がインストールされ、ランタイムが `nvidia` になっているか確認してください。
+2. `docker logs vllm-gen | grep -i 'cpu\|device'` で起動時のデバイス選択を確認。「Falling back to CPU」が出ていれば GPU は見えていたが拒否された (ドライバーが古い、compute capability が低い、またはこのアーキテクチャで量子化が非サポート)。
+3. 並列度: vLLM の PagedAttention は同時リクエストでスケールします。`ATLAS_LLM_PARALLEL=0` または `ATLAS_GEN_MAX_NUM_SEQS=1` だと事実上シングルスロット -- 両方を上げてください。
+4. KV キャッシュページング: `nvidia-smi` の VRAM が 100% でもスループットが低い → KV キャッシュがシステム RAM にページング中。`ATLAS_GEN_CTX_SIZE` (デフォルト 32768) または `ATLAS_GEN_MAX_NUM_SEQS` を下げて VRAM の余裕を確保。
 
 ### モデルファイルが見つからない
 
@@ -450,14 +450,16 @@ ls -la .aider.model.settings.yml .aider.model.metadata.json
 
 ## パフォーマンス
 
-### 生成が遅い (約 2 tok/s)
+### 生成が遅い (1 桁の tok/s)
 
-モデルが GPU ではなく CPU で実行されています。以下を確認してください:
-1. `nvidia-smi` -- vLLM が GPU プロセスとして表示されているか?
-2. `--n-gpu-layers 99` -- すべてのレイヤーがオフロードされているか?
-3. NVIDIA Container Toolkit -- コンテナランタイムが GPU アクセス用に設定されているか?
+vLLM は GPU を自動的に拾います -- `--n-gpu-layers` というつまみは存在せず、`--gpu-memory-utilization` で実用的なスライスを確保すれば全レイヤーが GPU に乗ります。それでも遅い場合は (順番に) 確認してください:
 
-**想定パフォーマンス:** RTX 5060 Ti 16GB で文法強制時に約 51 tok/s。
+1. `nvidia-smi` -- `python3` (vllm) プロセスが GPU プロセスリストに表示されているか? 表示されない場合、コンテナが GPU を見えていません (`nvidia-container-toolkit` がインストール済みでランタイムが `nvidia` か確認)。
+2. `docker logs vllm-gen | grep -i 'cpu\|device'` -- 起動時に vLLM が使用するデバイスをログ出力します。「Falling back to CPU」が出ていれば GPU は見えていたが拒否された (ドライバーが古い、compute capability が低い、量子化が非サポート)。
+3. 並列度: vLLM の PagedAttention は同時リクエストでスケールします。`ATLAS_LLM_PARALLEL=0` または `ATLAS_GEN_MAX_NUM_SEQS=1` だと事実上シングルスロット -- 両方を上げてください。
+4. KV キャッシュページング: `nvidia-smi` の VRAM が 100% でもスループットが低い → KV キャッシュがシステム RAM にページング中。`ATLAS_GEN_CTX_SIZE` (デフォルト 32768) または `ATLAS_GEN_MAX_NUM_SEQS` を下げて VRAM の余裕を確保。
+
+**想定パフォーマンス:** vLLM AWQ-Q4 のスループットは並列度・プロンプト長・量子化アーキ (Qwen3.5 DeltaNet ハイブリッドカーネルは初回リクエスト時に Triton コンパイルされる) で大きく変動するため、信頼できる単一の数値はありません。`benchmark/measure_bok_latency.sh` でご自身のワークロードを計測してください。
 
 ### V3 パイプラインに数分かかる
 

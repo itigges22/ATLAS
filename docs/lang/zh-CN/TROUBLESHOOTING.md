@@ -126,14 +126,14 @@ ATLAS_EMBED_PORT=8001  # vLLM embed 实例（默认 8001）
 
 ### 模型在 CPU 而非 GPU 上加载
 
-**现象：** 生成速度约 2 tok/s 而非约 50 tok/s。`nvidia-smi` 未显示 vLLM 使用 GPU。
+**现象：** 生成速度只有个位数 tok/s，且 `nvidia-smi` 未将 vLLM 列为 GPU 进程。
 
-**解决方法：** 确保设置了 `--n-gpu-layers 99`（将所有层卸载到 GPU）。Docker Compose 中这是默认设置。裸机部署时，请检查启动命令：
-```bash
-ps aux | grep vLLM | grep 'n-gpu-layers'
-```
+**解决方法：** vLLM 会自动使用 GPU -- 不存在 `--n-gpu-layers` 这个开关，只要 `--gpu-memory-utilization` 保留了可用的切片，所有层都会落到 GPU 上。如果仍然慢，请按顺序检查：
 
-如果使用 Docker，请确保已配置 NVIDIA 容器运行时（参见上方 GPU 章节）。
+1. `nvidia-smi` 中 `python3`（vllm）进程是否出现在 GPU 进程列表里？如果没有，说明容器无法看到 GPU。请确认安装了 `nvidia-container-toolkit` 并将运行时设置为 `nvidia`。
+2. `docker logs vllm-gen | grep -i 'cpu\|device'` 检查启动时的设备选择。如果出现 "Falling back to CPU"，说明 GPU 可见但被拒绝（驱动太旧、compute capability 太低，或该架构不支持当前量化）。
+3. 并发：vLLM 的 PagedAttention 随并发请求扩展。如果设置了 `ATLAS_LLM_PARALLEL=0` 或 `ATLAS_GEN_MAX_NUM_SEQS=1`，相当于单 slot 运行 -- 同时调高这两项。
+4. KV 缓存换页：`nvidia-smi` 显示 VRAM 100% 但吞吐很低 → KV 缓存正在被换出到系统 RAM。降低 `ATLAS_GEN_CTX_SIZE`（默认 32768）或 `ATLAS_GEN_MAX_NUM_SEQS`，直到 VRAM 留出余量。
 
 ### 模型文件未找到
 
@@ -450,14 +450,16 @@ ls -la .aider.model.settings.yml .aider.model.metadata.json
 
 ## 性能问题
 
-### 生成速度慢（约 2 tok/s）
+### 生成速度慢（个位数 tok/s）
 
-模型正在 CPU 而非 GPU 上运行。请检查：
-1. `nvidia-smi` - vLLM 是否列为 GPU 进程？
-2. `--n-gpu-layers 99` - 所有层是否已卸载到 GPU？
-3. NVIDIA Container Toolkit - 容器运行时是否已配置 GPU 访问？
+vLLM 会自动使用 GPU -- 不存在 `--n-gpu-layers` 这个开关，只要 `--gpu-memory-utilization` 保留了可用的切片，所有层都会落到 GPU 上。如果仍然慢，请按顺序检查：
 
-**预期性能：** 在 RTX 5060 Ti 16GB 上启用语法强制执行时约 51 tok/s。
+1. `nvidia-smi` -- `python3`（vllm）进程是否出现在 GPU 进程列表里？如果没有，说明容器看不到 GPU（确认安装了 `nvidia-container-toolkit` 并将运行时设置为 `nvidia`）。
+2. `docker logs vllm-gen | grep -i 'cpu\|device'` -- 启动时 vLLM 会记录使用的设备。出现 "Falling back to CPU" 表示 GPU 可见但被拒绝（驱动太旧、compute capability 低、该架构不支持量化）。
+3. 并发：vLLM 的 PagedAttention 随并发请求扩展。如果设置了 `ATLAS_LLM_PARALLEL=0` 或 `ATLAS_GEN_MAX_NUM_SEQS=1`，相当于单 slot 运行 -- 同时调高这两项。
+4. KV 缓存换页：`nvidia-smi` 显示 VRAM 100% 但吞吐很低 → KV 缓存正在被换出到系统 RAM。降低 `ATLAS_GEN_CTX_SIZE`（默认 32768）或 `ATLAS_GEN_MAX_NUM_SEQS`，直到 VRAM 留出余量。
+
+**预期性能：** vLLM AWQ-Q4 吞吐量随并发度、提示长度和量化架构（Qwen3.5 DeltaNet 混合内核在首次请求时由 Triton 编译）大幅波动 -- 没有诚实的单一数字可以引用。请用 `benchmark/measure_bok_latency.sh` 测量自己的工作负载。
 
 ### V3 Pipeline 需要几分钟
 

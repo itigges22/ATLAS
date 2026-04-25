@@ -126,14 +126,14 @@ ATLAS_EMBED_PORT=8001  # vLLM embed 인스턴스 (기본 8001)
 
 ### 모델이 GPU 대신 CPU에서 로드됨
 
-**증상:** 약 50 tok/s 대신 약 2 tok/s로 생성됩니다. `nvidia-smi`에서 vLLM가 GPU를 사용하지 않는 것으로 표시됩니다.
+**증상:** 한 자릿수 tok/s만 나오고, `nvidia-smi`에 vLLM가 GPU 프로세스로 표시되지 않음.
 
-**해결:** `--n-gpu-layers 99`가 설정되어 있는지 확인하십시오 (모든 레이어를 GPU로 오프로드합니다). Docker Compose에서는 기본값입니다. 베어메탈의 경우 명령을 확인합니다:
-```bash
-ps aux | grep vLLM | grep 'n-gpu-layers'
-```
+**해결:** vLLM는 자동으로 GPU를 사용합니다 -- `--n-gpu-layers` 같은 손잡이는 존재하지 않으며, `--gpu-memory-utilization`이 사용 가능한 슬라이스를 확보하면 모든 레이어가 GPU에 올라갑니다. 그래도 느리다면 (순서대로) 확인:
 
-Docker를 사용하는 경우 NVIDIA 컨테이너 런타임이 설정되어 있는지 확인하십시오 (위의 GPU 섹션 참조).
+1. `nvidia-smi`에서 `python3` (vllm) 프로세스가 GPU 프로세스 목록에 나타나는지? 없으면 컨테이너가 GPU를 볼 수 없는 것입니다. `nvidia-container-toolkit`이 설치되어 있고 런타임이 `nvidia`인지 확인하십시오.
+2. `docker logs vllm-gen | grep -i 'cpu\|device'`로 시작 시 디바이스 선택을 확인. "Falling back to CPU"가 보이면 GPU는 보였지만 거부됐습니다 (드라이버가 너무 낡음, compute capability가 낮음, 해당 아키텍처에서 양자화 미지원).
+3. 동시성: vLLM의 PagedAttention은 동시 요청으로 확장됩니다. `ATLAS_LLM_PARALLEL=0` 또는 `ATLAS_GEN_MAX_NUM_SEQS=1`이면 사실상 싱글 슬롯이므로, 두 값을 모두 올리십시오.
+4. KV 캐시 페이징: `nvidia-smi`에서 VRAM이 100%인데 처리량이 낮음 → KV 캐시가 시스템 RAM으로 페이징되는 중. `ATLAS_GEN_CTX_SIZE` (기본 32768) 또는 `ATLAS_GEN_MAX_NUM_SEQS`를 줄여 VRAM 여유를 확보하십시오.
 
 ### 모델 파일을 찾을 수 없음
 
@@ -450,14 +450,16 @@ ls -la .aider.model.settings.yml .aider.model.metadata.json
 
 ## 성능
 
-### 느린 생성 속도 (~2 tok/s)
+### 느린 생성 속도 (한 자릿수 tok/s)
 
-모델이 GPU 대신 CPU에서 실행되고 있습니다. 다음을 확인하십시오:
-1. `nvidia-smi` - vLLM가 GPU 프로세스로 표시되는지
-2. `--n-gpu-layers 99` - 모든 레이어가 오프로드되었는지
-3. NVIDIA Container Toolkit - 컨테이너 런타임이 GPU 접근용으로 설정되었는지
+vLLM는 자동으로 GPU를 사용합니다 -- `--n-gpu-layers` 같은 손잡이는 존재하지 않으며, `--gpu-memory-utilization`이 사용 가능한 슬라이스를 확보하면 모든 레이어가 GPU에 올라갑니다. 그래도 느리다면 (순서대로) 확인:
 
-**예상 성능:** RTX 5060 Ti 16GB에서 문법 적용 시 약 51 tok/s.
+1. `nvidia-smi` -- `python3` (vllm) 프로세스가 GPU 프로세스 목록에 나타나는지? 없으면 컨테이너가 GPU를 볼 수 없는 것입니다 (`nvidia-container-toolkit`이 설치되어 있고 런타임이 `nvidia`인지 확인).
+2. `docker logs vllm-gen | grep -i 'cpu\|device'` -- 시작 시 vLLM가 사용하는 디바이스를 로그로 남깁니다. "Falling back to CPU"가 보이면 GPU는 보였지만 거부됐습니다 (드라이버가 너무 낡음, compute capability 낮음, 양자화 미지원).
+3. 동시성: vLLM의 PagedAttention은 동시 요청으로 확장됩니다. `ATLAS_LLM_PARALLEL=0` 또는 `ATLAS_GEN_MAX_NUM_SEQS=1`이면 사실상 싱글 슬롯 -- 두 값을 모두 올리십시오.
+4. KV 캐시 페이징: `nvidia-smi`에서 VRAM이 100%인데 처리량이 낮음 → KV 캐시가 시스템 RAM으로 페이징 중. `ATLAS_GEN_CTX_SIZE` (기본 32768) 또는 `ATLAS_GEN_MAX_NUM_SEQS`를 줄여 VRAM 여유 확보.
+
+**예상 성능:** vLLM AWQ-Q4 처리량은 동시성, 프롬프트 길이, 양자화 아키 (Qwen3.5 DeltaNet 하이브리드 커널은 첫 요청 시 Triton 컴파일됨)에 따라 크게 달라지므로 신뢰할 수 있는 단일 수치가 없습니다. `benchmark/measure_bok_latency.sh`로 자신의 워크로드를 측정하십시오.
 
 ### V3 파이프라인이 수 분 소요됨
 

@@ -527,24 +527,40 @@ def test_setup_docs_do_not_advertise_a_broken_k3s_path():
 
 
 def test_troubleshooting_does_not_reference_llama_cpp_flags():
-    """`docs/TROUBLESHOOTING.md`'s Performance section steered users to
-    debug `--n-gpu-layers 99`, a llama.cpp flag with no vLLM equivalent
-    (vLLM auto-offloads every layer when CUDA is reachable). Quoting
-    llama.cpp flags as troubleshooting steps for a vLLM stack misleads
-    users into chasing a knob that doesn't exist.
+    """TROUBLESHOOTING.md (English + ja/ko/zh-CN translations) steered
+    users to debug `--n-gpu-layers 99`, a llama.cpp flag with no vLLM
+    equivalent. Quoting llama.cpp flags as troubleshooting steps for a
+    vLLM stack misleads users into chasing a knob that doesn't exist.
 
-    Forbid the llama.cpp-specific `--n-gpu-layers` flag, except inside an
-    explanation of why it doesn't apply (a "no `--n-gpu-layers` knob"
-    explainer is the *fix*). Same for the obsolete "grammar enforcement"
-    throughput claim."""
-    src = (PROJECT_ROOT / "docs" / "TROUBLESHOOTING.md").read_text()
-    # Allow the explanatory pattern that explicitly disclaims the flag.
-    body = src.replace("there is no `--n-gpu-layers` knob", "")
-    assert "--n-gpu-layers" not in body, (
-        "TROUBLESHOOTING.md must not steer users to debug --n-gpu-layers; "
-        "it's a llama.cpp flag with no vLLM analogue"
-    )
-    assert "with grammar enforcement" not in src, (
+    Forbid the bare flag, but allow it inside an explainer paragraph that
+    disclaims it ("there is no `--n-gpu-layers` knob" / "存在しません" /
+    "존재하지 않으며" / "不存在 ... 这个开关")."""
+    targets = [PROJECT_ROOT / "docs" / "TROUBLESHOOTING.md"]
+    targets += [PROJECT_ROOT / "docs" / "lang" / lang / "TROUBLESHOOTING.md"
+                for lang in ("ja", "ko", "zh-CN")]
+
+    # Phrases that explicitly disclaim the flag — those are the fix.
+    disclaimers = [
+        "there is no `--n-gpu-layers` knob",
+        "`--n-gpu-layers` というつまみは存在しません",
+        "`--n-gpu-layers` というつまみは存在せず",
+        "`--n-gpu-layers` 같은 손잡이는 존재하지 않으며",
+        "不存在 `--n-gpu-layers` 这个开关",
+    ]
+
+    for path in targets:
+        src = path.read_text()
+        body = src
+        for d in disclaimers:
+            body = body.replace(d, "")
+        assert "--n-gpu-layers" not in body, (
+            f"{path.relative_to(PROJECT_ROOT)} still steers users to debug "
+            "--n-gpu-layers outside an explainer paragraph; it's a llama.cpp "
+            "flag with no vLLM analogue"
+        )
+
+    en = (PROJECT_ROOT / "docs" / "TROUBLESHOOTING.md").read_text()
+    assert "with grammar enforcement" not in en, (
         "TROUBLESHOOTING.md must not quote 'grammar enforcement' throughput — "
         "vLLM uses guided_choice/response_format, not llama.cpp grammars"
     )
