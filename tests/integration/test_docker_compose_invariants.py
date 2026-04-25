@@ -125,6 +125,23 @@ def test_no_legacy_llama_server_service(compose):
     assert "llama-server" not in services, "llama-server service must not exist"
 
 
+def test_max_num_batched_tokens_set_for_deltanet_alignment(compose):
+    """Qwen3.5's Gated DeltaNet layers force vLLM to align the block_size
+    to 2096 tokens when prefix caching is enabled. The default
+    max_num_batched_tokens (2048) is one token short, which crashes
+    vLLM during config validation. Both gen and embed must explicitly
+    set --max-num-batched-tokens >= 2096.
+
+    See https://github.com/vllm-project/vllm/issues/36697 — the bug
+    that motivated this test."""
+    for svc in ("vllm-gen", "vllm-embed"):
+        cmd = compose["services"][svc]["command"]
+        assert "--max-num-batched-tokens" in cmd, (
+            f"{svc} must set --max-num-batched-tokens (DeltaNet alignment "
+            "needs >= 2096; default 2048 crashes vLLM startup)"
+        )
+
+
 def test_no_gguf_in_default_paths(compose):
     """Default model paths must point at AWQ directory, not GGUF."""
     for svc in ("vllm-gen", "vllm-embed"):

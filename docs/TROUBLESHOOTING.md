@@ -203,6 +203,26 @@ docker compose build --no-cache geometric-lens
 docker compose up -d geometric-lens
 ```
 
+### vLLM Crashes on Startup with `block_size > max_num_batched_tokens`
+
+**Symptom:** vLLM exits during config validation with an error like:
+```
+Validation Error: block_size (2096) > max_num_batched_tokens (2048)
+```
+
+**Fix:** Qwen3.5's Gated DeltaNet layers force vLLM to align the block_size
+to 2096 tokens for prefix caching. The default `max_num_batched_tokens`
+(2048) is one token too small. Both ATLAS docker-compose and the H200
+entrypoint already pass `--max-num-batched-tokens 8192` (gen) / `4096`
+(embed) to dodge this. If you're running `vllm serve` directly, add:
+
+```bash
+vllm serve ... --max-num-batched-tokens 8192
+```
+
+This is a known [vLLM issue](https://github.com/vllm-project/vllm/issues/36697)
+with hybrid Mamba models.
+
 ### Embed Instance Returns 0-dim Vectors
 
 **Symptom:** `/v1/embeddings` returns `{"data": [{"embedding": []}]}` or wrong dimensionality.

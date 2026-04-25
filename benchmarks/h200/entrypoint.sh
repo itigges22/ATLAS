@@ -120,6 +120,7 @@ nohup vllm serve "$MODEL_PATH" \
     --host 0.0.0.0 \
     --max-num-seqs "$EMBED_MAX_NUM_SEQS" \
     --max-model-len "$EMBED_MAX_MODEL_LEN" \
+    --max-num-batched-tokens "${EMBED_MAX_NUM_BATCHED_TOKENS:-4096}" \
     --gpu-memory-utilization "$EMBED_GPU_MEM_UTIL" \
     --tensor-parallel-size 1 \
     --trust-remote-code \
@@ -154,6 +155,7 @@ nohup vllm serve "$MODEL_PATH" \
     --host 0.0.0.0 \
     --max-num-seqs "$GEN_MAX_NUM_SEQS" \
     --max-model-len "$GEN_MAX_MODEL_LEN" \
+    --max-num-batched-tokens "${GEN_MAX_NUM_BATCHED_TOKENS:-8192}" \
     --gpu-memory-utilization "$GEN_GPU_MEM_UTIL" \
     --tensor-parallel-size 1 \
     --enable-prefix-caching \
