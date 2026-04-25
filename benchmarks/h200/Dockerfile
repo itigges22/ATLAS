@@ -33,14 +33,28 @@ RUN pip3 install --no-cache-dir -U \
         --extra-index-url https://wheels.vllm.ai/nightly \
         "${VLLM_SPEC}"
 
-# Qwen3.5 needs a transformers build with the partial_rotary_factor fix.
-# Install from the upstream commit that the QuantTrio AWQ recipe was validated against,
-# then patch modeling_rope_utils.py line 651 to allow the rope key.
+# Qwen3.5 needs a transformers build that allows the partial_rotary_factor
+# rope key. Install from the upstream commit the QuantTrio AWQ recipe was
+# validated against, then patch modeling_rope_utils.py to accept that key.
+#
+# Patch is content-based, not line-number-based: we look for the existing
+# `ignore_keys_at_rope_validation = ...` assignment that comes right before
+# the rope-key-validation block and inject our addition right after it. If a
+# future transformers commit re-arranges that file, the injection still
+# lands at the right place. We fail loudly if the anchor line isn't found.
 RUN pip3 install --no-cache-dir -U \
         "transformers @ git+https://github.com/huggingface/transformers.git@f2ba019" \
     && TF_FILE="$(python -m pip show transformers | awk -F': ' '/^Location:/{print $2}')/transformers/modeling_rope_utils.py" \
-    && perl -i.bak -pe 'if ($. == 651) { $_ = "            ignore_keys_at_rope_validation = set(ignore_keys_at_rope_validation) | {\"partial_rotary_factor\"}\n" }' "$TF_FILE" \
-    && grep -n partial_rotary_factor "$TF_FILE" || (echo "transformers patch failed" && exit 1)
+    && python3 -c "import sys, re; \
+p = sys.argv[1]; \
+src = open(p).read(); \
+needle = 'ignore_keys_at_rope_validation'; \
+assert needle in src, f'transformers patch anchor not found in {p}'; \
+inject = '            ignore_keys_at_rope_validation = set(ignore_keys_at_rope_validation) | {\"partial_rotary_factor\"}\n'; \
+out = re.sub(r'(\\n[^\\n]*ignore_keys_at_rope_validation\\s*=\\s*[^\\n]+\\n)', r'\\1' + inject, src, count=1); \
+assert out != src, 'patch made no changes'; \
+open(p, 'w').write(out); \
+print('patched ' + p)" "$TF_FILE"
 
 # ATLAS runner deps (eval libs).
 RUN pip3 install --no-cache-dir \
