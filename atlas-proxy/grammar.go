@@ -84,60 +84,12 @@ func buildToolCallSchemaJSON() string {
 	return string(b)
 }
 
-// ---------------------------------------------------------------------------
-// GBNF Grammar fallback
-// ---------------------------------------------------------------------------
-
-// buildGBNFGrammar generates a GBNF grammar string that constrains output
-// to the same tool_call/text/done union. Currently unused; kept as
-// reference in case json_object mode needs to be replaced with GBNF.
-func buildGBNFGrammar() string {
-	var sb strings.Builder
-
-	// Root: one of the three response types
-	sb.WriteString("root ::= tool-call | text-response | done-response\n\n")
-
-	// Tool call
-	toolNames := make([]string, 0, len(toolRegistry))
-	for name := range toolRegistry {
-		toolNames = append(toolNames, fmt.Sprintf(`"\"%s\""`, name))
-	}
-
-	sb.WriteString("tool-call ::= \"{\" ws ")
-	sb.WriteString(`"\"type\"" ws ":" ws "\"tool_call\"" ws "," ws `)
-	sb.WriteString(`"\"name\"" ws ":" ws tool-name ws "," ws `)
-	sb.WriteString(`"\"args\"" ws ":" ws json-object ws `)
-	sb.WriteString("\"}\"\n\n")
-
-	// Tool name enum
-	sb.WriteString("tool-name ::= ")
-	sb.WriteString(strings.Join(toolNames, " | "))
-	sb.WriteString("\n\n")
-
-	// Text response
-	sb.WriteString("text-response ::= \"{\" ws ")
-	sb.WriteString(`"\"type\"" ws ":" ws "\"text\"" ws "," ws `)
-	sb.WriteString(`"\"content\"" ws ":" ws json-string ws `)
-	sb.WriteString("\"}\"\n\n")
-
-	// Done response
-	sb.WriteString("done-response ::= \"{\" ws ")
-	sb.WriteString(`"\"type\"" ws ":" ws "\"done\"" ws "," ws `)
-	sb.WriteString(`"\"summary\"" ws ":" ws json-string ws `)
-	sb.WriteString("\"}\"\n\n")
-
-	// JSON primitives
-	sb.WriteString("json-object ::= \"{\" ws (json-pair (\",\" ws json-pair)*)? ws \"}\"\n")
-	sb.WriteString("json-pair ::= json-string ws \":\" ws json-value\n")
-	sb.WriteString("json-array ::= \"[\" ws (json-value (\",\" ws json-value)*)? ws \"]\"\n")
-	sb.WriteString("json-value ::= json-string | json-number | json-object | json-array | \"true\" | \"false\" | \"null\"\n")
-	sb.WriteString(`json-string ::= "\"" json-char* "\""` + "\n")
-	sb.WriteString(`json-char ::= [^"\\] | "\\" ["\\/bfnrt] | "\\u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]` + "\n")
-	sb.WriteString("json-number ::= \"-\"? [0-9]+ (\".\" [0-9]+)? ([eE] [\"+\\-\"]? [0-9]+)?\n")
-	sb.WriteString("ws ::= [ \\t\\n]*\n")
-
-	return sb.String()
-}
+// vLLM uses `response_format: {"type": "json_object"}` (with a JSON Schema
+// in `guided_json` for stricter shapes) — not the llama.cpp GBNF format.
+// The previous codebase carried a `buildGBNFGrammar()` reference here; it
+// was deleted in the vLLM cutover because GBNF is incompatible with vLLM
+// and the function provided no starting point for the lark-format
+// alternative if `guided_json` ever needs replacing.
 
 // ---------------------------------------------------------------------------
 // System prompt: tool descriptions for the model

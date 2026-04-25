@@ -1125,6 +1125,28 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_atlas_proxy_grammar_does_not_carry_dead_gbnf_function():
+    """`atlas-proxy/grammar.go` used to define a `buildGBNFGrammar()`
+    function (~55 lines of Go) that produced a llama.cpp GBNF grammar
+    string. The comment said it was "kept as reference in case json_object
+    mode needs to be replaced with GBNF" — but vLLM doesn't accept GBNF
+    (it uses lark-format `guided_grammar` and JSON Schema via `guided_json`).
+    The function was never called, was incompatible with vLLM, and
+    provided no starting point for the lark-format alternative anyone
+    would actually port to.
+
+    Pin: `buildGBNFGrammar` may not exist in the file. A future port to
+    vLLM's lark grammar (if `response_format: json_object` ever proves
+    insufficient) should be a fresh implementation, not a reference to
+    GBNF."""
+    src = (PROJECT_ROOT / "atlas-proxy" / "grammar.go").read_text()
+    assert "func buildGBNFGrammar" not in src, (
+        "atlas-proxy/grammar.go still defines buildGBNFGrammar — that's "
+        "dead llama.cpp-only code. vLLM uses guided_json (JSON Schema) "
+        "and guided_grammar (lark format), not GBNF."
+    )
+
+
 def test_v3_runner_llm_adapter_docstring_matches_lock_behavior():
     """`benchmark/v3_runner.py LLMAdapter` had a docstring that presented
     the class-level `threading.Lock()` as the always-engaged mechanism
