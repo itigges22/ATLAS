@@ -964,32 +964,48 @@ def test_v3_service_dockerfile_has_no_unused_heavy_deps():
 
 
 def test_atlas_proxy_applies_vllm_defaults_to_all_chat_posts():
-    """The atlas-proxy has three places that POST to /v1/chat/completions:
-    `forwardToFox` (the canonical helper), the spec generator, and the
-    streaming-handler fallback. Earlier iterations only set
-    enable_thinking=false in forwardToFox — the other two paths shipped
-    Qwen3.5 requests with thinking enabled, then stripped <think> blocks
-    after the fact (or, in streaming mode, left them in the response).
-    The helper `applyVllmDefaults` must be applied to every direct POST
-    so all three paths agree on the request shape."""
-    src = (PROJECT_ROOT / "atlas-proxy" / "main.go").read_text()
-    # Helper must exist.
-    assert "func applyVllmDefaults(req *ChatRequest)" in src, (
-        "atlas-proxy must define an applyVllmDefaults helper to ensure"
-        " every chat POST sends enable_thinking=false consistently"
+    """The atlas-proxy has multiple places that POST to /v1/chat/completions:
+
+      - main.go:forwardToFox (canonical typed-ChatRequest helper)
+      - main.go spec generator (raw POST)
+      - main.go streaming-handler fallback (raw POST)
+      - agent.go agent loop (raw map[string]interface{} POST with
+        response_format=json_object)
+
+    Earlier iterations only set enable_thinking=false in forwardToFox.
+    Even after the applyVllmDefaults helper landed in main.go, the agent
+    loop in agent.go bypassed it (different request shape — raw map for
+    the response_format flag). On Qwen3.5 that path burned thinking-mode
+    tokens before guided-JSON decoding kicked in.
+
+    Pin: every chat-completions POST in atlas-proxy must include either
+    `applyVllmDefaults(&` or the literal `enable_thinking` kwarg setup
+    inline."""
+    main_src = (PROJECT_ROOT / "atlas-proxy" / "main.go").read_text()
+    agent_src = (PROJECT_ROOT / "atlas-proxy" / "agent.go").read_text()
+
+    # Helper must exist in main.go.
+    assert "func applyVllmDefaults(req *ChatRequest)" in main_src, (
+        "atlas-proxy must define an applyVllmDefaults helper in main.go"
     )
-    # Helper must set the kwarg.
-    helper_start = src.index("func applyVllmDefaults")
-    helper_end = src.index("\n}", helper_start)
-    helper_body = src[helper_start:helper_end]
-    assert "enable_thinking" in helper_body, (
+    helper_start = main_src.index("func applyVllmDefaults")
+    helper_end = main_src.index("\n}", helper_start)
+    assert "enable_thinking" in main_src[helper_start:helper_end], (
         "applyVllmDefaults must set chat_template_kwargs.enable_thinking"
     )
-    # Count callers — must be at least 3 (forwardToFox + spec + streaming).
-    apply_calls = src.count("applyVllmDefaults(&")
+    apply_calls = main_src.count("applyVllmDefaults(&")
     assert apply_calls >= 3, (
-        f"applyVllmDefaults should be called from forwardToFox + spec generator "
-        f"+ streaming fallback (3 sites), found {apply_calls}"
+        f"applyVllmDefaults should be called at all 3 typed-ChatRequest "
+        f"POST sites in main.go, found {apply_calls}"
+    )
+
+    # agent.go uses a raw map (different shape because of
+    # response_format), so it can't call applyVllmDefaults — but it must
+    # still set enable_thinking inline.
+    assert "enable_thinking" in agent_src, (
+        "atlas-proxy/agent.go's raw /v1/chat/completions POST must set "
+        "chat_template_kwargs.enable_thinking — otherwise Qwen3.5 burns "
+        "thinking-mode tokens before guided-JSON decoding starts"
     )
 
 

@@ -287,6 +287,15 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		"response_format": map[string]string{
 			"type": "json_object",
 		},
+		// Disable Qwen3.5 reasoning. response_format=json_object alone
+		// forces the response shape via guided decoding, but without
+		// this kwarg the model still enters thinking mode and burns
+		// tokens until the guided sampler kicks in. forwardToFox sets
+		// the same kwarg via the typed ChatRequest path; this raw POST
+		// sits outside that codepath, so set it explicitly.
+		"chat_template_kwargs": map[string]interface{}{
+			"enable_thinking": false,
+		},
 	}
 	body, _ := json.Marshal(reqBody)
 	endpoint := llamaURL + "/v1/chat/completions"
