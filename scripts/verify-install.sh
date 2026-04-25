@@ -101,12 +101,28 @@ check_models() {
 
 # LLM inference test
 check_llm_inference() {
+    # vLLM requires `model` to match its --served-model-name (4xx otherwise).
+    # And on Qwen3.5 we must set enable_thinking=false; with max_tokens<<<thinking
+    # budget the model spends the whole response on a <think> block and
+    # `content` comes back empty — the response still has "choices" so the
+    # old check would falsely pass.
+    local model_name="${LLAMA_GEN_MODEL:-qwen3.5-9b}"
     local response=$(curl -sf --max-time "$ATLAS_LLM_TIMEOUT" \
         -X POST "http://localhost:${ATLAS_VLLM_GEN_NODEPORT:-${ATLAS_LLAMA_NODEPORT}}/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d '{"messages":[{"role":"user","content":"Say hello"}],"max_tokens":10}' 2>/dev/null)
+        -d "{\"model\":\"${model_name}\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello\"}],\"max_tokens\":16,\"chat_template_kwargs\":{\"enable_thinking\":false}}" 2>/dev/null)
 
-    if echo "$response" | grep -q "choices"; then
+    # Grep for non-empty content, not just the presence of "choices" — empty
+    # content was the most common failure mode of the prior version.
+    if echo "$response" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    msg = d['choices'][0]['message']
+    sys.exit(0 if (msg.get('content') or '').strip() else 1)
+except Exception:
+    sys.exit(2)
+" 2>/dev/null; then
         check_pass "LLM inference working"
     else
         check_fail "LLM inference failed"

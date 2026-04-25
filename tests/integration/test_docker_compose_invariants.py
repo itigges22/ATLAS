@@ -296,6 +296,33 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_verify_install_sends_valid_vllm_chat_request():
+    """`scripts/verify-install.sh` includes a smoke check that POSTs to
+    /v1/chat/completions. vLLM 4xx's any request without a `model` field
+    matching --served-model-name, and on Qwen3.5 a small `max_tokens`
+    budget without `enable_thinking=false` returns empty content (every
+    token spent inside <think>). The verifier had been asserting only that
+    "choices" appeared in the response — both failure modes returned
+    structurally-valid responses with empty content, so the verifier
+    falsely passed on a broken stack. Pin the request shape so this can't
+    silently regress."""
+    src = (PROJECT_ROOT / "scripts" / "verify-install.sh").read_text()
+    # Must include a model field (vLLM rejects unknown / missing names)
+    assert "\\\"model\\\":" in src or '"model":' in src, (
+        "verify-install.sh must send `model` in the chat completions body"
+    )
+    # Must disable thinking so the response actually contains content.
+    assert "enable_thinking" in src, (
+        "verify-install.sh must set chat_template_kwargs.enable_thinking=false; "
+        "otherwise a working vLLM returns empty content with small max_tokens"
+    )
+    # Must validate content, not just the bare presence of "choices".
+    assert "msg.get('content'" in src or "msg.get(\"content\"" in src, (
+        "verify-install.sh must check that `content` is non-empty, not just "
+        "that the response is structurally a chat completion"
+    )
+
+
 def test_lens_chat_request_schema_accepts_chat_template_kwargs():
     """The Geometric Lens proxy at /v1/chat/completions sits between callers
     and the vLLM gen instance. Pydantic's default `extra="ignore"` means any
