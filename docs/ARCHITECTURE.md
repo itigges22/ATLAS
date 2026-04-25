@@ -486,7 +486,7 @@ The `atlas` CLI (`pip install -e .`) talks directly to services on their default
 
 ### K3s
 
-Manifests in `templates/` are processed by `scripts/generate-manifests.sh` from `atlas.conf`. Services deploy as pods in the `atlas` namespace with NodePort exposure. K3s deployment uses the entrypoint scripts in `inference/` which support extended context (160K), KV cache quantization (q8_0/q4_0), flash attention, and mlock.
+The K3s deployment path is V3.0-era: it generated manifests via `scripts/generate-manifests.sh` from a `templates/` directory and consumed entrypoint scripts under `inference/`. Both directories were removed during the V3.0.1 vLLM cutover, and the per-instance entrypoints (gen + embed + Lens) collapsed into the single `benchmarks/h200/entrypoint.sh`. The cluster knobs the V3.0 deployment exposed — extended context (160K), KV cache quantization (q8_0/q4_0), flash attention, mlock — were all llama.cpp-specific and have no direct vLLM equivalent. `scripts/install.sh` detects the missing `manifests/` directory and exits with a pointer to docker-compose, so it is harmless but unproductive on the current repo state. See SETUP.md "K3s" section for the current options (docker-compose per node, hand-rolled K8s manifests from `docker-compose.yml`, or wait for the K3s port).
 
 ---
 

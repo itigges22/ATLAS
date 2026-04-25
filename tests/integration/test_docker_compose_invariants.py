@@ -1125,7 +1125,55 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
-def test_map_md_does_not_list_deleted_h200_artifacts():
+def test_docs_do_not_link_to_deleted_scripts_or_dirs():
+    """The V3.0 → V3.0.1 cutover deleted several scripts and directories
+    that the docs (`MAP.md`, `ARCHITECTURE.md`) used to link to:
+      - `scripts/deploy-9b.sh`        — never re-ported for vLLM
+      - `scripts/smoke-test-9b.sh`    — never re-ported
+      - `inference/`                  — collapsed into benchmarks/h200/
+      - the K3s `templates/` directory `generate-manifests.sh` consumes —
+                                        not currently shipped
+
+    Pin: MAP.md and ARCHITECTURE.md must not present the first two as
+    live, callable scripts (a fenced backtick path that points at a
+    missing file misleads anyone running a `cat`/`bat` from the repo
+    root). The dirs are referenced in disclaimer prose to explain what
+    *was* there, but no longer as live navigation targets."""
+    map_md = (PROJECT_ROOT / "docs" / "MAP.md").read_text()
+    arch_md = (PROJECT_ROOT / "docs" / "ARCHITECTURE.md").read_text()
+
+    # MAP.md: scripts table rows must not reference the deleted scripts.
+    # A row is detected by `[`<filename>`](path)` — markdown link in a
+    # table cell. Look for the deleted filenames in that shape.
+    for ghost in ("deploy-9b.sh", "smoke-test-9b.sh"):
+        # A markdown link of the form [`<ghost>`](...) is a live nav target.
+        # Disclaimer prose mentioning the name without the link is allowed.
+        live_link_re = re.compile(rf"\[`[^`]*{re.escape(ghost)}[^`]*`\]\(")
+        assert not live_link_re.search(map_md), (
+            f"docs/MAP.md still links to `{ghost}` as if it were a live "
+            f"script — but {PROJECT_ROOT / 'scripts' / ghost} doesn't exist"
+        )
+
+    # ARCHITECTURE.md K3s subsection — must not present the deleted
+    # `inference/` entrypoints as the *current* K3s mechanism.
+    k3s_match = re.search(
+        r"### K3s.*?(?=\n## |\n### |\Z)",
+        arch_md,
+        re.DOTALL,
+    )
+    assert k3s_match, "Could not locate ### K3s subsection in ARCHITECTURE.md"
+    k3s_text = k3s_match.group(0)
+    # Phrasings that would imply the deleted `inference/` is current:
+    bad_present_tense = [
+        r"K3s deployment uses the entrypoint scripts in `inference/`",
+        r"Services deploy as pods.*processed by",
+    ]
+    for pattern in bad_present_tense:
+        assert not re.search(pattern, k3s_text), (
+            f"ARCHITECTURE.md ### K3s still presents `inference/` or the "
+            f"V3.0-era manifest pipeline as current — but those were "
+            f"removed in the vLLM cutover. Phrase as historical context."
+        )
     """`docs/MAP.md` is the canonical "where does X live in this repo"
     map. After the vLLM cutover, `benchmarks/h200/` contains only the
     single-image build (`Dockerfile`), the entrypoint that drives both

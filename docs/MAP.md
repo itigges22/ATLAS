@@ -167,12 +167,10 @@ Every file in the repository. Click any directory in the tree to jump to its des
 - [`scripts/`](#scripts) — Build, deploy, and training automation
   - [`install.sh`](#scripts) — K3s + GPU Operator installation
   - [`uninstall.sh`](#scripts) — K3s teardown
-  - [`build-containers.sh`](#scripts) — Build all container images
-  - [`deploy-9b.sh`](#scripts) — Deploy 9B model to K3s
-  - [`generate-manifests.sh`](#scripts) — K3s manifests from atlas.conf
-  - [`download-models.sh`](#scripts) — Download model weights
-  - [`verify-install.sh`](#scripts) — Post-install verification
-  - [`smoke-test-9b.sh`](#scripts) — Quick 9B deployment smoke test
+  - [`build-containers.sh`](#scripts) — Build all container images (legacy V3.0 path)
+  - [`generate-manifests.sh`](#scripts) — K3s manifests from atlas.conf (consumes a `templates/` dir not currently shipped — see SETUP.md)
+  - [`download-models.sh`](#scripts) — Download model weights via huggingface-cli
+  - [`verify-install.sh`](#scripts) — Post-install verification (auto-detects K3s vs docker-compose)
   - [`run_full_benchmarks.sh`](#scripts) — Run all benchmark suites
   - [`run_v31_ablation.sh`](#scripts) — V3.1 ablation study launcher
   - [`validate_benchmarks.py`](#scripts) — Benchmark result validation
@@ -473,12 +471,10 @@ container is now `benchmarks/h200/`:
 |------|-------------|
 | [`install.sh`](../scripts/install.sh) | Full K3s installation: prerequisites, GPU Operator, namespace, image build, manifest deployment |
 | [`uninstall.sh`](../scripts/uninstall.sh) | K3s teardown and cleanup |
-| [`build-containers.sh`](../scripts/build-containers.sh) | Build all container images and import to K3s |
-| [`deploy-9b.sh`](../scripts/deploy-9b.sh) | Deploy Qwen3.5-9B to K3s cluster |
-| [`generate-manifests.sh`](../scripts/generate-manifests.sh) | Generate K3s manifests from atlas.conf via envsubst |
-| [`download-models.sh`](../scripts/download-models.sh) | Download model weights from HuggingFace |
-| [`verify-install.sh`](../scripts/verify-install.sh) | Post-install health verification |
-| [`smoke-test-9b.sh`](../scripts/smoke-test-9b.sh) | Quick smoke test for 9B deployment |
+| [`build-containers.sh`](../scripts/build-containers.sh) | Build all container images and import to K3s (legacy V3.0 path) |
+| [`generate-manifests.sh`](../scripts/generate-manifests.sh) | Generate K3s manifests from atlas.conf via envsubst (consumes a `templates/` dir not currently shipped — see SETUP.md) |
+| [`download-models.sh`](../scripts/download-models.sh) | Download model weights from HuggingFace via `huggingface-cli` |
+| [`verify-install.sh`](../scripts/verify-install.sh) | Post-install health verification (auto-detects K3s vs docker-compose) |
 | [`run_full_benchmarks.sh`](../scripts/run_full_benchmarks.sh) | Run all benchmark suites sequentially |
 | [`run_v31_ablation.sh`](../scripts/run_v31_ablation.sh) | V3.1 ablation study launcher with conditions A-F |
 | [`validate_benchmarks.py`](../scripts/validate_benchmarks.py) | Validate benchmark results for completeness |
