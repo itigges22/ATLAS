@@ -337,6 +337,27 @@ def test_makefile_lint_and_ci_lint_cover_same_scripts():
         assert must_have in mf_scripts, f"{must_have} must be lint-checked"
 
 
+def test_setup_docs_do_not_reference_fictional_atlas_launcher():
+    """All four SETUP files used to tell users to `cp /path/to/atlas-launcher
+    ~/.local/bin/atlas`. There is no atlas-launcher script anywhere in the
+    repo — the `atlas` command is the `atlas.cli.repl:run` Python entry
+    point installed by `pip install -e .` (declared in pyproject.toml).
+    The misleading section sent users searching for a file that has no
+    source. Pin the absence of `atlas-launcher` so it can't sneak back."""
+    targets = [PROJECT_ROOT / "docs" / "SETUP.md"]
+    targets += [PROJECT_ROOT / "docs" / "lang" / lang / "SETUP.md"
+                for lang in ("ja", "ko", "zh-CN")]
+
+    for path in targets:
+        src = path.read_text()
+        assert "atlas-launcher" not in src, (
+            f"{path.relative_to(PROJECT_ROOT)} still mentions `atlas-launcher`, "
+            "a script that doesn't exist in the repo. The `atlas` command is "
+            "the atlas.cli.repl:run Python entry point installed by "
+            "`pip install -e .` — point users at that instead."
+        )
+
+
 def test_setup_docs_do_not_advertise_a_broken_k3s_path():
     """SETUP.md (and translations) used to describe a working K3s install
     path: `cp atlas.conf.example atlas.conf && sudo scripts/install.sh`,

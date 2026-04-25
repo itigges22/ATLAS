@@ -231,17 +231,15 @@ atlas-proxy-v2
 
 > **참고:** 샌드박스는 베어메탈 모드에서 포트 **8020**에서 수신합니다 (Docker 포트 리매핑 없음). 프록시의 `ATLAS_SANDBOX_URL`은 30820이 아닌 8020 포트를 사용해야 합니다.
 
-### 런처 스크립트로 시작
+### `atlas` 명령 사용
 
-대안으로 런처 스크립트를 PATH에 복사할 수 있습니다:
+`atlas` 명령은 빌드의 1단계 (`pip install -e .`)에 의해 자동으로 설치됩니다 -- `pyproject.toml`에 선언된 `atlas.cli.repl:run` Python 진입점입니다. 임의의 프로젝트 디렉토리에서:
 
 ```bash
-cp /path/to/atlas-launcher ~/.local/bin/atlas
-chmod +x ~/.local/bin/atlas
-atlas    # 누락된 서비스를 시작하고 Aider를 실행합니다
+atlas    # 실행 중인 서비스에 연결하고 Aider를 실행합니다
 ```
 
-런처는 이미 실행 중인 서비스를 자동 감지하고 누락된 것만 시작합니다. Docker Compose 스택이 감지되면 해당 스택에 연결합니다.
+위의 베어메탈 서비스가 이미 실행 중이어야 합니다. 표준 포트에서 Docker Compose 스택을 발견하면 해당 스택에 연결합니다.
 
 ---
 

@@ -246,17 +246,15 @@ atlas-proxy-v2
 
 > **Note:** The sandbox listens on port **8020** in bare-metal mode (no Docker port remapping). The proxy's `ATLAS_SANDBOX_URL` must use port 8020, not 30820.
 
-### Start with the Launcher Script
+### Use the `atlas` Command
 
-Alternatively, copy the launcher script to your PATH:
+The `atlas` command is installed automatically by `pip install -e .` (step 1 of the build) — it's the `atlas.cli.repl:run` Python entry point declared in `pyproject.toml`. From any project directory:
 
 ```bash
-cp /path/to/atlas-launcher ~/.local/bin/atlas
-chmod +x ~/.local/bin/atlas
-atlas    # Starts all missing services and launches Aider
+atlas    # connects to the running services and launches Aider
 ```
 
-The launcher auto-detects which services are already running and starts only what's missing. If it detects a Docker Compose stack, it connects to that instead.
+It expects the bare-metal services above to already be running. If it finds a Docker Compose stack on the standard ports, it connects to that instead.
 
 ---
 

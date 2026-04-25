@@ -232,17 +232,15 @@ atlas-proxy-v2
 
 > **注意：** 裸机模式下沙箱监听端口为 **8020**（没有 Docker 端口映射）。代理的 `ATLAS_SANDBOX_URL` 必须使用端口 8020，而非 30820。
 
-### 使用启动脚本
+### 使用 `atlas` 命令
 
-你也可以将启动脚本复制到 PATH 中：
+`atlas` 命令在构建的步骤 1 (`pip install -e .`) 中自动安装 -- 它是 `pyproject.toml` 中声明的 `atlas.cli.repl:run` Python 入口点。在任意项目目录中：
 
 ```bash
-cp /path/to/atlas-launcher ~/.local/bin/atlas
-chmod +x ~/.local/bin/atlas
-atlas    # 启动所有缺失的服务并运行 Aider
+atlas    # 连接正在运行的服务并启动 Aider
 ```
 
-启动脚本会自动检测哪些服务已在运行，只启动缺失的服务。如果检测到 Docker Compose 栈，则直接连接。
+它假设上述裸机服务已在运行。如果在标准端口上发现 Docker Compose 栈，则连接到该栈。
 
 ---
 
