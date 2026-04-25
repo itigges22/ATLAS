@@ -123,74 +123,97 @@ All ports are configurable via `.env`. See [CONFIGURATION.md](CONFIGURATION.md).
 
 ### Model Loading on CPU Instead of GPU
 
-**Symptom:** Generation at ~2 tok/s instead of ~50 tok/s. `nvidia-smi` doesn't show vLLM using the GPU.
+**Symptom:** Generation is glacial; `nvidia-smi` doesn't show vLLM using the GPU.
 
-**Fix:** Ensure `--n-gpu-layers 99` is set (offloads all layers to GPU). In Docker Compose this is the default. For bare metal, check the command:
+**Fix:** vLLM auto-detects the GPU via PyTorch CUDA. If it's running on CPU something deeper is wrong — usually the NVIDIA container runtime is missing. Verify:
 ```bash
-ps aux | grep vLLM | grep 'n-gpu-layers'
+docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi
 ```
+If that fails, install [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). For bare metal, ensure `pip install vllm` was run with CUDA-enabled PyTorch (the wheels.vllm.ai/nightly index handles this automatically).
 
-If using Docker, ensure the NVIDIA container runtime is configured (see GPU section above).
+### Model Directory Not Found
 
-### Model File Not Found
+**Symptom:** vLLM exits immediately with `OSError: ... is not a valid model identifier` or similar.
 
-**Symptom:** vLLM exits immediately with "failed to load model" or similar.
-
-**Fix:** Check the model path:
+**Fix:** vLLM loads from a directory of `.safetensors` shards (NOT a single GGUF file). Check the AWQ directory exists:
 ```bash
 # Docker Compose — model must be in ATLAS_MODELS_DIR (default: ./models/)
-ls -la models/Qwen3.5-9B-Q6_K.gguf
+ls -la models/Qwen3.5-9B-AWQ/  # should contain config.json + *.safetensors
 
 # Bare metal — check ATLAS_MODEL_PATH
-ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
+ls -la "$ATLAS_MODEL_PATH"
 ```
 
-The filename must match `ATLAS_MODEL_FILE` in `.env` (default: `Qwen3.5-9B-Q6_K.gguf`).
+Pull the weights with `make model` or:
+```bash
+huggingface-cli download QuantTrio/Qwen3.5-9B-AWQ --local-dir models/Qwen3.5-9B-AWQ
+```
+
+For gated repos, set `HF_TOKEN` first.
 
 ### Out of VRAM
 
-**Symptom:** vLLM crashes or gets OOMKilled shortly after starting. `nvidia-smi` shows VRAM near 100%.
+**Symptom:** vLLM crashes or gets OOMKilled. `nvidia-smi` shows VRAM near 100%, or vLLM logs `torch.cuda.OutOfMemoryError`.
 
-**Fix:** The 9B Q6_K model needs ~8.2 GB VRAM (model + KV cache). Ensure:
-1. No other GPU processes are running (`nvidia-smi` — check for other CUDA processes)
-2. You have 16GB+ VRAM
-3. Context size isn't set too high (default 32K is fine, don't increase without checking VRAM)
+**Fix:** AWQ Q4 of Qwen3.5-9B needs ~5 GB for weights, plus KV cache. The two-instance setup (gen 0.55 + embed 0.20) targets ~80 GB cards. On smaller GPUs:
 
 ```bash
-# Kill other GPU processes if needed
-nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
+# 16 GB consumer card — gen-only, no Lens embeddings
+GEOMETRIC_LENS_ENABLED=false \
+ATLAS_GEN_MAX_NUM_SEQS=4 \
+ATLAS_GEN_CTX_SIZE=16384 \
+ATLAS_GEN_GPU_MEM=0.85 \
+docker compose up vllm-gen geometric-lens v3-service sandbox atlas-proxy
 ```
 
-### Grammar Not Enforced (Model Outputs Thinking Blocks)
+Disable the embed instance entirely with `docker compose up --scale vllm-embed=0` if you don't need Lens scoring during testing.
 
-**Symptom:** Model outputs `<think>` tags or raw text instead of JSON tool calls.
+### Thinking Tokens in Output
 
-**Fix:** The proxy sets `response_format: {"type": "json_object"}` automatically when `ATLAS_AGENT_LOOP=1`. If using vLLM directly, include it in your request:
+**Symptom:** Responses contain `<think>...</think>` blocks or `reasoning_content` is filled but `content` is empty.
+
+**Fix:** vLLM with `--reasoning-parser qwen3` separates thinking from the answer. Toggle thinking via `chat_template_kwargs`:
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen3.5-9B-Q6_K",
+    "model": "qwen3.5-9b",
     "messages": [{"role":"user","content":"Say hi"}],
     "max_tokens": 50,
-    "response_format": {"type": "json_object"}
+    "chat_template_kwargs": {"enable_thinking": false}
   }'
 ```
 
-If this returns raw text instead of JSON, your vLLM build doesn't support `response_format`. Rebuild from the latest source.
+Qwen3.5 dropped the soft `/nothink` and `/think` commands — passing them in the prompt does nothing. Use the `chat_template_kwargs` body field instead.
 
-### Context Window Too Small
+### G(x) Lens Scoring Disabled
 
-**Symptom:** Tool call arguments get truncated. `write_file` fails with "unexpected end of JSON" or proxy logs show "truncation detected".
+**Symptom:** Lens calls return `gx_available: false`. Phase 2 candidate selection only uses C(x).
 
-**Fix:** Context size should be 32768 (default in Docker Compose). Check:
+**Fix:** xgboost is missing from the Lens container. Check the Lens log:
 ```bash
-# Docker Compose
-grep CTX_SIZE .env
-
-# Bare metal
-ps aux | grep vLLM | grep ctx-size
+docker compose logs geometric-lens | grep -i xgboost
+# expect: "G(x) XGBoost loaded (AUC=0.8840, PCA 4096→128)"
+# bug:    "xgboost package not installed"
 ```
+
+If the bug message appears, `xgboost` and `scikit-learn` are missing from `geometric-lens/requirements.txt`. The Dockerfile installs from that file. Rebuild:
+```bash
+docker compose build --no-cache geometric-lens
+docker compose up -d geometric-lens
+```
+
+### Embed Instance Returns 0-dim Vectors
+
+**Symptom:** `/v1/embeddings` returns `{"data": [{"embedding": []}]}` or wrong dimensionality.
+
+**Fix:** The embed instance must use `--runner pooling --convert embed` (the current API). The deprecated `--task embed` may produce different shapes on newer vLLM versions:
+```bash
+docker compose exec vllm-embed bash -c 'ps aux | grep vllm | grep -- --runner'
+# expect: "--runner pooling --convert embed"
+```
+
+If you see `--task embed`, your docker-compose is out of date. Pull the latest. Stage 19 of the vLLM cutover migrated to the new API.
 
 ---
 
