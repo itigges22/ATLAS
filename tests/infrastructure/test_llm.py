@@ -5,7 +5,7 @@ Validates model loading, chat completions, streaming, generation
 parameters, and the dedicated /v1/embeddings instance the Geometric
 Lens depends on.
 
-Tests that probed llama.cpp-only endpoints (/props, /slots) are kept
+Tests that probed llama.cpp-era endpoints (/props, /slots) are kept
 but skip silently when the endpoint isn't present (vLLM doesn't
 implement them).
 """
@@ -16,7 +16,7 @@ import httpx
 
 
 class TestLlamaHealth:
-    """Test llama-server health."""
+    """Test vLLM health."""
 
     def test_health_endpoint_responds(self, llama_client: httpx.Client):
         """Health endpoint should return 200 OK."""
@@ -47,7 +47,7 @@ class TestLlamaModels:
 
     def test_context_length_is_configured(self, llama_client: httpx.Client):
         """Model should report context length (expected 16384)."""
-        # Try /props endpoint for llama.cpp server properties
+        # Try /props endpoint for llama.cpp /props (vLLM has /metrics instead)
         response = llama_client.get("/props", timeout=10.0)
         if response.status_code == 200:
             data = response.json()
@@ -220,7 +220,7 @@ class TestLlamaChatCompletion:
 
 
 class TestLlamaServerFeatures:
-    """Test llama-server specific features."""
+    """Test vLLM specific features."""
 
     def test_flash_attention_enabled(self, llama_client: httpx.Client):
         """Check if flash attention is enabled via props."""
@@ -481,7 +481,7 @@ class TestLlamaErrorHandling:
     """Test error handling in LLM service."""
 
     def test_empty_messages_handled(self, llama_client: httpx.Client):
-        """Empty messages array is handled by llama-server."""
+        """Empty messages array is handled by vLLM."""
         response = llama_client.post(
             "/v1/chat/completions",
             json={
@@ -494,14 +494,14 @@ class TestLlamaErrorHandling:
         assert response.status_code == 200
 
     def test_invalid_json_rejected(self, llama_client: httpx.Client):
-        """Invalid JSON should be rejected by llama-server."""
+        """Invalid JSON should be rejected by vLLM."""
         response = llama_client.post(
             "/v1/chat/completions",
             content="not valid json",
             headers={"Content-Type": "application/json"},
             timeout=30.0
         )
-        # Llama-server (llama.cpp) returns 500 for invalid JSON
+        # vLLM returns 500 for invalid JSON
         assert response.status_code == 500
 
 
