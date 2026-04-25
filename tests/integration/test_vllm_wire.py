@@ -459,3 +459,50 @@ def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     assert embs[1][0] == 0.2
     body = mock_vllm.last_body
     assert body["input"] == ["a", "b"]
+
+
+def test_v3_service_adapter_propagates_sampling_params(monkeypatch, mock_vllm):
+    """v3-service/main.py LLMAdapter must propagate top_k/top_p/stop/seed
+    from its internal body dict to the chat_completions request. Earlier
+    versions silently dropped these on the floor — the adapter built `body`
+    with them, then `_send` rebuilt `chat_body` with only model/messages/
+    max_tokens/temperature/stream/chat_template_kwargs. With Qwen3.5's
+    default top_k=-1 and no stop, dropping these gave very different
+    sampling behavior than the v2 llama.cpp runner the V3 modules were
+    tuned against."""
+    monkeypatch.setenv("LLAMA_GEN_URL", mock_vllm.url)
+    monkeypatch.setenv("LLAMA_GEN_MODEL", "qwen3.5-9b")
+
+    sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
+    # Force a reimport so the module-level INFERENCE_URL picks up our env.
+    for mod in [m for m in list(sys.modules) if m == "main" or m.startswith("main.")]:
+        del sys.modules[mod]
+    import importlib
+    import main as v3_main  # noqa: F401
+    importlib.reload(v3_main)
+
+    adapter = v3_main.LLMAdapter()
+    chatml = (
+        "<|im_start|>system\nYou are helpful.<|im_end|>\n"
+        "<|im_start|>user\nHi<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+    content, tokens, t_ms = adapter(chatml, temperature=0.4, max_tokens=128, seed=99)
+
+    body = mock_vllm.last_body
+    assert mock_vllm.last_path == "/v1/chat/completions"
+    # Sampling params from the adapter's defaults must be on the wire.
+    assert body.get("top_k") == 20, "top_k=20 must be forwarded to vLLM"
+    assert body.get("top_p") == 0.95, "top_p=0.95 must be forwarded"
+    assert body.get("stop") == ["\n\n\n\n"], "stop sequence must be forwarded"
+    # Caller-supplied seed/temperature must round-trip.
+    assert body.get("seed") == 99
+    assert body.get("temperature") == 0.4
+    assert body.get("max_tokens") == 128
+    # Thinking still disabled by default in this adapter.
+    assert body.get("chat_template_kwargs", {}).get("enable_thinking") is False
+    # Model name from env.
+    assert body.get("model") == "qwen3.5-9b"
+    # ChatML parsed into messages, not raw prompt forwarded.
+    assert "messages" in body and len(body["messages"]) >= 2
+    assert "prompt" not in body

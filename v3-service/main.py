@@ -93,8 +93,11 @@ class LLMAdapter:
                  max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
         self.call_count += 1
 
+        # Sampling params propagate to the chat-completions body in _send().
+        # Stop on the first quadruple newline (V3 modules expect a single
+        # generation per call; long runs of blank lines are usually the model
+        # drifting into self-talk after the answer is done).
         body = {
-            "model": "default",
             "prompt": prompt,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -170,8 +173,13 @@ class LLMAdapter:
             # Qwen3.5 has no /nothink soft command. Disable thinking via kwarg.
             "chat_template_kwargs": {"enable_thinking": False},
         }
-        if "seed" in body:
-            chat_body["seed"] = body["seed"]
+        # Forward sampling controls so the runtime sees the same shape it did
+        # under llama.cpp. Without this, top_k/top_p/stop fall back to vLLM's
+        # generation-config defaults — which for Qwen3.5 are top_k=-1 (no
+        # truncation) and no stop, very different sampling behavior.
+        for key in ("seed", "top_k", "top_p", "stop"):
+            if key in body and body[key] is not None:
+                chat_body[key] = body[key]
 
         req = urllib.request.Request(
             f"{INFERENCE_URL}/v1/chat/completions",
