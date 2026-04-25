@@ -86,7 +86,7 @@ To stay strictly under $100, do baseline only on the H200 and leave ATLAS for a 
 
 ## If something breaks
 
-- Container build fails: vLLM image pulls from `vllm/vllm-openai:latest`. If the pull errors, check that nvidia-container-toolkit is installed and `docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi` succeeds.
+- Container build fails: the h200 Dockerfile builds from `nvidia/cuda:12.8.1-runtime-ubuntu22.04` and pip-installs `vllm==0.17.1` (pinned — 0.18+ crashes on Qwen3.5). If the build errors, check nvidia-container-toolkit is installed and `docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi` succeeds.
 - vLLM OOMs at `--max-num-seqs 32`: drop to 16 (or 8) and reduce `--max-model-len` to 16384. See [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md#out-of-vram).
 - DeltaNet hang on multi-slot: vLLM's PagedAttention handles concurrent slots cleanly — this was a llama.cpp issue and doesn't apply on the new stack.
 - Instance dies mid-run: responses.jsonl is written incrementally with atomic appends. Re-run `./benchmarks/h200/launch_on_h200.sh` — runner's `find_completed()` skips finished tasks.

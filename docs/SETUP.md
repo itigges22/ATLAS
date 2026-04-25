@@ -74,7 +74,7 @@ atlas
 ### What Happens on First Run
 
 1. Docker builds the local images:
-   - **vllm-gen** + **vllm-embed** — pulled prebuilt from `vllm/vllm-openai:latest` (no compile step)
+   - **vllm-gen** + **vllm-embed** — pulled prebuilt from `vllm/vllm-openai:v0.17.1` (pinned: 0.18+ crashes on Qwen3.5; no compile step)
    - **geometric-lens** — installs PyTorch CPU + FastAPI
    - **v3-service** — installs PyTorch CPU + benchmark modules
    - **sandbox** — installs Node.js, Go, Rust, gcc

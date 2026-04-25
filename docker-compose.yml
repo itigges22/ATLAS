@@ -4,7 +4,10 @@ services:
   # Uses --reasoning-parser qwen3 so thinking tokens land in `reasoning_content`
   # and don't pollute the answer string.
   vllm-gen:
-    image: vllm/vllm-openai:latest
+    # Pinned to v0.17.1 — vLLM 0.18+ has a Qwen3.5 engine crash. The
+    # benchmarks/h200/Dockerfile pins the same version via pip install;
+    # don't drift these two without re-validating both paths.
+    image: vllm/vllm-openai:v0.17.1
     deploy:
       resources:
         reservations:
@@ -59,7 +62,10 @@ services:
   # vLLM is single-task per process — runs alongside vllm-gen sharing the GPU.
   # max_model_len is small (4096) because Lens calls only embed code snippets.
   vllm-embed:
-    image: vllm/vllm-openai:latest
+    # Pinned to v0.17.1 — vLLM 0.18+ has a Qwen3.5 engine crash. The
+    # benchmarks/h200/Dockerfile pins the same version via pip install;
+    # don't drift these two without re-validating both paths.
+    image: vllm/vllm-openai:v0.17.1
     deploy:
       resources:
         reservations:

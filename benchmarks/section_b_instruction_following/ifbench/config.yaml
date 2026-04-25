@@ -23,7 +23,7 @@ pipeline:
     Delta = what the pipeline adds over the raw model.
 
 server_config:
-  image: vllm/vllm-openai:latest
+  image: vllm/vllm-openai:v0.17.1  # pinned: vLLM 0.18+ crashes on Qwen3.5
   flags:
     - "--reasoning-parser qwen3"   # surfaces thinking in reasoning_content
     - "--enable-prefix-caching"

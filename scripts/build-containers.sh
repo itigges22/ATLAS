@@ -98,8 +98,10 @@ main() {
 
     # Pull (don't build) the vLLM image. Same image serves both gen and
     # embed instances — different command-line flags differentiate them.
-    log_info "Pulling vllm/vllm-openai:latest (used by both vllm-gen and vllm-embed)"
-    "$RUNTIME" pull vllm/vllm-openai:latest 2>/dev/null || \
+    # Pinned to v0.17.1 — vLLM 0.18+ has a Qwen3.5 engine crash. Keep
+    # in sync with docker-compose.yml and benchmarks/h200/Dockerfile.
+    log_info "Pulling vllm/vllm-openai:v0.17.1 (used by both vllm-gen and vllm-embed)"
+    "$RUNTIME" pull vllm/vllm-openai:v0.17.1 2>/dev/null || \
         log_warn "vLLM image pull failed — K3s will pull at first deployment"
 
     # Atlas services (in k8s/atlas)

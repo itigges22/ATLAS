@@ -1125,6 +1125,44 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_vllm_image_tag_is_pinned_to_v0_17_1():
+    """vLLM 0.18+ has a Qwen3.5 engine crash. Stage 50 pinned the H200
+    Dockerfile via `pip install vllm==0.17.1`. Two other surfaces still
+    pulled the moving `:latest` tag: the docker-compose `image:` keys
+    on `vllm-gen` and `vllm-embed`, and the `scripts/build-containers.sh`
+    pull command (used by the legacy K3s path). Both target the same
+    upstream Docker Hub repo (`vllm/vllm-openai`), so when vLLM cuts a
+    0.18 release, every fresh `make up` would pull the broken version
+    and fail at the first `/v1/chat/completions` call.
+
+    Pin: every reference to `vllm/vllm-openai:` in the live
+    deployment paths must carry an explicit version tag
+    (`v0.17.1`), never `:latest`."""
+    files = [
+        PROJECT_ROOT / "docker-compose.yml",
+        PROJECT_ROOT / "scripts" / "build-containers.sh",
+        PROJECT_ROOT / "benchmarks" / "section_b_instruction_following" / "ifbench" / "config.yaml",
+    ]
+    for f in files:
+        text = f.read_text()
+        if "vllm/vllm-openai" not in text:
+            continue
+        # Every vllm/vllm-openai reference in this file must be tagged
+        # with v0.17.1 (the pinned version), not :latest.
+        bad = re.findall(r"vllm/vllm-openai:latest", text)
+        assert not bad, (
+            f"{f.relative_to(PROJECT_ROOT)} still pulls "
+            f"`vllm/vllm-openai:latest` — vLLM 0.18+ crashes on Qwen3.5; "
+            f"pin to `vllm/vllm-openai:v0.17.1`"
+        )
+
+    # Sanity: the docker-compose image tag is the v0.17.1 we expect.
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text()
+    assert "vllm/vllm-openai:v0.17.1" in compose, (
+        "docker-compose.yml must reference the pinned `vllm/vllm-openai:v0.17.1`"
+    )
+
+
 def test_readme_roadmap_drops_dead_c_side_sampler_bullet():
     """The README.md V3.1 roadmap had a "Grammar speed - C-side sampler
     chain for faster constrained decoding" bullet — that was a llama.cpp-
