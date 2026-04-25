@@ -296,6 +296,34 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_install_sh_guards_against_missing_manifests_dir():
+    """`scripts/install.sh` references `$K8S_DIR/manifests/*.yaml` for the
+    K8s deployment path, but the repo currently does NOT ship any manifests/
+    directory — the canonical install path for the vLLM two-instance stack
+    is docker-compose. Without an upfront guard, install.sh would fail at
+    the first `kubectl apply -f $K8S_DIR/manifests/redis-deployment.yaml`
+    with "no such file" and leave the namespace half-initialized.
+
+    Pin: deploy_manifests must short-circuit when the directory is absent
+    and tell the user to use `make up` (docker-compose) instead."""
+    install_sh = (PROJECT_ROOT / "scripts" / "install.sh").read_text()
+    # The guard must reference the manifests directory existence check.
+    assert '-d "$K8S_DIR/manifests"' in install_sh or "[[ ! -d " in install_sh and "manifests" in install_sh, (
+        "install.sh must check `[[ ! -d $K8S_DIR/manifests ]]` before invoking kubectl"
+    )
+    # And it must point users to docker compose / make up.
+    assert "docker compose" in install_sh.lower() or "make up" in install_sh, (
+        "install.sh's missing-manifests message must point users to docker compose"
+    )
+    # Sanity: the manifests directory really is absent in the repo right now.
+    # If a future PR ports the K8s manifests across, this assertion will flag
+    # both the test and the guard for review at the same time.
+    assert not (PROJECT_ROOT / "manifests").is_dir(), (
+        "manifests/ directory now exists — update install.sh's guard and remove"
+        " this self-check, since the docker-compose-only fallback no longer applies"
+    )
+
+
 def test_config_sh_validates_vllm_embed_nodeport():
     """`scripts/lib/config.sh validate_config` must include the embed NodePort
     in its dedup + range check. Earlier iterations only listed ATLAS_LLAMA_NODEPORT

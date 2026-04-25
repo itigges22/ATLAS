@@ -424,6 +424,26 @@ deploy_manifests() {
     # Process templates first to substitute config values
     process_templates
 
+    # Sanity-check that manifests actually exist before invoking kubectl —
+    # the repo currently ships docker-compose as the canonical install path
+    # for the vLLM stack, and the K8s manifest set has not yet been ported
+    # over from the old llama.cpp deployment. Without this guard the first
+    # `kubectl apply` below would fail with an opaque "no such file" error
+    # and leave the namespace half-initialized (Redis pulled, nothing else).
+    if [[ ! -d "$K8S_DIR/manifests" ]]; then
+        log_error "K8s manifests directory ($K8S_DIR/manifests) is missing."
+        log_error ""
+        log_error "The vLLM stack currently ships as a docker-compose deployment."
+        log_error "K8s manifest support has not yet been re-implemented for the"
+        log_error "two-instance vllm-gen + vllm-embed architecture."
+        log_error ""
+        log_error "Use docker compose instead:"
+        log_error "    cp .env.example .env       # edit HF_TOKEN, model paths"
+        log_error "    make model                  # pull QuantTrio/Qwen3.5-9B-AWQ"
+        log_error "    make up                     # bring the stack up"
+        log_error "    make preflight              # smoke-test gen + embed + Lens"
+        return 2
+    fi
 
     # Deploy infrastructure first (Redis is dependency)
     log_info "Deploying infrastructure..."
