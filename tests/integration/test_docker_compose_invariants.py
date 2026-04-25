@@ -1570,6 +1570,45 @@ def test_v3_runner_preflight_tolerates_empty_vllm_health_body():
     )
 
 
+def test_lens_feedback_default_url_matches_docker_compose():
+    """`benchmark/v3/lens_feedback.py LensFeedbackConfig` had a hardcoded
+    `rag_api_url: str = "http://geometric-lens.atlas.svc.cluster.local:31144"`
+    default — that's a K3s in-cluster FQDN. Under docker-compose the
+    service is just `geometric-lens:31144`, and the K3s deployment path
+    isn't currently shipped (see SETUP.md "K3s" section). The current
+    production caller in `v3_runner.py:_init_feedback` passes
+    `rag_api_url=RAG_API_URL` explicitly so production wasn't broken,
+    but a bare instantiation (or any future caller that forgets the
+    kwarg) lands on a nonexistent host.
+
+    Pin: the default must mirror the resolution chain other Lens
+    surfaces use — `ATLAS_LENS_URL → ATLAS_RAG_URL → geometric-hub:31144`
+    — and may not reference the K3s `.svc.cluster.local` FQDN."""
+    src = (PROJECT_ROOT / "benchmark" / "v3" / "lens_feedback.py").read_text()
+    # Live code may not contain the K3s FQDN. Explanatory comments that
+    # mention it (with `K3s` or `pre-cutover` nearby for context) are OK
+    # — strip those before checking.
+    code_lines = []
+    for line in src.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("#") and ("K3s" in line or "pre-cutover" in line):
+            continue
+        code_lines.append(line)
+    code_only = "\n".join(code_lines)
+    assert ".svc.cluster.local" not in code_only, (
+        "lens_feedback.py still references the K3s in-cluster FQDN as "
+        "live code; docker-compose uses `geometric-lens:31144` for the Lens"
+    )
+    assert "geometric-lens:31144" in src, (
+        "lens_feedback.py must default to `http://geometric-lens:31144` "
+        "when no rag_api_url is passed"
+    )
+    assert "ATLAS_LENS_URL" in src, (
+        "lens_feedback.py must consult ATLAS_LENS_URL via os.environ to "
+        "mirror config.py's resolution chain"
+    )
+
+
 def test_lens_retriever_defaults_match_vllm_gen_service():
     """`geometric-lens/retriever/hybrid.py` and `tree_search.py` used to
     hardcode `llama_url: str = "http://llama-service:8000"` as the kwarg

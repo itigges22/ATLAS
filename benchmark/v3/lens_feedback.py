@@ -10,6 +10,7 @@ Telemetry: telemetry/lens_feedback_events.jsonl
 """
 
 import json
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -22,6 +23,18 @@ from typing import Any, Dict, List, Optional
 # Configuration
 # ---------------------------------------------------------------------------
 
+# Default Lens URL when caller doesn't pass one. Mirrors the resolution
+# chain used in `atlas/cli/client.py` and the Lens retrievers (stage 112)
+# so a bare instantiation lands on the right host on docker-compose
+# (service name: geometric-lens). The pre-cutover default was a K3s
+# in-cluster FQDN that didn't resolve outside the K3s deployment (which
+# is itself currently unsupported — see SETUP.md).
+_DEFAULT_LENS_URL = os.environ.get(
+    "ATLAS_LENS_URL",
+    os.environ.get("ATLAS_RAG_URL", "http://geometric-lens:31144"),
+)
+
+
 @dataclass
 class LensFeedbackConfig:
     """Configuration for online Lens recalibration."""
@@ -29,7 +42,7 @@ class LensFeedbackConfig:
     retrain_interval: int = 50
     min_pass: int = 5
     min_fail: int = 5
-    rag_api_url: str = "http://geometric-lens.atlas.svc.cluster.local:31144"
+    rag_api_url: str = field(default_factory=lambda: _DEFAULT_LENS_URL)
     domain: str = "LCB"
     use_replay: bool = True
     use_ewc: bool = True
