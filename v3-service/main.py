@@ -197,7 +197,20 @@ class LLMAdapter:
                             if "message" in choice:
                                 choice["text"] = choice["message"].get("content", "")
                         return data
-            except (urllib.error.HTTPError, OSError) as e:
+            except urllib.error.HTTPError as e:
+                # vLLM 4xx errors are permanent (max-model-len overrun, served-name
+                # mismatch, etc.) — body never changes between retries. Fail fast
+                # so the caller surfaces the misconfiguration instead of paying
+                # ~20s of doomed backoff sleep first.
+                _retryable = {408, 425, 429, 500, 502, 503, 504}
+                print(f"  [LLM] Attempt {attempt+1} HTTP {e.code}: {e.reason}", flush=True)
+                if e.code not in _retryable:
+                    raise
+                if attempt < 4:
+                    time.sleep(2 * (attempt + 1))
+                else:
+                    raise
+            except OSError as e:
                 print(f"  [LLM] Attempt {attempt+1} failed: {e}", flush=True)
                 if attempt < 4:
                     time.sleep(2 * (attempt + 1))

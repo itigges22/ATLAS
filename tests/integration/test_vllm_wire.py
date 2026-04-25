@@ -27,6 +27,7 @@ import json
 import sys
 import threading
 import time
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -425,6 +426,60 @@ def test_v301_chat_retries_on_503(mock_vllm):
         content, _, _, _ = c.chat([{"role": "user", "content": "hi"}], max_tokens=8)
         assert content == "ok"
         assert call_count["n"] == 3, f"expected 2 retries + 1 success, got {call_count['n']} calls"
+    finally:
+        server.shutdown()
+
+
+def test_v3_service_adapter_fails_fast_on_400(monkeypatch, mock_vllm):
+    """Same fix as runner.py / v3_runner.py: v3-service/main.py LLMAdapter
+    must not retry permanent 4xx errors. Earlier iterations slept ~20s of
+    backoff before raising, so a single misconfigured prompt cost ~20s
+    per call across the V3 pipeline (which may make 50+ calls per task).
+
+    Drive an always-400 mock and assert the call returns in <1s with no
+    extra HTTP attempts."""
+    import time, threading
+    from http.server import HTTPServer
+
+    BaseHandler = mock_vllm.make_handler()
+    call_count = {"n": 0}
+
+    class Always400(BaseHandler):
+        def do_POST(self):
+            call_count["n"] += 1
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"object":"error","message":"max-model-len exceeded"}')
+
+    server = HTTPServer(("127.0.0.1", 0), Always400)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        monkeypatch.setenv("LLAMA_GEN_URL", f"http://127.0.0.1:{port}")
+        monkeypatch.setenv("LLAMA_GEN_MODEL", "qwen3.5-9b")
+
+        sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
+        for mod in [m for m in list(sys.modules) if m == "main" or m.startswith("main.")]:
+            del sys.modules[mod]
+        import importlib
+        import main as v3_main  # noqa: F401
+        importlib.reload(v3_main)
+
+        adapter = v3_main.LLMAdapter()
+        chatml = "<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n"
+        start = time.time()
+        with pytest.raises(urllib.error.HTTPError):
+            adapter(chatml, temperature=0.0, max_tokens=8, seed=0)
+        elapsed = time.time() - start
+
+        assert call_count["n"] == 1, (
+            f"v3-service must not retry permanent 4xx; got {call_count['n']} attempts."
+        )
+        assert elapsed < 1.0, (
+            f"4xx fail-fast must return immediately; took {elapsed:.2f}s."
+        )
     finally:
         server.shutdown()
 
