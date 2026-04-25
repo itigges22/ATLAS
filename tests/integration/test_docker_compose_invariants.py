@@ -1125,6 +1125,39 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_atlas_cli_check_llama_tolerates_empty_vllm_health_body():
+    """Same root cause as `test_v3_runner_preflight_tolerates_empty_vllm_health_body`,
+    different surface: `atlas/cli/client.py:check_llama` used to call
+    `_get(f"{INFERENCE_URL}/health")` where `_get` runs
+    `json.loads(resp.read().decode())` on the response. vLLM 0.17+
+    `/health` returns 200 + empty body, so JSONDecodeError fires inside
+    the try-block, the except branch returns `(False, str(e))`, and the
+    REPL's status panel reports vLLM as down on a healthy stack.
+
+    Pin: `check_llama` must not call `_get` (the JSON-parsing helper) on
+    `/health` — only `_probe` (status-code-only) is acceptable. The
+    `/v1/models` follow-up call is fine to JSON-parse since it returns
+    OpenAI-shape JSON."""
+    src = (PROJECT_ROOT / "atlas" / "cli" / "client.py").read_text()
+    # Locate the check_llama function body.
+    fn_match = re.search(
+        r"def check_llama\(\).*?(?=\ndef |\Z)",
+        src,
+        re.DOTALL,
+    )
+    assert fn_match, "Could not locate check_llama in atlas/cli/client.py"
+    fn_body = fn_match.group(0)
+    assert '_get(f"{INFERENCE_URL}/health"' not in fn_body, (
+        "check_llama still calls _get (JSON-parsing) on /health — vLLM "
+        "returns an empty 200 body, so this raises JSONDecodeError on "
+        "every healthy stack. Use _probe (status-code-only) instead."
+    )
+    # And the function must use _probe somewhere (positive assertion).
+    assert "_probe(" in fn_body, (
+        "check_llama must use _probe(...) for the /health check"
+    )
+
+
 def test_v3_runner_preflight_tolerates_empty_vllm_health_body():
     """vLLM 0.17+ `/health` returns HTTP 200 with an *empty* body — it's
     a readiness probe, not a structured status report. The previous

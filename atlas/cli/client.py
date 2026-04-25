@@ -39,13 +39,24 @@ def _get(url: str, timeout: int = 10) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _probe(url: str, timeout: int = 10) -> int:
+    """GET, return HTTP status. urllib raises HTTPError on non-2xx, so any
+    successful return means 2xx. Use for endpoints whose body shape is
+    not guaranteed (e.g. vLLM `/health` returns 200 with an empty body)."""
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.status
+
+
 # --- Health checks ---
 
 def check_llama() -> Tuple[bool, str]:
     """Check vLLM gen instance health and get model name."""
     try:
-        _get(f"{INFERENCE_URL}/health")
-        # /health doesn't return model name — get it from /v1/models
+        # vLLM 0.17+ /health returns 200 with an empty body — don't try to
+        # json.loads it (would JSONDecodeError on every healthy stack).
+        _probe(f"{INFERENCE_URL}/health")
+        # Model name lives on /v1/models (returns OpenAI-shape JSON).
         try:
             models = _get(f"{INFERENCE_URL}/v1/models")
             model_list = models.get("models", models.get("data", []))
