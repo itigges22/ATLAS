@@ -114,43 +114,55 @@ if ! curl -s "http://localhost:${LENS_PORT:-31144}/health" 2>/dev/null | grep -q
 fi
 
 # 3. vLLM EMBED instance. Smaller, starts faster than gen.
-echo ""
-echo "--- Starting vLLM EMBED on port $EMBED_PORT ---"
-EMBED_LOG=/tmp/vllm-embed.log
-# --runner pooling --convert embed is the current API for serving a generation
-# model via /v1/embeddings. The older --task embed still works but is
-# deprecated in vLLM 0.17+.
-nohup vllm serve "$MODEL_PATH" \
-    --served-model-name "${LLAMA_EMBED_MODEL:-qwen3.5-9b-embed}" \
-    --runner pooling \
-    --convert embed \
-    --port "$EMBED_PORT" \
-    --host 0.0.0.0 \
-    --max-num-seqs "$EMBED_MAX_NUM_SEQS" \
-    --max-model-len "$EMBED_MAX_MODEL_LEN" \
-    --max-num-batched-tokens "${EMBED_MAX_NUM_BATCHED_TOKENS:-4096}" \
-    --gpu-memory-utilization "$EMBED_GPU_MEM_UTIL" \
-    --tensor-parallel-size 1 \
-    --trust-remote-code \
-    > "$EMBED_LOG" 2>&1 &
-EMBED_PID=$!
-echo "vLLM EMBED PID: $EMBED_PID (log: $EMBED_LOG)"
-
-# Wait for embed health (model load takes 30-90s for AWQ).
-echo "--- Waiting for vLLM EMBED health (timeout 600s) ---"
-for i in $(seq 1 120); do
-    if curl -s --max-time 2 "http://localhost:${EMBED_PORT}/health" 2>/dev/null | grep -q ok; then
-        echo "vLLM EMBED healthy after ${i}x5s."
-        break
-    fi
-    printf "."
-    sleep 5
-done
-if ! curl -s "http://localhost:${EMBED_PORT}/health" 2>/dev/null | grep -q ok; then
+#
+# SKIP_EMBED=1 lets a tight-VRAM run (single 16 GB card) skip the embed
+# instance entirely. The Lens needs embeddings, so we also force
+# GEOMETRIC_LENS_ENABLED=false in that case — the V3 pipeline runs
+# without G(x)/C(x) scoring, falling back to sandbox-only verification.
+EMBED_PID=""
+if [[ "${SKIP_EMBED:-0}" == "1" ]]; then
     echo ""
-    echo "ERROR: vLLM EMBED did not come up. Tail of log:" >&2
-    tail -60 "$EMBED_LOG" >&2
-    exit 1
+    echo "--- SKIP_EMBED=1: vLLM embed instance not started; Lens disabled ---"
+    export GEOMETRIC_LENS_ENABLED=false
+else
+    echo ""
+    echo "--- Starting vLLM EMBED on port $EMBED_PORT ---"
+    EMBED_LOG=/tmp/vllm-embed.log
+    # --runner pooling --convert embed is the current API for serving a generation
+    # model via /v1/embeddings. The older --task embed still works but is
+    # deprecated in vLLM 0.17+.
+    nohup vllm serve "$MODEL_PATH" \
+        --served-model-name "${LLAMA_EMBED_MODEL:-qwen3.5-9b-embed}" \
+        --runner pooling \
+        --convert embed \
+        --port "$EMBED_PORT" \
+        --host 0.0.0.0 \
+        --max-num-seqs "$EMBED_MAX_NUM_SEQS" \
+        --max-model-len "$EMBED_MAX_MODEL_LEN" \
+        --max-num-batched-tokens "${EMBED_MAX_NUM_BATCHED_TOKENS:-4096}" \
+        --gpu-memory-utilization "$EMBED_GPU_MEM_UTIL" \
+        --tensor-parallel-size 1 \
+        --trust-remote-code \
+        > "$EMBED_LOG" 2>&1 &
+    EMBED_PID=$!
+    echo "vLLM EMBED PID: $EMBED_PID (log: $EMBED_LOG)"
+
+    # Wait for embed health (model load takes 30-90s for AWQ).
+    echo "--- Waiting for vLLM EMBED health (timeout 600s) ---"
+    for i in $(seq 1 120); do
+        if curl -s --max-time 2 "http://localhost:${EMBED_PORT}/health" 2>/dev/null | grep -q ok; then
+            echo "vLLM EMBED healthy after ${i}x5s."
+            break
+        fi
+        printf "."
+        sleep 5
+    done
+    if ! curl -s "http://localhost:${EMBED_PORT}/health" 2>/dev/null | grep -q ok; then
+        echo ""
+        echo "ERROR: vLLM EMBED did not come up. Tail of log:" >&2
+        tail -60 "$EMBED_LOG" >&2
+        exit 1
+    fi
 fi
 
 # 4. vLLM GEN instance — main inference engine.
@@ -255,8 +267,10 @@ tar czf "$RESULT_TAR" \
     2>/dev/null || true
 ls -lh "$RESULT_TAR" || true
 
-# 8. Stop vLLM cleanly.
-kill "$GEN_PID" "$EMBED_PID" 2>/dev/null || true
+# 8. Stop vLLM cleanly. EMBED_PID is empty when SKIP_EMBED=1; the
+# `kill ""` would normally complain, so guard with -n test.
+kill "$GEN_PID" 2>/dev/null || true
+[[ -n "${EMBED_PID:-}" ]] && kill "$EMBED_PID" 2>/dev/null || true
 
 echo ""
 echo "============================================="

@@ -70,6 +70,7 @@ $CRT run -d --name atlas-bench \
     -e MODE="$MODE" \
     -e DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-1}" \
     -e SKIP_SMOKE="${SKIP_SMOKE:-0}" \
+    -e SKIP_EMBED="${SKIP_EMBED:-0}" \
     -e SHUTDOWN_ON_COMPLETE="${SHUTDOWN_ON_COMPLETE:-0}" \
     -e HF_TOKEN="${HF_TOKEN:-}" \
     -e GEN_MAX_NUM_SEQS="${GEN_MAX_NUM_SEQS:-32}" \

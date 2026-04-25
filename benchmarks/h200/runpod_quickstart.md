@@ -89,7 +89,7 @@ Tips to stay under $100:
 ## Troubleshooting
 
 - **"no nvidia-smi"**: pod doesn't have GPU. Pick a GPU template.
-- **vLLM OOM**: drop `GEN_MAX_NUM_SEQS` to 8 or 4, drop `GEN_MAX_MODEL_LEN` to 16384, or lower `GEN_GPU_MEM_UTIL` to 0.45. On a single 16 GB card you may need to disable the embed instance entirely (`GEOMETRIC_LENS_ENABLED=false`).
+- **vLLM OOM**: drop `GEN_MAX_NUM_SEQS` to 8 or 4, drop `GEN_MAX_MODEL_LEN` to 16384, or lower `GEN_GPU_MEM_UTIL` to 0.45. On a single 16 GB card, set `SKIP_EMBED=1` in the env to skip the embed instance entirely (the entrypoint will also disable the Lens, since C(x)/G(x) need embeddings — V3 falls back to sandbox-only verification).
 - **Smoke test fails**: check `/tmp/vllm-gen.log` (and `/tmp/vllm-embed.log`) for the actual error. Common ones: AWQ download failed (set HF_TOKEN), model not found at MODEL_PATH, or insufficient CUDA driver (need 12.8+).
 - **Slow download**: RunPod has cached HuggingFace hits — first download might be fast if the node has seen it before.
 - **Container exits immediately**: check Pod Logs. Most likely the model failed to download. Set `DOWNLOAD_MODEL=0` and mount a volume instead.
