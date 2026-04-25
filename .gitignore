@@ -197,3 +197,10 @@ geometric-lens/geometric_lens/gate_report.json
 
 # NLTK data — downloaded at runtime, not committed
 benchmarks/**/.nltk_data/
+
+# Cloud-pod benchmark snapshots pulled by scripts/pull_pod_snapshots.sh and
+# the rehydrated trees built from them. These can be many GiB and are
+# reproducible from the cloud-pod tarballs at any time.
+/inbox/
+/rehydrated/
+/reports/V3.1_BENCHMARKS.md

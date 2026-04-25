@@ -53,10 +53,12 @@ Build time: ~3-6 min (pip-install of pinned `vllm==0.17.1` plus the content-base
 
      # Spot-resilience knobs (recommended for spot instances)
      SNAPSHOT_INTERVAL_SEC=900    # auto-snapshot every 15 min during sweep
-     # ATLAS_HF_DATASET=user/dataset   # if set + HF_TOKEN below, partial
-                                       # snapshots upload here automatically
-                                       # so they survive pod reclaim
-     # HF_TOKEN=hf_...                 # write-token for ATLAS_HF_DATASET
+
+     # OPTIONAL: HuggingFace dataset push (pod -> HF) as an extra durability
+     # layer. The recommended path is the local pull-script — see step 4
+     # below. Only enable HF push if you also want a public archive.
+     # ATLAS_HF_DATASET=user/dataset
+     # HF_TOKEN=hf_...
      ```
    - Exposed Ports: `8000/http` (vLLM gen) and `8001/http` (vLLM embed) — let you probe vLLM directly from the web terminal.
 
@@ -80,16 +82,31 @@ Build time: ~3-6 min (pip-install of pinned `vllm==0.17.1` plus the content-base
    - `*_sigterm.tar.gz` — emergency snapshot if the spot reclaims (you want this one)
    - `*_final.tar.gz` — the canonical end-of-run archive (`atlas_results_latest.tar.gz` symlinks to it)
 
-   Pull them all (or the one you need):
+   **Recommended: continuous rsync-pull from this machine.** Start it once when the pod boots and let it run alongside the sweep — every `SNAPSHOT_INTERVAL_SEC`, the latest tarball lands locally, surviving any subsequent spot reclaim:
    ```bash
-   # On your local machine — pulls every snapshot for this run
-   runpodctl receive <pod-id>:/workspace/results/ ./inbox/
+   # Get the pod's SSH connection details from the RunPod web UI
+   # ("Connect → SSH" gives you something like `ssh root@149.36.0.42 -p 12345`)
 
-   # Or just the final one
+   # Continuous pull loop (every 5 min by default), auto-rehydrating any
+   # *_final.tar.gz that lands:
+   ./scripts/pull_pod_snapshots.sh root@<pod-host> -p <ssh-port> --rehydrate
+
+   # One-shot pull (e.g., after the sweep finished and you just want the final):
+   ./scripts/pull_pod_snapshots.sh root@<pod-host> -p <ssh-port> --once
+   ```
+
+   Why pull (vs. `runpodctl receive` or HF push):
+   - **No SSH server on your laptop** — the pod is the SSH server, your machine is the client.
+   - **Works through NAT / dynamic IP / coffee-shop wifi** — outbound SSH only.
+   - **rsync is incremental** — re-runs are cheap, partial transfers resume.
+   - **Survives pod reclaim** — whatever was on disk at SIGTERM-snapshot time is already local.
+
+   Alternative one-off pull via runpodctl (if SSH isn't set up):
+   ```bash
    runpodctl receive <pod-id>:/workspace/results/atlas_results_latest.tar.gz ./
    ```
 
-   If you set `ATLAS_HF_DATASET` + `HF_TOKEN`, every snapshot also pushes to `runs/<RUN_ID>/` in that dataset — so even if the pod gets reclaimed before you can `runpodctl receive`, the latest periodic snapshot is on HuggingFace.
+   Optional: `ATLAS_HF_DATASET` + `HF_TOKEN` enables a *secondary* push from the pod to a HuggingFace dataset. Not needed for the local-report flow — only useful if you also want a public archive of the run.
 
 5. **Build the report locally.** Once any tarball lands on your machine:
    ```bash
@@ -119,7 +136,7 @@ Tips to stay under $100:
 - Set `SHUTDOWN_ON_COMPLETE=1` if you can't be around to stop the pod manually
 - Use spot pricing if available — the snapshot pipeline (manifest, periodic auto-snapshot, SIGTERM trap) is built around exactly this case. If a spot reclaim hits, you lose at most `SNAPSHOT_INTERVAL_SEC` seconds of work, plus whatever the SIGTERM-handler's emergency snapshot couldn't capture in the ~1-2 min between SIGTERM and SIGKILL.
 - Pre-populate a network volume with the model so `DOWNLOAD_MODEL=0` saves ~5 min
-- Set `ATLAS_HF_DATASET` + `HF_TOKEN` so partials survive even if `runpodctl receive` doesn't get to run before the pod's gone
+- Start `scripts/pull_pod_snapshots.sh` on this machine the moment the pod is reachable so partials are already local before any reclaim
 
 ## Troubleshooting
 

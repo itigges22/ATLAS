@@ -32,13 +32,14 @@ SNAPSHOT = PROJECT_ROOT / "benchmarks" / "h200" / "snapshot.sh"
 MANIFEST_PY = PROJECT_ROOT / "benchmarks" / "h200" / "manifest.py"
 REHYDRATE = PROJECT_ROOT / "scripts" / "rehydrate_results.sh"
 REPORT_BUILDER = PROJECT_ROOT / "scripts" / "build_v31_report.py"
+PULL_SCRIPT = PROJECT_ROOT / "scripts" / "pull_pod_snapshots.sh"
 
 
 def test_files_exist():
     """The four scripts the spot pipeline depends on must all exist and be
     executable. A missing file here means the cloud-pod entrypoint will
     cascade-fail the moment it tries to call us."""
-    for p in (ENTRYPOINT, SNAPSHOT, MANIFEST_PY, REHYDRATE, REPORT_BUILDER):
+    for p in (ENTRYPOINT, SNAPSHOT, MANIFEST_PY, REHYDRATE, REPORT_BUILDER, PULL_SCRIPT):
         assert p.exists(), f"missing: {p}"
         assert os.access(p, os.X_OK), f"not executable: {p}"
 
@@ -278,3 +279,83 @@ def test_snapshot_round_trip_via_rehydrate():
         report = report_path.read_text()
         assert "ATLAS V3.1 Benchmark Report" in report
         assert "Reproducibility" in report
+
+
+def test_pull_script_help_runs_clean():
+    """`pull_pod_snapshots.sh --help` must exit 0 and print usage. If the
+    arg parser regresses, the user gets a confusing failure when they try
+    to start the puller — and the script has no other way to discover its
+    own flags."""
+    result = subprocess.run(
+        ["bash", str(PULL_SCRIPT), "--help"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, (
+        f"--help should exit 0, got {result.returncode}:\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    out = result.stdout
+    for required in ("Usage:", "--port", "--inbox", "--interval", "--rehydrate"):
+        assert required in out, f"--help output missing `{required}`"
+
+
+def test_pull_script_uses_resilient_rsync_flags():
+    """The whole point of pull-from-local is reliability across spot pod
+    flakiness. Lose `--partial`/`--append-verify`/`--inplace` and a dropped
+    SSH connection mid-transfer redownloads from byte 0 every poll."""
+    src = PULL_SCRIPT.read_text()
+    for flag, why in [
+        ("--partial", "resume interrupted transfers"),
+        ("--append-verify", "verify after appending to a partial file"),
+        ("--inplace", "don't write to a temp file then rename (avoids 2x disk)"),
+    ]:
+        assert flag in src, (
+            f"pull_pod_snapshots.sh must use `{flag}` ({why}). "
+            f"Without it, transient SSH errors cost full retransfers."
+        )
+
+
+def test_pull_script_filters_to_atlas_artifacts():
+    """rsync include filters scope the transfer to just what the spot
+    pipeline produces. If they regress to `--include='*'` we silently
+    pull the whole /workspace tree — model weights, HF caches, etc."""
+    src = PULL_SCRIPT.read_text()
+    for include, why in [
+        ("atlas_results_*.tar.gz", "the snapshot tarballs (the whole point)"),
+        ("manifest.json", "reproducibility fingerprint"),
+        ("pip_freeze.txt", "package state for the run"),
+        ("logs/", "sweep + benchmark logs"),
+    ]:
+        assert f"--include='{include}'" in src or f'--include="{include}"' in src, (
+            f"pull_pod_snapshots.sh must include `{include}` in its rsync filter "
+            f"({why}). If the filter narrows further, the rehydrated tree is "
+            f"missing context the report builder needs."
+        )
+    # And the catch-all exclude is what makes the includes meaningful.
+    assert "--exclude='*'" in src or '--exclude="*"' in src, (
+        "pull_pod_snapshots.sh must end the filter list with --exclude='*' "
+        "so non-matching files are skipped — otherwise the includes are no-ops"
+    )
+
+
+def test_pull_script_is_pull_only_not_push():
+    """The pull-from-local design assumes the script never writes to the
+    pod. A future edit that reverses the rsync direction (or adds a
+    `--delete`) could clobber pod state mid-sweep. Pin the direction."""
+    src = PULL_SCRIPT.read_text()
+    # The rsync invocation must read from `${SSH_TARGET}:...` and write to
+    # the local INBOX, never the other direction.
+    assert re.search(
+        r'rsync\b[^\n]*\$\{?SSH_TARGET\}?:\$\{?REMOTE_PATH\}?/?\s*"?\$\{?INBOX',
+        src, re.DOTALL,
+    ) or '"${SSH_TARGET}:${REMOTE_PATH}/" "$INBOX_ABS/"' in src, (
+        "pull_pod_snapshots.sh rsync must be remote→local (pull). "
+        "The pod is the SSH server; reversing would make the laptop one."
+    )
+    # Hard-ban --delete so a buggy edit can't accidentally wipe the pod
+    # (or the local inbox if direction got flipped).
+    assert "--delete" not in src, (
+        "pull_pod_snapshots.sh must not use --delete. The pull is meant "
+        "to be additive — every snapshot tarball is precious, never "
+        "removed by the puller."
+    )
