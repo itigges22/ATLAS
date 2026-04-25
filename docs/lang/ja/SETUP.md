@@ -13,8 +13,8 @@
 | **NVIDIA GPU** | 16GB 以上の VRAM (RTX 5060 Ti 16GB でテスト済み) |
 | **NVIDIA ドライバー** | プロプライエタリドライバーがインストール済みであること (`nvidia-smi` で GPU が表示されること) |
 | **Python 3.9+** | pip 付き |
-| **wget** | モデルウェイトのダウンロード用 |
-| **モデルウェイト** | HuggingFace から Qwen3.5-9B-Q6_K.gguf (~7GB) |
+| **HuggingFace CLI** (または wget) | モデルウェイトのダウンロード用 |
+| **モデルウェイト** | HuggingFace から QuantTrio/Qwen3.5-9B-AWQ (~12GB の AWQ-Q4 safetensors シャードのディレクトリ) |
 
 ### GPU の確認
 
@@ -42,10 +42,13 @@ V3.0.1 でテスト済みのデプロイ方法です。
 git clone https://github.com/itigges22/ATLAS.git
 cd ATLAS
 
-# 2. モデルウェイトのダウンロード (~7GB)
-mkdir -p models
-wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
-     -O models/Qwen3.5-9B-Q6_K.gguf
+# 2. モデルウェイトのダウンロード (~12 GiB の AWQ-Q4 safetensors シャードのディレクトリ)。
+#    vLLM は GGUF をネイティブにロードしないため、AWQ ビルドを直接使用します。
+make model
+# または直接：
+#   pip install -q huggingface_hub
+#   huggingface-cli download QuantTrio/Qwen3.5-9B-AWQ \
+#       --local-dir models/Qwen3.5-9B-AWQ --local-dir-use-symlinks False
 
 # 3. ATLAS CLI + Aider のインストール
 pip install -e . aider-chat
@@ -152,10 +155,10 @@ git clone https://github.com/itigges22/ATLAS.git
 cd ATLAS
 pip install -e .
 
-# 2. モデルウェイトのダウンロード
-mkdir -p models
-wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
-     -O models/Qwen3.5-9B-Q6_K.gguf
+# 2. モデルウェイトのダウンロード (~12 GiB)
+make model
+# または: huggingface-cli download QuantTrio/Qwen3.5-9B-AWQ \
+#         --local-dir models/Qwen3.5-9B-AWQ --local-dir-use-symlinks False
 
 # 3. atlas-proxy のビルド
 cd atlas-proxy
@@ -177,16 +180,28 @@ pip install fastapi uvicorn pylint pytest pydantic
 各サービスを別々のターミナルで起動します (または `&` を使ってログファイルにリダイレクトします):
 
 ```bash
-# ターミナル 1: vLLM (GPU)
-vLLM \
-  --model models/Qwen3.5-9B-Q6_K.gguf \
-  --host 0.0.0.0 --port 8080 \
-  --ctx-size 32768 --n-gpu-layers 99 --no-mmap
+# ターミナル 1a: vLLM gen インスタンス (GPU、ポート 8000)
+vllm serve models/Qwen3.5-9B-AWQ \
+  --served-model-name qwen3.5-9b \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 32768 --max-num-seqs 32 \
+  --max-num-batched-tokens 32768 \
+  --gpu-memory-utilization 0.55 \
+  --enable-prefix-caching --reasoning-parser qwen3 --trust-remote-code
+
+# ターミナル 1b: vLLM embed インスタンス (GPU、ポート 8001)
+vllm serve models/Qwen3.5-9B-AWQ \
+  --served-model-name qwen3.5-9b-embed \
+  --runner pooling --convert embed \
+  --host 0.0.0.0 --port 8001 \
+  --max-model-len 4096 --max-num-seqs 8 \
+  --max-num-batched-tokens 4096 \
+  --gpu-memory-utilization 0.20 --trust-remote-code
 
 # ターミナル 2: Geometric Lens
 cd geometric-lens
-LLAMA_URL=http://localhost:8000 \
-LLAMA_EMBED_URL=http://localhost:8000 \
+LLAMA_GEN_URL=http://localhost:8000 \
+LLAMA_EMBED_URL=http://localhost:8001 \
 GEOMETRIC_LENS_ENABLED=true \
 PROJECT_DATA_DIR=/tmp/atlas-projects \
 python -m uvicorn main:app --host 0.0.0.0 --port 31144
@@ -210,7 +225,7 @@ ATLAS_LENS_URL=http://localhost:31144 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
 ATLAS_AGENT_LOOP=1 \
-ATLAS_MODEL_NAME=Qwen3.5-9B-Q6_K \
+LLAMA_GEN_MODEL=qwen3.5-9b \
 atlas-proxy-v2
 ```
 

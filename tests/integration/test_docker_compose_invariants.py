@@ -338,29 +338,33 @@ def test_makefile_lint_and_ci_lint_cover_same_scripts():
 
 
 def test_user_facing_docs_have_no_stale_q6_k_refs():
-    """The five canonical English user-facing docs (README, SETUP, CONFIG,
-    ARCHITECTURE, API, CLI) must not steer fresh users to a Qwen3.5-9B-Q6_K
-    GGUF download or use that name in API examples — vLLM doesn't load
-    GGUF and serves under `qwen3.5-9b` (the AWQ build's served-model-name).
-    Stale doc refs cost users hours: they download the wrong file, hit a
-    4xx from vLLM, then chase the misalignment through the entire stack.
+    """The user-facing docs — English plus the ja/ko/zh-CN translations —
+    must not steer fresh users to a Qwen3.5-9B-Q6_K GGUF download or use
+    that name in API examples. vLLM doesn't load GGUF and serves under
+    `qwen3.5-9b` (the AWQ build's served-model-name). Stale refs cost
+    users hours: they download the wrong file, hit a 4xx from vLLM, then
+    chase the misalignment through the entire stack.
 
-    Translations (docs/lang/*/) and historical reports (docs/reports/,
-    benchmarks/section_*/) are excluded — those are explicitly snapshots
-    of past state, and translations follow English in a separate sweep."""
-    targets = ["SETUP.md", "CONFIGURATION.md", "ARCHITECTURE.md",
-               "API.md", "CLI.md"]
-    for name in targets:
-        src = (PROJECT_ROOT / "docs" / name).read_text()
+    Historical reports (docs/reports/, benchmarks/section_*/) are
+    excluded — those are explicitly snapshots of past state."""
+    english = ["docs/SETUP.md", "docs/CONFIGURATION.md",
+               "docs/ARCHITECTURE.md", "docs/API.md", "docs/CLI.md"]
+    translated = [
+        f"docs/lang/{lang}/{name}"
+        for lang in ("ja", "ko", "zh-CN")
+        for name in ("README.md", "SETUP.md")
+    ]
+    for rel in english + translated:
+        src = (PROJECT_ROOT / rel).read_text()
         # The docs may legitimately mention "GGUF" in the context of why we
         # don't use it (the explanation is the *fix*). Forbid only the active
         # patterns: the literal model name and the .gguf filename suffix.
         assert "Qwen3.5-9B-Q6_K" not in src, (
-            f"docs/{name}: stale Qwen3.5-9B-Q6_K reference — vLLM serves "
+            f"{rel}: stale Qwen3.5-9B-Q6_K reference — vLLM serves "
             "the AWQ build under `qwen3.5-9b`"
         )
         assert ".gguf" not in src, (
-            f"docs/{name}: stale .gguf path — vLLM consumes the AWQ "
+            f"{rel}: stale .gguf path — vLLM consumes the AWQ "
             "directory directly, not a single GGUF file"
         )
 
