@@ -255,7 +255,10 @@ def startup_checks() -> bool:
     if llm_ok:
         display.status_block(
             model=llm_model,
-            speed="~51 tok/s",
+            # vLLM PagedAttention pushes per-slot throughput well past llama.cpp's
+            # ~7.85 tok/s/slot ceiling — actual rate depends on concurrency,
+            # GPU, and AWQ vs FP8. Show "vLLM" instead of a stale tok/s number.
+            speed="vLLM (PagedAttention)",
             lens="connected" if rag_ok else "unavailable",
             sandbox="ready" if sandbox_ok else "unavailable",
         )
