@@ -1,17 +1,25 @@
 # ATLAS V3.0.1 Full Benchmark Suite — Aggregate Report
 
-**Model:** Qwen3.5-9B-Q6_K (Q6_K quantization)
+**Model:** Qwen3.5-9B-AWQ (AWQ-Q4 quantization)
 **Pipeline:** ATLAS V3.0.1
-**Hardware:** NVIDIA GeForce RTX 5060 Ti 16GB, K3s cluster
+**Hardware:** NVIDIA GeForce RTX 5060 Ti 16GB, K3s cluster (vLLM)
 **Date range:** 2026-04-14 — (ongoing)
+
+> **Note on the inference cutover (2026-04-25):** Earlier runs in this
+> aggregate used llama-server with Q6_K. After the vLLM / AWQ-Q4 cutover,
+> per-benchmark REPORT.md files capture the precise infrastructure their
+> numbers were generated on. The aggregate's caveats below apply broadly to
+> both eras.
 
 ## Thinking mode methodology
 
-**All results use natural thinking via `--jinja`, matching Qwen's methodology.**
+**All results use natural thinking via the model's chat template, matching
+Qwen's methodology.**
 
 - Thinking-heavy benchmarks (IFBench, IFEval, GPQA, LCB): **8192 token budget** (matches Qwen)
 - MCQ benchmarks (MMLU-Pro, C-Eval): **2048 token budget** (capped for time budget)
-- No `--reasoning off`, no `--reasoning-budget N` (both produce garbage output)
+- No `chat_template_kwargs.enable_thinking=false` (would disable planning, hurts constraint tasks)
+- No reasoning-budget cap (cuts mid-thought, produces garbage)
 
 Both baseline (raw model) and ATLAS pipeline runs use identical thinking settings.
 The **delta between baseline and ATLAS pipeline** measures what the V3 pipeline adds.
@@ -25,7 +33,7 @@ See `METHODOLOGY_THINKING.md` for full details.
 
 | Aspect | Qwen3.5-9B baseline | ATLAS V3.0.1 |
 |--------|---------------------|--------------|
-| Precision | bf16 | Q6_K |
+| Precision | bf16 | AWQ-Q4 |
 | Temperature | 1.0 (recommended) | 0.6 |
 | Top-P | 0.95 | 0.95 |
 | Top-K | 20 | server default |
@@ -36,7 +44,7 @@ See `METHODOLOGY_THINKING.md` for full details.
 
 ## Results
 
-| Section | Benchmark | Qwen3.5-9B (baseline) | ATLAS V3.0.1 (9B Q6_K) | Delta | 95% CI |
+| Section | Benchmark | Qwen3.5-9B (baseline) | ATLAS V3.0.1 (9B AWQ-Q4) | Delta | 95% CI |
 |---------|-----------|----------------------|------------------------|-------|--------|
 | **Knowledge & STEM** | | | | | |
 | | MMLU-Pro | 82.5 | — | — | — |
@@ -73,8 +81,10 @@ See `METHODOLOGY_THINKING.md` for full details.
 
 ## Known caveats
 
-1. **Quantization gap:** Qwen baseline uses full bf16; ATLAS uses Q6_K.
-   Q6_K retains ~99.5% of quality but may affect some benchmarks.
+1. **Quantization gap:** Qwen baseline uses full bf16; ATLAS uses AWQ-Q4.
+   AWQ-Q4 is more aggressive than Q6_K but preserves accuracy well on
+   reasoning/instruction tasks; may have measurable impact on
+   knowledge-heavy benchmarks.
 
 2. **Sampling divergence:** Qwen recommends temp=1.0/top_k=20/presence_penalty=1.5
    for thinking-mode tasks. ATLAS uses temp=0.6 which is optimized for the
