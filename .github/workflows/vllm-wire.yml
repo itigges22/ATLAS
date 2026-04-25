@@ -52,6 +52,9 @@ jobs:
       - name: Run vLLM wire tests
         run: python -m pytest tests/integration/test_vllm_wire.py -v --tb=short
 
+      - name: Run docker-compose invariant tests
+        run: python -m pytest tests/integration/test_docker_compose_invariants.py -v --tb=short
+
       - name: Run unit tests
         run: |
           python -m pytest tests/ \
