@@ -26,7 +26,7 @@ CUDA_ARCH values:
 - `86` — A100 (Ampere)
 - `120;121` — RTX 50xx, B100/B200 (Blackwell) — multi-arch builds work too: `"89;90"` for Ada+Hopper
 
-Build time: ~5-10 min (compiles llama.cpp from source). Image size: ~3GB (no model baked in).
+Build time: ~3-6 min (pip-install of pinned `vllm==0.17.1` plus the content-based transformers patch — no native compilation). Image size: ~9-11 GiB (the vLLM nightly base ships with PyTorch + CUDA + Triton kernels; no model is baked in, the entrypoint pulls QuantTrio/Qwen3.5-9B-AWQ on first run unless `/workspace/models` is mounted).
 
 ## Deploy on RunPod
 
