@@ -574,6 +574,64 @@ def test_lens_embedding_extractor(monkeypatch, mock_vllm):
     assert body["input"] == ["a", "b"]
 
 
+def test_lens_validate_key_falls_back_to_local_file(monkeypatch, tmp_path):
+    """Lens main.py:validate_key_with_portal had a stale "Fall through to
+    check if it's a legacy key" comment but no actual fallback —
+    `config.load_api_keys()` reads `/app/secrets/api-keys.json` but
+    `verify_api_key` never consulted it. On docker-compose (no api-portal
+    service), every authenticated Lens endpoint returned 401. Stage 96
+    wired the local-key fallback the comment promised.
+
+    This test:
+      1. Plants a fake api-keys.json containing one valid key.
+      2. Forces api_portal_url to an unreachable address.
+      3. Calls validate_key_with_portal under asyncio.run.
+      4. Asserts the local key is accepted; an unknown key is rejected.
+    """
+    sys.path.insert(0, str(PROJECT_ROOT / "geometric-lens"))
+
+    keys_file = tmp_path / "api-keys.json"
+    keys_file.write_text(json.dumps({
+        "sk-test-valid": {"user": "alice", "role": "developer"}
+    }))
+
+    monkeypatch.setenv("API_KEYS_PATH", str(keys_file))
+    monkeypatch.setenv("API_PORTAL_URL", "http://127.0.0.1:1")  # closed port
+    monkeypatch.setenv("PROJECT_DATA_DIR", str(tmp_path / "projects"))
+
+    # Reload to pick up the new env-driven module-level api_keys/config.
+    for mod in ("config", "main", "storage"):
+        if mod in sys.modules:
+            del sys.modules[mod]
+    import importlib
+    config_mod = importlib.import_module("config")
+    main_mod = importlib.import_module("main")
+
+    assert "sk-test-valid" in config_mod.api_keys, (
+        "Lens config.load_api_keys must pick up ATLAS_API_KEY_FILE"
+    )
+
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        valid = loop.run_until_complete(
+            main_mod.validate_key_with_portal("sk-test-valid")
+        )
+        invalid = loop.run_until_complete(
+            main_mod.validate_key_with_portal("sk-test-invalid")
+        )
+    finally:
+        loop.close()
+
+    assert valid is not None and valid.get("user") == "alice", (
+        "Local-key fallback must accept keys from the api-keys.json file "
+        "when the api-portal is unreachable"
+    )
+    assert invalid is None, (
+        "Local-key fallback must still reject unknown keys"
+    )
+
+
 def test_hardware_info_detects_awq_quantization(monkeypatch):
     """`benchmark/analysis/hardware_info.py:get_model_info` previously only
     extracted GGUF k-quants from the model name (`Q6_K`, `Q4_K_M`). After

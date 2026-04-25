@@ -90,7 +90,17 @@ _key_cache_ttl = 60  # seconds
 
 
 async def validate_key_with_portal(api_key: str) -> Optional[dict]:
-    """Validate API key with the API portal service."""
+    """Validate API key with the API portal service, falling back to a
+    local key file if the portal is unreachable.
+
+    The portal is the K8s production auth path (`api-portal:3000`). On
+    docker-compose deployments that service is not shipped, so portal
+    validation always fails — without this fallback every authenticated
+    Lens endpoint returns 401 even on a healthy stack. The local file
+    (`/app/secrets/api-keys.json` by default, override via
+    ATLAS_API_KEY_FILE) lets self-hosted users grant access without
+    standing up the api-portal microservice.
+    """
     import time
 
     # Check cache first
@@ -100,6 +110,7 @@ async def validate_key_with_portal(api_key: str) -> Optional[dict]:
 
     # Call portal validation endpoint
     portal_url = config.api_portal_url
+    portal_failed = False
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
@@ -116,9 +127,28 @@ async def validate_key_with_portal(api_key: str) -> Optional[dict]:
                     }
                     return data
     except Exception as e:
+        portal_failed = True
         logger.warning(f"Failed to validate key with portal: {e}")
-        # Fall through to check if it's a legacy key
+        # Fall through to local-key check below.
 
+    # Local file fallback (loaded once at import in config.py).
+    # The file maps `<api_key>` → `{"user": "...", ...}` dicts. Anyone with
+    # the on-disk key gets the matching user record. This is the
+    # docker-compose path: if no portal is reachable AND the user supplied
+    # an api-keys.json file, accept the key.
+    from config import api_keys as _local_keys
+    if api_key in _local_keys:
+        data = dict(_local_keys[api_key])
+        data.setdefault("valid", True)
+        _key_cache[api_key] = {"timestamp": time.time(), "data": data}
+        return data
+
+    if portal_failed and not _local_keys:
+        logger.warning(
+            "API key rejected: portal unreachable and no local key file "
+            "found. Set ATLAS_API_KEY_FILE or stand up the api-portal "
+            "service to enable auth on the Lens /v1/* endpoints."
+        )
     return None
 
 
