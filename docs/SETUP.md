@@ -11,8 +11,8 @@ Three deployment methods: Docker Compose (recommended and tested), bare-metal, a
 | **NVIDIA GPU** | 16GB+ VRAM (tested on RTX 5060 Ti 16GB) |
 | **NVIDIA drivers** | Proprietary drivers installed (`nvidia-smi` should show your GPU) |
 | **Python 3.9+** | With pip |
-| **wget** | For downloading model weights |
-| **Model weights** | Qwen3.5-9B-Q6_K.gguf (~7GB) from HuggingFace |
+| **HuggingFace CLI** (or wget) | For downloading model weights |
+| **Model weights** | QuantTrio/Qwen3.5-9B-AWQ (~12GB AWQ-Q4 directory of safetensors shards) |
 
 ### Verify GPU
 
@@ -40,10 +40,14 @@ This is the tested deployment method for V3.0.1.
 git clone https://github.com/itigges22/ATLAS.git
 cd ATLAS
 
-# 2. Download model weights (~7GB)
-mkdir -p models
-wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
-     -O models/Qwen3.5-9B-Q6_K.gguf
+# 2. Download model weights (~12 GiB AWQ-Q4 directory of safetensors shards).
+#    vLLM doesn't load GGUF natively — it consumes the AWQ build directly.
+#    `make model` runs the same huggingface-cli pull under the hood.
+make model
+# Or directly:
+#   pip install -q huggingface_hub
+#   huggingface-cli download QuantTrio/Qwen3.5-9B-AWQ \
+#       --local-dir models/Qwen3.5-9B-AWQ --local-dir-use-symlinks False
 
 # 3. Install the ATLAS CLI + Aider
 pip install -e . aider-chat

@@ -12,7 +12,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The defaults work if your model is at `./models/Qwen3.5-9B-Q6_K.gguf`.
+The defaults work if your model is at `./models/Qwen3.5-9B-AWQ/` (a directory of safetensors shards, not a single GGUF file — vLLM consumes the AWQ-Q4 build directly).
 
 ---
 
@@ -22,11 +22,14 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_MODELS_DIR` | `./models` | Host path to directory containing GGUF model weights |
-| `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | Model filename (must exist in ATLAS_MODELS_DIR) |
-| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses |
-| `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens |
-| `ATLAS_GEN_PORT` | `8000` | vLLM host port |
+| `ATLAS_MODELS_DIR` | `./models` | Host path bind-mounted into both vLLM containers at `/models` |
+| `ATLAS_MODEL_PATH` | `/models/Qwen3.5-9B-AWQ` | Container-side path to the AWQ model directory |
+| `ATLAS_GEN_MODEL_NAME` | `qwen3.5-9b` | vLLM `--served-model-name` for the gen instance |
+| `ATLAS_EMBED_MODEL_NAME` | `qwen3.5-9b-embed` | vLLM `--served-model-name` for the embed instance |
+| `ATLAS_GEN_CTX_SIZE` | `32768` | Gen-instance context window in tokens |
+| `ATLAS_EMBED_CTX_SIZE` | `4096` | Embed-instance context (much smaller — only embeds code snippets) |
+| `ATLAS_GEN_PORT` | `8000` | vLLM gen host port |
+| `ATLAS_EMBED_PORT` | `8001` | vLLM embed host port |
 | `ATLAS_LENS_PORT` | `31144` | Geometric Lens host port |
 | `ATLAS_V3_PORT` | `8070` | V3 Pipeline service host port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port (container listens on 8020) |
@@ -50,7 +53,7 @@ The Go proxy that runs the agent loop, routes tool calls, and translates between
 | `ATLAS_LENS_URL` | `http://localhost:31144` | Geometric Lens scoring endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox code execution endpoint |
 | `ATLAS_V3_URL` | `http://localhost:8070` | V3 Pipeline service endpoint |
-| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API responses |
+| `ATLAS_MODEL_NAME` (legacy alias for `LLAMA_GEN_MODEL`) | `qwen3.5-9b` | Model name for API responses (must match vLLM `--served-model-name`) |
 | `ATLAS_AGENT_LOOP` | (unset) | Set to `1` to enable tool-call agent loop. When unset or any other value, proxy forwards to vLLM directly. |
 | `ATLAS_V3_CLI` | (unset) | Set to `1` to enable V3 CLI mode (routes all generation through V3 service) |
 
@@ -89,7 +92,7 @@ Python HTTP service that orchestrates the V3 code generation pipeline (PlanSearc
 | `ATLAS_LENS_URL` | `http://localhost:31144` | Geometric Lens endpoint for C(x)/G(x) scoring |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox endpoint for code execution |
 | `ATLAS_V3_PORT` | `8070` | Port to listen on |
-| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API calls |
+| `ATLAS_MODEL_NAME` (legacy alias for `LLAMA_GEN_MODEL`) | `qwen3.5-9b` | Model name for vLLM API calls (must match `--served-model-name`) |
 
 ### Internal Constants
 
@@ -229,7 +232,7 @@ The standalone Python REPL (`pip install -e . && atlas`) reads these variables:
 | `ATLAS_INFERENCE_URL` | `http://localhost:8000` | vLLM endpoint |
 | `ATLAS_RAG_URL` | `http://localhost:31144` | Geometric Lens endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox endpoint |
-| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API calls |
+| `ATLAS_MODEL_NAME` (legacy alias for `LLAMA_GEN_MODEL`) | `qwen3.5-9b` | Model name for vLLM API calls (must match `--served-model-name`) |
 
 ### Generation Parameters
 

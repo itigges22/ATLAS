@@ -17,7 +17,7 @@ OpenAI-compatible chat completions. When `ATLAS_AGENT_LOOP=1` (default), the pro
 **Request:**
 ```json
 {
-  "model": "Qwen3.5-9B-Q6_K",
+  "model": "qwen3.5-9b",
   "messages": [
     {"role": "system", "content": "..."},
     {"role": "user", "content": "Create a Python hello world script"}
@@ -44,7 +44,7 @@ data: [DONE]
   "id": "atlas-verify",
   "object": "chat.completion",
   "created": 1712345678,
-  "model": "Qwen3.5-9B-Q6_K",
+  "model": "qwen3.5-9b",
   "choices": [{
     "index": 0,
     "message": {"role": "assistant", "content": "..."},
@@ -69,7 +69,7 @@ The `atlas_*` fields are ATLAS-specific metadata attached to non-streaming respo
 ```bash
 curl -N http://localhost:8090/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"Qwen3.5-9B-Q6_K","messages":[{"role":"user","content":"hi"}],"max_tokens":100,"stream":true}'
+  -d '{"model":"qwen3.5-9b","messages":[{"role":"user","content":"hi"}],"max_tokens":100,"stream":true,"chat_template_kwargs":{"enable_thinking":false}}'
 ```
 
 ### POST /v1/agent

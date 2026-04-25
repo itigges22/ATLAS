@@ -384,9 +384,9 @@ Generation parameters: `max_tokens=8192`, `temperature=0.6`, `top_k=20`, `top_p=
 
 **Common causes:**
 - **GPU not detected**: Check `nvidia-smi` — driver must be installed and GPU visible
-- **Model file missing**: Check that the GGUF model exists at the expected path (`ATLAS_MODEL_PATH` or `./models/Qwen3.5-9B-Q6_K.gguf`)
-- **Insufficient VRAM**: The 9B Q6_K model needs ~8.2 GB VRAM. Run `nvidia-smi` to check available memory. Close other GPU processes.
-- **Port conflict**: Another process may be using port 8080. Check with `lsof -i :8080`
+- **Model directory missing**: Check that the AWQ model directory exists (`ATLAS_MODEL_PATH` or `./models/Qwen3.5-9B-AWQ/`). vLLM consumes a directory of safetensors shards, not a single GGUF file. Run `make model` to pull from HuggingFace.
+- **Insufficient VRAM**: The 9B AWQ-Q4 build needs ~12 GB VRAM for gen + ~3 GB for the embed sidecar (sharing the same GPU). Run `nvidia-smi` to check, and close other GPU processes if it's tight.
+- **Port conflict**: vLLM gen listens on 8000 and embed on 8001 by default. Check with `lsof -i :8000 -i :8001` if startup fails on bind.
 
 **Debug:** Check `logs/vLLM.log` for the actual error.
 
@@ -454,8 +454,8 @@ All ports and URLs are configurable:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier for API responses |
-| `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | GGUF filename in models directory |
+| `ATLAS_MODEL_NAME` (alias for `LLAMA_GEN_MODEL`) | `qwen3.5-9b` | Model identifier for API responses (must match vLLM `--served-model-name`) |
+| `ATLAS_MODEL_PATH` | `/models/Qwen3.5-9B-AWQ` | Container-side path to the AWQ model directory (vLLM consumes safetensors shards directly, not GGUF) |
 | `ATLAS_MODELS_DIR` | `./models` | Host path to model weights |
 | `ATLAS_CTX_SIZE` | `32768` | Context window size (tokens) |
 | `ATLAS_AGENT_LOOP` | `1` | Enable agent loop in proxy (`1` = on) |
@@ -471,7 +471,7 @@ All ports and URLs are configurable:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `ATLAS_LLAMA_BIN` | `~/llama-cpp-mtp/build/bin/vLLM` | Path to vLLM binary |
-| `ATLAS_MODEL_PATH` | `~/models/Qwen3.5-9B-Q6_K.gguf` | Full path to model file |
+| `ATLAS_MODEL_PATH` | `~/models/Qwen3.5-9B-AWQ` | Full path to the AWQ model directory (a directory of safetensors shards; vLLM does not load GGUF) |
 
 ---
 

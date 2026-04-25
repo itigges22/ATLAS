@@ -446,9 +446,10 @@ Running on RTX 5060 Ti 16GB with Docker Compose defaults (32K context):
 
 | Component | VRAM |
 |-----------|------|
-| Qwen3.5-9B-Q6_K model weights | ~6.9 GB |
-| KV cache (32K context) | ~1.3 GB |
-| **Total vLLM** | **~8.2 GB** |
+| QuantTrio/Qwen3.5-9B-AWQ model weights (AWQ-Q4 safetensors shards, loaded by vllm-gen) | ~6 GB |
+| Embed instance (vllm-embed, same weights, separate process) | ~1 GB at gpu-memory-utilization=0.20 |
+| KV cache (32K gen context) | ~3 GB |
+| **Total across both vLLM instances** | **~10 GB** (default `--gpu-memory-utilization` 0.55 / 0.20) |
 | Geometric Lens | 0 (CPU-only, ~12 MB RAM for models, ~128 MB for PyTorch runtime) |
 | v3-service | 0 (CPU-only) |
 | sandbox | 0 (CPU-only) |
