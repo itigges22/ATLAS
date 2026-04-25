@@ -248,6 +248,64 @@ def test_v301_completion_nothink_disables_thinking(mock_vllm):
 # geometric_lens.embedding_extractor — /v1/embeddings
 # ---------------------------------------------------------------------------
 
+def test_v301_chat_handles_reasoning_split(mock_vllm):
+    """When vLLM uses --reasoning-parser qwen3, thinking lands in
+    reasoning_content and the answer in content. v301_runner.LLMClient.chat
+    must surface both fields to the caller — historical bugs forgot to read
+    reasoning_content and silently dropped the model's chain-of-thought."""
+    from benchmarks.v301_runner import LLMClient
+
+    # Override the chat response shape: reasoning + content split.
+    mock_vllm.chat_completion_response = {
+        "id": "chat-2",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "qwen3.5-9b",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Answer: B",
+                "reasoning_content": "Let me think about this...\nThe correct answer is B.",
+            },
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 30, "total_tokens": 80},
+    }
+
+    c = LLMClient(url=mock_vllm.url)
+    content, reasoning, tokens, _ = c.chat([{"role": "user", "content": "what's the answer?"}])
+    assert content == "Answer: B"
+    assert "correct answer is B" in reasoning
+    assert tokens == 30
+
+
+def test_v301_chat_handles_missing_reasoning_content(mock_vllm):
+    """If vLLM is started without --reasoning-parser, reasoning_content is
+    absent. The runner must still extract content and not crash."""
+    from benchmarks.v301_runner import LLMClient
+
+    mock_vllm.chat_completion_response = {
+        "id": "chat-3",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "qwen3.5-9b",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "Answer: C"},
+            # No reasoning_content key at all.
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 5, "total_tokens": 55},
+    }
+
+    c = LLMClient(url=mock_vllm.url)
+    content, reasoning, tokens, _ = c.chat([{"role": "user", "content": "what's the answer?"}])
+    assert content == "Answer: C"
+    assert reasoning == "" or reasoning is None
+    assert tokens == 5
+
+
 def test_v301_chat_retries_on_503(mock_vllm):
     """vLLM returns 503 when warming up or all slots busy. The runner must
     back off and retry rather than failing the whole task."""
