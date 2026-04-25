@@ -282,16 +282,23 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit:
 ```bash
 # Model
 ATLAS_MODELS_DIR="$HOME/models"
-ATLAS_MAIN_MODEL="Qwen3.5-9B-Q6_K.gguf"
+ATLAS_MODEL_PATH="/models/Qwen3.5-9B-AWQ"
+ATLAS_GEN_MODEL_NAME="qwen3.5-9b"
+ATLAS_EMBED_MODEL_NAME="qwen3.5-9b-embed"
 
-# Inference
-ATLAS_CONTEXT_LENGTH=40960        # Per-slot context (× PARALLEL_SLOTS)
-ATLAS_GPU_LAYERS=99
-ATLAS_PARALLEL_SLOTS=4
-ATLAS_FLASH_ATTENTION=true
+# vLLM gen instance (chat completions)
+ATLAS_GEN_MAX_NUM_SEQS=32
+ATLAS_GEN_CTX_SIZE=32768
+ATLAS_GEN_GPU_MEM=0.55
 
-# Service NodePorts
-ATLAS_LLAMA_NODEPORT=32735
+# vLLM embed instance (Lens 4096-dim hidden states)
+ATLAS_EMBED_MAX_NUM_SEQS=8
+ATLAS_EMBED_CTX_SIZE=4096
+ATLAS_EMBED_GPU_MEM=0.20
+
+# Service NodePorts (K3s only — docker-compose uses .env ports directly)
+ATLAS_VLLM_GEN_NODEPORT=32735
+ATLAS_VLLM_EMBED_NODEPORT=32736
 ATLAS_LENS_NODEPORT=31144
 ATLAS_SANDBOX_NODEPORT=30820
 
