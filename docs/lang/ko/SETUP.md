@@ -2,7 +2,7 @@
 
 # ATLAS 설정 가이드
 
-세 가지 배포 방법을 제공합니다: Docker Compose(권장 및 테스트 완료), 베어메탈, K3s.
+현재 출시된 배포 방법은 두 가지입니다: Docker Compose(권장 및 테스트 완료)와 베어메탈. K3s/Kubernetes 경로는 V3.0의 llama.cpp 스택용으로 존재했지만 V3.0.1의 듀얼 인스턴스 vLLM 아키텍처로 아직 다시 포팅되지 않았습니다. 하단의 K3s 섹션을 참조하십시오.
 
 ---
 
@@ -245,94 +245,19 @@ atlas    # 누락된 서비스를 시작하고 Aider를 실행합니다
 
 ---
 
-## 방법 3: K3s
+## 방법 3: K3s -- 현재 미지원
 
-GPU 스케줄링, 헬스 프로브, 리소스 제한을 갖춘 프로덕션 Kubernetes 배포입니다.
+V3.0 (Qwen3-14B + llama.cpp + spec-decode)는 전체 K3s 배포를 출시했습니다. `scripts/install.sh`가 K3s + NVIDIA GPU Operator를 설치하고, 컨테이너 이미지를 빌드하고, `atlas.conf`에서 `envsubst`로 매니페스트를 생성하여 `atlas` 네임스페이스에 `kubectl apply`했습니다. 비교 항목은 llama.cpp 고유 (슬롯당 컨텍스트, Flash attention, q8_0/q4_0 KV 양자화, mlock, `--embeddings` 플래그) 였습니다.
 
-### 추가 사전 요구 사항
+**V3.0.1 (Qwen3.5-9B-AWQ + vLLM 듀얼 인스턴스)에서는 K3s 경로가 아직 다시 포팅되지 않았습니다.** 현재 리포지토리에는 `manifests/` 디렉토리도 `scripts/generate-manifests.sh`가 사용하는 템플릿 세트도 포함되어 있지 않습니다. `scripts/install.sh`는 누락된 디렉토리를 미리 감지하고 docker-compose에 대한 명확한 안내와 함께 종료하므로 실행해도 무해하지만 의미는 없습니다.
 
-| 요구 사항 | 세부 내용 |
-|-----------|----------|
-| **K3s** | 단일 노드 또는 다중 노드 클러스터 |
-| **NVIDIA GPU Operator** 또는 **device plugin** | GPU가 `nvidia.com/gpu` 리소스로 표시되어야 합니다 |
-| **Helm** | GPU Operator 설치용 |
-| **Podman 또는 Docker** | 컨테이너 이미지 빌드용 |
+오늘 Kubernetes 배포가 필요한 경우 실용적인 경로:
 
-### 자동 설치
+- **각 노드의 Docker Compose** -- kubelet과 함께 docker가 설치된 K3s/k8s 노드에서 깔끔하게 동작합니다 (가장 일반적인 단일 노드 설정).
+- **`docker-compose.yml`에서 Deployment + Service 매니페스트 직접 작성** -- `vllm-gen`, `vllm-embed`, `geometric-lens`, `v3-service`, `sandbox`, `atlas-proxy` 서비스를 복사하고, 두 vLLM 서비스에 `nvidia.com/gpu` 리소스 요청을 추가합니다. compose의 `command:` 블록이 vLLM CLI 인수의 정답입니다.
+- **K3s 포팅 대기** -- 추적 중이지만 일정은 미정입니다. PR을 환영합니다.
 
-설치 스크립트가 K3s 설치, GPU Operator, 컨테이너 빌드, 배포까지 전체 설정을 처리합니다:
-
-```bash
-# 1. 설정
-cp atlas.conf.example atlas.conf
-# atlas.conf 수정: 모델 경로, GPU 레이어, 컨텍스트 크기, NodePorts
-
-# 2. 설치 프로그램 실행 (root 권한 필요)
-sudo scripts/install.sh
-```
-
-설치 프로그램은 다음을 수행합니다:
-1. 사전 요구 사항 확인 (NVIDIA 드라이버, GPU VRAM, 시스템 RAM)
-2. K3s가 실행 중이 아닌 경우 설치
-3. GPU가 클러스터에 보이지 않으면 Helm을 통해 NVIDIA GPU Operator 설치
-4. 컨테이너 이미지를 빌드하고 K3s containerd에 가져오기
-5. `atlas.conf`에서 envsubst를 통해 매니페스트 생성
-6. `atlas` 네임스페이스에 배포
-7. 모든 서비스가 정상이 될 때까지 대기
-
-### 수동 배포
-
-K3s가 이미 GPU 지원과 함께 실행 중인 경우:
-
-```bash
-# 1. 설정
-cp atlas.conf.example atlas.conf
-# atlas.conf 수정
-
-# 2. 이미지 빌드 및 가져오기
-scripts/build-containers.sh
-
-# 3. atlas.conf에서 매니페스트 생성
-scripts/generate-manifests.sh
-
-# 4. 배포
-kubectl apply -n atlas -f manifests/
-
-# 5. 확인
-scripts/verify-install.sh
-```
-
-### K3s 전용 설정
-
-K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. Docker Compose와의 주요 차이점:
-
-| 설정 항목 | Docker Compose | K3s |
-|-----------|---------------|-----|
-| 설정 파일 | `.env` | `atlas.conf` |
-| 컨텍스트 크기 | 32K | 슬롯당 40K (x 4 슬롯 = 총 160K) |
-| 병렬 슬롯 | 1 (암묵적) | 4 |
-| Flash attention | 꺼짐 | 켜짐 |
-| KV 캐시 양자화 | 없음 | q8_0 (키) + q4_0 (값) |
-| 메모리 잠금 | 아니오 | mlock 활성화 |
-| 임베딩 엔드포인트 | 미노출 | `--embeddings` 플래그 |
-| 서비스 노출 | 호스트 포트 | NodePorts |
-
-전체 `atlas.conf` 레퍼런스는 [CONFIGURATION.md](../../CONFIGURATION.md)를 참조하십시오.
-
-### K3s 배포 확인
-
-```bash
-# 파드 확인
-kubectl get pods -n atlas
-
-# GPU 할당 확인
-kubectl describe nodes | grep nvidia.com/gpu
-
-# 검증 스위트 실행
-scripts/verify-install.sh
-```
-
-> **참고:** Docker Compose는 V3.0.1에서 검증된 배포 방법입니다. K3s 매니페스트는 배포 시점에 템플릿에서 생성됩니다. K3s 배포는 V3.0 벤치마크에서 Qwen3-14B로 사용되었으며 프로덕션에서 테스트되었지만, 클러스터 설정에 따라 템플릿 파일 조정이 필요할 수 있습니다.
+여전히 동작하는 K3s 도구 (`atlas.conf` 파서, 포트 검증, GPU 감지 헬퍼)에 대해서는 [CONFIGURATION.md](../../CONFIGURATION.md)를 참조하십시오.
 
 ---
 

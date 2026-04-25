@@ -337,6 +337,46 @@ def test_makefile_lint_and_ci_lint_cover_same_scripts():
         assert must_have in mf_scripts, f"{must_have} must be lint-checked"
 
 
+def test_setup_docs_do_not_advertise_a_broken_k3s_path():
+    """SETUP.md (and translations) used to describe a working K3s install
+    path: `cp atlas.conf.example atlas.conf && sudo scripts/install.sh`,
+    `scripts/build-containers.sh && scripts/generate-manifests.sh && kubectl
+    apply -n atlas -f manifests/`. After the vLLM cutover, that path is
+    broken — the manifests/ directory and templates/ directory aren't
+    shipped (stage 73 catches this in install.sh's deploy_manifests). The
+    SETUP doc must not steer users toward it.
+
+    Forbid the broken `kubectl apply ... -f manifests/` recipe, the
+    `scripts/generate-manifests.sh` advice, and the llama.cpp comparison
+    table headings (Flash attention, mlock, q8_0 / q4_0)."""
+    targets = [PROJECT_ROOT / "docs" / "SETUP.md"]
+    targets += [PROJECT_ROOT / "docs" / "lang" / lang / "SETUP.md"
+                for lang in ("ja", "ko", "zh-CN")]
+
+    # Only consider fenced code blocks — that's where active recipes live.
+    # Prose paragraphs are allowed to mention these tokens in a historical
+    # disclaimer ("the template set scripts/generate-manifests.sh consumes
+    # is no longer shipped"). The fenced blocks are what users copy-paste,
+    # so that's where they have to be clean.
+    import re
+
+    forbidden_in_recipes = [
+        "kubectl apply -n atlas -f manifests/",
+        "scripts/generate-manifests.sh",
+    ]
+
+    for path in targets:
+        src = path.read_text()
+        # Extract everything between ``` ... ``` fences.
+        recipes = "\n".join(re.findall(r"```[a-z]*\n(.*?)```", src, re.DOTALL))
+        for recipe in forbidden_in_recipes:
+            assert recipe not in recipes, (
+                f"{path.relative_to(PROJECT_ROOT)}: a fenced code block still "
+                f"advertises the broken K3s recipe `{recipe}` — manifests/ "
+                "doesn't ship for the vLLM stack, so the recipe always fails"
+            )
+
+
 def test_troubleshooting_does_not_reference_llama_cpp_flags():
     """`docs/TROUBLESHOOTING.md`'s Performance section steered users to
     debug `--n-gpu-layers 99`, a llama.cpp flag with no vLLM equivalent

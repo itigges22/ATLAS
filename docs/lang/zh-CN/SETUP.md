@@ -2,7 +2,7 @@
 
 # ATLAS 安装指南
 
-三种部署方式：Docker Compose（推荐且经过测试）、裸机部署和 K3s 部署。
+当前出货的部署方式有两种：Docker Compose（推荐且经过测试）和裸机部署。K3s/Kubernetes 路径曾用于 V3.0 的 llama.cpp 栈，但尚未移植到 V3.0.1 的双实例 vLLM 架构。请参见底部的 K3s 章节。
 
 ---
 
@@ -246,94 +246,19 @@ atlas    # 启动所有缺失的服务并运行 Aider
 
 ---
 
-## 方式三：K3s
+## 方式三：K3s -- 当前不支持
 
-用于生产环境的 Kubernetes 部署，支持 GPU 调度、健康探针和资源限制。
+V3.0（Qwen3-14B + llama.cpp + spec-decode）出货了完整的 K3s 部署。`scripts/install.sh` 会安装 K3s + NVIDIA GPU Operator，构建容器镜像，通过 `envsubst` 从 `atlas.conf` 生成清单文件，并 `kubectl apply` 到 `atlas` 命名空间。比较项是 llama.cpp 特有的（每 slot 上下文、Flash attention、q8_0/q4_0 KV 量化、mlock、`--embeddings` 标志）。
 
-### 额外前置要求
+**对于 V3.0.1（Qwen3.5-9B-AWQ + vLLM 双实例），K3s 路径尚未重新移植。** 当前代码仓库不附带 `manifests/` 目录，也不附带 `scripts/generate-manifests.sh` 所消费的模板集。`scripts/install.sh` 会预先检测目录缺失，并明确指引到 docker-compose 后退出，因此运行它无害但也无意义。
 
-| 要求 | 详情 |
-|------|------|
-| **K3s** | 单节点或多节点集群 |
-| **NVIDIA GPU Operator** 或 **device plugin** | GPU 必须作为 `nvidia.com/gpu` 资源可见 |
-| **Helm** | 用于安装 GPU Operator |
-| **Podman 或 Docker** | 用于构建容器镜像 |
+如果今天需要 Kubernetes 部署，实际可行的路径：
 
-### 自动安装
+- **每节点上的 Docker Compose** -- 在 kubelet 旁安装了 docker 的 K3s/k8s 节点上能干净运行（最常见的单节点配置）。
+- **从 `docker-compose.yml` 手写 Deployment + Service 清单** -- 拷贝 `vllm-gen`、`vllm-embed`、`geometric-lens`、`v3-service`、`sandbox`、`atlas-proxy` 各服务，在两个 vLLM 服务上加 `nvidia.com/gpu` 资源请求。compose 中的 `command:` 块就是 vLLM CLI 参数的事实标准。
+- **等待 K3s 移植** -- 已记录但未排期。欢迎 PR。
 
-安装脚本负责完整的安装流程 - K3s 安装、GPU Operator、容器构建和部署：
-
-```bash
-# 1. 配置
-cp atlas.conf.example atlas.conf
-# 编辑 atlas.conf：模型路径、GPU 层数、上下文大小、NodePort 端口
-
-# 2. 运行安装程序（需要 root 权限）
-sudo scripts/install.sh
-```
-
-安装程序将：
-1. 检查前置要求（NVIDIA 驱动、GPU 显存、系统内存）
-2. 如果 K3s 尚未运行则安装
-3. 通过 Helm 安装 NVIDIA GPU Operator（如果 GPU 对集群不可见）
-4. 构建容器镜像并导入 K3s containerd
-5. 通过 envsubst 从 `atlas.conf` 生成清单文件
-6. 部署到 `atlas` 命名空间
-7. 等待所有服务变为健康状态
-
-### 手动部署
-
-如果 K3s 已在运行且支持 GPU：
-
-```bash
-# 1. 配置
-cp atlas.conf.example atlas.conf
-# 编辑 atlas.conf
-
-# 2. 构建并导入镜像
-scripts/build-containers.sh
-
-# 3. 从 atlas.conf 生成清单文件
-scripts/generate-manifests.sh
-
-# 4. 部署
-kubectl apply -n atlas -f manifests/
-
-# 5. 验证
-scripts/verify-install.sh
-```
-
-### K3s 专属配置
-
-K3s 使用 `atlas.conf`（而非 `.env`）进行配置。与 Docker Compose 的主要区别：
-
-| 配置项 | Docker Compose | K3s |
-|--------|---------------|-----|
-| 配置文件 | `.env` | `atlas.conf` |
-| 上下文大小 | 32K | 每 slot 40K（x 4 slots = 总计 160K） |
-| 并行 slot 数 | 1（隐式） | 4 |
-| Flash Attention | 关闭 | 开启 |
-| KV 缓存量化 | 无 | q8_0（keys）+ q4_0（values） |
-| 内存锁定 | 否 | 启用 mlock |
-| 嵌入端点 | 未暴露 | `--embeddings` 标志 |
-| 服务暴露方式 | 主机端口 | NodePort |
-
-完整的 `atlas.conf` 参考请参见 [CONFIGURATION.md](../../CONFIGURATION.md)。
-
-### 验证 K3s 部署
-
-```bash
-# 检查 Pod
-kubectl get pods -n atlas
-
-# 检查 GPU 分配
-kubectl describe nodes | grep nvidia.com/gpu
-
-# 运行验证套件
-scripts/verify-install.sh
-```
-
-> **注意：** Docker Compose 是 V3.0.1 经过验证的部署方式。K3s 清单文件在部署时从模板生成。K3s 部署曾用于在 Qwen3-14B 上运行 V3.0 基准测试，经过生产验证，但模板文件可能需要根据你的集群配置进行调整。
+仍然有效的 K3s 工具链（`atlas.conf` 解析器、端口校验、GPU 检测助手）请参见 [CONFIGURATION.md](../../CONFIGURATION.md)。
 
 ---
 

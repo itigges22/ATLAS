@@ -1,6 +1,6 @@
 # ATLAS Setup Guide
 
-Three deployment methods: Docker Compose (recommended and tested), bare-metal, and K3s.
+Two deployment methods are currently shipped: Docker Compose (recommended and tested) and bare-metal. A K3s/Kubernetes path existed for the V3.0 llama.cpp stack but has not yet been re-ported to the V3.0.1 dual-instance vLLM architecture — see the K3s section at the bottom for the current state.
 
 ---
 
@@ -260,94 +260,19 @@ The launcher auto-detects which services are already running and starts only wha
 
 ---
 
-## Method 3: K3s
+## Method 3: K3s — currently unsupported
 
-For production Kubernetes deployment with GPU scheduling, health probes, and resource limits.
+V3.0 (Qwen3-14B + llama.cpp + spec-decode) shipped with a full K3s deployment: `scripts/install.sh` would install K3s + the NVIDIA GPU Operator, build container images, generate manifests from `atlas.conf` via `envsubst`, and `kubectl apply` them under the `atlas` namespace. Comparison knobs were specific to llama.cpp (per-slot context, Flash attention, q8_0/q4_0 KV quantization, mlock, the `--embeddings` flag).
 
-### Additional Prerequisites
+**For V3.0.1 (Qwen3.5-9B-AWQ + vLLM dual-instance), the K3s path has not been re-ported.** The repo currently does not ship a `manifests/` directory or the template set `scripts/generate-manifests.sh` consumes. `scripts/install.sh` detects the missing directory upfront and exits with a clear pointer to docker-compose, so running it is harmless but unproductive.
 
-| Requirement | Details |
-|-------------|---------|
-| **K3s** | Single-node or multi-node cluster |
-| **NVIDIA GPU Operator** or **device plugin** | GPU must be visible as `nvidia.com/gpu` resource |
-| **Helm** | For GPU Operator installation |
-| **Podman or Docker** | For building container images |
+If you need a Kubernetes deployment today, the practical paths are:
 
-### Automated Install
+- **Docker Compose on each node** — runs cleanly on K3s/k8s nodes that have docker installed alongside the kubelet (most common single-node setup).
+- **Hand-roll Deployment + Service manifests** from `docker-compose.yml` — copy the `vllm-gen`, `vllm-embed`, `geometric-lens`, `v3-service`, `sandbox`, `atlas-proxy` services across, with `nvidia.com/gpu` resource requests on the two vLLM ones. The `command:` blocks in compose are the ground truth for vLLM CLI arguments.
+- **Wait for the K3s port** — tracked but not scheduled. PRs welcome.
 
-The install script handles the complete setup — K3s installation, GPU Operator, container builds, and deployment:
-
-```bash
-# 1. Configure
-cp atlas.conf.example atlas.conf
-# Edit atlas.conf: model paths, GPU layers, context size, NodePorts
-
-# 2. Run the installer (requires root)
-sudo scripts/install.sh
-```
-
-The installer will:
-1. Check prerequisites (NVIDIA drivers, GPU VRAM, system RAM)
-2. Install K3s if not already running
-3. Install NVIDIA GPU Operator via Helm (if GPU not visible to cluster)
-4. Build container images and import to K3s containerd
-5. Generate manifests from `atlas.conf` via envsubst
-6. Deploy to the `atlas` namespace
-7. Wait for all services to be healthy
-
-### Manual Deploy
-
-If K3s is already running with GPU support:
-
-```bash
-# 1. Configure
-cp atlas.conf.example atlas.conf
-# Edit atlas.conf
-
-# 2. Build and import images
-scripts/build-containers.sh
-
-# 3. Generate manifests from atlas.conf
-scripts/generate-manifests.sh
-
-# 4. Deploy
-kubectl apply -n atlas -f manifests/
-
-# 5. Verify
-scripts/verify-install.sh
-```
-
-### K3s-Specific Configuration
-
-K3s uses `atlas.conf` (not `.env`) for configuration. Key differences from Docker Compose:
-
-| Setting | Docker Compose | K3s |
-|---------|---------------|-----|
-| Config file | `.env` | `atlas.conf` |
-| Context size | 32K | 40K per slot (× 4 slots = 160K total) |
-| Parallel slots | 1 (implicit) | 4 |
-| Flash attention | Off | On |
-| KV cache quantization | None | q8_0 (keys) + q4_0 (values) |
-| Memory locking | No | mlock enabled |
-| Embeddings endpoint | Not exposed | `--embeddings` flag |
-| Service exposure | Host ports | NodePorts |
-
-See [CONFIGURATION.md](CONFIGURATION.md) for the full `atlas.conf` reference.
-
-### Verify K3s Deployment
-
-```bash
-# Check pods
-kubectl get pods -n atlas
-
-# Check GPU allocation
-kubectl describe nodes | grep nvidia.com/gpu
-
-# Run verification suite
-scripts/verify-install.sh
-```
-
-> **Note:** Docker Compose is the verified deployment method for V3.0.1. K3s manifests are generated from templates at deploy time. The K3s deployment was used for V3.0 benchmarks on Qwen3-14B and is production-tested, but the template files may need adjustment for your cluster configuration.
+For the rest of the K3s tooling that does still work (`atlas.conf` parser, port validation, GPU detection helpers), see [CONFIGURATION.md](CONFIGURATION.md).
 
 ---
 
