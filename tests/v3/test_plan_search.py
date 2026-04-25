@@ -302,9 +302,12 @@ class TestPlanSearchPipeline:
         ps_enabled.generate(
             SAMPLE_PROBLEM, "test", mock_llm, budget_tier="hard"
         )
-        # Steps 1 and 2 always use nothink (thinking wastes tokens on structured output)
-        assert "/nothink" in mock_llm.calls[0]["prompt"]
-        assert "/nothink" in mock_llm.calls[1]["prompt"]
+        # Steps 1 and 2 always use the nothink tier (thinking wastes
+        # tokens on structured output). On Qwen3.5 the no-think mechanism
+        # is the assistant `<think>\n\n</think>\n\n` prefill — not the
+        # legacy `/nothink` soft-command which the model now ignores.
+        assert "<think>\n\n</think>" in mock_llm.calls[0]["prompt"]
+        assert "<think>\n\n</think>" in mock_llm.calls[1]["prompt"]
 
     def test_pipeline_nothink_mode(self, ps_enabled):
         llm = MockLLM(responses=[
@@ -317,9 +320,10 @@ class TestPlanSearchPipeline:
             SAMPLE_CODE_RESPONSE,
         ])
         ps_enabled.generate(SAMPLE_PROBLEM, "test", llm, budget_tier="nothink")
-        # All calls should have /nothink
+        # In nothink-tier, every call carries the closed-think prefill
+        # in its assistant turn, the actual no-think mechanism on Qwen3.5.
         for call in llm.calls:
-            assert "/nothink" in call["prompt"]
+            assert "<think>\n\n</think>" in call["prompt"]
 
     def test_custom_num_plans(self, ps_enabled, bf_enabled, tmp_telemetry):
         """Override num_plans at call time."""
@@ -363,12 +367,13 @@ class TestPlanSearchPipeline:
 class TestBudgetForcingIntegration:
 
     def test_uses_nothink_for_structured_steps(self, ps_enabled, mock_llm):
-        """Steps 1-2 always use nothink regardless of budget tier."""
+        """Steps 1-2 always use the nothink tier regardless of budget
+        tier. The nothink mechanism on Qwen3.5 is the closed-think
+        assistant prefill, not the deprecated `/nothink` soft-command."""
         ps_enabled.generate(
             SAMPLE_PROBLEM, "test", mock_llm, budget_tier="extreme"
         )
-        # Steps 1-2 use nothink (structured output, thinking wastes tokens)
-        assert "/nothink" in mock_llm.calls[0]["prompt"]
+        assert "<think>\n\n</think>" in mock_llm.calls[0]["prompt"]
 
     def test_without_budget_forcing(self, tmp_telemetry):
         """PlanSearch should work without BudgetForcing (fallback prompts)."""
@@ -499,13 +504,15 @@ class TestAC1A4TimeBudget:
         ps_enabled.generate(
             SAMPLE_PROBLEM, "test", mock_llm, budget_tier="hard"
         )
-        # Step 3 calls (index 4, 5, 6) should use nothink or light
+        # Step 3 calls (index 4, 5, 6) should use nothink or light:
+        #   - nothink tier carries the closed-think assistant prefill
+        #     (Qwen3.5's actual no-think mechanism — `/nothink` is dead).
+        #   - light tier doesn't prefill; its system prompt steers toward
+        #     short reasoning ("step by step").
         for i in [4, 5, 6]:
             prompt = mock_llm.calls[i]["prompt"]
-            # light has "step by step" but NOT the extreme/hard budget
-            # nothink has /nothink
-            # Either is acceptable for code gen efficiency
-            assert "/nothink" in prompt or "step by step" in prompt.lower()
+            assert ("<think>\n\n</think>" in prompt
+                    or "step by step" in prompt.lower())
 
 
 # ---------------------------------------------------------------------------

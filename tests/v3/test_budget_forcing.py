@@ -179,9 +179,15 @@ class TestSelectTier:
 
 class TestGetSystemPrompt:
 
-    def test_nothink_has_nothink_tag(self):
+    def test_nothink_prompt_does_not_use_dead_soft_command(self):
+        # Qwen3.5 dropped the `/think` and `/nothink` soft-commands —
+        # leaving them in the system prompt just wastes ~3 tokens with no
+        # effect on reasoning. The actual no-think mechanism on Qwen3.5
+        # is the assistant `<think>\n\n</think>\n\n` prefill in
+        # format_chatml() (see TestBudgetForcingClass below).
         prompt = get_system_prompt("nothink")
-        assert "/nothink" in prompt
+        assert "/nothink" not in prompt
+        assert "directly" in prompt.lower() or "concisely" in prompt.lower()
 
     def test_thinking_tiers_lack_nothink(self):
         for tier in ["light", "standard", "hard", "extreme"]:
@@ -330,11 +336,14 @@ class TestBudgetForcingClass:
 
     def test_format_chatml_nothink(self, bf_enabled):
         prompt = bf_enabled.format_chatml("Solve this", "nothink")
-        assert "/nothink" in prompt
+        # /nothink soft-command was dropped by Qwen3.5; the actual no-think
+        # mechanism is the assistant `<think>\n\n</think>\n\n` prefill below.
+        assert "/nothink" not in prompt
         assert "<|im_start|>system" in prompt
         assert "<|im_start|>user" in prompt
         assert "Solve this" in prompt
-        # V3.1: pre-fill closed think block to force-skip thinking
+        # The closed-think prefill at the start of the assistant turn is
+        # what disables reasoning on Qwen3.5.
         assert "<think>\n\n</think>" in prompt
 
     def test_format_chatml_thinking(self, bf_enabled):
@@ -608,22 +617,30 @@ class TestAC1C4TokenBudgetCompliance:
 
 
 # ---------------------------------------------------------------------------
-# Test: AC-1C-5 — FAST_PATH (/nothink) no regression
+# Test: AC-1C-5 — FAST_PATH (nothink-tier) no regression
 # ---------------------------------------------------------------------------
 
 class TestAC1C5NothinkNoRegression:
-    """AC-1C-5: /nothink mode matches V2 behavior exactly."""
+    """AC-1C-5: nothink tier behavior — V3.0.1+ uses the
+    `<think>\\n\\n</think>\\n\\n` assistant prefill instead of the
+    deprecated `/nothink` soft-command (Qwen3.5 dropped support)."""
 
-    def test_nothink_system_prompt_matches_v2(self):
-        """The nothink system prompt should match V2's exactly."""
+    def test_nothink_system_prompt_is_concise_directive(self):
+        """The nothink system prompt is a plain "respond directly"
+        directive — no `/nothink` literal, since Qwen3.5 doesn't
+        interpret it."""
         prompt = get_system_prompt("nothink")
-        assert prompt == "You are an expert programmer. Respond directly and concisely. /nothink"
+        assert prompt == "You are an expert programmer. Respond directly and concisely."
 
     def test_nothink_chatml_has_prefill(self, bf_enabled):
-        """V3.1: ChatML for nothink tier pre-fills closed think block."""
+        """V3.1: ChatML for nothink tier pre-fills the closed think
+        block at the start of the assistant turn — that's the actual
+        no-think mechanism on Qwen3.5."""
         user_content = "Write a function to sort a list"
         chatml = bf_enabled.format_chatml(user_content, "nothink")
-        assert "/nothink" in chatml
+        # Legacy /nothink soft-command must NOT appear; it would just
+        # waste ~3 prompt tokens.
+        assert "/nothink" not in chatml
         assert "<think>\n\n</think>\n\n" in chatml
         assert chatml.endswith("<think>\n\n</think>\n\n")
 
