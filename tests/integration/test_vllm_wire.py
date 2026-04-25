@@ -307,6 +307,37 @@ def test_v301_chat_handles_reasoning_split(mock_vllm):
     assert tokens == 30
 
 
+def test_v301_chat_handles_empty_content(mock_vllm):
+    """vLLM returns empty content when the budget runs out mid-thinking
+    (all tokens went to reasoning_content, none left for the answer).
+    This happened a lot with llama.cpp and we have to handle it
+    gracefully — return what we have rather than crashing."""
+    from benchmarks.v301_runner import LLMClient
+
+    mock_vllm.chat_completion_response = {
+        "id": "chat-budget",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "qwen3.5-9b",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "",  # nothing left after thinking ate the budget
+                "reasoning_content": "I'm still thinking about this very hard...",
+            },
+            "finish_reason": "length",
+        }],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 8000, "total_tokens": 8050},
+    }
+
+    c = LLMClient(url=mock_vllm.url)
+    content, reasoning, tokens, _ = c.chat([{"role": "user", "content": "hard question"}])
+    assert content == ""  # caller decides how to handle empty response
+    assert "thinking" in reasoning
+    assert tokens == 8000
+
+
 def test_v301_chat_handles_missing_reasoning_content(mock_vllm):
     """If vLLM is started without --reasoning-parser, reasoning_content is
     absent. The runner must still extract content and not crash."""
