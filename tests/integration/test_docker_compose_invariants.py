@@ -414,6 +414,30 @@ def test_atlas_proxy_readme_matches_actual_env_vars():
         )
 
 
+def test_architecture_services_table_lists_dual_vllm_instances():
+    """`docs/ARCHITECTURE.md` Services table previously had a single
+    `vLLM | 8080 | C++ (vLLM)` row — three errors at once: wrong port
+    (8080 was llama-server; vLLM gen+embed run on 8000+8001), wrong
+    language (vLLM is Python with PyTorch + Triton kernels, not C++ —
+    that was llama.cpp), and the single row papered over the dual-
+    instance reality. Pin both gen and embed rows to keep readers
+    accurate."""
+    src = (PROJECT_ROOT / "docs" / "ARCHITECTURE.md").read_text()
+
+    # Forbid the stale single-row entry.
+    assert "C++ (vLLM)" not in src, (
+        "ARCHITECTURE.md: 'C++ (vLLM)' is the llama.cpp era — vLLM is Python"
+    )
+
+    # Require both dual-instance rows in the services table.
+    assert "**vllm-gen**" in src, (
+        "ARCHITECTURE.md services table must list vllm-gen explicitly"
+    )
+    assert "**vllm-embed**" in src, (
+        "ARCHITECTURE.md services table must list vllm-embed explicitly"
+    )
+
+
 def test_user_docs_do_not_reference_legacy_port_8080():
     """Port 8080 is the old llama-server port. vLLM gen runs on 8000 and
     embed on 8001 across the entire stack (Dockerfiles, compose, every

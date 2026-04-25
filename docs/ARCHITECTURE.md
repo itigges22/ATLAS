@@ -39,7 +39,8 @@ Services run as containers via Docker Compose (recommended) or as local processe
 
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
-| **vLLM** | 8080 | C++ (vLLM) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
+| **vllm-gen** | 8000 | Python (vLLM + Triton kernels) | Chat/completions with PagedAttention, AWQ-Q4, Qwen3 reasoning parser |
+| **vllm-embed** | 8001 | Python (vLLM + Triton kernels) | `/v1/embeddings` from a pooling-runner copy of the same model (4096-dim hidden states for the Lens) |
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, Aider format translation |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
 | **geometric-lens** | 31144 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |

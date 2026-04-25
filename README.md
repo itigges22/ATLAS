@@ -57,7 +57,7 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
 
 1. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go-based agent loop that orchestrates the entire system.
   - a. [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
-  - b. [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas guarantee 100% valid JSON output
+  - b. [Structured output](docs/ARCHITECTURE.md#grammar-enforcement) - vLLM `response_format: json_object` constrains every tool-call response to valid JSON
   - c. [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeout enforcement
 
 2. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation that turns a single prompt into verified, high-quality output.
