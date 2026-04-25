@@ -60,6 +60,7 @@ $CRT run -d --name atlas-bench \
     --gpus all \
     --ulimit memlock=-1 \
     --ulimit stack=67108864 \
+    --shm-size=8g \
     -p "${GEN_PORT}:8000" \
     -p "${EMBED_PORT}:8001" \
     -p "${LENS_PORT}:31144" \

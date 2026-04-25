@@ -37,6 +37,9 @@ services:
     ulimits:
       memlock: -1
       stack: 67108864
+    # vLLM uses CUDA IPC; the Docker default 64 MB shm is too small and
+    # causes "Bus error" / "Failed to allocate shared memory" at runtime.
+    shm_size: 8gb
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
@@ -87,6 +90,8 @@ services:
     ulimits:
       memlock: -1
       stack: 67108864
+    # vLLM CUDA IPC — see vllm-gen comment.
+    shm_size: 8gb
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
       interval: 30s
