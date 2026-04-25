@@ -7,11 +7,11 @@
 # Usage:
 #   ./benchmark/measure_bok_latency.sh [LLAMA_URL]
 #
-# Default LLAMA_URL: http://localhost:32735
+# Default LLAMA_URL: $LLAMA_GEN_URL or http://localhost:8000 (vLLM gen instance).
 
 set -euo pipefail
 
-LLAMA_URL="${1:-http://localhost:32735}"
+LLAMA_URL="${1:-${LLAMA_GEN_URL:-${LLAMA_URL:-http://localhost:8000}}}"
 API_URL="$LLAMA_URL/v1/chat/completions"
 RESULTS_DIR="benchmark/results/latency_$(date -u +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULTS_DIR"
