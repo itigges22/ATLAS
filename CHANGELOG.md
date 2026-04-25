@@ -28,6 +28,14 @@
 - **`benchmarks/h200/transfer_to_h200.sh`** rewritten for AWQ: rsyncs the `models/Qwen3.5-9B-AWQ/` directory + `geometric-lens/` tree (was a single `.gguf` file).
 - Documentation: README intro + Known Limitations + Roadmap, MAP.md section list, all 7 active English docs, all 9 translation files (ja/ko/zh-CN), atlas-proxy/README.md, `benchmarks/{,h200/}README.md`, and the `tests/infrastructure/test_llm.py` docstrings — all updated for vLLM.
 - **`.gitignore`**: excludes the new `.cache/huggingface/` mount path docker-compose creates by default.
+- **Lens runtime deps**: `xgboost>=2.0` and `scikit-learn>=1.3` added to `geometric-lens/requirements.txt`. Without xgboost the Lens silently disabled G(x) candidate scoring at startup; the docker-compose Lens container shipped without it. Added two regression tests so this can't regress.
+- **vLLM API up-to-date**: embed instance migrated from deprecated `--task embed` to `--runner pooling --convert embed` (the documented current API in vLLM 0.17+).
+- **Pre-flight contract tests** verify the curl bodies in `benchmarks/h200/preflight.sh` match what the runners send: uses `chat_template_kwargs` (no `/nothink`), checks 4096-dim embed responses, hits OpenAI-compatible endpoints only.
+- **Empty-content + missing-logprobs wire tests**: cover the two graceful-degradation paths the V3 adapter has to handle on real vLLM responses.
+- **`atlas.conf.example` / `CONFIGURATION.md` / atlas-proxy README / benchmarks READMEs / TROUBLESHOOTING / methodology docs / AGGREGATE_REPORT**: all swept for the cutover. `ATLAS_LLAMA_NODEPORT` aliased to the new `ATLAS_VLLM_GEN_NODEPORT`; code paths now read the new name first, falling back to old. The TROUBLESHOOTING vLLM section was actively misleading (gave llama.cpp advice for a vLLM stack) — rewritten with concrete vLLM-correct fixes plus entries for the G(x) xgboost-missing path and the deprecated `--task embed` path.
+- **`benchmark/measure_bok_latency.sh`**: default URL `localhost:32735` (old NodePort) → `LLAMA_GEN_URL` chain → `localhost:8000`.
+- **`atlas/cli/repl.py`**: status block speed string `"~51 tok/s"` (llama.cpp single-slot rate) → `"vLLM (PagedAttention)"` since vLLM per-slot throughput varies wildly with concurrency/GPU/quant — no honest single number to display.
+- **`.dockerignore` cleanup**: dropped dead `inference/` and `rag-api/` exclusions; removed an actively-misleading `geometric-lens/` exclusion in `benchmarks/h200/.dockerignore` (the Dockerfile COPYs that directory in).
 - Memory note saved: `memory/project_vllm_migration.md`.
 
 ### Documentation
