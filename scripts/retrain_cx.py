@@ -16,16 +16,21 @@ import time
 import random
 from urllib.request import Request, urlopen
 
-# Add geometric-lens to path for imports
-sys.path.insert(0, '" + ATLAS_DIR + "/geometric-lens')
+# Add geometric-lens to path for imports.
+# The previous form was a botched mass-edit literal — `'" + ATLAS_DIR + "/geometric-lens'` —
+# which Python parsed as the string `" + ATLAS_DIR + "/geometric-lens`
+# (quotes inside) and inserted *that* into sys.path. Subsequent
+# `from geometric_lens import ...` then ImportError'd with no useful
+# context. Use proper concatenation.
+sys.path.insert(0, os.path.join(ATLAS_DIR, "geometric-lens"))
 
 LLAMA_EMBED_URL = os.environ.get(
     "LLAMA_EMBED_URL",
     os.environ.get("LLAMA_URL", "http://localhost:8001"),
 ).rstrip("/") + "/v1/embeddings"
 EMBED_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
-MODELS_DIR = "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models"
-DATA_DIR = "" + ATLAS_DIR + "/v3_ablation_results/condition_a"
+MODELS_DIR = os.path.join(ATLAS_DIR, "geometric-lens/geometric_lens/models")
+DATA_DIR = os.path.join(ATLAS_DIR, "v3_ablation_results/condition_a")
 
 
 def get_llama_embedding(text: str, retries=2) -> list:

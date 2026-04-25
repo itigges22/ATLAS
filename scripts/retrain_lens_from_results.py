@@ -25,7 +25,7 @@ import urllib.error
 
 RESULTS_DIR = os.environ.get(
     "RESULTS_DIR",
-    "" + ATLAS_DIR + "/benchmark/results/v3_lcb/per_task",
+    os.path.join(ATLAS_DIR, "benchmark/results/v3_lcb/per_task"),
 )
 LLAMA_URL = os.environ.get(
     "LLAMA_EMBED_URL",
@@ -34,7 +34,7 @@ LLAMA_URL = os.environ.get(
 EMBED_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
 SAVE_PATH = os.environ.get(
     "SAVE_PATH",
-    "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models/cost_field.pt",
+    os.path.join(ATLAS_DIR, "geometric-lens/geometric_lens/models/cost_field.pt"),
 )
 MAX_TASKS = int(os.environ.get("MAX_TASKS", "0"))  # 0 = all
 

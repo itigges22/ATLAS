@@ -275,6 +275,49 @@ def test_preflight_script_uses_correct_vllm_shape():
     assert "/internal/lens/score-text" in preflight
 
 
+def test_no_botched_atlas_dir_string_concat_in_scripts():
+    """During the V3.0.1 ATLAS_DIR refactor a sed replacement got mangled
+    in places, leaving lines like:
+
+        sys.path.insert(0, '" + ATLAS_DIR + "/geometric-lens')
+
+    Python parses that as a single literal string with embedded quotes
+    (the value `" + ATLAS_DIR + "/geometric-lens`) — the path doesn't
+    actually get computed, sys.path gets garbage, and any subsequent
+    `from geometric_lens import ...` ImportErrors with no useful context.
+
+    The pattern `'" + ATLAS_DIR + "/...'` (quotes inside a single-quoted
+    string) is unambiguously broken — there's no legitimate reason to
+    embed quote+plus+ATLAS_DIR+plus+quote in a literal. Pin: forbid that
+    pattern in scripts that have been touched by the refactor."""
+    import re
+    targets = list((PROJECT_ROOT / "scripts").rglob("*.py"))
+    targets += list((PROJECT_ROOT / "benchmark").rglob("*.py"))
+    targets += list((PROJECT_ROOT / "benchmarks").rglob("*.py"))
+    # Allow this exact pattern only inside this test file (it's the
+    # invariant's data, not a botched edit).
+    targets = [p for p in targets if "tests/" not in str(p)
+               and "__pycache__" not in str(p)]
+
+    bad_pattern = re.compile(r"""['"]\s*\+\s*ATLAS_DIR\s*\+\s*['"]""")
+    offenders = []
+    for path in targets:
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            stripped = line.lstrip()
+            # Skip comments — they may legitimately mention the broken
+            # pattern in disclaimer/explanation form.
+            if stripped.startswith("#"):
+                continue
+            if bad_pattern.search(line):
+                offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "Botched ATLAS_DIR string concatenation found — the surrounding "
+        "quotes are inside the string literal, so the path is never "
+        "computed. Use os.path.join(ATLAS_DIR, ...) or an f-string instead.\n"
+        + "\n".join(offenders)
+    )
+
+
 def test_lens_entrypoint_env_points_chat_at_gen_port():
     """`benchmarks/h200/entrypoint.sh` launches the Geometric Lens with
     LLAMA_*_URL env vars. The Lens chat clients (summarizer.py,
