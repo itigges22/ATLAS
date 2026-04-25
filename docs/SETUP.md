@@ -189,9 +189,13 @@ vllm serve models/Qwen3.5-9B-AWQ \
   --trust-remote-code
 
 # Terminal 2: vLLM embed (4096-dim hidden states for the Lens, on port 8001)
+# --runner pooling + --convert embed: the current API for serving a generation
+# model via /v1/embeddings (the older --task embed still works but is
+# deprecated in vLLM 0.17+).
 vllm serve models/Qwen3.5-9B-AWQ \
   --served-model-name qwen3.5-9b-embed \
-  --task embed \
+  --runner pooling \
+  --convert embed \
   --host 0.0.0.0 --port 8001 \
   --max-num-seqs 8 --max-model-len 4096 \
   --gpu-memory-utilization 0.20 \

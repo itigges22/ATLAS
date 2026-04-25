@@ -62,7 +62,8 @@ services:
     command: >
       --model ${ATLAS_MODEL_PATH:-/models/Qwen3.5-9B-AWQ}
       --served-model-name ${ATLAS_EMBED_MODEL_NAME:-qwen3.5-9b-embed}
-      --task embed
+      --runner pooling
+      --convert embed
       --host 0.0.0.0 --port 8001
       --max-num-seqs ${ATLAS_EMBED_MAX_NUM_SEQS:-8}
       --max-model-len ${ATLAS_EMBED_CTX_SIZE:-4096}

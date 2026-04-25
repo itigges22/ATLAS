@@ -5,7 +5,8 @@
 # Inference backend:
 #   Two vLLM instances run side by side from a single image:
 #     - GEN  (port 8000): Qwen3.5-9B-AWQ, --reasoning-parser qwen3, prefix caching, max-num-seqs 32
-#     - EMBED (port 8001): same model, --task embed, max-num-seqs 8 (4096-dim hidden states for Lens)
+#     - EMBED (port 8001): same model, --runner pooling --convert embed,
+#       max-num-seqs 8 (4096-dim hidden states for the Lens)
 #
 # Model weights are PULLED on first run from HuggingFace (QuantTrio/Qwen3.5-9B-AWQ, ~12 GiB).
 # Set DOWNLOAD_MODEL=0 and mount /workspace/models to skip the download.

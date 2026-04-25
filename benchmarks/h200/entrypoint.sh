@@ -3,7 +3,8 @@
 #
 # Brings up three services in this order:
 #   1. Geometric Lens (FastAPI on port 31144) — fast, no model load
-#   2. vLLM EMBED instance on $EMBED_PORT (--task embed, 4096-dim hidden states)
+#   2. vLLM EMBED instance on $EMBED_PORT (--runner pooling --convert embed,
+#      4096-dim hidden states for the Lens)
 #   3. vLLM GEN instance on $GEN_PORT (--reasoning-parser qwen3, prefix caching)
 #
 # Why this order: Lens starts instantly. EMBED instance is smaller and used by Lens
@@ -108,9 +109,13 @@ fi
 echo ""
 echo "--- Starting vLLM EMBED on port $EMBED_PORT ---"
 EMBED_LOG=/tmp/vllm-embed.log
+# --runner pooling --convert embed is the current API for serving a generation
+# model via /v1/embeddings. The older --task embed still works but is
+# deprecated in vLLM 0.17+.
 nohup vllm serve "$MODEL_PATH" \
     --served-model-name qwen3.5-9b-embed \
-    --task embed \
+    --runner pooling \
+    --convert embed \
     --port "$EMBED_PORT" \
     --host 0.0.0.0 \
     --max-num-seqs "$EMBED_MAX_NUM_SEQS" \
