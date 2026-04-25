@@ -156,7 +156,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
 - [`sandbox/`](#sandbox) — Isolated code execution
   - [`executor_server.py`](#sandbox) — FastAPI server, 8 language executors, linting, error classification
   - [`Dockerfile`](#sandbox) — Container build (Python, Node, Go, Rust, gcc)
-- [`inference/`](#inference) — vLLM configuration
+- [`benchmarks/h200/`](#inference) — vLLM container build (replaces the deleted `inference/` dir)
   - [`Dockerfile.v31`](#inference) — V3.1 9B model build (used by docker-compose)
   - [`Dockerfile`](#inference) — Base vLLM build
   - [`Dockerfile.mtp`](#inference) — Multi-Token Prediction experimental build
@@ -457,21 +457,18 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`Dockerfile`](../sandbox/Dockerfile) | Python 3.11-slim + Node.js 20 + Go 1.22 + Rust stable + gcc/g++. tmpfs workspace, read-only root. |
 
 <a id="inference"></a>
-### inference/ — vLLM Configuration
+### benchmarks/h200/ — vLLM Container Build
+
+The legacy `inference/` directory (which built llama.cpp from source) was
+removed in the vLLM cutover. The single source of truth for the inference
+container is now `benchmarks/h200/`:
 
 | File | Description |
 |------|-------------|
-| [`Dockerfile.v31`](../benchmarks/h200/Dockerfile) | V3.1 9B model Docker build. Used by docker-compose. Builds vLLM from source with CUDA. |
-| [`Dockerfile`](../benchmarks/h200/Dockerfile) | Base vLLM build with CUDA support. |
-| [`Dockerfile.mtp`](../benchmarks/h200/Dockerfile) | Multi-Token Prediction experimental build. |
-| [`entrypoint-v3.1-9b.sh`](../inference/entrypoint-v3.1-9b.sh) | K3s 9B production entrypoint: flash-attn, mlock, --parallel 4, KV quant (q8_0/q4_0), embeddings, 160K context. |
-| [`entrypoint-v3-specdec.sh`](../inference/entrypoint-v3-specdec.sh) | K3s 14B + spec decode entrypoint: Qwen3-14B main + Qwen3-0.6B draft, embeddings patch. |
-| [`entrypoint.sh`](../inference/entrypoint.sh) | Default entrypoint: basic vLLM launch with configurable flags. |
-| [`entrypoint-embed.sh`](../inference/entrypoint-embed.sh) | Dedicated embedding server entrypoint (nomic-embed-text-v1.5). |
-| [`entrypoint-mtp.sh`](../inference/entrypoint-mtp.sh) | MTP experimental entrypoint. |
-| [`patches/fix-embeddings-spec-decode.patch`](../inference/patches/fix-embeddings-spec-decode.patch) | One-line patch: prevents embedding=true from poisoning draft model context in spec decode. |
-| [`templates/Qwen3-custom.jinja`](../inference/templates/Qwen3-custom.jinja) | Custom Qwen3 Jinja2 chat template. |
-| [`templates/Qwen3-no-think.jinja`](../inference/templates/Qwen3-no-think.jinja) | Qwen3 template that suppresses `<think>` blocks. |
+| [`Dockerfile`](../benchmarks/h200/Dockerfile) | vLLM nightly + transformers patched for Qwen3.5 partial_rotary_factor + ATLAS Python deps + Lens model weights. CUDA 12.8.1 base. |
+| [`entrypoint.sh`](../benchmarks/h200/entrypoint.sh) | Boots Lens, vLLM embed (port 8001, --runner pooling --convert embed), and vLLM gen (port 8000, --reasoning-parser qwen3 --enable-prefix-caching). Runs preflight + smoke before benchmarks. |
+| [`preflight.sh`](../benchmarks/h200/preflight.sh) | End-to-end check: gen completions, embed returns 4096-dim, Lens scoring. Refuses the sweep on failure. |
+| [`launch_on_h200.sh`](../benchmarks/h200/launch_on_h200.sh) | Builds and starts the container on a rented H100/H200 pod. |
 
 <a id="scripts"></a>
 ### scripts/ — Automation
