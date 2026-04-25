@@ -568,7 +568,8 @@ class TestVllmEmbeddings:
         assert response.status_code == 200
 
     def test_embed_returns_4096_dims(self, llama_embed_client: httpx.Client):
-        """Qwen3.5-9B in --task embed mode must return 4096-dim vectors.
+        """Qwen3.5-9B served with `--runner pooling --convert embed` (the
+        current vLLM 0.17+ embedding API) must return 4096-dim vectors.
         The Lens C(x) MLP is trained on this dimensionality — anything
         else means the Lens silently breaks."""
         response = llama_embed_client.post(

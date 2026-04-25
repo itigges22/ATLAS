@@ -1360,29 +1360,35 @@ def test_cli_md_health_check_table_uses_correct_vllm_ports():
 
 def test_lens_embedding_extractor_uses_current_vllm_api_name():
     """`geometric-lens/geometric_lens/embedding_extractor.py` is the entry
-    point used by every C(x)/G(x) scoring path in the Lens. Its docstring
-    used to say "For Qwen3.5-9B in --task embed mode, that's a 4096-dim
-    float vector" — but `--task embed` was deprecated in vLLM 0.17 in
-    favor of `--runner pooling --convert embed` (the docker-compose
-    command was migrated in stage 19). The docstring stayed behind, so
-    a reader debugging "why is the Lens getting empty embeddings?"
-    would search vLLM docs for `--task embed`, find a deprecation
-    notice, and have no clear next step.
+    point used by every C(x)/G(x) scoring path in the Lens, and
+    `tests/infrastructure/test_llm.py` documents the contract the embed
+    instance must honor. Both used to reference the deprecated
+    `--task embed` mode in their docstrings — but vLLM 0.17+ removed
+    that flag in favor of `--runner pooling --convert embed`. A reader
+    debugging "why is the Lens getting empty embeddings?" would search
+    vLLM docs for `--task embed`, find a deprecation notice, and have
+    no clear next step.
 
-    Pin: the docstring must reference the current API name and may not
-    present `--task embed` as if it were live."""
-    src = (PROJECT_ROOT / "geometric-lens" / "geometric_lens" / "embedding_extractor.py").read_text()
-    # The deprecated form (anywhere in the file) is forbidden — except
-    # inside a deliberate "the deprecated `--task embed`" disclaimer.
+    Pin: neither file may present `in --task embed mode` as a live
+    description, and `embedding_extractor.py` must reference the
+    current API by name."""
+    files = [
+        PROJECT_ROOT / "geometric-lens" / "geometric_lens" / "embedding_extractor.py",
+        PROJECT_ROOT / "tests" / "infrastructure" / "test_llm.py",
+    ]
     bad_pattern = re.compile(r"in --task embed mode")
-    assert not bad_pattern.search(src), (
-        "embedding_extractor.py still presents `--task embed` as a live "
-        "vLLM mode in its docstring; vLLM 0.17+ uses "
-        "`--runner pooling --convert embed`"
-    )
-    # Docstring formatting (line wraps, indents) varies — match the API
-    # phrase across any whitespace.
-    assert re.search(r"--runner\s+pooling\s+--convert\s+embed", src), (
+    for f in files:
+        src = f.read_text()
+        assert not bad_pattern.search(src), (
+            f"{f.relative_to(PROJECT_ROOT)} still presents `--task embed` "
+            f"as a live vLLM mode; vLLM 0.17+ uses "
+            f"`--runner pooling --convert embed`"
+        )
+
+    # `embedding_extractor.py` must additionally call out the current
+    # API by name (formatting varies — match across whitespace).
+    extractor_src = files[0].read_text()
+    assert re.search(r"--runner\s+pooling\s+--convert\s+embed", extractor_src), (
         "embedding_extractor.py docstring must name the current "
         "vLLM API (`--runner pooling --convert embed`)"
     )
