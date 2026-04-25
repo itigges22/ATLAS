@@ -137,6 +137,7 @@ Run all services as local processes without containers. Useful for development o
 
 | Requirement | Details |
 |-------------|---------|
+| **Python 3.10+** | vLLM 0.17 requires Python ≥ 3.10 (the project itself is 3.9+, but bare-metal vLLM is the binding constraint) |
 | **Go 1.24+** | For building atlas-proxy |
 | **vLLM** | `pip install -U --pre vllm` (>=0.17 for Qwen3.5 DeltaNet support; CUDA 12.8) |
 | **Aider** | `pip install aider-chat` |

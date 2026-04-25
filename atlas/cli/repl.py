@@ -124,12 +124,19 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
 
     env = os.environ.copy()
     env["ATLAS_PROXY_PORT"] = PROXY_PORT
+    # vLLM gen + embed URLs (current names + back-compat names — proxy reads
+    # firstEnv([LLAMA_GEN_URL, ATLAS_INFERENCE_URL], ...) so this covers both
+    # bare-metal and docker-compose deployments).
+    env["LLAMA_GEN_URL"] = INFERENCE_URL
+    env["LLAMA_EMBED_URL"] = os.environ.get("LLAMA_EMBED_URL", "http://localhost:8001")
     env["ATLAS_INFERENCE_URL"] = INFERENCE_URL
     env["ATLAS_LLAMA_URL"] = INFERENCE_URL
     env["ATLAS_LENS_URL"] = LENS_URL
     env["ATLAS_SANDBOX_URL"] = SANDBOX_URL
     env["ATLAS_V3_URL"] = V3_URL
     env["ATLAS_AGENT_LOOP"] = "1"
+    env["LLAMA_GEN_MODEL"] = MODEL_NAME
+    env["LLAMA_EMBED_MODEL"] = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
     env["ATLAS_MODEL_NAME"] = MODEL_NAME
 
     try:
