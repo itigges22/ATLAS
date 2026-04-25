@@ -80,9 +80,17 @@ echo ""
 echo "--- Starting Geometric Lens service on port ${LENS_PORT:-31144} ---"
 LENS_LOG=/tmp/lens-service.log
 cd /workspace/ATLAS/geometric-lens
+# IMPORTANT: Lens chat clients (summarizer / pattern_extractor / tree_search)
+# read LLAMA_GEN_URL first, falling back to LLAMA_URL when unset. If we leave
+# LLAMA_GEN_URL unset and only set LLAMA_URL=$EMBED_PORT, those clients hit
+# the embed instance with /v1/chat/completions and 4xx (embed runs in
+# pooling/embed mode, not chat). Point chat at gen and embeddings at embed.
 GEOMETRIC_LENS_ENABLED=true \
-LLAMA_URL="http://localhost:${EMBED_PORT}" \
+LLAMA_GEN_URL="http://localhost:${GEN_PORT}" \
 LLAMA_EMBED_URL="http://localhost:${EMBED_PORT}" \
+LLAMA_URL="http://localhost:${GEN_PORT}" \
+LLAMA_GEN_MODEL="${LLAMA_GEN_MODEL:-qwen3.5-9b}" \
+LLAMA_EMBED_MODEL="${LLAMA_EMBED_MODEL:-qwen3.5-9b-embed}" \
 PROJECT_DATA_DIR=/data/projects \
 nohup python -m uvicorn main:app --host 0.0.0.0 --port "${LENS_PORT:-31144}" \
     > "$LENS_LOG" 2>&1 &

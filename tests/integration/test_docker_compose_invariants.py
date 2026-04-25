@@ -275,6 +275,41 @@ def test_preflight_script_uses_correct_vllm_shape():
     assert "/internal/lens/score-text" in preflight
 
 
+def test_lens_entrypoint_env_points_chat_at_gen_port():
+    """`benchmarks/h200/entrypoint.sh` launches the Geometric Lens with
+    LLAMA_*_URL env vars. The Lens chat clients (summarizer.py,
+    pattern_extractor.py, tree_search.py) read `LLAMA_GEN_URL` first,
+    falling back to `LLAMA_URL` when unset. The entrypoint used to set
+    only `LLAMA_URL=http://localhost:${EMBED_PORT}` (port 8001), so
+    chat completion requests from the Lens went to the embed instance
+    — which runs in `--runner pooling --convert embed` mode and 4xx's
+    on `/v1/chat/completions`. Pin: the Lens block must set
+    `LLAMA_GEN_URL` to ${GEN_PORT}, not ${EMBED_PORT}, and `LLAMA_URL`
+    (the fallback) must agree.
+    """
+    src = (PROJECT_ROOT / "benchmarks" / "h200" / "entrypoint.sh").read_text()
+    # Find the Lens-launch block (between the "Starting Geometric Lens"
+    # banner and the LENS_PID assignment).
+    block_start = src.index('"--- Starting Geometric Lens')
+    block_end = src.index("LENS_PID=$!", block_start)
+    block = src[block_start:block_end]
+    assert 'LLAMA_GEN_URL="http://localhost:${GEN_PORT}"' in block, (
+        "Lens entrypoint must set LLAMA_GEN_URL to ${GEN_PORT} so chat "
+        "completions hit the gen instance, not the embed one"
+    )
+    assert 'LLAMA_EMBED_URL="http://localhost:${EMBED_PORT}"' in block, (
+        "Lens entrypoint must set LLAMA_EMBED_URL to ${EMBED_PORT} for "
+        "embedding extraction"
+    )
+    # If LLAMA_URL is set at all, it must match GEN_PORT (it's the
+    # fallback for code paths that haven't migrated to LLAMA_GEN_URL).
+    if 'LLAMA_URL="' in block:
+        assert 'LLAMA_URL="http://localhost:${GEN_PORT}"' in block, (
+            "When entrypoint sets the legacy LLAMA_URL, it must point at "
+            "${GEN_PORT} — not the embed port"
+        )
+
+
 def test_launch_on_h200_forwards_model_and_parallel_env():
     """benchmarks/h200/launch_on_h200.sh starts the cloud-pod container with
     a curated set of `-e VAR=...` exports. The entrypoint inside the
