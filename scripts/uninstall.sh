@@ -145,8 +145,11 @@ remove_k3s() {
 remove_models() {
     log_info "Removing models from $ATLAS_MODELS_DIR..."
 
+    # vLLM AWQ weights are a directory of safetensors shards. Remove the
+    # whole AWQ model directory plus any legacy GGUF files left behind.
+    local model_dir_name="${ATLAS_MODEL_DIR_NAME:-Qwen3.5-9B-AWQ}"
+    rm -rf "$ATLAS_MODELS_DIR/$model_dir_name"
     rm -f "$ATLAS_MODELS_DIR"/*.gguf
-    rm -f "$ATLAS_MODELS_DIR/default.gguf"
     rm -rf "$ATLAS_LORA_DIR"
 
     log_info "Models removed"

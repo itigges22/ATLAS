@@ -3,8 +3,8 @@ section: section_d_reasoning_coding
 version: "3.0.1"
 
 model:
-  name: Qwen3.5-9B-Q6_K
-  quantization: Q6_K
+  name: Qwen3.5-9B-AWQ
+  quantization: AWQ-Q4
 
 pipeline:
   name: ATLAS V3.0.1

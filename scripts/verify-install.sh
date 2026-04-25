@@ -79,15 +79,18 @@ check_gpu() {
     fi
 }
 
-# Model check
+# Model check (vLLM AWQ — directory of safetensors shards, not a single GGUF).
 check_models() {
-    if [[ -f "$ATLAS_MODELS_DIR/default.gguf" ]] || [[ -f "$ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL" ]]; then
-        check_pass "Main model found"
+    local model_dir_name="${ATLAS_MODEL_DIR_NAME:-Qwen3.5-9B-AWQ}"
+    local model_path="$ATLAS_MODELS_DIR/$model_dir_name"
+    if [[ -d "$model_path" ]] && ls "$model_path"/*.safetensors >/dev/null 2>&1; then
+        check_pass "AWQ model found at $model_path"
     else
-        check_fail "Main model not found in $ATLAS_MODELS_DIR"
+        check_fail "AWQ model not found at $model_path (expected .safetensors shards)"
     fi
 
-    if [[ "$ATLAS_ENABLE_SPECULATIVE" == "true" ]] && [[ -n "$ATLAS_DRAFT_MODEL" ]]; then
+    # Speculative decoding is no longer used with vLLM in this setup.
+    if false; then
         if [[ -f "$ATLAS_MODELS_DIR/$ATLAS_DRAFT_MODEL" ]]; then
             check_pass "Draft model found (speculative decoding enabled)"
         else

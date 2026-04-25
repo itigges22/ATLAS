@@ -31,14 +31,14 @@ validate_paths() {
         errors=$((errors + 1))
     fi
 
-    # Check for main model file
-    if [[ -n "$ATLAS_MAIN_MODEL" ]]; then
-        if [[ ! -f "$ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL" ]] && [[ ! -f "$ATLAS_MODELS_DIR/default.gguf" ]]; then
-            log_error "Main model not found: $ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL"
-            log_error "  Download with: ./scripts/download-models.sh"
-            log_error "  Or update ATLAS_MAIN_MODEL in atlas.conf"
-            errors=$((errors + 1))
-        fi
+    # Check for the AWQ model directory. vLLM loads from a directory of
+    # .safetensors shards + config.json (no single file).
+    local model_dir_name="${ATLAS_MODEL_DIR_NAME:-Qwen3.5-9B-AWQ}"
+    if [[ ! -d "$ATLAS_MODELS_DIR/$model_dir_name" ]]; then
+        log_error "Model directory not found: $ATLAS_MODELS_DIR/$model_dir_name"
+        log_error "  Download with: ./scripts/download-models.sh"
+        log_error "  Or set ATLAS_MODEL_DIR_NAME and place the AWQ weights there"
+        errors=$((errors + 1))
     fi
 
     # Check ATLAS_LORA_DIR (create if missing, it's optional)
