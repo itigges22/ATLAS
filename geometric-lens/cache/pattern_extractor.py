@@ -1,6 +1,7 @@
 """LLM-based pattern extraction from successful task completions."""
 
 import logging
+import os
 import re
 import uuid
 from typing import Optional
@@ -10,6 +11,9 @@ import httpx
 from models.pattern import Pattern, PatternType, PatternTier, HALF_LIVES
 
 logger = logging.getLogger(__name__)
+
+# vLLM rejects unknown model names — must match --served-model-name on the gen instance.
+GEN_MODEL = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
 
 
 async def extract_pattern(
@@ -126,7 +130,7 @@ async def _llm_extract(
             response = await client.post(
                 f"{llama_url}/v1/chat/completions",
                 json={
-                    "model": "default",
+                    "model": GEN_MODEL,
                     "messages": [
                         {
                             "role": "system",

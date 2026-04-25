@@ -1,6 +1,7 @@
 """LLM-generated node summaries via vLLM gen instance."""
 
 import logging
+import os
 import hashlib
 import re
 from typing import Dict, Optional
@@ -11,8 +12,11 @@ from models.tree_node import TreeNode, NodeType
 
 logger = logging.getLogger(__name__)
 
-# Default vLLM gen instance URL (overridable)
-LLAMA_URL = "http://llama-service:8000"
+# Default vLLM gen instance URL (overridable). The default targets the
+# `vllm-gen` service name from docker-compose; in K8s this resolves to the
+# corresponding service.
+LLAMA_URL = os.environ.get("LLAMA_GEN_URL", os.environ.get("LLAMA_URL", "http://vllm-gen:8000"))
+GEN_MODEL = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
 
 
 async def summarize_tree(
@@ -154,7 +158,7 @@ async def _llm_summarize(
             response = await client.post(
                 f"{llama_url}/v1/chat/completions",
                 json={
-                    "model": "default",
+                    "model": GEN_MODEL,
                     "messages": [
                         {
                             "role": "system",

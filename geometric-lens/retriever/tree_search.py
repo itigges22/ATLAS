@@ -1,6 +1,7 @@
 """LLM-guided tree traversal for semantic code retrieval."""
 
 import logging
+import os
 import json
 import re
 from typing import List, Dict, Any, Optional
@@ -10,6 +11,9 @@ import httpx
 from models.tree_node import TreeNode, NodeType
 
 logger = logging.getLogger(__name__)
+
+# vLLM rejects unknown model names — must match --served-model-name.
+GEN_MODEL = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
 
 # Relevance score threshold for expanding a child node
 EXPAND_THRESHOLD = 6
@@ -158,7 +162,7 @@ class TreeSearcher:
                 response = await client.post(
                     f"{self.llama_url}/v1/chat/completions",
                     json={
-                        "model": "default",
+                        "model": GEN_MODEL,
                         "messages": [
                             {
                                 "role": "system",

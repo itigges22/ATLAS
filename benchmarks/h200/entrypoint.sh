@@ -42,20 +42,23 @@ echo ""
 
 # 1. Ensure model is present. AWQ is ~12 GiB; pulling on first run is fine for
 #    cloud pods. For repeat runs, mount a volume at /workspace/models to avoid the download.
+#    Set HF_TOKEN for gated/private repos (passed through to huggingface_hub).
 if [[ ! -d "$MODEL_PATH" || -z "$(ls -A "$MODEL_PATH" 2>/dev/null)" ]]; then
     if [[ "$DOWNLOAD_MODEL" == "1" ]]; then
         echo "--- Downloading $MODEL_NAME from HuggingFace (~12 GiB) ---"
         mkdir -p "$MODEL_PATH"
-        # Use the HF hub CLI rather than wget per-file — there are many shards.
+        # huggingface_hub CLI handles sharded weights + retries.
         pip3 install -q huggingface_hub
         python -c "
-from huggingface_hub import snapshot_download
 import os
+from huggingface_hub import snapshot_download
+token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN')
 snapshot_download(
     repo_id='$MODEL_NAME',
     local_dir='$MODEL_PATH',
     local_dir_use_symlinks=False,
     max_workers=8,
+    token=token,
 )
 print('download complete')
 "
