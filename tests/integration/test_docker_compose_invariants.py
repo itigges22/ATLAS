@@ -337,6 +337,49 @@ def test_makefile_lint_and_ci_lint_cover_same_scripts():
         assert must_have in mf_scripts, f"{must_have} must be lint-checked"
 
 
+def test_atlas_proxy_readme_matches_actual_env_vars():
+    """atlas-proxy/README.md's "Configuration" table must list the env vars
+    the proxy actually reads, with the same defaults the code uses. The
+    README had drifted: it documented `ATLAS_RAG_URL = http://localhost:8099`
+    but the proxy reads `ATLAS_LENS_URL = http://localhost:31144` (wrong
+    name, wrong port). A user trusting the README would set ATLAS_RAG_URL
+    in their environment and the proxy would ignore it, falling back to
+    the 31144 default — silent override-not-applied."""
+    readme = (PROJECT_ROOT / "atlas-proxy" / "README.md").read_text()
+    main_go = (PROJECT_ROOT / "atlas-proxy" / "main.go").read_text()
+
+    # Every env var the README documents must actually be read by main.go.
+    import re
+    docs_vars = set(re.findall(r"\|\s*([A-Z][A-Z0-9_]+)\s*\|", readme))
+    # Filter to ones the README actually presents as env knobs (skip
+    # column header tokens / random uppercase words).
+    env_var_pattern = re.compile(r"^[A-Z][A-Z0-9_]*$")
+    docs_vars = {v for v in docs_vars if env_var_pattern.match(v)
+                 and v not in ("Env", "Var", "Default", "Description")}
+
+    # `ATLAS_RAG_URL` is the legacy name we want gone.
+    assert "ATLAS_RAG_URL" not in docs_vars, (
+        "atlas-proxy/README.md still documents ATLAS_RAG_URL; the proxy "
+        "actually reads ATLAS_LENS_URL (see main.go:45 envOr call)"
+    )
+    # And the new name should be present.
+    assert "ATLAS_LENS_URL" in readme, (
+        "atlas-proxy/README.md must document ATLAS_LENS_URL with default "
+        "http://localhost:31144"
+    )
+    # Sanity-check: every env var the README claims is honored must
+    # actually appear as an envOr/firstEnv lookup in main.go.
+    for var in docs_vars:
+        # Skip common-knob env vars not specific to the proxy's lookups
+        # (LLAMA_GEN_MODEL is read by ChatRequest, not directly via envOr).
+        if var in ("LLAMA_GEN_MODEL", "ATLAS_PROXY_PORT", "ATLAS_AGENT_LOOP"):
+            continue
+        assert var in main_go, (
+            f"atlas-proxy/README.md documents `{var}` but main.go never "
+            f"references it — README has drifted from code"
+        )
+
+
 def test_lens_default_port_matches_stack():
     """The Geometric Lens listens on 31144 across every surface — Dockerfile
     EXPOSE, docker-compose's ATLAS_LENS_PORT default, the cloud-pod

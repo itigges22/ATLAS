@@ -47,11 +47,13 @@ OPENAI_API_BASE=http://localhost:8090 aider --model openai/atlas
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| LLAMA_GEN_URL | http://localhost:8000 | vLLM gen instance inference server |
-| ATLAS_RAG_URL | http://localhost:8099 | RAG API with C(x)+G(x) |
+| LLAMA_GEN_URL | http://localhost:8000 | vLLM gen instance (chat/completions) |
+| ATLAS_LENS_URL | http://localhost:31144 | Geometric Lens (C(x) + G(x) scoring) |
 | ATLAS_SANDBOX_URL | http://localhost:30820 | Code execution sandbox |
+| ATLAS_V3_URL | http://localhost:8070 | V3 pipeline service (PlanSearch, etc.) |
 | ATLAS_PROXY_PORT | 8090 | Proxy listen port |
-| ATLAS_MODEL_NAME | qwen3.5-9b | Model name for vLLM gen instance |
+| LLAMA_GEN_MODEL | qwen3.5-9b | vLLM `--served-model-name` for the gen instance |
+| ATLAS_AGENT_LOOP | 1 | When `1`, run the internal tool-call agent loop instead of forwarding to vLLM directly |
 
 ## Build
 
