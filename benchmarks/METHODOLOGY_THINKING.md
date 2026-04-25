@@ -13,18 +13,23 @@ mode enabled** with an 8192-token thinking budget.
 ### Server configuration
 
 ```bash
-llama-server \
-  --jinja \                  # Let the model's native template handle <think> tags
-  --flash-attn on \
-  -c 16384 -ctk q8_0 -ctv q4_0 \
-  --parallel 1 --cont-batching \
-  --embeddings
-  # NO --reasoning off (prevents planning, hurts count/constraint tasks)
-  # NO --reasoning-budget N (cuts mid-thought, produces garbage content)
+vllm serve "$MODEL_PATH" \
+  --served-model-name qwen3.5-9b \
+  --reasoning-parser qwen3 \    # Surfaces thinking in choices[0].message.reasoning_content
+  --enable-prefix-caching \
+  --max-num-seqs 32 --max-model-len 32768 \
+  --gpu-memory-utilization 0.55 \
+  --trust-remote-code
+  # No reasoning-budget cap — cutting mid-thought produces garbage.
+  # For thinking-heavy benchmarks where speed matters (e.g. 12K-question
+  # MMLU-Pro), pass chat_template_kwargs.enable_thinking=false at request
+  # time instead of disabling at the server level.
 ```
 
-With `--jinja`, the model's built-in template handles `<think>...</think>` blocks.
-The server returns clean content (thinking stripped) via the chat completions endpoint.
+With `--reasoning-parser qwen3`, vLLM separates the model's `<think>...</think>` block
+from the final answer: `choices[0].message.content` carries the answer; `reasoning_content`
+carries the (parsed) thinking. The runner reads both — `reasoning_content` is logged for
+analysis, `content` is what gets evaluated.
 
 ### Runner configuration
 
@@ -90,4 +95,5 @@ Both runs use identical thinking settings. The delta between:
 ## Reference
 - Qwen3.5 blog: https://qwenlm.github.io/blog/qwen3/
 - Qwen3.5-9B model card: https://huggingface.co/Qwen/Qwen3.5-9B
-- llama.cpp `--reasoning-budget` doc: https://github.com/ggml-org/llama.cpp/pull/20297
+- vLLM Qwen3.5 recipe: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html
+- vLLM reasoning-outputs feature: https://docs.vllm.ai/en/latest/features/reasoning_outputs/

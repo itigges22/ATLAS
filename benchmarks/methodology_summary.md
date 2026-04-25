@@ -2,9 +2,10 @@
 
 ## System under test
 
-**ATLAS V3.0.1** running on **Qwen3.5-9B-Q6_K** (Q6_K quantization of the
-Qwen3.5-9B model). The model runs on a single NVIDIA GeForce RTX 5060 Ti
-with 16GB VRAM via llama-server in a K3s cluster.
+**ATLAS V3.0.1** running on **Qwen3.5-9B-AWQ** (AWQ-Q4 quantization of the
+Qwen3.5-9B model from QuantTrio). The model runs on a single NVIDIA GeForce
+RTX 5060 Ti with 16GB VRAM via vLLM in a K3s cluster (or via docker-compose
+for local development).
 
 ## Execution principles
 
