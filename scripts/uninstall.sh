@@ -83,7 +83,8 @@ remove_atlas_services() {
 
     # Delete any remaining resources by label
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=redis 2>/dev/null || true
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=llama-server 2>/dev/null || true
+    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=vllm-gen 2>/dev/null || true
+    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=vllm-embed 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=geometric-lens 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=llm-proxy 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=sandbox 2>/dev/null || true

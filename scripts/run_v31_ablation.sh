@@ -48,11 +48,12 @@ echo "  Results: ${RESULT_BASE}/"
 echo "============================================================"
 
 preflight_check() {
-    if ! curl -sf http://localhost:32735/health > /dev/null 2>&1; then
-        echo "  ERROR: llama-server not healthy. Waiting 60s..."
+    local gen_url="${LLAMA_GEN_URL:-${LLAMA_URL:-http://localhost:8000}}"
+    if ! curl -sf "$gen_url/health" > /dev/null 2>&1; then
+        echo "  ERROR: vLLM gen instance not healthy at $gen_url. Waiting 60s..."
         sleep 60
-        if ! curl -sf http://localhost:32735/health > /dev/null 2>&1; then
-            echo "  FATAL: llama-server still not healthy. Aborting."
+        if ! curl -sf "$gen_url/health" > /dev/null 2>&1; then
+            echo "  FATAL: vLLM gen instance still not healthy. Aborting."
             return 1
         fi
     fi

@@ -180,7 +180,17 @@ export ATLAS_LLM_URL="$LLAMA_GEN_URL"
 export RAG_API_URL="http://localhost:${LENS_PORT:-31144}"
 export BENCHMARK_PARALLEL ATLAS_LLM_PARALLEL ATLAS_PARALLEL_TASKS GEOMETRIC_LENS_ENABLED
 
-# 5. Optional smoke test (set SKIP_SMOKE=1 to skip).
+# 5a. Pre-flight: hit each service end-to-end before committing GPU time
+#     to a long benchmark sweep. Catches misconfiguration early.
+echo ""
+echo "--- Pre-flight: vLLM gen + embed + Lens end-to-end ---"
+if ! ./benchmarks/h200/preflight.sh; then
+    echo "Pre-flight failed. Refusing to start the benchmark sweep." >&2
+    echo "Inspect the logs above and the service log files in /tmp/." >&2
+    exit 1
+fi
+
+# 5b. Optional smoke test (set SKIP_SMOKE=1 to skip).
 if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
     echo ""
     echo "--- Smoke test: 3 C-Eval tasks ---"

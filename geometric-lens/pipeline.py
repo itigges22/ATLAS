@@ -432,7 +432,7 @@ async def rag_enhanced_completion(
     3. Query Pattern Cache for matching patterns (READ PATH)
     4. ROUTER: Collect signals, estimate difficulty, select route, set retry budget
     5. Build enhanced system prompt with context + cached patterns
-    6. Forward to llama-server
+    6. Forward to vLLM gen instance
     7. Return response (with route metadata in _route_decision for feedback recording)
     """
     # Extract query from last user message
@@ -638,7 +638,7 @@ async def forward_to_llama(
     max_tokens: int = 16384,
     **kwargs,
 ) -> Dict[str, Any]:
-    """Forward request to llama-server."""
+    """Forward request to vLLM gen instance."""
     payload = {
         "model": model,
         "messages": messages,
@@ -695,7 +695,7 @@ async def forward_to_llama_stream(
     max_tokens: int = 16384,
     **kwargs,
 ) -> AsyncGenerator[str, None]:
-    """Forward streaming request to llama-server."""
+    """Forward streaming request to vLLM gen instance."""
     payload = {
         "model": model,
         "messages": messages,

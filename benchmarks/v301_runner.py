@@ -95,7 +95,7 @@ def bootstrap_ci(scores: List[float], n: int = BOOTSTRAP_N,
 # --- LLM Client --------------------------------------------------------------
 
 class LLMClient:
-    """Thin client for llama-server chat completions."""
+    """Thin client for vLLM gen instance chat completions."""
 
     def __init__(self, url: str = LLAMA_URL, max_retries: int = 3):
         self.url = url
@@ -1072,7 +1072,7 @@ checking library from the IFEval paper (Zhou et al., 2023).
 
             return task_id, tokens, latency_ms, len(content)
 
-        # Parallel execution — 4 slots match llama-server --parallel 4
+        # Parallel execution — 4 slots match vLLM gen instance --parallel 4
         PARALLEL = int(os.environ.get('BENCHMARK_PARALLEL', '1'))
         print(f"[parallel={PARALLEL}] Processing {len(pending)} pending tasks")
 

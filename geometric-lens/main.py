@@ -506,7 +506,7 @@ async def chat_completions(
 
 @app.get("/v1/models")
 async def list_models(api_key: str = Depends(verify_api_key)):
-    """List available models (proxy to llama-server)."""
+    """List available models (proxy to vLLM gen instance)."""
     import httpx
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{config.llama.base_url}/v1/models")

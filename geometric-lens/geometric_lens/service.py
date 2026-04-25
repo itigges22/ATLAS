@@ -154,7 +154,7 @@ def reload_weights(model_dir: str = None) -> dict:
 def get_geometric_energy(query: str) -> float:
     """Compute normalized geometric energy for a query.
 
-    Extracts embedding from llama-server, evaluates through C(x),
+    Extracts embedding from vLLM gen instance, evaluates through C(x),
     and returns a normalized energy in [0, 1].
 
     Used as the 4th signal in the Confidence Router.

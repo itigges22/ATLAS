@@ -1,4 +1,4 @@
-"""LLM-generated node summaries via llama-server."""
+"""LLM-generated node summaries via vLLM gen instance."""
 
 import logging
 import hashlib
@@ -11,7 +11,7 @@ from models.tree_node import TreeNode, NodeType
 
 logger = logging.getLogger(__name__)
 
-# Default llama-server URL (overridable)
+# Default vLLM gen instance URL (overridable)
 LLAMA_URL = "http://llama-service:8000"
 
 
@@ -136,7 +136,7 @@ async def _llm_summarize(
     name: str,
     llama_url: str,
 ) -> str:
-    """Call llama-server to generate a summary for a code node."""
+    """Call vLLM gen instance to generate a summary for a code node."""
     # Truncate very long code to keep prompt manageable
     max_chars = 2000
     if len(code) > max_chars:

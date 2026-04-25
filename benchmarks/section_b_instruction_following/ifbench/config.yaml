@@ -24,18 +24,17 @@ pipeline:
     Delta = what the pipeline adds over the raw model.
 
 server_config:
-  image: localhost/llama-server:mtp
+  image: vllm/vllm-openai:latest
   flags:
-    - "--jinja"              # Native template handles <think> tags
-    - "--flash-attn on"
-    - "--parallel 1"
-    - "--cont-batching"
-    - "--embeddings"
-    - "-c 16384"
-    - "-ctk q8_0 -ctv q4_0"
+    - "--reasoning-parser qwen3"   # surfaces thinking in reasoning_content
+    - "--enable-prefix-caching"
+    - "--max-num-seqs 32"
+    - "--max-model-len 32768"
+    - "--gpu-memory-utilization 0.55"
+    - "--tensor-parallel-size 1"
+    - "--trust-remote-code"
   not_used:
-    - "--reasoning off"           # Prevents planning, hurts constraint tasks
-    - "--reasoning-budget N"      # Cuts thinking mid-thought, produces garbage
+    - "chat_template_kwargs:{enable_thinking:false}"  # would skip thinking — hurts constraint tasks
 
 sampling:
   temperature: 0.6

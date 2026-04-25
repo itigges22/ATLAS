@@ -21,11 +21,14 @@ from atlas.cli.commands import solve, status, bench
 
 PROXY_PORT = os.environ.get("ATLAS_PROXY_PORT", "8090")
 PROXY_URL = os.environ.get("ATLAS_PROXY_URL", f"http://localhost:{PROXY_PORT}")
-INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
+INFERENCE_URL = os.environ.get(
+    "LLAMA_GEN_URL",
+    os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8000"),
+)
+LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:31144")
 SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
 V3_URL = os.environ.get("ATLAS_V3_URL", "http://localhost:8070")
-MODEL_NAME = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+MODEL_NAME = os.environ.get("LLAMA_GEN_MODEL", os.environ.get("ATLAS_MODEL_NAME", "qwen3.5-9b"))
 
 _proxy_process = None
 
@@ -250,8 +253,8 @@ def startup_checks() -> bool:
             sandbox="ready" if sandbox_ok else "unavailable",
         )
     else:
-        display.error(f"llama-server not running — {llm_model}")
-        display.info("Start llama-server first (see inference/ entrypoints)")
+        display.error(f"vLLM gen instance not running — {llm_model}")
+        display.info("Start the inference stack with `docker compose up vllm-gen vllm-embed`.")
         return False
 
     if not rag_ok:

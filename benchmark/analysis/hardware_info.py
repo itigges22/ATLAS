@@ -190,7 +190,7 @@ def get_llama_cpp_version() -> str:
     Returns:
         llama.cpp version or commit hash
     """
-    # Try to get from llama-server
+    # Try to get from vLLM gen instance
     # This would require querying the running server
     # For now, return empty - can be populated from server response
     return ""

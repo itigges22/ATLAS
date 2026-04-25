@@ -42,7 +42,7 @@ def _get(url: str, timeout: int = 10) -> dict:
 # --- Health checks ---
 
 def check_llama() -> Tuple[bool, str]:
-    """Check llama-server health and get model name."""
+    """Check vLLM gen instance health and get model name."""
     try:
         _get(f"{INFERENCE_URL}/health")
         # /health doesn't return model name — get it from /v1/models
@@ -82,7 +82,7 @@ def check_sandbox() -> Tuple[bool, str]:
 def generate(prompt: str, max_tokens: int = 8192,
              temperature: float = 0.6, stop: Optional[List[str]] = None,
              timeout: int = 900) -> dict:
-    """Generate via llama-server /v1/completions (raw prompt, includes thinking)."""
+    """Generate via vLLM /v1/completions (raw prompt, includes thinking)."""
     body = {
         "model": MODEL_NAME,
         "prompt": prompt,
@@ -99,7 +99,7 @@ def generate(prompt: str, max_tokens: int = 8192,
 def generate_stream(prompt: str, max_tokens: int = 8192,
                     temperature: float = 0.6, stop: Optional[List[str]] = None,
                     timeout: int = 900):
-    """Stream generation via llama-server /v1/completions with stream=true.
+    """Stream generation via vLLM /v1/completions with stream=true.
 
     Yields (token_text, is_done) tuples.
     """

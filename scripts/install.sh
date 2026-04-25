@@ -183,7 +183,8 @@ check_prerequisites() {
 # Check if all required images exist in K3s
 check_images_exist() {
     local required_images=(
-        "llama-server"
+        "vllm-gen"
+        "vllm-embed"
         "geometric-lens"
         "llm-proxy"
         "sandbox"

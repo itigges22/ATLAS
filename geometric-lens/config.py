@@ -11,7 +11,15 @@ class ServerConfig(BaseModel):
 
 
 class LlamaConfig(BaseModel):
-    base_url: str = os.environ.get("LLAMA_URL", "http://llama-server:8080")
+    """vLLM gen instance URL for chat completions calls (named LlamaConfig
+    for backwards compat with existing imports)."""
+    base_url: str = os.environ.get(
+        "LLAMA_GEN_URL",
+        os.environ.get("LLAMA_URL", "http://vllm-gen:8000"),
+    )
+    embed_url: str = os.environ.get("LLAMA_EMBED_URL", "http://vllm-embed:8001")
+    gen_model: str = os.environ.get("LLAMA_GEN_MODEL", "qwen3.5-9b")
+    embed_model: str = os.environ.get("LLAMA_EMBED_MODEL", "qwen3.5-9b-embed")
 
 
 class LimitsConfig(BaseModel):

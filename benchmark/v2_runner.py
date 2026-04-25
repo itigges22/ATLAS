@@ -442,7 +442,7 @@ class V2BenchmarkRunner:
         candidates = []
 
         # Phase 1: Generate K candidates with pipelined requests.
-        # With --parallel 4 and --cont-batching on llama-server, queuing
+        # With --parallel 4 and --cont-batching on vLLM gen instance, queuing
         # requests early means the server starts prompt processing for N+1
         # while N is still generating. cache_prompt=True lets the server
         # reuse the KV cache for the shared prompt across candidates.

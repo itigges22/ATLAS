@@ -24,7 +24,7 @@ async def extract_pattern(
     """
     Extract a reusable code pattern from a successful task completion.
 
-    Calls llama-server with an extraction prompt, then classifies the type
+    Calls vLLM gen instance with an extraction prompt, then classifies the type
     and computes surprise_score.
     """
     # Compute surprise_proxy
@@ -102,7 +102,7 @@ async def _llm_extract(
     llama_url: str,
 ) -> Optional[tuple[str, str]]:
     """
-    Call llama-server to extract a reusable pattern.
+    Call vLLM gen instance to extract a reusable pattern.
 
     Returns (content, summary) or None on failure.
     """

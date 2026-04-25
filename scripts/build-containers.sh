@@ -87,12 +87,20 @@ main() {
     RUNTIME=$(detect_runtime)
     log_info "Using container runtime: $RUNTIME"
 
-    # Core services (in k8s root)
+    # Core services. vLLM uses the upstream vllm/vllm-openai image — no
+    # local build required. Pull it once into the local container store
+    # so K3s `ctr images import` finds it; falls back to letting the
+    # deployment pull it at first run.
     declare -a CORE_IMAGES=(
-        "llama-server:$K8S_DIR/llama-server"
         "geometric-lens:$K8S_DIR/geometric-lens"
         "llm-proxy:$K8S_DIR/llm-proxy"
     )
+
+    # Pull (don't build) the vLLM image. Same image serves both gen and
+    # embed instances — different command-line flags differentiate them.
+    log_info "Pulling vllm/vllm-openai:latest (used by both vllm-gen and vllm-embed)"
+    "$RUNTIME" pull vllm/vllm-openai:latest 2>/dev/null || \
+        log_warn "vLLM image pull failed — K3s will pull at first deployment"
 
     # Atlas services (in k8s/atlas)
     declare -a ATLAS_IMAGES=(

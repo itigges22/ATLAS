@@ -255,7 +255,7 @@ class LLMAdapter:
 
     # Serialize LLM requests to avoid DeltaNet multi-slot generation hang.
     # Set ATLAS_LLM_PARALLEL=1 to disable the lock (requires --no-cache-prompt
-    # on llama-server to prevent checkpoint restore hang).
+    # on vLLM gen instance to prevent checkpoint restore hang).
     _llm_lock = threading.Lock()
     _parallel_mode = os.environ.get("ATLAS_LLM_PARALLEL", "0") == "1"
 
@@ -532,7 +532,7 @@ class EmbedAdapter:
     """Adapts extract_embedding_urllib to V3 EmbedCallable.
 
     Retries up to 3 times with backoff to handle transient 503/timeout
-    errors when llama-server is busy with generation requests.
+    errors when vLLM gen instance is busy with generation requests.
     """
 
     def __init__(self, llama_url: str, max_retries: int = 3):
@@ -1625,7 +1625,7 @@ class V3BenchmarkRunner:
 
         Each task gets its own LLMAdapter (per run_task), so thread safety
         relies on:
-          - llama-server handling concurrent /completion requests (--no-cache-prompt)
+          - vLLM gen instance handling concurrent /completion requests (--no-cache-prompt)
           - atomic_write_json for per-task results (temp file + rename)
           - EmbeddingWriter._lock for binary embedding file
           - append_jsonl for JSONL telemetry (small writes are atomic on Linux)
@@ -1723,10 +1723,10 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         req = urllib.request.Request(f"{LLAMA_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-        print(f"  llama-server: OK ({data.get('status', '?')})")
+        print(f"  vLLM gen instance: OK ({data.get('status', '?')})")
     except Exception as e:
-        print(f"  llama-server: FAILED ({e})")
-        print("  Aborting benchmark — llama-server not reachable")
+        print(f"  vLLM gen instance: FAILED ({e})")
+        print("  Aborting benchmark — vLLM gen instance not reachable")
         return None
 
     try:
