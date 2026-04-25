@@ -63,6 +63,7 @@ $CRT run -d --name atlas-bench \
     -p "${LENS_PORT}:31144" \
     -v "${ATLAS_MODELS_DIR:-$PWD/models}:/workspace/models" \
     -v "${ATLAS_RESULTS_DIR:-$PWD/results}:/workspace/results" \
+    -v "${ATLAS_HF_CACHE:-$PWD/.cache/huggingface}:/root/.cache/huggingface" \
     -e MODE="$MODE" \
     -e DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-1}" \
     -e SKIP_SMOKE="${SKIP_SMOKE:-0}" \
