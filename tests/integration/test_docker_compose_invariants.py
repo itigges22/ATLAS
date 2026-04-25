@@ -337,6 +337,28 @@ def test_makefile_lint_and_ci_lint_cover_same_scripts():
         assert must_have in mf_scripts, f"{must_have} must be lint-checked"
 
 
+def test_lens_default_port_matches_stack():
+    """The Geometric Lens listens on 31144 across every surface — Dockerfile
+    EXPOSE, docker-compose's ATLAS_LENS_PORT default, the cloud-pod
+    entrypoint's LENS_PORT, the atlas-proxy's hardcoded http://localhost:31144,
+    every preflight curl. config.py's `ServerConfig.port` was the one outlier
+    at 8099, which only matters on the `python main.py` debug entry path
+    (Dockerfile and compose both override via uvicorn `--port 31144`). But
+    that entry path is exactly what a developer reaches for when debugging
+    locally — and it would silently bind to a port the rest of the stack
+    can't see. Pin the default."""
+    src = (PROJECT_ROOT / "geometric-lens" / "config.py").read_text()
+    # Allow `LENS_PORT` env override but the literal default must be 31144.
+    assert "31144" in src, (
+        "Lens default port must be 31144 to match Dockerfile EXPOSE, "
+        "docker-compose ATLAS_LENS_PORT, and every consumer URL"
+    )
+    # The stale 8099 must not be a literal default anywhere in the file.
+    assert "= 8099" not in src and "=8099" not in src, (
+        "Lens config still hardcodes the legacy 8099 port as a default"
+    )
+
+
 def test_setup_docs_do_not_reference_fictional_atlas_launcher():
     """All four SETUP files used to tell users to `cp /path/to/atlas-launcher
     ~/.local/bin/atlas`. There is no atlas-launcher script anywhere in the

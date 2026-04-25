@@ -6,7 +6,15 @@ from typing import Dict, Optional
 
 
 class ServerConfig(BaseModel):
-    port: int = 8099
+    # Default Lens port across the stack:
+    #   - Dockerfile: EXPOSE 31144
+    #   - docker-compose: ATLAS_LENS_PORT=31144 default
+    #   - benchmarks/h200/entrypoint.sh: LENS_PORT=31144
+    #   - every consumer URL hardcodes :31144 or reads $ATLAS_LENS_PORT
+    # The earlier 8099 default left local `python main.py` runs binding to
+    # a port nothing else in the stack could reach — silent unreachability,
+    # not a crash. Override via env (LENS_PORT) when intentionally moving.
+    port: int = int(os.environ.get("LENS_PORT", "31144"))
     host: str = "0.0.0.0"
 
 
