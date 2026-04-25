@@ -75,15 +75,16 @@ flowchart TD
 
 [atlas] Stack ready. Launching aider...
   vLLM → V3 Pipeline → Proxy v2 → Aider
-  Grammar: response_format:json_object | V3 on T2+ files
-  Context: 32K | GPU: RTX 5060 Ti | ~51 tok/s
+  Guided decoding: response_format:json_object | V3 on T2+ files
+  Context: 32K | GPU: RTX 5060 Ti | vLLM (PagedAttention)
 ```
 
 Each service is health-checked via `GET /health` before proceeding:
 
 | Service | Port | Health Timeout |
 |---------|------|---------------|
-| vLLM | 8080 | 120s (model loading is slow) |
+| vLLM gen | 8000 | 120s (model loading is slow) |
+| vLLM embed | 8001 | 120s |
 | Geometric Lens | 31144 | 30s |
 | V3 Pipeline | 8070 | 15s |
 | Proxy v2 | 8090 | 30s |

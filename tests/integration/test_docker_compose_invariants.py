@@ -1125,6 +1125,68 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_no_stale_51_toks_claim_in_user_facing_surfaces():
+    """Several user-facing surfaces (atlas-proxy comment, CLI.md REPL
+    output snippet, three translation READMEs) carried a stale
+    "~51 tok/s" claim — that's llama-server's single-slot throughput on
+    the 9B model. vLLM throughput depends entirely on concurrency, GPU,
+    and quantization format; there's no honest single number. Stage 38
+    fixed the live REPL display, but the same dead figure leaked into
+    these other surfaces.
+
+    Pin: none of these files may quote `51 tok/s` (or `약 51 tok/s` /
+    `约 51 tok/s` / `約 51 tok/s`) as if it were the current vLLM
+    throughput."""
+    files = [
+        PROJECT_ROOT / "atlas-proxy" / "agent.go",
+        PROJECT_ROOT / "docs" / "CLI.md",
+        PROJECT_ROOT / "docs" / "lang" / "ja" / "README.md",
+        PROJECT_ROOT / "docs" / "lang" / "ko" / "README.md",
+        PROJECT_ROOT / "docs" / "lang" / "zh-CN" / "README.md",
+    ]
+    bad_phrases = [
+        "~51 tok/s",
+        "약 51 tok/s",
+        "约 51 tok/s",
+        "約 51 tok/s",
+    ]
+    for f in files:
+        text = f.read_text()
+        for phrase in bad_phrases:
+            assert phrase not in text, (
+                f"{f.relative_to(PROJECT_ROOT)} still claims `{phrase}` — "
+                f"that's a llama-server single-slot number; vLLM "
+                f"throughput is concurrency- and GPU-dependent"
+            )
+
+
+def test_cli_md_health_check_table_uses_correct_vllm_ports():
+    """`docs/CLI.md` had a "Service Health Timeout" table that listed
+    `vLLM` on port `8080` — but vLLM gen runs on 8000 and embed on 8001
+    across the entire stack. A user following the CLI doc to debug a
+    failed startup would `lsof -i :8080` and find nothing. The same
+    REPL output a few lines above already correctly shows ports 8000
+    and 8001, so the table contradicted the prose.
+
+    Pin: the health-check table in CLI.md must list vLLM gen on 8000
+    and either include or omit (but not contradict) the embed instance."""
+    cli = (PROJECT_ROOT / "docs" / "CLI.md").read_text()
+    table_match = re.search(
+        r"Each service is health-checked.*?(?=If a service is already running)",
+        cli,
+        re.DOTALL,
+    )
+    assert table_match, "Could not locate the health-check table in CLI.md"
+    table = table_match.group(0)
+    assert "| 8080 |" not in table, (
+        "CLI.md health-check table still lists vLLM on port 8080 — "
+        "that was the old llama-server port; vLLM gen runs on 8000"
+    )
+    assert "| 8000 |" in table, (
+        "CLI.md health-check table must list the vLLM gen port (8000)"
+    )
+
+
 def test_lens_embedding_extractor_uses_current_vllm_api_name():
     """`geometric-lens/geometric_lens/embedding_extractor.py` is the entry
     point used by every C(x)/G(x) scoring path in the Lens. Its docstring

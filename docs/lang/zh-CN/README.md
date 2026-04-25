@@ -82,7 +82,7 @@ ATLAS 需要一块 16GB+ 显存的 GPU、Docker（配合 nvidia-container-toolki
 - **仅在 NVIDIA 上测试** - ATLAS 使用 vLLM 进行推理，该引擎支持多种加速后端。ROCm 支持是 V3.1 的优先事项。
 - **9B 模型尚未正式基准测试** - 命令行工具搭载 Qwen3.5-9B 和完整的 V3 Pipeline，但正式的 LiveCodeBench 分数来自 14B 模型。9B 基准测试属于 V3.1 工作。
 - **复杂功能添加可能失败** - 向现有项目添加功能的成功率约为 67%。模型有时过度探索而非编写代码。
-- **语法约束推理速度** - 在 vLLM 上约 51 tok/s。更快的语法集成计划在 V3.1 中实现。
+- **引导式解码推理吞吐量** - 单个 tok/s 数值没有意义。vLLM 吞吐量随并发度、GPU、量化格式 (AWQ-Q4 vs FP8) 大幅波动。生产环境请通过 `nvidia-smi dmon` 和 vLLM 日志查看实际值。
 
 ---
 

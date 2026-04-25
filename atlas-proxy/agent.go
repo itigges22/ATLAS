@@ -271,8 +271,10 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		}
 	}
 
-	// vLLM gen instance handles all inference (grammar-constrained agent loop
-	// calls and free-form V3 pipeline calls). Qwen3.5-9B at ~51 tok/s.
+	// vLLM gen instance handles all inference (guided-decoding agent loop
+	// calls via response_format=json_object and free-form V3 pipeline calls).
+	// Throughput varies with concurrency/GPU/quant — no single tok/s figure
+	// applies; check `nvidia-smi dmon` + the vLLM logs in production.
 
 	// vLLM gen instance at InferenceURL (or ATLAS_LLAMA_URL override)
 	// Uses response_format: json_object for grammar enforcement — 100% valid JSON
