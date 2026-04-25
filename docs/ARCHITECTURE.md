@@ -11,7 +11,7 @@ graph LR
     User["User"] --> Aider["Aider"] --> Proxy["atlas-proxy\n:8090"]
 
     subgraph outer["Outer Layer"]
-        Proxy -->|"grammar JSON"| LLM["vLLM\n:8080"]
+        Proxy -->|"grammar JSON"| LLM["vLLM gen\n:8000"]
         Proxy -->|"T2 files"| V3Service["v3-service\n:8070"]
     end
 
@@ -498,7 +498,7 @@ sequenceDiagram
     participant U as User
     participant A as Aider
     participant P as atlas-proxy :8090
-    participant L as vLLM :8080
+    participant L as vLLM gen :8000
 
     U->>A: "Create a config file"
     A->>P: POST /v1/chat/completions (SSE)
@@ -519,7 +519,7 @@ sequenceDiagram
     participant U as User
     participant A as Aider
     participant P as atlas-proxy :8090
-    participant L as vLLM :8080
+    participant L as vLLM gen :8000
     participant V as v3-service :8070
     participant G as geometric-lens :31144
     participant S as sandbox :30820
@@ -566,7 +566,7 @@ sequenceDiagram
     participant U as User
     participant A as Aider
     participant P as atlas-proxy :8090
-    participant L as vLLM :8080
+    participant L as vLLM gen :8000
 
     U->>A: "Fix the bug in auth.py"
     A->>P: POST /v1/chat/completions (SSE)

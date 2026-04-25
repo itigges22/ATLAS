@@ -110,11 +110,12 @@ docker network create atlas
 
 **修正:** ポートを使用しているプロセスを確認し、停止するか `.env` で ATLAS のポートを変更してください:
 ```bash
-# ポート 8080 を使用しているプロセスを確認
-lsof -i :8080
+# vLLM の gen と embed のポートを使用しているプロセスを確認
+lsof -i :8000 -i :8001
 
-# .env でポートを変更
-ATLAS_LLAMA_PORT=8081    # vLLM に別のポートを指定
+# .env で各ポートを変更
+ATLAS_GEN_PORT=8000    # vLLM gen インスタンス (デフォルト 8000)
+ATLAS_EMBED_PORT=8001  # vLLM embed インスタンス (デフォルト 8001)
 ```
 
 すべてのポートは `.env` で設定可能です。[CONFIGURATION.md](../../CONFIGURATION.md) をご覧ください。

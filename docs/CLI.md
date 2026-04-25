@@ -67,7 +67,8 @@ flowchart TD
   / _ \ | | | |__ / _ \\__ \
  /_/ \_\|_| |____/_/ \_\___/
 
-  ✓ vLLM (port 8080)
+  ✓ vLLM gen (port 8000)
+  ✓ vLLM embed (port 8001)
   ✓ Geometric Lens (port 31144)
   ✓ V3 Pipeline (port 8070)
   ✓ Proxy v2 (port 8090)
@@ -333,8 +334,9 @@ Plain text input (no `/` prefix) is treated as a coding problem and solved direc
 ### REPL Health Checks
 
 On startup, the REPL checks:
-- **vLLM** at `ATLAS_INFERENCE_URL` (default: localhost:8080) — required, exits if unavailable
-- **Geometric Lens** at `ATLAS_RAG_URL` (default: localhost:31144) — optional, warns "Lens unavailable — verification disabled"
+- **vLLM gen** at `LLAMA_GEN_URL` (default: localhost:8000) — required, exits if unavailable
+- **vLLM embed** at `LLAMA_EMBED_URL` (default: localhost:8001) — optional, only used by the Lens
+- **Geometric Lens** at `ATLAS_LENS_URL` (default: localhost:31144) — optional, warns "Lens unavailable — verification disabled"
 - **Sandbox** at `ATLAS_SANDBOX_URL` (default: localhost:30820) — optional, warns "Sandbox unavailable — code testing disabled"
 
 ### Solve Pipeline

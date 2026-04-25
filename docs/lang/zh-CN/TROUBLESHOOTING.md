@@ -110,11 +110,12 @@ docker network create atlas
 
 **解决方法：** 检查占用端口的进程，然后停止它或更改 `.env` 中的 ATLAS 端口：
 ```bash
-# 查找占用 8080 端口的进程
-lsof -i :8080
+# 查找占用 vLLM gen 和 embed 端口的进程
+lsof -i :8000 -i :8001
 
-# 在 .env 中更改端口
-ATLAS_LLAMA_PORT=8081    # vLLM 使用不同端口
+# 在 .env 中分别更改端口
+ATLAS_GEN_PORT=8000    # vLLM gen 实例（默认 8000）
+ATLAS_EMBED_PORT=8001  # vLLM embed 实例（默认 8001）
 ```
 
 所有端口均可通过 `.env` 配置。参见 [CONFIGURATION.md](../../CONFIGURATION.md)。

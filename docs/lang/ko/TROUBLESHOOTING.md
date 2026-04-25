@@ -110,11 +110,12 @@ docker network create atlas
 
 **해결:** 해당 포트를 사용하는 프로세스를 확인하고, 중지하거나 `.env`에서 ATLAS 포트를 변경하십시오:
 ```bash
-# 포트 8080을 사용하는 프로세스 확인
-lsof -i :8080
+# vLLM gen과 embed의 포트를 사용하는 프로세스 확인
+lsof -i :8000 -i :8001
 
-# .env에서 포트 변경
-ATLAS_LLAMA_PORT=8081    # vLLM에 다른 포트 사용
+# .env에서 각 포트 변경
+ATLAS_GEN_PORT=8000    # vLLM gen 인스턴스 (기본 8000)
+ATLAS_EMBED_PORT=8001  # vLLM embed 인스턴스 (기본 8001)
 ```
 
 모든 포트는 `.env`를 통해 설정 가능합니다. [CONFIGURATION.md](../../CONFIGURATION.md)를 참조하십시오.

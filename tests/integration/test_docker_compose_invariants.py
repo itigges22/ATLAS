@@ -414,6 +414,35 @@ def test_atlas_proxy_readme_matches_actual_env_vars():
         )
 
 
+def test_user_docs_do_not_reference_legacy_port_8080():
+    """Port 8080 is the old llama-server port. vLLM gen runs on 8000 and
+    embed on 8001 across the entire stack (Dockerfiles, compose, every
+    SETUP recipe, every wire test). Stale 8080 refs in user-facing docs
+    sent users running `lsof -i :8080`, finding nothing, and concluding
+    the install was broken. CLI.md, TROUBLESHOOTING.md, ARCHITECTURE.md
+    plus the three TROUBLESHOOTING translations had 11 such refs."""
+    targets = [
+        PROJECT_ROOT / "docs" / "CLI.md",
+        PROJECT_ROOT / "docs" / "TROUBLESHOOTING.md",
+        PROJECT_ROOT / "docs" / "ARCHITECTURE.md",
+    ]
+    targets += [PROJECT_ROOT / "docs" / "lang" / lang / "TROUBLESHOOTING.md"
+                for lang in ("ja", "ko", "zh-CN")]
+
+    import re
+    # Forbid `:8080` and `port 8080` patterns. Allow anything that contains
+    # a longer port number that happens to start with 8080 (e.g. 80800),
+    # though none currently exist.
+    for path in targets:
+        src = path.read_text()
+        # Match `:8080` (not followed by another digit) and "port 8080".
+        bad = re.findall(r":8080(?!\d)|port 8080(?!\d)", src)
+        assert not bad, (
+            f"{path.relative_to(PROJECT_ROOT)} still references legacy port "
+            f"8080 ({len(bad)} occurrences) — vLLM gen runs on 8000, embed on 8001"
+        )
+
+
 def test_lens_default_port_matches_stack():
     """The Geometric Lens listens on 31144 across every surface — Dockerfile
     EXPOSE, docker-compose's ATLAS_LENS_PORT default, the cloud-pod

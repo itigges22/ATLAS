@@ -108,11 +108,12 @@ docker network create atlas
 
 **Fix:** Check what's using the port and either stop it or change ATLAS ports in `.env`:
 ```bash
-# Find what's using port 8080
-lsof -i :8080
+# Find what's using vLLM's gen + embed ports
+lsof -i :8000 -i :8001
 
-# Change port in .env
-ATLAS_GEN_PORT=8081    # Different port for vLLM
+# Change either in .env
+ATLAS_GEN_PORT=8000    # vLLM gen instance (default 8000)
+ATLAS_EMBED_PORT=8001  # vLLM embed instance (default 8001)
 ```
 
 All ports are configurable via `.env`. See [CONFIGURATION.md](CONFIGURATION.md).
