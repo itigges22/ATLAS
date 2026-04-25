@@ -318,6 +318,37 @@ def test_no_botched_atlas_dir_string_concat_in_scripts():
     )
 
 
+def test_preflight_respects_skip_embed():
+    """Stage 107 added SKIP_EMBED=1 to entrypoint.sh — when set, the
+    embed vLLM instance is never started (saves VRAM on a single 16 GB
+    card). But the entrypoint then runs `./benchmarks/h200/preflight.sh`,
+    which always probed `/v1/embeddings`. The probe naturally failed
+    against the absent service, preflight returned 1, and the entrypoint
+    refused to start the benchmark sweep — making SKIP_EMBED useless
+    end-to-end. Stage 108 wired SKIP_EMBED into preflight too."""
+    src = (PROJECT_ROOT / "benchmarks" / "h200" / "preflight.sh").read_text()
+    # The skip path must exist.
+    assert 'SKIP_EMBED' in src, (
+        "preflight.sh must check SKIP_EMBED so the embed probe is bypassed "
+        "when the embed instance was never started"
+    )
+    # Behavioral check: with SKIP_EMBED=1 + GEOMETRIC_LENS_ENABLED=false +
+    # gen up at a working URL, preflight must not fail the embed probe.
+    # We can verify this purely by parsing the script structure: the
+    # embed probe block must be inside an `if [[ ... SKIP_EMBED ... ]]` else.
+    import re
+    # Match the "embed" comment block followed by the SKIP_EMBED gate.
+    block = re.search(
+        r"# 2\. Embed instance.*?(?=# 3\.)",
+        src, re.DOTALL,
+    )
+    assert block is not None, "preflight.sh embed-section comment missing"
+    embed_block = block.group(0)
+    assert 'if [[ "${SKIP_EMBED' in embed_block, (
+        "Embed probe in preflight.sh must be gated on SKIP_EMBED"
+    )
+
+
 def test_lens_entrypoint_env_points_chat_at_gen_port():
     """`benchmarks/h200/entrypoint.sh` launches the Geometric Lens with
     LLAMA_*_URL env vars. The Lens chat clients (summarizer.py,

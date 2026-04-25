@@ -59,11 +59,18 @@ else
 fi
 
 # 2. Embed instance health + a real /v1/embeddings call returning 4096 dims.
-check "embed /health" curl -sf --max-time 10 "$LLAMA_EMBED_URL/health"
-embed_resp=$(curl -s --max-time 60 "$LLAMA_EMBED_URL/v1/embeddings" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\":\"$LLAMA_EMBED_MODEL\",\"input\":\"def hello(): return 1\"}" || true)
-embed_dim=$(echo "$embed_resp" | python3 -c "
+#    SKIP_EMBED=1 (used on tight-VRAM single-card setups) takes the embed
+#    instance out of the entrypoint entirely; in that mode the Lens is also
+#    disabled, so embeddings genuinely aren't needed and probing for them
+#    would falsely fail the entire preflight.
+if [[ "${SKIP_EMBED:-0}" == "1" ]]; then
+    echo "  SKIP  embed (SKIP_EMBED=1; running gen-only)"
+else
+    check "embed /health" curl -sf --max-time 10 "$LLAMA_EMBED_URL/health"
+    embed_resp=$(curl -s --max-time 60 "$LLAMA_EMBED_URL/v1/embeddings" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"$LLAMA_EMBED_MODEL\",\"input\":\"def hello(): return 1\"}" || true)
+    embed_dim=$(echo "$embed_resp" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -71,13 +78,14 @@ try:
 except Exception as e:
     print(0)
 " 2>/dev/null || echo 0)
-if [[ "$embed_dim" == "4096" ]]; then
-    echo "  PASS  embed returned 4096-dim vector"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL  embed dimension was $embed_dim, expected 4096"
-    echo "        response: ${embed_resp:0:300}"
-    FAIL=$((FAIL + 1))
+    if [[ "$embed_dim" == "4096" ]]; then
+        echo "  PASS  embed returned 4096-dim vector"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  embed dimension was $embed_dim, expected 4096"
+        echo "        response: ${embed_resp:0:300}"
+        FAIL=$((FAIL + 1))
+    fi
 fi
 
 # 3. Lens scoring (only required if GEOMETRIC_LENS_ENABLED=true).
