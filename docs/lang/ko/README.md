@@ -35,7 +35,7 @@ ATLAS는 지능형 추론 인프라를 기반으로 한 완전 자체 호스팅 
 
 1. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 전체 시스템을 조율하는 Go 기반 에이전트 루프입니다.
   - a. [도구 호출 라우팅](../../ARCHITECTURE.md#tools) - 파일 작업을 복잡도 등급별로 분류합니다
-  - b. [문법 강제](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 스키마가 100% 유효한 JSON 출력을 보장합니다
+  - b. [구조화된 출력](../../ARCHITECTURE.md#grammar-enforcement) - vLLM의 `response_format: json_object`가 모든 도구 호출 응답을 유효한 JSON으로 제약합니다
   - c. [안전 제한](../../ARCHITECTURE.md#safety-limits) - 턴 제한, 토큰 예산, 타임아웃 적용
 
 2. **[V3 파이프라인](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 단일 프롬프트를 검증된 고품질 출력으로 변환하는 다단계 코드 생성입니다.

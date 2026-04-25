@@ -1125,6 +1125,46 @@ def test_dockerfile_default_model_names_match_preflight_defaults():
     assert 'LLAMA_EMBED_MODEL:=qwen3.5-9b-embed' in preflight
 
 
+def test_docs_do_not_call_grammar_go_a_gbnf_generator():
+    """Stage 120 deleted `buildGBNFGrammar()` from atlas-proxy/grammar.go.
+    `docs/MAP.md` and the three translation README "What ATLAS Does"
+    bullets still described grammar.go as producing GBNF — but vLLM
+    doesn't accept GBNF (uses JSON Schema via `guided_json` and
+    `response_format: json_object`). The English README was already
+    rewritten in stage 93 to say "Structured output - vLLM
+    response_format: json_object". The translations and MAP lagged.
+
+    Pin: docs/MAP.md and the three translation README bullets must not
+    call grammar.go a "GBNF" generator. The `#grammar-enforcement`
+    anchor in ARCHITECTURE.md keeps its name (the heading is
+    historical) but the link text and description must reflect vLLM's
+    actual mechanism."""
+    map_md = (PROJECT_ROOT / "docs" / "MAP.md").read_text()
+    assert "GBNF grammar" not in map_md, (
+        "docs/MAP.md still describes grammar.go as a 'GBNF grammar' "
+        "generator — but stage 120 deleted that function and vLLM "
+        "doesn't accept GBNF anyway"
+    )
+
+    # Translation READMEs: bullet `b.` under "What ATLAS Does" must not
+    # claim GBNF as the JSON-shape mechanism.
+    readme_translations = [
+        PROJECT_ROOT / "docs" / "lang" / "ja" / "README.md",
+        PROJECT_ROOT / "docs" / "lang" / "ko" / "README.md",
+        PROJECT_ROOT / "docs" / "lang" / "zh-CN" / "README.md",
+    ]
+    for f in readme_translations:
+        text = f.read_text()
+        # The "GBNF" string in any of the bullet rows under
+        # "What ATLAS Does" / equivalent. Keep the check broad — none
+        # of the translations should claim GBNF anywhere in their
+        # body, since none of the live ATLAS surface uses it.
+        assert "GBNF" not in text, (
+            f"{f.relative_to(PROJECT_ROOT)} still references GBNF; "
+            "vLLM uses response_format: json_object, not GBNF"
+        )
+
+
 def test_atlas_proxy_grammar_does_not_carry_dead_gbnf_function():
     """`atlas-proxy/grammar.go` used to define a `buildGBNFGrammar()`
     function (~55 lines of Go) that produced a llama.cpp GBNF grammar

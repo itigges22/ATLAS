@@ -23,7 +23,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`agent.go`](#atlas-proxy) — Agent loop, LLM dispatch, exploration budget, error recovery
   - [`tools.go`](#atlas-proxy) — 8 tool definitions + executors, tier classifier
   - [`aider_format.go`](#atlas-proxy) — Agent results to Aider whole-file format
-  - [`grammar.go`](#atlas-proxy) — JSON schema + GBNF grammar generation
+  - [`grammar.go`](#atlas-proxy) — JSON Schema generation for vLLM `guided_json` / `response_format: json_object` constraints + tool-doc system prompt
   - [`types.go`](#atlas-proxy) — Shared types: ToolCall, AgentContext, tiers
   - [`v3_bridge.go`](#atlas-proxy) — Go-to-Python V3 service SSE bridge
   - [`v3_adapter.go`](#atlas-proxy) — File requests to V3 pipeline format
@@ -257,7 +257,7 @@ The core of the V3.0.1 CLI. Receives OpenAI-compatible requests from Aider, runs
 | [`agent.go`](../atlas-proxy/agent.go) | 740 | Agent loop iteration, JSON schema generation, system prompt building, LLM calls with grammar constraint, exploration budget, truncation recovery |
 | [`tools.go`](../atlas-proxy/tools.go) | 905 | 8 tool definitions (read/write/edit/delete file, run command, search, list dir, plan tasks), per-file tier classifier, V3 routing |
 | [`aider_format.go`](../atlas-proxy/aider_format.go) | 697 | Converts agent results to Aider whole-file blocks, streams real-time status with icons, project directory detection, delete fast-path |
-| [`grammar.go`](../atlas-proxy/grammar.go) | 192 | JSON schema (oneOf: tool_call/text/done) and GBNF grammar for constrained output, tool documentation generation |
+| [`grammar.go`](../atlas-proxy/grammar.go) | 143 | JSON Schema (oneOf: tool_call/text/done) for vLLM `guided_json`/`response_format: json_object` constraint, tool-doc system prompt generation |
 | [`types.go`](../atlas-proxy/types.go) | 390 | AgentContext, ToolDef, ToolResult, tier definitions (T0-T3), max turns per tier, permission types |
 | [`v3_bridge.go`](../atlas-proxy/v3_bridge.go) | 120 | HTTP bridge to Python V3 service with SSE progress streaming, Lens scoring bridge |
 | [`v3_adapter.go`](../atlas-proxy/v3_adapter.go) | 177 | Translates file write requests into V3GenerateRequest with project context, framework detection, constraint extraction |
