@@ -104,15 +104,25 @@ load_config() {
 validate_config() {
     local errors=0
 
-    # Check port conflicts (NodePorts must be unique)
+    # Check port conflicts (NodePorts must be unique).
+    # Prefer the vLLM-era variable names; fall back to the legacy
+    # ATLAS_LLAMA_NODEPORT alias if a user hasn't migrated their
+    # atlas.conf yet. The embed NodePort is new — without listing it
+    # here, a value that collides with another service or falls
+    # outside the 30000-32767 K8s NodePort range would slip through
+    # validation and only surface at `kubectl apply` time as an
+    # opaque "invalid value" error.
     local ports=(
         "$ATLAS_API_PORTAL_NODEPORT"
         "$ATLAS_LLM_PROXY_NODEPORT"
         "$ATLAS_RAG_API_NODEPORT"
         "$ATLAS_DASHBOARD_NODEPORT"
-        "$ATLAS_LLAMA_NODEPORT"
+        "${ATLAS_VLLM_GEN_NODEPORT:-${ATLAS_LLAMA_NODEPORT}}"
         "$ATLAS_SANDBOX_NODEPORT"
     )
+    if [[ -n "${ATLAS_VLLM_EMBED_NODEPORT:-}" ]]; then
+        ports+=("$ATLAS_VLLM_EMBED_NODEPORT")
+    fi
 
     local seen=()
     for port in "${ports[@]}"; do

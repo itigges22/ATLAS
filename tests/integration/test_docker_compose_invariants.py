@@ -296,6 +296,52 @@ def test_entrypoint_served_model_name_flows_from_env():
     assert "export LENS_URL" in entrypoint
 
 
+def test_config_sh_validates_vllm_embed_nodeport():
+    """`scripts/lib/config.sh validate_config` must include the embed NodePort
+    in its dedup + range check. Earlier iterations only listed ATLAS_LLAMA_NODEPORT
+    — a fresh K8s install with ATLAS_VLLM_EMBED_NODEPORT set to (e.g.) 32735
+    (the gen port) would slip past validation entirely and only fail at
+    `kubectl apply` time as an opaque NodePort conflict.
+
+    Drive validate_config from a temp shell with mocked vars and assert it
+    rejects a duplicate embed port."""
+    import subprocess
+    import textwrap
+
+    config_sh = PROJECT_ROOT / "scripts" / "lib" / "config.sh"
+    src = config_sh.read_text()
+
+    # Static check: validate_config must reference the embed NodePort.
+    assert "ATLAS_VLLM_EMBED_NODEPORT" in src, (
+        "validate_config must check ATLAS_VLLM_EMBED_NODEPORT for collisions/range"
+    )
+
+    # Behavioral check: source the file, set duplicate ports, expect non-zero.
+    # Sourcing triggers auto-load_config, which would overwrite our test vars
+    # from atlas.conf.example — set the vars AFTER the source.
+    script = textwrap.dedent(f"""
+    set +e
+    source {config_sh}
+    export ATLAS_API_PORTAL_NODEPORT=30000
+    export ATLAS_LLM_PROXY_NODEPORT=30001
+    export ATLAS_RAG_API_NODEPORT=30002
+    export ATLAS_DASHBOARD_NODEPORT=30003
+    export ATLAS_VLLM_GEN_NODEPORT=32735
+    export ATLAS_VLLM_EMBED_NODEPORT=32735   # collides with gen — must be flagged
+    export ATLAS_LLAMA_NODEPORT=32735
+    export ATLAS_SANDBOX_NODEPORT=30820
+    validate_config
+    echo "rc=$?"
+    """).strip()
+    out = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30,
+    )
+    combined = out.stdout + out.stderr
+    assert "Duplicate NodePort: 32735" in combined or "rc=1" in combined or "rc=2" in combined, (
+        f"validate_config did not flag the colliding embed/gen NodePort:\n{combined}"
+    )
+
+
 def test_v3_service_dockerfile_has_no_unused_heavy_deps():
     """v3-service is a thin stdlib http.server front-end for the V3 pipeline
     modules. None of those modules import torch, numpy, or any ML lib — they
