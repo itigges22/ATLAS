@@ -46,6 +46,11 @@ jobs:
           # using --no-deps when installing the project — CI doesn't run the
           # CLI, only the benchmark/Lens/runner Python paths.
           pip install pytest httpx pyyaml
+          # geometric-lens modules (main.py, config.py) import fastapi+pydantic
+          # at module load. Two wire tests importlib.import_module them, so CI
+          # needs both even though we use --no-deps for the project install.
+          # Versions pinned to geometric-lens/requirements.txt.
+          pip install fastapi==0.109.0 pydantic==2.5.3
           pip install --extra-index-url https://download.pytorch.org/whl/cpu "torch>=2.0"
           pip install --no-deps -e .
 
