@@ -14,7 +14,16 @@ ARG CUDA_ARCH=120;121
 RUN dnf install -y git cmake gcc-c++ && dnf clean all
 # Use /llama.cpp/tmp for build temp to avoid /tmp space exhaustion
 ENV TMPDIR=/llama.cpp/tmp
-RUN git clone https://github.com/ggml-org/llama.cpp /llama.cpp && \
+# Shallow + single-branch clone: full history is ~1GB and chokes flaky
+# connections (saw an 11-minute SSL read timeout on a full clone). The
+# build doesn't need history. http.postBuffer bump helps large packs;
+# lowSpeedLimit/Time abort fast on dead connections instead of hanging.
+# See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
+RUN git -c http.postBuffer=524288000 \
+        -c http.lowSpeedLimit=1000 \
+        -c http.lowSpeedTime=60 \
+        clone --depth 1 --single-branch \
+        https://github.com/ggml-org/llama.cpp /llama.cpp && \
     cd /llama.cpp && \
     mkdir -p /llama.cpp/tmp && \
     # ATLAS patch: prevent --embeddings from poisoning the draft model context.

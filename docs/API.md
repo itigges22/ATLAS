@@ -89,6 +89,20 @@ Tool-based agent endpoint. Sends a message and receives a stream of tool calls a
 
 **Response:** SSE stream of tool call events, terminated by `data: [DONE]`.
 
+**Tools available to the agent loop** (defined in `atlas-proxy/tools.go`):
+
+| Tool | Purpose |
+|------|---------|
+| `read_file` | Read a file and return its contents with line numbers |
+| `write_file` | Create a new file or replace its full contents (rejected for existing files >100 lines — use `edit_file` instead) |
+| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file |
+| `delete_file` | Remove a file from the workspace |
+| `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
+| `find_file` | Regex search by file **name** or relative path. Use this to check whether a file exists. Added in v3.0.1+ to resolve PC-028 |
+| `list_directory` | List files and subdirectories at a given path |
+| `run_command` | Execute a shell command via bash. Runs inside the atlas-proxy container, which ships with python3, py3-pip, nodejs/npm, gcc, g++, make, and git. See PC-032 for the architectural plan to route this through the sandbox container |
+| `plan_tasks` | Decompose work into parallel tasks with dependencies |
+
 ### GET /v1/models
 
 Returns available models (OpenAI-compatible).
@@ -302,11 +316,12 @@ Execute code in an isolated environment.
 **Request:**
 ```json
 {
-  "code": "print('hello from sandbox')",
+  "code": "from utils import greet\nprint(greet('world'))",
   "language": "python",
   "test_code": null,
   "requirements": null,
-  "timeout": 30
+  "timeout": 30,
+  "files": {"utils.py": "def greet(name): return f'hi {name}'"}
 }
 ```
 
@@ -317,6 +332,7 @@ Execute code in an isolated environment.
 | `test_code` | string | null | Optional test code (e.g. pytest assertions) |
 | `requirements` | string[] | null | Python packages to pip install before execution |
 | `timeout` | int | 30 | Max execution time in seconds (capped at 60) |
+| `files` | object | null | Map of `relative-path → file-content` written into the workspace before execution. Use to ship multi-file project context (e.g. modules the candidate imports). Path traversal (`..`, absolute paths) is rejected. See PC-046. |
 
 **Response:**
 ```json

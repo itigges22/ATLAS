@@ -184,6 +184,24 @@ type SearchFilesOutput struct {
 	Truncated  bool          `json:"truncated,omitempty"`
 }
 
+// -- find_file --
+
+type FindFileInput struct {
+	Pattern string `json:"pattern"`        // regex matched against filename or relative path
+	Path    string `json:"path,omitempty"` // directory to search in (defaults to working dir)
+}
+
+type FindFileMatch struct {
+	Path string `json:"path"` // relative path from working dir
+	Name string `json:"name"` // basename
+}
+
+type FindFileOutput struct {
+	Matches    []FindFileMatch `json:"matches"`
+	TotalCount int             `json:"total_count"`
+	Truncated  bool            `json:"truncated,omitempty"`
+}
+
 // -- list_directory --
 
 type ListDirectoryInput struct {

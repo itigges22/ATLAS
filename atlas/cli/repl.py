@@ -128,6 +128,9 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
     env["ATLAS_V3_URL"] = V3_URL
     env["ATLAS_AGENT_LOOP"] = "1"
     env["ATLAS_MODEL_NAME"] = MODEL_NAME
+    # Pin the proxy's "where to write files" target to the directory the user
+    # invoked `atlas` from, overriding the proxy's stale-history heuristics.
+    env["ATLAS_WORKSPACE_DIR"] = os.getcwd()
 
     try:
         _proxy_process = subprocess.Popen(
@@ -166,16 +169,103 @@ def _stop_local_proxy():
             _proxy_process.kill()
 
 
+def _docker_proxy_workspace() -> Optional[str]:
+    """Return the host path bind-mounted to /workspace inside the Docker
+    atlas-proxy container, or None if the proxy isn't running in Docker
+    (or docker isn't on PATH). See ISSUES.md PC-038.
+    """
+    if not shutil.which("docker"):
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "docker", "inspect", "atlas-atlas-proxy-1",
+                "--format",
+                "{{range .Mounts}}{{if eq .Destination \"/workspace\"}}{{.Source}}{{end}}{{end}}",
+            ],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        src = result.stdout.strip()
+        return src if src else None
+    except Exception:
+        return None
+
+
+def _recreate_docker_proxy(atlas_dir: str, project_dir: str) -> bool:
+    """Recreate the Docker atlas-proxy container with a new ATLAS_PROJECT_DIR
+    bind. Returns True when the proxy is back up and healthy. See PC-038.
+    """
+    if not atlas_dir:
+        return False
+    print(f"  Aligning proxy workspace → {project_dir}")
+    env = os.environ.copy()
+    env["ATLAS_PROJECT_DIR"] = project_dir
+    try:
+        result = subprocess.run(
+            [
+                "docker", "compose", "up", "-d",
+                "atlas-proxy", "--no-deps", "--no-build", "--force-recreate",
+            ],
+            cwd=atlas_dir, env=env,
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout)[:240]
+            print(f"  Proxy recreate failed: {tail}")
+            return False
+        for _ in range(40):
+            time.sleep(0.5)
+            if _check_url(PROXY_URL, timeout=1):
+                return True
+        print("  Proxy recreated but not responding on health check")
+        return False
+    except Exception as e:
+        print(f"  Recreate failed: {e}")
+        return False
+
+
+def _align_workspace(atlas_dir: str) -> None:
+    """If the proxy is running in Docker and its /workspace bind doesn't
+    cover the current working directory, recreate it so it does. See PC-038.
+
+    Disable with ATLAS_AUTO_WORKSPACE=0 — the user keeps whatever bind the
+    proxy was started with.
+    """
+    if os.environ.get("ATLAS_AUTO_WORKSPACE", "1") == "0":
+        return
+    cwd = os.path.realpath(os.getcwd())
+    bound = _docker_proxy_workspace()
+    if bound is None:
+        # Local proxy (not in Docker) — _launch_local_proxy already pinned
+        # ATLAS_WORKSPACE_DIR to os.getcwd(), so nothing to do.
+        return
+    bound_real = os.path.realpath(bound)
+    # No-op if the bound directory is the cwd or an ancestor of it
+    # (so e.g. binding $HOME covers any subproject without recreating).
+    try:
+        rel = os.path.relpath(cwd, bound_real)
+    except ValueError:
+        rel = ".."
+    if rel == "." or not rel.startswith(".."):
+        return
+    if not _recreate_docker_proxy(atlas_dir, cwd):
+        print("  Continuing with the existing proxy workspace — file operations may not see your project.")
+
+
 def _ensure_proxy() -> bool:
     """Ensure atlas-proxy is running, launching it locally if needed.
 
     Strategy:
-    1. Already running on PROXY_PORT → use it
+    1. Already running on PROXY_PORT → use it (and align its workspace
+       to the user's CWD if it's a Docker proxy — PC-038)
     2. Go available → build (if needed) and launch locally from CWD
     3. Nothing available → return False
     """
     # Already running?
     if _check_url(PROXY_URL):
+        _align_workspace(_find_atlas_dir())
         return True
 
     # Try to find or build and launch locally

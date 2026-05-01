@@ -18,7 +18,8 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 STM_SORTED_SET = "pcache:stm"  # Sorted set: pattern_id -> composite_score
 LTM_SORTED_SET = "pcache:ltm"  # Sorted set: pattern_id -> composite_score
 PERSISTENT_SET = "pcache:persistent"  # Set: pattern_ids
-PATTERN_HASH = "pcache:pattern:"  # Hash per pattern: pcache:pattern:{id}
+PATTERN_KEY = "pcache:pattern:"  # JSON-encoded Pattern stored at pcache:pattern:{id}
+VERSION_KEY = "pcache:version"  # Monotonic counter bumped on every mutation
 
 # Capacity limits
 STM_CAPACITY = 100
@@ -42,8 +43,25 @@ class PatternStore:
     def available(self) -> bool:
         return self._available
 
+    def get_version(self) -> int:
+        """Monotonic counter bumped on every mutation. Used to invalidate caches."""
+        if not self._available:
+            return 0
+        try:
+            v = self._redis.get(VERSION_KEY)
+            return int(v) if v else 0
+        except Exception:
+            return 0
+
+    def _bump_version(self):
+        if self._available:
+            try:
+                self._redis.incr(VERSION_KEY)
+            except Exception:
+                pass
+
     def store_pattern(self, pattern: Pattern, score: float = 0.0) -> bool:
-        """Store a pattern in Redis. STM patterns go to sorted set + hash."""
+        """Store a pattern in Redis (JSON blob + tier-specific index entry)."""
         if not self._available:
             return False
 
@@ -51,7 +69,7 @@ class PatternStore:
             pipe = self._redis.pipeline()
 
             # Store pattern data as hash
-            key = f"{PATTERN_HASH}{pattern.id}"
+            key = f"{PATTERN_KEY}{pattern.id}"
             pipe.set(key, pattern.model_dump_json())
 
             # Add to appropriate sorted set
@@ -69,6 +87,7 @@ class PatternStore:
             else:
                 pipe.execute()
 
+            self._bump_version()
             return True
         except Exception as e:
             logger.error(f"Failed to store pattern {pattern.id}: {e}")
@@ -80,7 +99,7 @@ class PatternStore:
             return None
 
         try:
-            data = self._redis.get(f"{PATTERN_HASH}{pattern_id}")
+            data = self._redis.get(f"{PATTERN_KEY}{pattern_id}")
             if data:
                 return Pattern.model_validate_json(data)
             return None
@@ -89,37 +108,55 @@ class PatternStore:
             return None
 
     def update_pattern(self, pattern: Pattern, score: Optional[float] = None) -> bool:
-        """Update pattern data and optionally its score in the sorted set."""
+        """
+        Update pattern data and re-index according to its current tier.
+
+        If the tier has changed since the pattern was last stored, this removes
+        any stale entries from the other indices so the pattern is only present
+        in the index that matches its current tier.
+        """
         if not self._available:
             return False
 
         try:
-            key = f"{PATTERN_HASH}{pattern.id}"
-            self._redis.set(key, pattern.model_dump_json())
+            pipe = self._redis.pipeline()
+            pipe.set(f"{PATTERN_KEY}{pattern.id}", pattern.model_dump_json())
 
-            if score is not None:
-                if pattern.tier == PatternTier.STM:
-                    self._redis.zadd(STM_SORTED_SET, {pattern.id: score})
-                elif pattern.tier == PatternTier.LTM:
-                    self._redis.zadd(LTM_SORTED_SET, {pattern.id: score})
+            if pattern.tier == PatternTier.STM:
+                pipe.zrem(LTM_SORTED_SET, pattern.id)
+                pipe.srem(PERSISTENT_SET, pattern.id)
+                if score is not None:
+                    pipe.zadd(STM_SORTED_SET, {pattern.id: score})
+            elif pattern.tier == PatternTier.LTM:
+                pipe.zrem(STM_SORTED_SET, pattern.id)
+                pipe.srem(PERSISTENT_SET, pattern.id)
+                if score is not None:
+                    pipe.zadd(LTM_SORTED_SET, {pattern.id: score})
+            elif pattern.tier == PatternTier.PERSISTENT:
+                pipe.zrem(STM_SORTED_SET, pattern.id)
+                pipe.zrem(LTM_SORTED_SET, pattern.id)
+                pipe.sadd(PERSISTENT_SET, pattern.id)
 
+            pipe.execute()
+            self._bump_version()
             return True
         except Exception as e:
             logger.error(f"Failed to update pattern {pattern.id}: {e}")
             return False
 
     def delete_pattern(self, pattern_id: str) -> bool:
-        """Delete a pattern from Redis (hash + sorted set)."""
+        """Delete a pattern from Redis (JSON blob + all index entries)."""
         if not self._available:
             return False
 
         try:
             pipe = self._redis.pipeline()
-            pipe.delete(f"{PATTERN_HASH}{pattern_id}")
+            pipe.delete(f"{PATTERN_KEY}{pattern_id}")
             pipe.zrem(STM_SORTED_SET, pattern_id)
             pipe.zrem(LTM_SORTED_SET, pattern_id)
             pipe.srem(PERSISTENT_SET, pattern_id)
             pipe.execute()
+            self._bump_version()
             return True
         except Exception as e:
             logger.error(f"Failed to delete pattern {pattern_id}: {e}")
@@ -173,8 +210,9 @@ class PatternStore:
             pipe = self._redis.pipeline()
             pipe.zrem(STM_SORTED_SET, pattern_id)
             pipe.zadd(LTM_SORTED_SET, {pattern_id: score})
-            pipe.set(f"{PATTERN_HASH}{pattern_id}", pattern.model_dump_json())
+            pipe.set(f"{PATTERN_KEY}{pattern_id}", pattern.model_dump_json())
             pipe.execute()
+            self._bump_version()
 
             logger.info(f"Promoted pattern {pattern_id} to LTM (score={score:.3f})")
             return True
@@ -276,6 +314,7 @@ class PatternStore:
                     self._redis.delete(*keys)
                 if cursor == 0:
                     break
+            self._bump_version()
             logger.info("Pattern cache flushed")
         except Exception as e:
             logger.error(f"Failed to flush cache: {e}")
@@ -307,7 +346,9 @@ class PatternStore:
                 excess = size - STM_CAPACITY
                 evicted = self._redis.zpopmin(STM_SORTED_SET, excess)
                 for pid, _ in evicted:
-                    self._redis.delete(f"{PATTERN_HASH}{pid}")
+                    self._redis.delete(f"{PATTERN_KEY}{pid}")
+                if evicted:
+                    self._bump_version()
                 logger.info(f"Evicted {len(evicted)} patterns from STM (capacity={STM_CAPACITY})")
         except Exception as e:
             logger.error(f"Failed to enforce STM capacity: {e}")

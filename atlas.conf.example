@@ -1,7 +1,14 @@
 #!/bin/bash
 #===========================================
-# ATLAS Configuration
+# ATLAS Configuration  —  K3s / KUBERNETES DEPLOYMENT
 #===========================================
+# This file is read ONLY by ./scripts/install.sh and other K3s tooling
+# under scripts/lib/config.sh. It is NOT read by `docker compose`.
+#
+# If you are running `docker compose up` instead, edit `.env` (see
+# `.env.example`) — values placed here will be silently ignored by
+# the docker path. See ISSUES.md PC-021.
+#
 # Copy this file to atlas.conf and customize.
 # All values have sensible defaults.
 #

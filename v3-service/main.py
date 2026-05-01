@@ -63,6 +63,56 @@ DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
 
 
+# --- Pattern Cache write hook -------------------------------------------------
+# Maps the V3 phase that produced the winning solution to a retry_count value.
+# The pattern cache uses retry_count / max_retries as a "surprise" proxy — higher
+# retries mean the pattern was harder to find and worth caching with more weight.
+_PHASE_RETRY_COUNT = {
+    "probe_pass": 1,        # solved on first probe
+    "phase1": 2,            # plan-search candidates passed
+    "phase1_sstar": 2,      # S* tiebreak among passing candidates
+    "pr_cot": 3,            # required PR-CoT repair
+    "refinement": 4,        # required refinement loop
+    "derivation": 5,        # required derivation chains
+    "fallback": 5,          # nothing passed; best-by-energy returned
+    "none": 5,
+}
+
+
+def _post_pattern_outcome(problem: str, result: dict):
+    """Fire-and-forget: post the pipeline outcome to geometric-lens for caching.
+
+    Runs in a background thread so it never delays the response. Errors are
+    logged but never raised — the pattern cache is best-effort, not load-bearing.
+    """
+    import threading
+
+    def _do_post():
+        payload = {
+            "query": problem,
+            "solution": result.get("code", ""),
+            "retry_count": _PHASE_RETRY_COUNT.get(result.get("phase_solved", "none"), 5),
+            "max_retries": 5,
+            "error_context": None,
+            "source_files": [],
+            "active_pattern_ids": [],
+            "success": bool(result.get("passed")),
+        }
+        try:
+            req = urllib.request.Request(
+                f"{LENS_URL}/internal/patterns/write",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read()
+        except Exception as e:
+            print(f"  [pattern-write] POST failed (non-fatal): {e}", flush=True)
+
+    threading.Thread(target=_do_post, daemon=True).start()
+
+
 # --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
 
 class LLMAdapter:
@@ -188,7 +238,17 @@ class LLMAdapter:
 # --- Sandbox Adapter (calls sandbox /execute) ---------------------------------
 
 class SandboxAdapter:
-    """Calls the sandbox service for code execution."""
+    """Calls the sandbox service for code execution.
+
+    PC-046: optional `project_files` dict ships supporting files (other
+    modules from the user's project) into the sandbox workspace so
+    multi-file imports resolve. Without this, a candidate that does
+    `from utils import helper` fails ImportError in the sandbox even
+    though it would work on the user's machine.
+    """
+
+    def __init__(self, project_files: Optional[Dict[str, str]] = None):
+        self.project_files = project_files or {}
 
     def __call__(self, code: str, test_input: str = "") -> Tuple[bool, str, str]:
         body = {
@@ -196,6 +256,8 @@ class SandboxAdapter:
             "language": "python",
             "timeout": 15,
         }
+        if self.project_files:
+            body["files"] = self.project_files
         try:
             req = urllib.request.Request(
                 f"{SANDBOX_URL}/execute",
@@ -247,6 +309,264 @@ def score_candidate(code: str) -> Tuple[float, float]:
         return 0.0, 0.5
 
 
+# --- Task-type classifier (PC-022) -------------------------------------------
+
+_INTERACTIVE_MARKERS = (
+    "game", "tui", "terminal interface", "menu", "interactive",
+    "pygame", "curses", "tkinter", "flask", "fastapi", "django",
+    "streamlit", "gradio", "dashboard", "gui", "web app", "webapp",
+    "cli tool", "command-line tool", "chat bot", "chatbot",
+    "discord bot", "telegram bot", "snake", "tetris", "pong",
+    "rpg", "shell", "repl", "live server", "scraper", "crawler",
+    "watcher", "daemon",
+)
+_ALGORITHMIC_MARKERS = (
+    "input:", "output:", "examples:", "sample input", "sample output",
+    "constraints:", "test case", "leetcode", "codeforces", "hackerrank",
+    "competitive programming", "function signature", "given an array",
+    "given a string", "return the", "return an integer", "modulo 10",
+)
+
+
+def classify_task_type(problem: str) -> str:
+    """Classify whether a task expects (input -> output) self-tests.
+
+    Returns 'algorithmic' for problems with clear I/O contracts (the
+    LiveCodeBench shape — synthesized self-tests are meaningful), or
+    'interactive' for games/UIs/scripts/library code where I/O self-tests
+    don't apply and would produce false failures (PC-022).
+    """
+    p = problem.lower()
+    interactive_hits = sum(1 for m in _INTERACTIVE_MARKERS if m in p)
+    algorithmic_hits = sum(1 for m in _ALGORITHMIC_MARKERS if m in p)
+    if interactive_hits > 0 and interactive_hits >= algorithmic_hits:
+        return "interactive"
+    return "algorithmic"
+
+
+def smoke_compile_check(code: str, sandbox, language: str = "python") -> Tuple[bool, str, str]:
+    """Lightweight verification for interactive tasks: code parses + compiles.
+
+    Replaces synthetic-I/O self-tests for tasks where (input -> output)
+    pairs are nonsensical (curses games, pygame apps, flask servers, …).
+    Runs inside the sandbox so any import-time crashes show up as stderr.
+
+    PC-048: language-aware. Python files run the AST parse / compile
+    smoke. HTML/JSON/YAML files run a stdlib parse for well-formedness.
+    Everything else (CSS, JS, MD, plain text, …) returns OK without a
+    sandbox round-trip — we don't have a cheap, accurate validator and
+    the LLM is more reliable on those formats than spurious-failure
+    pressure from a half-built validator would be.
+    """
+    lang = (language or "python").lower()
+
+    if lang in ("html", "htm"):
+        smoke = (
+            "import sys\n"
+            "from html.parser import HTMLParser\n"
+            f"_src = {code!r}\n"
+            "class _Strict(HTMLParser):\n"
+            "    def error(self, msg):\n"
+            "        raise ValueError(msg)\n"
+            "try:\n"
+            "    _p = _Strict()\n"
+            "    _p.feed(_src)\n"
+            "    _p.close()\n"
+            "    print('SMOKE_OK')\n"
+            "except Exception as e:\n"
+            "    print(f'HTML_PARSE_ERROR: {e}', file=sys.stderr)\n"
+            "    sys.exit(1)\n"
+        )
+        ok, out, err = sandbox(smoke)
+        return (ok and "SMOKE_OK" in out), out, err
+
+    if lang == "json":
+        smoke = (
+            "import json, sys\n"
+            f"_src = {code!r}\n"
+            "try:\n"
+            "    json.loads(_src)\n"
+            "    print('SMOKE_OK')\n"
+            "except json.JSONDecodeError as e:\n"
+            "    print(f'JSON_PARSE_ERROR: {e}', file=sys.stderr)\n"
+            "    sys.exit(1)\n"
+        )
+        ok, out, err = sandbox(smoke)
+        return (ok and "SMOKE_OK" in out), out, err
+
+    if lang in ("yaml", "yml"):
+        smoke = (
+            "import sys\n"
+            f"_src = {code!r}\n"
+            "try:\n"
+            "    import yaml\n"
+            "    yaml.safe_load(_src)\n"
+            "    print('SMOKE_OK')\n"
+            "except ImportError:\n"
+            # PyYAML not installed in sandbox — pass-through so we don't
+            # block legitimate edits on a missing optional dep.
+            "    print('SMOKE_OK')\n"
+            "except Exception as e:\n"
+            "    print(f'YAML_PARSE_ERROR: {e}', file=sys.stderr)\n"
+            "    sys.exit(1)\n"
+        )
+        ok, out, err = sandbox(smoke)
+        return (ok and "SMOKE_OK" in out), out, err
+
+    if lang not in ("python", "py"):
+        # CSS, JS, TS, MD, plain text, anything else — no cheap validator,
+        # trust the LLM. Returning OK avoids false-positive failures that
+        # cascade into PR-CoT repair attempts and LLM timeouts.
+        return True, "SMOKE_SKIP (non-Python)", ""
+
+    # Default: Python compile smoke
+    smoke = (
+        "import ast, sys\n"
+        f"_src = {code!r}\n"
+        "try:\n"
+        "    ast.parse(_src)\n"
+        "    compile(_src, '<smoke>', 'exec')\n"
+        "    print('SMOKE_OK')\n"
+        "except SyntaxError as e:\n"
+        "    print(f'SYNTAX_ERROR: {e}', file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+    )
+    ok, out, err = sandbox(smoke)
+    return (ok and "SMOKE_OK" in out), out, err
+
+
+def interactive_lint(code: str) -> Tuple[bool, str]:
+    """Heuristic checks beyond compile-OK for interactive (terminal/UI) tasks.
+
+    Compile-OK is necessary but not sufficient: a snake game using
+    `sys.stdin.read(1)` without termios setup parses fine, runs without
+    crashing, and silently fails on every keypress. We've seen this in real
+    user runs (ISSUES.md PC-034). Detect the most common failure shapes
+    statically before accepting the probe.
+
+    Returns (passed, reason). reason is empty when passed.
+    """
+    import ast as _ast
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        # Compile gate above already caught this; treat as passed here so
+        # we don't double-report.
+        return True, ""
+
+    has_curses = False
+    has_termios_setraw = False
+    has_raw_stdin_read = False
+    has_blocking_input_loop = False
+    # PC-047: track curses-bottom-row anti-patterns (unwrapped addstr to
+    # LINES-N or COLS-N — addstr to the very last cell always returns ERR
+    # in curses, which is why so many "snake game" runs crash with
+    # `_curses.error: addwstr() returned ERR`).
+    bottom_row_addstr_nodes: List[Tuple[int, str]] = []  # (lineno, snippet)
+    try_except_curses_lines: set = set()
+
+    def _is_lines_or_cols_minus(node: _ast.AST, name: str) -> bool:
+        """True if node is a `curses.{name} - <int>` BinOp expression
+        (or just `LINES - <int>` if the model imported the names)."""
+        if not isinstance(node, _ast.BinOp) or not isinstance(node.op, _ast.Sub):
+            return False
+        left = node.left
+        # curses.LINES - N
+        if (isinstance(left, _ast.Attribute) and left.attr == name
+                and isinstance(left.value, _ast.Name) and left.value.id == "curses"):
+            return True
+        # bare LINES - N (after `from curses import LINES, COLS`)
+        if isinstance(left, _ast.Name) and left.id == name:
+            return True
+        return False
+
+    # First pass: find every `try: ... except curses.error / except _curses.error`
+    # block and record the line ranges they protect, so we can skip
+    # already-wrapped addstr calls below.
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Try):
+            handles_curses = False
+            for handler in node.handlers:
+                exc = handler.type
+                if isinstance(exc, _ast.Attribute) and exc.attr == "error":
+                    if (isinstance(exc.value, _ast.Name)
+                            and exc.value.id in ("curses", "_curses")):
+                        handles_curses = True
+                elif isinstance(exc, _ast.Name) and exc.id == "Exception":
+                    handles_curses = True  # broad catch covers curses.error
+            if handles_curses:
+                start = node.lineno
+                end = max((getattr(n, "end_lineno", node.lineno) or node.lineno)
+                          for n in _ast.walk(node))
+                for ln in range(start, end + 1):
+                    try_except_curses_lines.add(ln)
+
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                if alias.name == "curses":
+                    has_curses = True
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module in ("curses", "termios", "tty"):
+                has_curses = has_curses or node.module == "curses"
+                has_termios_setraw = has_termios_setraw or node.module in ("termios", "tty")
+        elif isinstance(node, _ast.Call):
+            func = node.func
+            if isinstance(func, _ast.Attribute):
+                # sys.stdin.read(1) without termios setup
+                if (
+                    func.attr == "read"
+                    and isinstance(func.value, _ast.Attribute)
+                    and func.value.attr == "stdin"
+                    and isinstance(func.value.value, _ast.Name)
+                    and func.value.value.id == "sys"
+                ):
+                    has_raw_stdin_read = True
+                # termios.tcsetattr / tty.setraw / tty.setcbreak
+                if func.attr in ("tcsetattr", "setraw", "setcbreak"):
+                    has_termios_setraw = True
+                # PC-047: addstr / addnstr / addch with a LINES-N first arg
+                # (writing to a row near the bottom — last row always errors)
+                # or a COLS-N second arg pair that targets the last column.
+                if func.attr in ("addstr", "addnstr", "addch"):
+                    args = node.args
+                    if args:
+                        first = args[0]
+                        if _is_lines_or_cols_minus(first, "LINES"):
+                            if node.lineno not in try_except_curses_lines:
+                                snippet = f"line {node.lineno}: {func.attr}(curses.LINES - N, ...) without try/except curses.error"
+                                bottom_row_addstr_nodes.append((node.lineno, snippet))
+        elif isinstance(node, _ast.While):
+            # Look for `while True: ... input(...)` shape — blocking input
+            # in an interactive loop is almost always wrong.
+            for sub in _ast.walk(node):
+                if isinstance(sub, _ast.Call) and isinstance(sub.func, _ast.Name) and sub.func.id == "input":
+                    has_blocking_input_loop = True
+                    break
+
+    # Raw stdin read without termios is a near-certain bug for interactive
+    # keystroke handling — single-char read is line-buffered and can't see
+    # arrow-key escape sequences.
+    if has_raw_stdin_read and not has_termios_setraw and not has_curses:
+        return False, "raw sys.stdin.read without termios/tty setup or curses — keystrokes won't register"
+
+    # input() inside a `while True` of a TUI flow blocks until Enter; usually
+    # intended to be a non-blocking key read.
+    if has_blocking_input_loop and not has_curses and not has_termios_setraw:
+        return False, "input() in a loop with no curses/termios — blocks on Enter, can't read single keystrokes"
+
+    # PC-047: unwrapped addstr to the bottom row will always raise
+    # `_curses.error: addwstr() returned ERR` at runtime (writing the last
+    # cell of any window is undefined and historically returns ERR). The
+    # idiomatic fix is `try: stdscr.addstr(...) except curses.error: pass`.
+    # Fail the lint so V3 prefers a candidate that has the wrap.
+    if has_curses and bottom_row_addstr_nodes:
+        first = bottom_row_addstr_nodes[0][1]
+        return False, f"curses bottom-row write without try/except curses.error wrap — {first} (will raise ERR at runtime)"
+
+    return True, ""
+
+
 # --- V3 Pipeline Orchestrator ------------------------------------------------
 
 class V3PipelineService:
@@ -268,7 +588,8 @@ class V3PipelineService:
         self.self_test_gen = SelfTestGen(SelfTestGenConfig(enabled=True))
 
     def run(self, problem: str, task_id: str = "cli",
-            progress_callback=None, files: Dict[str, str] = None) -> Dict[str, Any]:
+            progress_callback=None, files: Dict[str, str] = None,
+            file_path: str = "") -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -276,10 +597,37 @@ class V3PipelineService:
             task_id: Task identifier
             progress_callback: SSE progress emitter
             files: Dict of filename→content from Aider's existing file context
+            file_path: Target file path (used by PC-048 to detect language
+                for the smoke check — `.html` files use HTML parser, not
+                Python compile, etc.)
         """
         start = time.time()
         events = []
         files = files or {}
+
+        # PC-048: derive language from the target file's extension. Used
+        # only by smoke_compile_check below to pick the right parser
+        # (Python compile vs HTML parser vs JSON loads vs skip-and-pass
+        # for unknown formats). Defaults to Python when no file_path is
+        # supplied, preserving previous behavior for /v3/run callers.
+        _ext = Path(file_path).suffix.lower() if file_path else ""
+        _ext_to_lang = {
+            ".py": "python", ".pyw": "python",
+            ".html": "html", ".htm": "html",
+            ".json": "json",
+            ".yaml": "yaml", ".yml": "yaml",
+            ".css": "css",
+            ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+            ".ts": "typescript", ".tsx": "typescript",
+            ".md": "markdown", ".markdown": "markdown",
+            ".txt": "text", ".rst": "text",
+            ".toml": "toml",
+            ".xml": "html",  # treat XML same as HTML for parsing
+            ".sh": "bash", ".bash": "bash",
+            ".go": "go",
+            ".rs": "rust",
+        }
+        smoke_language = _ext_to_lang.get(_ext, "python")
 
         # If existing file context is provided, prepend it to the problem
         # so all V3 modules (PlanSearch, PR-CoT, etc.) can see the code
@@ -299,7 +647,13 @@ class V3PipelineService:
                 progress_callback(stage, detail)
 
         llm = LLMAdapter(progress_callback=emit)
-        sandbox = SandboxAdapter()
+        # PC-046: ship the user's other project files into the sandbox so
+        # multi-file imports resolve. `files` is the same Dict that V3
+        # already prepends to the LLM prompt above; passing it to the
+        # sandbox closes the gap where the model writes
+        # `from utils import helper` and the sandbox imports a workspace
+        # that contains only solution.py.
+        sandbox = SandboxAdapter(project_files=files)
         embed = EmbedAdapter()
 
         result = {
@@ -342,15 +696,26 @@ class V3PipelineService:
             response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
             probe_code = extract_code(response)
 
-        # Generate self-tests first — used for all sandbox verification
-        emit("self_test_gen", "Generating verification tests...")
+        # Classify task type. Interactive tasks (games, UIs, framework code)
+        # skip synthetic I/O self-tests entirely — those tests would fail by
+        # construction, falsely triggering PR-CoT/refinement on working code.
+        # See ISSUES.md PC-022.
+        task_type = classify_task_type(problem)
+        emit("task_type", task_type)
+        result["task_type"] = task_type
+
+        # Generate self-tests (algorithmic tasks only) — used for sandbox verification
         self_tests = None
-        try:
-            self_tests = self.self_test_gen.generate(problem, llm, task_id)
-            emit("self_test_done", f"{len(self_tests.test_cases)} test cases")
-            result["total_tokens"] += self_tests.generation_tokens
-        except Exception as e:
-            emit("self_test_error", str(e)[:200])
+        if task_type == "algorithmic":
+            emit("self_test_gen", "Generating verification tests...")
+            try:
+                self_tests = self.self_test_gen.generate(problem, llm, task_id)
+                emit("self_test_done", f"{len(self_tests.test_cases)} test cases")
+                result["total_tokens"] += self_tests.generation_tokens
+            except Exception as e:
+                emit("self_test_error", str(e)[:200])
+        else:
+            emit("self_test_skip", "Interactive task — using compile smoke-test")
 
         def _make_test(code, tc):
             """Build executable assertion code for a single test case.
@@ -380,7 +745,33 @@ class V3PipelineService:
                 "print('SELF_TEST_PASS')\n")
 
         def verified_sandbox(code, extra_test=""):
-            """Sandbox + self-test correctness. Fails if code crashes OR >50% assertions fail."""
+            """Sandbox + verification. Algorithmic tasks: I/O self-tests; interactive: compile smoke."""
+            # Interactive tasks: skip the run-and-test; just verify the code
+            # parses and compiles. Running curses/pygame/flask in the sandbox
+            # would fail for environmental reasons (no TTY, no display) even
+            # when the code is correct — see PC-022.
+            if task_type == "interactive":
+                # PC-048: pass the detected language so HTML/JSON/etc. files
+                # don't get parsed as Python (which produces spurious
+                # SYNTAX_ERROR cascades into PR-CoT repair + LLM timeouts).
+                ok, out, err = smoke_compile_check(code, sandbox, language=smoke_language)
+                emit("smoke_check", f"compile={'OK' if ok else 'FAIL'} ({smoke_language})")
+                if not ok:
+                    return ok, out, err
+                # Interactive lint is Python-AST based — only meaningful for
+                # Python files. Skip for HTML/CSS/JSON/etc.
+                if smoke_language not in ("python", "py"):
+                    return True, out, err
+                # Interactive lint: catch raw stdin reads / blocking input loops
+                # that compile fine but don't actually work for keystroke
+                # handling (PC-034).
+                lint_ok, lint_reason = interactive_lint(code)
+                if lint_ok:
+                    emit("interactive_lint", "OK")
+                    return True, out, err
+                emit("interactive_lint", f"FAIL: {lint_reason}")
+                return False, out, f"interactive_lint: {lint_reason}"
+
             ok, out, err = sandbox(code)
             if not ok:
                 return False, out, err
@@ -565,14 +956,18 @@ class V3PipelineService:
             for c in candidates if not c.get("passed")
         ]
 
-        # Self-test generation for repair verification
-        emit("self_test_gen", "Generating self-tests...")
-        try:
-            self_tests = self.self_test_gen.generate(problem, llm, task_id)
-            emit("self_test_done", f"{len(self_tests.test_cases)} test cases generated")
-        except Exception as e:
+        # Self-test generation for repair verification — algorithmic only.
+        # Interactive tasks repair against compile-smoke (PC-022).
+        if task_type == "algorithmic":
+            emit("self_test_gen", "Generating self-tests...")
+            try:
+                self_tests = self.self_test_gen.generate(problem, llm, task_id)
+                emit("self_test_done", f"{len(self_tests.test_cases)} test cases generated")
+            except Exception as e:
+                self_tests = None
+                emit("self_test_error", str(e)[:200])
+        else:
             self_tests = None
-            emit("self_test_error", str(e)[:200])
 
         # Metacognitive warnings
         metacog_warnings = self.metacognitive.get_warnings([], task_id)
@@ -875,6 +1270,7 @@ class V3Handler(BaseHTTPRequestHandler):
                     pass
 
             result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
+            _post_pattern_outcome(problem, result)
 
             # Final result event
             final = json.dumps(result, default=str)
@@ -883,6 +1279,7 @@ class V3Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         else:
             result = pipeline.run(problem, task_id, files=files)
+            _post_pattern_outcome(problem, result)
             self._json_response(200, result)
 
     def _handle_generate(self):
@@ -964,7 +1361,9 @@ class V3Handler(BaseHTTPRequestHandler):
             task_id=f"gen-{Path(file_path).stem}",
             progress_callback=emit_progress,
             files=files,
+            file_path=file_path,  # PC-048: language-aware smoke check
         )
+        _post_pattern_outcome(problem, result)
 
         # If baseline code was provided and pipeline didn't produce anything better,
         # use the baseline
@@ -983,15 +1382,26 @@ class V3Handler(BaseHTTPRequestHandler):
             "total_time_ms": result.get("total_time_ms", 0.0),
         }
         final = json.dumps(response)
-        self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+        try:
+            self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # Client closed mid-stream (timed out, cancelled, etc).
+            # See ISSUES.md PC-026.
+            pass
 
     def _json_response(self, code, data):
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            # Client closed before we finished writing — typically a
+            # docker healthcheck that hit its timeout. Not actionable.
+            # See ISSUES.md PC-026.
+            pass
 
     def log_message(self, format, *args):
         # Suppress default HTTP logging

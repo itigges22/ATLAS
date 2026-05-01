@@ -93,6 +93,11 @@ type ChatRequest struct {
 	Temperature float64       `json:"temperature,omitempty"`
 	Stream      bool          `json:"stream,omitempty"`
 	Stop        []string      `json:"stop,omitempty"`
+	// ProjectDir overrides the proxy's project-dir resolution for this
+	// request only (host path inside the container). Falls back to the
+	// X-Atlas-Project-Dir header, then ATLAS_WORKSPACE_DIR, then the
+	// existing heuristics. See ISSUES.md PC-020.
+	ProjectDir string `json:"project_dir,omitempty"`
 }
 
 type ChatChoice struct {
@@ -384,7 +389,15 @@ func forwardToLLM(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	// Cold-start budget: 240s. After ~1-2 min idle, llama-server's prompt
+	// cache is evicted; the next request reprocesses the whole conversation
+	// from cold. A 4-6K token Aider history at cold rates (50-80 tok/s) is
+	// 60-120s by itself. PC-029 fixed the in-session classifier deadlines;
+	// PC-035 covers this *cold-start* HTTP-client deadline. 120s blew out
+	// after short idle periods. The inner request context (Aider's own
+	// timeout) still cancels independently if the user gives up.
+	// See ISSUES.md PC-029, PC-035.
+	client := &http.Client{Timeout: 240 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -415,7 +428,11 @@ func scoreLens(ctx context.Context, text string) (*LensScore, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	// 30s — geometric-lens internally calls llama-server for embeddings,
+	// which is slow under prompt-cache pressure. Was 5s — fired in
+	// long sessions and surfaced as user-visible "deadline exceeded".
+	// See ISSUES.md PC-029.
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -1172,6 +1189,13 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-request project dir (PC-020). Body field wins; header is the
+	// fallback for clients that can't easily set the body field (curl
+	// scripts, etc).
+	if req.ProjectDir == "" {
+		req.ProjectDir = r.Header.Get("X-Atlas-Project-Dir")
+	}
+
 	totalRequests.Add(1)
 
 	// Streaming: use SSE passthrough with post-stream verification
@@ -1404,7 +1428,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 		}
 		if isDeleteRequest(userMsg) {
 			log.Printf("  delete fast-path: %s", truncate(userMsg, 80))
-			projectDir := detectRealProjectDir(req.Messages)
+			projectDir := detectRealProjectDirWith(req.ProjectDir, req.Messages)
 			if projectDir != "" {
 				re := regexp.MustCompile(`[\w./\-\[\]]+\.\w{1,10}`)
 				paths := re.FindAllString(userMsg, -1)
@@ -1566,7 +1590,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 		tier = classifyAgentTier(userMsg)
 		log.Printf("  agent tier override: %s", tier)
 		log.Printf("  agent loop: running internal tool-call loop for %s...", tier)
-		agentResult := runInternalAgentLoop(req, tier, w, flusher)
+		agentResult := runInternalAgentLoop(r.Context(), req, tier, w, flusher)
 		if agentResult != nil && len(agentResult.FileChanges) > 0 {
 			// Format as Aider whole-file blocks and deliver via SSE
 			aiderContent := formatForAider(agentResult)
@@ -2013,52 +2037,12 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 				// write the file directly. This bypasses Aider's parser which sometimes
 				// drops SSE-injected content silently.
 				if userHintFilename != "" && len(blocks) > 0 {
-					// Find CWD from Aider's Referer or file context
-					cwd := ""
-					for _, msg := range req.Messages {
-						if msg.Role == "system" {
-							// Look for repo path indicators
-							for _, line := range strings.Split(msg.Content, "\n") {
-								t := strings.TrimSpace(line)
-								if strings.HasPrefix(t, "/tmp/") || strings.HasPrefix(t, "/home/") {
-									if idx := strings.Index(t, "/"); idx >= 0 {
-										candidate := t
-										if sidx := strings.Index(candidate, " "); sidx > 0 {
-											candidate = candidate[:sidx]
-										}
-										if _, err := os.Stat(candidate); err == nil {
-											cwd = candidate
-											break
-										}
-									}
-								}
-							}
-						}
-					}
-					if cwd == "" {
-						// Find the most recently modified /tmp/atlas-* directory with .git
-						entries, _ := os.ReadDir("/tmp")
-						var newest string
-						var newestTime int64
-						for _, e := range entries {
-							if e.IsDir() && strings.HasPrefix(e.Name(), "atlas-") {
-								gitPath := "/tmp/" + e.Name() + "/.git"
-								if info, err := os.Stat(gitPath); err == nil {
-									if info.ModTime().Unix() > newestTime {
-										newestTime = info.ModTime().Unix()
-										newest = "/tmp/" + e.Name()
-									}
-								}
-							}
-						}
-						if newest != "" {
-							cwd = newest
-						}
-					}
+					// Resolve target dir via the centralized helper.
+					// Precedence: req.ProjectDir > ATLAS_WORKSPACE_DIR > os.Getwd > heuristics.
+					cwd := detectRealProjectDirWith(req.ProjectDir, req.Messages)
 					if cwd != "" {
-						fullPath := cwd + "/" + userHintFilename
-						dir := fullPath[:strings.LastIndex(fullPath, "/")]
-						os.MkdirAll(dir, 0755)
+						fullPath := filepath.Join(cwd, userHintFilename)
+						os.MkdirAll(filepath.Dir(fullPath), 0755)
 						if err := os.WriteFile(fullPath, []byte(blocks[0].Code+"\n"), 0644); err == nil {
 							log.Printf("  direct-write: %s (%d bytes)", fullPath, len(blocks[0].Code))
 						}
@@ -2324,10 +2308,13 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 		}
 	}
 
-	// Score in background
+	// Score in background. 30s deadline — same reasoning as scoreLens
+	// itself (lens calls llama-server for embeddings, slow under cache
+	// pressure). Background goroutine, no user blocking either way.
+	// See ISSUES.md PC-029.
 	if len(content) > 10 {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if score, err := scoreLens(ctx, content); err == nil {
 				log.Printf("  stream-score: gx=%.2f verdict=%s len=%d", score.GxScore, score.Verdict, len(content))
@@ -2472,7 +2459,7 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
-	llmOK, ragOK, sandboxOK := false, false, false
+	llmOK, ragOK, sandboxOK, lensReady := false, false, false, false
 
 	if resp, err := http.Get(inferenceURL + "/health"); err == nil {
 		resp.Body.Close()
@@ -2482,17 +2469,31 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 		ragOK = resp.StatusCode == 200
 	}
+	// Geometric-lens /ready is the gate that flips to 503 when scoring is
+	// degraded (lens weights missing, embedding-dim mismatch, etc — see
+	// PC-019). /health stays informational; /ready is the pass/fail.
+	if resp, err := http.Get(lensURL + "/ready"); err == nil {
+		resp.Body.Close()
+		lensReady = resp.StatusCode == 200
+	}
 	if resp, err := http.Get(sandboxURL + "/health"); err == nil {
 		resp.Body.Close()
 		sandboxOK = resp.StatusCode == 200
 	}
 
+	overall := llmOK && ragOK && sandboxOK && lensReady
+	overallStatus := "ok"
+	if !overall {
+		overallStatus = "degraded"
+	}
+
 	status := map[string]any{
-		"status":   "ok",
-		"inference":      llmOK,
-		"lens":  ragOK,
-		"sandbox":  sandboxOK,
-		"port":     proxyPort,
+		"status":     overallStatus,
+		"inference":  llmOK,
+		"lens":       ragOK,
+		"lens_ready": lensReady,
+		"sandbox":    sandboxOK,
+		"port":       proxyPort,
 		"stats": map[string]int64{
 			"requests":       totalRequests.Load(),
 			"repairs":        totalRepairs.Load(),
@@ -2504,6 +2505,35 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
+func handleReady(w http.ResponseWriter, r *http.Request) {
+	llmOK, sandboxOK, lensReady := false, false, false
+
+	if resp, err := http.Get(inferenceURL + "/health"); err == nil {
+		resp.Body.Close()
+		llmOK = resp.StatusCode == 200
+	}
+	if resp, err := http.Get(lensURL + "/ready"); err == nil {
+		resp.Body.Close()
+		lensReady = resp.StatusCode == 200
+	}
+	if resp, err := http.Get(sandboxURL + "/health"); err == nil {
+		resp.Body.Close()
+		sandboxOK = resp.StatusCode == 200
+	}
+
+	ready := llmOK && lensReady && sandboxOK
+	w.Header().Set("Content-Type", "application/json")
+	if !ready {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"ready":      ready,
+		"inference":  llmOK,
+		"lens_ready": lensReady,
+		"sandbox":    sandboxOK,
+	})
+}
+
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
@@ -2513,6 +2543,7 @@ func main() {
 	mux.HandleFunc("/v1/models", handleModels)
 	mux.HandleFunc("/models", handleModels)
 	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/ready", handleReady)
 	mux.HandleFunc("/v1/agent", handleAgent) // New tool-based agent endpoint
 
 	// Catch-all: proxy to llama-server
@@ -2547,8 +2578,40 @@ func main() {
 	log.Printf("  Sandbox: %s", sandboxURL)
 	log.Printf("  Pipeline: generate → score → sandbox → repair (max %d) → deliver", maxRepairAttempts)
 
+	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
+		go keepLlamaWarm()
+		log.Printf("  Keep-warm: pinging %s every 45s (set ATLAS_KEEP_LLAMA_WARM=0 to disable)", inferenceURL)
+	}
+
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server error: %v", err)
+	}
+}
+
+// keepLlamaWarm pings llama-server with a 1-token completion every 45s. Keeps
+// the model loaded in VRAM, the slot's prompt cache live, and the TCP keepalive
+// fresh — avoiding the cold-start path that fires after 1-2 min idle. See
+// ISSUES.md PC-035. Disable with ATLAS_KEEP_LLAMA_WARM=0.
+func keepLlamaWarm() {
+	const interval = 45 * time.Second
+	// Wait for llama-server to come up before starting the loop.
+	time.Sleep(15 * time.Second)
+	body, _ := json.Marshal(map[string]any{
+		"messages":    []map[string]string{{"role": "user", "content": "."}},
+		"max_tokens":  1,
+		"temperature": 0.0,
+	})
+	client := &http.Client{Timeout: 60 * time.Second}
+	for {
+		req, err := http.NewRequest("POST", inferenceURL+"/v1/chat/completions", bytes.NewReader(body))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}
+		time.Sleep(interval)
 	}
 }
 
@@ -2791,8 +2854,13 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 		Stop:        []string{"\n"},
 	}
 
-	// Classification timeout — model needs ~1-2s on GPU
-	classifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Classification timeout. Empty cache: ~1-2s on GPU. Loaded cache:
+	// 25s+ when prompt processing has to walk a 5+ entry prompt cache
+	// (~85 MiB per entry on Qwen3.5-9B). Was 5s — fired routinely after
+	// 4-5 turns and made Aider see "context deadline exceeded" upstream
+	// errors. The classifier already falls back to T1 on error, so a
+	// generous deadline is free safety. See ISSUES.md PC-029.
+	classifyCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	resp, err := forwardToLLM(classifyCtx, classifyReq)
@@ -2838,10 +2906,23 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 	}
 
 	// File-context cap: if Aider sent existing file content AND the request
-	// is an edit (not creation from scratch), cap at T2.
-	if tier == Tier3Hard && hasFileContext && hasEditTarget {
+	// is an edit (not creation from scratch), cap at T2 — *unless* fix-intent
+	// keywords are present. "Fix the bug in this 200-line file" is genuinely
+	// T3 (understanding existing code adds difficulty), so the cap inverts
+	// the right answer for that class of task. See ISSUES.md PC-025
+	// Sub-finding A.
+	hasFixIntent := false
+	for _, w := range []string{"fix", "broken", "doesn't work", "not working", "bug", "issue", "problem", "error"} {
+		if strings.Contains(lowerTrimmed, w) {
+			hasFixIntent = true
+			break
+		}
+	}
+	if tier == Tier3Hard && hasFileContext && hasEditTarget && !hasFixIntent {
 		log.Printf("  classifier capped T3→T2 (file context + edit intent)")
 		tier = Tier2Medium
+	} else if tier == Tier3Hard && hasFileContext && hasEditTarget && hasFixIntent {
+		log.Printf("  classifier kept T3 (file context + fix intent)")
 	}
 
 	// Creation guard: if the message mentions a filename + creation intent,

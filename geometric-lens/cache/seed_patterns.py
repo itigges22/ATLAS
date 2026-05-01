@@ -158,10 +158,11 @@ async def load_seed_patterns():
 
     loaded = 0
     for pattern in SEED_PATTERNS:
-        # Only store if not already present
+        # Only store if not already present. Persistent tier uses an unordered
+        # SADD into PERSISTENT_SET, so no score is needed (or honored).
         existing = store.get_pattern(pattern.id)
         if existing is None:
-            store.store_pattern(pattern, score=100.0)  # High score, never evicted
+            store.store_pattern(pattern)
             loaded += 1
 
     if loaded > 0:

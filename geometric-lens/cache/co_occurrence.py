@@ -32,20 +32,24 @@ class CoOccurrenceGraph:
         """
         Record that these patterns were all active in a successful task.
         Increments edge weights for all pairs (Hebbian: fire together, wire together).
+
+        Self-count Count(i,i) is incremented exactly once per call per pattern,
+        independent of batch size, so edge weights normalize as
+        Count(i,j) / Count(i,i) per the Memoria formulation.
         """
-        if not self._available or len(pattern_ids) < 2:
+        unique_ids = list(dict.fromkeys(pattern_ids))  # de-dupe, preserve order
+        if not self._available or len(unique_ids) < 2:
             return
 
         try:
             pipe = self._redis.pipeline()
-            for i, pid_a in enumerate(pattern_ids):
-                for j, pid_b in enumerate(pattern_ids):
-                    if i == j:
+            for pid_a in unique_ids:
+                # Self-count: how many times pid_a was active. Increment once per call.
+                pipe.zincrby(f"{COOCCUR_PREFIX}{pid_a}", 1, pid_a)
+                for pid_b in unique_ids:
+                    if pid_a == pid_b:
                         continue
-                    # Increment edge A->B
                     pipe.zincrby(f"{COOCCUR_PREFIX}{pid_a}", 1, pid_b)
-                    # Also increment self-reference count for normalization
-                    pipe.zincrby(f"{COOCCUR_PREFIX}{pid_a}", 1, pid_a)
             pipe.execute()
         except Exception as e:
             logger.error(f"Failed to record co-occurrence: {e}")

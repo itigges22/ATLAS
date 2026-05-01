@@ -13,6 +13,8 @@ TASK*.md
 FIX_*.md
 IMPLEMENT_*.md
 ADD_*.md
+# Local-only issue tracker (mirrored to GitHub Issues for public tracking).
+ISSUES.md
 CREATE_*.md
 AUDIT*.md
 *AUDIT*.md

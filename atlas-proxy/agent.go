@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,13 +30,42 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		{Role: "user", Content: userMessage},
 	}
 
+	// PC-045: Per-session cache scope. llama.cpp's KV slot persists between
+	// requests by default — that's PC-035's keep-warm behavior. But the slot
+	// also persists *across user sessions*, so context from a previous
+	// session's conversation can bias the next session (the
+	// `show_greeting.py` hallucination from the 2026-04-30 snake test was
+	// likely an example). Erase slot 0 at the start of each agent loop call.
+	// llama.cpp re-encodes the system prompt from scratch (~1-2s on a
+	// warm GPU); the per-turn cache benefit within the session is preserved.
+	// Disable with ATLAS_FRESH_SLOT_PER_SESSION=0.
+	if envOr("ATLAS_FRESH_SLOT_PER_SESSION", "1") != "0" {
+		eraseLlamaSlot(ctx)
+	}
+
 	// Get the constrained output schema
 	schemaJSON := buildToolCallSchemaJSON()
 
-	consecutiveReads := 0   // Track consecutive read-only calls
-	consecutiveErrors := 0  // Track consecutive tool failures to break error loops
+	consecutiveReads := 0       // Track consecutive read-only calls
+	consecutiveErrors := 0      // Track consecutive tool failures to break error loops
+	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
+	// Used to soften the consecutiveErrors exit: post-write run_command failures
+	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
 
 	for turn := 0; turn < ctx.MaxTurns; turn++ {
+		// Bail out fast if the upstream request was cancelled (Aider closed the
+		// connection, user hit Ctrl-C, terminal exited). Without this check the
+		// loop would keep grinding LLM calls and tool work for a client that's
+		// already gone, burning GPU. See ISSUES.md PC-036.
+		if ctx.Ctx != nil {
+			select {
+			case <-ctx.Ctx.Done():
+				log.Printf("[agent] cancelled at turn %d: %v", turn, ctx.Ctx.Err())
+				return ctx.Ctx.Err()
+			default:
+			}
+		}
+
 		// Trim conversation history if it gets too long (prevent context overflow)
 		// Keep system prompt + last 8 messages
 		if len(ctx.Messages) > 12 {
@@ -60,7 +90,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// Parse the response — extract JSON even if model added surrounding text
 		parsed, parseErr := extractModelResponse(response)
 		if parseErr != nil {
-			log.Printf("[agent] parse error: %v | raw: %s", parseErr, truncateStr(response, 300))
+			log.Printf("[agent] parse error: %v | raw_len=%d | raw: %q", parseErr, len(response), truncateStr(response, 500))
 			ctx.Stream("error", map[string]string{
 				"error":    "failed to parse model response",
 			})
@@ -71,7 +101,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			continue
 		}
 
-		log.Printf("[agent] turn=%d type=%s name=%s", turn, parsed.Type, parsed.Name)
+		// Log the args truncated — enables diagnosing failures like
+		// "all 3 tool calls returned Success=false" without having to add
+		// breakpoints. See ISSUES.md PC-039 follow-up.
+		log.Printf("[agent] turn=%d type=%s name=%s args=%s", turn, parsed.Type, parsed.Name, truncateStr(string(parsed.Args), 200))
+
+		// PC-041: when a tool_call still has no args after liftMissingArgs,
+		// log the raw model output so we can see exactly what shape was
+		// emitted — helps catch new alt-shapes the lift logic missed.
+		if parsed.Type == "tool_call" && (len(parsed.Args) == 0 || string(parsed.Args) == "null") {
+			log.Printf("[agent] turn=%d EMPTY ARGS — raw model output: %q", turn, truncateStr(response, 500))
+		}
 
 		switch parsed.Type {
 		case "done":
@@ -171,6 +211,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			result := executeToolCall(parsed.Name, parsed.Args, ctx)
 			elapsed := time.Since(startTime)
 
+			// On failure, log the error so it shows up in `docker compose
+			// logs atlas-proxy` without having to attach a debugger.
+			// PC-039 follow-up.
+			if !result.Success {
+				log.Printf("[agent] turn=%d tool=%s FAIL: %s", turn, parsed.Name, truncateStr(result.Error, 240))
+			}
+
 			ctx.Stream("tool_result", map[string]interface{}{
 				"tool":    parsed.Name,
 				"success": result.Success,
@@ -187,12 +234,34 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				return nil
 			}
 
-			// Break error loops: if 3 tool calls fail in a row, stop
+			// Track productive state changes — write/edit/delete that landed.
+			// Used below to soften the error-loop exit when work was completed.
+			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" || parsed.Name == "delete_file") {
+				madeProductiveChange = true
+			}
+
+			// Break error loops: if 3 tool calls fail in a row, stop. PC-025
+			// Sub-finding B: when the agent has already written/edited a file
+			// and is now failing on `run_command` (verification noise — no
+			// TTY for curses, missing toolchain, etc.), a different exit
+			// message is appropriate so the user isn't told "the file may
+			// be too large to modify" when their file is, in fact, on disk.
 			if !result.Success {
 				consecutiveErrors++
 				if consecutiveErrors >= 3 {
-					log.Printf("[agent] breaking error loop: %d consecutive failures at turn %d", consecutiveErrors, turn)
-					ctx.Stream("done", map[string]string{"summary": "Stopped after repeated failures. The file may be too large to modify in one pass. Try asking for a smaller, specific change."})
+					log.Printf("[agent] breaking error loop: %d consecutive failures at turn %d (productive=%v)", consecutiveErrors, turn, madeProductiveChange)
+					if madeProductiveChange {
+						ctx.Stream("done", map[string]string{"summary": "Wrote your changes to disk; couldn't verify them automatically (the verification commands failed). Run them yourself to confirm — they're on disk."})
+					} else {
+						// Non-productive 3-error exit. The previous message
+						// ("file may be too large") presumed a write/edit
+						// context, but this branch fires for any 3 failures
+						// — including discovery flailing (empty paths from
+						// PC-039, missing files, bad regex). Be honest about
+						// the failure mode and point at the tool errors so
+						// the user can correct course.
+						ctx.Stream("done", map[string]string{"summary": "Stopped after 3 tool failures with no successful changes. Common causes: the file you referenced isn't in the workspace, an empty path argument was passed, or a regex was malformed. Check the per-turn errors above, then try a more specific request (e.g. \"fix snake_game.py at line 95 — the curses bounds are wrong\")."})
+					}
 					return nil
 				}
 			} else {
@@ -218,6 +287,25 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				ToolCallID: fmt.Sprintf("call_%d", turn),
 				ToolName:   parsed.Name,
 			})
+
+			// PC-044: Trust V3-verified edits — strongly nudge toward done.
+			// When V3 ran the edit through its sandbox/probe pipeline and
+			// the result came back successful (V3Used && PhaseSolved
+			// non-empty), the edit is build-verified. The 9B model otherwise
+			// keeps grinding: re-reads the file, edits unrelated functions,
+			// runs another V3 cycle (~110s each). Inject an explicit
+			// "you're done unless you have a specific reason" message.
+			if result.Success && result.V3Used && result.PhaseSolved != "" &&
+				(parsed.Name == "write_file" || parsed.Name == "edit_file") {
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role: "user",
+					Content: fmt.Sprintf(
+						"V3 verified this edit passed its %s pipeline (%d candidates, score=%.2f). The fix is on disk and build-checked. If this resolves the user's original request, respond NOW with {\"type\":\"done\",\"summary\":\"<one sentence describing the fix>\"}. Only continue if you have a specific, concrete additional change to make — do not re-read the file to double-check, and do not edit unrelated code.",
+						result.PhaseSolved, result.CandidatesTested, result.WinningScore,
+					),
+				})
+				log.Printf("[agent] PC-044: V3-verified %s on %s — nudging toward done", parsed.Name, truncateStr(string(parsed.Args), 80))
+			}
 
 			// Exploration budget: after 4 consecutive read-only calls,
 			// inject nudge. After 5, skip reads.
@@ -261,27 +349,89 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 // callLLMConstrained calls the LLM with json_schema or grammar constraint.
 // Returns the raw response text and token count.
+//
+// PC-043: When the model emits zero tokens (raw_len=0) — usually after a
+// tool result message under /nothink + json_object grammar — we retry
+// inline once with a bumped temperature and a transient "continue"
+// nudge appended to the messages. This avoids burning a full agent-loop
+// turn (~30s + tokens) on the parse-error retry path. The nudge is
+// scoped to the retry call only; ctx.Messages is not mutated.
 func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, error) {
-	// Build messages in chat format
-	messages := make([]map[string]string, len(ctx.Messages))
-	for i, msg := range ctx.Messages {
-		messages[i] = map[string]string{
+	content, tokens, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	if err != nil {
+		return "", tokens, err
+	}
+	if strings.TrimSpace(content) != "" {
+		return content, tokens, nil
+	}
+
+	// Empty response — retry once with a transient continuation nudge
+	// and a higher temperature. The nudge gives the model an explicit
+	// next-action prompt; the temperature bump escapes the EOS-local
+	// minimum that the json_object grammar can wedge the model into.
+	log.Printf("[agent] empty LLM response (PC-043), retrying with temp=0.7 + continuation nudge")
+	nudged := append(append([]AgentMessage(nil), ctx.Messages...), AgentMessage{
+		Role:    "user",
+		Content: `Continue. Respond with one JSON object: {"type":"tool_call","name":"<tool>","args":{...}} for the next action, or {"type":"done","summary":"..."} if the task is complete. Do not emit empty content.`,
+	})
+	content2, tokens2, err := callLLMOnce(ctx, nudged, 0.7)
+	if err != nil {
+		// Return whatever we have from the original call; caller
+		// handles empty via parse-error retry.
+		return content, tokens, nil
+	}
+	return content2, tokens + tokens2, nil
+}
+
+// eraseLlamaSlot clears llama.cpp's KV slot 0 to give the next chat
+// completion a fresh prefix. See PC-045. Errors are logged and
+// swallowed — slot erase is a best-effort isolation step, not a
+// correctness requirement.
+func eraseLlamaSlot(ctx *AgentContext) {
+	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
+	endpoint := llamaURL + "/slots/0?action=erase"
+
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, nil)
+	if err != nil {
+		log.Printf("[PC-045] erase slot: build request failed: %v", err)
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[PC-045] erase slot: request failed: %v (this is fine — slot is now stale, will be re-encoded on next call)", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[PC-045] erase slot: status %d (continuing — first turn will re-encode prefix from scratch)", resp.StatusCode)
+		return
+	}
+	log.Printf("[PC-045] erased llama slot 0 — fresh KV cache for this session")
+}
+
+// callLLMOnce is one round-trip to llama-server's /v1/chat/completions.
+// Extracted from callLLMConstrained so the empty-response retry can
+// reuse the same plumbing with a different temperature + message list.
+func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64) (string, int, error) {
+	wireMessages := make([]map[string]string, len(messages))
+	for i, msg := range messages {
+		wireMessages[i] = map[string]string{
 			"role":    msg.Role,
 			"content": msg.Content,
 		}
 	}
 
-	// llama-server handles all inference (grammar-constrained agent loop
-	// calls and free-form V3 pipeline calls). Qwen3.5-9B at ~51 tok/s.
-
-	// llama-server at InferenceURL (or ATLAS_LLAMA_URL override)
-	// Uses response_format: json_object for grammar enforcement — 100% valid JSON
 	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
 
 	reqBody := map[string]interface{}{
 		"model":       modelName,
-		"messages":    messages,
-		"temperature": 0.3,
+		"messages":    wireMessages,
+		"temperature": temperature,
 		"max_tokens":  32768,
 		"stream":      false,
 		"response_format": map[string]string{
@@ -290,7 +440,14 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 	}
 	body, _ := json.Marshal(reqBody)
 	endpoint := llamaURL + "/v1/chat/completions"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+
+	// Carry the agent's request context into the HTTP request so client
+	// disconnects propagate down to llama-server (PC-036).
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", 0, fmt.Errorf("create request: %w", err)
 	}
@@ -312,7 +469,6 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		return "", 0, fmt.Errorf("LLM returned %d: %s", resp.StatusCode, truncateStr(string(respBody), 500))
 	}
 
-	// llama-server uses /v1/chat/completions format:
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
@@ -331,10 +487,7 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		return "", 0, fmt.Errorf("no choices in response")
 	}
 
-	content := chatResp.Choices[0].Message.Content
-	tokens := chatResp.Usage.TotalTokens
-
-	return content, tokens, nil
+	return chatResp.Choices[0].Message.Content, chatResp.Usage.TotalTokens, nil
 }
 
 
@@ -472,6 +625,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	ctx.SandboxURL = sandboxURL
 	ctx.LensURL = lensURL
 	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
+	// Carry the upstream cancellation through so disconnects abort the loop
+	// and llama-server's in-flight generation. See ISSUES.md PC-036.
+	ctx.Ctx = r.Context()
 
 	// Set permission mode
 	switch req.Mode {
@@ -529,6 +685,7 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 	// Try direct parse first
 	var resp ModelResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err == nil {
+		liftMissingArgs(&resp, raw)
 		return resp, nil
 	}
 
@@ -574,6 +731,7 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 	if end > start {
 		jsonStr := raw[start:end]
 		if err := json.Unmarshal([]byte(jsonStr), &resp); err == nil {
+			liftMissingArgs(&resp, jsonStr)
 			return resp, nil
 		}
 	}
@@ -585,6 +743,73 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 	}
 
 	return resp, fmt.Errorf("could not parse JSON from response")
+}
+
+// liftMissingArgs handles models that emit tool calls in shapes other than
+// the prescribed {"type":"tool_call","name":"X","args":{...}} envelope.
+//
+// Common alternative shapes (PC-041, PC-050):
+//   - OpenAI-style: {"type":"tool_call","name":"X","arguments":{...}}
+//   - Anthropic-style: {"type":"tool_call","name":"X","parameters":{...}}
+//   - Inlined: {"type":"tool_call","name":"X","path":"...","offset":0,...}
+//   - Type-is-tool-name (PC-050): {"type":"read_file","path":"..."} — model
+//     put the tool name in the type field instead of using "tool_call".
+//
+// When `args` is missing on a tool_call, re-decode the raw JSON into a
+// generic map and either pull `arguments`/`parameters` over to args, or
+// lift every non-envelope top-level field into a synthetic args object.
+// This is purely a recovery path; the system prompt still teaches the
+// canonical shape.
+func liftMissingArgs(resp *ModelResponse, raw string) {
+	// PC-050: if Type is a known tool name, treat it as a tool_call with
+	// that tool. The model emitted {"type":"read_file","path":"..."}
+	// instead of {"type":"tool_call","name":"read_file","args":{...}}.
+	// Without this fix the agent loop's switch hits the `default` arm
+	// and burns a turn telling the model "Unknown response type".
+	if resp.Type != "" && resp.Type != "tool_call" && resp.Type != "text" && resp.Type != "done" {
+		if getTool(resp.Type) != nil {
+			resp.Name = resp.Type
+			resp.Type = "tool_call"
+		}
+	}
+
+	if resp.Type != "tool_call" || resp.Name == "" {
+		return
+	}
+	if len(resp.Args) > 0 && string(resp.Args) != "null" {
+		return
+	}
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &top); err != nil {
+		return
+	}
+
+	// Prefer explicit alt-key wrappers when present.
+	for _, key := range []string{"arguments", "parameters", "params", "input"} {
+		if v, ok := top[key]; ok && len(v) > 0 && string(v) != "null" {
+			resp.Args = v
+			return
+		}
+	}
+
+	// Otherwise lift every non-envelope key into a synthetic args object.
+	envelope := map[string]struct{}{
+		"type": {}, "name": {}, "content": {}, "summary": {}, "args": {},
+	}
+	lifted := make(map[string]json.RawMessage)
+	for k, v := range top {
+		if _, isEnvelope := envelope[k]; isEnvelope {
+			continue
+		}
+		lifted[k] = v
+	}
+	if len(lifted) == 0 {
+		return
+	}
+	if buf, err := json.Marshal(lifted); err == nil {
+		resp.Args = buf
+	}
 }
 
 // recoverTruncatedWriteFile attempts to recover a write_file tool call
@@ -706,6 +931,47 @@ func classifyAgentTier(message string) Tier {
 
 	// T2: Genuinely multi-component (not just 2 files)
 	if fileIndicators >= 5 || multiIndicators >= 2 {
+		return Tier2Medium
+	}
+
+	// Fix-intent against an existing file: never collapse to T1 — fixing a
+	// bug in pre-existing code is harder than writing a fresh file, even when
+	// only one file is mentioned. See ISSUES.md PC-025 Sub-finding A.
+	//
+	// PC-049: original list missed natural-language fix prompts like "still
+	// does not", "isn't working", "try again", "the X is not Y". Real users
+	// describe bugs without saying the word "bug" or "fix". Expanded
+	// vocabulary, plus weakened the file-indicator requirement: a clear
+	// continuation marker like "still" or "again" implies the user is
+	// iterating on existing code even without naming the file extension.
+	fixIntent := false
+	for _, w := range []string{
+		"fix", "broken", "doesn't work", "doesn't", "does not work", "does not",
+		"not working", "isn't working", "isn't", "is not", "aren't", "wasn't",
+		"didn't", "won't", "can't", "bug", "issue", "problem", "error",
+		"failed", "fails", "failing", "incorrect", "wrong",
+	} {
+		if strings.Contains(lower, w) {
+			fixIntent = true
+			break
+		}
+	}
+	// Continuation markers indicate the user is iterating on prior work,
+	// which by definition involves an existing file even when the prompt
+	// doesn't name an extension.
+	continuation := false
+	for _, w := range []string{"still", "again", "try again", "retry", "another", "also fix"} {
+		if strings.Contains(lower, w) {
+			continuation = true
+			break
+		}
+	}
+	if fixIntent && (fileIndicators >= 1 || continuation) {
+		return Tier2Medium
+	}
+	// Strong continuation alone (e.g. "still doesn't pick up the food") is a
+	// fix request even without explicit fix vocabulary.
+	if continuation && len(strings.TrimSpace(message)) > 30 {
 		return Tier2Medium
 	}
 

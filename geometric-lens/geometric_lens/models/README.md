@@ -6,7 +6,8 @@
 |------|------|---------|
 | `cost_field.pt` | 8.3M | C(x) cost field — 4096→512→128→1 MLP, maps embeddings to correctness energy |
 | `metric_tensor.pt` | 65M | G(x) metric tensor — 4096→512→4096, geometric correction field |
-| `gx_xgboost.pkl` | 958K | G(x) XGBoost ensemble for quality scoring |
+| `gx_xgboost.json` | 1.5M | G(x) XGBoost ensemble — native XGBoost JSON dump (preferred loader path, see PC-031) |
+| `gx_xgboost.pkl` | 958K | G(x) XGBoost ensemble — legacy pickle, kept as fallback for one release while users refresh their model dir |
 | `gx_weights.json` | 12M | G(x) ensemble weights |
 
 ## Training Data

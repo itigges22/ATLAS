@@ -1,5 +1,30 @@
 services:
+  # --- Redis (Pattern Cache + co-occurrence graph + task queue + router state) ---
+  # Host prereq: `sudo sysctl vm.overcommit_memory=1` (and add to /etc/sysctl.conf
+  # to persist). Without it Redis logs a warning and AOF rewrites can fail
+  # under memory pressure. See ISSUES.md PC-011.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - atlas
+
   # --- LLM Inference (CUDA + grammar support) ---
+  # The image's ENTRYPOINT (inference/entrypoint-v3.1-9b.sh) is what runs
+  # llama-server. It does NOT consume "$@", so a compose `command:` here
+  # would be silently ignored. Configure the server via the environment
+  # variables the entrypoint actually reads:
+  #   MODEL_PATH, PORT, CONTEXT_LENGTH, PARALLEL_SLOTS,
+  #   KV_CACHE_TYPE_K, KV_CACHE_TYPE_V, SLOT_SAVE_PATH
+  # `--embeddings` is set by the entrypoint (geometric-lens C(x)/G(x)
+  # scoring depends on it). See ISSUES.md PC-017.
   llama-server:
     build:
       context: ./inference
@@ -13,13 +38,6 @@ services:
               capabilities: [gpu]
     volumes:
       - ${ATLAS_MODELS_DIR:-./models}:/models:ro
-    command: >
-      /llama-server
-      --model /models/${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}
-      --host 0.0.0.0 --port 8080
-      --ctx-size ${ATLAS_CTX_SIZE:-32768}
-      --n-gpu-layers 99
-      --no-mmap
     ports:
       - "${ATLAS_LLAMA_PORT:-8080}:8080"
     ulimits:
@@ -33,6 +51,11 @@ services:
       start_period: 120s
     networks:
       - atlas
+    environment:
+      - MODEL_PATH=/models/${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}
+      - PORT=8080
+      - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-32768}
+      - PARALLEL_SLOTS=1
 
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
@@ -43,13 +66,21 @@ services:
       - LLAMA_EMBED_URL=http://llama-server:8080
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
+      - REDIS_URL=redis://redis:6379
+      # Auth: bearer tokens are looked up locally from /app/secrets/api-keys.json.
+      # Format: {"sk-...": {"user": "alice"}, ...}. Override path with API_KEYS_PATH.
+      # Until a key file is mounted, /v1/* endpoints will return 401.
     volumes:
       - lens-data:/data/projects
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+      # Uncomment and point ATLAS_SECRETS_DIR at a host directory containing api-keys.json:
+      # - ${ATLAS_SECRETS_DIR:-./secrets}:/app/secrets:ro
     ports:
       - "${ATLAS_LENS_PORT:-8099}:8099"
     depends_on:
       llama-server:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
@@ -105,7 +136,13 @@ services:
 
   # --- ATLAS Proxy v2 (agent loop + grammar + Aider format) ---
   # The proxy needs access to your project files for read_file, write_file, etc.
-  # Set ATLAS_PROJECT_DIR to your project path, or it defaults to the current directory.
+  #
+  # File-write target inside the container is /workspace, pinned via
+  # ATLAS_WORKSPACE_DIR below. The host directory mounted to /workspace is
+  # ATLAS_PROJECT_DIR (defaults to the directory you ran `docker compose up`
+  # from). To target a different host project, set ATLAS_PROJECT_DIR in .env
+  # (or `ATLAS_PROJECT_DIR=/path/to/proj docker compose up`) BEFORE bringing
+  # the stack up — the bind mount is fixed for the container's lifetime.
   atlas-proxy:
     build:
       context: ./atlas-proxy
@@ -118,6 +155,9 @@ services:
       - ATLAS_V3_URL=http://v3-service:8070
       - ATLAS_AGENT_LOOP=1
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      # Pins the proxy's "where to write files" target. Must match the
+      # working_dir below and the right-hand side of the volume mount.
+      - ATLAS_WORKSPACE_DIR=/workspace
     volumes:
       - ${ATLAS_PROJECT_DIR:-.}:/workspace
     working_dir: /workspace
@@ -142,6 +182,7 @@ services:
 
 volumes:
   lens-data:
+  redis-data:
 
 networks:
   atlas:

@@ -80,6 +80,28 @@ podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi
 2. Network issues downloading the CUDA base image or cloning llama.cpp
 3. Podman rootless builds may fail with permission issues — try `podman-compose build` with `--podman-build-args="--format docker"`
 
+### llama.cpp Clone Times Out
+
+**Symptom:** Build hangs in the `llama-server builder 3/3` stage and eventually fails with:
+
+```
+error: RPC failed; curl 56 OpenSSL SSL_read: Connection timed out, errno 110
+fatal: early EOF
+fatal: fetch-pack: invalid index-pack output
+```
+
+**Cause:** The full llama.cpp git history is large (~1 GB) and the clone is sensitive to flaky/slow connections. A momentary stall causes the SSL read to time out and the whole transfer to abort.
+
+**Fix (already applied in `inference/Dockerfile.v31`):** the Dockerfile uses `git clone --depth 1 --single-branch` with `http.postBuffer=524288000` and `http.lowSpeedLimit/Time` to fail-fast on dead connections instead of hanging for 11 minutes. If you have an older Dockerfile or the issue recurs:
+
+1. Retry the build — transient network blips happen, especially on residential connections.
+2. If retries keep failing, pre-pull the repo on the host and bind-mount it into the build context. Quick recipe:
+   ```bash
+   git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
+   # then edit Dockerfile.v31 to COPY from /tmp/llama.cpp instead of cloning
+   ```
+3. Long term: prebuilt llama-server images on GHCR will skip this step entirely (Phase 0 roadmap item).
+
 ### SELinux Blocking Container Access (Fedora/RHEL)
 
 **Symptom:** Containers can't read mounted volumes, permission denied on model files.
@@ -209,24 +231,31 @@ In Docker Compose, this is set in `docker-compose.yml` and doesn't need manual c
 
 ### V3 Pipeline Not Firing on Feature Files
 
-**Symptom:** All `write_file` calls are T1 (direct write). No V3 pipeline stages in output.
+**Symptom:** All `write_file` *or* `edit_file` calls are T1 (direct write). No V3 pipeline stages in output.
 
-V3 only fires when **all three conditions** are met:
+V3 fires when **all conditions** are met:
 1. File has **50+ lines** of content
 2. File has **3+ logic indicators** (function defs, control flow, API patterns)
 3. V3 service is reachable at `ATLAS_V3_URL`
+4. **Request tier ≥ T2** (classifier output, after any agent override) **AND** the file's own tier ≥ T2 (PC-042)
+
+**Both** `write_file` and `edit_file` route through V3 since PC-042. Before that, only `write_file` did — and since the system prompt steers the model toward `edit_file` for all changes to existing files, V3 effectively never ran on real edits. If you're on a build that predates PC-042, that's why.
 
 **Diagnose:**
 ```bash
 # Check V3 service health
 curl -s http://localhost:8070/health
 
-# Check proxy logs for tier classification
-docker compose logs atlas-proxy | grep "write_file"
-# Look for: T1 (direct) vs T2 (V3 pipeline)
+# Check proxy logs for tier classification + V3 activation
+docker compose logs atlas-proxy | grep -E "write_file|edit_file|tier="
+# Look for:
+#   "tier=T2:medium" or higher in classifier output
+#   "[edit_file] V3 pipeline activating for X (req_tier=2, file_tier=2)"
+#   "[write_file] V3 pipeline activating for X"
+# T1 means direct write — no V3.
 ```
 
-If V3 is unreachable, the proxy falls back to direct write silently.
+If V3 is unreachable, the proxy logs `V3 failed: ...` and falls back to direct write without breaking the edit.
 
 ### Truncation Errors (write_file Fails Repeatedly)
 
@@ -239,6 +268,386 @@ If V3 is unreachable, the proxy falls back to direct write silently.
 - After 3 consecutive failures: error loop breaker stops the agent and returns a summary
 
 **What you can do:** Rephrase your request to ask for targeted changes rather than full file rewrites. For example, "Add input validation to the login function" instead of "Rewrite auth.py".
+
+**False positives, pre-PC-040.** Before PC-040, *any*
+`unexpected end of JSON` from a tool's input parser was
+relabeled "tool call truncated." The most common trigger
+was the model emitting a tool call with **no `args` field
+at all** — e.g. `{"type":"tool_call","name":"read_file"}`
+— which is malformed input, not truncated output. The old
+remap then steered the model toward `edit_file` of a file
+it had never read, looping until the 3-error breaker
+fired. PC-040 fixes this in two ways:
+
+1. Empty/missing `args` is caught **before** the tool's
+   `Execute` runs, and the proxy returns a per-tool hint
+   like `read_file: no arguments provided. Call with
+   {"path":"<file>"}. Use list_directory {"path":"."}
+   first if you need to discover what files exist.`
+2. The "truncated" remap now only fires when the args
+   payload is over 200 bytes (real truncation territory).
+   Short or empty args fall through to the actual parser
+   error.
+
+If you still see "tool call truncated" after PC-040 ships,
+it's a real truncation — the model was actually trying to
+write a payload too long for the context window. The
+`edit_file` advice still applies in that case.
+
+**PC-041 alt-shape lifting.** Some models emit tool calls
+in OpenAI-style (`arguments` instead of `args`),
+Anthropic-style (`parameters`), or with arguments inlined
+at the top level (`{"name":"read_file","path":"x.py"}`).
+The proxy now normalizes all three shapes into the
+canonical `args` envelope automatically. If a tool call
+still arrives with empty args after normalization, the
+proxy logs `[agent] turn=N EMPTY ARGS — raw model output:
+"..."` so you can see the exact shape it sent and either
+add it to the lift list or rephrase the prompt.
+
+### Long Pause Between Tool Result and Next Action
+
+**Symptom:** A tool succeeds, then the agent loop sits
+idle for ~30 seconds before the next turn fires. No
+errors, no output — eventually the next tool call appears.
+
+**Cause (PC-043).** Qwen3.5-9B with `/nothink` +
+`response_format: json_object` occasionally emits zero
+tokens after a tool result. The grammar requires the
+response to start with `{`, but the model's natural
+continuation after a tool result is a brief whitespace /
+acknowledgment, which the grammar rejects. The model
+emits EOS as its first token, returning empty content,
+which the parse-error retry path then has to recover
+from with a fresh user message — that's the lost ~30
+seconds.
+
+PC-043 catches this inside `callLLMConstrained` and
+retries inline once with `temperature=0.7` and a
+transient continuation nudge appended to the messages.
+The agent loop never sees the empty turn.
+
+**Diagnose:**
+```bash
+docker compose logs atlas-proxy | grep -E "PC-043|empty LLM|raw_len=0"
+```
+- `[agent] empty LLM response (PC-043), retrying with
+  temp=0.7 + continuation nudge` — the retry fired; if
+  the next log line is a normal `turn=N type=tool_call ...`
+  the recovery worked.
+- `parse error: ... raw_len=0 | raw: ""` — both the
+  initial call AND the PC-043 retry returned empty. The
+  outer parse-error retry will handle it, but you'll see
+  the long pause. If this happens consistently, model is
+  in a worse state than PC-043 anticipates — file a
+  follow-up ticket with the full proxy log.
+
+**Workaround if PC-043 isn't enough:** Restart the proxy
+to clear llama.cpp's slot cache:
+```bash
+docker compose restart atlas-proxy llama-server
+```
+
+### Model Keeps Editing After V3 Already Confirmed the Fix
+
+**Symptom:** The agent makes a successful V3-verified
+edit (Aider TUI shows V3 progress events ending in
+`Probe passed`), then re-reads the same file and starts
+editing other unrelated functions. Each follow-on edit
+triggers another full V3 cycle (~110s), and the new edits
+sometimes touch code that has nothing to do with the
+original bug.
+
+**Cause (PC-044).** The 9B model has trouble
+self-assessing "is the user's original problem solved?"
+After a tool result with `v3_used=true,
+phase_solved=probe`, it has no strong signal to stop, so
+it just continues planning more work.
+
+**What PC-044 does.** Immediately after a V3-verified
+write_file or edit_file, the agent loop appends a strong
+user-role nudge: *"V3 verified this edit passed its
+{phase} pipeline. The fix is on disk and build-checked.
+If this resolves the user's original request, respond
+NOW with {"type":"done","summary":"..."}. Only continue
+if you have a specific, concrete additional change to
+make — do not re-read the file to double-check, and do
+not edit unrelated code."*
+
+**Diagnose:**
+```bash
+docker compose logs atlas-proxy | grep "PC-044"
+```
+- `[agent] PC-044: V3-verified edit_file on ... — nudging
+  toward done` — the nudge fired. The next agent turn
+  should be `type=done`. If it isn't, the model ignored
+  the nudge — file a follow-up ticket noting the
+  prompt and the next-turn tool call.
+
+**If the model still won't stop after PC-044:** The
+follow-up options (hard-stop after re-read, per-file
+edit cap, or auto-done from the proxy) are listed in
+ISSUES.md PC-044 under "Caveat — promote to a harder
+option if the soft nudge doesn't stick."
+
+### Model Hallucinates Filenames From Previous Sessions
+
+**Symptom:** Brand-new session, fresh prompt about a file
+in the current directory, and the model's first tool call
+is a `read_file` on a filename that doesn't exist
+anywhere in this workspace — usually a filename that
+*does* exist somewhere else you've worked recently.
+
+**Cause (PC-045).** llama.cpp's KV slot persists between
+chat completions to keep the cache warm (PC-035). Across
+*sessions*, that means residual attention bias from the
+previous session's tokens leaks into the new session.
+Most prompts dominate this bias, but model-fabricated
+filenames and other low-entropy outputs can pick it up.
+
+**What PC-045 does.** Every `runAgentLoop` invocation
+(one per Aider message) starts by POSTing
+`/slots/0?action=erase` to llama-server. The KV cache is
+reset; the next chat completion re-encodes the system
+prompt from scratch (~1-2s on warm GPU). Within the
+session, subsequent turns share the now-fresh cache as
+normal.
+
+**Diagnose:**
+```bash
+docker compose logs atlas-proxy | grep "PC-045"
+```
+- `[PC-045] erased llama slot 0 — fresh KV cache for
+  this session` on every Aider message — working as
+  intended.
+- `[PC-045] erase slot: ...` followed by an error — the
+  HTTP call to llama-server failed. Slot may still hold
+  stale state, but next chat completion will partially
+  overwrite it. Worst case: pre-PC-045 behavior.
+
+**Disable** if you measure the per-message ~1-2s blip
+and decide it's worse than occasional cross-session
+leakage:
+```bash
+# .env
+ATLAS_FRESH_SLOT_PER_SESSION=0
+```
+Restart the proxy after changing.
+
+**Workaround if PC-045 is somehow disabled and you see
+hallucinations:** Restart `llama-server` to fully clear
+all slots:
+```bash
+docker compose restart llama-server
+```
+
+### Multi-File Project: Sandbox `ModuleNotFoundError`
+
+**Symptom:** Edit on a file that imports another module
+in the same project. V3 reports verification failure
+with `ModuleNotFoundError: No module named 'utils'` (or
+similar) even though the import works fine on your
+machine.
+
+**Cause (PC-046).** Pre-PC-046 the sandbox wrote *only*
+the candidate file as `solution.py` to its workspace.
+Any `from utils import …` failed because `utils.py`
+didn't exist in the sandbox's tmpdir.
+
+**What PC-046 does.** Sandbox `/execute` accepts a
+`files: Dict[str, str]` map; V3's `SandboxAdapter`
+ships every file the agent has read (the same
+`ProjectContext` dict V3 already feeds to the LLM
+prompt) into the sandbox workspace alongside
+`solution.py`. Multi-file imports resolve.
+
+**Diagnose:** if you still see `ModuleNotFoundError`
+in V3 progress events, the file is probably not in
+`ctx.FilesRead` (the proxy's read-tracking set). Read
+the missing file via `read_file` so it lands in the
+project context that V3 ships to the sandbox.
+
+**If you're using the sandbox `/execute` API directly**
+(scripts, tests), pass the supporting files in the
+request body:
+```bash
+curl -X POST http://localhost:30820/execute -d '{
+  "code": "from utils import greet\nprint(greet(\"x\"))",
+  "language": "python",
+  "files": {"utils.py": "def greet(n): return f\"hi {n}\""}
+}'
+```
+
+### Curses Bottom-Row `addwstr() returned ERR`
+
+**Symptom:** Your curses program (snake game, TUI menu,
+status bar, etc.) crashes at runtime with:
+```
+_curses.error: addwstr() returned ERR
+```
+…but ATLAS reported the edit passed V3 verification.
+
+**Cause.** Writing to the last cell of a curses window
+(any row=LINES-1, or column=COLS-1) is documented as
+returning ERR. This is decades-old curses behavior. The
+idiomatic fix:
+```python
+try:
+    stdscr.addstr(curses.LINES - 1, 0, border)
+except curses.error:
+    pass  # writing the bottom-right cell errors; benign
+```
+
+**What PC-047 does.** `interactive_lint` now AST-walks
+for `addstr/addnstr/addch(curses.LINES - N, ...)` (and
+the bare `LINES - N` form after `from curses import LINES`)
+that aren't inside a `try/except curses.error` block.
+Such candidates are rejected at the lint gate — V3 has
+to find a wrapped variant before certifying.
+
+**Diagnose:**
+```bash
+docker compose logs v3-service | grep "interactive_lint"
+```
+- `[interactive_lint] OK` — candidate passed all checks.
+- `[interactive_lint] FAIL: curses bottom-row write
+  without try/except curses.error wrap — line N: ...` —
+  PC-047 fired. V3 will either find a wrapped variant
+  or surface the failure to the model so it can produce
+  one.
+
+**If V3 can't find a wrapped variant**, the model is in
+the structural-reasoning gap (Issue B): it knows the
+file uses `curses.LINES - 1` but can't reliably
+synthesize the try/except wrap. Workaround: tell the
+model explicitly in your Aider prompt: *"wrap the
+addstr call at line N in `try: ... except curses.error:
+pass`."*
+
+### V3 Hangs for Several Minutes on Non-Python Files
+
+**Symptom:** Asking ATLAS to write an HTML/CSS/JSON file
+causes a long pause (~5 minutes) with progress events
+showing PR-CoT repair attempts and LLM timeouts. The
+file eventually gets written via the direct-write
+fallback, but the V3 cycle was wasted.
+
+**Cause (PC-048).** Pre-PC-048 the V3 smoke check
+hardcoded `compile(_src, '<smoke>', 'exec')` (Python AST
+parse) for **every** interactive-task candidate — HTML,
+CSS, JSON, anything. Any non-Python file failed the
+smoke check with `SYNTAX_ERROR`, which kicked V3 into
+PR-CoT repair, which made LLM calls that timed out, then
+fell back to direct write.
+
+**What PC-048 does.** `smoke_compile_check` is now
+language-aware. The V3 pipeline derives language from
+the target file's extension (`pipeline.run(file_path=…)`)
+and routes:
+- `.py` → AST/compile smoke (existing behavior)
+- `.html` / `.htm` / `.xml` → `html.parser` strict mode
+- `.json` → `json.loads`
+- `.yaml` / `.yml` → `yaml.safe_load` (or skip if PyYAML
+  unavailable)
+- everything else (CSS, JS, MD, plain text, TOML, …) →
+  pass-through with `SMOKE_SKIP (non-Python)`
+
+**Diagnose:**
+```bash
+docker compose logs v3-service | grep "smoke_check"
+```
+- `[smoke_check] compile=OK (html)` — PC-048 routed
+  correctly.
+- `[smoke_check] compile=OK (python)` on a `.html` file —
+  the proxy didn't pass `file_path` through. Check
+  `atlas-proxy/v3_bridge.go` and the
+  `V3GenerateRequest`.
+- `[smoke_check] compile=FAIL` followed by
+  `[phase3] All candidates failed — entering repair
+  phase` followed by `[LLM] Attempt N failed: timed
+  out` — the cascade PC-048 was supposed to prevent
+  is happening anyway. File a follow-up ticket with
+  the failing file extension.
+
+**If you're hitting this on a file extension PC-048
+doesn't recognize**, the smoke check defaults to Python
+and you get the same cascade. Workaround: set
+`ATLAS_AGENT_LOOP=1` and rely on the proxy's direct
+write path, or add the extension to `_ext_to_lang` in
+`v3-service/main.py:613`.
+
+### V3 Pipeline Doesn't Fire on "Fix It Again" Prompts
+
+**Symptom:** First request creates a file, V3 pipeline
+runs (you see V3 progress events). Follow-up "still
+doesn't work, try again"-style prompts complete in
+microseconds with no V3 events visible. The model just
+edits and exits without verification.
+
+**Cause (PC-049).** Pre-PC-049 the agent-loop tier
+classifier checked a narrow vocabulary (`fix`,
+`broken`, `doesn't work`, `bug`, …) and required at
+least one explicit file extension in the prompt. Real
+iterative-fix prompts use natural phrases ("still does
+not", "isn't working", "try again") with no `.py` in
+sight, so the classifier returned T1, V3 never fires.
+
+**What PC-049 does.** Vocabulary expanded to cover
+natural fix language (`doesn't`, `is not`, `aren't`,
+`failed`, `wrong`, etc.), plus a separate
+"continuation marker" detector (`still`, `again`,
+`retry`, `another`). Continuation markers substitute
+for explicit file names — if you say "still doesn't
+work" we now know you mean "the existing file isn't
+working" even if you don't name it.
+
+**Diagnose:**
+```bash
+docker compose logs atlas-proxy | grep "agent tier override"
+```
+- `agent tier override: T2:medium` — PC-049 promoted
+  correctly. V3 should fire on the next edit_file.
+- `agent tier override: T1:simple` on a clearly-iterative
+  prompt — PC-049's vocabulary missed it. File a
+  follow-up ticket with the exact prompt; the
+  vocabulary is finite.
+
+**Workaround if classifier still misses your prompt:**
+Mention the file by name in the prompt — `app.py` is
+enough. The original `fileIndicators >= 1` gate still
+works for explicit file mentions.
+
+### "Hallucinated" Filenames From Aider Chat History
+
+**Symptom:** Brand-new prompt about `snake_game.py`,
+but the agent's first read is on `show_greeting.py` (or
+some other file you've never mentioned in this
+session). PC-045 fires correctly (you see
+`[PC-045] erased llama slot 0` in the proxy log), so
+it's not LLM cache pollution.
+
+**Cause.** Aider stores chat history per-project
+directory in `.aider.chat.history.md` and feeds it to
+the LLM as conversation context on **every** new
+prompt. Filenames mentioned in *prior sessions in the
+same directory* leak into the current session's
+context. PC-045 erases the LLM KV cache but cannot
+clear Aider's history file — that's outside the proxy's
+scope.
+
+**Fix:**
+```
+# In Aider:
+/clear
+
+# Or from a shell:
+rm .aider.chat.history.md
+```
+
+The recovery path works (read fails on the
+non-existent file → model pivots to list_directory →
+finds the real file), so this is just a one-turn
+waste, not a session-blocker.
 
 ### File Not Read Before Editing
 
@@ -412,6 +821,181 @@ cp .env.example .env
 
 1. Ensure you're using the repo's config files (`.aider.model.settings.yml` and `.aider.model.metadata.json`)
 2. Check that `streaming: true` is set in the settings file
+
+### "context deadline exceeded" mid-session
+
+**Symptom:** Aider shows
+`litellm.APIError ... context deadline exceeded` partway through
+a session, sometimes during a busy turn, sometimes after a quiet
+gap.
+
+**Two distinct causes — each fixed differently:**
+
+1. **In-session prompt-cache pressure (PC-029).** After ~4-5 turns
+   the llama-server prompt cache fills up and prompt-eval rate
+   drops from ~700 tok/s to ~100 tok/s. Tight 5s deadlines on the
+   classifier and lens-score paths blew out. **Fixed in atlas-proxy
+   v3.0.1+** — classifier ctx 5s→60s, lens client 5s→30s, background
+   stream-score 5s→30s. No user-side action needed beyond keeping
+   atlas-proxy current.
+
+2. **Cold-start after idle (PC-035).** After 1-2 minutes of
+   inactivity, the next request blows the 120s `forwardToLLM`
+   client timeout because the prompt cache is evicted and the
+   conversation has to be reprocessed cold. The error wording
+   distinguishes this case: it includes `Client.Timeout exceeded
+   while awaiting headers`, which is specific to Go's HTTP client
+   timeout (vs the context-cancel "deadline exceeded" wording for
+   case 1). **Fixed in atlas-proxy v3.0.1+** with two layers:
+   - Client timeout bumped 120s → 240s (cold-start budget).
+   - A 45s-interval keep-warm goroutine that pings llama-server
+     with a 1-token completion. Avoids the cold path entirely.
+     Disable with `ATLAS_KEEP_LLAMA_WARM=0` if running CPU-only
+     or under tight power constraints.
+
+If you still see this after upgrading, check
+`docker compose logs atlas-proxy` for `keep-warm: pinging …`
+on startup — its absence means the goroutine isn't running and
+the cold-start path is still in play.
+
+### Model says "command not found" / "Python is not installed"
+
+**Symptom:** Mid-session, the model issues `run_command` calls
+like `python -m py_compile foo.py` that fail in microseconds with
+no useful output, then concludes the environment lacks Python.
+You know your host has Python.
+
+**Cause (PC-032).** `run_command` runs inside the atlas-proxy
+container, which used to be alpine-bare (curl + bash only). Any
+`python`, `node`, `gcc`, `make` invocation hit "command not
+found" with no stderr surfaced to the UI (PC-033 compounded the
+diagnosis problem).
+
+**Fix:** atlas-proxy v3.0.1+ ships with python3, py3-pip,
+nodejs/npm, gcc, g++, make, and git baked into the runtime image.
+Targeted rebuild after pulling: `docker compose up -d --build
+atlas-proxy`. Verify:
+
+```bash
+docker compose exec atlas-proxy sh -c "which python3 node gcc make"
+```
+
+If anything is missing, you're on an older image; rebuild.
+
+The proper architectural fix (route `run_command` through the
+sandbox container's `/execute` endpoint, which is properly
+isolated) is tracked as a Phase 1+ follow-up under PC-032.
+
+### I closed Aider but my GPU stayed busy
+
+**Symptom:** You hit Ctrl-C in Aider, close the terminal, or your
+SSH session drops mid-generation — but `nvidia-smi` shows
+llama-server still pegged at high utilization for the next 30 sec
+to several minutes.
+
+**Cause (PC-036).** The proxy was not propagating Aider's
+cancellation down to llama-server. Aider closing its TCP
+connection cancelled `r.Context()` at the proxy boundary, but
+the agent loop and its LLM calls used `context.Background()`
+instead, so they kept running until the model finished
+generating to `max_tokens` or hit a stop sequence.
+
+**Fix:** atlas-proxy v3.0.1+ wires the request context all the
+way through: `handleStreamingChat` → `runInternalAgentLoop` →
+`AgentContext.Ctx` → `callLLMConstrained`'s HTTP request. The
+agent loop also checks `ctx.Done()` at each turn boundary. Now
+when Aider disconnects:
+- The current LLM call's TCP connection to llama-server closes
+  (within ~1 token tick).
+- llama.cpp detects the disconnect on the slot and aborts
+  generation, releasing the GPU.
+- The agent loop bails on the next turn and logs
+  `[agent] cancelled at turn N: context canceled`.
+
+Verify after rebuild: tail `docker compose logs -f atlas-proxy`,
+trigger a long generation, hit Ctrl-C in Aider — you should see
+the cancellation log line within a second, and `nvidia-smi`
+utilization should fall within 1-2 sec.
+
+### Agent says my file "doesn't exist" but I can see it in `ls`
+
+**Symptom:** You're in a project directory, the file is right
+there in `ls`, but ATLAS replies with something like "the file
+doesn't exist in the current workspace" and refuses to edit it.
+
+**Cause (PC-038).** The proxy container's `/workspace` is
+bind-mounted from `ATLAS_PROJECT_DIR` (default: the directory
+you ran `docker compose up` from). If you `cd` into a project
+elsewhere on the host and run `atlas`, the proxy used to still
+only see the original directory.
+
+**Fix:** the `atlas` CLI now auto-aligns the proxy's
+`/workspace` to your CWD on every invocation. When a mismatch is
+detected, you'll see:
+
+```
+$ atlas
+  Aligning proxy workspace → /home/isaac/your/project
+  ...
+```
+
+The container is recreated in ~5-8s on cached images. Same-CWD
+invocations are no-ops. If you've pre-mounted a parent (e.g.
+`ATLAS_PROJECT_DIR=$HOME`), no realignment happens because
+`$HOME` already covers your CWD.
+
+**Disable** with `ATLAS_AUTO_WORKSPACE=0` if you want manual
+control:
+```bash
+ATLAS_AUTO_WORKSPACE=0 atlas
+```
+
+**If the model still bails after the bind is correct** —
+e.g. you `cd`'d into the right project but the agent still
+exits with "Stopped after 3 tool failures with no successful
+changes" — Aider didn't `/add` the file, so the model has no
+content to work from and tries to discover it. Either:
+
+- `aider /add snake_game.py` once before your first prompt,
+  then ATLAS gets the file content directly from Aider, or
+- Just be explicit: "fix snake_game.py at line 95 — the
+  curses bounds are wrong." Naming the file in the prompt
+  triggers the model to run `find_file` / `list_directory`
+  to locate it. (PC-039 ensures empty-path tool calls get
+  redirected with a hint instead of silently failing.)
+
+**Manual alternative** (the path before PC-038 landed):
+```bash
+cd /home/isaac/ATLAS
+ATLAS_PROJECT_DIR=/path/to/your/project \
+    docker compose up -d --no-build atlas-proxy \
+    --no-deps --force-recreate
+cd /path/to/your/project
+atlas
+```
+
+### Model "loses" a file it just created (search_files returns 0)
+
+**Symptom:** The model writes `foo.py`, then on the next turn it
+runs `search_files "foo\.py"` and gets 0 matches. It then tries
+to recreate `foo.py` from scratch, and Aider prompts "Create new
+file? [Yes]:".
+
+**Cause (PC-028).** The old `search_files` description said it
+searches "in files," which the model read as "in filenames." The
+tool actually greps file *contents* — and file contents don't
+contain the literal string "foo.py", so it returned zero matches.
+
+**Fix:** atlas-proxy v3.0.1+ updates the `search_files`
+description to "search inside file CONTENTS" and adds a new
+`find_file` tool for name-based lookups. The model now uses
+`find_file "foo\.py"` (or `list_directory`) to check whether a
+file exists.
+
+If you're running an older version: workaround is to be explicit
+in the prompt ("the file already exists at foo.py — modify it
+in place"). The model can still call `read_file` directly to
+confirm a file exists.
 
 ### Empty Response
 

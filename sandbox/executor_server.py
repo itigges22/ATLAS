@@ -64,6 +64,14 @@ class ExecuteRequest(BaseModel):
     test_code: Optional[str] = None
     requirements: Optional[List[str]] = None
     timeout: int = 30
+    # PC-046: Project-context files dropped into the workspace alongside
+    # `solution.py` (or the language equivalent) so multi-file imports
+    # resolve. Filename keys are relative to the workspace root; each is
+    # validated to reject path traversal (`..`) and absolute paths
+    # before being written. Used by V3's verified_sandbox and
+    # smoke_compile_check to ship the rest of the project so e.g.
+    # `import game_logic` resolves to the user's actual game_logic.py.
+    files: Optional[Dict[str, str]] = None
 
 
 class ExecuteResponse(BaseModel):
@@ -120,6 +128,27 @@ def execute_code(request: ExecuteRequest):
 
     workspace = tempfile.mkdtemp(dir=WORKSPACE_BASE)
     timeout = min(request.timeout, MAX_EXECUTION_TIME)
+
+    # PC-046: Drop project-context files into the workspace BEFORE the
+    # language handler runs so any `import other_module` in the candidate
+    # resolves against the rest of the user's project. Validate each
+    # path to keep the sandbox isolated — no absolute paths, no `..`
+    # traversal, no symlinks. Bad entries are silently skipped (we don't
+    # want a malformed name to block legitimate verification).
+    if request.files:
+        for name, content in request.files.items():
+            if not isinstance(name, str) or not name:
+                continue
+            # Reject absolute paths and traversal
+            if name.startswith("/") or name.startswith("\\") or ".." in Path(name).parts:
+                logger.warning(f"PC-046: rejected unsafe file path in sandbox request: {name!r}")
+                continue
+            target = Path(workspace) / name
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content if isinstance(content, str) else "")
+            except OSError as e:
+                logger.warning(f"PC-046: failed to write {name!r} to sandbox: {e}")
 
     try:
         handler = LANGUAGE_HANDLERS[lang]

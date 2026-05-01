@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 # In-memory cache of loaded PageIndex data per project
 _pageindex_cache: Dict[str, Any] = {}
 
+# Versioned cache of the Pattern Cache BM25 matcher.
+# Invalidated by checking PatternStore.get_version() — if the version has
+# changed since we last built, we rebuild from get_all_patterns().
+_pattern_matcher_cache: Dict[str, Any] = {"version": -1, "matcher": None}
+
 # Context budget constants (tokens, estimated at 4 chars/token)
 PAGEINDEX_BUDGET = 6000
 CACHE_BUDGET = 2000
@@ -209,19 +214,41 @@ def invalidate_cache(project_id: str):
 # Pattern Cache: Read Path
 # ──────────────────────────────────────────────────────────────
 
+def _get_pattern_matcher(store):
+    """Get a PatternMatcher built over all patterns, rebuilding only when the store mutates."""
+    from cache.pattern_matcher import PatternMatcher
+
+    current_version = store.get_version()
+    cached_matcher = _pattern_matcher_cache.get("matcher")
+    cached_version = _pattern_matcher_cache.get("version")
+
+    if cached_matcher is not None and cached_version == current_version:
+        return cached_matcher
+
+    all_patterns = store.get_all_patterns()
+    if not all_patterns:
+        _pattern_matcher_cache["matcher"] = None
+        _pattern_matcher_cache["version"] = current_version
+        return None
+
+    matcher = PatternMatcher()
+    matcher.build(all_patterns)
+    _pattern_matcher_cache["matcher"] = matcher
+    _pattern_matcher_cache["version"] = current_version
+    return matcher
+
+
 async def retrieve_cached_patterns(query: str, top_k: int = 3):
     """
     Read path: query Pattern Cache for matching patterns.
 
     Flow:
-    1. BM25 match against STM pattern summaries
-    2. Co-occurrence expansion to find linked LTM patterns
-    3. Direct LTM search if STM matches are weak
-    4. Score all candidates with Ebbinghaus decay
-    5. Return top-k scored patterns
+    1. BM25 match across all patterns (STM + LTM + persistent)
+    2. Co-occurrence expansion of the top BM25 hits
+    3. Score all candidates with Ebbinghaus decay
+    4. Return top-k by composite score
     """
     from cache.pattern_store import get_pattern_store
-    from cache.pattern_matcher import PatternMatcher
     from cache.pattern_scorer import compute_score
     from cache.co_occurrence import CoOccurrenceGraph
 
@@ -229,60 +256,35 @@ async def retrieve_cached_patterns(query: str, top_k: int = 3):
     if not store.available:
         return []
 
-    # Step 1: Get all patterns and build BM25 matcher
-    all_patterns = store.get_all_patterns()
-    if not all_patterns:
+    matcher = _get_pattern_matcher(store)
+    if matcher is None:
         store.record_miss()
         return []
 
-    matcher = PatternMatcher()
-    matcher.build(all_patterns)
-
-    # Step 2: BM25 search
     bm25_matches = matcher.search(query, top_k=10)
-
     if not bm25_matches:
         store.record_miss()
         return []
 
-    # Step 3: Co-occurrence expansion for top matches
     cooccur = CoOccurrenceGraph()
     candidate_patterns = {}  # pattern_id -> (Pattern, similarity)
 
     for pattern, similarity in bm25_matches:
         candidate_patterns[pattern.id] = (pattern, similarity)
 
-        # Follow co-occurrence edges (depth 1-2)
         linked = cooccur.get_linked_patterns(pattern.id, top_k=3, max_depth=2)
         for linked_id, edge_weight in linked:
             if linked_id not in candidate_patterns:
                 linked_pattern = store.get_pattern(linked_id)
                 if linked_pattern:
-                    # Use edge_weight * parent similarity as linked similarity
-                    linked_sim = similarity * edge_weight
-                    candidate_patterns[linked_id] = (linked_pattern, linked_sim)
+                    candidate_patterns[linked_id] = (linked_pattern, similarity * edge_weight)
 
-    # Step 4: Direct LTM search if STM matches are weak
-    top_sim = bm25_matches[0][1] if bm25_matches else 0
-    if top_sim < 0.3:
-        ltm_patterns = store.get_ltm_patterns(limit=50)
-        if ltm_patterns:
-            ltm_matcher = PatternMatcher()
-            ltm_matcher.build(ltm_patterns)
-            ltm_matches = ltm_matcher.search(query, top_k=5)
-            for pattern, similarity in ltm_matches:
-                if pattern.id not in candidate_patterns:
-                    candidate_patterns[pattern.id] = (pattern, similarity)
-
-    # Step 5: Score with Ebbinghaus decay
-    scored = []
-    for pattern, similarity in candidate_patterns.values():
-        ps = compute_score(pattern, similarity)
-        scored.append(ps)
-
+    scored = [
+        compute_score(pattern, similarity)
+        for pattern, similarity in candidate_patterns.values()
+    ]
     scored.sort(key=lambda ps: ps.composite_score, reverse=True)
 
-    # Step 6: Record hit/miss and return
     result = scored[:top_k]
     if result:
         store.record_hit()
@@ -588,6 +590,42 @@ async def rag_enhanced_completion(
 
         except Exception as e:
             logger.error(f"Verify loop failed (non-fatal): {e}")
+
+    # ── Pattern Cache: Write Path ──────────────────────────────
+    # Drive writes off the verify result so we only persist patterns whose
+    # solutions actually passed validation. Without verify there's no
+    # ground-truth signal, so we leave the cache untouched.
+    if verify_result is not None:
+        active_pattern_ids = [ps.pattern.id for ps in scored_patterns]
+
+        if active_pattern_ids:
+            asyncio.create_task(
+                record_pattern_outcome(active_pattern_ids, success=verify_result.passed)
+            )
+
+        if verify_result.passed:
+            solution_text = verify_result.final_code or ""
+            if solution_text:
+                source_files = list({
+                    c.get("file_path", "") for c in chunks if c.get("file_path")
+                })
+                last_error = ""
+                for attempt in reversed(verify_result.attempt_history or []):
+                    if not attempt.get("passed", True):
+                        last_error = attempt.get("stderr", "") or attempt.get("error", "")
+                        break
+
+                asyncio.create_task(
+                    write_pattern_async(
+                        query=query,
+                        solution=solution_text,
+                        retry_count=verify_result.attempts,
+                        max_retries=verify_result.max_attempts,
+                        error_context=last_error or None,
+                        source_files=source_files,
+                        active_pattern_ids=active_pattern_ids,
+                    )
+                )
 
     # Attach route decision to result for feedback recording
     if route_decision and isinstance(result, dict):

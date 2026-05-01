@@ -30,6 +30,29 @@ def is_enabled() -> bool:
     return os.environ.get("GEOMETRIC_LENS_ENABLED", "false").lower() in ("true", "1", "yes")
 
 
+class _BoosterClassifier:
+    """Minimal predict_proba shim around an xgboost.Booster.
+
+    The legacy code path loaded an xgboost.sklearn.XGBClassifier from pickle
+    and called .predict_proba(x). The native-JSON path (PC-031) avoids the
+    pickle compat warning and the sklearn runtime dep — but raw Booster only
+    exposes .predict(). For binary:logistic objectives, that returns the
+    positive-class probability directly. This shim shapes it back into the
+    [P(neg), P(pos)] layout the callers in this module expect, so the
+    downstream `proba[1]` indexing keeps working unchanged.
+    """
+
+    def __init__(self, booster):
+        self._booster = booster
+
+    def predict_proba(self, x):
+        import numpy as np
+        import xgboost as xgb
+        dmatrix = xgb.DMatrix(np.asarray(x, dtype=np.float32))
+        pos = self._booster.predict(dmatrix)
+        return np.column_stack([1.0 - pos, pos])
+
+
 def _ensure_models_loaded():
     """Lazy-load C(x) cost field and G(x) models (XGBoost preferred, metric tensor legacy) on first use."""
     global _cost_field, _metric_tensor, _models_loaded, _load_attempted
@@ -75,18 +98,34 @@ def _ensure_models_loaded():
         else:
             logger.info("No G(x) model found — correctability unavailable")
 
-        # Load G(x) XGBoost model (preferred over metric tensor when available)
+        # Load G(x) XGBoost model (preferred over metric tensor when available).
+        # Prefer the native JSON dump (gx_xgboost.json) — version-stable, no
+        # pickle-compat warning, no sklearn dep. Fall back to gx_xgboost.pkl
+        # for users who haven't refreshed their model dir yet. See
+        # ISSUES.md PC-031.
         if _metric_tensor is None:
-            xgb_path = os.path.join(models_dir, "gx_xgboost.pkl")
+            xgb_json = os.path.join(models_dir, "gx_xgboost.json")
+            xgb_pkl = os.path.join(models_dir, "gx_xgboost.pkl")
             weights_path = os.path.join(models_dir, "gx_weights.json")
-            if os.path.exists(xgb_path) and os.path.exists(weights_path):
+            if os.path.exists(weights_path) and (os.path.exists(xgb_json) or os.path.exists(xgb_pkl)):
                 try:
-                    import pickle
                     import json as json_mod
                     import numpy as np
+                    import xgboost as xgb
 
-                    with open(xgb_path, 'rb') as f:
-                        _gx_xgboost = pickle.load(f)
+                    if os.path.exists(xgb_json):
+                        booster = xgb.Booster()
+                        booster.load_model(xgb_json)
+                        _gx_xgboost = _BoosterClassifier(booster)
+                        load_path = "json"
+                    else:
+                        # Legacy pickle fallback. Emits the forward-compat
+                        # warning the JSON path was added to silence; keep
+                        # this branch for one release while users migrate.
+                        import pickle
+                        with open(xgb_pkl, 'rb') as f:
+                            _gx_xgboost = pickle.load(f)
+                        load_path = "pickle (deprecated — re-export to gx_xgboost.json)"
 
                     with open(weights_path, 'r') as f:
                         weights = json_mod.load(f)
@@ -96,7 +135,7 @@ def _ensure_models_loaded():
                     _gx_top_dims = weights.get('top_dims', [])
 
                     logger.info(
-                        f"G(x) XGBoost loaded (AUC={weights.get('cv_auc_mean', 0):.4f}, "
+                        f"G(x) XGBoost loaded ({load_path}, AUC={weights.get('cv_auc_mean', 0):.4f}, "
                         f"PCA {weights.get('original_dim', '?')}→{weights.get('pca_dim', '?')})"
                     )
                 except ImportError:

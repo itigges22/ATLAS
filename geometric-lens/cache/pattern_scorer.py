@@ -7,32 +7,36 @@ from models.pattern import Pattern, PatternScore, HALF_LIVES
 
 logger = logging.getLogger(__name__)
 
+# Saturation anchor for the frequency boost. At this many accesses the
+# frequency term is at 1.0; below it the term grows logarithmically.
+REF_ACCESS = 50.0
+
+
+def _freq_boost(access_count: int) -> float:
+    """Saturating log frequency in [0, 1]. 0 → 0, 1 → ~0.18, 5 → ~0.46, 50 → 1.0."""
+    return min(math.log1p(max(access_count, 0)) / math.log1p(REF_ACCESS), 1.0)
+
 
 def compute_score(pattern: Pattern, similarity: float) -> PatternScore:
     """
-    Compute composite Ebbinghaus score for a pattern.
+    Compute composite Ebbinghaus score for a pattern, in [0, 1].
 
-    score = similarity × 0.5^(days_since_last_access / half_life) × log(1 + access_count)
+    composite = similarity * decay * freq
 
-    Three multiplicative terms:
-    1. similarity — BM25 relevance to current query (0.0-1.0)
+    Three multiplicative terms, each in [0, 1]:
+    1. similarity — BM25 relevance to the current query
     2. decay — temporal recency via Ebbinghaus forgetting curve
-    3. frequency_boost — logarithmic access count (prevents runaway)
+    3. freq — saturating log frequency with a 0.5 baseline so fresh
+       patterns aren't zeroed out
     """
-    # Temporal decay: 0.5^(days / half_life)
     days = pattern.days_since_access()
-    half_life = pattern.half_life_days
-    if half_life <= 0:
-        half_life = 14.0  # Fallback
+    half_life = pattern.half_life_days if pattern.half_life_days > 0 else 14.0
 
     decay = math.pow(0.5, days / half_life)
+    # 0.5 baseline keeps fresh patterns (access_count=0) retrievable while
+    # letting frequently-used patterns saturate the term to 1.0
+    freq = 0.5 + 0.5 * _freq_boost(pattern.access_count)
 
-    # Frequency boost: log(1 + access_count)
-    freq = math.log(1 + pattern.access_count)
-    # Minimum boost of 1.0 so new patterns aren't zeroed out
-    freq = max(freq, 1.0)
-
-    # Composite score
     composite = similarity * decay * freq
 
     return PatternScore(
@@ -46,18 +50,16 @@ def compute_score(pattern: Pattern, similarity: float) -> PatternScore:
 
 def compute_storage_score(pattern: Pattern) -> float:
     """
-    Compute storage score for sorted set ordering.
-    Uses surprise_score as initial boost + decay + frequency.
+    Compute storage score for STM/LTM sorted-set ordering.
 
-    This is the score used for STM/LTM sorted set ordering (without query similarity).
+    Used purely for relative ordering; not directly comparable to
+    compute_score's composite (which is gated against an absolute threshold).
     """
     days = pattern.days_since_access()
-    half_life = pattern.half_life_days
+    half_life = pattern.half_life_days if pattern.half_life_days > 0 else 14.0
 
     decay = math.pow(0.5, days / half_life)
-    freq = max(math.log(1 + pattern.access_count), 1.0)
-
-    # Surprise gives initial boost (high-retry = more valuable)
+    boost = _freq_boost(pattern.access_count)
     surprise_boost = 1.0 + pattern.surprise_score
 
-    return surprise_boost * decay * freq
+    return surprise_boost * decay * (1.0 + boost)

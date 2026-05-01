@@ -53,6 +53,8 @@ The Go proxy that runs the agent loop, routes tool calls, and translates between
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API responses |
 | `ATLAS_AGENT_LOOP` | (unset) | Set to `1` to enable tool-call agent loop. When unset or any other value, proxy forwards to llama-server directly. |
 | `ATLAS_V3_CLI` | (unset) | Set to `1` to enable V3 CLI mode (routes all generation through V3 service) |
+| `ATLAS_KEEP_LLAMA_WARM` | `1` | Set to `0` to disable the keep-warm goroutine that pings llama-server every 45s with a 1-token completion. Keeping warm avoids the cold-start path that fires after 1-2 min idle (see ISSUES.md PC-035). Disable for CPU-only or tightly power-budgeted setups. |
+| `ATLAS_FRESH_SLOT_PER_SESSION` | `1` | Set to `0` to disable per-session llama.cpp KV-slot erase. With it enabled (default), the proxy POSTs `/slots/0?action=erase` at the start of each agent loop invocation, giving each Aider message a clean cache. Adds ~1-2s to the first turn but prevents cross-session token-state leakage (e.g. filenames hallucinated from prior sessions). See ISSUES.md PC-045. |
 
 ### Internal Settings (not configurable via env)
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -200,6 +201,13 @@ func collectAgentResults(ctx *AgentContext, userMessage string, w http.ResponseW
 						streamStatus(fmt.Sprintf("[Turn %d/%d] \U0001f50d searching \"%s\"", turnCount, ctx.MaxTurns, truncateStr(inp.Pattern, 30)))
 					}
 
+				case "find_file":
+					if args, ok := m["args"].(json.RawMessage); ok {
+						var inp FindFileInput
+						json.Unmarshal(args, &inp)
+						streamStatus(fmt.Sprintf("[Turn %d/%d] \U0001f9ed finding \"%s\"", turnCount, ctx.MaxTurns, truncateStr(inp.Pattern, 30)))
+					}
+
 				case "list_directory":
 					if args, ok := m["args"].(json.RawMessage); ok {
 						var inp ListDirectoryInput
@@ -226,7 +234,24 @@ func collectAgentResults(ctx *AgentContext, userMessage string, w http.ResponseW
 						if errMsg != "" {
 							streamStatus(fmt.Sprintf("  \u2717 failed: %s (%s)", truncateStr(errMsg, 80), elapsed))
 						} else {
-							streamStatus(fmt.Sprintf("  \u2717 non-zero exit (%s)", elapsed))
+							// Surface first non-empty stderr line. Without it the operator sees only
+							// "non-zero exit (Xms)" and can't tell command-not-found from real
+							// failures \u2014 see ISSUES.md PC-033.
+							hint := ""
+							if dataRaw, ok := m["data"].(json.RawMessage); ok {
+								var rc RunCommandOutput
+								if json.Unmarshal(dataRaw, &rc) == nil {
+									hint = firstNonEmptyLine(rc.Stderr)
+									if hint == "" {
+										hint = firstNonEmptyLine(rc.Stdout)
+									}
+								}
+							}
+							if hint != "" {
+								streamStatus(fmt.Sprintf("  \u2717 non-zero exit (%s)\n     %s", elapsed, truncateStr(hint, 120)))
+							} else {
+								streamStatus(fmt.Sprintf("  \u2717 non-zero exit (%s)", elapsed))
+							}
 						}
 					}
 
@@ -455,7 +480,12 @@ func readFileContent(path string) (string, error) {
 // runInternalAgentLoop creates an AgentContext from an Aider ChatRequest,
 // runs the internal agent loop, and returns the collected results.
 // This is called from handleStreamingChat for T1+ tasks when ATLAS_AGENT_LOOP=1.
-func runInternalAgentLoop(req ChatRequest, tier Tier, w http.ResponseWriter, flusher http.Flusher) *AgentRunResult {
+//
+// reqCtx is the upstream HTTP request context. The agent loop honors its
+// cancellation: when Aider disconnects (Ctrl-C, terminal close, network
+// drop) the loop bails out at the next turn boundary and llama-server's
+// in-flight generation is aborted via TCP close. See ISSUES.md PC-036.
+func runInternalAgentLoop(reqCtx context.Context, req ChatRequest, tier Tier, w http.ResponseWriter, flusher http.Flusher) *AgentRunResult {
 	// Extract user's actual message (strip Aider format instructions)
 	userMessage := ""
 	for i := len(req.Messages) - 1; i >= 0; i-- {
@@ -491,7 +521,8 @@ func runInternalAgentLoop(req ChatRequest, tier Tier, w http.ResponseWriter, flu
 
 	// Detect the real project directory by finding where Aider's files exist on disk.
 	// Aider sends file contents in messages — we check where those files actually are.
-	workingDir := detectRealProjectDir(req.Messages)
+	// Per-request override (req.ProjectDir / X-Atlas-Project-Dir) wins; PC-020.
+	workingDir := detectRealProjectDirWith(req.ProjectDir, req.Messages)
 	if workingDir == "" {
 		workingDir = extractWorkingDir(req.Messages)
 	}
@@ -519,6 +550,10 @@ func runInternalAgentLoop(req ChatRequest, tier Tier, w http.ResponseWriter, flu
 	ctx.LensURL = lensURL
 	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
 	ctx.Project = detectProjectInfo(workingDir)
+	// Wire upstream cancellation into the agent loop and downstream LLM calls.
+	if reqCtx != nil {
+		ctx.Ctx = reqCtx
+	}
 
 	// Extract existing file context from Aider's messages
 	fileCtx := extractFileContext(req.Messages)
@@ -635,11 +670,52 @@ func extractWorkingDir(messages []ChatMessage) string {
 	return ""
 }
 
-// detectRealProjectDir finds the actual project directory by checking where
-// Aider's file context exists on disk, or by finding the most recently modified
-// git-initialized directory in /tmp that matches the test pattern.
+// detectRealProjectDir finds the actual project directory.
+//
+// Resolution order (first match wins):
+//  -1. Per-request project_dir (body field or X-Atlas-Project-Dir header),
+//      if set and points to an existing directory. Highest priority because
+//      it's the most specific signal — see ISSUES.md PC-020.
+//   0. ATLAS_WORKSPACE_DIR env var, if set and points to an existing directory.
+//      This is the per-process override and is set by `atlas/cli/repl.py` to the
+//      user's CWD at launch, and by docker-compose to /workspace.
+//   1. The proxy's own working directory (os.Getwd) — set by repl.py to the
+//      user's CWD, and by docker-compose via working_dir: /workspace. Skipped
+//      only if it resolves to "/" or fails entirely.
+//   2. Aider file-context heuristic: glob /tmp/*/ for a dir whose .git exists
+//      and that contains a file Aider has open. Preserves benchmark behavior
+//      where /tmp/atlas-* scratch dirs are created per task.
+//   3. Last-resort heuristic: most recently modified dir under /tmp or $HOME
+//      containing .aider.chat.history.md. Wanders between projects when stale
+//      Aider sessions exist; only used when -1/0/1/2 all miss.
 func detectRealProjectDir(messages []ChatMessage) string {
-	// Strategy 1: Find where Aider's file context exists on disk
+	return detectRealProjectDirWith("", messages)
+}
+
+// detectRealProjectDirWith is the per-request-aware variant. Pass the
+// request's project_dir (from body or header) as `requestDir`; pass ""
+// to skip strategy -1.
+func detectRealProjectDirWith(requestDir string, messages []ChatMessage) string {
+	// Strategy -1: per-request override (PC-020)
+	if requestDir != "" {
+		if info, err := os.Stat(requestDir); err == nil && info.IsDir() {
+			return requestDir
+		}
+	}
+
+	// Strategy 0: per-process override
+	if dir := os.Getenv("ATLAS_WORKSPACE_DIR"); dir != "" {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+
+	// Strategy 1: proxy's own working directory
+	if cwd, err := os.Getwd(); err == nil && cwd != "" && cwd != "/" {
+		return cwd
+	}
+
+	// Strategy 2: Aider file context match in /tmp/*/
 	fileCtx := extractFileContext(messages)
 	for fname := range fileCtx {
 		entries, _ := filepath.Glob("/tmp/*/")
@@ -655,8 +731,7 @@ func detectRealProjectDir(messages []ChatMessage) string {
 		break
 	}
 
-	// Strategy 2: Find the most recently modified directory with
-	// .aider.chat.history.md — search /tmp AND user home directory
+	// Strategy 3: most recently modified .aider.chat.history.md
 	var bestDir string
 	var bestTime int64
 

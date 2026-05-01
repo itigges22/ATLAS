@@ -17,6 +17,20 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Warn if both deployment modes' config files exist. install.sh is the
+# K3s path and only reads atlas.conf — values in .env are ignored here.
+# This catches the case where a user edited the wrong file. See PC-021.
+warn_dual_config() {
+    local repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+    if [[ -f "$repo_root/.env" ]] && [[ -f "$repo_root/atlas.conf" ]]; then
+        log_warn "Both .env and atlas.conf are present."
+        log_warn "  install.sh (this script) reads atlas.conf only — .env is ignored."
+        log_warn "  If you are deploying with K3s, set values in atlas.conf."
+        log_warn "  If you are deploying with docker compose, run \`docker compose up\` (not this script)."
+        log_warn "  See ISSUES.md PC-021."
+    fi
+}
+
 # Validate paths in configuration
 validate_paths() {
     local errors=0
@@ -165,6 +179,9 @@ check_prerequisites() {
     if [[ $SYS_MEM -lt 16 ]]; then
         log_warn "System has ${SYS_MEM}GB RAM. 16GB+ recommended."
     fi
+
+    # Warn early if both deployment modes' config files exist
+    warn_dual_config
 
     # Validate paths
     if ! validate_paths; then

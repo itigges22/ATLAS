@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 class PatternMatcher:
     """In-memory BM25 index over pattern summaries for fast matching."""
 
+    # Saturation reference for converting raw BM25 scores to [0, 1] similarity.
+    # 1 - exp(-raw / SCORE_REFERENCE): raw=2→0.33, raw=5→0.63, raw=10→0.86.
+    # Tuned for typical query length (3-6 terms) against short pattern summaries.
+    SCORE_REFERENCE: float = 5.0
+
     def __init__(self):
         self._patterns: List[Pattern] = []
         # term -> list of (pattern_index, term_frequency)
@@ -56,8 +61,10 @@ class PatternMatcher:
         """
         Search patterns by BM25 similarity.
 
-        Returns list of (Pattern, normalized_score) tuples.
-        Scores are normalized to 0.0-1.0 range.
+        Returns list of (Pattern, similarity) tuples where similarity is an
+        ABSOLUTE [0, 1] score derived from the raw BM25 score via a saturating
+        exponential. The top result is NOT pinned to 1.0 — weak matches stay
+        weak, so downstream gates against absolute thresholds work correctly.
         """
         query_terms = _tokenize(query)
         if not query_terms or not self._patterns:
@@ -86,17 +93,20 @@ class PatternMatcher:
         if not scores:
             return []
 
-        # Normalize scores to 0.0-1.0
-        max_score = max(scores.values())
-        if max_score <= 0:
-            return []
-
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
         return [
-            (self._patterns[idx], score / max_score)
-            for idx, score in ranked
+            (self._patterns[idx], _saturate(raw, self.SCORE_REFERENCE))
+            for idx, raw in ranked
+            if raw > 0
         ]
+
+
+def _saturate(raw_score: float, reference: float) -> float:
+    """Map raw BM25 in [0, ∞) to [0, 1) via 1 - exp(-raw / reference)."""
+    if raw_score <= 0:
+        return 0.0
+    return 1.0 - math.exp(-raw_score / reference)
 
 
 def _tokenize(text: str) -> List[str]:

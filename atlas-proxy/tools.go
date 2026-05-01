@@ -27,6 +27,7 @@ func init() {
 	registerTool(deleteFileTool())
 	registerTool(runCommandTool())
 	registerTool(searchFilesTool())
+	registerTool(findFileTool())
 	registerTool(listDirectoryTool())
 	registerTool(planTasksTool())
 }
@@ -57,10 +58,33 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 		}
 	}
 
+	// PC-040: distinguish "no args field at all" from "malformed args".
+	// The model occasionally emits {"type":"tool_call","name":"read_file"}
+	// with no "args" key, which lands here as nil/empty bytes. Calling
+	// json.Unmarshal on that returns "unexpected end of JSON input" — the
+	// same string a *truncated* response produces — and the old remap
+	// branch below would then tell the model "your output was truncated,
+	// use smaller edit_file calls" which is not just unhelpful, it
+	// actively steers the model away from the read_file/list_directory
+	// it was trying to make. Catch the empty case here and return a
+	// per-tool hint that tells the model exactly what shape to send.
+	trimmed := strings.TrimSpace(string(args))
+	if trimmed == "" || trimmed == "null" {
+		return &ToolResult{
+			Success: false,
+			Error:   missingArgsHint(name),
+		}
+	}
+
 	result, err := tool.Execute(args, ctx)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "unexpected end of JSON") || strings.Contains(errMsg, "invalid input") {
+		// Only treat "unexpected end of JSON" as truncation when the
+		// args payload is large enough that truncation is plausible.
+		// Short payloads with that error are malformed JSON, not
+		// truncated output, and the model needs the real parser error
+		// to correct itself.
+		if len(args) > 200 && strings.Contains(errMsg, "unexpected end of JSON") {
 			errMsg = "Tool call was truncated (output too long for context window). Use smaller, targeted edit_file calls instead of full write_file rewrites."
 		}
 		return &ToolResult{
@@ -69,6 +93,34 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 		}
 	}
 	return result
+}
+
+// missingArgsHint returns a tool-specific message instructing the model
+// what argument shape to send when it omits the args field entirely.
+// See PC-040.
+func missingArgsHint(name string) string {
+	switch name {
+	case "read_file":
+		return `read_file: no arguments provided. Call with {"path":"<file>"}. Use list_directory {"path":"."} first if you need to discover what files exist.`
+	case "write_file":
+		return `write_file: no arguments provided. Call with {"path":"<file>","content":"<full file contents>"}.`
+	case "edit_file":
+		return `edit_file: no arguments provided. Call with {"path":"<file>","old_str":"<exact text to replace>","new_str":"<replacement>"}.`
+	case "delete_file":
+		return `delete_file: no arguments provided. Call with {"path":"<file>"}.`
+	case "list_directory":
+		return `list_directory: no arguments provided. Call with {"path":"."} for the working directory or {"path":"<subdir>"}.`
+	case "search_files":
+		return `search_files: no arguments provided. Call with {"pattern":"<regex>"} and optionally {"path":"<dir>","include":"*.py"}.`
+	case "find_file":
+		return `find_file: no arguments provided. Call with {"pattern":"<name regex>"} (e.g. {"pattern":"snake_game\\.py"}).`
+	case "run_command":
+		return `run_command: no arguments provided. Call with {"command":"<shell command>"}.`
+	case "lint_python":
+		return `lint_python: no arguments provided. Call with {"path":"<file.py>"} or {"code":"<source>"}.`
+	default:
+		return fmt.Sprintf("%s: no arguments provided. Inspect the tool schema and resend with the required fields.", name)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +138,17 @@ func readFileTool() *ToolDef {
 			var input ReadFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+
+			// Empty path → resolves to the working dir, which is a
+			// directory, which fails with a confusing error the model
+			// can't recover from. Reject early with a hint at how to
+			// discover the file. See ISSUES.md PC-039.
+			if strings.TrimSpace(input.Path) == "" {
+				return &ToolResult{
+					Success: false,
+					Error:   "read_file: path cannot be empty. Call list_directory with path \".\" to see what files exist, or find_file with a name regex (e.g. \"snake_game\\.py\").",
+				}, nil
 			}
 
 			path := resolvePath(input.Path, ctx.WorkingDir)
@@ -145,7 +208,7 @@ func readFileTool() *ToolDef {
 func searchFilesTool() *ToolDef {
 	return &ToolDef{
 		Name:        "search_files",
-		Description: "Search for a regex pattern in files. Returns matching lines with file paths and line numbers. Use glob to filter by file type.",
+		Description: "Search for a regex pattern inside file CONTENTS. Returns matching lines with file paths and line numbers. Use glob to filter by filename pattern. To find a file by its name (not contents), use find_file or list_directory instead.",
 		InputSchema: SearchFilesInput{},
 		ReadOnly:    true,
 		Destructive: false,
@@ -153,6 +216,15 @@ func searchFilesTool() *ToolDef {
 			var input SearchFilesInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+
+			// Reject empty pattern: same reasoning as find_file. An empty
+			// regex matches every line in every file. See ISSUES.md PC-037.
+			if strings.TrimSpace(input.Pattern) == "" {
+				return &ToolResult{
+					Success: false,
+					Error:   "search_files: pattern cannot be empty. Provide a regex to grep file contents for (e.g. \"def main\" or \"TODO\\(.*\\)\").",
+				}, nil
 			}
 
 			searchPath := ctx.WorkingDir
@@ -314,6 +386,14 @@ func writeFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
+			// Reject empty path — same reasoning as read_file (PC-039).
+			if strings.TrimSpace(input.Path) == "" {
+				return &ToolResult{
+					Success: false,
+					Error:   "write_file: path cannot be empty. Provide a relative path like \"snake_game.py\" or \"src/main.py\".",
+				}, nil
+			}
+
 			path := resolvePath(input.Path, ctx.WorkingDir)
 
 			// Per-file tier classification — determines V3 pipeline activation
@@ -447,6 +527,14 @@ func editFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
+			// Reject empty path — same reasoning as read_file (PC-039).
+			if strings.TrimSpace(input.Path) == "" {
+				return &ToolResult{
+					Success: false,
+					Error:   "edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path.",
+				}, nil
+			}
+
 			path := resolvePath(input.Path, ctx.WorkingDir)
 
 			// Require file was read first (staleness protection)
@@ -489,13 +577,32 @@ func editFileTool() *ToolDef {
 				return nil, fmt.Errorf("old_str and new_str are identical — no change to make")
 			}
 
-			// For T2/T3 with large changes (>20 lines in new_str), could route through V3
-			// For now, apply directly — V3 routing for large edits is a future optimization
 			var newContent string
 			if input.ReplaceAll {
 				newContent = strings.ReplaceAll(content, actualOldStr, input.NewStr)
 			} else {
 				newContent = strings.Replace(content, actualOldStr, input.NewStr, 1)
+			}
+
+			// PC-042: Route through V3 pipeline when the request tier and
+			// the file tier both indicate non-trivial logic. The system
+			// prompt tells the model to use edit_file for ALL changes to
+			// existing files, so without this branch V3 never fires on
+			// edits — only on brand-new files. V3 takes the post-edit
+			// content as baseline candidate #0; if its diverse alternatives
+			// build-verify better, V3 wins; otherwise the baseline (=our
+			// edit) wins. Either way the answer is build-verified.
+			fileTier := classifyFileTier(input.Path, newContent)
+			v3Out := V3EditMetadata{}
+			if ctx.Tier >= Tier2Medium && fileTier >= Tier2Medium && ctx.V3URL != "" {
+				log.Printf("[edit_file] V3 pipeline activating for %s (req_tier=%d, file_tier=%d)", input.Path, ctx.Tier, fileTier)
+				improved, meta, err := improveContentWithV3(path, newContent, ctx)
+				if err != nil {
+					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
+				} else if improved != "" {
+					newContent = improved
+					v3Out = meta
+				}
 			}
 
 			// Atomic write
@@ -508,10 +615,10 @@ func editFileTool() *ToolDef {
 				return nil, fmt.Errorf("cannot rename temp file: %w", err)
 			}
 
-			// Update cached state
+			// Update cached state with whatever was actually written
 			ctx.RecordFileRead(path, newContent)
 
-			// Build diff preview
+			// Build diff preview against the original on-disk content
 			oldLines := strings.Count(input.OldStr, "\n") + 1
 			newLines := strings.Count(input.NewStr, "\n") + 1
 			preview := buildDiffPreview(content, newContent, actualOldStr, input.NewStr)
@@ -528,9 +635,84 @@ func editFileTool() *ToolDef {
 			}
 
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			result := &ToolResult{Success: true, Data: outBytes}
+			if v3Out.Used {
+				result.V3Used = true
+				result.CandidatesTested = v3Out.CandidatesTested
+				result.WinningScore = v3Out.WinningScore
+				result.PhaseSolved = v3Out.PhaseSolved
+			}
+			return result, nil
 		},
 	}
+}
+
+// V3EditMetadata captures what V3 did to an edit_file request, so the
+// edit_file result can carry the same v3_used / candidates_tested fields
+// write_file does. See PC-042.
+type V3EditMetadata struct {
+	Used             bool
+	CandidatesTested int
+	WinningScore     float64
+	PhaseSolved      string
+}
+
+// improveContentWithV3 sends content through the V3 pipeline and returns
+// V3's chosen code (baseline candidate or a better-scoring alternative).
+// On error, returns "" + zero metadata; the caller should fall back to
+// writing the original content. See PC-042.
+func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
+	req := V3GenerateRequest{
+		FilePath:     path,
+		BaselineCode: content,
+		Tier:         int(ctx.Tier),
+		WorkingDir:   ctx.WorkingDir,
+	}
+	if len(ctx.FilesRead) > 0 {
+		req.ProjectContext = make(map[string]string)
+		for p, c := range ctx.FilesRead {
+			rel, _ := filepath.Rel(ctx.WorkingDir, p)
+			if rel == "" {
+				rel = p
+			}
+			if len(c) > 4000 {
+				c = c[:4000] + "\n... (truncated)"
+			}
+			req.ProjectContext[rel] = c
+		}
+	}
+	if ctx.Project != nil {
+		req.Framework = ctx.Project.Framework
+		req.BuildCommand = ctx.Project.BuildCommand
+	}
+
+	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string) {
+		if ctx.StreamFn != nil {
+			ctx.StreamFn("v3_progress", map[string]string{
+				"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
+			})
+		}
+	})
+	if err != nil {
+		return "", V3EditMetadata{}, err
+	}
+
+	if ctx.StreamFn != nil {
+		ctx.StreamFn("v3_progress", map[string]string{
+			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
+		})
+	}
+
+	chosen := v3Result.Code
+	if chosen == "" {
+		chosen = content
+	}
+	return chosen, V3EditMetadata{
+		Used:             true,
+		CandidatesTested: v3Result.CandidatesTested,
+		WinningScore:     v3Result.WinningScore,
+		PhaseSolved:      v3Result.PhaseSolved,
+	}, nil
 }
 
 // findActualString searches for oldStr in content, handling quote normalization.
@@ -617,6 +799,14 @@ func deleteFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
+			// Reject empty path — same reasoning as read_file (PC-039).
+			if strings.TrimSpace(input.Path) == "" {
+				return &ToolResult{
+					Success: false,
+					Error:   "delete_file: path cannot be empty. Provide the path of the file you want to delete.",
+				}, nil
+			}
+
 			deleted := false
 
 			// Delete from the REAL project directory (where Aider's files live)
@@ -653,6 +843,88 @@ func deleteFileTool() *ToolDef {
 			// from generating follow-up text that Aider could misinterpret as a file edit
 			result.Error = "__FORCE_DONE__"
 			return result, nil
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// find_file — locate files by NAME (vs search_files which greps contents).
+// Added to resolve PC-028: the model would search_files for a filename,
+// get zero matches (because contents don't contain the literal filename),
+// and conclude the file didn't exist.
+// ---------------------------------------------------------------------------
+
+func findFileTool() *ToolDef {
+	return &ToolDef{
+		Name:        "find_file",
+		Description: "Find files by NAME using a regex against the filename or relative path. Use this to check whether a file exists or to locate it. For searching inside file contents, use search_files instead.",
+		InputSchema: FindFileInput{},
+		ReadOnly:    true,
+		Destructive: false,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input FindFileInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+
+			// Reject empty pattern: it matches every filename, returns the
+			// 200-match cap full of unrelated files, and confuses the model
+			// into thinking it found nothing useful. See ISSUES.md PC-037.
+			if strings.TrimSpace(input.Pattern) == "" {
+				return &ToolResult{
+					Success: false,
+					Error:   "find_file: pattern cannot be empty. Provide a regex matching the filename you want to locate (e.g. \"snake_game\\.py\" or \"^main\\.\").",
+				}, nil
+			}
+
+			searchPath := ctx.WorkingDir
+			if input.Path != "" {
+				searchPath = resolvePath(input.Path, ctx.WorkingDir)
+			}
+
+			re, err := regexp.Compile(input.Pattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid regex: %w", err)
+			}
+
+			var matches []FindFileMatch
+			maxMatches := 200
+
+			err = filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return nil
+				}
+				if d.IsDir() {
+					base := d.Name()
+					if base == ".git" || base == "node_modules" || base == "__pycache__" || base == ".next" || base == "target" {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				relPath, _ := filepath.Rel(ctx.WorkingDir, path)
+				if relPath == "" {
+					relPath = path
+				}
+				if re.MatchString(d.Name()) || re.MatchString(relPath) {
+					matches = append(matches, FindFileMatch{Path: relPath, Name: d.Name()})
+					if len(matches) >= maxMatches {
+						return filepath.SkipAll
+					}
+				}
+				return nil
+			})
+
+			if err != nil && len(matches) == 0 {
+				return nil, fmt.Errorf("find error: %w", err)
+			}
+
+			out := FindFileOutput{
+				Matches:    matches,
+				TotalCount: len(matches),
+				Truncated:  len(matches) >= maxMatches,
+			}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -901,4 +1173,17 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// firstNonEmptyLine returns the first non-blank line of s, trimmed of trailing
+// whitespace. Used to surface a one-line hint from a tool's stderr without
+// dumping the whole buffer to the UI.
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		trimmed := strings.TrimRight(line, " \t\r")
+		if strings.TrimSpace(trimmed) != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

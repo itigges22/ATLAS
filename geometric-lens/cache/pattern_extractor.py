@@ -158,7 +158,13 @@ async def _llm_extract(
             return _parse_extraction(content, solution)
 
     except Exception as e:
-        logger.warning(f"Pattern extraction LLM call failed: {e}")
+        # Use repr + class name — many exceptions (httpx timeouts, empty
+        # status errors) render as empty strings via str(), making
+        # debugging blind. See ISSUES.md PC-027.
+        logger.warning(
+            f"Pattern extraction LLM call failed: "
+            f"{type(e).__name__}: {e!r}"
+        )
         return None
 
 
