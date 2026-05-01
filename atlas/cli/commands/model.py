@@ -417,10 +417,105 @@ def _hf_token() -> Optional[str]:
             or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
 
 
+# ---------------------------------------------------------------------------
+# Concurrent-install protection (PC-056.2 item A)
+# ---------------------------------------------------------------------------
+
+def _pid_alive(pid: int) -> bool:
+    """POSIX trick: kill(pid, 0) raises ProcessLookupError if no such PID,
+    PermissionError if PID exists but we can't signal it (other user).
+    Both 'exists' cases return True — a PID owned by another user is
+    still a real running process from our perspective."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        # Unknown — be conservative, assume alive.
+        return True
+
+
+def _acquire_install_lock(target: str, color: bool) -> Optional[str]:
+    """Try to atomically create <target>.lock. Return the lock path on
+    success, None if another live install is in progress.
+
+    Stale lock recovery: if the lock file's PID is no longer alive,
+    delete the stale lock and try again. This handles the SIGKILL'd
+    process case so users don't have to manually clean .lock files.
+
+    Lock contents: "<pid>\\n<unix_timestamp>\\n" — useful for the
+    "install in progress (PID X, started Y)" message.
+    """
+    lock_path = target + ".lock"
+    pid = os.getpid()
+    payload = f"{pid}\n{int(time.time())}\n".encode()
+
+    # Bounded retries — at most one stale-lock reclaim per call. Without
+    # the bound, a permission error reading the lock could loop forever.
+    for _ in range(2):
+        try:
+            fd = os.open(lock_path,
+                          os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                os.write(fd, payload)
+            finally:
+                os.close(fd)
+            return lock_path
+        except FileExistsError:
+            # Inspect existing lock — alive or stale?
+            try:
+                with open(lock_path) as f:
+                    parts = f.read().strip().split("\n")
+                other_pid = int(parts[0]) if parts and parts[0] else 0
+                started = int(parts[1]) if len(parts) > 1 else 0
+            except (OSError, ValueError, IndexError):
+                # Can't read or parse — treat as stale, try to remove.
+                try:
+                    os.unlink(lock_path)
+                    continue
+                except OSError:
+                    return None
+
+            if other_pid and _pid_alive(other_pid):
+                age_s = max(int(time.time()) - started, 0) if started else None
+                age_msg = (f", started ~{age_s}s ago" if age_s is not None
+                           else "")
+                _safe_print(f"  {RED if color else ''}Another install is "
+                            f"already in progress: PID {other_pid}{age_msg}."
+                            f"{RESET if color else ''}")
+                _safe_print("  Wait for it to finish, or if you're sure "
+                            "it's hung, manually remove the lock:")
+                _safe_print(f"    rm {lock_path}")
+                return None
+
+            # Stale — process is gone. Reclaim by deleting + retrying.
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                return None
+            # loop continues for one more attempt
+    return None
+
+
+def _release_install_lock(lock_path: Optional[str]) -> None:
+    """Best-effort lock release. Errors ignored — we'd rather leak a
+    lock file than crash the CLI on the cleanup path."""
+    if lock_path is None:
+        return
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        pass
+
+
 def _stream_download(m: Model, target: str, color: bool,
                      resume: bool = True) -> int:
     """Stream-download the model with progress bar, SHA verification,
-    resume support, and HF_TOKEN auth (PC-056.1).
+    resume support, HF_TOKEN auth (PC-056.1), concurrent-install lock,
+    and oversized .part detection (PC-056.2).
 
     Resume strategy:
       - If <target>.part exists and resume=True: send Range: bytes=N-,
@@ -429,6 +524,8 @@ def _stream_download(m: Model, target: str, color: bool,
       - If resume=False: delete any existing .part, start fresh.
       - If the server returns 200 OK to a Range request (some endpoints
         ignore Range), we restart from byte 0 cleanly.
+      - PC-056.2: if existing .part is suspiciously larger than the
+        registered model size (>5% over), refuse — likely user-corrupted.
 
     SHA verification:
       - hashlib.sha256.update() runs alongside file.write() during the
@@ -443,12 +540,36 @@ def _stream_download(m: Model, target: str, color: bool,
         added as Authorization: Bearer header. Unlocks gated repos for
         authenticated users.
       - On 401 without a token: helpful message points at HF_TOKEN.
+
+    Concurrent-install lock (PC-056.2):
+      - <target>.part.lock acquired with O_CREAT|O_EXCL before any I/O.
+      - Stale locks from SIGKILL'd processes are reclaimed via
+        os.kill(pid, 0) liveness check.
+      - Released on any exit path (success, error, KeyboardInterrupt).
     """
     tmp = target + ".part"
     chunk = 1024 * 1024  # 1 MiB
     started = time.monotonic()
     token = _hf_token()
 
+    # PC-056.2 item A: acquire lock before touching .part.
+    lock_path = _acquire_install_lock(tmp, color)
+    if lock_path is None:
+        return 1
+
+    try:
+        return _stream_download_locked(m, target, tmp, chunk, started,
+                                        token, color, resume)
+    finally:
+        _release_install_lock(lock_path)
+
+
+def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
+                              started: float, token: Optional[str],
+                              color: bool, resume: bool) -> int:
+    """The actual download logic, factored out so the lock-release in
+    `_stream_download`'s `finally` always runs even on early returns
+    here. No new behavior — just a structural split."""
     # Resume bookkeeping.
     range_start = 0
     file_mode = "wb"
@@ -458,6 +579,27 @@ def _stream_download(m: Model, target: str, color: bool,
         except OSError:
             range_start = 0
         if range_start > 0:
+            # PC-056.2 item B: oversized .part detection. If the existing
+            # .part is wildly larger than the registered model size, it
+            # was created by something other than this CLI (manual
+            # touch / append, mismatched mirror, leftover from a model
+            # that was renamed). Refuse cleanly rather than send a
+            # nonsense Range request that would 416 OR hash garbage.
+            expected_bytes = int(m.model_size_gb * (1024 ** 3))
+            # 5% slack tolerates registry size drift. Anything bigger
+            # than that is unambiguously wrong.
+            if expected_bytes > 0 and range_start > int(expected_bytes * 1.05):
+                _safe_print(f"  {RED if color else ''}Existing .part file "
+                            f"({_human_bytes(range_start)}) is larger than "
+                            f"the expected model size "
+                            f"({m.model_size_gb:.1f} GB).{RESET if color else ''}")
+                _safe_print("  This isn't from a normal interrupted "
+                            "download. Likely causes: manual modification, "
+                            "a previous install of a renamed model, or a "
+                            "mismatched mirror. Recover by deleting it:")
+                _safe_print(f"    rm {tmp}")
+                _safe_print("  Or pass --no-resume to overwrite from byte 0.")
+                return 1
             file_mode = "ab"
             _safe_print(f"  Resuming from byte {range_start} "
                         f"({_human_bytes(range_start)} already on disk)")

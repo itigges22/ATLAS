@@ -214,6 +214,38 @@ atlas model verify Qwen3.5-9B-Q6_K
 # If the upstream actually changed: file an issue or pull a newer ATLAS release.
 ```
 
+### `atlas model install` refuses: "Another install is already in progress: PID N"
+
+**Symptom:** Install exits early with `Another install is already in progress: PID 12345 (started Ns ago).`
+
+**Cause:** PC-056.2 added a `<file>.part.lock` to prevent two install processes from corrupting each other's `.part` writes. Another `atlas model install` is currently downloading the same model file. (If you don't have one running, the lock holder probably crashed mid-download — the message tells you whether the PID is alive.)
+
+**Fix:**
+```bash
+# 1. Wait for the other install to finish (check with `ps -p <PID>`).
+# 2. If the holder is dead, the next install attempt should reclaim the lock
+#    automatically. If something is wedged, remove it manually:
+rm /path/to/models/<file>.part.lock
+atlas model install Qwen3.5-9B-Q6_K
+```
+
+The lock is auto-reclaimed if the holder PID is no longer alive (PC-056.2's stale-lock detection), so you should rarely need to delete it by hand.
+
+### `atlas model install` refuses: ".part file is larger than expected model size"
+
+**Symptom:** Install refuses to resume with a message about an oversized `.part` file and a hint to either `rm` it or pass `--no-resume`.
+
+**Cause:** PC-056.2 guard. The resume path trusts the `.part`'s current size and asks the server for `Range: bytes=N-`. If the existing `.part` is bigger than the registry's expected model size (more than 5% over to allow for normal quant variation), something is wrong: a renamed model left a stale `.part` behind, you switched mirrors, or the file was modified manually. Continuing would skip the whole download and fail SHA at the end.
+
+**Fix:**
+```bash
+# Either delete the .part:
+rm /path/to/models/<file>.gguf.part
+
+# Or restart from byte 0 (which discards the existing .part):
+atlas model install Qwen3.5-9B-Q6_K --no-resume
+```
+
 ### `atlas model install` says "requires HuggingFace authentication"
 
 **Symptom:** Install of Qwen3.5-7B / 14B / 32B refuses with a message about setting `HF_TOKEN`.
