@@ -29,7 +29,7 @@ services:
     # Default behavior: pull prebuilt image from GHCR (PC-052). To rebuild
     # locally for dev, run: docker compose build llama-server
     # Tag is overridable via ATLAS_IMAGE_TAG (default: latest from main).
-    image: ghcr.io/itigges22/atlas-llama:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-llama:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: ./inference
       dockerfile: Dockerfile.v31
@@ -63,7 +63,7 @@ services:
 
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
-    image: ghcr.io/itigges22/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: ./geometric-lens
     environment:
@@ -97,7 +97,7 @@ services:
 
   # --- V3 Pipeline Service ---
   v3-service:
-    image: ghcr.io/itigges22/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: v3-service/Dockerfile
@@ -123,7 +123,7 @@ services:
 
   # --- Sandbox (isolated code execution) ---
   sandbox:
-    image: ghcr.io/itigges22/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: ./sandbox
     tmpfs:
@@ -151,7 +151,7 @@ services:
   # (or `ATLAS_PROJECT_DIR=/path/to/proj docker compose up`) BEFORE bringing
   # the stack up — the bind mount is fixed for the container's lifetime.
   atlas-proxy:
-    image: ghcr.io/itigges22/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: ./atlas-proxy
     environment:

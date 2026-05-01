@@ -146,6 +146,21 @@ Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/
 > $USERNAME --password-stdin`), or (b) build from source with
 > `docker compose build` and skip the pull entirely.
 
+> **Dev workflow gotcha — `compose pull` overwrites local builds.**
+> Both the local-built image and the GHCR-pulled image share the same
+> tag (`ghcr.io/<owner>/atlas-<svc>:<tag>`), so `docker compose pull`
+> will REPLACE your locally-built image with the registry version and
+> wipe your local changes. While iterating on a service, either skip
+> `compose pull` entirely (Docker won't auto-pull if a local image is
+> present), or set `ATLAS_IMAGE_TAG=dev-local` (any unpublished tag
+> name) in `.env` so your local builds and the registry images live
+> under different tags.
+
+> **Forks: pointing compose at your own GHCR.** If you've forked the
+> repo and your build-images.yml workflow has published images to
+> `ghcr.io/<your-username>/atlas-*`, set `ATLAS_GHCR_OWNER=<your-username>`
+> in `.env` to pull your fork's images instead of upstream's.
+
 ### Verify Installation
 
 ```bash

@@ -117,7 +117,11 @@ jobs:
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=sha,prefix=sha-,format=short
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            # Restrict :X.Y to stable tags only — without `enable=`,
+            # tagging `v1.0.0-rc1` after `v1.0.0` would silently flip
+            # `:1.0` to point at the RC (downgrade for users pinned to
+            # `:1.0`). Same class of footgun as auto-latest above.
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref, '-') }}
 
       # Cache strategy:
       #   llama  -> registry-based cache (CUDA build is ~6 GB; GHA cache is
