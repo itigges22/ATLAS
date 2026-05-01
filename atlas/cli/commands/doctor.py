@@ -58,9 +58,11 @@ class CheckResult:
 # Subprocess + HTTP helpers
 # ---------------------------------------------------------------------------
 
-def _run(cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
+def _run(cmd: List[str], timeout: int = 30,
+         cwd: Optional[str] = None) -> Tuple[int, str, str]:
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout, cwd=cwd)
         return p.returncode, p.stdout, p.stderr
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         return 1, "", str(e)
@@ -123,9 +125,17 @@ def check_nvidia() -> CheckResult:
         f"{len(gpus)} GPU(s): {', '.join(gpus)}")
 
 
-def _compose_ps() -> List[Dict]:
-    """Run `docker compose ps --format json` and parse (handles both NDJSON and array forms)."""
-    rc, out, err = _run(["docker", "compose", "ps", "--all", "--format", "json"])
+def _compose_ps(project_dir: str) -> List[Dict]:
+    """Run `docker compose ps --format json` and parse (handles both NDJSON and array forms).
+
+    Must run from `project_dir` — that's where docker-compose.yml lives.
+    Without this, `atlas doctor` invoked from outside the repo sees
+    "no containers" even when the stack is fully healthy.
+    """
+    rc, out, err = _run(
+        ["docker", "compose", "ps", "--all", "--format", "json"],
+        cwd=project_dir,
+    )
     if rc != 0 or not out.strip():
         return []
     services: List[Dict] = []
@@ -202,7 +212,7 @@ def check_model_file(atlas_root: str) -> CheckResult:
     # MODEL_DIR is typically `./models` (relative to the compose cwd).
     # Resolve relative paths against atlas_root, not the doctor's cwd.
     base = MODEL_DIR if os.path.isabs(MODEL_DIR) else os.path.join(atlas_root, MODEL_DIR)
-    path = os.path.join(base, MODEL_FILE)
+    path = os.path.normpath(os.path.join(base, MODEL_FILE))
     if not os.path.exists(path):
         return CheckResult("model_file", "fail",
             f"missing: {path}",
@@ -227,7 +237,7 @@ def check_lens_weights(atlas_root: str) -> CheckResult:
             f"missing: {', '.join(missing)}",
             f"expected in {weights_dir} — fetch from HuggingFace per README")
     return CheckResult("lens_weights", "pass",
-        f"cost_field.pt + metric_tensor.pt present")
+        "cost_field.pt + metric_tensor.pt present")
 
 
 def check_overcommit() -> CheckResult:
@@ -425,8 +435,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 3. NVIDIA toolkit (also slow — 60s timeout — pulls a small CUDA image first time)
     results.append(check_nvidia())
 
-    # 4. Compose stack
-    services = _compose_ps()
+    # 4. Compose stack — pass atlas_root as cwd so compose finds
+    # docker-compose.yml even when doctor is invoked from elsewhere
+    # on the filesystem.
+    services = _compose_ps(atlas_root)
 
     # 5. Per-container state
     container_results = check_containers(services)

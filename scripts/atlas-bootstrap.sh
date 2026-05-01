@@ -504,13 +504,27 @@ run_doctor() {
     fi
 
     # Doctor lives in the repo. cd there, run --quick, capture exit code.
-    local doctor_out
-    if doctor_out=$(cd "$ATLAS_INSTALL_DIR" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1); then
-        log_ok "atlas doctor passed (run \`atlas doctor\` for full check)"
-    else
-        log_warn "atlas doctor reported failures or warnings:"
-        echo "$doctor_out" | tail -10 | sed 's/^/      /'
+    local doctor_out doctor_rc
+    doctor_out=$(cd "$ATLAS_INSTALL_DIR" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1)
+    doctor_rc=$?
+
+    if [[ $doctor_rc -ne 0 ]]; then
+        log_err "atlas doctor reported failures:"
+        echo "$doctor_out" | grep -E "FAIL|WARN" | sed 's/^/      /'
         log_info "Run \`atlas doctor -v\` after install completes for detail."
+        return  # Don't block bootstrap; failures are install-time signals
+    fi
+
+    # Exit 0 may still include warnings — surface them inline so users
+    # don't miss things like vm.overcommit_memory=0 (PC-011).
+    local warn_lines
+    warn_lines=$(echo "$doctor_out" | grep "WARN" || true)
+    if [[ -n "$warn_lines" ]]; then
+        log_warn "atlas doctor passed with warnings:"
+        echo "$warn_lines" | sed 's/^/      /'
+        log_info "Run \`atlas doctor -v\` for the recommended fix."
+    else
+        log_ok "atlas doctor passed (run \`atlas doctor\` for full check)"
     fi
 }
 
