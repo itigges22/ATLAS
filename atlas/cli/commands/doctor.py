@@ -290,7 +290,7 @@ def check_overcommit() -> CheckResult:
             "could not read /proc/sys (non-Linux?)", str(e))
 
 
-def check_tier_constraints() -> CheckResult:
+def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
     """PC-055.1 cross-check: does the host meet the recommended tier's
     per-axis minimums (RAM, CPU, disk)?
 
@@ -301,13 +301,18 @@ def check_tier_constraints() -> CheckResult:
 
     Catches the "16 GB GPU but 8 GB RAM" case where llama-server fits on
     the GPU but the host OOMs during V3 pipeline + sandbox compiles.
+
+    Passes `atlas_root` to tier.probe() so the disk-free check measures
+    the partition where models will actually live (typically ATLAS_INSTALL_DIR
+    or the repo root), not `/`. Without this, a user with `/opt/atlas` on
+    a separate `/data` mount would get a misleading disk check.
     """
     try:
         from atlas.cli.commands import tier
     except ImportError as e:
         return CheckResult("tier_constraints", "skip",
             "tier module unavailable", str(e))
-    p = tier.probe()
+    p = tier.probe(install_dir=atlas_root)
     if not p.has_gpu:
         return CheckResult("tier_constraints", "skip",
             "no GPU detected (cpu tier)")
@@ -637,7 +642,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 10.6. Tier constraints (PC-055.1) — does the host meet the
     # recommended tier's CPU/RAM/disk minimums? Catches "16 GB GPU
     # but 8 GB RAM" cases where llama fits but host OOMs under V3.
-    results.append(check_tier_constraints())
+    # Pass atlas_root so disk check measures the right partition.
+    results.append(check_tier_constraints(atlas_root))
 
     # 11. End-to-end smoke
     if args.quick:
