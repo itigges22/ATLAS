@@ -1,6 +1,38 @@
 # ATLAS Setup Guide
 
-Three deployment methods: Docker Compose (recommended and tested), bare-metal, and K3s.
+Four deployment methods: **one-shot bootstrap** (recommended for new installs), Docker Compose (manual), bare-metal, or K3s.
+
+---
+
+## Method 0: One-shot bootstrap (PC-051)
+
+Single curl command that detects your distro, installs Docker + nvidia-container-toolkit, sets sysctl knobs, downloads model weights, and brings the stack up. Idempotent — safe to re-run.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+```
+
+Or, from a checkout:
+```bash
+./scripts/atlas-bootstrap.sh
+```
+
+Supported distros: Ubuntu/Debian, RHEL/Fedora/Rocky/Alma. Works around EPEL, firewalld, vm.overcommit_memory (PC-011), and nouveau driver conflicts automatically.
+
+Skip flags (env vars):
+| Flag | Effect |
+|---|---|
+| `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | Don't install Docker (already managed) |
+| `ATLAS_BOOTSTRAP_SKIP_NVIDIA=1` | CPU-only install (no GPU steps) |
+| `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
+| `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
+| `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
+| `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas`) |
+| `ATLAS_REPO_URL=https://...` | Alternate repo URL |
+
+When complete, prints a green "ATLAS ready" banner with quick-start commands. Total time on a fresh VM with a fast connection: ~10-30 minutes (model download dominates).
+
+If you'd rather do each step manually, use Method 1 below.
 
 ---
 

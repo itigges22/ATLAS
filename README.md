@@ -95,7 +95,15 @@ Full documentation - setup guides, architecture, configuration, troubleshooting,
 
 ## 🚀 Get Started
 
-ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or Podman, and Python 3.9+. Currently tested on NVIDIA GPUs - ATLAS is not NVIDIA-specific, and ROCm support for AMD GPUs is on the roadmap. See **[SETUP.md](docs/SETUP.md)** for full installation instructions covering Docker Compose, bare-metal, and K3s deployment. Once running, type `atlas` in any project directory and start building.
+**One-shot install** — single curl, walks away:
+```bash
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+```
+Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, downloads model weights, brings the stack up, and prints a green "ready" banner. ~10–30 minutes on a fresh VM.
+
+Then in any project directory: `atlas`.
+
+ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or Podman, and Python 3.9+. Currently tested on NVIDIA GPUs - ATLAS is not NVIDIA-specific, and ROCm support for AMD GPUs is on the roadmap. See **[SETUP.md](docs/SETUP.md)** for the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags.
 
 ---
 
