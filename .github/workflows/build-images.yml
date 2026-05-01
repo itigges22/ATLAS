@@ -14,6 +14,14 @@
 
 name: Build & publish container images
 
+# Cancel an in-progress build for the same ref when a newer commit arrives.
+# Branch refs (`refs/heads/dev`, `refs/heads/main`) get cancelled; tag refs
+# (`refs/tags/v1.0.0`) won't conflict because the same tag can't be pushed
+# twice. Per-ref grouping prevents a dev push from killing a main release.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main, dev]
@@ -94,7 +102,27 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build & push
+      # Cache strategy:
+      #   llama  -> registry-based cache (CUDA build is ~6 GB; GHA cache is
+      #             capped at 10 GB total per repo, so 5 services × mode=max
+      #             would thrash. Registry cache has no size limit and lives
+      #             alongside the published image.)
+      #   others -> GHA cache (small, fast, no extra registry write).
+      - name: Build & push (llama, registry cache)
+        if: matrix.service.name == 'llama'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache,mode=max
+          provenance: false
+
+      - name: Build & push (small services, GHA cache)
+        if: matrix.service.name != 'llama'
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.service.context }}

@@ -138,6 +138,14 @@ Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/
 (swap `atlas-proxy` for the other service names: `atlas-v3`,
 `atlas-lens`, `atlas-llama`, `atlas-sandbox`).
 
+> **Hitting `unauthorized` on `compose pull`?** GHCR packages are
+> private by default. If a maintainer hasn't yet flipped a package to
+> public visibility, `compose pull` fails with `unauthorized`. Two
+> escapes: (a) authenticate to GHCR with a personal access token that
+> has `read:packages` scope (`echo $TOKEN | docker login ghcr.io -u
+> $USERNAME --password-stdin`), or (b) build from source with
+> `docker compose build` and skip the pull entirely.
+
 ### Verify Installation
 
 ```bash
