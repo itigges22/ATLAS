@@ -18,13 +18,12 @@ on:
   push:
     branches: [main, dev]
     tags: ["v*.*.*"]
-    paths:
-      - "atlas-proxy/**"
-      - "v3-service/**"
-      - "geometric-lens/**"
-      - "inference/**"
-      - "sandbox/**"
-      - ".github/workflows/build-images.yml"
+    # No `paths:` filter on purpose. GitHub applies path filters to BOTH
+    # branch and tag pushes, so a `git tag v1.0.0 <existing-commit>` push
+    # — which doesn't itself touch any files — would be silently skipped
+    # if a paths filter were present, breaking release-by-tag. CI is cheap
+    # (Buildx layer cache makes docs-only pushes near-instant); over-build
+    # beats miss-build.
   workflow_dispatch:
 
 env:
