@@ -98,10 +98,20 @@ class Probe:
 
 
 def _read_nvidia_smi() -> Tuple[bool, Optional[str], float, int]:
-    """Return (has_gpu, gpu_name_first, vram_gb_first, gpu_count).
+    """Return (has_gpu, gpu_name, vram_gb, gpu_count).
 
-    Picks the FIRST GPU's VRAM as the budget for tier classification —
-    multi-GPU is documented as out-of-scope for v1 (PC-055 caveat).
+    Picks the GPU with the MOST VRAM (not the first) as the budget for
+    tier classification. Rationale: on hybrid-graphics systems (laptops
+    with iGPU + dGPU, workstations with display + compute GPUs), the
+    first GPU enumerated by nvidia-smi is often the smaller / display
+    GPU. ATLAS will run llama-server on the biggest GPU so the budget
+    should reflect that. To explicitly target a different GPU, set
+    `CUDA_VISIBLE_DEVICES=N` before invoking — nvidia-smi will then
+    only see the chosen GPU.
+
+    Multi-GPU tensor parallelism (e.g., 2x 24GB → 48GB effective via
+    --tensor-split) is still out of scope for v1; reported VRAM is
+    the largest single GPU, conservative for tensor-parallel users.
     """
     if not shutil.which("nvidia-smi"):
         return False, None, 0.0, 0
@@ -118,13 +128,18 @@ def _read_nvidia_smi() -> Tuple[bool, Optional[str], float, int]:
     lines = [ln.strip() for ln in p.stdout.strip().split("\n") if ln.strip()]
     if not lines:
         return False, None, 0.0, 0
-    first = lines[0]
-    try:
-        name, mem_mib = [x.strip() for x in first.split(",", 1)]
-        vram_gb = float(mem_mib) / 1024.0
-    except (ValueError, IndexError):
+    # Parse all GPUs, pick the one with most VRAM.
+    gpus: List[Tuple[str, float]] = []
+    for ln in lines:
+        try:
+            name, mem_mib = [x.strip() for x in ln.split(",", 1)]
+            gpus.append((name, float(mem_mib) / 1024.0))
+        except (ValueError, IndexError):
+            continue
+    if not gpus:
         return False, None, 0.0, 0
-    return True, name, vram_gb, len(lines)
+    name, vram_gb = max(gpus, key=lambda g: g[1])
+    return True, name, vram_gb, len(gpus)
 
 
 def _read_system_ram_gb() -> float:
@@ -460,15 +475,33 @@ def overall_status(checks: List[ConstraintCheck]) -> str:
     return "pass"
 
 
+def _round_floats(d: dict, ndigits: int = 1) -> dict:
+    """Round float values in a dict for clean JSON output.
+
+    nvidia-smi gives memory in MiB; dividing by 1024 produces noisy
+    decimals like 15.9287109375. Downstream consumers (PC-054 wizard,
+    PC-056 model registry) want clean numbers — they never need 4-decimal
+    VRAM precision since tier breakpoints are integer-aligned.
+    """
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, float):
+            out[k] = round(v, ndigits)
+        else:
+            out[k] = v
+    return out
+
+
 def classify(p: Probe) -> TierProfile:
     """Pick the tier whose VRAM range contains this probe's VRAM.
 
     GPU present but VRAM below the smallest tier (e.g., 4 GB) returns
     `small` with a notes-level warning rather than `cpu`, so users with a
-    too-small GPU at least see what to upgrade to. Pure no-GPU returns
-    `cpu`.
+    too-small GPU at least see what to upgrade to. Pure no-GPU OR
+    has_gpu-but-zero-VRAM (rare nvidia-smi failure mode) returns `cpu`
+    since neither can run llama.cpp.
     """
-    if not p.has_gpu:
+    if not p.has_gpu or p.vram_gb <= 0:
         return TIERS[0]  # cpu
     for t in TIERS[1:]:
         if t.max_vram_gb is None:
@@ -586,16 +619,16 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
         # compat.
         constraints = (evaluate_constraints(p, t) if t.tier != "cpu" else [])
         out = {
-            "probe": asdict(p),
+            "probe": _round_floats(asdict(p)),
             "tier": asdict(t),
             "env": t.env_vars(),
-            "constraints": [asdict(c) for c in constraints],
+            "constraints": [_round_floats(asdict(c)) for c in constraints],
             "overall": overall_status(constraints) if constraints else "skip",
         }
         print(json.dumps(out, indent=2, ensure_ascii=not UNICODE_OK))
         return 0
     if args.raw:
-        for k, v in asdict(p).items():
+        for k, v in _round_floats(asdict(p)).items():
             _safe_print(f"  {k:18s} {v}")
         return 0
     hdr = f"{BOLD}ATLAS tier{RESET}" if color else "ATLAS tier"
