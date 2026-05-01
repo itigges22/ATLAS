@@ -287,6 +287,9 @@ Standalone REPL for direct interaction with ATLAS services (without Aider).
 | [`cli/commands/solve.py`](../atlas/cli/commands/solve.py) | /solve: generate code from LLM, extract from think blocks, score via Lens, test via sandbox |
 | [`cli/commands/bench.py`](../atlas/cli/commands/bench.py) | /bench: delegates to benchmark.v3_runner with dataset/strategy/task-count args |
 | [`cli/commands/status.py`](../atlas/cli/commands/status.py) | /status: check health of llama-server, Lens, sandbox |
+| [`cli/commands/doctor.py`](../atlas/cli/commands/doctor.py) | `atlas doctor` (PC-053): 21-check install diagnostic — Docker / Compose / NVIDIA / model file / Lens weights / containers / health endpoints / image skew / e2e smoke / overcommit / tier match / tier constraints. Exit 0 on pass-or-warn, 1 on any fail. |
+| [`cli/commands/tier.py`](../atlas/cli/commands/tier.py) | `atlas tier` (PC-055 + PC-055.1 + PC-055.2): hardware probe + classification into one of 5 tiers (cpu/small/medium/large/xlarge). Multi-axis constraint check (VRAM + RAM + CPU + disk). `TierProfile` carries runtime knobs only; model selection lives in `model_recommendations.py`. |
+| [`cli/commands/model_recommendations.py`](../atlas/cli/commands/model_recommendations.py) | Per-tier default-model lookup (PC-055.2). `ModelRecommendation` dataclass + `for_tier(name)` / `tier_for_model(file)`. Stable public API that PC-056's full model registry will preserve when it absorbs this stub. |
 
 <a id="benchmark"></a>
 <a id="benchmark-core"></a>
@@ -512,6 +515,8 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`test_e2e_training.py`](../tests/integration/test_e2e_training.py) | End-to-end Lens training test |
 | **v3/** — 22 unit tests, one per V3 module | |
 | `test_plan_search.py` `test_div_sampling.py` `test_budget_forcing.py` `test_blend_asc.py` `test_reasc.py` `test_s_star.py` `test_candidate_selection.py` `test_failure_analysis.py` `test_constraint_refinement.py` `test_pr_cot.py` `test_derivation_chains.py` `test_refinement_loop.py` `test_metacognitive.py` `test_ace_pipeline.py` `test_self_test_gen.py` `test_lens_feedback.py` `test_embedding_store.py` `test_ablation_analysis.py` `test_ewc.py` `test_replay_buffer.py` `test_enhanced_retrain.py` `test_phase4_validation.py` `test_sandbox_adapter.py` | |
+| **cli/** — CLI subcommand unit tests | |
+| [`test_tier.py`](../tests/cli/test_tier.py) | 28 cases covering hardware classification + multi-axis constraints + PC-055.2 layering invariants. Regression tests for every paranoid-pass bug (multi-GPU pick-max, vram=0 + has_gpu=True, install_dir plumbing). Parametrized band-breakpoint cases at exact-edge VRAM values. |
 
 <a id="docs"></a>
 ### docs/ — Documentation

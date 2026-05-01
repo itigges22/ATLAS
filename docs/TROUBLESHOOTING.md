@@ -6,7 +6,18 @@ Common issues and solutions for ATLAS V3.0.1, organized by service.
 
 ## Quick Diagnostics
 
-Run these first to identify where the problem is:
+**Always start with `atlas doctor`.** It runs **21 checks** across the host (Docker / Compose / NVIDIA), the running services (containers, health endpoints, image skew), the runtime contract (kernel `vm.overcommit_memory`, model file presence, Lens weights, e2e smoke), and the host-vs-tier match (configured model fits this hardware, CPU/RAM/disk meet the tier minimums). It supersedes the manual `curl` ritual that used to lead this section.
+
+```bash
+atlas doctor              # full check (~5–10 s)
+atlas doctor --quick      # skip the e2e smoke (~2 s)
+atlas doctor -v           # verbose: full detail per check
+atlas doctor --json       # machine output (for bootstrap / CI)
+```
+
+See [CLI.md → Diagnostic Commands](CLI.md#diagnostic-commands) for the full check list, flag table, and exit codes. Doctor exits `0` on pass-or-warn, `1` on any fail — bootstrap and CI gate on the exit code. If a check fails, run with `-v` to get the underlying command output and remediation hints.
+
+If `atlas doctor` is unavailable (e.g., you haven't `pip install -e .` yet), the manual fallbacks are:
 
 ```bash
 # Docker Compose — check all services at once
@@ -39,6 +50,12 @@ The atlas-proxy health endpoint reports the status of all upstream services:
 ```
 
 If any field is `false`, that service is the problem.
+
+### Hardware classification
+
+If you're unsure whether your host can run ATLAS at the configured tier — or you just swapped GPUs — run `atlas tier`. It probes VRAM / RAM / CPU / disk, classifies the host into one of 5 tiers (`cpu` / `small` / `medium` / `large` / `xlarge`), and prints the recommended model + runtime knobs (context length, parallel slots, KV-cache quantization). The output also serves as the source-of-truth for `.env` values; see [CLI.md → `atlas tier`](CLI.md#atlas-tier) for the band table and flags.
+
+`atlas doctor` already runs the tier check (`tier_match` + `tier_constraints`) as part of its 21-check sweep, so most users don't need to invoke `atlas tier` directly — only when planning a config change or hardware swap.
 
 ---
 
@@ -173,10 +190,12 @@ The filename must match `ATLAS_MODEL_FILE` in `.env` (default: `Qwen3.5-9B-Q6_K.
 
 **Symptom:** llama-server crashes or gets OOMKilled shortly after starting. `nvidia-smi` shows VRAM near 100%.
 
-**Fix:** The 9B Q6_K model needs ~8.2 GB VRAM (model + KV cache). Ensure:
+**Diagnose first:** run `atlas doctor` — the `tier_match` check (#20) flags configured models that overshoot the host's tier (e.g., a 14B model on a 12 GB GPU). If it warns, you're running a tier above what the hardware supports; downgrade the model or upgrade the GPU. Run `atlas tier` for the recommended model + runtime knobs for your specific hardware.
+
+**Fix:** The default 9B Q6_K model needs ~8.2 GB VRAM (model + KV cache). Ensure:
 1. No other GPU processes are running (`nvidia-smi` — check for other CUDA processes)
-2. You have 16GB+ VRAM
-3. Context size isn't set too high (default 32K is fine, don't increase without checking VRAM)
+2. You have at least 12 GB VRAM (medium tier minimum). For 8 GB cards, switch to the small-tier 7B Q4_K_M model.
+3. Context size isn't set too high (default 32K is fine, don't increase without checking VRAM). `atlas tier` shows the recommended `ATLAS_CTX_SIZE` for your tier.
 
 ```bash
 # Kill other GPU processes if needed

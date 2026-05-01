@@ -18,14 +18,27 @@ The defaults work if your model is at `./models/Qwen3.5-9B-Q6_K.gguf`.
 
 ## 1. Docker Compose (.env)
 
-These variables are read by `docker-compose.yml` and control host-side port mappings and model paths. Copy `.env.example` to `.env` to configure:
+These variables are read by `docker-compose.yml` and control host-side port mappings and model paths. Copy `.env.example` to `.env` to configure.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
+> **Source of truth for runtime knobs.** Don't pick values for
+> `ATLAS_MODEL_FILE`, `ATLAS_CTX_SIZE`, `PARALLEL_SLOTS`, or
+> `KV_CACHE_TYPE_K|V` from this table directly — run `atlas tier` and use
+> the values it prints for your hardware. The defaults below are tuned
+> for the **medium tier** (12–20 GB VRAM, ATLAS development target);
+> small / large / xlarge boxes need different settings to avoid OOM or
+> leave perf on the table. See [SETUP.md → Hardware Sizing](SETUP.md#hardware-sizing)
+> for the full tier table, or [CLI.md → `atlas tier`](CLI.md#atlas-tier)
+> for the command flags.
+
+| Variable | Default (medium tier) | Description |
+|----------|----------------------:|-------------|
 | `ATLAS_MODELS_DIR` | `./models` | Host path to directory containing GGUF model weights |
-| `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | Model filename (must exist in ATLAS_MODELS_DIR) |
-| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses |
-| `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens |
+| `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | Model filename (must exist in ATLAS_MODELS_DIR). `atlas tier` recommends per hardware. |
+| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses (matches MODEL_FILE without extension) |
+| `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens. Tier-dependent: small=8K, medium=32K, large=32K, xlarge=64K. |
+| `PARALLEL_SLOTS` | `1` | llama-server `--parallel`. Tier-dependent: small/medium=1, large/xlarge=2. Read by the llama entrypoint, not directly by docker-compose. |
+| `KV_CACHE_TYPE_K` | `q8_0` | KV-cache K quantization. Tier-dependent: small=q4_0, medium/large=q8_0, xlarge=f16. |
+| `KV_CACHE_TYPE_V` | `q4_0` | KV-cache V quantization. Tier-dependent: small=q4_0, medium=q4_0, large=q8_0, xlarge=f16. |
 | `ATLAS_LLAMA_PORT` | `8080` | llama-server host port |
 | `ATLAS_LENS_PORT` | `8099` | Geometric Lens host port |
 | `ATLAS_V3_PORT` | `8070` | V3 Pipeline service host port |

@@ -350,6 +350,90 @@ Generation parameters: `max_tokens=8192`, `temperature=0.6`, `top_k=20`, `top_p=
 
 ---
 
+<a id="diagnostic-commands"></a>
+## Diagnostic Commands
+
+ATLAS ships with two standalone subcommands for diagnosing install health and matching the host to the right runtime configuration. Both are invoked as `atlas <subcommand>` after `pip install -e .`.
+
+<a id="atlas-doctor"></a>
+### `atlas doctor` — install health check
+
+`atlas doctor` runs **21 checks** across the host (Docker / Compose / NVIDIA stack), the running services (compose ps, image skew, health endpoints, model file presence, Lens weights), and the runtime contract (kernel `vm.overcommit_memory`, host-vs-tier match + constraints, end-to-end llama-server smoke). Use it as the **first step** for any "ATLAS isn't working" question — it replaces the 8-line manual `curl` ritual that used to lead the troubleshooting guide.
+
+```bash
+atlas doctor              # full check (~5–10 s)
+atlas doctor --quick      # skip the e2e smoke (~2 s)
+atlas doctor --json       # machine output, for bootstrap / CI
+atlas doctor -v           # verbose: full detail per check
+atlas doctor --no-color   # disable ANSI color in human output
+```
+
+**Flags**
+
+| Flag | Behavior |
+|---|---|
+| `--quick` | Skip the e2e llama-server smoke test (~10 s saved). |
+| `--json` | Emit machine output. Used by `atlas-bootstrap.sh` post-install to surface warnings inline. |
+| `-v` / `--verbose` | Show full detail (commands, output snippets, remediation hints) for each check, not just status + headline. |
+| `--no-color` | Disable ANSI color (auto-disabled when stdout is non-TTY or `--json`). |
+
+**Exit codes**
+
+- `0` — all checks pass, or only warnings (warnings are actionable, not fatal).
+- `1` — at least one check failed (compose stack down, OOM-bound config, smoke test fails, etc.).
+
+**The 21 checks** (in run order)
+
+1. `docker` — daemon installed and reachable
+2. `compose` — Docker Compose v2 plugin available
+3. `nvidia` — `nvidia-smi` works + container runtime can see GPU
+4. `overcommit` — kernel `vm.overcommit_memory` set sanely for llama-server allocator
+5. `model_file` — `ATLAS_MODEL_FILE` exists on disk in `models/` (size sanity-check)
+6. `lens_weights` — Geometric Lens model files present
+7. `containers` — all 5 atlas-* containers in `compose ps` output
+8. `health_endpoints` — proxy / lens / sandbox / llama health endpoints reachable
+9. `image_skew` — all 5 atlas-* images on the same tag (mixed tags can break inter-service contracts)
+10. `e2e_smoke` — direct `POST /completion` to llama-server returns text (skipped under `--quick`)
+11–19. service-specific subcheck rows (containers, ports, log heads, env-var presence, etc.)
+20. `tier_match` — does the configured `ATLAS_MODEL_FILE` match the recommended model for this hardware tier? Warns on overshoot (small box running large-tier model — OOM risk); passes silently on undershoot (just leaves perf on the table).
+21. `tier_constraints` — does this host meet the recommended tier's CPU / RAM / disk minimums? Multi-axis check (PC-055.1) — pure VRAM check isn't enough since ATLAS is heavy on host RAM (5 containers + V3 PR-CoT) and disk (model + images + working space).
+
+Doctor's tier checks consult the same classification engine as `atlas tier` (below). Disk checks against the directory containing `docker-compose.yml`, so users who installed to `/opt/atlas` or `/data/atlas` get the right partition measured.
+
+<a id="atlas-tier"></a>
+### `atlas tier` — hardware classification
+
+`atlas tier` probes the host (GPU VRAM via `nvidia-smi`, system RAM via `/proc/meminfo`, CPU cores via `os.cpu_count()`, free disk via `shutil.disk_usage`), classifies it into one of five tiers (`cpu` / `small` / `medium` / `large` / `xlarge`), and prints the recommended ATLAS runtime settings for that tier (model, context length, parallel slots, KV-cache quantization). Use it before editing `.env` for the first time, or whenever you swap GPUs.
+
+```bash
+atlas tier              # classify this host + show recommendations
+atlas tier list         # show all 5 tier definitions
+atlas tier --json       # machine output (consumed by PC-054 wizard, PC-056 registry)
+atlas tier --raw        # just the probe (no classification)
+atlas tier --install-dir /data/atlas   # measure disk free against an alternate path
+```
+
+**Tier breakpoints** (VRAM)
+
+| Tier | VRAM band | Example GPUs |
+|---|---|---|
+| `cpu` | none | (CPU-only is documented but not supported in v1) |
+| `small` | 8–12 GB | RTX 3060 8GB, RTX 4060 8GB |
+| `medium` | 12–20 GB | RTX 4060 Ti 16GB, RTX 5060 Ti 16GB, 4070 Ti Super 16GB |
+| `large` | 20–32 GB | RTX 3090 / 4090 / 5090 24GB |
+| `xlarge` | 32 GB+ | RTX 5090 32GB, A6000 48GB, A100, H100 |
+
+**Multi-axis constraints (PC-055.1).** Each tier carries minimums for system RAM, CPU cores, and free disk in addition to VRAM, because a 16 GB GPU paired with 8 GB host RAM is a real OOM risk during V3 + sandbox compiles. The tier card prints a constraint table comparing the host against the recommended tier's minimums; the JSON output exposes `constraints[]` and an `overall` field (`pass` / `warn` / `fail`) so consumers don't have to re-implement the rules.
+
+**Multi-GPU.** `atlas tier` reports the **largest** GPU's VRAM as the budget. ATLAS runs llama-server on the biggest GPU; to override, set `CUDA_VISIBLE_DEVICES=N` before invoking so `nvidia-smi` only sees the chosen GPU.
+
+**Exit codes**
+
+- `0` — classified successfully (warnings stay exit 0 — they're actionable, not fatal).
+- `1` — at least one constraint failed (cpu tier, or RAM/disk shortage past 15% threshold). `atlas-bootstrap.sh` gates on this.
+
+---
+
 ## What ATLAS Does Well
 
 - **Single-file creation**: Python scripts, Rust CLIs, Go servers, C programs, shell scripts — first-shot, compiles and runs

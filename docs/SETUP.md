@@ -163,10 +163,11 @@ Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/
 
 ### Verify Installation
 
-The fastest way is **`atlas doctor`** — runs 19 checks across the host
-environment, the docker stack, and a live model inference, and returns
-exit 0 (healthy) / 1 (failures). This is also what `atlas-bootstrap.sh`
-runs at the end of install.
+The fastest way is **`atlas doctor`** — runs **21 checks** across the host
+environment, the docker stack, a live model inference, and the
+host-vs-tier match. Returns exit 0 (healthy or warnings only) / 1 (any
+hard failure). This is what `atlas-bootstrap.sh` runs at the end of
+install, and what TROUBLESHOOTING.md leads with.
 
 ```bash
 atlas doctor              # full check (~5–10s)
@@ -175,7 +176,7 @@ atlas doctor --json       # machine output, for scripts/CI
 atlas doctor -v           # verbose: show detail for each check
 ```
 
-The 19 checks (PC-053):
+The 21 checks (PC-053 + PC-055 + PC-055.1):
 
 | Group | Check | What it confirms |
 |---|---|---|
@@ -183,12 +184,14 @@ The 19 checks (PC-053):
 | Host | compose | docker compose v2 installed |
 | Host | nvidia | nvidia-container-toolkit can run nvidia-smi inside Docker |
 | Host | vm.overcommit_memory | set to 1 (PC-011 — Redis AOF) |
-| Host | model_file | `Qwen3.5-9B-Q6_K.gguf` exists and is > 100 MB |
+| Host | model_file | `ATLAS_MODEL_FILE` exists and is > 100 MB |
 | Host | lens_weights | `cost_field.pt` + `metric_tensor.pt` present |
 | Stack | container/redis, llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 6 running and healthy |
 | Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag (PC-052) |
 | End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
+| Tier | tier_match (PC-055) | configured `ATLAS_MODEL_FILE` matches the recommended model for this hardware tier (warns on overshoot — OOM risk; passes on undershoot — just leaves perf on the table) |
+| Tier | tier_constraints (PC-055.1) | host meets the recommended tier's CPU / RAM / disk minimums. Multi-axis check — pure VRAM isn't enough since ATLAS is heavy on host RAM (5 containers + V3 PR-CoT) and disk (model + images + working space) |
 
 If you'd rather check by hand:
 
@@ -445,21 +448,58 @@ which tier your hardware lands in and the exact `.env` values to use.
 ```bash
 atlas tier              # classify this host + show recommendations
 atlas tier list         # show all 5 tier definitions
-atlas tier --json       # machine output (for scripts)
+atlas tier --json       # machine output (consumed by PC-054 wizard, PC-056 registry)
 atlas tier --raw        # just the probe (no classification)
+atlas tier --install-dir /data/atlas   # measure disk free against an alternate path
 ```
+
+Use `--install-dir` when ATLAS lives on a non-root mount (e.g.,
+`/opt/atlas` on a `/data` partition) — the disk-free check defaults to
+`/`, which can mislead when the model + images live elsewhere. Doctor's
+`tier_constraints` check passes the right path automatically (it knows
+where `docker-compose.yml` lives), so this flag is mainly for direct
+`atlas tier` invocations.
 
 The medium tier is the ATLAS development target — `atlas-bootstrap.sh`
 defaults to its model+context settings. Other tiers require manual `.env`
 edits (or wait for PC-054's first-run wizard which automates the
 selection).
 
+#### Multi-axis constraint check (PC-055.1)
+
+`atlas tier` doesn't only classify by GPU VRAM — each tier carries
+floors for system RAM, CPU cores, and free disk, and the tier card
+prints a **constraint table** comparing the host against the
+recommended tier's minimums. ATLAS is heavy on host resources too:
+five containers each carry their own RSS, the V3 PR-CoT repair phase
+bursts memory, sandbox compiles need real CPU, and model + image
+storage adds up fast. A 16 GB GPU paired with 8 GB host RAM is a real
+OOM risk during V3 + sandbox compiles, with no warning from a
+VRAM-only check.
+
+| Tier | min RAM | min CPU cores | min free disk |
+|------|--------:|--------------:|--------------:|
+| small  | 12 GB | 4  | 20 GB |
+| medium | 16 GB | 4  | 25 GB |
+| large  | 24 GB | 8  | 35 GB |
+| xlarge | 32 GB | 16 | 60 GB |
+
+Status semantics:
+
+- **pass** — comfortably above the minimum
+- **warn** — RAM/disk shortage within 15% of the minimum, OR any CPU
+  shortage. CPU shortage is always warn (slow ≠ broken)
+- **fail** — RAM/disk shortage past the 15% threshold (will OOM during
+  V3 or fail to download / pull images)
+
+Hard minimums for the tier you intend to run:
+
 | Resource | Minimum | Recommended | Notes |
 |----------|---------|-------------|-------|
 | GPU VRAM | 8 GB | 16 GB | See tier table above |
-| System RAM | 14 GB | 16 GB+ | PyTorch runtime + container overhead |
-| Disk | 15 GB | 25 GB | Model (4.4–23 GB depending on tier) + container images (5–8 GB) + working space |
-| CPU | 4 cores | 8+ cores | V3 pipeline is CPU-intensive during repair phases |
+| System RAM | 12 GB | 16 GB+ | 5 containers + V3 PR-CoT burst memory + sandbox tmpfs |
+| Disk | 20 GB | 35 GB | Model (4.4–23 GB) + container images (5–8 GB) + working space |
+| CPU | 4 cores | 8+ cores | V3 pipeline + sandbox compiles + llama prompt processing |
 
 ### Supported GPUs
 
