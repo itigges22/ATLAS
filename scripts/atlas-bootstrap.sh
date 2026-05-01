@@ -424,7 +424,11 @@ start_compose() {
         log_warn "Using sudo for docker compose (user not in docker group yet — log out/in to fix)"
     fi
 
-    log_info "Pulling/building images and starting containers…"
+    # Compose v2 with `image:` set in compose.yml does `pull missing` by
+    # default — first run downloads the GHCR images (PC-052), subsequent
+    # runs reuse the local cache. To force a rebuild from source instead
+    # of pulling, run `docker compose build` before this.
+    log_info "Pulling images from GHCR (first run only) and starting containers…"
     $DC up -d 2>&1 | tee /tmp/atlas-compose.log | tail -20
     log_ok "Containers started. See /tmp/atlas-compose.log for details."
 }

@@ -99,7 +99,7 @@ Full documentation - setup guides, architecture, configuration, troubleshooting,
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
-Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, downloads model weights, brings the stack up, and prints a green "ready" banner. ~10–30 minutes on a fresh VM.
+Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, pulls prebuilt service images from GHCR (no 75-min CUDA build), downloads model weights, brings the stack up, and prints a green "ready" banner. ~5–10 minutes on a fast connection.
 
 Then in any project directory: `atlas`.
 

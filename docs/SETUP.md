@@ -101,17 +101,42 @@ atlas
 
 ### What Happens on First Run
 
-1. Docker builds 5 container images from source:
-   - **llama-server** — compiles llama.cpp with CUDA (slowest, ~5-10 min)
-   - **geometric-lens** — installs PyTorch CPU + FastAPI
-   - **v3-service** — installs PyTorch CPU + benchmark modules
-   - **sandbox** — installs Node.js, Go, Rust, gcc
-   - **atlas-proxy** — compiles Go binary
+1. Docker pulls 5 prebuilt container images from
+   `ghcr.io/itigges22/atlas-{proxy,v3,lens,llama,sandbox}` (PC-052,
+   ~3 min on a fast connection — replaces the prior ~75 min from-source
+   CUDA build). To build from source instead (dev workflow), run
+   `docker compose build` before the `up` step — see "Image source"
+   below.
 2. llama-server loads the 7GB model into GPU VRAM (~1-2 min)
 3. All services start health checks
 4. Once all 5 services report healthy, `atlas` connects and launches Aider
 
 Subsequent `docker compose up -d` starts are fast (seconds) since images are cached.
+
+### Image source: prebuilt vs from-source
+
+`docker-compose.yml` declares both `image:` (GHCR) and `build:` (local
+Dockerfile) for every service. Compose's default behavior:
+
+| Command | What it does |
+|---------|--------------|
+| `docker compose up -d`            | Pull `image:` if not in local cache, else reuse local |
+| `docker compose pull`             | Force pull latest tag from GHCR (overwrite local cache) |
+| `docker compose build`            | Build from `Dockerfile` (overrides GHCR image) |
+| `docker compose up -d --build`    | Always rebuild from source then start |
+
+**Tag pinning.** The tag defaults to `latest`. To pin to a specific
+version (recommended for production), set `ATLAS_IMAGE_TAG` in `.env`:
+
+```env
+ATLAS_IMAGE_TAG=v1.0.0      # semver tag from a git release
+ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
+ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
+```
+
+Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/atlas-proxy>
+(swap `atlas-proxy` for the other service names: `atlas-v3`,
+`atlas-lens`, `atlas-llama`, `atlas-sandbox`).
 
 ### Verify Installation
 
