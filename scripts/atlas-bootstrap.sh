@@ -483,6 +483,38 @@ wait_for_healthy() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 8.5: atlas doctor (PC-053) — surface non-container issues
+# ---------------------------------------------------------------------------
+# Health-poll only checks `docker compose ps` for healthy. Doctor adds the
+# "is the install actually correct" layer: lens weights, model file size,
+# overcommit, image-tag skew. Run --quick (skip e2e smoke — wait until
+# user explicitly invokes for that) and only surface a summary line.
+
+run_doctor() {
+    log_step "Step 8.5: atlas doctor (sanity sweep)"
+
+    if [[ "${ATLAS_BOOTSTRAP_SKIP_COMPOSE:-0}" == "1" ]]; then
+        log_skip "Skipped (compose was skipped, no stack to check)"
+        return
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        log_warn "python3 not found — skipping doctor (doctor is Python)"
+        return
+    fi
+
+    # Doctor lives in the repo. cd there, run --quick, capture exit code.
+    local doctor_out
+    if doctor_out=$(cd "$ATLAS_INSTALL_DIR" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1); then
+        log_ok "atlas doctor passed (run \`atlas doctor\` for full check)"
+    else
+        log_warn "atlas doctor reported failures or warnings:"
+        echo "$doctor_out" | tail -10 | sed 's/^/      /'
+        log_info "Run \`atlas doctor -v\` after install completes for detail."
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Step 9: Ready banner
 # ---------------------------------------------------------------------------
 
@@ -537,6 +569,8 @@ main() {
     start_compose
     echo
     wait_for_healthy || die "Service health check failed."
+    echo
+    run_doctor
 
     print_ready_banner
 }

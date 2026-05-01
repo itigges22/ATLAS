@@ -163,15 +163,44 @@ Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/
 
 ### Verify Installation
 
+The fastest way is **`atlas doctor`** — runs 19 checks across the host
+environment, the docker stack, and a live model inference, and returns
+exit 0 (healthy) / 1 (failures). This is also what `atlas-bootstrap.sh`
+runs at the end of install.
+
 ```bash
-# Check each service individually
+atlas doctor              # full check (~5–10s)
+atlas doctor --quick      # skip the e2e model inference (~2s)
+atlas doctor --json       # machine output, for scripts/CI
+atlas doctor -v           # verbose: show detail for each check
+```
+
+The 19 checks (PC-053):
+
+| Group | Check | What it confirms |
+|---|---|---|
+| Host | docker | daemon reachable |
+| Host | compose | docker compose v2 installed |
+| Host | nvidia | nvidia-container-toolkit can run nvidia-smi inside Docker |
+| Host | vm.overcommit_memory | set to 1 (PC-011 — Redis AOF) |
+| Host | model_file | `Qwen3.5-9B-Q6_K.gguf` exists and is > 100 MB |
+| Host | lens_weights | `cost_field.pt` + `metric_tensor.pt` present |
+| Stack | container/redis, llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 6 running and healthy |
+| Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
+| Stack | image_skew | all 5 `atlas-*` images on the same tag (PC-052) |
+| End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
+
+If you'd rather check by hand:
+
+```bash
+# Hit each health endpoint
 curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
 curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
 curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Quick functional test (requires aider: pip install aider-chat)
+# Functional test (requires aider: pip install aider-chat)
 atlas --message "Create hello.py that prints hello world"
 ```
 

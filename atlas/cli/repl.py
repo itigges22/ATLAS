@@ -411,10 +411,16 @@ def run():
     """Main entry point.
 
     Launch strategy:
-    1. Check if proxy is running or can be started locally (Go)
-    2. If proxy + Aider available → launch Aider (full coding assistant)
-    3. Otherwise → fall back to built-in REPL (/solve, /bench only)
+    1. `atlas doctor [...]` → run install diagnostic and exit (PC-053)
+    2. Check if proxy is running or can be started locally (Go)
+    3. If proxy + Aider available → launch Aider (full coding assistant)
+    4. Otherwise → fall back to built-in REPL (/solve, /bench only)
     """
+    # Subcommand dispatch (must precede Aider passthrough)
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        from atlas.cli.commands import doctor
+        sys.exit(doctor.main(sys.argv[2:]))
+
     extra_args = sys.argv[1:] if len(sys.argv) > 1 else None
 
     # Try to get the proxy running
