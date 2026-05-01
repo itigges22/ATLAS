@@ -1,9 +1,16 @@
-"""atlas tier — hardware probe + tier classification (PC-055).
+"""atlas tier — hardware probe + tier classification (PC-055, split PC-055.2).
 
 Classifies the host's GPU/RAM/disk into one of five tiers and emits the
-recommended ATLAS settings for that tier (model, context length, parallel
-slots, KV cache quantization). The output is the foundation that PC-056
-(model registry) and PC-054 (first-run wizard) compose on top of.
+recommended ATLAS *runtime* settings for that tier (context length,
+parallel slots, KV cache quantization). The recommended *model* per tier
+lives in `model_recommendations.py` so PC-056's full model registry can
+absorb that surface without churning every caller of TierProfile.
+
+Layering:
+    tier.py                  -> hardware capability + runtime knobs
+    model_recommendations.py -> per-tier default model (PC-056 will replace)
+    PC-054 wizard            -> consumes both, writes merged .env
+    PC-056 model registry    -> upgrades model_recommendations in place
 
 Tier breakpoints are based on VRAM, the hardest constraint for LLM
 inference:
@@ -36,6 +43,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple
+
+from atlas.cli.commands import model_recommendations
 
 # Reuse doctor's color + unicode-safety primitives so output looks consistent.
 RESET = "\033[0m"
@@ -202,10 +211,14 @@ def probe(install_dir: Optional[str] = None) -> Probe:
 
 @dataclass
 class TierProfile:
-    """Recommended ATLAS settings for a hardware tier.
+    """Recommended ATLAS *runtime* settings for a hardware tier.
 
-    Field meanings map directly to docker-compose.yml / .env knobs:
-      model_file       -> ATLAS_MODEL_FILE
+    PC-055.2 split: this record is pure *hardware capability* + the
+    llama-server runtime knobs that derive from it. Model selection
+    (which gguf to load) lives in `model_recommendations.py` so PC-056's
+    full model registry can absorb that surface without touching tiers.
+
+    Runtime fields map directly to docker-compose.yml / .env knobs:
       context_length   -> ATLAS_CTX_SIZE / CONTEXT_LENGTH
       parallel_slots   -> PARALLEL_SLOTS  (llama-server --parallel)
       kv_cache_k       -> KV_CACHE_TYPE_K (llama-server -ctk)
@@ -224,10 +237,8 @@ class TierProfile:
     min_vram_gb: float
     max_vram_gb: Optional[float]  # None = unbounded above
     example_gpus: List[str]
-    # Recommended settings
-    model_file: str
-    model_display: str
-    model_size_gb: float
+    # Recommended runtime settings (model-independent — same gguf
+    # quant choice doesn't change context/slots/KV caching strategy).
     context_length: int
     parallel_slots: int
     kv_cache_k: str
@@ -239,10 +250,14 @@ class TierProfile:
     notes: str
 
     def env_vars(self) -> dict:
-        """Render the recommended settings as a dict suitable for .env writing."""
+        """Render the recommended *runtime* settings as a dict suitable
+        for .env writing.
+
+        Model-related env vars (ATLAS_MODEL_FILE, ATLAS_MODEL_NAME) are
+        rendered by `model_recommendations.ModelRecommendation.env_vars()`.
+        Wizard / installer code merges the two dicts before writing .env.
+        """
         return {
-            "ATLAS_MODEL_FILE": self.model_file,
-            "ATLAS_MODEL_NAME": self.model_file.rsplit(".", 1)[0],
             "ATLAS_CTX_SIZE": str(self.context_length),
             # Note: PARALLEL_SLOTS / KV_CACHE_TYPE_K|V are read by the
             # llama entrypoint, not directly by docker-compose. Surface
@@ -266,9 +281,6 @@ TIERS: List[TierProfile] = [
                     "completeness but not supported in v1.",
         min_vram_gb=0.0, max_vram_gb=0.0,
         example_gpus=[],
-        model_file="N/A",
-        model_display="N/A — install a CUDA GPU",
-        model_size_gb=0.0,
         context_length=0,
         parallel_slots=0,
         kv_cache_k="N/A", kv_cache_v="N/A",
@@ -283,9 +295,6 @@ TIERS: List[TierProfile] = [
                     "7B Q4 model leaves ~3 GB for KV cache + compute.",
         min_vram_gb=8.0, max_vram_gb=12.0,
         example_gpus=["RTX 3060 8GB", "RTX 4060 8GB", "T4 16GB (datacenter)"],
-        model_file="Qwen3.5-7B-Q4_K_M.gguf",
-        model_display="Qwen3.5 7B (Q4_K_M)",
-        model_size_gb=4.4,
         context_length=8192,
         parallel_slots=1,
         kv_cache_k="q4_0", kv_cache_v="q4_0",
@@ -308,9 +317,6 @@ TIERS: List[TierProfile] = [
         min_vram_gb=12.0, max_vram_gb=20.0,
         example_gpus=["RTX 4060 Ti 16GB", "RTX 5060 Ti 16GB",
                       "RTX 3080 Ti 12GB", "RTX 4070 Ti Super 16GB"],
-        model_file="Qwen3.5-9B-Q6_K.gguf",
-        model_display="Qwen3.5 9B (Q6_K)",
-        model_size_gb=6.9,
         context_length=32768,
         parallel_slots=1,
         kv_cache_k="q8_0", kv_cache_v="q4_0",
@@ -330,9 +336,6 @@ TIERS: List[TierProfile] = [
                     "2 parallel slots for multi-conversation.",
         min_vram_gb=20.0, max_vram_gb=32.0,
         example_gpus=["RTX 3090 24GB", "RTX 4090 24GB", "RTX 5090 24GB"],
-        model_file="Qwen3.5-14B-Q5_K_M.gguf",
-        model_display="Qwen3.5 14B (Q5_K_M)",
-        model_size_gb=10.5,
         context_length=32768,
         parallel_slots=2,
         kv_cache_k="q8_0", kv_cache_v="q8_0",
@@ -353,9 +356,6 @@ TIERS: List[TierProfile] = [
         min_vram_gb=32.0, max_vram_gb=None,
         example_gpus=["RTX 5090 32GB", "RTX A6000 48GB",
                       "A100 40/80GB", "H100 80GB"],
-        model_file="Qwen3.5-32B-Q5_K_M.gguf",
-        model_display="Qwen3.5 32B (Q5_K_M)",
-        model_size_gb=23.0,
         context_length=65536,
         parallel_slots=2,
         kv_cache_k="f16", kv_cache_v="f16",
@@ -551,8 +551,16 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     _safe_print()
     _safe_print(f"  {BOLD}Recommended ATLAS settings:{RESET}" if color
                 else "  Recommended ATLAS settings:")
-    _safe_print(f"    Model:           {t.model_display} ({t.model_size_gb:.1f} GB on disk)")
-    _safe_print(f"    File:            {t.model_file}")
+    # PC-055.2: model lookup lives in model_recommendations now. Display
+    # gracefully if the recommendation is missing (PC-056 might omit some
+    # tiers, or rename one — we shouldn't crash the doctor over it).
+    rec = model_recommendations.for_tier(t.tier)
+    if rec is not None:
+        _safe_print(f"    Model:           {rec.model_display} "
+                    f"({rec.model_size_gb:.1f} GB on disk)")
+        _safe_print(f"    File:            {rec.model_file}")
+    else:
+        _safe_print("    Model:           (no default recommendation)")
     _safe_print(f"    Context length:  {t.context_length:,} tokens")
     _safe_print(f"    Parallel slots:  {t.parallel_slots}")
     _safe_print(f"    KV cache K / V:  {t.kv_cache_k} / {t.kv_cache_v}")
@@ -615,13 +623,22 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
     if args.json:
         # Include constraints + overall status so PC-054 wizard and PC-056
         # model registry can render the same evaluation without re-implementing
-        # the rules. Existing keys (probe, tier, env) preserved for backwards
-        # compat.
+        # the rules. Existing keys (probe, tier, env, constraints, overall)
+        # preserved across PC-055.1 -> PC-055.2; the only schema change is
+        # that `tier` no longer carries model_*. The model fields move under
+        # the new `recommendation` key, and `env` is the merged dict (model
+        # vars + tier runtime vars) so consumers writing .env get one bag.
         constraints = (evaluate_constraints(p, t) if t.tier != "cpu" else [])
+        rec = model_recommendations.for_tier(t.tier)
+        env = dict(t.env_vars())
+        if rec is not None:
+            env.update(rec.env_vars())
         out = {
             "probe": _round_floats(asdict(p)),
             "tier": asdict(t),
-            "env": t.env_vars(),
+            "recommendation": (model_recommendations.as_dict(rec)
+                               if rec is not None else None),
+            "env": env,
             "constraints": [_round_floats(asdict(c)) for c in constraints],
             "overall": overall_status(constraints) if constraints else "skip",
         }

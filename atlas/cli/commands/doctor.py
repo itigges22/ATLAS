@@ -352,7 +352,7 @@ def check_tier_match() -> CheckResult:
     elsewhere and want a smaller-than-recommended model).
     """
     try:
-        from atlas.cli.commands import tier
+        from atlas.cli.commands import tier, model_recommendations
     except ImportError as e:
         return CheckResult("tier_match", "skip",
             "tier module unavailable", str(e))
@@ -361,19 +361,16 @@ def check_tier_match() -> CheckResult:
         return CheckResult("tier_match", "skip",
             "no GPU detected (cpu tier)")
     recommended = tier.classify(p)
+    rec_model = model_recommendations.for_tier(recommended.tier)
     actual_model = MODEL_FILE
-    if actual_model == recommended.model_file:
+    if rec_model is not None and actual_model == rec_model.model_file:
         return CheckResult("tier_match", "pass",
             f"{recommended.tier} tier matches configured model "
-            f"({recommended.model_display})")
-    # Mismatch — figure out direction. Find which tier the actual model
-    # belongs to, then compare.
-    actual_tier = None
-    for t in tier.TIERS:
-        if t.model_file == actual_model:
-            actual_tier = t
-            break
-    if actual_tier is None:
+            f"({rec_model.model_display})")
+    # Mismatch — figure out direction. Reverse-lookup which tier owns
+    # the configured model, then compare.
+    actual_tier_name = model_recommendations.tier_for_model(actual_model)
+    if actual_tier_name is None:
         return CheckResult("tier_match", "warn",
             f"configured model `{actual_model}` is not in any tier preset",
             f"host classified as {recommended.tier}; consider one of the "
@@ -383,15 +380,17 @@ def check_tier_match() -> CheckResult:
     # leaves performance on the table.
     tiers_order = ["cpu", "small", "medium", "large", "xlarge"]
     rec_idx = tiers_order.index(recommended.tier)
-    act_idx = tiers_order.index(actual_tier.tier)
+    act_idx = tiers_order.index(actual_tier_name)
     if act_idx > rec_idx:
+        rec_display = (rec_model.model_display if rec_model is not None
+                       else f"the {recommended.tier}-tier preset")
         return CheckResult("tier_match", "warn",
-            f"running {actual_tier.tier}-tier model on {recommended.tier}-tier "
+            f"running {actual_tier_name}-tier model on {recommended.tier}-tier "
             f"hardware ({p.vram_gb:.1f} GB VRAM)",
             f"OOM risk. Recommended for your VRAM: "
-            f"{recommended.model_display}. Run `atlas tier` for detail.")
+            f"{rec_display}. Run `atlas tier` for detail.")
     return CheckResult("tier_match", "pass",
-        f"running {actual_tier.tier}-tier model on {recommended.tier}-tier "
+        f"running {actual_tier_name}-tier model on {recommended.tier}-tier "
         f"hardware (under-utilized but safe)")
 
 
