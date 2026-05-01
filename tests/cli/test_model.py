@@ -79,7 +79,8 @@ def test_list_json_structure(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["models_dir"] == str(tmp_path)
     assert isinstance(payload["models"], list)
-    assert len(payload["models"]) == 4
+    # PC-056.1: 6 entries (added Q4_K_M and Q8_0 9B variants).
+    assert len(payload["models"]) == 6
     nine = next(m for m in payload["models"] if m["name"] == "Qwen3.5-9B-Q6_K")
     assert nine["lens_status"] == "supported"
     assert nine["installed"] is False
@@ -179,14 +180,20 @@ def test_install_no_artifacts_refused_without_no_lens_flag(tmp_path, capsys):
     assert "--no-lens" in out
 
 
-def test_install_no_artifacts_with_no_lens_then_blocked_by_gated_upstream(tmp_path, capsys):
-    """User passes --no-lens but the upstream is gated (download_url
-    is None) — install must still refuse, with a different message."""
+def test_install_no_artifacts_with_no_lens_then_blocked_by_hf_token(tmp_path,
+                                                                       monkeypatch,
+                                                                       capsys):
+    """User passes --no-lens for the gated 14B but the upstream
+    requires HF_TOKEN — install must still refuse, with the helpful
+    HF_TOKEN message (PC-056.1)."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
                      "--dry-run", "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 1
     out = capsys.readouterr().out
-    assert "upstream gated" in out or "no public download" in out.lower()
+    assert "HF_TOKEN" in out
+    assert "huggingface.co/settings/tokens" in out
 
 
 def test_install_dry_run_for_supported_model_prints_url(tmp_path, capsys):
@@ -272,3 +279,126 @@ def test_models_dir_flag_overrides_env(tmp_path, monkeypatch, capsys):
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["models_dir"] == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# PC-056.1 — install hardening: HF_TOKEN gate, list rendering with auth
+# ---------------------------------------------------------------------------
+
+def test_install_gated_without_hf_token_refuses_with_helpful_msg(tmp_path,
+                                                                   monkeypatch,
+                                                                   capsys):
+    """Gated entries (requires_hf_token=True) refuse early when HF_TOKEN
+    is not in the env, with the helpful 'set HF_TOKEN' message."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "requires HuggingFace authentication" in out
+    assert "HF_TOKEN" in out
+    assert "huggingface.co/settings/tokens" in out
+
+
+def test_install_gated_with_hf_token_proceeds_to_dry_run(tmp_path,
+                                                          monkeypatch,
+                                                          capsys):
+    """With HF_TOKEN set, the gated check passes — dry-run prints the URL."""
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_test_token")
+    rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
+                     "--dry-run", "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "DRY-RUN" in out
+    assert "huggingface.co/unsloth/Qwen3.5-14B-GGUF" in out
+
+
+def test_install_alt_token_env_var_also_honored(tmp_path, monkeypatch, capsys):
+    """HUGGING_FACE_HUB_TOKEN (HF SDK alt spelling) should work too."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf_dummy_alt")
+    rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
+                     "--dry-run", "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 0
+
+
+def test_list_renders_requires_hf_token_marker_without_token(tmp_path,
+                                                              monkeypatch,
+                                                              capsys):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    rc = model.main(["list", "--tier", "small", "--models-dir", str(tmp_path),
+                     "--no-color"])
+    assert rc == 0
+    assert "requires HF_TOKEN" in capsys.readouterr().out
+
+
+def test_list_renders_token_present_marker_with_token(tmp_path, monkeypatch,
+                                                       capsys):
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy")
+    rc = model.main(["list", "--tier", "small", "--models-dir", str(tmp_path),
+                     "--no-color"])
+    assert rc == 0
+    assert "HF_TOKEN present" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# PC-056.1 — atlas model verify subcommand
+# ---------------------------------------------------------------------------
+
+def test_verify_no_installed_models_returns_0(tmp_path, capsys):
+    rc = model.main(["verify", "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 0
+    assert "No installed models" in capsys.readouterr().out
+
+
+def test_verify_unknown_name_returns_1(capsys):
+    rc = model.main(["verify", "Llama-Made-Up", "--no-color"])
+    assert rc == 1
+
+
+def test_verify_corrupted_file_detects_mismatch(tmp_path, capsys):
+    """Sparse file with wrong contents → SHA mismatch → exit 1 + helpful
+    message about re-installing."""
+    p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
+    with open(p, "wb") as f:
+        f.seek(101 * 1024 * 1024)
+        f.write(b"\0")
+    rc = model.main(["verify", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
+                     "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "MISMATCH" in out
+    assert "atlas model install" in out
+
+
+def test_verify_no_expected_sha_reports_skipped(tmp_path, capsys):
+    """A file that's installed but registry has no expected SHA → status
+    'no-expected', exit 0 (we can't tell if it's corrupt or not)."""
+    p = tmp_path / "Qwen3.5-7B-Q4_K_M.gguf"  # registry sha256=None
+    with open(p, "wb") as f:
+        f.seek(101 * 1024 * 1024)
+        f.write(b"\0")
+    rc = model.main(["verify", "Qwen3.5-7B-Q4_K_M", "--models-dir",
+                     str(tmp_path), "--no-color"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no expected SHA256" in out
+
+
+def test_verify_json_includes_per_model_results(tmp_path, capsys):
+    p = tmp_path / "Qwen3.5-9B-Q6_K.gguf"
+    with open(p, "wb") as f:
+        f.seek(101 * 1024 * 1024)
+        f.write(b"\0")
+    rc = model.main(["verify", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
+                     "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["models_dir"] == str(tmp_path)
+    assert payload["any_mismatch"] is True  # corrupted file
+    assert len(payload["results"]) == 1
+    r = payload["results"][0]
+    assert r["name"] == "Qwen3.5-9B-Q6_K"
+    assert r["match"] == "mismatch"
+    assert rc == 1

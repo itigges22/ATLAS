@@ -194,6 +194,42 @@ ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
 
 The filename must match `ATLAS_MODEL_FILE` in `.env` (default: `Qwen3.5-9B-Q6_K.gguf`).
 
+### `atlas model install` reports SHA256 mismatch
+
+**Symptom:** Download finishes but install exits 1 with "SHA256 mismatch — download may be corrupted or upstream has changed" and removes the `.part` file.
+
+**Cause distinction:**
+- **Transient corruption** (more common) — packet loss, flaky proxy, or interrupted CDN connection. Re-running the install will usually succeed.
+- **Stale registry SHA** (rare) — upstream re-uploaded the same filename with different bytes, but our registry hash is from before the re-upload. PC-056.1 pinned URLs to specific commit hashes (`/3885219b…/`) to prevent this; if it still happens, the upstream commit itself was re-pushed.
+
+**Fix path:**
+```bash
+# Try once with --no-resume to force a clean fetch (no leftover .part)
+atlas model install Qwen3.5-9B-Q6_K --no-resume
+
+# If it fails repeatedly, check whether the registry SHA is stale —
+# `atlas model verify` would show the same mismatch on any installed copy:
+atlas model verify Qwen3.5-9B-Q6_K
+
+# If the upstream actually changed: file an issue or pull a newer ATLAS release.
+```
+
+### `atlas model install` says "requires HuggingFace authentication"
+
+**Symptom:** Install of Qwen3.5-7B / 14B / 32B refuses with a message about setting `HF_TOKEN`.
+
+**Cause:** unsloth's 7B / 14B / 32B GGUF repos are gated (HTTP 401 anonymously). The 9B variants are public. PC-056.1 added the `requires_hf_token` registry flag and an HF_TOKEN gate that fires before the download attempts.
+
+**Fix:** Get a HuggingFace access token at https://huggingface.co/settings/tokens (read-only is fine), then:
+```bash
+export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'
+atlas model install Qwen3.5-14B-Q5_K_M --no-lens
+```
+
+The token can also be exported as `HUGGING_FACE_HUB_TOKEN` for HF Python SDK compatibility. `atlas model list` will show `gated, HF_TOKEN present` when the env var is set.
+
+Note that even with auth, the 7B/14B/32B models have `lens_status: no-artifacts` — G(x) verification will silently no-op. The `--no-lens` flag acknowledges that.
+
 ### G(x) verification always returns "unavailable" or `gx_score: 0.5`
 
 **Symptom:** Generations come back from llama-server fine, but every Lens response shows `gx_score: 0.5, verdict: "unavailable"`. The C(x)/G(x) verification half of ATLAS isn't working.

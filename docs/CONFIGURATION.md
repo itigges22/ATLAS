@@ -49,6 +49,7 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_V3_PORT` | `8070` | V3 Pipeline service host port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port (container listens on 8020) |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (Aider connects here) |
+| `HF_TOKEN` | (unset) | HuggingFace access token (PC-056.1). Read by `atlas model install` to authenticate against gated upstream repos. The 7B / 14B / 32B Qwen3.5 GGUFs all return HTTP 401 anonymously; with a valid token, install proceeds. Get one at https://huggingface.co/settings/tokens. `HUGGING_FACE_HUB_TOKEN` is honored as an alternative spelling for HF Python SDK compatibility. |
 
 Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are hardcoded in `docker-compose.yml` and do not need to be configured by users.
 

@@ -1,11 +1,13 @@
-"""atlas model — registry-aware install/list/recommend/remove (PC-056).
+"""atlas model — registry-aware install/list/recommend/remove/verify
+(PC-056, hardened in PC-056.1).
 
 Subcommands:
     atlas model list       — table of known models with install + lens columns
     atlas model recommend  — best model for this hardware (composes tier.classify
                               + registry, honors lens_status)
-    atlas model install    — download from registry's download_url with progress
-                              + size check; refuses no-artifacts without --no-lens
+    atlas model install    — download from registry's download_url with progress,
+                              SHA verify, resume support, HF_TOKEN auth
+    atlas model verify     — recompute SHA of installed file vs. registry
     atlas model remove     — delete a model file from ATLAS_MODELS_DIR
 
 The lens_status field is the central truth this command surfaces. A
@@ -15,15 +17,28 @@ llama.cpp model but no G(x) verification — half of what makes ATLAS
 
 Implementation notes:
 - urllib (stdlib) for downloads, no third-party deps. Streams in chunks
-  with a progress bar. Resume not supported in v1 — partial files are
-  deleted on interrupt (PC-056.1 follow-up).
-- ATLAS_MODELS_DIR resolution: env var > ./models/ relative to atlas_root
-  (containing docker-compose.yml). Mirrors doctor's atlas_root finder.
+  with a progress bar.
+- **PC-056.1 hardening:**
+    * SHA256 is computed during the chunk loop (hashlib.sha256.update)
+      and verified against the registered hash after the download
+      completes. Mismatch = delete file + exit 1. Skipped when registry
+      has no expected SHA, with a warning printed.
+    * Resume is supported by default. If `<target>.part` exists, the
+      next install picks up from `len(.part)` via `Range: bytes=N-`,
+      verifies the server returns 206 Partial Content, and appends.
+      `--no-resume` deletes the .part and starts fresh.
+    * HF_TOKEN env var is honored — adds `Authorization: Bearer <token>`
+      to the request, which unlocks gated repos for users with HF
+      access. 401 without token prints a helpful "set HF_TOKEN" message.
+- ATLAS_MODELS_DIR resolution: --models-dir flag > ATLAS_MODELS_DIR env
+  > ./models/ relative to atlas_root (containing docker-compose.yml).
+  Mirrors doctor's atlas_root finder.
 - --dry-run prints what would happen without touching the network or disk;
   used by tests + by users who want to verify URLs without committing.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -31,7 +46,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from atlas.cli.commands import model_registry, tier
 from atlas.cli.commands.model_registry import Model
@@ -158,13 +173,30 @@ def _emit_list(args: argparse.Namespace, color: bool) -> int:
         _safe_print("  (no models match these filters)")
         return 0
 
-    # Compact table. Columns: lens-icon, name, tier, size, installed?, status note
+    # Compact table. Columns: lens-icon, name, tier, size, install-state.
+    # PC-056.1 install-state precedence:
+    #   installed? → "installed"
+    #   no URL at all? → "(no download URL)"
+    #   gated + no token? → "(requires HF_TOKEN)"
+    #   gated + token present? → "(gated, HF_TOKEN OK)"
+    #   else → "not installed"
+    have_token = bool(_hf_token())
     for m in models:
         installed = model_registry.is_installed(m, models_dir)
-        inst_marker = (f"{GREEN}installed{RESET}" if color else "installed") \
-                      if installed else (f"{DIM}not installed{RESET}" if color else "not installed")
-        if not m.can_install:
-            inst_marker = f"{DIM}(upstream gated){RESET}" if color else "(upstream gated)"
+        if installed:
+            inst_marker = (f"{GREEN}installed{RESET}" if color else "installed")
+        elif not m.can_install:
+            inst_marker = (f"{DIM}(no download URL){RESET}" if color
+                           else "(no download URL)")
+        elif m.requires_hf_token and not have_token:
+            inst_marker = (f"{YELL}(requires HF_TOKEN){RESET}" if color
+                           else "(requires HF_TOKEN)")
+        elif m.requires_hf_token and have_token:
+            inst_marker = (f"{DIM}gated, HF_TOKEN present{RESET}" if color
+                           else "gated, HF_TOKEN present")
+        else:
+            inst_marker = (f"{DIM}not installed{RESET}" if color
+                           else "not installed")
         icon = _lens_icon(m.lens_status, color)
         name_col = f"{BOLD}{m.name}{RESET}" if color else m.name
         _safe_print(f"  {icon}  {name_col}")
@@ -291,8 +323,27 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:
 
     if not m.can_install:
         _safe_print(f"  {RED if color else ''}Cannot install `{m.name}`: "
-                    f"upstream gated (no public download URL).{RESET if color else ''}")
+                    f"no known download URL.{RESET if color else ''}")
         _safe_print(f"  Notes: {m.notes}")
+        return 1
+
+    # PC-056.1: HF_TOKEN gate for known-gated repos. Refuse early with
+    # a helpful message rather than letting the download path 401.
+    if m.requires_hf_token and not _hf_token():
+        _safe_print(f"  {YELL if color else ''}`{m.name}` upstream "
+                    f"({m.download_url}) requires HuggingFace authentication."
+                    f"{RESET if color else ''}")
+        _safe_print()
+        _safe_print("  Set the HF_TOKEN env var to a HuggingFace access "
+                    "token with read access:")
+        _safe_print("    export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'")
+        _safe_print(f"    atlas model install {m.name}")
+        _safe_print("  Get one at https://huggingface.co/settings/tokens")
+        _safe_print()
+        if m.lens_status != "supported":
+            _safe_print(f"  Note: even with auth, this model has Lens "
+                        f"status `{m.lens_status}` — G(x) verification "
+                        f"will silently no-op (--no-lens to acknowledge).")
         return 1
 
     target = os.path.join(models_dir, m.model_file)
@@ -339,69 +390,217 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:
     _safe_print(f"  Downloading {m.name} ({m.model_size_gb:.1f} GB)")
     _safe_print(f"    From: {m.download_url}")
     _safe_print(f"    To:   {target}")
+    if _hf_token():
+        _safe_print("    Auth: HF_TOKEN present (will send Authorization header)")
     _safe_print()
 
-    return _stream_download(m, target, color)
+    return _stream_download(m, target, color, resume=not args.no_resume)
 
 
-def _stream_download(m: Model, target: str, color: bool) -> int:
-    """Stream-download the model with a progress bar. Deletes partial
-    file on interrupt or error (no resume support in v1)."""
+def _build_request(url: str, range_start: int = 0,
+                   token: Optional[str] = None) -> urllib.request.Request:
+    """Construct a urllib Request with optional resume + HF auth headers."""
+    headers = {"User-Agent": "atlas-cli/PC-056.1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if range_start > 0:
+        # bytes=N- = "from byte N to the end". HF supports this; the
+        # response will be 206 Partial Content with Content-Range.
+        headers["Range"] = f"bytes={range_start}-"
+    return urllib.request.Request(url, headers=headers)
+
+
+def _hf_token() -> Optional[str]:
+    """Read HF_TOKEN (preferred) or HUGGING_FACE_HUB_TOKEN (HF SDK alt
+    spelling) from env. Returns None if neither is set."""
+    return (os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
+
+
+def _stream_download(m: Model, target: str, color: bool,
+                     resume: bool = True) -> int:
+    """Stream-download the model with progress bar, SHA verification,
+    resume support, and HF_TOKEN auth (PC-056.1).
+
+    Resume strategy:
+      - If <target>.part exists and resume=True: send Range: bytes=N-,
+        expect 206 Partial Content, append-write, hash from start by
+        also reading the existing .part contents into the SHA digest.
+      - If resume=False: delete any existing .part, start fresh.
+      - If the server returns 200 OK to a Range request (some endpoints
+        ignore Range), we restart from byte 0 cleanly.
+
+    SHA verification:
+      - hashlib.sha256.update() runs alongside file.write() during the
+        chunk loop. After download completes, hexdigest() is compared
+        to model.sha256. Mismatch deletes the file and returns 1.
+      - When model.sha256 is None (no expected hash), we skip the
+        comparison and print a warning so users know integrity wasn't
+        verified end-to-end.
+
+    HF auth:
+      - HF_TOKEN env var (or HUGGING_FACE_HUB_TOKEN as alt spelling) is
+        added as Authorization: Bearer header. Unlocks gated repos for
+        authenticated users.
+      - On 401 without a token: helpful message points at HF_TOKEN.
+    """
     tmp = target + ".part"
     chunk = 1024 * 1024  # 1 MiB
     started = time.monotonic()
-    bytes_seen = 0
-    last_print = 0.0
+    token = _hf_token()
 
-    try:
-        req = urllib.request.Request(m.download_url,
-                                     headers={"User-Agent": "atlas-cli/PC-056"})
-        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as f:
-            total = resp.headers.get("Content-Length")
-            total_n = int(total) if total else 0
-            while True:
-                buf = resp.read(chunk)
-                if not buf:
-                    break
-                f.write(buf)
-                bytes_seen += len(buf)
-                now = time.monotonic()
-                if now - last_print > 0.25 or (total_n and bytes_seen >= total_n):
-                    last_print = now
-                    _print_progress(bytes_seen, total_n, started, color)
-    except KeyboardInterrupt:
-        _safe_print()
-        _safe_print(f"  {YELL if color else ''}Interrupted. Removing partial "
-                    f"file.{RESET if color else ''}")
+    # Resume bookkeeping.
+    range_start = 0
+    file_mode = "wb"
+    if resume and os.path.exists(tmp):
+        try:
+            range_start = os.stat(tmp).st_size
+        except OSError:
+            range_start = 0
+        if range_start > 0:
+            file_mode = "ab"
+            _safe_print(f"  Resuming from byte {range_start} "
+                        f"({_human_bytes(range_start)} already on disk)")
+    elif not resume and os.path.exists(tmp):
         try:
             os.unlink(tmp)
         except OSError:
             pass
+
+    bytes_seen = range_start  # for progress
+    last_print = 0.0
+    h = hashlib.sha256()
+
+    # If we're resuming, we need to fold the existing .part contents into
+    # the hash before continuing — otherwise the final hexdigest won't
+    # match because we skipped those bytes.
+    if range_start > 0:
+        try:
+            with open(tmp, "rb") as f:
+                while True:
+                    buf = f.read(chunk)
+                    if not buf:
+                        break
+                    h.update(buf)
+        except OSError as e:
+            _safe_print(f"  {RED if color else ''}Cannot read existing "
+                        f".part for hash continuation: {e}"
+                        f"{RESET if color else ''}")
+            return 1
+
+    try:
+        req = _build_request(m.download_url, range_start=range_start, token=token)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            status = resp.getcode()
+            # If we sent Range and got 200, server ignored it — restart.
+            if range_start > 0 and status == 200:
+                _safe_print(f"  {YELL if color else ''}Server ignored "
+                            f"Range header — restarting from byte 0."
+                            f"{RESET if color else ''}")
+                file_mode = "wb"
+                range_start = 0
+                bytes_seen = 0
+                h = hashlib.sha256()
+            elif range_start > 0 and status != 206:
+                _safe_print(f"  {RED if color else ''}Unexpected response "
+                            f"to Range request: HTTP {status}. Aborting."
+                            f"{RESET if color else ''}")
+                return 1
+
+            # Total size — for resume, Content-Length is the REMAINING
+            # bytes; we want absolute total for progress display.
+            cl = resp.headers.get("Content-Length")
+            if status == 206 and cl:
+                total_n = int(cl) + range_start
+            else:
+                total_n = int(cl) if cl else 0
+
+            with open(tmp, file_mode) as f:
+                while True:
+                    buf = resp.read(chunk)
+                    if not buf:
+                        break
+                    f.write(buf)
+                    h.update(buf)
+                    bytes_seen += len(buf)
+                    now = time.monotonic()
+                    if now - last_print > 0.25 or (total_n and bytes_seen >= total_n):
+                        last_print = now
+                        _print_progress(bytes_seen, total_n, started, color)
+    except KeyboardInterrupt:
+        _safe_print()
+        _safe_print(f"  {YELL if color else ''}Interrupted. .part file "
+                    f"kept for resume — re-run install to continue."
+                    f"{RESET if color else ''}")
         return 130
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+    except urllib.error.HTTPError as e:
+        _safe_print()
+        if e.code == 401:
+            if token:
+                _safe_print(f"  {RED if color else ''}HTTP 401 even with "
+                            f"HF_TOKEN — your token may not have access "
+                            f"to this repo.{RESET if color else ''}")
+            else:
+                _safe_print(f"  {RED if color else ''}HTTP 401: this repo "
+                            f"is gated.{RESET if color else ''}")
+                _safe_print("  Set the HF_TOKEN env var to a HuggingFace "
+                            "access token with read access:")
+                _safe_print("    export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'")
+                _safe_print(f"    atlas model install {m.name}")
+                _safe_print("  Get one at "
+                            "https://huggingface.co/settings/tokens")
+        else:
+            _safe_print(f"  {RED if color else ''}Download failed: HTTP "
+                        f"{e.code} {e.reason}{RESET if color else ''}")
+        # Don't delete .part on auth/HTTP errors — user may fix env and resume.
+        return 1
+    except (urllib.error.URLError, OSError) as e:
         _safe_print()
         _safe_print(f"  {RED if color else ''}Download failed: {e}"
                     f"{RESET if color else ''}")
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        # Network errors: keep .part for retry.
         return 1
 
     _safe_print()
-    # Final size sanity check
+
+    # Final size sanity check.
     try:
         actual = os.stat(tmp).st_size
     except OSError:
         actual = 0
     if actual < 100 * 1024 * 1024:
         _safe_print(f"  {RED if color else ''}Downloaded file is too small "
-                    f"({_human_bytes(actual)}). Aborting.{RESET if color else ''}")
+                    f"({_human_bytes(actual)}). Aborting and removing "
+                    f".part.{RESET if color else ''}")
         try:
             os.unlink(tmp)
         except OSError:
             pass
         return 1
+
+    # SHA256 verification (PC-056.1).
+    if m.sha256:
+        actual_hash = h.hexdigest()
+        if actual_hash != m.sha256:
+            _safe_print(f"  {RED if color else ''}SHA256 mismatch — "
+                        f"download may be corrupted or upstream has "
+                        f"changed.{RESET if color else ''}")
+            _safe_print(f"    expected: {m.sha256}")
+            _safe_print(f"    actual:   {actual_hash}")
+            _safe_print("  Removing .part file. If this happens repeatedly, "
+                        "the registry may be stale or the upstream URL has "
+                        "been re-uploaded — check for a newer ATLAS release.")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return 1
+        _safe_print(f"  {GREEN if color else ''}SHA256 verified.{RESET if color else ''} "
+                    f"({m.sha256[:16]}…)")
+    else:
+        _safe_print(f"  {YELL if color else ''}Note: registry has no "
+                    f"expected SHA256 for this model — download integrity "
+                    f"NOT verified end-to-end.{RESET if color else ''}")
 
     # Atomic rename .part -> final.
     try:
@@ -412,13 +611,14 @@ def _stream_download(m: Model, target: str, color: bool) -> int:
         return 1
 
     elapsed = time.monotonic() - started
-    rate = bytes_seen / elapsed if elapsed > 0 else 0.0
+    # rate = bytes pulled in this invocation / time. For a fully-resumed
+    # download with no new bytes the rate is misleading; just skip the
+    # rate column when bytes_seen - range_start is tiny.
+    new_bytes = max(bytes_seen - range_start, 0)
+    rate = new_bytes / elapsed if elapsed > 0 else 0.0
     _safe_print(f"  {GREEN if color else ''}Done.{RESET if color else ''} "
                 f"{_human_bytes(actual)} in {elapsed:.0f}s "
-                f"({_human_bytes(rate)}/s)")
-    if m.sha256:
-        _safe_print(f"  Note: SHA256 verification not yet implemented "
-                    f"(PC-056.1). Expected: {m.sha256[:16]}...")
+                f"({_human_bytes(rate)}/s of new bytes)")
     return 0
 
 
@@ -439,6 +639,98 @@ def _print_progress(seen: int, total: int, started: float, color: bool) -> None:
                f"{_human_bytes(rate)}/s")
     sys.stdout.write("\r" + msg)
     sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# `atlas model verify` (PC-056.1)
+# ---------------------------------------------------------------------------
+
+def _verify_one(m: Model, models_dir: str, color: bool) -> Tuple[str, str]:
+    """Run verify_installed on a single model and return
+    (status, message) for table rendering. Status is one of
+    'ok', 'mismatch', 'no-expected', 'missing'."""
+    result = model_registry.verify_installed(m, models_dir)
+    match = result["match"]
+    if match == "missing":
+        return "missing", "not installed"
+    if match == "no-expected":
+        sz = result["actual_size_gb"]
+        return "no-expected", (f"installed ({sz:.1f} GB) but registry has "
+                                f"no expected SHA256 — cannot verify")
+    if match == "ok":
+        return "ok", (f"SHA256 OK ({result['actual_sha256'][:16]}…)")
+    # mismatch
+    return "mismatch", (f"SHA256 MISMATCH "
+                         f"expected {result['expected_sha256'][:16]}… "
+                         f"got {result['actual_sha256'][:16]}…")
+
+
+def _verify_icon(status: str, color: bool) -> str:
+    if not color or not UNICODE_OK:
+        return {"ok": "[OK]    ", "mismatch": "[FAIL]  ",
+                "no-expected": "[?]     ", "missing": "[skip]  "}[status]
+    return {"ok": f"{GREEN}✓{RESET}", "mismatch": f"{RED}✗{RESET}",
+            "no-expected": f"{YELL}?{RESET}",
+            "missing": f"{DIM}-{RESET}"}[status]
+
+
+def _emit_verify(args: argparse.Namespace, color: bool) -> int:
+    """Verify one model (if name given) or all installed models.
+
+    Exit codes:
+      0 — every checked model matched (or had nothing to check)
+      1 — at least one mismatch (corrupted file or stale registry)
+    """
+    models_dir = _resolve_models_dir(args.models_dir)
+    if args.name:
+        m = model_registry.by_name(args.name)
+        if m is None:
+            _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
+                        f"{RESET if color else ''}")
+            return 1
+        targets = [m]
+    else:
+        targets = [m for m in model_registry.all_models()
+                    if model_registry.is_installed(m, models_dir)]
+
+    if args.json:
+        results = []
+        for m in targets:
+            r = model_registry.verify_installed(m, models_dir)
+            r["name"] = m.name
+            results.append(r)
+        any_mismatch = any(r["match"] == "mismatch" for r in results)
+        print(json.dumps({"models_dir": models_dir, "results": results,
+                          "any_mismatch": any_mismatch},
+                          indent=2, ensure_ascii=not UNICODE_OK))
+        return 1 if any_mismatch else 0
+
+    hdr = (f"{BOLD}ATLAS model verify{RESET}" if color
+           else "ATLAS model verify")
+    _safe_print(f"{hdr} {DASH} hashing installed models in {models_dir}")
+    _safe_print()
+    if not targets:
+        _safe_print("  No installed models to verify.")
+        return 0
+    any_mismatch = False
+    for m in targets:
+        status, msg = _verify_one(m, models_dir, color)
+        icon = _verify_icon(status, color)
+        name = f"{BOLD}{m.name}{RESET}" if color else m.name
+        _safe_print(f"  {icon}  {name}")
+        _safe_print(f"      {msg}")
+        if status == "mismatch":
+            any_mismatch = True
+    _safe_print()
+    if any_mismatch:
+        _safe_print(f"  {RED if color else ''}One or more models failed "
+                    f"SHA verification.{RESET if color else ''} The file "
+                    f"may be corrupted, OR the registry's expected SHA is "
+                    f"stale (upstream re-uploaded). Re-install with "
+                    f"`atlas model install <name> --no-resume` to fetch "
+                    f"a fresh copy.")
+        return 1
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -511,9 +803,23 @@ def main(argv: Optional[List[str]] = None) -> int:
              "(G(x) verification will silently no-op)")
     p_inst.add_argument("--yes", action="store_true",
         help="overwrite existing file without prompt")
+    p_inst.add_argument("--no-resume", action="store_true",
+        help="ignore any existing .part file and start the download "
+             "from byte 0 (default: resume from .part if present)")
     p_inst.add_argument("--models-dir", default=None,
         help="override ATLAS_MODELS_DIR")
     p_inst.add_argument("--no-color", action="store_true")
+
+    p_ver = sub.add_parser("verify",
+        help="recompute SHA256 of installed file(s) vs the registry "
+             "(PC-056.1)")
+    p_ver.add_argument("name", nargs="?", default=None,
+        help="optional: verify only this model. Default: verify all "
+             "installed models.")
+    p_ver.add_argument("--models-dir", default=None,
+        help="override ATLAS_MODELS_DIR")
+    p_ver.add_argument("--json", action="store_true")
+    p_ver.add_argument("--no-color", action="store_true")
 
     p_rm = sub.add_parser("remove", help="delete a model file from ATLAS_MODELS_DIR")
     p_rm.add_argument("name", help="model name (see `atlas model list`)")
@@ -536,6 +842,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _emit_recommend(args, color)
     if args.subcommand == "install":
         return _emit_install(args, color)
+    if args.subcommand == "verify":
+        return _emit_verify(args, color)
     if args.subcommand == "remove":
         return _emit_remove(args, color)
     parser.print_help()

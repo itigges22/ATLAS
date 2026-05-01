@@ -516,15 +516,17 @@ atlas model remove <name> --yes             # delete from disk
 
 **Truth in advertising — `lens_status`.** Every registry entry is one of `supported` (Lens artifacts shipped, G(x) verification works), `no-artifacts` (model can be downloaded but G(x) silently no-ops), or `unverified`. Today **only `Qwen3.5-9B-Q6_K` is `supported`** — the 7B / 14B / 32B entries are listed honestly as `no-artifacts` so users know what's missing before they install. This is why the Phase 0 development target is medium tier: it's the only tier where ATLAS is end-to-end functional today.
 
-To install a `no-artifacts` model anyway (you accept G(x) won't score generations), pass `--no-lens`:
+To install a `no-artifacts` model anyway (you accept G(x) won't score generations), pass `--no-lens`. The 7B / 14B / 32B unsloth repos require **HuggingFace authentication** — set `HF_TOKEN` to a token from [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens):
 
 ```bash
+export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'
 atlas model install Qwen3.5-14B-Q5_K_M --no-lens
-# refused — upstream unsloth/Qwen3.5-14B-GGUF is gated (HTTP 401)
-# you'd need to obtain the GGUF separately and place it in ATLAS_MODELS_DIR manually
+# downloads from gated upstream with auth header; G(x) still no-ops at runtime
 ```
 
-Bringing more models to `supported` is the work of [PC-058 (`atlas lens build`)](https://github.com/itigges22/ATLAS/issues/100) — the multi-hour Lens-training pipeline that produces metric tensor + embeddings for new models. See ISSUES.md for the full model-agnostic roadmap (PC-057 through PC-060).
+`atlas model list` shows `(requires HF_TOKEN)` next to gated entries when the env var is missing, and `gated, HF_TOKEN present` when it's set. The `--no-resume` flag forces a fresh download from byte 0 (default behavior resumes from `<file>.part` if present). Use `atlas model verify` to recompute SHA256 of installed files vs. the registry — useful after suspected disk corruption or after pulling a new ATLAS release.
+
+Bringing more models to `supported` is the work of [PC-058 (`atlas lens build`)](https://github.com/itigges22/ATLAS/issues/100) — the multi-hour Lens-training pipeline that produces metric tensor + embeddings for new models. PC-056.1 added `Qwen3.5-9B-Q4_K_M` and `Qwen3.5-9B-Q8_0` as `unverified` quant variants — they share the Q6_K's Lens artifacts (different quant of the same model family, structurally similar embedding space) but the exact (quant, Lens) combinations haven't been validated end-to-end. See ISSUES.md for the full model-agnostic roadmap (PC-057 through PC-060).
 
 ### Supported GPUs
 

@@ -439,11 +439,11 @@ atlas tier --install-dir /data/atlas   # measure disk free against an alternate 
 
 | Lens status | Meaning |
 |---|---|
-| `supported` | Trained metric tensor + embeddings shipped in the repo. G(x) verification works end-to-end. |
-| `no-artifacts` | Model exists but no Lens artifacts are trained for it. ATLAS will run llama-server on it but G(x) silently no-ops (`gx_score: 0.5, verdict: "unavailable"`) on every generation — half of what makes ATLAS *ATLAS* will be missing. |
-| `unverified` | Has artifacts but never validated end-to-end. (Reserved; no entries today.) |
+| `supported` | Trained metric tensor + embeddings shipped in the repo, validated end-to-end against this exact (model, quant) combination. G(x) verification works. |
+| `no-artifacts` | Model exists but no Lens artifacts are trained for it (no metric tensor at all). ATLAS will run llama-server on it but G(x) silently no-ops (`gx_score: 0.5, verdict: "unavailable"`) on every generation — half of what makes ATLAS *ATLAS* will be missing. |
+| `unverified` | Has Lens artifacts that should structurally apply (e.g., a different quant of the same model family — embedding space is structurally similar) but the exact (model, quant) combination hasn't been validated. PC-056.1 marks the 9B Q4_K_M and Q8_0 variants as `unverified` — they share the Q6_K's metric tensor. |
 
-Today **only `Qwen3.5-9B-Q6_K` is `supported`**. The 7B / 14B / 32B entries are listed honestly as `no-artifacts` so the registry tells the truth about what works. Bringing more models to `supported` is the work of [PC-058 (`atlas lens build`)](https://github.com/itigges22/ATLAS/issues/100); see ISSUES.md for the model-agnostic roadmap.
+Today **only `Qwen3.5-9B-Q6_K` is `supported` (validated)**, with `Qwen3.5-9B-Q4_K_M` and `Qwen3.5-9B-Q8_0` as `unverified` quant variants that share its Lens artifacts. The 7B / 14B / 32B entries are listed honestly as `no-artifacts` so the registry tells the truth about what works. Bringing more models to `supported` is the work of [PC-058 (`atlas lens build`)](https://github.com/itigges22/ATLAS/issues/100); see ISSUES.md for the model-agnostic roadmap.
 
 ```bash
 atlas model list                                   # show all known models
@@ -452,11 +452,17 @@ atlas model list --installed                       # only models on disk
 atlas model list --lens-supported                  # only Lens-supported models
 atlas model list --json                            # machine output
 atlas model recommend                              # best model for THIS host
-atlas model install Qwen3.5-9B-Q6_K                # download into ATLAS_MODELS_DIR
+atlas model install Qwen3.5-9B-Q6_K                # download + SHA verify into ATLAS_MODELS_DIR
 atlas model install Qwen3.5-9B-Q6_K --dry-run      # print URL/target/SHA, no network
+atlas model install Qwen3.5-9B-Q6_K --no-resume    # ignore .part, restart from byte 0
 atlas model install Qwen3.5-14B-Q5_K_M --no-lens   # acknowledge installing a no-artifacts model
+HF_TOKEN=hf_xxx atlas model install Qwen3.5-14B-Q5_K_M --no-lens   # unlock gated upstream
+atlas model verify                                 # re-hash all installed models vs registry
+atlas model verify Qwen3.5-9B-Q6_K                 # verify just one
 atlas model remove Qwen3.5-9B-Q6_K --yes           # delete from disk
 ```
+
+**HuggingFace authentication (PC-056.1).** Set the `HF_TOKEN` env var to a HuggingFace access token (get one at https://huggingface.co/settings/tokens) to unlock gated upstreams. The 7B / 14B / 32B unsloth repos all return HTTP 401 anonymously; with a valid token, the install path will authenticate and proceed. `HUGGING_FACE_HUB_TOKEN` is honored as an alternative spelling for compatibility with the HF Python SDK. `atlas model list` shows `(requires HF_TOKEN)` when the env var is missing and `gated, HF_TOKEN present` when it's set.
 
 **Path resolution.** All four subcommands share a `--models-dir` flag and resolve in this order: `--models-dir` flag > `ATLAS_MODELS_DIR` env var > `./models/` relative to `atlas_root` (the directory containing `docker-compose.yml`).
 
@@ -502,10 +508,15 @@ Streams the model from the registry's `download_url` via stdlib `urllib` (no thi
 | `--dry-run` | Print URL / target path / size / SHA256, no network or disk writes. Used by tests and by users sanity-checking before committing. |
 | `--no-lens` | Acknowledge installing a model with no Lens artifacts. Required for any non-`supported` install. |
 | `--yes` | Overwrite an existing file without prompt. |
+| `--no-resume` | Ignore any existing `.part` file and restart from byte 0 (default: resume from `.part` if present, hashing existing bytes into the SHA digest first). |
 | `--models-dir` | Override `ATLAS_MODELS_DIR`. |
 | `--no-color` | Disable ANSI color. |
 
-**SHA verification.** The 9B's registry entry carries the HuggingFace `x-linked-etag` (content-addressed storage SHA256). Today we only print it after download; actual verification is a PC-056.1 follow-up. This catches *download corruption* but not *provenance* — that's PC-060 territory.
+**SHA verification (PC-056.1).** The 9B variants' registry entries carry the HuggingFace `x-linked-etag` (content-addressed storage SHA256). The install path now **enforces the hash**: `hashlib.sha256.update()` runs alongside the chunk write loop, and the final hexdigest is compared to the registry value. Mismatch deletes the `.part` file and exits 1 with a message that distinguishes "download corruption" (likely transient — re-install) from "registry SHA stale" (upstream re-uploaded — wait for an ATLAS release). When the registry has no expected SHA (gated entries we couldn't anonymously HEAD), download proceeds and prints a warning that integrity wasn't verified end-to-end.
+
+**Download resume (PC-056.1).** The default behavior is to resume from any existing `<target>.part` file using `Range: bytes=N-`. Hash continuation works correctly: the existing `.part` bytes get folded into the SHA digest before the new chunks land. If the server returns 200 OK to a Range request (some endpoints ignore it), the install path detects that and restarts from byte 0 cleanly. Pass `--no-resume` to force a fresh download. Network failures and `Ctrl+C` keep the `.part` for the next attempt; SHA mismatches and "file too small" errors delete it.
+
+**Verify subcommand (`atlas model verify`).** Recomputes the SHA of installed file(s) and compares to the registry. Without a model name, verifies every installed model. Useful after suspected disk corruption, after pulling a new ATLAS release (registry SHAs may have changed), or as a periodic integrity check. Status per model: `OK` (matches), `MISMATCH` (corrupted or stale registry — exit 1), `[?]` (no expected SHA in registry, can't verify), `[skip]` (not installed). JSON output includes per-model results + an `any_mismatch` summary flag for scripting.
 
 #### `atlas model remove <name>`
 

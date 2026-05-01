@@ -364,6 +364,30 @@ def check_tier_match() -> CheckResult:
     rec_model = model_recommendations.for_tier(recommended.tier)
     actual_model = MODEL_FILE
     if rec_model is not None and actual_model == rec_model.model_file:
+        # PC-056.1: even on exact tier match, cross-check that the
+        # claimed Lens artifacts actually exist on disk. Registry can
+        # say "supported" while the .pt files are missing — config
+        # drift that would otherwise hide G(x) silently no-opping.
+        try:
+            from atlas.cli.commands import model_registry
+            atlas_root = _find_atlas_root()
+            artifact_state = model_registry.lens_artifacts_present(
+                rec_model, atlas_root)
+            if not artifact_state["ok"]:
+                return CheckResult("tier_match", "warn",
+                    f"`{actual_model}` registered as Lens-supported but "
+                    f"{len(artifact_state['missing_files'])} artifact "
+                    f"file(s) missing: "
+                    f"{', '.join(artifact_state['missing_files'])}",
+                    f"Expected in {artifact_state['expected_dir']}. "
+                    f"Without these files G(x) will silently no-op even "
+                    f"though the registry says it should work. Either "
+                    f"download the artifacts (see "
+                    f"geometric-lens/geometric_lens/models/README.md) "
+                    f"or set ATLAS_LENS_MODELS to point at a dir that "
+                    f"has them.")
+        except (ImportError, AttributeError):
+            pass
         return CheckResult("tier_match", "pass",
             f"{recommended.tier} tier matches configured model "
             f"({rec_model.model_display})")
@@ -392,8 +416,10 @@ def check_tier_match() -> CheckResult:
     # Undershoot path: smaller model than the tier supports. Normally
     # safe (just leaves perf on the table). PC-056: also warn if the
     # actual model has no Lens artifacts — that means G(x) silently
-    # no-ops at runtime, regardless of tier-fit. Worth surfacing even
-    # though the tier check itself passes.
+    # no-ops at runtime, regardless of tier-fit. PC-056.1: also warn
+    # if the model claims `supported` but the artifact files are
+    # actually missing on disk — config drift between registry claim
+    # and reality.
     try:
         from atlas.cli.commands import model_registry
         actual_model_record = model_registry.by_name(
@@ -404,9 +430,29 @@ def check_tier_match() -> CheckResult:
                 f"configured model `{actual_model}` has Lens status "
                 f"`{actual_model_record.lens_status}` — G(x) will silently "
                 f"no-op",
-                f"ATLAS will run llama-server but C(x)/G(x) verification is "
-                f"missing. See PC-058 roadmap. To switch: "
-                f"`atlas model recommend` for a Lens-supported alternative.")
+                "ATLAS will run llama-server but C(x)/G(x) verification is "
+                "missing. See PC-058 roadmap. To switch: "
+                "`atlas model recommend` for a Lens-supported alternative.")
+        # PC-056.1: model claims supported — verify artifact files actually
+        # exist where the registry says they should.
+        if actual_model_record is not None and \
+                actual_model_record.lens_status == "supported":
+            atlas_root = _find_atlas_root()
+            artifact_state = model_registry.lens_artifacts_present(
+                actual_model_record, atlas_root)
+            if not artifact_state["ok"]:
+                return CheckResult("tier_match", "warn",
+                    f"`{actual_model}` registered as Lens-supported but "
+                    f"{len(artifact_state['missing_files'])} artifact "
+                    f"file(s) missing: "
+                    f"{', '.join(artifact_state['missing_files'])}",
+                    f"Expected in {artifact_state['expected_dir']}. "
+                    f"Without these files G(x) will silently no-op even "
+                    f"though the registry says it should work. Either "
+                    f"download the artifacts (see "
+                    f"geometric-lens/geometric_lens/models/README.md) "
+                    f"or set ATLAS_LENS_MODELS to point at a dir that "
+                    f"has them.")
     except (ImportError, AttributeError):
         pass
     return CheckResult("tier_match", "pass",
