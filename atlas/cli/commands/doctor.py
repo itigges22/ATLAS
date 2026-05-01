@@ -30,6 +30,30 @@ GREEN = "\033[32m"
 YELL  = "\033[33m"
 CYAN  = "\033[36m"
 
+
+def _supports_unicode() -> bool:
+    """Detect whether stdout can safely encode the unicode chars we emit.
+
+    Catches the LANG=C / ASCII-only stdout case (common via SSH from
+    terminals with degraded locale, or when stdout is piped through a
+    logger that defaulted to ASCII). Without this guard, doctor crashes
+    with UnicodeEncodeError on the first em-dash.
+    """
+    enc = (getattr(sys.stdout, "encoding", None) or "").lower()
+    if not enc:
+        return False
+    try:
+        # Round-trip the chars we actually emit: em-dash + checkmark
+        "—✓".encode(enc, errors="strict")
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+# Resolved at import; doctor.main() can re-evaluate if needed.
+UNICODE_OK = _supports_unicode()
+DASH       = "—" if UNICODE_OK else "--"
+
 # Defaults — overridable by env (matches docker-compose.yml interpolations)
 PROXY_URL    = os.environ.get("ATLAS_PROXY_URL",     "http://localhost:8090")
 LLAMA_URL    = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
@@ -39,6 +63,11 @@ V3_URL       = os.environ.get("ATLAS_V3_URL",        "http://localhost:8070")
 MODEL_DIR    = os.environ.get("ATLAS_MODELS_DIR",    "./models")
 MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE",    "Qwen3.5-9B-Q6_K.gguf")
 MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME",    "Qwen3.5-9B-Q6_K")
+# Match docker-compose.yml's `${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}`
+# host-side bind-mount source so doctor checks the same directory the
+# container will actually receive.
+LENS_MODELS_DIR = os.environ.get("ATLAS_LENS_MODELS",
+                                  "./geometric-lens/geometric_lens/models")
 
 EXPECTED_SERVICES = [
     "redis", "llama-server", "geometric-lens",
@@ -227,17 +256,22 @@ def check_model_file(atlas_root: str) -> CheckResult:
 
 
 def check_lens_weights(atlas_root: str) -> CheckResult:
-    weights_dir = os.path.join(atlas_root, "geometric-lens",
-                               "geometric_lens", "models")
+    # LENS_MODELS_DIR is typically the relative default; absolute paths
+    # come from users overriding ATLAS_LENS_MODELS to mount weights from
+    # outside the repo (e.g., a shared NFS mount). Resolve relative paths
+    # against atlas_root, not the doctor's cwd.
+    weights_dir = (LENS_MODELS_DIR if os.path.isabs(LENS_MODELS_DIR)
+                   else os.path.normpath(os.path.join(atlas_root, LENS_MODELS_DIR)))
     required = ["cost_field.pt", "metric_tensor.pt"]
     missing = [f for f in required if not os.path.exists(
         os.path.join(weights_dir, f))]
     if missing:
         return CheckResult("lens_weights", "fail",
             f"missing: {', '.join(missing)}",
-            f"expected in {weights_dir} — fetch from HuggingFace per README")
+            f"expected in {weights_dir} — fetch from HuggingFace per README "
+            f"(or set ATLAS_LENS_MODELS to point at your weights dir)")
     return CheckResult("lens_weights", "pass",
-        "cost_field.pt + metric_tensor.pt present")
+        f"cost_field.pt + metric_tensor.pt in {weights_dir}")
 
 
 def check_overcommit() -> CheckResult:
@@ -332,8 +366,35 @@ def check_e2e_smoke() -> CheckResult:
 # Output
 # ---------------------------------------------------------------------------
 
+def _safe_print(s: str = "") -> None:
+    """print() that survives an ASCII-only stdout.
+
+    Without this, any em-dash, arrow, or unicode in a check message
+    (most of them have one) crashes the entire run with
+    UnicodeEncodeError — even though we only emit a small fixed set
+    of unicode characters and could safely degrade them.
+    """
+    if UNICODE_OK:
+        print(s)
+        return
+    # Replace the specific unicode chars we know we use, then encode/decode
+    # as ASCII with replacement to catch anything else.
+    s = (s.replace("—", "--")
+          .replace("✓", "OK")
+          .replace("✗", "X")
+          .replace("⚠", "!")
+          .replace("→", "->")
+          .replace("│", "|")
+          .replace("╭", "+").replace("╮", "+")
+          .replace("╰", "+").replace("╯", "+")
+          .replace("─", "-"))
+    print(s.encode("ascii", errors="replace").decode("ascii"))
+
+
 def _icon(status: str, color: bool) -> str:
-    if not color:
+    # Without color OR without unicode support, fall back to ASCII brackets.
+    # This covers --no-color, non-TTY stdout, AND TTYs with ASCII-only encoding.
+    if not color or not UNICODE_OK:
         return {"pass": "[OK]  ", "warn": "[WARN]",
                 "fail": "[FAIL]", "skip": "[SKIP]"}[status]
     return {"pass": f"{GREEN}✓{RESET}", "warn": f"{YELL}⚠{RESET}",
@@ -343,10 +404,10 @@ def _icon(status: str, color: bool) -> str:
 def _print_result(r: CheckResult, verbose: bool, color: bool) -> None:
     name = f"{BOLD}{r.name}{RESET}" if color else r.name
     pad = " " * max(0, 32 - len(r.name))
-    print(f"  {_icon(r.status, color)} {name}{pad}  {r.message}")
+    _safe_print(f"  {_icon(r.status, color)} {name}{pad}  {r.message}")
     if verbose and r.detail:
         for line in r.detail.splitlines():
-            print(f"      {DIM if color else ''}{line}{RESET if color else ''}")
+            _safe_print(f"      {DIM if color else ''}{line}{RESET if color else ''}")
 
 
 def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool) -> int:
@@ -361,12 +422,20 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool) -> 
                         "fail": n_fail, "skip": n_skip},
             "checks": [asdict(r) for r in results],
         }
-        print(json.dumps(out, indent=2))
+        # ensure_ascii=False keeps unicode in detail fields readable; if
+        # stdout truly can't encode it, write bytes directly with
+        # backslash-escape so we don't crash on the way out.
+        body = json.dumps(out, indent=2, ensure_ascii=not UNICODE_OK)
+        try:
+            print(body)
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write(body.encode("ascii", errors="backslashreplace"))
+            sys.stdout.buffer.write(b"\n")
         return 1 if n_fail else 0
 
     for r in results:
         _print_result(r, args.verbose, color)
-    print()
+    _safe_print()
     parts = [f"{n_pass} passed"]
     if n_warn:
         parts.append(f"{YELL if color else ''}{n_warn} warnings{RESET if color else ''}")
@@ -374,13 +443,13 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool) -> 
         parts.append(f"{RED if color else ''}{n_fail} failed{RESET if color else ''}")
     if n_skip:
         parts.append(f"{n_skip} skipped")
-    print("  " + ", ".join(parts))
+    _safe_print("  " + ", ".join(parts))
     if n_fail == 0 and n_warn == 0:
-        print(f"  {GREEN if color else ''}ATLAS install is healthy.{RESET if color else ''}")
+        _safe_print(f"  {GREEN if color else ''}ATLAS install is healthy.{RESET if color else ''}")
     elif n_fail == 0:
-        print(f"  {YELL if color else ''}ATLAS install is functional with warnings.{RESET if color else ''}")
+        _safe_print(f"  {YELL if color else ''}ATLAS install is functional with warnings.{RESET if color else ''}")
     else:
-        print(f"  {RED if color else ''}ATLAS install has failures — re-run with -v for detail.{RESET if color else ''}")
+        _safe_print(f"  {RED if color else ''}ATLAS install has failures {DASH} re-run with -v for detail.{RESET if color else ''}")
     return 1 if n_fail else 0
 
 
@@ -415,8 +484,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not args.json:
         hdr = f"{BOLD}ATLAS doctor{RESET}" if color else "ATLAS doctor"
-        print(f"{hdr} — checking install health (root: {atlas_root})")
-        print()
+        _safe_print(f"{hdr} {DASH} checking install health (root: {atlas_root})")
+        _safe_print()
 
     results: List[CheckResult] = []
 
