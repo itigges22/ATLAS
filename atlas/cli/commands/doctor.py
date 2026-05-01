@@ -290,6 +290,52 @@ def check_overcommit() -> CheckResult:
             "could not read /proc/sys (non-Linux?)", str(e))
 
 
+def check_tier_constraints() -> CheckResult:
+    """PC-055.1 cross-check: does the host meet the recommended tier's
+    per-axis minimums (RAM, CPU, disk)?
+
+    Distinct from `tier_match`:
+      - `tier_match` asks "is the configured model right for this hardware?"
+      - `tier_constraints` asks "can this hardware actually run anything at
+        the tier we'd recommend, given ATLAS's CPU/RAM/disk needs?"
+
+    Catches the "16 GB GPU but 8 GB RAM" case where llama-server fits on
+    the GPU but the host OOMs during V3 pipeline + sandbox compiles.
+    """
+    try:
+        from atlas.cli.commands import tier
+    except ImportError as e:
+        return CheckResult("tier_constraints", "skip",
+            "tier module unavailable", str(e))
+    p = tier.probe()
+    if not p.has_gpu:
+        return CheckResult("tier_constraints", "skip",
+            "no GPU detected (cpu tier)")
+    recommended = tier.classify(p)
+    checks = tier.evaluate_constraints(p, recommended)
+    overall = tier.overall_status(checks)
+    failed = [c for c in checks if c.status == "fail"]
+    warned = [c for c in checks if c.status == "warn"]
+    if overall == "fail":
+        return CheckResult("tier_constraints", "warn",
+            f"{len(failed)} hard constraint(s) below {recommended.tier}-tier minimum: "
+            f"{', '.join(c.name for c in failed)}",
+            "\n".join(c.message for c in failed) +
+            "\n\nATLAS may OOM or fail to install at the recommended tier. "
+            "Either upgrade host resources or downgrade tier "
+            "(`atlas tier list` for alternatives).")
+    if overall == "warn":
+        return CheckResult("tier_constraints", "warn",
+            f"{len(warned)} borderline constraint(s) for {recommended.tier} tier: "
+            f"{', '.join(c.name for c in warned)}",
+            "\n".join(c.message for c in warned) +
+            "\n\nATLAS will run but may struggle under load.")
+    return CheckResult("tier_constraints", "pass",
+        f"{recommended.tier} tier fits comfortably "
+        f"({p.cpu_cores} cores, {p.system_ram_gb:.0f} GB RAM, "
+        f"{p.disk_free_gb:.0f} GB disk)")
+
+
 def check_tier_match() -> CheckResult:
     """PC-055 cross-check: warn if .env settings overshoot the host's tier.
 
@@ -587,6 +633,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # matches host hardware. Warn on overshoot (OOM risk), pass on
     # match or undershoot.
     results.append(check_tier_match())
+
+    # 10.6. Tier constraints (PC-055.1) — does the host meet the
+    # recommended tier's CPU/RAM/disk minimums? Catches "16 GB GPU
+    # but 8 GB RAM" cases where llama fits but host OOMs under V3.
+    results.append(check_tier_constraints())
 
     # 11. End-to-end smoke
     if args.quick:

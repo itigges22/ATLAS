@@ -41,6 +41,7 @@ from typing import List, Optional, Tuple
 RESET = "\033[0m"
 BOLD  = "\033[1m"
 DIM   = "\033[2m"
+RED   = "\033[31m"
 GREEN = "\033[32m"
 YELL  = "\033[33m"
 CYAN  = "\033[36m"
@@ -81,14 +82,17 @@ class Probe:
     vram_gb: float
     gpu_count: int
     system_ram_gb: float
+    cpu_cores: int          # logical cores (incl. SMT)
     disk_free_gb: float
     platform: str  # 'linux' | 'darwin' | 'windows' | 'other'
 
     @property
     def description(self) -> str:
         if not self.has_gpu:
-            return f"{self.platform} | no GPU | {self.system_ram_gb:.0f} GB RAM"
+            return (f"{self.platform} | no GPU | {self.cpu_cores} cores "
+                    f"| {self.system_ram_gb:.0f} GB RAM")
         return (f"{self.platform} | {self.gpu_name} ({self.vram_gb:.1f} GB VRAM) "
+                f"| {self.cpu_cores} cores "
                 f"| {self.system_ram_gb:.0f} GB RAM "
                 f"| {self.disk_free_gb:.0f} GB free disk")
 
@@ -153,10 +157,20 @@ def _read_disk_free_gb(path: str = "/") -> float:
         return 0.0
 
 
+def _read_cpu_cores() -> int:
+    """Logical CPU count (includes SMT/hyperthreading).
+
+    os.cpu_count() returns None on rare platforms; fall back to 1
+    rather than crashing.
+    """
+    return os.cpu_count() or 1
+
+
 def probe(install_dir: Optional[str] = None) -> Probe:
     """Run all hardware probes and return a Probe."""
     has_gpu, gpu_name, vram_gb, gpu_count = _read_nvidia_smi()
     sys_ram = _read_system_ram_gb()
+    cpu_cores = _read_cpu_cores()
     # Probe disk against where ATLAS will live (model files are large).
     disk_path = install_dir if install_dir and os.path.isdir(install_dir) else "/"
     disk_free = _read_disk_free_gb(disk_path)
@@ -164,7 +178,7 @@ def probe(install_dir: Optional[str] = None) -> Probe:
     plat = "windows" if plat == "win32" else plat
     return Probe(has_gpu=has_gpu, gpu_name=gpu_name, vram_gb=vram_gb,
                  gpu_count=gpu_count, system_ram_gb=sys_ram,
-                 disk_free_gb=disk_free, platform=plat)
+                 cpu_cores=cpu_cores, disk_free_gb=disk_free, platform=plat)
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +195,13 @@ class TierProfile:
       parallel_slots   -> PARALLEL_SLOTS  (llama-server --parallel)
       kv_cache_k       -> KV_CACHE_TYPE_K (llama-server -ctk)
       kv_cache_v       -> KV_CACHE_TYPE_V (llama-server -ctv)
+
+    The min_* fields are constraint floors used by `evaluate_constraints`.
+    They reflect "what you actually need to run ATLAS at this tier without
+    host-side OOMs," not just the GPU dimension. ATLAS is heavy on CPU
+    (V3 pipeline PR-CoT repair, sandbox compiles, lens scoring) and RAM
+    (5 containers each with their own RSS, plus sandbox tmpfs), so a
+    16 GB GPU paired with 8 GB host RAM is a real OOM risk.
     """
     tier: str            # cpu | small | medium | large | xlarge
     label: str           # short human name
@@ -196,6 +217,10 @@ class TierProfile:
     parallel_slots: int
     kv_cache_k: str
     kv_cache_v: str
+    # Per-tier system minimums (PC-055.1)
+    min_system_ram_gb: float
+    min_cpu_cores: int
+    min_disk_gb: float
     notes: str
 
     def env_vars(self) -> dict:
@@ -232,6 +257,7 @@ TIERS: List[TierProfile] = [
         context_length=0,
         parallel_slots=0,
         kv_cache_k="N/A", kv_cache_v="N/A",
+        min_system_ram_gb=0, min_cpu_cores=0, min_disk_gb=0,
         notes="ROCm support for AMD GPUs is on the roadmap. "
               "Apple Silicon support requires llama.cpp Metal backend.",
     ),
@@ -248,6 +274,14 @@ TIERS: List[TierProfile] = [
         context_length=8192,
         parallel_slots=1,
         kv_cache_k="q4_0", kv_cache_v="q4_0",
+        # 5 containers (~7 GB combined RSS) + host OS + sandbox tmpfs
+        # + V3 pipeline burst memory ~= 12 GB minimum.
+        min_system_ram_gb=12.0,
+        # 4 cores: 1 for proxy/redis idle, 1 for sandbox compiles,
+        # 1 for v3 PR-CoT repair, 1 for llama prompt processing.
+        min_cpu_cores=4,
+        # Model (4.4 GB) + container images (8 GB) + ~7 GB working space.
+        min_disk_gb=20.0,
         notes="Q4 KV cache trades ~5% quality for ~50% memory. "
               "Increase to q8_0 if you have 12 GB and find quality lacking.",
     ),
@@ -265,6 +299,12 @@ TIERS: List[TierProfile] = [
         context_length=32768,
         parallel_slots=1,
         kv_cache_k="q8_0", kv_cache_v="q4_0",
+        # Larger model + 4× context vs small means more KV cache + more
+        # prompt processing memory in v3 PR-CoT.
+        min_system_ram_gb=16.0,
+        min_cpu_cores=4,
+        # Model (6.9 GB) + images (8 GB) + ~10 GB working.
+        min_disk_gb=25.0,
         notes="Default ATLAS configuration. Verified on RTX 5060 Ti 16GB "
               "with ~3 GB headroom remaining.",
     ),
@@ -281,6 +321,12 @@ TIERS: List[TierProfile] = [
         context_length=32768,
         parallel_slots=2,
         kv_cache_k="q8_0", kv_cache_v="q8_0",
+        # 2 parallel slots = doubled prompt-processing CPU + memory.
+        min_system_ram_gb=24.0,
+        min_cpu_cores=8,
+        # Model (10.5 GB) + images (8 GB) + ~16 GB working / scratch
+        # for sandbox compiles + V3 ablation results during dev.
+        min_disk_gb=35.0,
         notes="2 parallel slots lets ATLAS handle a coding session + "
               "background V3 verification without queueing.",
     ),
@@ -298,11 +344,120 @@ TIERS: List[TierProfile] = [
         context_length=65536,
         parallel_slots=2,
         kv_cache_k="f16", kv_cache_v="f16",
+        # 32B + 64K context + F16 KV is sustained-throughput territory;
+        # CPU bottleneck on prompt processing becomes real with long contexts.
+        min_system_ram_gb=32.0,
+        min_cpu_cores=16,
+        # Model (23 GB) + images (8 GB) + 30 GB headroom for benchmark
+        # outputs / multi-model A/B testing typical of datacenter use.
+        min_disk_gb=60.0,
         notes="F16 KV cache + 64K context costs ~10 GB of cache. "
               "If you have 80 GB+ VRAM, bump parallel_slots to 4 and "
               "context to 131072 manually in .env.",
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Constraint evaluation (PC-055.1)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ConstraintCheck:
+    """One axis of host-vs-tier constraint comparison."""
+    name: str        # 'gpu_vram' | 'system_ram' | 'cpu_cores' | 'disk_free'
+    actual: float
+    required: float
+    unit: str        # 'GB' | 'cores'
+    status: str      # 'pass' | 'warn' | 'fail'
+    message: str     # human-readable, includes shortfall if any
+
+
+def evaluate_constraints(p: Probe, t: TierProfile) -> List[ConstraintCheck]:
+    """Check each per-tier minimum against the probe.
+
+    Returns a list of ConstraintCheck — one per axis. Status semantics:
+      pass — comfortably above minimum
+      warn — below minimum but within ~15% (RAM/disk) or any shortage (CPU)
+      fail — meaningfully below minimum, will OOM or fail to install
+
+    CPU shortage is always warn-level (not fail) because it makes ATLAS
+    slow but doesn't OOM. RAM/disk shortage past the warn threshold is
+    fail because it actually breaks runtime.
+    """
+    checks: List[ConstraintCheck] = []
+
+    # GPU VRAM — only meaningful for GPU tiers
+    if t.tier != "cpu":
+        if p.vram_gb >= t.min_vram_gb:
+            checks.append(ConstraintCheck(
+                "gpu_vram", p.vram_gb, t.min_vram_gb, "GB", "pass",
+                f"{p.vram_gb:.1f} GB >= {t.min_vram_gb:.0f} GB minimum"))
+        else:
+            shortfall = t.min_vram_gb - p.vram_gb
+            checks.append(ConstraintCheck(
+                "gpu_vram", p.vram_gb, t.min_vram_gb, "GB", "fail",
+                f"{p.vram_gb:.1f} GB / {t.min_vram_gb:.0f} GB minimum "
+                f"({shortfall:.1f} GB short — llama-server will OOM)"))
+
+    # System RAM — 5 containers + V3 pipeline + host OS
+    if p.system_ram_gb >= t.min_system_ram_gb:
+        checks.append(ConstraintCheck(
+            "system_ram", p.system_ram_gb, t.min_system_ram_gb, "GB", "pass",
+            f"{p.system_ram_gb:.1f} GB >= {t.min_system_ram_gb:.0f} GB minimum"))
+    elif p.system_ram_gb >= t.min_system_ram_gb * 0.85:
+        shortfall = t.min_system_ram_gb - p.system_ram_gb
+        checks.append(ConstraintCheck(
+            "system_ram", p.system_ram_gb, t.min_system_ram_gb, "GB", "warn",
+            f"{p.system_ram_gb:.1f} GB / {t.min_system_ram_gb:.0f} GB minimum "
+            f"({shortfall:.1f} GB short — V3 pipeline may OOM under load)"))
+    else:
+        shortfall = t.min_system_ram_gb - p.system_ram_gb
+        checks.append(ConstraintCheck(
+            "system_ram", p.system_ram_gb, t.min_system_ram_gb, "GB", "fail",
+            f"{p.system_ram_gb:.1f} GB / {t.min_system_ram_gb:.0f} GB minimum "
+            f"({shortfall:.1f} GB short — host will OOM during V3 + sandbox compiles)"))
+
+    # CPU cores — affects throughput (prompt processing, V3 PR-CoT, sandbox)
+    if p.cpu_cores >= t.min_cpu_cores:
+        checks.append(ConstraintCheck(
+            "cpu_cores", float(p.cpu_cores), float(t.min_cpu_cores), "cores", "pass",
+            f"{p.cpu_cores} cores >= {t.min_cpu_cores} minimum"))
+    else:
+        # CPU shortage = slow, not OOM. Always warn (never fail).
+        checks.append(ConstraintCheck(
+            "cpu_cores", float(p.cpu_cores), float(t.min_cpu_cores), "cores", "warn",
+            f"{p.cpu_cores} cores / {t.min_cpu_cores} minimum "
+            f"(V3 pipeline + prompt processing will be slow)"))
+
+    # Disk free — for model + images + working space
+    if p.disk_free_gb >= t.min_disk_gb:
+        checks.append(ConstraintCheck(
+            "disk_free", p.disk_free_gb, t.min_disk_gb, "GB", "pass",
+            f"{p.disk_free_gb:.0f} GB free >= {t.min_disk_gb:.0f} GB minimum"))
+    elif p.disk_free_gb >= t.min_disk_gb * 0.7:
+        shortfall = t.min_disk_gb - p.disk_free_gb
+        checks.append(ConstraintCheck(
+            "disk_free", p.disk_free_gb, t.min_disk_gb, "GB", "warn",
+            f"{p.disk_free_gb:.0f} GB free / {t.min_disk_gb:.0f} GB minimum "
+            f"({shortfall:.0f} GB short — clean cache before model download)"))
+    else:
+        shortfall = t.min_disk_gb - p.disk_free_gb
+        checks.append(ConstraintCheck(
+            "disk_free", p.disk_free_gb, t.min_disk_gb, "GB", "fail",
+            f"{p.disk_free_gb:.0f} GB free / {t.min_disk_gb:.0f} GB minimum "
+            f"({shortfall:.0f} GB short — model download or container pull will fail)"))
+
+    return checks
+
+
+def overall_status(checks: List[ConstraintCheck]) -> str:
+    """Reduce a list of constraints to the worst-case status."""
+    if any(c.status == "fail" for c in checks):
+        return "fail"
+    if any(c.status == "warn" for c in checks):
+        return "warn"
+    return "pass"
 
 
 def classify(p: Probe) -> TierProfile:
@@ -369,23 +524,74 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     _safe_print(f"    Parallel slots:  {t.parallel_slots}")
     _safe_print(f"    KV cache K / V:  {t.kv_cache_k} / {t.kv_cache_v}")
     _safe_print()
+    _safe_print(f"  {BOLD}System minimums for this tier:{RESET}" if color
+                else "  System minimums for this tier:")
+    _safe_print(f"    System RAM:      {t.min_system_ram_gb:.0f} GB")
+    _safe_print(f"    CPU cores:       {t.min_cpu_cores}")
+    _safe_print(f"    Disk free:       {t.min_disk_gb:.0f} GB")
+    _safe_print()
     _safe_print(f"  Notes: {t.notes}")
-    if p is not None and p.has_gpu:
-        _safe_print()
-        match = p.vram_gb >= t.min_vram_gb and (
-            t.max_vram_gb is None or p.vram_gb < t.max_vram_gb)
-        if match:
-            mark = f"{GREEN}✓ matches{RESET}" if color and UNICODE_OK else "[match]"
-        else:
-            mark = f"{YELL}- (does not match){RESET}" if color and UNICODE_OK else "[no match]"
-        _safe_print(f"  Your hardware: {p.vram_gb:.1f} GB VRAM {mark}")
+    if p is not None:
+        _print_constraints(p, t, color)
+
+
+def _constraint_icon(status: str, color: bool) -> str:
+    if not color or not UNICODE_OK:
+        return {"pass": "[OK]  ", "warn": "[WARN]", "fail": "[FAIL]"}[status]
+    return {"pass": f"{GREEN}✓{RESET}", "warn": f"{YELL}⚠{RESET}",
+            "fail": f"{RED}✗{RESET}"}[status]
+
+
+def _print_constraints(p: Probe, t: TierProfile, color: bool) -> None:
+    """PC-055.1: render the host-vs-tier constraint table."""
+    if t.tier == "cpu":
+        # No GPU = no useful constraint check at this tier.
+        return
+    checks = evaluate_constraints(p, t)
+    _safe_print()
+    _safe_print(f"  {BOLD}Constraint check (your host vs this tier):{RESET}"
+                if color else "  Constraint check (your host vs this tier):")
+    for c in checks:
+        icon = _constraint_icon(c.status, color)
+        label = {"gpu_vram": "GPU VRAM", "system_ram": "System RAM",
+                 "cpu_cores": "CPU cores", "disk_free": "Disk free"}[c.name]
+        _safe_print(f"    {icon}  {label:14s}  {c.message}")
+    overall = overall_status(checks)
+    _safe_print()
+    if overall == "pass":
+        verdict = (f"  {GREEN}OK{RESET}: this tier is a comfortable fit "
+                   f"for your hardware." if color else
+                   "  OK: this tier is a comfortable fit for your hardware.")
+    elif overall == "warn":
+        verdict = (f"  {YELL}Warning{RESET}: this tier is borderline. "
+                   f"ATLAS will run but may struggle under load."
+                   if color else
+                   "  Warning: this tier is borderline. ATLAS will run "
+                   "but may struggle under load.")
+    else:
+        verdict = (f"  {RED}Fail{RESET}: at least one constraint is short "
+                   f"of the minimum. ATLAS will OOM or fail to install."
+                   if color else
+                   "  Fail: at least one constraint is short of the minimum. "
+                   "ATLAS will OOM or fail to install.")
+    _safe_print(verdict)
 
 
 def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
                    color: bool) -> int:
     if args.json:
-        out = {"probe": asdict(p), "tier": asdict(t),
-               "env": t.env_vars()}
+        # Include constraints + overall status so PC-054 wizard and PC-056
+        # model registry can render the same evaluation without re-implementing
+        # the rules. Existing keys (probe, tier, env) preserved for backwards
+        # compat.
+        constraints = (evaluate_constraints(p, t) if t.tier != "cpu" else [])
+        out = {
+            "probe": asdict(p),
+            "tier": asdict(t),
+            "env": t.env_vars(),
+            "constraints": [asdict(c) for c in constraints],
+            "overall": overall_status(constraints) if constraints else "skip",
+        }
         print(json.dumps(out, indent=2, ensure_ascii=not UNICODE_OK))
         return 0
     if args.raw:
@@ -407,7 +613,10 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
                 "shown above.")
     _safe_print(f"  Or run: {CYAN if color else ''}atlas wizard{RESET if color else ''}"
                 f"  (when PC-054 lands).")
-    return 0
+    # Exit non-zero on constraint failure so scripts (bootstrap, CI) can
+    # gate on it. Warnings stay exit 0 — they're actionable, not fatal.
+    overall = overall_status(evaluate_constraints(p, t))
+    return 1 if overall == "fail" else 0
 
 
 def _emit_list(args: argparse.Namespace, color: bool) -> int:
