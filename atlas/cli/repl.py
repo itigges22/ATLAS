@@ -420,6 +420,9 @@ def run():
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
         from atlas.cli.commands import doctor
         sys.exit(doctor.main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "tier":
+        from atlas.cli.commands import tier
+        sys.exit(tier.main(sys.argv[2:]))
 
     extra_args = sys.argv[1:] if len(sys.argv) > 1 else None
 

@@ -290,6 +290,60 @@ def check_overcommit() -> CheckResult:
             "could not read /proc/sys (non-Linux?)", str(e))
 
 
+def check_tier_match() -> CheckResult:
+    """PC-055 cross-check: warn if .env settings overshoot the host's tier.
+
+    Example: user on tier-small (8 GB GPU) running with the medium-tier
+    default `Qwen3.5-9B-Q6_K.gguf` will OOM. Doctor flags this as a
+    warning so the user knows to either downgrade the model or upgrade
+    the GPU. We never hard-fail on tier mismatch — sometimes the user
+    knows better than the heuristic (e.g., they pre-allocated VRAM
+    elsewhere and want a smaller-than-recommended model).
+    """
+    try:
+        from atlas.cli.commands import tier
+    except ImportError as e:
+        return CheckResult("tier_match", "skip",
+            "tier module unavailable", str(e))
+    p = tier.probe()
+    if not p.has_gpu:
+        return CheckResult("tier_match", "skip",
+            "no GPU detected (cpu tier)")
+    recommended = tier.classify(p)
+    actual_model = MODEL_FILE
+    if actual_model == recommended.model_file:
+        return CheckResult("tier_match", "pass",
+            f"{recommended.tier} tier matches configured model "
+            f"({recommended.model_display})")
+    # Mismatch — figure out direction. Find which tier the actual model
+    # belongs to, then compare.
+    actual_tier = None
+    for t in tier.TIERS:
+        if t.model_file == actual_model:
+            actual_tier = t
+            break
+    if actual_tier is None:
+        return CheckResult("tier_match", "warn",
+            f"configured model `{actual_model}` is not in any tier preset",
+            f"host classified as {recommended.tier}; consider one of the "
+            f"presets: `atlas tier list`")
+    # Warn only when actual > recommended (overshoot risks OOM).
+    # Undershoot (smaller model than tier supports) is fine — just
+    # leaves performance on the table.
+    tiers_order = ["cpu", "small", "medium", "large", "xlarge"]
+    rec_idx = tiers_order.index(recommended.tier)
+    act_idx = tiers_order.index(actual_tier.tier)
+    if act_idx > rec_idx:
+        return CheckResult("tier_match", "warn",
+            f"running {actual_tier.tier}-tier model on {recommended.tier}-tier "
+            f"hardware ({p.vram_gb:.1f} GB VRAM)",
+            f"OOM risk. Recommended for your VRAM: "
+            f"{recommended.model_display}. Run `atlas tier` for detail.")
+    return CheckResult("tier_match", "pass",
+        f"running {actual_tier.tier}-tier model on {recommended.tier}-tier "
+        f"hardware (under-utilized but safe)")
+
+
 def check_image_skew(services: List[Dict]) -> CheckResult:
     """PC-052 follow-up: warn if the 5 atlas-* images aren't on the same tag."""
     atlas_imgs = [s.get("Image", "") for s in services
@@ -528,6 +582,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 10. Image-tag skew (PC-052)
     results.append(check_image_skew(services))
+
+    # 10.5. Tier match (PC-055) — soft cross-check that .env model
+    # matches host hardware. Warn on overshoot (OOM risk), pass on
+    # match or undershoot.
+    results.append(check_tier_match())
 
     # 11. End-to-end smoke
     if args.quick:

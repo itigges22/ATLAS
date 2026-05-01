@@ -430,16 +430,40 @@ scripts/verify-install.sh
 
 ## Hardware Sizing
 
+ATLAS classifies GPUs into 5 tiers and recommends a model + context
+size + parallel-slots configuration per tier. Run `atlas tier` to see
+which tier your hardware lands in and the exact `.env` values to use.
+
+| Tier | VRAM | Recommended model | Context | Slots | Example GPUs |
+|------|------|-------------------|--------:|------:|--------------|
+| **cpu** | n/a | not supported in v1 | n/a | n/a | (no CUDA GPU) |
+| **small** | 8–12 GB | Qwen3.5 7B Q4_K_M (4.4 GB) | 8K | 1 | RTX 3060/4060 8GB, T4 |
+| **medium** | 12–20 GB | Qwen3.5 9B Q6_K (6.9 GB) | 32K | 1 | RTX 4060/5060 Ti 16GB, 3080 Ti, 4070 Ti Super |
+| **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090, 4090, 5090 24GB |
+| **xlarge** | 32 GB+ | Qwen3.5 32B Q5_K_M (23 GB) | 64K | 2 | RTX 5090 32GB, A6000, A100, H100 |
+
+```bash
+atlas tier              # classify this host + show recommendations
+atlas tier list         # show all 5 tier definitions
+atlas tier --json       # machine output (for scripts)
+atlas tier --raw        # just the probe (no classification)
+```
+
+The medium tier is the ATLAS development target — `atlas-bootstrap.sh`
+defaults to its model+context settings. Other tiers require manual `.env`
+edits (or wait for PC-054's first-run wizard which automates the
+selection).
+
 | Resource | Minimum | Recommended | Notes |
 |----------|---------|-------------|-------|
-| GPU VRAM | 16 GB | 16 GB | Model (~7GB) + KV cache (~1.3GB) + overhead |
+| GPU VRAM | 8 GB | 16 GB | See tier table above |
 | System RAM | 14 GB | 16 GB+ | PyTorch runtime + container overhead |
-| Disk | 15 GB | 25 GB | Model (7GB) + container images (5-8GB) + working space |
+| Disk | 15 GB | 25 GB | Model (4.4–23 GB depending on tier) + container images (5–8 GB) + working space |
 | CPU | 4 cores | 8+ cores | V3 pipeline is CPU-intensive during repair phases |
 
 ### Supported GPUs
 
-Any NVIDIA GPU with 16GB+ VRAM and CUDA support. Tested on:
+Any NVIDIA GPU with 8 GB+ VRAM and CUDA support. Tested on:
 - RTX 5060 Ti 16GB (primary development GPU)
 
 AMD and Intel GPUs are not yet tested. llama.cpp supports ROCm and other backends — ROCm support is a V3.1 priority.
