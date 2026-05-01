@@ -72,13 +72,21 @@ jobs:
 
       - name: Free disk space (llama only)
         if: matrix.service.name == 'llama'
-        # CUDA devel base + build artifacts can exceed the 14 GB free on
-        # ubuntu-latest. Reclaim the obvious wastage before docker pulls.
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
-                      /opt/hostedtoolcache/CodeQL "$AGENT_TOOLSDIRECTORY" || true
-          docker system prune -af || true
-          df -h /
+        # CUDA devel base (~9 GB) + runtime base (~4 GB) + llama.cpp build
+        # artifacts (~5-8 GB) can peak at ~22-25 GB during a llama build.
+        # ubuntu-latest has ~14 GB free out of the box. The community
+        # `jlumbroso/free-disk-space` action reclaims ~30 GB by removing
+        # Android SDK, dotnet, Haskell, large hosted-tool caches, etc.
+        # That puts us comfortably under the limit.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false  # apt large-pkg removal is slow + low payoff
+          docker-images: true
+          swap-storage: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -95,6 +103,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-${{ matrix.service.name }}
+          # `flavor: latest=false` disables metadata-action's auto-latest
+          # logic, which marks the current run's semver tag as `:latest`
+          # within its own run — so a backport tag like `v0.9.5` pushed
+          # AFTER `v1.0.0` would silently downgrade `:latest` to v0.9.5
+          # for everyone. Instead, `:latest` is set explicitly below ONLY
+          # on main pushes, so it tracks bleeding edge from main, and
+          # users pin to versioned tags for stability.
+          flavor: |
+            latest=false
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
