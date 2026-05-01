@@ -501,6 +501,31 @@ Hard minimums for the tier you intend to run:
 | Disk | 20 GB | 35 GB | Model (4.4–23 GB) + container images (5–8 GB) + working space |
 | CPU | 4 cores | 8+ cores | V3 pipeline + sandbox compiles + llama prompt processing |
 
+<a id="model-management"></a>
+### Model Management (`atlas model`, PC-056)
+
+Beyond classifying *which* model to run, ATLAS ships an `atlas model` subcommand for the install lifecycle. See [CLI.md → `atlas model`](CLI.md#atlas-model) for the full flag tables and examples; the short version:
+
+```bash
+atlas model list                            # show all known models with install + Lens columns
+atlas model recommend                       # composes atlas tier + registry, prints best fit
+atlas model install Qwen3.5-9B-Q6_K         # download from HuggingFace into ATLAS_MODELS_DIR
+atlas model install <name> --dry-run        # preview URL/target/SHA, no network
+atlas model remove <name> --yes             # delete from disk
+```
+
+**Truth in advertising — `lens_status`.** Every registry entry is one of `supported` (Lens artifacts shipped, G(x) verification works), `no-artifacts` (model can be downloaded but G(x) silently no-ops), or `unverified`. Today **only `Qwen3.5-9B-Q6_K` is `supported`** — the 7B / 14B / 32B entries are listed honestly as `no-artifacts` so users know what's missing before they install. This is why the Phase 0 development target is medium tier: it's the only tier where ATLAS is end-to-end functional today.
+
+To install a `no-artifacts` model anyway (you accept G(x) won't score generations), pass `--no-lens`:
+
+```bash
+atlas model install Qwen3.5-14B-Q5_K_M --no-lens
+# refused — upstream unsloth/Qwen3.5-14B-GGUF is gated (HTTP 401)
+# you'd need to obtain the GGUF separately and place it in ATLAS_MODELS_DIR manually
+```
+
+Bringing more models to `supported` is the work of [PC-058 (`atlas lens build`)](https://github.com/itigges22/ATLAS/issues/100) — the multi-hour Lens-training pipeline that produces metric tensor + embeddings for new models. See ISSUES.md for the full model-agnostic roadmap (PC-057 through PC-060).
+
 ### Supported GPUs
 
 Any NVIDIA GPU with 8 GB+ VRAM and CUDA support. Tested on:

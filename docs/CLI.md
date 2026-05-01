@@ -432,6 +432,85 @@ atlas tier --install-dir /data/atlas   # measure disk free against an alternate 
 - `0` — classified successfully (warnings stay exit 0 — they're actionable, not fatal).
 - `1` — at least one constraint failed (cpu tier, or RAM/disk shortage past 15% threshold). `atlas-bootstrap.sh` gates on this.
 
+<a id="atlas-model"></a>
+### `atlas model` — registry: list / install / recommend / remove
+
+`atlas model` is the install-side counterpart to `atlas tier`. The tier command answers *"what hardware do I have and what should I run?"*; the model command answers *"is that model actually downloadable, is it on disk, will G(x) verification work on it?"*. The central concept is **`lens_status`** — every registry entry is one of:
+
+| Lens status | Meaning |
+|---|---|
+| `supported` | Trained metric tensor + embeddings shipped in the repo. G(x) verification works end-to-end. |
+| `no-artifacts` | Model exists but no Lens artifacts are trained for it. ATLAS will run llama-server on it but G(x) silently no-ops (`gx_score: 0.5, verdict: "unavailable"`) on every generation — half of what makes ATLAS *ATLAS* will be missing. |
+| `unverified` | Has artifacts but never validated end-to-end. (Reserved; no entries today.) |
+
+Today **only `Qwen3.5-9B-Q6_K` is `supported`**. The 7B / 14B / 32B entries are listed honestly as `no-artifacts` so the registry tells the truth about what works. Bringing more models to `supported` is the work of [PC-058 (`atlas lens build`)](https://github.com/itigges22/ATLAS/issues/100); see ISSUES.md for the model-agnostic roadmap.
+
+```bash
+atlas model list                                   # show all known models
+atlas model list --tier medium                     # filter to a tier
+atlas model list --installed                       # only models on disk
+atlas model list --lens-supported                  # only Lens-supported models
+atlas model list --json                            # machine output
+atlas model recommend                              # best model for THIS host
+atlas model install Qwen3.5-9B-Q6_K                # download into ATLAS_MODELS_DIR
+atlas model install Qwen3.5-9B-Q6_K --dry-run      # print URL/target/SHA, no network
+atlas model install Qwen3.5-14B-Q5_K_M --no-lens   # acknowledge installing a no-artifacts model
+atlas model remove Qwen3.5-9B-Q6_K --yes           # delete from disk
+```
+
+**Path resolution.** All four subcommands share a `--models-dir` flag and resolve in this order: `--models-dir` flag > `ATLAS_MODELS_DIR` env var > `./models/` relative to `atlas_root` (the directory containing `docker-compose.yml`).
+
+#### `atlas model list`
+
+Prints the registry as a table with install state + Lens status per row. The `--installed` filter only shows models present in `ATLAS_MODELS_DIR` (file > 100 MB sanity threshold). The `--lens-supported` filter is the right starting point if you don't yet know which model to use:
+
+```bash
+atlas model list --lens-supported   # → just shows Qwen3.5-9B-Q6_K today
+```
+
+| Flag | Behavior |
+|---|---|
+| `--tier` | Filter to one of `cpu` / `small` / `medium` / `large` / `xlarge`. |
+| `--installed` | Show only models whose gguf file is present in `ATLAS_MODELS_DIR`. |
+| `--lens-supported` | Show only models with `lens_status == "supported"`. |
+| `--models-dir` | Override `ATLAS_MODELS_DIR`. |
+| `--json` | Emit machine output: `{"models_dir": "...", "models": [{...}, ...]}`. |
+| `--no-color` | Disable ANSI color. |
+
+#### `atlas model recommend`
+
+Composes `atlas tier` (host classification) with the registry (what's actually installable + Lens-supported) and prints the best fit:
+
+- If your tier's default model is `supported` → prints "Ready to install: `atlas model install …`" and exits 0.
+- If your tier's default is `no-artifacts` → surfaces the **fallback** (the only `supported` model today, regardless of tier) so users on small/large/xlarge hosts get a working recommendation instead of nothing.
+- JSON output includes both `recommendation` (tier-default) and `fallback` (Lens-supported alternative) keys for the wizard / scripts to consume.
+
+#### `atlas model install <name>`
+
+Streams the model from the registry's `download_url` via stdlib `urllib` (no third-party deps), writes to `ATLAS_MODELS_DIR/<file>.part`, then atomically renames into place on success. Shows a progress bar with rate + ETA. Partial files are deleted on interrupt or download failure (no resume support in v1; PC-056.1 follow-up).
+
+**Safety gates** (in order):
+
+1. **Unknown name** → exit 1 with "Unknown model" message.
+2. **No-artifacts gate** → If `lens_status != "supported"` and `--no-lens` not passed → refuse with explanation. The user must explicitly acknowledge that G(x) will silently no-op.
+3. **Gated upstream** → If `download_url is None` (e.g., 7B/14B/32B unsloth repos return HTTP 401) → refuse. There's nothing to download.
+4. **Disk space** → If free disk in `ATLAS_MODELS_DIR` < 1.2× model size → refuse with the shortfall reported.
+5. **Existing file** → If target already exists → refuse without `--yes`.
+
+| Flag | Behavior |
+|---|---|
+| `--dry-run` | Print URL / target path / size / SHA256, no network or disk writes. Used by tests and by users sanity-checking before committing. |
+| `--no-lens` | Acknowledge installing a model with no Lens artifacts. Required for any non-`supported` install. |
+| `--yes` | Overwrite an existing file without prompt. |
+| `--models-dir` | Override `ATLAS_MODELS_DIR`. |
+| `--no-color` | Disable ANSI color. |
+
+**SHA verification.** The 9B's registry entry carries the HuggingFace `x-linked-etag` (content-addressed storage SHA256). Today we only print it after download; actual verification is a PC-056.1 follow-up. This catches *download corruption* but not *provenance* — that's PC-060 territory.
+
+#### `atlas model remove <name>`
+
+Deletes the model file from `ATLAS_MODELS_DIR`. Refuses without `--yes`. Idempotent — removing a model that isn't installed exits 0 with no action.
+
 ---
 
 ## What ATLAS Does Well

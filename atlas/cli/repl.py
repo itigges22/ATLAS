@@ -412,9 +412,11 @@ def run():
 
     Launch strategy:
     1. `atlas doctor [...]` → run install diagnostic and exit (PC-053)
-    2. Check if proxy is running or can be started locally (Go)
-    3. If proxy + Aider available → launch Aider (full coding assistant)
-    4. Otherwise → fall back to built-in REPL (/solve, /bench only)
+    2. `atlas tier [...]` → hardware classification (PC-055)
+    3. `atlas model [...]` → registry: list / install / recommend / remove (PC-056)
+    4. Check if proxy is running or can be started locally (Go)
+    5. If proxy + Aider available → launch Aider (full coding assistant)
+    6. Otherwise → fall back to built-in REPL (/solve, /bench only)
     """
     # Subcommand dispatch (must precede Aider passthrough)
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
@@ -423,6 +425,9 @@ def run():
     if len(sys.argv) > 1 and sys.argv[1] == "tier":
         from atlas.cli.commands import tier
         sys.exit(tier.main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "model":
+        from atlas.cli.commands import model
+        sys.exit(model.main(sys.argv[2:]))
 
     extra_args = sys.argv[1:] if len(sys.argv) > 1 else None
 

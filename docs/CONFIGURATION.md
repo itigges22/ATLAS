@@ -22,13 +22,18 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 
 > **Source of truth for runtime knobs.** Don't pick values for
 > `ATLAS_MODEL_FILE`, `ATLAS_CTX_SIZE`, `PARALLEL_SLOTS`, or
-> `KV_CACHE_TYPE_K|V` from this table directly — run `atlas tier` and use
-> the values it prints for your hardware. The defaults below are tuned
-> for the **medium tier** (12–20 GB VRAM, ATLAS development target);
-> small / large / xlarge boxes need different settings to avoid OOM or
-> leave perf on the table. See [SETUP.md → Hardware Sizing](SETUP.md#hardware-sizing)
-> for the full tier table, or [CLI.md → `atlas tier`](CLI.md#atlas-tier)
-> for the command flags.
+> `KV_CACHE_TYPE_K|V` from this table directly — run `atlas tier` (for
+> tier-derived runtime knobs) or `atlas model recommend` (for the right
+> *model* given your hardware AND Lens artifact availability) and use the
+> values they print. The defaults below are tuned for the **medium tier**
+> (12–20 GB VRAM, ATLAS development target); small / large / xlarge boxes
+> need different settings to avoid OOM or leave perf on the table. See
+> [SETUP.md → Hardware Sizing](SETUP.md#hardware-sizing) for the full
+> tier table, [CLI.md → `atlas tier`](CLI.md#atlas-tier) for the
+> classification command, or [CLI.md → `atlas model`](CLI.md#atlas-model)
+> for the install lifecycle. Today only `Qwen3.5-9B-Q6_K` has end-to-end
+> Lens support; `atlas model recommend` will surface that fact for
+> users on other tiers.
 
 | Variable | Default (medium tier) | Description |
 |----------|----------------------:|-------------|

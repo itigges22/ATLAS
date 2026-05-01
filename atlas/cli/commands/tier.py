@@ -551,13 +551,22 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     _safe_print()
     _safe_print(f"  {BOLD}Recommended ATLAS settings:{RESET}" if color
                 else "  Recommended ATLAS settings:")
-    # PC-055.2: model lookup lives in model_recommendations now. Display
-    # gracefully if the recommendation is missing (PC-056 might omit some
-    # tiers, or rename one — we shouldn't crash the doctor over it).
+    # PC-055.2: model lookup lives in model_recommendations (now a shim
+    # over model_registry). PC-056 added lens_status — surface it here
+    # so users see the warning before committing to install.
     rec = model_recommendations.for_tier(t.tier)
     if rec is not None:
+        lens = getattr(rec, "lens_status", None)  # tolerate older shim
+        if lens == "supported":
+            lens_marker = (f"{GREEN}[Lens supported]{RESET}" if color
+                           else "[Lens supported]")
+        elif lens == "no-artifacts":
+            lens_marker = (f"{YELL}[Lens NO-ARTIFACTS — G(x) will no-op]{RESET}"
+                           if color else "[Lens NO-ARTIFACTS — G(x) will no-op]")
+        else:
+            lens_marker = ""
         _safe_print(f"    Model:           {rec.model_display} "
-                    f"({rec.model_size_gb:.1f} GB on disk)")
+                    f"({rec.model_size_gb:.1f} GB on disk)  {lens_marker}")
         _safe_print(f"    File:            {rec.model_file}")
     else:
         _safe_print("    Model:           (no default recommendation)")

@@ -175,7 +175,15 @@ If using Docker, ensure the NVIDIA container runtime is configured (see GPU sect
 
 **Symptom:** llama-server exits immediately with "failed to load model" or similar.
 
-**Fix:** Check the model path:
+**Diagnose first:** `atlas model list --installed` — shows which registry entries are present in `ATLAS_MODELS_DIR`. If your configured model isn't listed, the file is missing.
+
+**Fix path 1 — install via the registry:**
+```bash
+atlas model recommend                          # what should I have for this hardware?
+atlas model install Qwen3.5-9B-Q6_K            # download from HuggingFace
+```
+
+**Fix path 2 — manual placement.** Check the model path:
 ```bash
 # Docker Compose — model must be in ATLAS_MODELS_DIR (default: ./models/)
 ls -la models/Qwen3.5-9B-Q6_K.gguf
@@ -185,6 +193,24 @@ ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
 ```
 
 The filename must match `ATLAS_MODEL_FILE` in `.env` (default: `Qwen3.5-9B-Q6_K.gguf`).
+
+### G(x) verification always returns "unavailable" or `gx_score: 0.5`
+
+**Symptom:** Generations come back from llama-server fine, but every Lens response shows `gx_score: 0.5, verdict: "unavailable"`. The C(x)/G(x) verification half of ATLAS isn't working.
+
+**Cause:** You're running a model that has no Lens artifacts (no trained metric tensor + embeddings for that specific model). The Lens silently no-ops on unknown models. Only `Qwen3.5-9B-Q6_K` ships with artifacts in the repo today; 7B / 14B / 32B were either never trained or had their artifacts removed.
+
+**Diagnose:**
+```bash
+atlas doctor                                   # tier_match check (#20) flags this directly
+atlas model list                               # look for Lens status column
+```
+
+**Fix:**
+- **Recommended:** switch to a `supported` model. `atlas model recommend` will surface the fallback (`Qwen3.5-9B-Q6_K`) regardless of which tier your hardware lands in.
+- **If you must run a `no-artifacts` model:** train Lens artifacts for it locally via `atlas lens build` (PC-058 — not yet shipped). Until that's available, you have to accept G(x) won't score generations.
+
+See [PC-058 roadmap](https://github.com/itigges22/ATLAS/issues/100) for the Lens training pipeline and [SETUP.md → Model Management](SETUP.md#model-management) for the full registry story.
 
 ### Out of VRAM
 

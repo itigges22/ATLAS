@@ -233,11 +233,17 @@ def test_tier_env_vars_excludes_model_keys():
     assert "PARALLEL_SLOTS" in env
 
 
-def test_model_recommendations_for_each_tier():
-    """Every tier should have a corresponding model recommendation —
-    rendering breaks otherwise."""
+def test_model_recommendations_for_each_gpu_tier():
+    """Every GPU tier should have a model recommendation. The 'cpu' tier
+    intentionally has no recommendation in PC-056's honest registry —
+    ATLAS requires a CUDA GPU and there's no GGUF model to recommend
+    for CPU-only hosts. tier.py renders that as 'N/A — install a CUDA
+    GPU' from the TierProfile.notes field, not from a recommendation."""
     for t in tier.TIERS:
         rec = model_recommendations.for_tier(t.tier)
+        if t.tier == "cpu":
+            assert rec is None, "cpu tier should not have a model recommendation"
+            continue
         assert rec is not None, f"missing recommendation for tier {t.tier!r}"
         assert rec.tier == t.tier
 

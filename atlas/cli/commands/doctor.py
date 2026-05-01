@@ -389,6 +389,26 @@ def check_tier_match() -> CheckResult:
             f"hardware ({p.vram_gb:.1f} GB VRAM)",
             f"OOM risk. Recommended for your VRAM: "
             f"{rec_display}. Run `atlas tier` for detail.")
+    # Undershoot path: smaller model than the tier supports. Normally
+    # safe (just leaves perf on the table). PC-056: also warn if the
+    # actual model has no Lens artifacts — that means G(x) silently
+    # no-ops at runtime, regardless of tier-fit. Worth surfacing even
+    # though the tier check itself passes.
+    try:
+        from atlas.cli.commands import model_registry
+        actual_model_record = model_registry.by_name(
+            actual_model.rsplit(".", 1)[0])
+        if actual_model_record is not None and \
+                actual_model_record.lens_status != "supported":
+            return CheckResult("tier_match", "warn",
+                f"configured model `{actual_model}` has Lens status "
+                f"`{actual_model_record.lens_status}` — G(x) will silently "
+                f"no-op",
+                f"ATLAS will run llama-server but C(x)/G(x) verification is "
+                f"missing. See PC-058 roadmap. To switch: "
+                f"`atlas model recommend` for a Lens-supported alternative.")
+    except (ImportError, AttributeError):
+        pass
     return CheckResult("tier_match", "pass",
         f"running {actual_tier_name}-tier model on {recommended.tier}-tier "
         f"hardware (under-utilized but safe)")
