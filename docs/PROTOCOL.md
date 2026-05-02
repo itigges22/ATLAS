@@ -25,7 +25,30 @@ data: {"event_id":"evt_aabb1122",...}
 
 ```
 
-(Two newlines terminate the frame.) Comments (`: heartbeat`) and named events (`event: result`) are SSE-standard and clients should tolerate them. The Python helper `atlas.cli.events.iter_sse_lines` handles the framing.
+(Two newlines terminate the frame.) The Python helper `atlas.cli.events.iter_sse_lines` handles the framing.
+
+### SSE control frames (server → client only)
+
+The protocol uses three SSE comment / control patterns. None are envelope events; consumers must skip them via the lines parser:
+
+| Frame | When | Why |
+|---|---|---|
+| `: connected\n\n` | First body byte after a successful `/events` connection (atlas-proxy only) | Forces the response headers + first body chunk to leave the server immediately. Without it, Go buffers the response until the first envelope or 15s heartbeat fires, and clients with short connect timeouts see "no response received" (PC-061 follow-up). |
+| `: heartbeat\n\n` | Every 15s during quiet stretches (atlas-proxy only) | Keeps proxies / load balancers from idling out the connection. |
+| `event: result\ndata: {...}\n\n` | Right before stream end on `/v3/run` (v3-service only, legacy) | Carries the final pipeline `result` dict in the legacy back-compat shape. v2 envelope consumers should ignore this and watch for the `done` envelope instead. |
+
+The Python `iter_sse_lines` helper already filters comment lines (any line starting with `:`) automatically. Named-event lines (`event: result`) come through prefixed (`result: <data>`) so the caller can distinguish them.
+
+## Single-session broadcast model (current limitation)
+
+atlas-proxy's `/events` endpoint **broadcasts every envelope event from every concurrent agent session to every connected subscriber.** There is no `session_id` field in the envelope, and no per-session `?session_id=X` filtering on the endpoint.
+
+For Phase 1's single-user TUI consumer, this is fine — most users run one ATLAS at a time, so the broadcast model degenerates to "you see your own session." If multi-user / multi-session use cases emerge:
+
+1. Add a `session_id` field to the envelope (back-compatible — consumers that don't recognize it ignore it)
+2. Add a `?session_id=X` filter to `/events` that drops envelopes whose session doesn't match
+
+Documented as a known scope-defining choice rather than a bug. v3-service's `/v3/run` endpoint is per-request streaming, so session interleaving is not an issue there.
 
 ## Envelope
 

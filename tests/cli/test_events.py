@@ -268,6 +268,33 @@ def test_assert_monotonic_raises_on_decreasing_timestamp():
 # End-to-end pipeline shape — pins the contract callers will rely on
 # ---------------------------------------------------------------------------
 
+def test_iter_events_skips_sse_control_frames():
+    """The atlas-proxy /events endpoint emits `: connected` and
+    `: heartbeat` SSE comment lines. iter_events must skip them
+    (they're not envelopes) without raising. Same for `event: result`
+    legacy framing on v3-service's done sequence."""
+    from atlas.cli.events import iter_sse_lines, parse_envelope, LegacyEventError
+    raw = (
+        b": connected\n\n"
+        b": heartbeat\n\n"
+        b"data: {\"event_id\":\"evt_aabb\",\"timestamp\":1.0,\"type\":\"metric\","
+        b"\"stage\":\"x\",\"payload\":{\"name\":\"y\",\"value\":1}}\n\n"
+        b": heartbeat\n\n"
+        b"event: result\ndata: {\"final\":true}\n\n"
+        b"data: [DONE]\n\n"
+    )
+    parsed = []
+    for line in iter_sse_lines(io.BytesIO(raw).readlines()):
+        if line == "[DONE]" or line.startswith("result: "):
+            continue
+        try:
+            parsed.append(parse_envelope(line))
+        except LegacyEventError:
+            continue
+    assert len(parsed) == 1
+    assert parsed[0].type == "metric"
+
+
 def test_known_pipeline_sequence_round_trips_via_sse():
     """Simulate a realistic event sequence emitted over SSE, then consume it
     through iter_sse_lines + parse_envelope to confirm the full pipeline
