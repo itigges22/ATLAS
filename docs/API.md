@@ -61,6 +61,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 |------|------|---------|
 | `turn_start` | At the start of every agent loop iteration | `turn` (int), `messages` (int), `trimmed` (bool, true if conversation history was trimmed for context window) |
 | `llm_call_start` | Before each LLM round-trip | `turn`, `messages`, `prompt_tokens` (estimated, chars/4) |
+| `llm_prompt_progress` | Every ~250 ms while llama-server is in prompt-eval (before any decoded token) — only emitted when llama-server's `/slots` endpoint is enabled | `processed` (int), `total` (int), `pct` (0–1 float). Stops as soon as `llm_first_token` fires. |
 | `llm_first_token` | First streamed delta from llama-server | `prompt_ms` (time-to-first-token in milliseconds) |
 | `llm_token` | Each streamed delta | `text` (the delta string — typically a token or two) |
 | `llm_call_end` | LLM call finished | `turn`, `tokens` (this call), `total_tokens` (cumulative for the turn), `ms`, `chars`. On error: `error` instead of `tokens`/`chars`. |
@@ -68,9 +69,17 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `permission_denied` | User said no via `PermissionFn` callback | `tool` (the tool name) |
 | `tool_result` | Tool finished executing | `tool`, `success` (bool), `data` (raw JSON), `error` (string), `elapsed` (Go duration string, e.g. `"245ms"`) |
 | `text` | Model emitted a `{"type":"text","content":"..."}` JSON (conversational reply) | `content` (string) |
-| `v3_progress` | V3 pipeline stage transition during a write/edit that V3 verifies | `message` (string) — humanized stage label |
-| `v3_llm_start` / `v3_llm_end` | V3's internal LLMAdapter started / finished a call (planner, candidate generation, repair, etc.) | `message` (string) |
-| `v3_token` | V3's internal LLM streamed a token (PC-062 follow-up) | `text` (delta string) |
+| `v3_progress` | V3 pipeline stage that doesn't have a dedicated typed event yet (fallback) | `message` (string) — humanized stage label |
+| `v3_llm_start` / `v3_llm_end` | V3's internal LLMAdapter started / finished a call (planner, candidate generation, repair, etc.) | `detail` (string), `call` (int), `tokens` (int, on `llm_end`), `elapsed_ms` (int, on `llm_end`), `max_tokens`, `temperature` (on `llm_start`) |
+| `v3_token` | V3's internal LLM streamed a token | `text` (delta string) |
+| `v3_phase` | V3 phase transition (`phase1`, `phase2`, `phase2_allocated`) | `stage`, `detail`, plus `k` (candidate count) and `tier` on `phase2_allocated` |
+| `v3_plansearch` | PlanSearch step (`plansearch`, `plansearch_done`, `plansearch_error`) | `stage`, `detail`, `plans` (int), `candidates` (int, on `_done`), `tokens` (int, on `_done`) |
+| `v3_divsampling` | DivSampling step (`divsampling`, `divsampling_done`, `divsampling_error`) | `stage`, `detail`, `slots` (int), `total` (int, on `_done`) |
+| `v3_sandbox` | Per-candidate sandbox test (`sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`) | `stage`, `detail`, `index` (int), `elapsed_ms` (int), `energy` (float, on `_pass`), `stderr` (string, first 120 chars on `_fail`), `passed` / `total` (on `_done`) |
+| `v3_select` | Candidate selection (`s_star`, `s_star_winner`, `selected`) | `stage`, `detail`, `index` (int), `energy` (float) |
+| `v3_repair` | Phase 3 repair strategy (`phase3`, `pr_cot*`, `refinement*`, `derivation*`, `fallback`) | `stage`, `detail`, `strategy` (string: `pr_cot` / `refinement` / `derivation`), `failing` (int), `iterations` (int, on `refinement_pass`), `tokens` (int, on `_pass`) |
+| `v3_probe` | Probe phase events (`probe`, `probe_light`, `probe_retry`, `probe_failed`, `probe_scored`, `probe_sandbox`, `probe_pass`) | `stage`, `detail` |
+| `v3_self_test` | Self-test generation/verify events (`self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip`, `self_test_verify`) | `stage`, `detail` |
 | `done` | Agent loop ended cleanly | `summary` (string — empty for a `text`-shaped turn) |
 | `error` | LLM/parse/turn-cap error | `error` (string) |
 
@@ -290,21 +299,23 @@ All fields are optional except the task itself. `tier` defaults to 2.
 ```
 data: {"stage": "probe", "detail": "Generating probe candidate..."}
 data: {"stage": "probe_scored", "detail": "C(x)=0.72 norm=0.68"}
-data: {"stage": "probe_sandbox", "detail": "Testing probe..."}
-data: {"stage": "plansearch", "detail": "Generating 3 plans..."}
-data: {"stage": "divsampling", "detail": "Generating candidates..."}
-data: {"stage": "sandbox_test", "detail": "Testing 3 candidates..."}
-data: {"stage": "sandbox_pass", "detail": "Candidate 1 passed"}
-data: {"stage": "llm_start", "detail": "call #4"}
+data: {"stage": "phase2_allocated", "detail": "k=3 tier=standard", "data": {"k": 3, "tier": "standard"}}
+data: {"stage": "plansearch", "detail": "Generating 3 plans...", "data": {"plans": 3}}
+data: {"stage": "sandbox_test", "detail": "Testing 3 candidates...", "data": {"candidates": 3}}
+data: {"stage": "sandbox_pass", "detail": "Candidate 1 passed", "data": {"index": 1, "elapsed_ms": 420, "energy": 0.34}}
+data: {"stage": "sandbox_done", "detail": "1/3 passed", "data": {"passed": 1, "total": 3}}
+data: {"stage": "llm_start", "detail": "call #4", "data": {"call": 4, "max_tokens": 4096, "temperature": 0.7}}
 data: {"stage": "token", "detail": "def "}
 data: {"stage": "token", "detail": "merge_sort("}
-data: {"stage": "llm_end", "detail": "245 tok · 1820ms"}
+data: {"stage": "llm_end", "detail": "245 tok · 1820ms", "data": {"call": 4, "tokens": 245, "elapsed_ms": 1820}}
 
 event: result
 data: {"code": "...", "passed": true, "phase_solved": "phase1", "candidates_tested": 3, "winning_score": 0.85, "total_tokens": 12500, "total_time_ms": 4200.0}
 
 data: [DONE]
 ```
+
+Each progress event has the shape `{"stage": "<name>", "detail": "<human-readable>", "data": {...}}`. The `data` object carries structured fields specific to that stage (counts, indices, timings, strategy labels) — the proxy bridge fans these out into the dedicated `v3_*` events on `/v1/agent`. Older stages without `data` enrichment still emit `stage` + `detail` only and continue to flow through `v3_progress`.
 
 The proxy's `tools.go` bridge translates these into `v3_progress` / `v3_token` / `v3_llm_start` / `v3_llm_end` events on the `/v1/agent` stream — direct callers see the raw V3 stages.
 

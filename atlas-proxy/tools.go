@@ -504,7 +504,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	//   llm_end     \u2014 V3's LLM call finished (with token/timing summary)
 	//   <other>     \u2014 pipeline stage marker (probe, plansearch, sandbox\u2026)
 	currentV3Stage := ""
-	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string) {
+	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		// Token deltas: forward to the TUI on a separate SSE event so
 		// it can render them as a streaming dim row, mirroring how the
 		// agent's own LLM tokens are shown. No envelope (would bloat
@@ -519,24 +519,49 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// llm_call_start/end shapes so the TUI can reuse handlers.
 		if stage == "llm_start" {
 			if ctx.StreamFn != nil {
-				ctx.StreamFn("v3_llm_start",
-					map[string]string{"detail": detail})
+				payload := map[string]interface{}{"detail": detail}
+				for k, v := range data {
+					payload[k] = v
+				}
+				ctx.StreamFn("v3_llm_start", payload)
 			}
 			return
 		}
 		if stage == "llm_end" {
 			if ctx.StreamFn != nil {
-				ctx.StreamFn("v3_llm_end",
-					map[string]string{"detail": detail})
+				payload := map[string]interface{}{"detail": detail}
+				for k, v := range data {
+					payload[k] = v
+				}
+				ctx.StreamFn("v3_llm_end", payload)
 			}
 			return
 		}
 
-		// Other stages: a human-readable progress line in chat plus a
-		// typed envelope for the pipeline pane.
+		// Dedicated structured events for the pipeline pane. The TUI
+		// renders each as its own row instead of a generic v3_progress
+		// string. data is the structured payload from V3's _emit; we
+		// pass it through verbatim with `stage` and `detail` for
+		// fallback rendering.
 		if ctx.StreamFn != nil {
-			msg := fmt.Sprintf("  \u2502 [%s] %s", stage, detail)
-			ctx.StreamFn("v3_progress", map[string]string{"message": msg})
+			eventName := v3StageToEvent(stage)
+			if eventName == "v3_progress" {
+				// Unknown / unmapped stage \u2014 emit the legacy text line
+				// only. Keeps third-party clients that haven't migrated
+				// to typed events working.
+				ctx.StreamFn("v3_progress", map[string]string{
+					"message": fmt.Sprintf("  \u2502 [%s] %s", stage, detail),
+				})
+			} else {
+				payload := map[string]interface{}{
+					"stage":  stage,
+					"detail": detail,
+				}
+				for k, v := range data {
+					payload[k] = v
+				}
+				ctx.StreamFn(eventName, payload)
+			}
 		}
 		// Stage transitions emit start/end envelopes for the pipeline
 		// pane \u2014 close the previous stage when we see a new name.
@@ -552,8 +577,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 					},
 				})
 			}
-			Emit(NewEnvelope(EvtStageStart, "v3:"+stage,
-				map[string]interface{}{"detail": detail}))
+			payload := map[string]interface{}{"detail": detail}
+			for k, v := range data {
+				payload[k] = v
+			}
+			Emit(NewEnvelope(EvtStageStart, "v3:"+stage, payload))
 			currentV3Stage = stage
 		} else {
 			Emit(NewEnvelope(EvtMetric, "v3:"+stage,
@@ -799,7 +827,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
 
-	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string) {
+	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, _ map[string]interface{}) {
 		if ctx.StreamFn != nil {
 			ctx.StreamFn("v3_progress", map[string]string{
 				"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
@@ -1289,6 +1317,42 @@ func resolvePath(path, workingDir string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(filepath.Join(workingDir, path))
+}
+
+// v3StageToEvent maps a V3 pipeline stage name to the TUI event type
+// it should fire. Stages cluster by phase: PlanSearch / DivSampling /
+// Sandbox / S* / Phase 3 each get a dedicated event type so the TUI can
+// render specialized rows (counters, per-test results, strategy choice)
+// instead of a generic "v3_progress" string. Unknown stages fall back
+// to v3_progress.
+//
+// Names are intentionally short — they cross the SSE wire on every
+// pipeline stage transition (a typical T2 run emits 15–30 of them).
+func v3StageToEvent(stage string) string {
+	switch stage {
+	case "phase1", "phase2", "phase2_allocated":
+		return "v3_phase"
+	case "plansearch", "plansearch_done", "plansearch_error":
+		return "v3_plansearch"
+	case "divsampling", "divsampling_done", "divsampling_error":
+		return "v3_divsampling"
+	case "sandbox_test", "sandbox_pass", "sandbox_fail", "sandbox_done":
+		return "v3_sandbox"
+	case "s_star", "s_star_winner", "s_star_error", "selected":
+		return "v3_select"
+	case "phase3", "pr_cot", "pr_cot_pass", "pr_cot_failed", "pr_cot_error",
+		"refinement", "refinement_pass", "refinement_failed", "refinement_error",
+		"derivation", "derivation_pass", "derivation_failed", "derivation_error",
+		"fallback":
+		return "v3_repair"
+	case "probe", "probe_light", "probe_retry", "probe_failed",
+		"probe_scored", "probe_sandbox", "probe_pass", "probe_error":
+		return "v3_probe"
+	case "self_test_gen", "self_test_done", "self_test_error",
+		"self_test_skip", "self_test_verify":
+		return "v3_self_test"
+	}
+	return "v3_progress"
 }
 
 // truncateStr limits a string to maxLen characters.

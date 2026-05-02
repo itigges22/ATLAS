@@ -126,9 +126,14 @@ class LLMAdapter:
         self.last_logprobs: List[float] = []
         self._progress = progress_callback
 
-    def _emit(self, stage: str, detail: str = ""):
+    def _emit(self, stage: str, detail: str = "", **data):
         if self._progress:
-            self._progress(stage, detail)
+            try:
+                self._progress(stage, detail, **data)
+            except TypeError:
+                # Older two-arg callbacks don't accept **data — call back
+                # to the legacy signature so we stay compatible.
+                self._progress(stage, detail)
 
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
@@ -151,7 +156,9 @@ class LLMAdapter:
         start = time.time()
         # Marker so the TUI can frame this LLM call. Mirrors what
         # atlas-proxy emits around its own llama.cpp calls.
-        self._emit("llm_start", f"call #{self.call_count}")
+        self._emit("llm_start", f"call #{self.call_count}",
+                   call=self.call_count, max_tokens=max_tokens,
+                   temperature=temperature)
         data = self._send(body)
         # The streaming send already emitted token events; emit a
         # closing marker with totals so the TUI can replace the live
@@ -159,7 +166,9 @@ class LLMAdapter:
         elapsed_ms = (time.time() - start) * 1000
         completion_tokens = data.get("usage", {}).get("completion_tokens", 0) \
             or data.get("usage", {}).get("total_tokens", 0)
-        self._emit("llm_end", f"{completion_tokens} tok · {elapsed_ms:.0f}ms")
+        self._emit("llm_end", f"{completion_tokens} tok · {elapsed_ms:.0f}ms",
+                   call=self.call_count, tokens=completion_tokens,
+                   elapsed_ms=int(elapsed_ms))
 
         # Parse response
         content = ""
@@ -687,10 +696,16 @@ class V3PipelineService:
                 + "\n\n---\n\nTask:\n" + problem
             )
 
-        def emit(stage, detail=""):
-            events.append({"stage": stage, "detail": detail, "t": time.time() - start})
+        def emit(stage, detail="", **data):
+            ev = {"stage": stage, "detail": detail, "t": time.time() - start}
+            if data:
+                ev["data"] = data
+            events.append(ev)
             if progress_callback:
-                progress_callback(stage, detail)
+                try:
+                    progress_callback(stage, detail, **data)
+                except TypeError:
+                    progress_callback(stage, detail)
 
         llm = LLMAdapter(progress_callback=emit)
         # PC-046: ship the user's other project files into the sandbox so
@@ -863,10 +878,10 @@ class V3PipelineService:
         emit("phase2", "Allocating compute budget...")
         k, budget_tier = self.blend_asc.allocate(probe_energy_raw, task_id)
         bf_tier = budget_tier
-        emit("phase2_allocated", f"k={k} tier={budget_tier}")
+        emit("phase2_allocated", f"k={k} tier={budget_tier}", k=k, tier=budget_tier)
 
         # ===== PHASE 1: CONSTRAINT-DIVERSE CANDIDATE GENERATION =====
-        emit("phase1", f"Generating {k} diverse candidates...")
+        emit("phase1", f"Generating {k} diverse candidates...", k=k)
         candidates = []
 
         # Start with probe if it produced code
@@ -881,7 +896,8 @@ class V3PipelineService:
 
         # Step 1A: PlanSearch
         if remaining_k > 0:
-            emit("plansearch", f"Generating {remaining_k} plans...")
+            emit("plansearch", f"Generating {remaining_k} plans...",
+                 plans=remaining_k)
             try:
                 ps_result = self.plan_search.generate(
                     problem, task_id, llm, num_plans=remaining_k,
@@ -895,14 +911,18 @@ class V3PipelineService:
                             "passed": False, "stdout": "", "stderr": "",
                         })
                 result["total_tokens"] += ps_result.total_tokens
-                emit("plansearch_done", f"{len(ps_result.candidates)} candidates from PlanSearch")
+                emit("plansearch_done",
+                     f"{len(ps_result.candidates)} candidates from PlanSearch",
+                     candidates=len(ps_result.candidates),
+                     tokens=ps_result.total_tokens)
             except Exception as e:
                 emit("plansearch_error", str(e)[:200])
 
         # Step 1B: DivSampling to fill remaining slots
         remaining_k = max(0, k - len(candidates))
         if remaining_k > 0:
-            emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...")
+            emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...",
+                 slots=remaining_k)
             for idx in range(remaining_k):
                 try:
                     perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
@@ -923,12 +943,14 @@ class V3PipelineService:
                     result["total_tokens"] += tokens
                 except Exception as e:
                     emit("divsampling_error", str(e)[:200])
-            emit("divsampling_done", f"{len(candidates)} total candidates")
+            emit("divsampling_done", f"{len(candidates)} total candidates",
+                 total=len(candidates))
 
         result["candidates_generated"] = len(candidates)
 
         # ===== SANDBOX TESTING =====
-        emit("sandbox_test", f"Testing {len(candidates)} candidates...")
+        emit("sandbox_test", f"Testing {len(candidates)} candidates...",
+             candidates=len(candidates))
         # Sort by energy (easy first) for early-exit potential
         candidates.sort(key=lambda c: c.get("energy", 0))
 
@@ -937,15 +959,24 @@ class V3PipelineService:
             if c.get("passed"):
                 passing.append(c)
                 continue
+            sb_start = time.time()
             passed, stdout, stderr = verified_sandbox(c["code"])
+            sb_ms = int((time.time() - sb_start) * 1000)
             c["passed"] = passed
             c["stdout"] = stdout
             c["stderr"] = stderr
             if passed:
                 passing.append(c)
-                emit("sandbox_pass", f"Candidate {c['index']} passed")
+                emit("sandbox_pass", f"Candidate {c['index']} passed",
+                     index=c["index"], elapsed_ms=sb_ms,
+                     energy=c.get("energy_norm", 0.0))
+            else:
+                emit("sandbox_fail", f"Candidate {c['index']} failed",
+                     index=c["index"], elapsed_ms=sb_ms,
+                     stderr=(stderr or "")[:120])
 
-        emit("sandbox_done", f"{len(passing)}/{len(candidates)} passed")
+        emit("sandbox_done", f"{len(passing)}/{len(candidates)} passed",
+             passed=len(passing), total=len(candidates))
 
         # ===== CANDIDATE SELECTION =====
         if passing:
@@ -966,7 +997,8 @@ class V3PipelineService:
                     )
                     if tb_result.triggered and tb_result.winner_index >= 0:
                         winner = passing[tb_result.winner_index]
-                        emit("s_star_winner", f"Winner: candidate {winner['index']}")
+                        emit("s_star_winner", f"Winner: candidate {winner['index']}",
+                             index=winner["index"], energy=winner.get("energy_norm", 0.0))
                         result["passed"] = True
                         result["code"] = winner["code"]
                         result["phase_solved"] = "phase1_sstar"
@@ -983,7 +1015,8 @@ class V3PipelineService:
             ]
             selected = select_candidate(ci_list, strategy="lens")
             if selected:
-                emit("selected", f"Lens selected candidate {selected.index}")
+                emit("selected", f"Lens selected candidate {selected.index}",
+                     index=selected.index, energy=getattr(selected, "energy", 0.0))
                 result["passed"] = True
                 result["code"] = selected.code
                 result["phase_solved"] = "phase1"
@@ -992,7 +1025,8 @@ class V3PipelineService:
                 return result
 
         # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
-        emit("phase3", "All candidates failed — entering repair phase...")
+        emit("phase3", "All candidates failed — entering repair phase...",
+             failing=len([c for c in candidates if not c.get("passed")]))
 
         failing = [
             FailingCandidate(
@@ -1020,7 +1054,8 @@ class V3PipelineService:
 
         # Strategy 1: PR-CoT Quick Repair
         if failing:
-            emit("pr_cot", "Attempting PR-CoT repair...")
+            emit("pr_cot", "Attempting PR-CoT repair...",
+                 strategy="pr_cot", failing=len(failing))
             best_failing = failing[0]
             try:
                 pr_result = self.pr_cot.repair(
@@ -1034,7 +1069,8 @@ class V3PipelineService:
                 for repair_code in pr_result.repairs:
                     passed, stdout, stderr = verified_sandbox(repair_code)
                     if passed:
-                        emit("pr_cot_pass", "PR-CoT repair succeeded!")
+                        emit("pr_cot_pass", "PR-CoT repair succeeded!",
+                             strategy="pr_cot", tokens=pr_result.total_tokens)
                         result["passed"] = True
                         result["code"] = repair_code
                         result["phase_solved"] = "pr_cot"
@@ -1047,7 +1083,8 @@ class V3PipelineService:
 
         # Strategy 2: Refinement Loop
         if failing:
-            emit("refinement", "Starting refinement loop...")
+            emit("refinement", "Starting refinement loop...",
+                 strategy="refinement", failing=len(failing))
             constraints = []  # from PlanSearch
             try:
                 ref_result = self.refinement_loop.run(
@@ -1062,7 +1099,11 @@ class V3PipelineService:
                 )
                 result["total_tokens"] += ref_result.total_tokens
                 if ref_result.solved:
-                    emit("refinement_pass", f"Refinement solved in {ref_result.total_iterations} iterations!")
+                    emit("refinement_pass",
+                         f"Refinement solved in {ref_result.total_iterations} iterations!",
+                         strategy="refinement",
+                         iterations=ref_result.total_iterations,
+                         tokens=ref_result.total_tokens)
                     result["passed"] = True
                     result["code"] = ref_result.winning_code
                     result["phase_solved"] = "refinement"
@@ -1075,7 +1116,8 @@ class V3PipelineService:
 
         # Strategy 3: Derivation Chains
         if failing:
-            emit("derivation", "Attempting derivation chains...")
+            emit("derivation", "Attempting derivation chains...",
+                 strategy="derivation", failing=len(failing))
             failure_context = "; ".join(
                 f"Candidate {c.index}: {c.error_output[:200]}"
                 for c in failing[:3]
@@ -1093,7 +1135,8 @@ class V3PipelineService:
                     # Verify with real sandbox
                     passed, _, _ = verified_sandbox(dc_result.final_code)
                     if passed:
-                        emit("derivation_pass", "Derivation chains solved!")
+                        emit("derivation_pass", "Derivation chains solved!",
+                             strategy="derivation")
                         result["passed"] = True
                         result["code"] = dc_result.final_code
                         result["phase_solved"] = "derivation"
@@ -1307,8 +1350,11 @@ class V3Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
 
-            def emit_sse(stage, detail=""):
-                event = json.dumps({"stage": stage, "detail": detail})
+            def emit_sse(stage, detail="", **data):
+                payload = {"stage": stage, "detail": detail}
+                if data:
+                    payload["data"] = data
+                event = json.dumps(payload)
                 try:
                     self.wfile.write(f"data: {event}\n\n".encode())
                     self.wfile.flush()
@@ -1388,9 +1434,12 @@ class V3Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
 
-        def emit_progress(stage, detail=""):
+        def emit_progress(stage, detail="", **data):
             """Stream progress events to the Go proxy."""
-            event = json.dumps({"stage": stage, "detail": detail})
+            payload = {"stage": stage, "detail": detail}
+            if data:
+                payload["data"] = data
+            event = json.dumps(payload)
             try:
                 self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.flush()

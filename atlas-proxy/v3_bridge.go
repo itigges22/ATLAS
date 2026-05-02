@@ -15,8 +15,11 @@ import (
 // ---------------------------------------------------------------------------
 
 // V3ProgressFn is called for each V3 pipeline progress event.
-// The proxy forwards these to Aider as streaming status lines.
-type V3ProgressFn func(stage, detail string)
+// `data` carries the structured payload from the V3 service (since the
+// 2026-05 observability pass) — counts, timings, indices, strategy
+// labels. Empty for legacy stages that haven't been enriched yet; the
+// proxy bridge falls back to the human-readable `detail` in that case.
+type V3ProgressFn func(stage, detail string, data map[string]interface{})
 
 // callV3GenerateStreaming sends a file generation request to the V3 Python
 // service and streams progress events back via the callback. Returns the
@@ -79,11 +82,12 @@ func callV3GenerateStreaming(v3URL string, req V3GenerateRequest, onProgress V3P
 		if strings.HasPrefix(line, "data: ") {
 			data := strings.TrimPrefix(line, "data: ")
 			var event struct {
-				Stage  string `json:"stage"`
-				Detail string `json:"detail"`
+				Stage  string                 `json:"stage"`
+				Detail string                 `json:"detail"`
+				Data   map[string]interface{} `json:"data"`
 			}
 			if json.Unmarshal([]byte(data), &event) == nil && onProgress != nil {
-				onProgress(event.Stage, event.Detail)
+				onProgress(event.Stage, event.Detail, event.Data)
 			}
 		}
 	}

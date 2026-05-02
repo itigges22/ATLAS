@@ -112,6 +112,15 @@ type tuiModel struct {
 	streamingLLMText   string
 	streamingLLMHeader string
 
+	// Prompt-eval progress. While llama-server is encoding the prompt
+	// (before the first decoded token arrives), the proxy polls /slots
+	// every 250ms and emits llm_prompt_progress with processed/total/pct.
+	// We render this as the body of the streaming row instead of a static
+	// "encoding prompt…" line. Cleared on llm_first_token / llm_call_end.
+	promptProcessed int
+	promptTotal     int
+	promptPct       float64
+
 	// Same idea, but for V3's *internal* LLM calls (candidate gen,
 	// scoring). Tracked separately so a v3_token doesn't overwrite the
 	// agent loop's row and vice versa.
@@ -703,8 +712,8 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 	case "llm_call_start":
 		// Marker: prompt is being encoded by llama-server. No tokens yet —
 		// time-to-first-token reflects prompt eval duration. The body is
-		// rewritten on llm_first_token (decoding starts) and again on
-		// llm_call_end (totals).
+		// rewritten on llm_prompt_progress (live %), llm_first_token
+		// (decoding starts), and llm_call_end (totals).
 		var p struct {
 			PromptTokens int `json:"prompt_tokens"`
 		}
@@ -715,12 +724,31 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		})
 		m.streamingLLM = true
 		m.streamingLLMText = ""
+		m.promptProcessed = 0
+		m.promptTotal = p.PromptTokens
+		m.promptPct = 0
 		// Pre-fill the context gauge with the prompt-token estimate so
 		// the user sees ctx fill up the moment the call starts, not
 		// only on llm_call_end. Each llm_token below increments this
 		// further; llm_call_end replaces with the authoritative count.
 		if p.PromptTokens > 0 {
 			m.lastTurnTokens = p.PromptTokens
+		}
+
+	case "llm_prompt_progress":
+		// Live prompt-eval progress from the proxy's /slots poller.
+		// Rewrites the streaming row with a small bar so the user sees
+		// "encoding prompt 1234/8765 (14%)" instead of a frozen line.
+		var p struct {
+			Processed int     `json:"processed"`
+			Total     int     `json:"total"`
+			Pct       float64 `json:"pct"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil && p.Total > 0 {
+			m.promptProcessed = p.Processed
+			m.promptTotal = p.Total
+			m.promptPct = p.Pct
+			m.replaceLLMRow(formatPromptProgress(p.Processed, p.Total, p.Pct))
 		}
 
 	case "llm_first_token":
@@ -965,7 +993,105 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 				Role: roleSystem, Meta: "V3", Body: msg,
 			})
 		}
+
+	// V3 typed observability events. Each carries a structured `data`
+	// payload from the V3 service (counts, indices, timings, strategy
+	// names) on top of the human-readable `detail` string. We render
+	// each as a dedicated row in the chat with the stage tag bolded.
+	// The pipeline pane reads the same events to drive its progress
+	// rows. Added 2026-05.
+	case "v3_phase", "v3_plansearch", "v3_divsampling", "v3_sandbox",
+		"v3_select", "v3_repair", "v3_probe", "v3_self_test":
+		body := formatV3StageEvent(ev.Type, ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "V3", Body: body,
+			})
+		}
 	}
+}
+
+// formatV3StageEvent renders a structured V3 stage event as a single
+// chat-row body. We extract the most useful 1–3 fields and append them
+// to the human-readable detail. Keeps the line short — the pipeline
+// pane is the place to show timelines and counters in detail.
+func formatV3StageEvent(eventType string, data json.RawMessage) string {
+	var p struct {
+		Stage     string  `json:"stage"`
+		Detail    string  `json:"detail"`
+		Index     int     `json:"index"`
+		ElapsedMS int     `json:"elapsed_ms"`
+		Energy    float64 `json:"energy"`
+		Passed    int     `json:"passed"`
+		Total     int     `json:"total"`
+		K         int     `json:"k"`
+		Plans     int     `json:"plans"`
+		Slots     int     `json:"slots"`
+		Tier      string  `json:"tier"`
+		Strategy  string  `json:"strategy"`
+		Iterations int    `json:"iterations"`
+		Tokens    int     `json:"tokens"`
+		Failing   int     `json:"failing"`
+	}
+	_ = json.Unmarshal(data, &p)
+	if p.Detail == "" && p.Stage == "" {
+		return ""
+	}
+	tag := strings.TrimPrefix(eventType, "v3_")
+	body := tag
+	if p.Stage != "" && p.Stage != tag {
+		body += "·" + p.Stage
+	}
+	body += " — " + p.Detail
+	// Append the most informative structured field for this event.
+	switch p.Stage {
+	case "sandbox_pass", "sandbox_fail":
+		if p.ElapsedMS > 0 {
+			body += fmt.Sprintf(" · %dms", p.ElapsedMS)
+		}
+	case "sandbox_done":
+		if p.Total > 0 {
+			body += fmt.Sprintf(" · %d/%d", p.Passed, p.Total)
+		}
+	case "phase2_allocated":
+		if p.K > 0 {
+			body += fmt.Sprintf(" · k=%d tier=%s", p.K, p.Tier)
+		}
+	case "plansearch_done":
+		if p.Tokens > 0 {
+			body += fmt.Sprintf(" · %d tok", p.Tokens)
+		}
+	case "refinement_pass":
+		if p.Iterations > 0 {
+			body += fmt.Sprintf(" · %d iter · %d tok", p.Iterations, p.Tokens)
+		}
+	case "s_star_winner", "selected":
+		if p.Energy > 0 {
+			body += fmt.Sprintf(" · E=%.2f", p.Energy)
+		}
+	}
+	return body
+}
+
+// formatPromptProgress renders the encoding-prompt progress row as a
+// short bar plus token counters. Width 24 keeps it compact even on a
+// narrow terminal — the proxy emits this every 250ms while llama-server
+// is grinding through prompt eval (can take 30–90s on long histories).
+func formatPromptProgress(processed, total int, pct float64) string {
+	const barWidth = 24
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 1 {
+		pct = 1
+	}
+	filled := int(pct*float64(barWidth) + 0.5)
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	return fmt.Sprintf("encoding prompt  [%s] %d/%d (%.0f%%)",
+		bar, processed, total, pct*100)
 }
 
 // formatStreamingLLM renders the partial JSON the model is mid-emitting.

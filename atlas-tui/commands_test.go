@@ -33,7 +33,7 @@ func TestSlashHelpEchoesHelpText(t *testing.T) {
 	if len(m.chat) != 2 {
 		t.Fatalf("chat length = %d, want 2", len(m.chat))
 	}
-	if !strings.Contains(m.chat[1].Body, "Slash commands:") {
+	if !strings.Contains(m.chat[1].Body, "Slash commands") {
 		t.Errorf("help body missing header: %q", m.chat[1].Body)
 	}
 }

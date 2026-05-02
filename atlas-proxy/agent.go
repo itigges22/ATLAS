@@ -546,6 +546,101 @@ func eraseLlamaSlot(ctx *AgentContext) {
 	log.Printf("[PC-045] erased llama slot 0 — fresh KV cache for this session")
 }
 
+// pollPromptProgress emits llm_prompt_progress events while llama-server
+// is in the prompt-eval phase of a streaming chat completion. The TUI
+// renders a real percentage instead of a static spinner — without this,
+// long histories (8–12k tokens) stall the chat pane on "encoding prompt…"
+// for 30–90s with no feedback.
+//
+// Polls llama.cpp's /slots endpoint at 250ms cadence. Quietly no-ops if
+// /slots is disabled (--slots flag not passed) or returns an unexpected
+// shape — this is a UX nicety, never a correctness requirement. Stops
+// when stop is closed (the caller closes it on first-token arrival, on
+// function return, or on context cancel).
+//
+// totalEst is the chars/4 prompt-token estimate; used as the progress
+// denominator if /slots doesn't expose n_prompt_tokens directly. The
+// estimate is typically 10–20% off but good enough for a progress bar.
+func pollPromptProgress(ctx *AgentContext, llamaURL string, stop <-chan struct{}, totalEst int) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		reqCtx, cancel := context.WithTimeout(ctx.Ctx, 2*time.Second)
+		req, err := http.NewRequestWithContext(reqCtx, "GET", llamaURL+"/slots", nil)
+		if err != nil {
+			cancel()
+			return
+		}
+		resp, err := client.Do(req)
+		cancel()
+		if err != nil {
+			// /slots may be temporarily refusing connections during a
+			// hot reload. Try again next tick rather than giving up.
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			// 404 / 501 → llama-server was started without --slots.
+			// Stop polling rather than spamming the log.
+			if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented {
+				return
+			}
+			continue
+		}
+		var slots []map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&slots)
+		resp.Body.Close()
+
+		var processed, total int
+		for _, s := range slots {
+			// Skip idle slots. is_processing is the modern field; older
+			// versions used state == 0 for idle.
+			if isProc, ok := s["is_processing"].(bool); ok && !isProc {
+				continue
+			}
+			if state, ok := s["state"].(float64); ok && state == 0 {
+				continue
+			}
+			for _, k := range []string{"n_prompt_tokens_processed", "prompt_n", "n_past"} {
+				if v, ok := s[k].(float64); ok && v > 0 {
+					processed = int(v)
+					break
+				}
+			}
+			for _, k := range []string{"n_prompt_tokens", "n_prompt"} {
+				if v, ok := s[k].(float64); ok && v > 0 {
+					total = int(v)
+					break
+				}
+			}
+			break
+		}
+		if total == 0 {
+			total = totalEst
+		}
+		if processed == 0 || total == 0 {
+			continue
+		}
+		pct := float64(processed) / float64(total)
+		if pct > 1 {
+			pct = 1
+		}
+		ctx.Stream("llm_prompt_progress", map[string]interface{}{
+			"processed": processed,
+			"total":     total,
+			"pct":       pct,
+		})
+	}
+}
+
 // llmStreamClient is a long-lived HTTP client for streaming LLM calls.
 // Streaming responses can run for many minutes (a 4k-token write_file
 // generation at ~30 tok/s is ~2min, longer for big content). The old
@@ -629,6 +724,20 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	sentAt := time.Now()
+
+	// Estimate total prompt tokens (chars/4 — works for English + code
+	// within ~10–20%) so the prompt-progress poller has a baseline even
+	// when /slots doesn't expose n_prompt_tokens directly.
+	promptTokenEst := 0
+	for _, m := range messages {
+		promptTokenEst += len(m.Content) / 4
+	}
+	stopProgress := make(chan struct{})
+	var stopOnce sync.Once
+	stopProgressFn := func() { stopOnce.Do(func() { close(stopProgress) }) }
+	go pollPromptProgress(ctx, llamaURL, stopProgress, promptTokenEst)
+	defer stopProgressFn()
+
 	resp, err := llmStreamClient.Do(httpReq)
 	if err != nil {
 		return "", 0, fmt.Errorf("LLM request failed: %w", err)
@@ -682,6 +791,7 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 				continue
 			}
 			if !firstTokenSent {
+				stopProgressFn() // prompt eval done — kill the poller
 				ctx.Stream("llm_first_token", map[string]interface{}{
 					"prompt_ms": time.Since(sentAt).Milliseconds(),
 				})
