@@ -82,6 +82,14 @@ type tuiModel struct {
 	turnSessionID  string
 	chatRenderer   *glamour.TermRenderer
 
+	// Set when the user presses Ctrl+C mid-turn so the trailing flurry
+	// of error/llm_call_end/__turn_done__ events render as "cancelled"
+	// rather than misleading "FAIL"/"ERROR" rows. Cleared when the next
+	// turn starts. The proxy's context-cancelled errors come through
+	// the same SSE channel as real errors, so the flag is the only way
+	// to distinguish "user aborted" from "real failure".
+	userCancelled bool
+
 	// Files added via /add — appended as a hint to each /v1/agent message.
 	contextFiles map[string]bool
 
@@ -346,6 +354,7 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 	m.turnCancel = cancel
 	m.turnSessionID = sessionID
 	m.turnActive = true
+	m.userCancelled = false // fresh turn — clear the cancel sticky flag
 
 	proxyURL := m.proxyURL
 	workingDir := m.workingDir
@@ -395,6 +404,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// First Ctrl+C cancels the in-flight turn; second quits.
 				// Belt-and-suspenders: cancel locally (closes TCP) AND
 				// POST /cancel so the proxy aborts even when buffered.
+				m.userCancelled = true
 				m.turnCancel()
 				sid := m.turnSessionID
 				proxyURL := m.proxyURL
@@ -602,7 +612,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Err string `json:"err"`
 			}
 			_ = json.Unmarshal(msg.ev.Data, &p)
-			if p.Err != "" {
+			if p.Err != "" && !m.userCancelled && !looksCancelled(p.Err) {
 				m.chat = append(m.chat, chatMessage{
 					Role: roleSystem, Meta: "error",
 					Body: p.Err,
@@ -686,6 +696,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputMode = "bash"
 		case strings.HasPrefix(val, "/"):
 			m.inputMode = "slash"
+		case strings.HasPrefix(val, "?"):
+			m.inputMode = "help"
 		default:
 			m.inputMode = ""
 		}
@@ -810,9 +822,12 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		_ = json.Unmarshal(ev.Data, &p)
 		secs := float64(p.MS) / 1000.0
 		var body string
-		if p.Error != "" {
+		switch {
+		case p.Error != "" && (m.userCancelled || looksCancelled(p.Error)):
+			body = fmt.Sprintf("model call cancelled after %.1fs", secs)
+		case p.Error != "":
 			body = fmt.Sprintf("model failed in %.1fs — %s", secs, p.Error)
-		} else {
+		default:
 			body = fmt.Sprintf("model replied · %d tok · %d chars · %.1fs",
 				p.Tokens, p.Chars, secs)
 		}
@@ -920,6 +935,12 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
+		// Suppress error rows that are really just cancellation echoes
+		// (proxy still emits them when ctx.Ctx is cancelled). The user
+		// already saw the "turn cancelled" row when they hit Ctrl+C.
+		if m.userCancelled || looksCancelled(p.Error) {
+			return
+		}
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "error", Body: p.Error,
 		})
@@ -1079,6 +1100,27 @@ func formatV3StageEvent(eventType string, data json.RawMessage) string {
 		}
 	}
 	return body
+}
+
+// looksCancelled returns true if an error string looks like the
+// user-initiated context cancellation rather than a real failure.
+// The proxy/Go runtime surface this as "context canceled" /
+// "context deadline exceeded" / "client disconnected"; the chat-stream
+// scanner adds its own "context canceled" wrapping. None of these are
+// useful for the user to see — they already pressed Ctrl+C.
+func looksCancelled(err string) bool {
+	if err == "" {
+		return false
+	}
+	low := strings.ToLower(err)
+	for _, sig := range []string{"context canceled", "context cancelled",
+		"client disconnected", "request canceled", "operation was canceled",
+		"use of closed network connection"} {
+		if strings.Contains(low, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // formatPromptProgress renders the encoding-prompt progress row. When

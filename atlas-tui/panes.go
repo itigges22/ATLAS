@@ -434,6 +434,28 @@ func renderSlashHint(value string, width int) string {
 	return line
 }
 
+// renderHelpHint shows the full slashCommandHelp body above the input
+// box while the user is in "?" mode. Live hint, no Enter required —
+// matches how /slash shows its command dropdown. Pressing Enter still
+// routes through /help (so the help also lands in chat scrollback).
+func renderHelpHint(width int) string {
+	header := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("220")).
+		Bold(true).
+		Render("help · press Enter to dismiss, or just keep typing")
+	body := dimStyle.Render(slashCommandHelp)
+	out := header + "\n" + body
+	// Width-clamp each rendered line so a wide help body doesn't blow
+	// past the input column on narrow terminals.
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // renderBashHint shows a single warning row above the bash input box.
 // Red text; brief enough to fit a single row at any reasonable width.
 func renderBashHint(_ string, width int) string {
@@ -494,9 +516,22 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	)
 	// Input box: 5 rows by default (3 inner + 2 border). bash/slash
 	// mode adds a one-row hint banner above, so reserve one extra row.
+	// help mode shows the full multi-line slashCommandHelp body — count
+	// its lines so the box doesn't bleed into the chat pane.
 	inputH := 5
-	if inputMode == "bash" || inputMode == "slash" {
+	switch inputMode {
+	case "bash", "slash":
 		inputH = 6
+	case "help":
+		// +1 header + N body lines + 1 spacer row before the input box.
+		// Cap at half the terminal height so the chat pane stays
+		// visible on small terminals — the help body is dense but
+		// scrollable in the user's terminal so a clip is acceptable.
+		helpLines := strings.Count(slashCommandHelp, "\n") + 1
+		inputH = 5 + 1 + helpLines + 1
+		if cap := height / 2; cap > 8 && inputH > cap {
+			inputH = cap
+		}
 	}
 	eventsH := 5 // 3 inner + 2 border
 	if hideEvents {
@@ -614,6 +649,10 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		style = bordStyleSlash
 		title = " Command "
 		hint = renderSlashHint(inputValue, innerW)
+	case "help":
+		style = bordStyleSlash
+		title = " ? · help "
+		hint = renderHelpHint(innerW)
 	}
 	inputBox := style.Width(innerW).Render(
 		titleStyle.Render(title) + "\n" + inputView)
