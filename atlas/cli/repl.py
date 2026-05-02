@@ -430,6 +430,9 @@ def run():
     if len(sys.argv) > 1 and sys.argv[1] == "model":
         from atlas.cli.commands import model
         sys.exit(model.main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "tui":
+        from atlas.cli.commands import tui
+        sys.exit(tui.main(sys.argv[2:]))
 
     extra_args = sys.argv[1:] if len(sys.argv) > 1 else None
 

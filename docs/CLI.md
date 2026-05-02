@@ -266,6 +266,77 @@ All standard Aider commands work through ATLAS:
 
 ---
 
+## TUI Mode (`atlas tui`)
+
+`atlas tui` launches a native Bubbletea terminal UI as an alternative to the Aider front-end. It is the canonical chat client going forward — it shows the full ATLAS pipeline (V3 stages, tool calls, metrics) live in dedicated panes alongside the chat, instead of routing everything through Aider's free-form log. PC-062.
+
+```bash
+atlas tui                                # connect to default proxy (http://localhost:8090)
+atlas tui --proxy http://other-host:8090 # override proxy URL
+```
+
+`atlas tui` reuses the same proxy auto-launch logic as `atlas`: if the proxy isn't running, it builds and starts it locally (Go required) before opening the TUI.
+
+### Layout
+
+```
+┌─ Header ─────────────────────────────────────────┐
+│ ATLAS TUI  ⠹ busy · cwd:~/projects/snake · default│
+├─ Pipeline ───────────────────────────────────────┤
+│ ⚙  probe          RUN   1.2s  generating candidate│
+│ ✓  phase1         OK    2.4s  3 plans → 2 passed │
+├─ Chat ───────────────────────────────────────────┤
+│ you                                              │
+│   fix the snake game collision detection         │
+│ agent                                            │
+│   I'll start by reading the file …               │
+│ ✓ tool · read_file                               │
+│   path=snake_game.py                             │
+├─ Events ─────────────────────────────────────────┤
+│ 14:32:01  stage_start    probe   generating …    │
+│ 14:32:02  metric         probe   tokens = 1024   │
+├─ stage:probe  turn:1  tools:3✓/0✗  events:42 ────┤
+┌─ Message ────────────────────────────────────────┐
+│ > Send a message…                                │
+└──────────────────────────────────────────────────┘
+```
+
+### Hotkeys
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Send the message |
+| `Shift+Enter` | Insert a newline (multi-line input) |
+| `Ctrl+L` | Clear chat history |
+| `Ctrl+T` | Cycle permission mode (default → accept-edits → yolo) |
+| `Ctrl+R` | Re-send the last message |
+| `Ctrl+C` | First press cancels the in-flight turn; second exits |
+| `Ctrl+D` | Exit immediately |
+
+Bracketed paste is enabled by default — pasted code arrives as a single input event, so newlines in pasted text don't trigger a premature send.
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/add <path>` | Add a file to the agent's working context (path-only — agent reads on demand) |
+| `/drop <path>` | Remove a file from the working context |
+| `/context` | List files currently in context |
+| `/diff [path]` | Show `git diff` (optionally for a specific path) |
+| `/commit [msg]` | Stage all changes and create a commit |
+| `/undo` | `git reset --soft HEAD~1` — revert the last commit, keep the changes |
+| `/run <cmd>` | Run a shell command in the working dir; output appears in chat |
+| `/help` | Show this list inside the TUI |
+| `/quit` | Exit |
+
+The `/add /drop /context` set is TUI-side state — file paths are appended to outgoing messages as a hint (`[atlas-tui context: foo.go, bar.go]`) so the agent can `read_file` them on demand. No file content is sent eagerly.
+
+### Cancel Protocol
+
+Each chat turn is tagged with a `session_id` in the POST /v1/agent body. On Ctrl+C the TUI cancels the local context (closes the TCP connection) and also POSTs `/cancel` with the same `session_id` as defense-in-depth in case a reverse proxy buffers the disconnect. The proxy's agent loop watches `ctx.Done()` and exits at the next turn boundary.
+
+---
+
 ## Proxy File Access
 
 The proxy executes all file operations (`read_file`, `write_file`, `edit_file`, `run_command`, etc.) on the filesystem where it's running. How it accesses your project files depends on how it's launched:

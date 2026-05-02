@@ -10,8 +10,19 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+// activeSessions tracks in-flight /v1/agent turns by session_id so
+// /cancel can abort them. Map value is the context.CancelFunc returned
+// from the per-request context.WithCancel wrapper. PC-062 step 5.
+//
+// Defense-in-depth: cancellation also flows naturally through TCP
+// disconnect (handleAgent already binds ctx to r.Context()), but a
+// reverse proxy may buffer the disconnect. /cancel gives the TUI a
+// reliable, explicit kill switch.
+var activeSessions sync.Map
 
 // ---------------------------------------------------------------------------
 // Agent loop — iterative tool-calling loop between model and executors
@@ -661,7 +672,8 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Message    string `json:"message"`
 		WorkingDir string `json:"working_dir"`
-		Mode       string `json:"mode"`    // "default", "accept-edits", "yolo"
+		Mode       string `json:"mode"`       // "default", "accept-edits", "yolo"
+		SessionID  string `json:"session_id"` // optional — required for /cancel
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -689,7 +701,16 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
 	// Carry the upstream cancellation through so disconnects abort the loop
 	// and llama-server's in-flight generation. See ISSUES.md PC-036.
-	ctx.Ctx = r.Context()
+	//
+	// PC-062: also wrap in a cancellable context so POST /cancel can
+	// abort even when the TCP disconnect is buffered upstream.
+	reqCtx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	ctx.Ctx = reqCtx
+	if req.SessionID != "" {
+		activeSessions.Store(req.SessionID, cancel)
+		defer activeSessions.Delete(req.SessionID)
+	}
 
 	// Set permission mode
 	switch req.Mode {
@@ -736,6 +757,55 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// Send final done event
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+}
+
+// ---------------------------------------------------------------------------
+// /cancel — abort an in-flight /v1/agent turn by session_id (PC-062 step 5)
+// ---------------------------------------------------------------------------
+
+// handleCancel POSTs cancel an in-flight agent turn. Body:
+//
+//	{"session_id": "..."}
+//
+// Returns 200 with `{"cancelled": true}` if the session was found and
+// cancelled, 404 with `{"cancelled": false}` if no such session is
+// active. Idempotent: a second cancel for the same session returns 404.
+//
+// On success, the agent loop exits via context.Canceled, the SSE
+// stream emits its trailing `[DONE]`, and the client connection
+// closes cleanly. The TUI surfaces a "turn cancelled" system message.
+func handleCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.SessionID == "" {
+		http.Error(w, "session_id required", http.StatusBadRequest)
+		return
+	}
+	v, ok := activeSessions.LoadAndDelete(req.SessionID)
+	w.Header().Set("Content-Type", "application/json")
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": false})
+		return
+	}
+	cancel, ok := v.(context.CancelFunc)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "bad session entry"})
+		return
+	}
+	cancel()
+	log.Printf("[agent] cancelled session %s via /cancel", req.SessionID)
+	_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
 }
 
 // extractModelResponse extracts a ModelResponse from the LLM output,

@@ -2546,6 +2546,7 @@ func main() {
 	mux.HandleFunc("/ready", handleReady)
 	mux.HandleFunc("/v1/agent", handleAgent) // New tool-based agent endpoint
 	mux.HandleFunc("/events", handleEvents)  // PC-061: typed SSE event stream
+	mux.HandleFunc("/cancel", handleCancel)  // PC-062: TUI abort hook
 
 	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

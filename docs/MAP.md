@@ -35,6 +35,16 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`Dockerfile`](#atlas-proxy) — Multi-stage Go build
   - [`README.md`](#atlas-proxy) — Proxy documentation
   - [`atlas-proxy`](#atlas-proxy) — Compiled Go binary (gitignored in production)
+- [`atlas-tui/`](#atlas-tui) — Bubbletea TUI client (Go) — PC-062
+  - [`main.go`](#atlas-tui) — Entry point + Bubbletea program setup
+  - [`model.go`](#atlas-tui) — Bubbletea model: events, chat, textarea, hotkeys
+  - [`panes.go`](#atlas-tui) — Pure pane renderers (pipeline / chat / events / stats / input)
+  - [`state.go`](#atlas-tui) — Pipeline state machine (Envelope → derived UI state)
+  - [`consumer.go`](#atlas-tui) — `/events` SSE consumer (typed Envelope stream)
+  - [`chat.go`](#atlas-tui) — `/v1/agent` POST + SSE chat client; `/cancel` POST
+  - [`commands.go`](#atlas-tui) — Slash command dispatch (/add, /diff, /commit, /run, etc.)
+  - [`*_test.go`](#atlas-tui) — 39 unit + integration tests
+  - [`go.mod`](#atlas-tui) — Go module (github.com/itigges22/atlas-tui)
 - [`atlas/`](#atlas-cli) — Python CLI package
   - [`__init__.py`](#atlas-cli)
   - [`cli/`](#atlas-cli)
@@ -46,6 +56,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
       - [`solve.py`](#atlas-cli) — /solve command: generate + score + test
       - [`bench.py`](#atlas-cli) — /bench command: run V3 benchmarks
       - [`status.py`](#atlas-cli) — /status command: service health checks
+      - [`tui.py`](#atlas-cli) — `atlas tui` — locate/build/exec the Bubbletea TUI binary (PC-062)
       - [`__init__.py`](#atlas-cli)
 - [`benchmark/`](#benchmark) — Benchmark runner and datasets
   - [`runner.py`](#benchmark-core) — Code execution, LLM API calls, ChatML formatting
@@ -275,6 +286,23 @@ The core of the V3.0.1 CLI. Receives OpenAI-compatible requests from Aider, runs
 | [`events_test.go`](../atlas-proxy/events_test.go) | 200 | Go unit tests (PC-061): event-id format/uniqueness, envelope JSON shape pinned against the Python schema, omitempty for parent_id/duration_ms, broker fan-out to multiple subscribers, unsubscribe stops delivery, slow-consumer doesn't block producer (drop semantics), concurrent subscribe/unsubscribe race-free, `EmitSimple` payload shape. Run with `go test -race`. |
 | [`go.mod`](../atlas-proxy/go.mod) | — | Go module definition |
 | [`Dockerfile`](../atlas-proxy/Dockerfile) | — | Multi-stage Go build for containerized deployment |
+
+<a id="atlas-tui"></a>
+### atlas-tui/ — Bubbletea TUI Client (Go)
+
+Native terminal UI that consumes both atlas-proxy SSE streams (`/events` for typed envelopes, `/v1/agent` for chat). Replaces Aider as the canonical chat front-end. PC-062.
+
+| File | Description |
+|------|-------------|
+| [`main.go`](../atlas-tui/main.go) | Entry point. Parses `--proxy`, spawns SSE consumer goroutine, runs Bubbletea program in alt-screen mode. |
+| [`model.go`](../atlas-tui/model.go) | Bubbletea model — owns Envelope channel, chat history, textarea input. Hotkeys: Enter/Ctrl+L/Ctrl+T/Ctrl+R/Ctrl+C. Spinner tick. |
+| [`panes.go`](../atlas-tui/panes.go) | Pure pane renderers: pipeline (stage table), chat (markdown via glamour), events (log), stats (counter strip), input (textarea wrapper). |
+| [`state.go`](../atlas-tui/state.go) | Pipeline state machine — pure function from Envelope sequence to derived UI state (stages, counters, active turn, done). |
+| [`consumer.go`](../atlas-tui/consumer.go) | `/events` SSE consumer mirroring atlas-proxy's Envelope struct. Reconnect with exponential backoff. |
+| [`chat.go`](../atlas-tui/chat.go) | `/v1/agent` POST + chat-protocol SSE parser. `/cancel` POST for explicit turn abort. Optional bearer auth from `secrets/api-keys.json`. |
+| [`commands.go`](../atlas-tui/commands.go) | Slash-command dispatch: `/add /drop /context /diff /commit /undo /run /help /quit`. Shell-out commands via `exec.CommandContext` with 60s deadline. |
+| [`*_test.go`](../atlas-tui/) | 39 tests covering state machine (12), slash commands (8), model integration (11), chat client + bearer loader (8). |
+| [`go.mod`](../atlas-tui/go.mod) | Go module definition (github.com/itigges22/atlas-tui). Deps: bubbletea, lipgloss, bubbles, glamour. |
 
 <a id="atlas-cli"></a>
 ### atlas/ — Python CLI

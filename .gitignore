@@ -162,6 +162,7 @@ v2_5_1/
 atlas-proxy/atlas-proxy
 atlas-proxy/atlas-proxy-v2
 atlas-proxy/cmd/
+atlas-tui/atlas-tui
 
 # ----- Geometric Lens large files (on HuggingFace, not in git) -----
 geometric-lens/geometric_lens/models/training_embeddings_*.json

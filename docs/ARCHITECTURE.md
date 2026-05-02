@@ -8,7 +8,11 @@ System architecture for ATLAS V3.0.1. Two-layer design: an outer agent loop hand
 
 ```mermaid
 graph LR
-    User["User"] --> Aider["Aider"] --> Proxy["atlas-proxy\n:8090"]
+    User["User"] --> Frontends{"chat front-end"}
+    Frontends -->|"atlas tui (default)"| TUI["atlas-tui\n(Bubbletea)"]
+    Frontends -->|"atlas (legacy)"| Aider["Aider"]
+    TUI --> Proxy["atlas-proxy\n:8090"]
+    Aider --> Proxy
 
     subgraph outer["Outer Layer"]
         Proxy -->|"grammar JSON"| LLM["llama-server\n:8080"]
@@ -23,6 +27,7 @@ graph LR
     end
 
     style User fill:#333,color:#fff
+    style TUI fill:#1a3a5c,color:#fff
     style Aider fill:#1a3a5c,color:#fff
     style Proxy fill:#1a3a5c,color:#fff
     style LLM fill:#5c1a1a,color:#fff
@@ -33,6 +38,11 @@ graph LR
 
 Services run as containers via Docker Compose (recommended) or as local processes via the `atlas` launcher. Only llama-server uses the GPU. Everything else runs on CPU.
 
+Two chat front-ends are supported:
+
+- **atlas-tui (Bubbletea, PC-062)** — canonical client. Native Go terminal UI consuming both `/events` (typed envelope SSE for pipeline visibility) and `/v1/agent` (per-turn chat SSE). Launch with `atlas tui`. Pipeline pane shows V3 stages live; chat pane renders assistant markdown via glamour; slash commands `/add /diff /commit /run` etc. handle local file context and shell-out.
+- **Aider (legacy)** — original front-end via `atlas`. Talks to `/v1/chat/completions` and gets back Aider whole-file blocks. Still supported but the TUI surfaces ATLAS-specific signal (V3 stages, tool counters, /cancel) that Aider can't render.
+
 ---
 
 ## 2. Services
@@ -40,7 +50,8 @@ Services run as containers via Docker Compose (recommended) or as local processe
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
 | **llama-server** | 8080 | C++ (llama.cpp) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
-| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, Aider format translation |
+| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, Aider format translation, `/events` typed SSE, `/cancel` |
+| **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. PC-062. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
 | **sandbox** | 30820 (host) / 8020 (container) | Python (FastAPI) | Isolated code execution, compilation, linting, test running |

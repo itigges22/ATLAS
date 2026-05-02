@@ -30,6 +30,7 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
 
 ## 🔥 Latest News
 
+- **2026-05-01** - **`atlas tui` ships** ([PC-062](ISSUES.md)) - native Bubbletea terminal UI replaces Aider as the canonical chat client; live V3 pipeline visibility, slash commands, in-turn cancel
 - **2026-04-13** - ["How to Run an AI Coding Assistant on a $500 GPU and Beat Claude Sonnet"](https://devtrends.ru/python/itigges22-atlas) - devtrends.ru
 - **2026-04-05** - **[V3.0.1 released](CHANGELOG.md)** - interactive CLI, Docker Compose deployment, 95.8% reliability
 - **2026-04-03** - ["$500 GPU Beats Claude: Local AI Revolution for Web Devs"](https://ownet.it/blog/500-gpu-beats-claude-local-ai-revolution-for-web-devs) - ownet.it

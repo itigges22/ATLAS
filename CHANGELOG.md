@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Bubbletea TUI (PC-062)
+- New `atlas tui` subcommand launches a native Bubbletea terminal UI as the canonical chat client (Aider remains supported via `atlas`)
+- Five-pane layout: header (proxy/cwd/mode/spinner) + pipeline (live V3 stage table from `/events`) + chat (glamour-rendered markdown + inline tool calls) + events log + stats strip + textarea input
+- Hotkeys: Enter send, Shift+Enter newline, Ctrl+L clear, Ctrl+T cycle permission mode, Ctrl+R resend last, Ctrl+C cancel turn / quit, Ctrl+D quit
+- Slash commands inside the TUI: `/add /drop /context /diff /commit /undo /run /help /quit`
+- New atlas-proxy `POST /cancel` endpoint indexed by `session_id` — TUI cancels the in-flight `/v1/agent` turn on Ctrl+C as defense-in-depth alongside TCP disconnect
+- 43 atlas-tui Go tests + 4 atlas-proxy `/cancel` tests, all green under `go test -race`
+- `atlas-tui/` is a standalone Go module (`github.com/itigges22/atlas-tui`) — depends on bubbletea, lipgloss, bubbles, glamour
+
 ### Documentation
 - Added multilingual documentation: Simplified Chinese (zh-CN), Japanese (ja), Korean (ko) for README, SETUP, and TROUBLESHOOTING
 - Added language selector badges to README
