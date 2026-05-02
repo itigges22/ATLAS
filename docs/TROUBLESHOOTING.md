@@ -214,6 +214,28 @@ atlas model verify Qwen3.5-9B-Q6_K
 # If the upstream actually changed: file an issue or pull a newer ATLAS release.
 ```
 
+### `atlas init` refuses: "no docker-compose.yml found"
+
+**Symptom:** Running `atlas init` outside the ATLAS checkout exits 1 with `no docker-compose.yml found in <path> or any parent directory`.
+
+**Cause:** PC-054 audit safety gate. The wizard writes `.env` and `secrets/` *relative to atlas_root* — defined as the nearest ancestor directory containing `docker-compose.yml`. Without that anchor, the wizard would silently dump config into wherever the user happened to be running from, which is almost never what they wanted.
+
+**Fix:**
+```bash
+# Find / clone the ATLAS checkout, then re-run from there:
+git clone https://github.com/itigges22/ATLAS.git
+cd ATLAS
+atlas init --yes
+```
+
+### `atlas init` refuses: "No NVIDIA GPU detected"
+
+**Symptom:** Wizard exits 1 at the model-selection step with `No NVIDIA GPU detected. ATLAS v1 requires a CUDA GPU for llama.cpp inference.`
+
+**Cause:** PC-054 audit safety gate. `tier.classify` returned `cpu`. The only Lens-supported model in the registry today (`Qwen3.5-9B-Q6_K`) needs ~7 GB VRAM to load, so writing a `.env` for it on a GPU-less host would just push the failure out to `docker compose up -d` (llama-server would fail to load the model into a non-existent CUDA context). Refusing here is the friendlier outcome.
+
+**Fix:** None for v1 — ATLAS requires CUDA. ROCm support for AMD GPUs and Metal for Apple Silicon are on the roadmap (see SETUP.md → "Future hardware support"). If you do have an NVIDIA GPU but `nvidia-smi` isn't on PATH or returns nothing, fix that first (the wizard uses the same probe as `atlas tier`, which `atlas doctor` exercises under the `gpu_visible` check).
+
 ### `atlas init` wrote the wrong thing — how do I rerun it?
 
 **Symptom:** Wizard picked the wrong model, you typo'd `--image-tag`, you want a different ctx_size, or the generated api-keys.json got committed somewhere it shouldn't have. Re-running plain `atlas init` refuses with "Already configured."

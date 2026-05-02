@@ -75,18 +75,77 @@ def _err(color: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Prompt helpers (PC-054 audit fix — wizard is now actually interactive
+# unless --yes is passed or stdin isn't a TTY).
+# ---------------------------------------------------------------------------
+
+def _is_interactive(args: argparse.Namespace) -> bool:
+    """True when the wizard should prompt the user for confirmations.
+    --yes or a non-TTY stdin both force non-interactive mode."""
+    if args.yes:
+        return False
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _confirm(prompt: str, default_yes: bool, args: argparse.Namespace) -> bool:
+    """Yes/no prompt. Non-interactive (--yes or non-TTY) returns the default."""
+    if not _is_interactive(args):
+        return default_yes
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    while True:
+        try:
+            ans = input(f"  {prompt} {suffix} ").strip().lower()
+        except EOFError:
+            return default_yes
+        if ans == "":
+            return default_yes
+        if ans in ("y", "yes"):
+            return True
+        if ans in ("n", "no"):
+            return False
+        _safe_print("  Please answer 'y' or 'n'.")
+
+
+def _choose(prompt: str, choices: List[str], default: str,
+             args: argparse.Namespace) -> str:
+    """Multiple-choice prompt. Non-interactive returns the default."""
+    if not _is_interactive(args):
+        return default
+    suffix = "/".join(c if c != default else c.upper() for c in choices)
+    while True:
+        try:
+            ans = input(f"  {prompt} [{suffix}] ").strip().lower()
+        except EOFError:
+            return default
+        if ans == "":
+            return default
+        for c in choices:
+            if ans == c.lower() or ans == c.lower()[0]:
+                return c
+        _safe_print(f"  Please pick one of: {', '.join(choices)}.")
+
+
+# ---------------------------------------------------------------------------
 # Path resolution — share atlas_root with model.py / doctor.py
 # ---------------------------------------------------------------------------
 
-def _find_atlas_root() -> str:
-    """Walk up from CWD looking for docker-compose.yml. Falls back to CWD."""
+def _find_atlas_root() -> Optional[str]:
+    """Walk up from CWD looking for docker-compose.yml.
+
+    Returns None if no compose file is found in any ancestor — the wizard
+    refuses to write .env / secrets/ into a non-checkout directory rather
+    than silently dumping config wherever the user happens to be.
+    """
     cur = os.path.abspath(os.getcwd())
     while True:
         if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:
-            return os.path.abspath(os.getcwd())
+            return None
         cur = parent
 
 
@@ -127,7 +186,20 @@ def _step_select_model(profile: tier.TierProfile, args: argparse.Namespace,
                         color: bool) -> Optional[model_registry.Model]:
     """Pick a model for the user. Tier default if `supported`, otherwise
     surface the supported-fallback so wizard never recommends a model
-    where G(x) silently no-ops."""
+    where G(x) silently no-ops.
+
+    PC-054 audit fix: refuse on cpu tier — the user has no GPU and
+    `docker compose up -d` would fail at llama-server load. Better to
+    refuse here than write a broken .env."""
+    if profile.tier == "cpu":
+        _safe_print(f"  {RED if color else ''}No NVIDIA GPU detected. "
+                    f"ATLAS v1 requires a CUDA GPU for llama.cpp inference."
+                    f"{RESET if color else ''}")
+        _safe_print("  ROCm support for AMD and Metal for Apple Silicon are "
+                    "on the roadmap (see SETUP.md). The wizard refuses here "
+                    "rather than write a .env that won't boot.")
+        return None
+
     tier_default = model_registry.for_tier(profile.tier)
     supported = model_registry.supported_models()
     fallback = supported[0] if supported else None
@@ -135,9 +207,14 @@ def _step_select_model(profile: tier.TierProfile, args: argparse.Namespace,
     if tier_default and tier_default.lens_status == "supported":
         _safe_print(f"  Recommended: {BOLD if color else ''}{tier_default.name}{RESET if color else ''} "
                     f"({tier_default.model_size_gb:.1f} GB, Lens supported)")
+        if not _confirm(f"Use {tier_default.name}?", default_yes=True, args=args):
+            _safe_print("  User declined — re-run with `atlas model list` to pick "
+                        "a different model, then `atlas init --reconfigure --skip-download` "
+                        "to wire the .env without re-downloading.")
+            return None
         return tier_default
 
-    # Tier default is missing (cpu) or no-artifacts — fall back.
+    # Tier default is missing or no-artifacts — fall back.
     if tier_default and tier_default.lens_status != "supported":
         _safe_print(f"  Tier default ({tier_default.name}) has lens_status="
                     f"{tier_default.lens_status} — G(x) verification would no-op.")
@@ -147,6 +224,9 @@ def _step_select_model(profile: tier.TierProfile, args: argparse.Namespace,
         return None
     _safe_print(f"  Falling back to: {BOLD if color else ''}{fallback.name}{RESET if color else ''} "
                 f"({fallback.model_size_gb:.1f} GB, Lens supported)")
+    if not _confirm(f"Use {fallback.name}?", default_yes=True, args=args):
+        _safe_print("  User declined — see `atlas model list` for alternatives.")
+        return None
     return fallback
 
 
@@ -375,6 +455,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     color = (not args.no_color) and sys.stdout.isatty()
     atlas_root = _find_atlas_root()
+    if atlas_root is None:
+        _safe_print(f"{RED if color else ''}atlas init: "
+                    f"no docker-compose.yml found in {os.getcwd()} or any "
+                    f"parent directory.{RESET if color else ''}")
+        _safe_print("  The wizard writes .env and secrets/ relative to your "
+                    "ATLAS checkout. cd into the repo (or clone it: "
+                    "git clone https://github.com/itigges22/ATLAS.git) "
+                    "before re-running.")
+        return 1
     models_dir = _resolve_models_dir(args.models_dir, atlas_root)
 
     # Header

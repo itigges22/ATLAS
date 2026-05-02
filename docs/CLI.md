@@ -361,7 +361,7 @@ ATLAS ships with standalone subcommands for first-run setup, install diagnostics
 `atlas init` is the recommended entry point on a fresh checkout. It composes `atlas tier` (hardware probe) + `atlas model recommend` (registry) + `atlas model install` (download + SHA verify) + `.env` and `secrets/api-keys.json` generation into a single five-step run, so users never have to hand-edit config to get the stack up.
 
 ```bash
-atlas init                                 # interactive walkthrough
+atlas init                                 # interactive: prompts at the model-confirmation step
 atlas init --yes                           # non-interactive: accept all defaults (CI / scripted bootstrap)
 atlas init --yes --skip-download           # write config but bring-your-own gguf
 atlas init --reconfigure                   # back up existing .env → .env.bak, regenerate
@@ -371,6 +371,8 @@ atlas init --models-dir /data/atlas/models # override default <atlas_root>/model
 atlas init --image-tag v1.0.0              # pin a specific GHCR tag instead of "latest"
 atlas init --ghcr-owner myfork             # use your own published images
 ```
+
+**Interactive vs. non-interactive.** The wizard prompts when stdin is a TTY *and* `--yes` wasn't passed. With `--yes`, or when stdin is piped (CI, `<<<` heredoc, `curl | sh` bootstrap), all prompts are skipped and defaults applied — answering "y" to model confirmation. Never hangs waiting on a prompt that won't come. Decline a prompt with `n` and the wizard exits 1 cleanly without writing anything.
 
 **Five steps, in order.** Each delegates to existing primitives — there's no separate code path to keep in sync:
 
@@ -384,6 +386,8 @@ atlas init --ghcr-owner myfork             # use your own published images
 
 | Gate | Behavior |
 |---|---|
+| No ATLAS checkout | If no `docker-compose.yml` is in CWD or any parent, refuses up-front. Wizard never silently dumps `.env` and `secrets/` into a directory that isn't an ATLAS clone. |
+| CPU-only host | If `tier.classify` returns `cpu` (no NVIDIA GPU), refuses with the ROCm/Metal roadmap pointer. Better to refuse here than write a `.env` that fails at `docker compose up -d`. |
 | Already-configured | Refuses if `.env` exists and `--reconfigure` not passed. Pre-existing `.env` is **never** modified by accident. |
 | `--reconfigure` backup | Atomically copies `.env` → `.env.bak` (and `api-keys.json` → `api-keys.json.bak` if present) before writing. Recovery is `mv .env.bak .env`. |
 | Loose `secrets/` perms | If `secrets/` exists with permissions looser than 0700, refuses unless `--yes` is passed (security guardrail — the user might have intentionally chmod'd for a multi-user setup). |

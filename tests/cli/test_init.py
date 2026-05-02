@@ -243,3 +243,108 @@ def test_models_dir_override_lands_in_env_as_absolute(tmp_path, monkeypatch):
     # Non-default path is written verbatim (absolute), not as ./models.
     assert f"ATLAS_MODELS_DIR={custom}" in body
     assert "ATLAS_MODELS_DIR=./models" not in body
+
+
+# ---------------------------------------------------------------------------
+# PC-054 audit fixes
+# ---------------------------------------------------------------------------
+
+def test_refuses_when_no_atlas_checkout_in_cwd(tmp_path, monkeypatch, capsys):
+    """Running outside an ATLAS checkout (no docker-compose.yml in CWD or
+    any parent) refuses up-front rather than silently writing .env into
+    a random directory."""
+    # tmp_path has no docker-compose.yml — and pytest's tmp_path is under
+    # /tmp/pytest-of-*/, none of whose ancestors have one either.
+    monkeypatch.chdir(tmp_path)
+    rc = init.main(["--yes", "--skip-download", "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "no docker-compose.yml found" in out
+    # And critically — nothing got written.
+    assert os.listdir(tmp_path) == []
+
+
+def test_refuses_on_cpu_tier(tmp_path, monkeypatch, capsys):
+    """When tier.classify returns 'cpu' (no GPU), refuse rather than
+    silently recommend a 16GB-VRAM model the user can't run."""
+    root = _make_atlas_root(tmp_path)
+
+    # Force a cpu probe regardless of the actual host.
+    from atlas.cli.commands import tier
+    cpu_probe = tier.Probe(
+        has_gpu=False, gpu_name=None, vram_gb=0.0, gpu_count=0,
+        system_ram_gb=8.0, cpu_cores=4, disk_free_gb=100.0, platform="linux")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: cpu_probe)
+
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "No NVIDIA GPU detected" in out
+    assert "ATLAS v1 requires a CUDA GPU" in out
+    # Nothing got written — the refusal happens before step 4.
+    assert not os.path.isfile(os.path.join(root, ".env"))
+    assert not os.path.isdir(os.path.join(root, "secrets"))
+
+
+def test_yes_skips_prompts(tmp_path, monkeypatch, capsys):
+    """--yes makes the wizard non-interactive — input() is never called.
+    Patch input() to raise so the test fails loudly if the wizard
+    accidentally tries to prompt."""
+    root = _make_atlas_root(tmp_path)
+
+    def _no_prompt(*args, **kwargs):
+        raise AssertionError("wizard called input() despite --yes")
+    monkeypatch.setattr("builtins.input", _no_prompt)
+
+    rc = _run(monkeypatch, root,
+              ["--yes", "--skip-download", "--no-color"])
+    assert rc == 0
+
+
+def test_interactive_decline_aborts_wizard(tmp_path, monkeypatch, capsys):
+    """When the user answers 'n' at the model-confirmation prompt,
+    the wizard exits 1 cleanly and writes nothing."""
+    root = _make_atlas_root(tmp_path)
+
+    # Force interactive mode: claim stdin is a TTY, no --yes.
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    # First prompt: decline.
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "n")
+
+    rc = _run(monkeypatch, root,
+              ["--skip-download", "--no-color"])
+    assert rc == 1
+    # No .env, no secrets/.
+    assert not os.path.isfile(os.path.join(root, ".env"))
+    assert not os.path.isdir(os.path.join(root, "secrets"))
+
+
+def test_interactive_default_yes_on_empty_input(tmp_path, monkeypatch):
+    """Pressing Enter at a [Y/n] prompt accepts the default (yes)."""
+    root = _make_atlas_root(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    # Empty string = pressed Enter without typing anything.
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "")
+
+    rc = _run(monkeypatch, root,
+              ["--skip-download", "--no-color"])
+    assert rc == 0
+    assert os.path.isfile(os.path.join(root, ".env"))
+
+
+def test_non_tty_stdin_is_treated_as_yes(tmp_path, monkeypatch):
+    """When stdin isn't a TTY (piped input, CI), the wizard never
+    prompts — it uses defaults the same way --yes does. Otherwise CI
+    runs would hang waiting on input that will never come."""
+    root = _make_atlas_root(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    # input() being callable would still be a bug — verify it isn't called.
+    def _no_prompt(*args, **kwargs):
+        raise AssertionError("wizard called input() with non-TTY stdin")
+    monkeypatch.setattr("builtins.input", _no_prompt)
+
+    rc = _run(monkeypatch, root,
+              ["--skip-download", "--no-color"])
+    assert rc == 0
+    assert os.path.isfile(os.path.join(root, ".env"))

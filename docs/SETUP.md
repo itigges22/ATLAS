@@ -78,7 +78,7 @@ cd ATLAS
 pip install -e . aider-chat
 
 # 3. Run the first-run wizard
-atlas init                   # interactive — prompts before each write
+atlas init                   # interactive — prompts to confirm the recommended model
 # or, for non-interactive bootstrap (CI / scripted):
 atlas init --yes             # accept all defaults: download recommended model + write .env + api-keys.json
 # or, if you've already placed a gguf in ./models/:
