@@ -147,6 +147,18 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	// Flush the headers immediately. Without this, Go buffers the
+	// response until the first body write — meaning the client sees no
+	// HTTP/200 until the first event or the 15s heartbeat fires, and
+	// any consumer using a connect-then-wait timeout shorter than 15s
+	// reads "no response". This was caught by integration test, not
+	// unit test (PC-061 follow-up).
+	flusher.Flush()
+	// Send a one-shot SSE comment so the client also gets a body byte
+	// immediately — some HTTP middlewares only consider the response
+	// "started" after the first body chunk, not after headers alone.
+	fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
 
 	ch := defaultBroker.subscribe()
 	defer defaultBroker.unsubscribe(ch)
