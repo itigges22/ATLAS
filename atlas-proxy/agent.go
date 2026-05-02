@@ -582,7 +582,7 @@ func eraseLlamaSlot(ctx *AgentContext) {
 func pollPromptProgress(ctx *AgentContext, llamaURL string, stop <-chan struct{}, totalEst int) {
 	startedAt := time.Now()
 	client := &http.Client{Timeout: 2 * time.Second}
-	ticker := time.NewTicker(250 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	// Once /slots returns 404/501 we stop probing it but keep emitting
 	// elapsed-time progress events — the timer is the useful signal,

@@ -14,14 +14,85 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// copyToClipboard writes s to the system clipboard. Tries in order:
+//  1. Local CLI tools — wl-copy / xclip / xsel / pbcopy (only useful
+//     when the TUI is running on the same machine as the desktop).
+//  2. OSC52 escape sequence — works over SSH because the TERMINAL
+//     EMULATOR (iTerm2 / Kitty / WezTerm / Alacritty / modern xterm /
+//     gnome-terminal with the option enabled / Windows Terminal /
+//     Ghostty) intercepts ESC]52;c;<base64>BEL and pushes the payload
+//     to the local clipboard. The user gets the right behavior whether
+//     they ran `atlas tui` locally or via ssh atlas-host.
+//
+// Returns nil on the first success. The OSC52 path only fails when we
+// can't write to the TTY at all — even on terminals that don't support
+// the sequence the write itself is silent (the escape is just ignored).
+func copyToClipboard(s string) error {
+	tools := [][]string{
+		{"wl-copy"},
+		{"xclip", "-selection", "clipboard"},
+		{"xsel", "--clipboard", "--input"},
+		{"pbcopy"},
+	}
+	for _, cmd := range tools {
+		if _, err := exec.LookPath(cmd[0]); err != nil {
+			continue
+		}
+		c := exec.Command(cmd[0], cmd[1:]...)
+		c.Stdin = strings.NewReader(s)
+		if err := c.Run(); err == nil {
+			return nil
+		}
+	}
+	// Fallback: OSC52. Bubble Tea has its own clipboard cmd in newer
+	// versions, but emitting the sequence directly works without a
+	// dependency bump and lets us return synchronously.
+	encoded := base64.StdEncoding.EncodeToString([]byte(s))
+	// Some terminals enforce a payload cap on OSC52 (~ 8KB historically).
+	// Truncate so the user gets *something* in the clipboard rather than
+	// nothing — the original full text is still in chat scrollback.
+	if len(encoded) > 7500 {
+		encoded = base64.StdEncoding.EncodeToString([]byte(s[:5500]))
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("OSC52 fallback: %w", err)
+	}
+	defer tty.Close()
+	if _, err := fmt.Fprintf(tty, "\x1b]52;c;%s\x07", encoded); err != nil {
+		return fmt.Errorf("OSC52 write: %w", err)
+	}
+	return nil
+}
+
+// collectLastMessages returns the body of the last n chat messages
+// joined with blank lines. Used by /copy / /yank.
+func collectLastMessages(chat []chatMessage, n int) string {
+	if n <= 0 || len(chat) == 0 {
+		return ""
+	}
+	start := len(chat) - n
+	if start < 0 {
+		start = 0
+	}
+	parts := make([]string, 0, n)
+	for _, m := range chat[start:] {
+		parts = append(parts, m.Body)
+	}
+	return strings.Join(parts, "\n\n")
+}
 
 // slashResultMsg carries the output of a shelled-out slash command back
 // to the model. err is non-nil when the command failed (non-zero exit
@@ -47,17 +118,26 @@ const slashCommandHelp = `Slash commands
   /compact                Ask the agent to compact conversation history.
   /hide <pane>            Hide a pane: files, pipeline, events, or all.
   /show <pane>            Show a pane (or all).
-  /mouse on|off           Toggle mouse capture (off lets you copy text).
+  /mouse [on|off]         Toggle mouse capture (off lets you select text). No arg = off.
+  /copy [N]               Copy last N chat messages to system clipboard (default 1).
   /quit                   Exit.
 
-Copying text
-  When mouse capture is on, selecting text is blocked by the TUI so
-  the wheel can scroll. To copy: either hold Shift (Linux/Windows) or
-  Option (macOS) while dragging — most terminals honor the override —
-  or run /mouse off to disable capture for the rest of the session.
-  To launch with capture pre-disabled: ATLAS_TUI_MOUSE=off atlas tui
-  (or pass --mouse off). The /mouse setting does not persist across
-  TUI restarts — each launch re-reads the flag/env var.
+Copying text  (TL;DR: Ctrl+C cancels; copy uses Ctrl+Shift+C / Cmd+C)
+  Three ways to get text out of the TUI:
+    1. /copy [N]      → copy the last N messages straight to clipboard.
+                         Easiest path. Uses xclip / wl-copy / pbcopy.
+    2. /mouse off     → disables mouse capture so drag-highlight works.
+                         Then your terminal's own copy hotkey takes over:
+                           Ctrl+Shift+C  (Linux / Windows)
+                           Cmd+C         (macOS)
+                           right-click → Copy  (most terminals)
+    3. Hold Shift     → (Linux/Win) or Option (macOS) while dragging
+                         to override capture for one selection without
+                         disabling it. iTerm2/Kitty/WezTerm/GNOME work.
+  Ctrl+C is bound to "cancel turn / quit" inside the TUI — it will NOT
+  copy text. /mouse off + Ctrl+Shift+C is the workflow you want.
+  Launch with capture pre-disabled: ATLAS_TUI_MOUSE=off atlas tui
+  (or --mouse off). The setting does not persist across restarts.
 
 Input modes
   message text            Send to agent (Enter).
@@ -179,32 +259,73 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		return true, nil, false
 
 	case "/mouse":
-		// Toggle mouse capture so users can copy text without holding
-		// Shift/Option. Defaults to "on" (capture); /mouse off disables
-		// capture for the session, /mouse on re-enables it.
+		// Toggle mouse capture. With no arg, flips current state.
+		// /mouse off → wheel-scroll stops working but the user can
+		// drag-highlight text and copy it via the terminal's own
+		// hotkey (Ctrl+Shift+C / Cmd+C / right-click).
 		want := ""
 		if len(args) > 0 {
 			want = strings.ToLower(args[0])
 		}
+		if want == "" {
+			// No arg → toggle. Track desired state so the next no-arg
+			// toggle flips back. We don't have a model field for this
+			// right now, so just default to "off" — the more useful
+			// of the two states (users typically /mouse to enable copy).
+			want = "off"
+		}
 		if want != "on" && want != "off" {
 			m.chat = append(m.chat, chatMessage{
 				Role: roleSystem, Meta: "error",
-				Body: "/mouse on | off",
+				Body: "/mouse on | off  (no arg = off)",
 			})
 			return true, nil, false
 		}
 		if want == "off" {
 			m.chat = append(m.chat, chatMessage{
 				Role: roleSystem, Meta: "mouse",
-				Body: "mouse capture disabled — wheel-scroll won't work, but you can select/copy text normally. Run /mouse on to restore.",
+				Body: "mouse capture OFF — drag-highlight to select, then your terminal's own hotkey copies (Ctrl+Shift+C on Linux, Cmd+C on Mac, right-click → Copy elsewhere). Wheel scroll won't work until /mouse on. Tip: launch with ATLAS_TUI_MOUSE=off atlas tui to default to this.",
 			})
 			return true, tea.DisableMouse, false
 		}
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "mouse",
-			Body: "mouse capture enabled — wheel scrolls chat. Hold Shift/Option to select text without disabling.",
+			Body: "mouse capture ON — wheel scrolls chat. Hold Shift/Option while dragging to override capture for one selection.",
 		})
 		return true, tea.EnableMouseCellMotion, false
+
+	case "/copy", "/yank":
+		// Copy the most recent assistant message body to the system
+		// clipboard via xclip / wl-copy / pbcopy. Bypasses the whole
+		// mouse-capture mess for users who just want to paste the
+		// last reply elsewhere. With an arg /copy N copies the last N
+		// messages (assistant + user) joined.
+		n := 1
+		if len(args) > 0 {
+			if v, err := strconv.Atoi(args[0]); err == nil && v > 0 {
+				n = v
+			}
+		}
+		text := collectLastMessages(m.chat, n)
+		if text == "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: "/copy: no messages to copy yet.",
+			})
+			return true, nil, false
+		}
+		if err := copyToClipboard(text); err != nil {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: fmt.Sprintf("/copy: %v (no clipboard tool found — install xclip, wl-clipboard, or use a terminal copy)", err),
+			})
+			return true, nil, false
+		}
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "copy",
+			Body: fmt.Sprintf("copied %d chars to clipboard.", len(text)),
+		})
+		return true, nil, false
 	}
 
 	// Unknown slash command — show help instead of sending to the

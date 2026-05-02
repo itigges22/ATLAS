@@ -128,6 +128,11 @@ type tuiModel struct {
 	promptProcessed int
 	promptTotal     int
 	promptPct       float64
+	// Set on llm_call_start, zeroed on llm_first_token / llm_call_end.
+	// While non-zero the spinner ticker rewrites the streaming row at
+	// 100ms cadence so the elapsed timer keeps moving even when the
+	// proxy's progress poller is between emits (or /slots is silent).
+	promptEvalStart time.Time
 
 	// Same idea, but for V3's *internal* LLM calls (candidate gen,
 	// scoring). Tracked separately so a v3_token doesn't overwrite the
@@ -303,7 +308,7 @@ func (m tuiModel) Init() tea.Cmd {
 	return tea.Batch(
 		waitForEnvelope(m.events),
 		waitForChatEvent(m.chatEvents),
-		tickEvery(150*time.Millisecond),
+		tickEvery(100*time.Millisecond),
 		textarea.Blink,
 		// Run the initial file-tree scan off the main thread so it
 		// doesn't block the event loop. The empty sidebar shows for
@@ -660,6 +665,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.spinnerFrame++
+		// Tick-driven prompt-progress row update: while we're still in
+		// prompt eval (no first token yet), rewrite the streaming row
+		// every tick so the elapsed timer ticks smoothly even when the
+		// proxy's poller is silent (e.g. between /slots probes, or when
+		// /slots returns no token counters at all on this build).
+		if !m.promptEvalStart.IsZero() && m.streamingLLM {
+			elapsed := time.Since(m.promptEvalStart).Milliseconds()
+			m.replaceLLMRow(formatPromptProgress(
+				m.promptProcessed, m.promptTotal, m.promptPct, elapsed))
+		}
 		// Rescan files periodically so external changes (agent wrote
 		// a file via /workspace, user added a file in another shell)
 		// show up in the sidebar without a manual refresh. Dispatch
@@ -669,7 +684,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastFileScan = time.Now() // mark to debounce overlapping scans
 			refresh = scanFilesCmd(m.workingDir)
 		}
-		return m, tea.Batch(tickEvery(150*time.Millisecond), refresh)
+		return m, tea.Batch(tickEvery(100*time.Millisecond), refresh)
 
 	case scanFilesMsg:
 		// Result of an async scanFiles run. Apply only if newer than
@@ -745,6 +760,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		m.promptProcessed = 0
 		m.promptTotal = p.PromptTokens
 		m.promptPct = 0
+		m.promptEvalStart = time.Now()
 		// Pre-fill the context gauge with the prompt-token estimate so
 		// the user sees ctx fill up the moment the call starts, not
 		// only on llm_call_end. Each llm_token below increments this
@@ -768,6 +784,15 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			m.promptProcessed = p.Processed
 			m.promptTotal = p.Total
 			m.promptPct = p.Pct
+			// Live ctx gauge during prompt eval: if /slots gives us
+			// processed-tokens, push that into lastTurnTokens so the
+			// header context indicator fills as the prompt is encoded
+			// (instead of jumping at llm_call_end). On builds where
+			// /slots is silent this is a no-op — we still show the
+			// chars/4 estimate from llm_call_start.
+			if p.Processed > m.lastTurnTokens {
+				m.lastTurnTokens = p.Processed
+			}
 			m.replaceLLMRow(formatPromptProgress(p.Processed, p.Total, p.Pct, p.ElapsedMS))
 		}
 
@@ -779,6 +804,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			PromptMS int64 `json:"prompt_ms"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
+		m.promptEvalStart = time.Time{} // stop tick-rewrite of the row
 		secs := float64(p.PromptMS) / 1000.0
 		header := fmt.Sprintf("decoding…  (prompt eval: %.1fs)", secs)
 		m.streamingLLMHeader = header
@@ -1145,10 +1171,15 @@ func formatPromptProgress(processed, total int, pct float64, elapsedMS int64) st
 		return fmt.Sprintf("encoding prompt  [%s] %d/%d (%.0f%%)  · %.1fs",
 			bar, processed, total, pct*100, secs)
 	}
-	// No token counters — show a 4-frame spinner indexed by elapsed
-	// quarter-seconds so the user sees motion every poll.
+	// No token counters — show a 10-frame braille spinner indexed by
+	// 100ms elapsed so the spinner advances every tick, and surface the
+	// chars/4 prompt estimate (`total`) so the user knows how big the
+	// prompt is even when llama.cpp doesn't report live progress.
 	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	frame := frames[(elapsedMS/250)%int64(len(frames))]
+	frame := frames[(elapsedMS/100)%int64(len(frames))]
+	// %.1fs is one-decimal seconds (e.g. "5.4s") — that's what the user
+	// asked for. The row redraws every 100ms via the spinner ticker so
+	// the timer increments every tick, not every 250ms poll.
 	if total > 0 {
 		return fmt.Sprintf("encoding prompt  %s  ~%d tok · %.1fs",
 			frame, total, secs)

@@ -405,7 +405,8 @@ var slashCommandList = []string{
 	"/help", "/clear", "/compact",
 	"/add", "/drop", "/context",
 	"/diff", "/commit", "/undo",
-	"/run", "/hide", "/show", "/quit",
+	"/run", "/hide", "/show",
+	"/mouse", "/copy", "/quit",
 }
 
 // renderSlashHint shows a one-line list of slash commands matching
@@ -472,11 +473,15 @@ func renderBashHint(_ string, width int) string {
 	return line
 }
 
+// formatTokens renders a token count compactly. Below 10,000 we keep
+// the raw integer so the user sees per-token movement during
+// streaming (1234 → 1235 → 1236…). At 10k+ the count changes too
+// quickly for raw digits to be readable, so we abbreviate.
 func formatTokens(n int) string {
 	switch {
-	case n >= 10000:
+	case n >= 100000:
 		return fmt.Sprintf("%dk", n/1000)
-	case n >= 1000:
+	case n >= 10000:
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	default:
 		return fmt.Sprintf("%d", n)
