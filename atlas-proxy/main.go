@@ -2545,6 +2545,7 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/ready", handleReady)
 	mux.HandleFunc("/v1/agent", handleAgent) // New tool-based agent endpoint
+	mux.HandleFunc("/events", handleEvents)  // PC-061: typed SSE event stream
 
 	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

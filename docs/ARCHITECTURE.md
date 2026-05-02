@@ -582,3 +582,43 @@ sequenceDiagram
 ```
 
 Existing files over 100 lines are rejected for `write_file` — the model must use `edit_file` with targeted changes.
+
+---
+
+## 10. Event Protocol (PC-061)
+
+ATLAS services emit a typed JSON event stream over SSE. This is the foundation Phase 1's UI/UX work consumes — the Bubbletea TUI, live decode streaming, per-stage spinners, and compute budget visualizer all read from it.
+
+**Two endpoints:**
+
+- `GET http://atlas-proxy:8090/events` — broadcasts envelope events from any active session. Heartbeat every 15s. Always-on; no opt-in needed.
+- `POST http://v3-service:8070/v3/run` — the existing pipeline endpoint, dual-emits the legacy `{stage, detail}` shape AND envelope events when the client opts in via `Accept: application/json+envelope` header or `?event_format=v2`.
+
+**Seven envelope types:** `stage_start`, `stage_end`, `tool_call`, `tool_result`, `metric`, `error`, `done`. Full schema, per-type payloads, suffix-mapping rules, and back-compat policy live in [`PROTOCOL.md`](PROTOCOL.md).
+
+**Where events come from:**
+
+```mermaid
+sequenceDiagram
+    participant U as TUI / Test
+    participant P as atlas-proxy :8090
+    participant V3 as v3-service :8070
+
+    U->>P: GET /events (SSE subscribe)
+    Note over P: Subscriber added to broker
+
+    Note over P: Agent loop starts (per-request)
+    P-->>U: stage_start "agent"
+    P-->>U: tool_call "edit_file"
+    P-->>U: tool_result "edit_file" success=true
+    P->>V3: POST /v3/run (Accept: application/json+envelope)
+    V3-->>U: stage_start "phase2"
+    V3-->>U: stage_end "phase2" success=true
+    V3-->>U: done success=true
+    P-->>U: stage_end "agent" success=true
+    P-->>U: done success=true
+```
+
+Events from the proxy and v3-service merge into one stream at the TUI. Each envelope carries enough context (`stage`, `event_id`, `parent_id`) for the consumer to nest them visually without needing a session id.
+
+**Consumer:** `atlas/cli/events.py` — `iter_events(url)` returns typed `Event` dataclasses. Use this rather than parsing SSE frames directly.

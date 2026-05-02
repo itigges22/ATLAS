@@ -30,6 +30,40 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		{Role: "user", Content: userMessage},
 	}
 
+	// PC-061: typed envelope for the agent loop. Pairs with the
+	// stage_end + done envelope emitted at every return path below.
+	agentLoopStart := time.Now()
+	agentStartEv := NewEnvelope(EvtStageStart, "agent", map[string]interface{}{
+		"detail": truncateStr(userMessage, 200),
+	})
+	Emit(agentStartEv)
+	emitAgentDone := func(success bool, summary string) {
+		duration := int64(time.Since(agentLoopStart) / time.Millisecond)
+		Emit(Envelope{
+			EventID:    NewEventID(),
+			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+			Type:       EvtStageEnd,
+			Stage:      "agent",
+			ParentID:   agentStartEv.EventID,
+			DurationMS: duration,
+			Payload: map[string]interface{}{
+				"success": success,
+				"summary": summary,
+			},
+		})
+		Emit(Envelope{
+			EventID:   NewEventID(),
+			Timestamp: float64(time.Now().UnixNano()) / 1e9,
+			Type:      EvtDone,
+			Stage:     "agent",
+			Payload: map[string]interface{}{
+				"success":           success,
+				"total_duration_ms": duration,
+				"summary":           summary,
+			},
+		})
+	}
+
 	// PC-045: Per-session cache scope. llama.cpp's KV slot persists between
 	// requests by default — that's PC-035's keep-warm behavior. But the slot
 	// also persists *across user sessions*, so context from a previous
@@ -61,6 +95,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			select {
 			case <-ctx.Ctx.Done():
 				log.Printf("[agent] cancelled at turn %d: %v", turn, ctx.Ctx.Err())
+				EmitSimple(EvtError, "agent", fmt.Sprintf("cancelled at turn %d: %v", turn, ctx.Ctx.Err()))
+				emitAgentDone(false, "cancelled by client")
 				return ctx.Ctx.Err()
 			default:
 			}
@@ -83,6 +119,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		response, tokens, err := callLLMConstrained(ctx, schemaJSON)
 		if err != nil {
 			ctx.Stream("error", map[string]string{"error": err.Error()})
+			EmitSimple(EvtError, "agent", err.Error())
+			emitAgentDone(false, fmt.Sprintf("LLM call failed: %v", err))
 			return fmt.Errorf("LLM call failed on turn %d: %w", turn, err)
 		}
 		ctx.TotalTokens += tokens
@@ -116,6 +154,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		switch parsed.Type {
 		case "done":
 			ctx.Stream("done", map[string]string{"summary": parsed.Summary})
+			emitAgentDone(true, parsed.Summary)
 			return nil
 
 		case "text":
@@ -131,6 +170,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				"args": json.RawMessage(parsed.Args),
 				"turn": turn,
 			})
+			Emit(NewEnvelope(EvtToolCall, "agent", map[string]interface{}{
+				"name":          parsed.Name,
+				"args_summary":  truncateStr(string(parsed.Args), 200),
+				"turn":          turn,
+			}))
 
 			// Check permissions
 			if needsPermission(ctx, parsed.Name, parsed.Args) {
@@ -173,6 +217,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					consecutiveErrors++
 					if consecutiveErrors >= 3 {
 						ctx.Stream("done", map[string]string{"summary": "Stopped: content too large for tool calls. Try requesting smaller, targeted changes."})
+						emitAgentDone(false, "content too large for tool calls")
 						return nil
 					}
 					continue
@@ -225,12 +270,25 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				"error":   result.Error,
 				"elapsed": elapsed.String(),
 			})
+			Emit(Envelope{
+				EventID:    NewEventID(),
+				Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+				Type:       EvtToolResult,
+				Stage:      "agent",
+				DurationMS: elapsed.Milliseconds(),
+				Payload: map[string]interface{}{
+					"name":    parsed.Name,
+					"success": result.Success,
+					"summary": truncateStr(result.Error, 200),
+				},
+			})
 
 			// Force-stop after destructive operations that shouldn't have follow-up
 			if result.Error == "__FORCE_DONE__" {
 				result.Error = ""
 				// Don't stream anything — Aider interprets all text as file edits.
 				// The file deletion already happened on disk. Just end silently.
+				emitAgentDone(true, "destructive operation completed")
 				return nil
 			}
 
@@ -252,6 +310,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					log.Printf("[agent] breaking error loop: %d consecutive failures at turn %d (productive=%v)", consecutiveErrors, turn, madeProductiveChange)
 					if madeProductiveChange {
 						ctx.Stream("done", map[string]string{"summary": "Wrote your changes to disk; couldn't verify them automatically (the verification commands failed). Run them yourself to confirm — they're on disk."})
+						emitAgentDone(true, "wrote changes; verification failed")
 					} else {
 						// Non-productive 3-error exit. The previous message
 						// ("file may be too large") presumed a write/edit
@@ -261,6 +320,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// the failure mode and point at the tool errors so
 						// the user can correct course.
 						ctx.Stream("done", map[string]string{"summary": "Stopped after 3 tool failures with no successful changes. Common causes: the file you referenced isn't in the workspace, an empty path argument was passed, or a regex was malformed. Check the per-turn errors above, then try a more specific request (e.g. \"fix snake_game.py at line 95 — the curses bounds are wrong\")."})
+						emitAgentDone(false, "stopped after 3 tool failures with no productive changes")
 					}
 					return nil
 				}
@@ -340,6 +400,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	ctx.Stream("error", map[string]string{
 		"error": fmt.Sprintf("max turns (%d) exceeded for %s task", ctx.MaxTurns, ctx.Tier),
 	})
+	EmitSimple(EvtError, "agent", fmt.Sprintf("max turns (%d) exceeded for %s task", ctx.MaxTurns, ctx.Tier))
+	emitAgentDone(false, fmt.Sprintf("max turns (%d) exceeded", ctx.MaxTurns))
 	return fmt.Errorf("max turns exceeded (%d)", ctx.MaxTurns)
 }
 

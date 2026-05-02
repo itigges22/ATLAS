@@ -35,6 +35,98 @@ sys.stdout.reconfigure(line_buffering=True)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# PC-061: typed event envelope emission alongside the legacy
+# {stage, detail} shape. Legal envelope types and stage→type mapping
+# rules live here so v3-service stays self-contained.
+from atlas.cli.events import make_event
+
+# Suffix → envelope-type mapping. PC-061 step B. Keep this list short
+# and decisively mapped so producers stay predictable.
+_STAGE_SUFFIX_TYPE = (
+    ("_error",  "error"),       # *_error  → error
+    ("_failed", "stage_end"),   # *_failed → stage_end (success=False)
+    ("_pass",   "stage_end"),   # *_pass   → stage_end (success=True)
+    ("_done",   "stage_end"),   # *_done   → stage_end (success=True)
+    ("_skip",   "stage_end"),   # *_skip   → stage_end (success=True; skipped is success in flow)
+    ("_retry",  "stage_start"), # *_retry  → stage_start (re-attempt)
+)
+
+
+def _classify_stage(stage: str) -> tuple:
+    """Map a legacy stage name onto (envelope_type, success_flag).
+
+    success_flag is None for events that don't carry a success bit
+    (stage_start, error → success not applicable; we set it on the
+    payload in the helper below).
+    """
+    for suffix, etype in _STAGE_SUFFIX_TYPE:
+        if stage.endswith(suffix):
+            if etype == "stage_end":
+                return etype, (suffix != "_failed")
+            return etype, None
+    return "stage_start", None
+
+
+def _logical_stage(stage: str) -> str:
+    """Strip the suffix so stage_start("phase2") and stage_end("phase2")
+    share the same logical stage name (lets consumers pair them)."""
+    for suffix, _ in _STAGE_SUFFIX_TYPE:
+        if stage.endswith(suffix):
+            return stage[:-len(suffix)]
+    return stage
+
+
+def _emit_event(wfile, envelope_opt_in: bool, stage: str, detail: str,
+                  stage_start_ids: dict) -> None:
+    """Dual-emit a single event to an SSE wfile. Always writes the legacy
+    {stage, detail} shape; additionally writes a typed envelope when the
+    client opted in. Mutates `stage_start_ids` to track parent_id +
+    duration computation across emissions.
+
+    Extracted from `_handle_run` so it's testable without spinning up an
+    HTTP server (PC-061 step B).
+    """
+    legacy = json.dumps({"stage": stage, "detail": detail})
+    try:
+        wfile.write(f"data: {legacy}\n\n".encode())
+    except Exception:
+        return  # client disconnected — don't try the envelope either
+
+    if not envelope_opt_in:
+        try:
+            wfile.flush()
+        except Exception:
+            pass
+        return
+
+    etype, success = _classify_stage(stage)
+    logical = _logical_stage(stage)
+    payload: Dict[str, Any] = {"detail": detail} if detail else {}
+    parent_id = None
+    duration_ms = None
+
+    if etype == "stage_start":
+        ev = make_event("stage_start", logical, payload=payload)
+        stage_start_ids[logical] = (ev.event_id, ev.timestamp)
+    elif etype == "stage_end":
+        payload["success"] = bool(success)
+        if logical in stage_start_ids:
+            parent_id, t0 = stage_start_ids.pop(logical)
+            duration_ms = int((time.time() - t0) * 1000)
+        ev = make_event("stage_end", logical, payload=payload,
+                         parent_id=parent_id, duration_ms=duration_ms)
+    else:  # error
+        payload.update({"stage": logical, "message": detail,
+                        "recoverable": True})
+        ev = make_event("error", logical, payload=payload)
+
+    try:
+        wfile.write(f"data: {ev.to_json()}\n\n".encode())
+        wfile.flush()
+    except Exception:
+        pass
+
+
 from benchmark.runner import extract_code
 from benchmark.v3.budget_forcing import BudgetForcing, BudgetForcingConfig
 from benchmark.v3.plan_search import PlanSearch, PlanSearchConfig
@@ -1261,21 +1353,43 @@ class V3Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
 
+            # PC-061: opt-in to typed envelopes via Accept header or
+            # ?event_format=v2 query param. Default = legacy-only for
+            # back-compat with current Aider/CLI consumers.
+            envelope_opt_in = (
+                "application/json+envelope" in self.headers.get("Accept", "")
+                or "event_format=v2" in (self.path or "")
+            )
+            run_started_at = time.time()
+            stage_start_ids: dict = {}
+
             def emit_sse(stage, detail=""):
-                event = json.dumps({"stage": stage, "detail": detail})
-                try:
-                    self.wfile.write(f"data: {event}\n\n".encode())
-                    self.wfile.flush()
-                except Exception:
-                    pass
+                _emit_event(self.wfile, envelope_opt_in, stage, detail,
+                              stage_start_ids)
 
             result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
             _post_pattern_outcome(problem, result)
 
-            # Final result event
+            # Final result event (legacy `event: result` framing for
+            # current consumers).
             final = json.dumps(result, default=str)
             self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
+
+            # PC-061: typed `done` envelope as the last typed event.
+            # Consumers that opted into v2 use this to detect clean stream
+            # end vs. premature disconnect.
+            if envelope_opt_in:
+                done_payload = {
+                    "success": bool(result.get("success", False))
+                                if isinstance(result, dict) else False,
+                    "total_duration_ms": int((time.time() - run_started_at) * 1000),
+                }
+                done_ev = make_event("done", "pipeline", payload=done_payload)
+                try:
+                    self.wfile.write(f"data: {done_ev.to_json()}\n\n".encode())
+                except Exception:
+                    pass
             self.wfile.flush()
         else:
             result = pipeline.run(problem, task_id, files=files)
