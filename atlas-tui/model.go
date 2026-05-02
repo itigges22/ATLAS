@@ -484,6 +484,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, runShellCmd(m.workingDir, "!"+cmdStr,
 						[]string{"bash", "-lc", cmdStr})
 				}
+				// "?" alone (or with trailing whitespace) is a shorthand
+				// for /help — same convention as Aider/Claude Code so
+				// users don't have to remember the slash form.
+				if text == "?" {
+					text = "/help"
+				}
 				// Slash commands intercepted before agent send.
 				if consumed, slashCmd, quit := m.handleSlash(text); consumed {
 					dlog("slash", "dispatched", map[string]interface{}{
@@ -736,19 +742,21 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		}
 
 	case "llm_prompt_progress":
-		// Live prompt-eval progress from the proxy's /slots poller.
-		// Rewrites the streaming row with a small bar so the user sees
-		// "encoding prompt 1234/8765 (14%)" instead of a frozen line.
+		// Live prompt-eval progress from the proxy's poller. ElapsedMS
+		// is always set; processed/total/pct are present only when
+		// llama-server's /slots endpoint exposes them. We render a bar
+		// when we have %, a spinner+timer otherwise.
 		var p struct {
 			Processed int     `json:"processed"`
 			Total     int     `json:"total"`
 			Pct       float64 `json:"pct"`
+			ElapsedMS int64   `json:"elapsed_ms"`
 		}
-		if json.Unmarshal(ev.Data, &p) == nil && p.Total > 0 {
+		if json.Unmarshal(ev.Data, &p) == nil {
 			m.promptProcessed = p.Processed
 			m.promptTotal = p.Total
 			m.promptPct = p.Pct
-			m.replaceLLMRow(formatPromptProgress(p.Processed, p.Total, p.Pct))
+			m.replaceLLMRow(formatPromptProgress(p.Processed, p.Total, p.Pct, p.ElapsedMS))
 		}
 
 	case "llm_first_token":
@@ -1073,25 +1081,37 @@ func formatV3StageEvent(eventType string, data json.RawMessage) string {
 	return body
 }
 
-// formatPromptProgress renders the encoding-prompt progress row as a
-// short bar plus token counters. Width 24 keeps it compact even on a
-// narrow terminal — the proxy emits this every 250ms while llama-server
-// is grinding through prompt eval (can take 30–90s on long histories).
-func formatPromptProgress(processed, total int, pct float64) string {
-	const barWidth = 24
-	if pct < 0 {
-		pct = 0
+// formatPromptProgress renders the encoding-prompt progress row. When
+// llama.cpp's /slots exposes prompt-eval token counts (some builds do,
+// others don't) we render a 24-cell bar plus the running counters.
+// When only elapsed time is known, we render a spinner + timer + the
+// chars/4 estimate so the user sees motion and rough magnitude. The
+// proxy emits one of these every 250ms while llama-server is grinding
+// through prompt eval (30–90s on long histories).
+func formatPromptProgress(processed, total int, pct float64, elapsedMS int64) string {
+	secs := float64(elapsedMS) / 1000.0
+	if pct > 0 && total > 0 {
+		const barWidth = 24
+		if pct > 1 {
+			pct = 1
+		}
+		filled := int(pct*float64(barWidth) + 0.5)
+		if filled > barWidth {
+			filled = barWidth
+		}
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+		return fmt.Sprintf("encoding prompt  [%s] %d/%d (%.0f%%)  · %.1fs",
+			bar, processed, total, pct*100, secs)
 	}
-	if pct > 1 {
-		pct = 1
+	// No token counters — show a 4-frame spinner indexed by elapsed
+	// quarter-seconds so the user sees motion every poll.
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	frame := frames[(elapsedMS/250)%int64(len(frames))]
+	if total > 0 {
+		return fmt.Sprintf("encoding prompt  %s  ~%d tok · %.1fs",
+			frame, total, secs)
 	}
-	filled := int(pct*float64(barWidth) + 0.5)
-	if filled > barWidth {
-		filled = barWidth
-	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-	return fmt.Sprintf("encoding prompt  [%s] %d/%d (%.0f%%)",
-		bar, processed, total, pct*100)
+	return fmt.Sprintf("encoding prompt  %s  %.1fs", frame, secs)
 }
 
 // formatStreamingLLM renders the partial JSON the model is mid-emitting.

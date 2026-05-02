@@ -42,15 +42,31 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			truncateStr(userMessage, 80)),
 	}))
 	defer func() {
+		// Close the "agent" stage so the pipeline pane stops showing it
+		// running. Without this, the TUI's pipelineState.apply only ever
+		// sees EvtDone (overall finish) and the agent row is stuck in
+		// Running() forever — visually misleading after the turn ended.
+		dur := time.Since(loopStart).Milliseconds()
+		Emit(Envelope{
+			EventID:    NewEventID(),
+			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+			Type:       EvtStageEnd,
+			Stage:      "agent",
+			DurationMS: dur,
+			Payload: map[string]interface{}{
+				"success":      true,
+				"total_tokens": ctx.TotalTokens,
+			},
+		})
 		Emit(Envelope{
 			EventID:    NewEventID(),
 			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
 			Type:       EvtDone,
 			Stage:      "agent",
-			DurationMS: time.Since(loopStart).Milliseconds(),
+			DurationMS: dur,
 			Payload: map[string]interface{}{
 				"success":           true,
-				"total_duration_ms": time.Since(loopStart).Milliseconds(),
+				"total_duration_ms": dur,
 				"total_tokens":      ctx.TotalTokens,
 			},
 		})
@@ -546,25 +562,32 @@ func eraseLlamaSlot(ctx *AgentContext) {
 	log.Printf("[PC-045] erased llama slot 0 — fresh KV cache for this session")
 }
 
-// pollPromptProgress emits llm_prompt_progress events while llama-server
-// is in the prompt-eval phase of a streaming chat completion. The TUI
-// renders a real percentage instead of a static spinner — without this,
-// long histories (8–12k tokens) stall the chat pane on "encoding prompt…"
-// for 30–90s with no feedback.
+// pollPromptProgress emits llm_prompt_progress events at 250ms cadence
+// while llama-server is in the prompt-eval phase of a streaming chat
+// completion. Without these events the TUI freezes on "encoding prompt…"
+// for the 30–90s prompt-eval window on long histories.
 //
-// Polls llama.cpp's /slots endpoint at 250ms cadence. Quietly no-ops if
-// /slots is disabled (--slots flag not passed) or returns an unexpected
-// shape — this is a UX nicety, never a correctness requirement. Stops
-// when stop is closed (the caller closes it on first-token arrival, on
-// function return, or on context cancel).
+// Always emits elapsed_ms so the TUI can show a live timer ("encoding
+// prompt · 12.3s"). Additionally tries to extract processed/total/pct
+// from llama.cpp's /slots endpoint — those fields are only present in
+// some llama.cpp builds (n_prompt_tokens_processed / n_prompt_tokens).
+// When absent, the TUI renders a spinner-with-timer rather than a bar.
 //
-// totalEst is the chars/4 prompt-token estimate; used as the progress
-// denominator if /slots doesn't expose n_prompt_tokens directly. The
-// estimate is typically 10–20% off but good enough for a progress bar.
+// Stops when stop is closed (the caller closes it on first-token
+// arrival, on function return, or on context cancel).
+//
+// totalEst is the chars/4 prompt-token estimate; passed through to the
+// TUI as `total_est` so even without /slots data the user sees the
+// rough magnitude of what's being encoded.
 func pollPromptProgress(ctx *AgentContext, llamaURL string, stop <-chan struct{}, totalEst int) {
+	startedAt := time.Now()
 	client := &http.Client{Timeout: 2 * time.Second}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	// Once /slots returns 404/501 we stop probing it but keep emitting
+	// elapsed-time progress events — the timer is the useful signal,
+	// the bar is the bonus.
+	slotsAvailable := true
 	for {
 		select {
 		case <-stop:
@@ -573,72 +596,75 @@ func pollPromptProgress(ctx *AgentContext, llamaURL string, stop <-chan struct{}
 			return
 		case <-ticker.C:
 		}
-		reqCtx, cancel := context.WithTimeout(ctx.Ctx, 2*time.Second)
-		req, err := http.NewRequestWithContext(reqCtx, "GET", llamaURL+"/slots", nil)
-		if err != nil {
-			cancel()
-			return
-		}
-		resp, err := client.Do(req)
-		cancel()
-		if err != nil {
-			// /slots may be temporarily refusing connections during a
-			// hot reload. Try again next tick rather than giving up.
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			// 404 / 501 → llama-server was started without --slots.
-			// Stop polling rather than spamming the log.
-			if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented {
-				return
-			}
-			continue
-		}
-		var slots []map[string]interface{}
-		_ = json.NewDecoder(resp.Body).Decode(&slots)
-		resp.Body.Close()
-
-		var processed, total int
-		for _, s := range slots {
-			// Skip idle slots. is_processing is the modern field; older
-			// versions used state == 0 for idle.
-			if isProc, ok := s["is_processing"].(bool); ok && !isProc {
-				continue
-			}
-			if state, ok := s["state"].(float64); ok && state == 0 {
-				continue
-			}
-			for _, k := range []string{"n_prompt_tokens_processed", "prompt_n", "n_past"} {
-				if v, ok := s[k].(float64); ok && v > 0 {
-					processed = int(v)
-					break
-				}
-			}
-			for _, k := range []string{"n_prompt_tokens", "n_prompt"} {
-				if v, ok := s[k].(float64); ok && v > 0 {
-					total = int(v)
-					break
-				}
-			}
-			break
+		elapsed := time.Since(startedAt).Milliseconds()
+		processed, total := 0, 0
+		if slotsAvailable {
+			processed, total, slotsAvailable = probeSlot(ctx.Ctx, client, llamaURL)
 		}
 		if total == 0 {
 			total = totalEst
 		}
-		if processed == 0 || total == 0 {
-			continue
-		}
-		pct := float64(processed) / float64(total)
-		if pct > 1 {
-			pct = 1
+		pct := 0.0
+		if processed > 0 && total > 0 {
+			pct = float64(processed) / float64(total)
+			if pct > 1 {
+				pct = 1
+			}
 		}
 		ctx.Stream("llm_prompt_progress", map[string]interface{}{
-			"processed": processed,
-			"total":     total,
-			"pct":       pct,
+			"processed":  processed,
+			"total":      total,
+			"pct":        pct,
+			"elapsed_ms": elapsed,
 		})
 	}
+}
+
+// probeSlot does one /slots GET and pulls out prompt-eval counters when
+// llama.cpp exposes them. Returns (processed, total, stillAvailable);
+// stillAvailable goes false on 404/501 so the caller can stop probing.
+func probeSlot(ctx context.Context, client *http.Client, llamaURL string) (int, int, bool) {
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "GET", llamaURL+"/slots", nil)
+	if err != nil {
+		return 0, 0, true
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0, true // transient — try again next tick
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented {
+		return 0, 0, false // /slots disabled — give up
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, true
+	}
+	var slots []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
+		return 0, 0, true
+	}
+	for _, s := range slots {
+		if isProc, ok := s["is_processing"].(bool); ok && !isProc {
+			continue
+		}
+		var processed, total int
+		for _, k := range []string{"n_prompt_tokens_processed", "prompt_n", "n_past"} {
+			if v, ok := s[k].(float64); ok && v > 0 {
+				processed = int(v)
+				break
+			}
+		}
+		for _, k := range []string{"n_prompt_tokens", "n_prompt"} {
+			if v, ok := s[k].(float64); ok && v > 0 {
+				total = int(v)
+				break
+			}
+		}
+		return processed, total, true
+	}
+	return 0, 0, true
 }
 
 // llmStreamClient is a long-lived HTTP client for streaming LLM calls.

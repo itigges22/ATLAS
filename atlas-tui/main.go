@@ -29,6 +29,9 @@ func main() {
 	logPath := flag.String("log", envOr("ATLAS_TUI_LOG", ""),
 		"append-only debug log path (default: off; alt-screen makes copy hard, "+
 			"so tail this file to see what the TUI saw)")
+	mouseFlag := flag.String("mouse", envOr("ATLAS_TUI_MOUSE", "on"),
+		"mouse capture: 'on' (wheel scrolls chat) or 'off' (lets you select/copy text). "+
+			"Mid-session toggle: /mouse on|off")
 	flag.Parse()
 
 	if closer, err := initDebugLog(*logPath); err != nil {
@@ -62,8 +65,16 @@ func main() {
 	// modern terminals. iTerm2/Kitty/WezTerm let users hold Option/
 	// Shift while dragging to override capture entirely; that's the
 	// recommended escape hatch when copy/paste is needed.
-	prog := tea.NewProgram(model, tea.WithAltScreen(),
-		tea.WithMouseCellMotion())
+	//
+	// --mouse off (or ATLAS_TUI_MOUSE=off) skips the WithMouseCellMotion
+	// option entirely so users who prefer to select/copy without holding
+	// modifiers can launch the TUI with capture pre-disabled. The
+	// /mouse slash command still toggles either way at runtime.
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if *mouseFlag != "off" {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	prog := tea.NewProgram(model, opts...)
 
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "atlas-tui: %v\n", err)

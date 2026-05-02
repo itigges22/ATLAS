@@ -35,7 +35,7 @@ type slashResultMsg struct {
 // slashCommandHelp is the static text emitted by /help. Single source
 // of truth — keep in lockstep with handleSlash's switch.
 const slashCommandHelp = `Slash commands
-  /help                   Show this help.
+  /help  (or ?)           Show this help.
   /add <path>             Add file to the agent's working context.
   /drop <path>            Remove file from the working context.
   /context                List files currently in context.
@@ -55,6 +55,9 @@ Copying text
   the wheel can scroll. To copy: either hold Shift (Linux/Windows) or
   Option (macOS) while dragging — most terminals honor the override —
   or run /mouse off to disable capture for the rest of the session.
+  To launch with capture pre-disabled: ATLAS_TUI_MOUSE=off atlas tui
+  (or pass --mouse off). The /mouse setting does not persist across
+  TUI restarts — each launch re-reads the flag/env var.
 
 Input modes
   message text            Send to agent (Enter).
