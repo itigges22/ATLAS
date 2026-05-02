@@ -222,7 +222,7 @@ func TestStageEndWithoutMatchingStartSynthesizesEntry(t *testing.T) {
 
 func TestRenderPipelinePaneEmptyShowsWaitingMessage(t *testing.T) {
 	p := newPipelineState()
-	got := renderPipelinePane(&p, 80)
+	got, _, _ := renderPipelinePane(&p, 5, 80, 0)
 	if got == "" {
 		t.Fatal("expected non-empty content for empty state")
 	}

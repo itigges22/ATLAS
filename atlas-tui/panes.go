@@ -94,16 +94,22 @@ var (
 
 // renderPipelinePane returns the pipeline pane content (no border).
 // Caller wraps in a bordered box at the right size.
-func renderPipelinePane(p *pipelineState, width int) string {
+//
+// `height` is the usable inside height. `scroll` is rows from the
+// bottom (0 = follow latest stage). Returns (rendered, allLines,
+// viewStart) so the caller can snapshot the full content for the
+// highlight-to-copy / mouse-wheel routing.
+func renderPipelinePane(p *pipelineState, height, width, scroll int) (string, []string, int) {
 	stages := p.stages()
 	if len(stages) == 0 {
-		return dimStyle.Render("waiting for events…")
+		empty := dimStyle.Render("waiting for events…")
+		return empty, []string{empty}, 0
 	}
-	rows := make([]string, 0, len(stages))
+	all := make([]string, 0, len(stages))
 	for _, s := range stages {
-		rows = append(rows, renderPipelineRow(s, width))
+		all = append(all, renderPipelineRow(s, width))
 	}
-	return strings.Join(rows, "\n")
+	return windowLines(all, height, scroll)
 }
 
 func renderPipelineRow(s *stageStatus, width int) string {
@@ -144,22 +150,130 @@ func formatDuration(d time.Duration) string {
 
 // renderEventsPane returns the event log pane content. `height` is the
 // usable inside height (caller has already accounted for the border).
-func renderEventsPane(events []Envelope, height, width int) string {
+// `scroll` is rows from the bottom (0 = follow). Returns (rendered,
+// allLines, viewStart).
+func renderEventsPane(events []Envelope, height, width, scroll int) (string, []string, int) {
 	if height <= 0 {
-		return ""
+		return "", nil, 0
 	}
-	start := 0
-	if len(events) > height {
-		start = len(events) - height
+	all := make([]string, 0, len(events))
+	for _, ev := range events {
+		all = append(all, formatEventLine(ev, width))
 	}
-	lines := make([]string, 0, height)
-	for _, ev := range events[start:] {
-		lines = append(lines, formatEventLine(ev, width))
+	return windowLines(all, height, scroll)
+}
+
+// selectionStyle is the inverse-video style applied to lines under
+// an in-flight drag-highlight selection. Solid block so the user can
+// see exactly which rows will be copied on release.
+var selectionStyle = lipgloss.NewStyle().Reverse(true)
+
+// applySelectionOverlay re-styles the rows of `rendered` (one pane's
+// already-windowed content, "\n"-joined) that fall within the user's
+// drag selection. paneTopY is the screen Y of the FIRST visible row;
+// paneRows is how many lines `rendered` contains. Returns the rendered
+// string with selected rows wrapped in inverse-video styling.
+//
+// Called by layoutFullScreen after each pane's renderXxxPane, when
+// the active sel.pane matches the pane being processed. Stripping
+// ANSI from the targeted lines before re-styling is intentional —
+// preserving the original styling alongside reverse video produces
+// inconsistent results across terminals (some terminals XOR the
+// styles, others let the foreground bleed through).
+func applySelectionOverlay(rendered, paneName string, sel selectionState,
+	paneTopY, paneRows int) string {
+	if sel.pane == "" || sel.pane != paneName || paneRows <= 0 {
+		return rendered
 	}
-	for len(lines) < height {
-		lines = append(lines, "")
+	lo, hi := sel.startY, sel.endY
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	paneBottomY := paneTopY + paneRows - 1
+	if hi < paneTopY || lo > paneBottomY {
+		return rendered
+	}
+	if lo < paneTopY {
+		lo = paneTopY
+	}
+	if hi > paneBottomY {
+		hi = paneBottomY
+	}
+	startRow := lo - paneTopY
+	endRow := hi - paneTopY
+	lines := strings.Split(rendered, "\n")
+	for i := startRow; i <= endRow && i < len(lines); i++ {
+		lines[i] = selectionStyle.Render(stripPaneANSI(lines[i]))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// stripPaneANSI is the panes-level shim around model.go's stripANSI.
+// Defined here so the overlay code can stay in panes.go without
+// pulling in model.go's helpers.
+func stripPaneANSI(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if c == 0x1b && i+1 < len(s) {
+			next := s[i+1]
+			if next == '[' {
+				j := i + 2
+				for j < len(s) {
+					if s[j] >= 0x40 && s[j] <= 0x7e {
+						j++
+						break
+					}
+					j++
+				}
+				i = j
+				continue
+			}
+			i += 2
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
+
+// windowLines slices a flat lines list to a (height)-tall window
+// shifted up by `scroll` rows, padding short content with blanks at
+// the top so the newest entry stays anchored at the bottom. Returns
+// (rendered_joined, all_lines, viewStart) where viewStart is the
+// absolute index of the first VISIBLE non-pad line.
+func windowLines(all []string, height, scroll int) (string, []string, int) {
+	total := len(all)
+	if height <= 0 {
+		return "", all, 0
+	}
+	if total == 0 {
+		out := make([]string, height)
+		return strings.Join(out, "\n"), all, 0
+	}
+	maxScroll := total - height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	end := total - scroll
+	start := end - height
+	if start < 0 {
+		start = 0
+	}
+	out := append([]string(nil), all[start:end]...)
+	for len(out) < height {
+		out = append([]string{""}, out...)
+	}
+	return strings.Join(out, "\n"), all, start
 }
 
 // renderChatPane returns the chat history rendered for `height` rows.
@@ -167,17 +281,18 @@ func renderEventsPane(events []Envelope, height, width int) string {
 // "follow the latest message". The value is clamped against the total
 // line count so over-scrolling is harmless.
 //
-// Returns (rendered, atTop, atBottom, totalLines, viewStart) so the
-// caller can show a scroll indicator in the chat title.
+// Returns (rendered, atTop, atBottom, totalLines, viewStart, allLines)
+// so the caller can show a scroll indicator in the chat title and
+// build a paneSnapshot for highlight-to-copy.
 func renderChatPane(chat []chatMessage, renderer *glamour.TermRenderer,
-	height, width, scroll int) (string, bool, bool, int, int) {
+	height, width, scroll int) (string, bool, bool, int, int, []string) {
 	if height <= 0 {
-		return "", true, true, 0, 0
+		return "", true, true, 0, 0, nil
 	}
 	if len(chat) == 0 {
 		empty := dimStyle.Render(
 			"Type a message and press Enter to send it to the agent.")
-		return empty, true, true, 0, 0
+		return empty, true, true, 0, 0, []string{empty}
 	}
 
 	// Flatten every message into a list of display lines with blank
@@ -220,11 +335,9 @@ func renderChatPane(chat []chatMessage, renderer *glamour.TermRenderer,
 	if start < 0 {
 		start = 0
 	}
-	// Snapshot the full flattened chat for the highlight-to-copy
-	// handler. Strings are ANSI-styled; the consumer strips ANSI
-	// before pushing to clipboard.
-	lastChatLines = allLines
-	lastChatViewStart = start
+	// Snapshot lives in the caller now (paneSnaps) — return allLines
+	// + viewStart so layoutFullScreen can build a paneSnapshot with
+	// the correct bounds.
 	out := append([]string(nil), allLines[start:end]...)
 	// Pad short content to height (newest stays at bottom). When we
 	// pad ABOVE, the visual row → flat-line index relation shifts:
@@ -234,7 +347,7 @@ func renderChatPane(chat []chatMessage, renderer *glamour.TermRenderer,
 	for len(out) < height {
 		out = append([]string{""}, out...)
 	}
-	return strings.Join(out, "\n"), start == 0, scroll == 0, total, start
+	return strings.Join(out, "\n"), start == 0, scroll == 0, total, start, allLines
 }
 
 // renderChatMessage formats one chat row into a list of display lines.
@@ -511,13 +624,24 @@ func formatTokens(n int) string {
 //   events   5  (3 inner + 2 border)
 //   stats    1  (no border)
 //   input    5  (3 inner + 2 border)
+// selectionState carries the user's drag-in-progress info into
+// layoutFullScreen so the overlay can highlight the active range.
+// Empty pane name = no selection in flight.
+type selectionState struct {
+	pane           string
+	startY, endY   int
+	startX, endX   int
+}
+
 func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	inputView, inputValue, inputMode string,
 	renderer *glamour.TermRenderer, header string,
-	turnActive bool, spinnerFrame, chatScroll int,
+	turnActive bool, spinnerFrame int,
+	chatScroll, eventsScroll, pipelineScroll int,
 	files []fileEntry, modified map[string]bool, fileScroll int, fileRoot string,
 	lastTurnTokens, totalTokens, maxTokens int,
 	hideFiles, hidePipeline, hideEvents bool,
+	sel selectionState,
 	width, height int) (string, int) {
 
 	if width <= 0 || height <= 0 {
@@ -597,11 +721,25 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		innerW = 10
 	}
 
+	// Reset pane snapshots — populated by each pane's render below.
+	paneSnaps = paneSnaps[:0]
+
 	pipelineBox := ""
+	var pipelineAll []string
+	pipelineViewStart := 0
+	pipelineTopY := headerH + 2 // top border + title (only valid if shown)
 	if !hidePipeline {
+		pipelineContentH := pipelineH - 3 // borders + title
+		if pipelineContentH < 1 {
+			pipelineContentH = 1
+		}
+		var pipelinePane string
+		pipelinePane, pipelineAll, pipelineViewStart = renderPipelinePane(
+			p, pipelineContentH, innerW, pipelineScroll)
+		pipelinePane = applySelectionOverlay(pipelinePane, "pipeline",
+			sel, pipelineTopY, pipelineContentH)
 		pipelineBox = bordStyle.Width(innerW).Render(
-			titleStyle.Render(" Pipeline ") + "\n" +
-				renderPipelinePane(p, innerW))
+			titleStyle.Render(" Pipeline ") + "\n" + pipelinePane)
 	}
 
 	// Chat: render history into the available rows, then append a
@@ -620,8 +758,17 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		thinkingRow = "\n" + runStyle.Render(
 			fmt.Sprintf("  %s %s…  (Ctrl+C to cancel)", mark, verb))
 	}
-	chatPane, atTop, atBottom, totalLines, viewStart := renderChatPane(
+	chatPane, atTop, atBottom, totalLines, viewStart, chatAll := renderChatPane(
 		chat, renderer, chatContentH, innerW-2, chatScroll)
+	// Compute chat pane top Y now (depends only on header + pipeline)
+	// so the selection overlay can highlight rows BEFORE chatBox wraps.
+	chatBoxTopY := headerH
+	if !hidePipeline {
+		chatBoxTopY += pipelineH
+	}
+	chatTopY := chatBoxTopY + 2 // top border + title
+	chatPane = applySelectionOverlay(chatPane, "chat", sel,
+		chatTopY, chatContentH)
 	// Chat title shows scroll state. When following, just " Chat ".
 	// When scrolled, show the position so the user knows where they
 	// are and how to get back to live.
@@ -639,31 +786,62 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 			chatPane +
 			thinkingRow)
 
-	// Snapshot chat pane bounds so the highlight-to-copy mouse handler
-	// can map screen Y → chat-line index. Chat box layout (top→bottom):
-	//   row 0          top border
-	//   row 1          title
-	//   row 2..        chatPane content (chatContentH rows)
-	//   row 2+content  thinking row (if turnActive) — also "in" the
-	//                  chat pane visually but not part of allLines, so
-	//                  excluded from selection range.
-	//   row 2+content+(thinking?) bottom border
-	// Right column starts at screen Y = headerH; pipelineBox precedes
-	// chatBox if shown.
-	pipelineRowOffset := 0
+	// Compute screen-coord bounds for each pane and snapshot them.
+	// Right column starts at screen X 0, files sidebar (if shown) at X
+	// rightW. Each box has a top border (1 row) + title (1 row) +
+	// content rows + bottom border (1 row); content X range inside the
+	// box is [boxLeft+1, boxLeft+innerW-2] (we use innerW-2 as a safety
+	// margin to avoid right-edge ANSI artifacts).
+	rightLeftX := 1
+	rightRightX := innerW - 2
+	yCursor := headerH
 	if !hidePipeline {
-		pipelineRowOffset = pipelineH
+		paneSnaps = append(paneSnaps, paneSnapshot{
+			name:      "pipeline",
+			topY:      yCursor + 2, // top border + title
+			bottomY:   yCursor + 2 + (pipelineH - 3) - 1,
+			leftX:     rightLeftX,
+			rightX:    rightRightX,
+			viewStart: pipelineViewStart,
+			lines:     pipelineAll,
+		})
+		yCursor += pipelineH
 	}
-	lastChatTopY = headerH + pipelineRowOffset + 2
-	lastChatBottomY = lastChatTopY + chatContentH - 1
-	lastChatLeftX = 1                       // 1 = inside the box's left border
-	lastChatRightX = innerW - 2             // -2 = right border + safety
+	// chatTopY computed above. Snapshot for the mouse handler.
+	paneSnaps = append(paneSnaps, paneSnapshot{
+		name:      "chat",
+		topY:      chatTopY,
+		bottomY:   chatTopY + chatContentH - 1,
+		leftX:     rightLeftX,
+		rightX:    rightRightX,
+		viewStart: viewStart,
+		lines:     chatAll,
+	})
+	eventsTopY := yCursor + chatH + 2
+	yCursor += chatH
 
 	eventsBox := ""
 	if !hideEvents {
+		eventsContentH := eventsH - 3
+		if eventsContentH < 1 {
+			eventsContentH = 1
+		}
+		eventsPane, eventsAll, eventsViewStart := renderEventsPane(
+			events, eventsContentH, innerW, eventsScroll)
+		eventsPane = applySelectionOverlay(eventsPane, "events", sel,
+			eventsTopY, eventsContentH)
 		eventsBox = bordStyle.Width(innerW).Render(
-			titleStyle.Render(" Events ") + "\n" +
-				renderEventsPane(events, eventsH-3, innerW))
+			titleStyle.Render(" Events ") + "\n" + eventsPane)
+		paneSnaps = append(paneSnaps, paneSnapshot{
+			name:      "events",
+			topY:      eventsTopY,
+			bottomY:   eventsTopY + eventsContentH - 1,
+			leftX:     rightLeftX,
+			rightX:    rightRightX,
+			viewStart: eventsViewStart,
+			lines:     eventsAll,
+		})
+		yCursor += eventsH
 	}
 
 	statsLine := renderStatsPane(p, width, lastTurnTokens, totalTokens, maxTokens)
@@ -724,10 +902,28 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	if filesContentH < 1 {
 		filesContentH = 1
 	}
-	filesPane := renderFilesPane(files, modified, fileRoot,
+	filesPane, filesAll, filesViewStart := renderFilesPane(files, modified, fileRoot,
 		filesContentH, sidebarInnerW, fileScroll)
+	filesPane = applySelectionOverlay(filesPane, "files", sel,
+		headerH+2, filesContentH)
 	filesBox := bordStyle.Width(sidebarInnerW).Height(bodyH - 2).Render(
 		titleStyle.Render(" Files ") + "\n" + filesPane)
+	// Snapshot files pane bounds for highlight-to-copy / wheel scroll.
+	// Sidebar is on the right, after rightCol, so its X starts at rightW.
+	rightColWidth := width - sidebarW
+	filesLeftX := rightColWidth + 1
+	filesRightX := rightColWidth + sidebarW - 2
+	filesTopY := headerH + 2
+	filesBottomY := filesTopY + filesContentH - 1
+	paneSnaps = append(paneSnaps, paneSnapshot{
+		name:      "files",
+		topY:      filesTopY,
+		bottomY:   filesBottomY,
+		leftX:     filesLeftX,
+		rightX:    filesRightX,
+		viewStart: filesViewStart,
+		lines:     filesAll,
+	})
 
 	// Sidebar on the right (after rightCol) per user preference —
 	// keeps the chat anchored on the left where the eye starts.

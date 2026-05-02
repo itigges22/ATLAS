@@ -97,6 +97,7 @@ type tuiModel struct {
 	// We only copy when there was a real drag (non-zero delta), so a
 	// pure click doesn't trigger a copy.
 	selecting          bool
+	selPane            string // "chat" / "events" / "pipeline" / "files"
 	selStartX, selStartY int
 	selEndX, selEndY     int
 
@@ -157,8 +158,10 @@ type tuiModel struct {
 	// the line count from the most recent render (used to clamp scroll
 	// at the top so PgUp/wheel-up stops growing once you hit the start
 	// of history — without this, 100 PgUps requires 100 PgDns to undo).
-	chatScroll    int
-	lastChatTotal int
+	chatScroll     int
+	eventsScroll   int
+	pipelineScroll int
+	lastChatTotal  int
 
 	// Hide-pane toggles. Slash commands /hide files / pipeline / events
 	// drop the corresponding pane; /show <name> brings it back.
@@ -544,31 +547,30 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		// Wheel scrolls the chat history.
+		// Wheel routes to whichever pane the cursor is over so events,
+		// pipeline, files all scroll independently — not just chat.
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
-				m.scrollChat(3)
+				m.scrollPaneAt(msg.X, msg.Y, 3)
 				return m, nil
 			case tea.MouseButtonWheelDown:
-				m.scrollChat(-3)
+				m.scrollPaneAt(msg.X, msg.Y, -3)
 				return m, nil
 			}
 		}
-		// Highlight-to-copy: drag inside the chat pane → copy the
-		// covered lines to clipboard on release. Cell coords are
-		// screen-relative; lastChatTopY/BottomY/LeftX/RightX are set
-		// by layoutFullScreen each render.
-		inChat := func(x, y int) bool {
-			return y >= lastChatTopY && y <= lastChatBottomY &&
-				x >= lastChatLeftX && x <= lastChatRightX
-		}
+		// Highlight-to-copy in any pane. Press finds the pane under
+		// (X,Y); motion updates the end; release extracts text from
+		// that pane's snapshot and copies via OSC52 / CLI tool.
 		switch msg.Action {
 		case tea.MouseActionPress:
-			if msg.Button == tea.MouseButtonLeft && inChat(msg.X, msg.Y) {
-				m.selecting = true
-				m.selStartX, m.selStartY = msg.X, msg.Y
-				m.selEndX, m.selEndY = msg.X, msg.Y
+			if msg.Button == tea.MouseButtonLeft {
+				if pane := findPane(msg.X, msg.Y); pane != nil {
+					m.selecting = true
+					m.selPane = pane.name
+					m.selStartX, m.selStartY = msg.X, msg.Y
+					m.selEndX, m.selEndY = msg.X, msg.Y
+				}
 			}
 		case tea.MouseActionMotion:
 			if m.selecting {
@@ -576,10 +578,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case tea.MouseActionRelease:
 			if m.selecting {
+				selPane := m.selPane
 				m.selecting = false
-				// Pure click (no drag) → no copy. We only treat a
-				// real motion as a selection. Threshold = different
-				// row OR more than 1 column delta on the same row.
 				dy := m.selEndY - m.selStartY
 				if dy < 0 {
 					dy = -dy
@@ -588,10 +588,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if dx < 0 {
 					dx = -dx
 				}
+				// Pure click (no drag) → no copy.
 				if dy == 0 && dx < 2 {
 					return m, nil
 				}
-				text := extractChatSelection(
+				text := extractPaneSelection(selPane,
 					m.selStartY, m.selEndY,
 					m.selStartX, m.selEndX)
 				if text == "" {
@@ -606,14 +607,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.chat = append(m.chat, chatMessage{
 					Role: roleSystem, Meta: "copy",
-					Body: fmt.Sprintf("✓ copied %d chars to clipboard.",
-						len(text)),
+					Body: fmt.Sprintf("✓ copied %d chars from %s pane to clipboard.",
+						len(text), selPane),
 				})
 				return m, nil
 			}
 		}
-		// Don't forward to textarea — it would interpret motion as
-		// cursor moves and corrupt the input.
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -1203,67 +1202,107 @@ func formatV3StageEvent(eventType string, data json.RawMessage) string {
 	return body
 }
 
-// extractChatSelection returns the plain text of chat lines covered by
-// a drag from (startX, startY) to (endX, endY) in screen coordinates.
-// Reads the layout snapshot vars (lastChatLines, lastChatViewStart,
-// lastChatTopY) populated by the most recent View().
+// extractPaneSelection returns the plain text of `paneName`'s lines
+// covered by a drag from (startX, startY) to (endX, endY) in screen
+// coordinates. Looks up the named pane in paneSnaps (populated by
+// the most recent View()).
 //
 // Behavior:
-//   - Selection is line-granular vertically; column granularity is
-//     applied only on the first/last line (so a left-to-right drag
-//     across one row clips correctly).
-//   - ANSI escape codes are stripped before returning so the clipboard
-//     gets readable text.
-//   - Out-of-bounds Y values are clamped to the visible window.
-func extractChatSelection(startY, endY, startX, endX int) string {
-	if len(lastChatLines) == 0 || lastChatBottomY < lastChatTopY {
+//   - Vertical selection is line-granular; column clipping is applied
+//     to the first and last lines so a left-to-right drag in one row
+//     copies the right substring.
+//   - ANSI escape codes are stripped so the clipboard is readable.
+//   - Out-of-bounds Y values are clamped to the pane's visible window.
+func extractPaneSelection(paneName string, startY, endY, startX, endX int) string {
+	pane := findPaneByName(paneName)
+	if pane == nil || len(pane.lines) == 0 {
 		return ""
 	}
 	if startY > endY {
 		startY, endY = endY, startY
 		startX, endX = endX, startX
 	}
-	// Clamp to visible chat window.
-	if startY < lastChatTopY {
-		startY = lastChatTopY
+	if startY < pane.topY {
+		startY = pane.topY
 	}
-	if endY > lastChatBottomY {
-		endY = lastChatBottomY
+	if endY > pane.bottomY {
+		endY = pane.bottomY
 	}
-	if endY < lastChatTopY || startY > lastChatBottomY {
+	if endY < pane.topY || startY > pane.bottomY {
 		return ""
 	}
-	// Translate screen Y to absolute line index in lastChatLines.
-	startLine := lastChatViewStart + (startY - lastChatTopY)
-	endLine := lastChatViewStart + (endY - lastChatTopY)
+	startLine := pane.viewStart + (startY - pane.topY)
+	endLine := pane.viewStart + (endY - pane.topY)
 	if startLine < 0 {
 		startLine = 0
 	}
-	if endLine >= len(lastChatLines) {
-		endLine = len(lastChatLines) - 1
+	if endLine >= len(pane.lines) {
+		endLine = len(pane.lines) - 1
 	}
 	if startLine > endLine {
 		return ""
 	}
 	out := make([]string, 0, endLine-startLine+1)
 	for i := startLine; i <= endLine; i++ {
-		raw := stripANSI(lastChatLines[i])
-		// Apply X clipping on the first / last line only. Middle
-		// lines come through whole.
+		raw := stripANSI(pane.lines[i])
 		if i == startLine && i == endLine {
 			lo, hi := startX, endX
 			if lo > hi {
 				lo, hi = hi, lo
 			}
-			raw = clipColumns(raw, lo-lastChatLeftX, hi-lastChatLeftX)
+			raw = clipColumns(raw, lo-pane.leftX, hi-pane.leftX)
 		} else if i == startLine {
-			raw = clipColumns(raw, startX-lastChatLeftX, len(raw))
+			raw = clipColumns(raw, startX-pane.leftX, len(raw))
 		} else if i == endLine {
-			raw = clipColumns(raw, 0, endX-lastChatLeftX)
+			raw = clipColumns(raw, 0, endX-pane.leftX)
 		}
 		out = append(out, raw)
 	}
 	return strings.TrimRight(strings.Join(out, "\n"), "\n ")
+}
+
+// scrollPaneAt scrolls whichever pane is under (x, y) by `delta` rows.
+// Wheel-up sends positive delta (toward older content); wheel-down
+// negative (toward newest). Falls back to chat if no pane matches —
+// the user wheeled in the gap between panes; chat is the most useful
+// default.
+func (m *tuiModel) scrollPaneAt(x, y, delta int) {
+	pane := findPane(x, y)
+	if pane == nil {
+		m.scrollChat(delta)
+		return
+	}
+	switch pane.name {
+	case "chat":
+		m.scrollChat(delta)
+	case "events":
+		m.eventsScroll += delta
+		if m.eventsScroll < 0 {
+			m.eventsScroll = 0
+		}
+		// windowLines clamps high end to total-height anyway, but
+		// also cap here so consecutive wheel-ups don't grow the
+		// counter unboundedly.
+		if max := len(pane.lines); m.eventsScroll > max {
+			m.eventsScroll = max
+		}
+	case "pipeline":
+		m.pipelineScroll += delta
+		if m.pipelineScroll < 0 {
+			m.pipelineScroll = 0
+		}
+		if max := len(pane.lines); m.pipelineScroll > max {
+			m.pipelineScroll = max
+		}
+	case "files":
+		m.fileScanScroll += delta
+		if m.fileScanScroll < 0 {
+			m.fileScanScroll = 0
+		}
+		if max := len(pane.lines); m.fileScanScroll > max {
+			m.fileScanScroll = max
+		}
+	}
 }
 
 // stripANSI removes ANSI CSI / OSC sequences from s. Bubbletea/lipgloss
@@ -1520,13 +1559,22 @@ func (m tuiModel) View() string {
 	}
 	header := renderHeader(m.proxyURL, m.workingDir, m.mode, m.turnActive,
 		m.spinnerFrame, width)
+	sel := selectionState{}
+	if m.selecting {
+		sel = selectionState{
+			pane:   m.selPane,
+			startY: m.selStartY, endY: m.selEndY,
+			startX: m.selStartX, endX: m.selEndX,
+		}
+	}
 	out, totalChatLines := layoutFullScreen(&m.state, m.envelope, m.chat,
 		m.input.View(), m.input.Value(), m.inputMode,
 		m.chatRenderer, header, m.turnActive, m.spinnerFrame,
-		m.chatScroll,
+		m.chatScroll, m.eventsScroll, m.pipelineScroll,
 		m.fileEntries, m.modifiedFiles, m.fileScanScroll, m.workingDir,
 		m.lastTurnTokens, m.totalTokensSession, m.maxContextTokens,
 		m.hideFiles, m.hidePipeline, m.hideEvents,
+		sel,
 		width, height)
 	// View is supposed to be pure, but we need to know the rendered
 	// line count to clamp PgUp / mouse-wheel-up. Stashing it on the
@@ -1551,34 +1599,55 @@ func (m tuiModel) View() string {
 // so no concurrency concern.
 var lastChatTotalRendered int
 
-// Layout snapshot used by the highlight-to-copy code. Updated by
-// layoutFullScreen on every render; read by the MouseMsg handler when
-// computing which chat lines the user just dragged across.
+// paneSnapshot records a pane's screen bounds and full pre-window
+// content so the mouse handler can map a screen-cell click to the
+// right pane and the right line index. layoutFullScreen rebuilds
+// the list from scratch on every render.
 //
-//	lastChatLines      — the FULL flattened chat (every line ever
-//	                     rendered for this turn), pre-window. Indexed
-//	                     by absolute line index.
-//	lastChatViewStart  — index of the first line currently *visible*
-//	                     in the chat pane. mouseY → chatLine via
-//	                     viewStart + (mouseY - chatTopY).
-//	lastChatTopY       — screen Y of the chat pane's first content row
-//	                     (one below the chat box's top border).
-//	lastChatBottomY    — screen Y of the chat pane's last content row.
-//	lastChatLeftX      — screen X of the chat pane's first content col
-//	                     (one right of the chat box's left border).
-//	lastChatRightX     — screen X of the chat pane's last content col.
-//
-// All values reflect the most recent View(); a Mouse event arriving
-// before the first render reads zeros and the handler treats that as
-// "no chat region known" → no copy.
-var (
-	lastChatLines     []string
-	lastChatViewStart int
-	lastChatTopY      int
-	lastChatBottomY   int
-	lastChatLeftX     int
-	lastChatRightX    int
-)
+//	name      — "chat" | "events" | "pipeline" | "files"
+//	topY/bottomY — INCLUSIVE screen Y range of the pane's content
+//	               rows (just inside the box's top/bottom border).
+//	leftX/rightX — INCLUSIVE screen X range of the pane's content
+//	               columns (just inside the box's L/R border).
+//	viewStart — index of the first VISIBLE line in `lines`. A mouse
+//	            at screen Y maps to lines[viewStart + (Y - topY)].
+//	lines     — the full flattened pane content, pre-window. Already
+//	            ANSI-styled; consumers strip ANSI before clipboard.
+type paneSnapshot struct {
+	name                       string
+	topY, bottomY, leftX, rightX int
+	viewStart                  int
+	lines                      []string
+}
+
+// paneSnaps holds the most recent layout's pane bounds. Single TUI
+// process, so no concurrency concern between View() (writer) and
+// Update() (reader).
+var paneSnaps []paneSnapshot
+
+// findPane returns the snapshot whose bounds contain (x, y), or nil.
+func findPane(x, y int) *paneSnapshot {
+	for i := range paneSnaps {
+		p := &paneSnaps[i]
+		if y >= p.topY && y <= p.bottomY &&
+			x >= p.leftX && x <= p.rightX {
+			return p
+		}
+	}
+	return nil
+}
+
+// findPaneByName returns the most recently rendered snapshot for the
+// given name, or nil. Used by selection rendering to locate the
+// active pane to overlay highlights on.
+func findPaneByName(name string) *paneSnapshot {
+	for i := range paneSnaps {
+		if paneSnaps[i].name == name {
+			return &paneSnaps[i]
+		}
+	}
+	return nil
+}
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 

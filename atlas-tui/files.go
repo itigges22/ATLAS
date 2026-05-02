@@ -121,15 +121,16 @@ var (
 // of relative paths that were touched by recent tool calls; those rows
 // render in orange/bold so the user can see what just changed.
 //
-// Returns the rendered string plus the total line count, for caller
-// to optionally show a scroll indicator (future).
+// Returns the rendered string, the full pre-window list of lines (for
+// pane snapshot / highlight-to-copy), and the absolute viewStart index.
 func renderFilesPane(entries []fileEntry, modified map[string]bool,
-	root string, height, width, scroll int) string {
+	root string, height, width, scroll int) (string, []string, int) {
 	if height <= 0 {
-		return ""
+		return "", nil, 0
 	}
 	if len(entries) == 0 {
-		return dimStyle.Render("(empty workspace)")
+		empty := dimStyle.Render("(empty workspace)")
+		return empty, []string{empty}, 0
 	}
 
 	// Header row showing the scan root (basename only — we don't have
@@ -213,7 +214,7 @@ func renderFilesPane(entries []fileEntry, modified map[string]bool,
 			out[len(out)-1] = dimStyle.Render(truncate(more, width))
 		}
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(out, "\n"), rows, start
 }
 
 // extractWritePath pulls the file path out of a tool call's args JSON
