@@ -65,38 +65,69 @@ This is the tested deployment method for V3.0.1.
 - **Docker** with [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), **or Podman**
 - ~20GB disk space (model weights + container images)
 
-### Setup
+### Setup (recommended — `atlas init` wizard)
+
+Since PC-054, the wizard composes hardware probe + model registry + SHA-verified download + `.env` + `api-keys.json` into a single command.
 
 ```bash
 # 1. Clone
 git clone https://github.com/itigges22/ATLAS.git
 cd ATLAS
 
-# 2. Download model weights (~7GB)
-mkdir -p models
-wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
-     -O models/Qwen3.5-9B-Q6_K.gguf
-
-# 3. Install the ATLAS CLI + Aider
+# 2. Install the ATLAS CLI + Aider
 pip install -e . aider-chat
+
+# 3. Run the first-run wizard
+atlas init                   # interactive — prompts before each write
+# or, for non-interactive bootstrap (CI / scripted):
+atlas init --yes             # accept all defaults: download recommended model + write .env + api-keys.json
+# or, if you've already placed a gguf in ./models/:
+atlas init --yes --skip-download
 
 # 4. (Recommended) Install Go 1.24+ for full file access from any directory
 #    https://go.dev/dl/ — the proxy builds automatically on first run
-#    Without Go, the proxy runs in Docker with file access limited to ATLAS_PROJECT_DIR
 
-# 5. Configure environment
-cp .env.example .env
-# Defaults work if your model is in ./models/ — edit .env only if you changed the path
-
-# 6. Start all services (first run builds container images — this takes several minutes)
+# 5. Bring up the stack (first run pulls prebuilt images from GHCR — ~3 min)
 docker compose up -d         # or: podman-compose up -d
 
-# 7. Verify everything is healthy (wait for all services to show "healthy")
+# 6. Verify everything is healthy
+atlas doctor                 # 21-check install diagnostic — replaces "is it working?" log-grepping
 docker compose ps
 
-# 8. Start coding (from your project directory)
+# 7. Start coding (from your project directory)
 cd /path/to/your/project
 atlas
+```
+
+**What the wizard does** (each step delegates to existing primitives — same gates as `atlas tier` / `atlas model install`):
+
+1. Probes hardware via `atlas tier` (GPU/RAM/disk → one of 5 tiers).
+2. Picks a Lens-supported model from the registry (falls back to `Qwen3.5-9B-Q6_K` if your tier's default has no Lens artifacts — see [PC-056 model registry](../docs/CLI.md#atlas-model--registry-list--install--recommend--remove)).
+3. Downloads + SHA256-verifies into `./models/` via `atlas model install` (inherits the resume + concurrent-install lock + oversized-`.part` guard from PC-056.1/.2).
+4. Writes `.env` with tier-appropriate `ATLAS_CTX_SIZE` / `PARALLEL_SLOTS` / `KV_CACHE_TYPE_*` plus model + image-source keys.
+5. Generates `secrets/api-keys.json` (mode 0600, parent 0700) with a fresh `sk-atlas-…` bearer token labeled `user: local`. Prints the key — capture it for your client's `Authorization: Bearer` header.
+
+**Re-running the wizard.** A second `atlas init` refuses if `.env` already exists. To regenerate from new defaults (e.g., upgraded hardware, bumped a tier knob, or wrote the wrong model first time): `atlas init --reconfigure` backs up `.env` → `.env.bak` (and `api-keys.json` → `api-keys.json.bak` if present) before writing.
+
+#### Manual setup (if you'd rather not use the wizard)
+
+The pre-wizard flow still works:
+
+```bash
+# Download the model (or pick a different one from `atlas model list`)
+atlas model install Qwen3.5-9B-Q6_K
+
+# Copy the env template + edit if you changed paths
+cp .env.example .env
+
+# Generate an api-keys.json by hand
+mkdir -m 0700 -p secrets
+echo '{"sk-mykey": {"user": "local"}}' > secrets/api-keys.json
+chmod 600 secrets/api-keys.json
+
+# Bring up + verify
+docker compose up -d
+atlas doctor
 ```
 
 ### What Happens on First Run
@@ -461,9 +492,10 @@ where `docker-compose.yml` lives), so this flag is mainly for direct
 `atlas tier` invocations.
 
 The medium tier is the ATLAS development target — `atlas-bootstrap.sh`
-defaults to its model+context settings. Other tiers require manual `.env`
-edits (or wait for PC-054's first-run wizard which automates the
-selection).
+defaults to its model+context settings. For other tiers, run `atlas init`
+(PC-054 wizard, shipped) which probes the host and writes a `.env` with
+the tier-appropriate `ATLAS_CTX_SIZE` / `PARALLEL_SLOTS` / `KV_CACHE_TYPE_*`
+without manual edits.
 
 #### Multi-axis constraint check (PC-055.1)
 

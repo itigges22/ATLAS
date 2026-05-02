@@ -353,7 +353,65 @@ Generation parameters: `max_tokens=8192`, `temperature=0.6`, `top_k=20`, `top_p=
 <a id="diagnostic-commands"></a>
 ## Diagnostic Commands
 
-ATLAS ships with two standalone subcommands for diagnosing install health and matching the host to the right runtime configuration. Both are invoked as `atlas <subcommand>` after `pip install -e .`.
+ATLAS ships with standalone subcommands for first-run setup, install diagnostics, hardware classification, and the model registry. All are invoked as `atlas <subcommand>` after `pip install -e .`.
+
+<a id="atlas-init"></a>
+### `atlas init` — first-run install wizard (PC-054)
+
+`atlas init` is the recommended entry point on a fresh checkout. It composes `atlas tier` (hardware probe) + `atlas model recommend` (registry) + `atlas model install` (download + SHA verify) + `.env` and `secrets/api-keys.json` generation into a single five-step run, so users never have to hand-edit config to get the stack up.
+
+```bash
+atlas init                                 # interactive walkthrough
+atlas init --yes                           # non-interactive: accept all defaults (CI / scripted bootstrap)
+atlas init --yes --skip-download           # write config but bring-your-own gguf
+atlas init --reconfigure                   # back up existing .env → .env.bak, regenerate
+atlas init --dry-run                       # print proposed writes, touch nothing
+atlas init --json                          # machine-readable summary on stdout
+atlas init --models-dir /data/atlas/models # override default <atlas_root>/models
+atlas init --image-tag v1.0.0              # pin a specific GHCR tag instead of "latest"
+atlas init --ghcr-owner myfork             # use your own published images
+```
+
+**Five steps, in order.** Each delegates to existing primitives — there's no separate code path to keep in sync:
+
+1. **Probe hardware** — `tier.classify(probe())` reports tier (cpu/small/medium/large/xlarge) and surfaces GPU/RAM/disk.
+2. **Select model** — `model_registry.for_tier(tier)`, but if the tier default has `lens_status != "supported"`, fall back to the only Lens-supported model in the registry (`Qwen3.5-9B-Q6_K` today). The wizard never recommends a model where G(x) would silently no-op.
+3. **Download** — delegates to `atlas model install <name> --models-dir <dir>`. Inherits all of PC-056.1/.2's gates: SHA256 enforcement, `.part` resume, concurrent-install lock, oversized-`.part` guard, HF_TOKEN handling.
+4. **Write `.env`** — every key the compose stack reads at boot: `ATLAS_MODEL_FILE` / `ATLAS_MODEL_NAME` (from registry), `ATLAS_CTX_SIZE` / `PARALLEL_SLOTS` / `KV_CACHE_TYPE_K|V` (from TierProfile), `ATLAS_MODELS_DIR`, `ATLAS_GHCR_OWNER`, `ATLAS_IMAGE_TAG`, plus default port mappings. Header comment records tier + model + lens_status for at-a-glance review.
+5. **Generate `secrets/api-keys.json`** — fresh `sk-atlas-<token_urlsafe(32)>` key labeled `{"user": "local"}`. Parent dir 0700, file 0600 (set atomically via `O_CREAT` mode). The key is printed once — capture it for your client's `Authorization: Bearer` header.
+
+**Safety gates:**
+
+| Gate | Behavior |
+|---|---|
+| Already-configured | Refuses if `.env` exists and `--reconfigure` not passed. Pre-existing `.env` is **never** modified by accident. |
+| `--reconfigure` backup | Atomically copies `.env` → `.env.bak` (and `api-keys.json` → `api-keys.json.bak` if present) before writing. Recovery is `mv .env.bak .env`. |
+| Loose `secrets/` perms | If `secrets/` exists with permissions looser than 0700, refuses unless `--yes` is passed (security guardrail — the user might have intentionally chmod'd for a multi-user setup). |
+| Lens fallback | If tier default is `no-artifacts`, surfaces the supported fallback. Wizard never silently picks a model where G(x) would no-op. |
+| Model-step delegation | Install reuses `atlas model install` — wizard inherits SHA verify, lock, oversized-part guard for free. |
+
+**`--yes` non-interactive contract.** Defaults are the safe bootstrap path: model = `atlas model recommend`'s fallback (the only `supported` model today), tier knobs = TierProfile defaults, image tag = `latest`, models_dir = `<atlas_root>/models`, single new `sk-atlas-…` key labeled "local". Refuses if `.env` exists, requiring the composable `atlas init --reconfigure --yes`.
+
+**`--json` shape (stable for the bootstrap script):**
+
+```json
+{
+  "atlas_root": "/path/to/ATLAS",
+  "tier": "medium",
+  "model": "Qwen3.5-9B-Q6_K",
+  "models_dir": "/path/to/ATLAS/models",
+  "env_path": "/path/to/ATLAS/.env",
+  "env_backup": null,
+  "api_keys_path": "/path/to/ATLAS/secrets/api-keys.json",
+  "api_keys_backup": null,
+  "api_key": "sk-atlas-…",
+  "image_tag": "latest",
+  "ghcr_owner": "itigges22",
+  "dry_run": false
+}
+```
+
+**Out of scope** (ticket-tracked, not in PC-054): Bubbletea TUI replacement of the prompt loop (Phase 1), custom `presets/` schema beyond TierProfile, multi-user `api-keys.json`, K3s installer wizard variant, `ATLAS_PROJECT_DIR` rebind workflow.
 
 <a id="atlas-doctor"></a>
 ### `atlas doctor` — install health check

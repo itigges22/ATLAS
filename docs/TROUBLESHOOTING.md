@@ -214,6 +214,47 @@ atlas model verify Qwen3.5-9B-Q6_K
 # If the upstream actually changed: file an issue or pull a newer ATLAS release.
 ```
 
+### `atlas init` wrote the wrong thing — how do I rerun it?
+
+**Symptom:** Wizard picked the wrong model, you typo'd `--image-tag`, you want a different ctx_size, or the generated api-keys.json got committed somewhere it shouldn't have. Re-running plain `atlas init` refuses with "Already configured."
+
+**Cause:** PC-054's safety gate. Once `.env` exists, the wizard refuses by default — accidentally re-running on a working install would otherwise wipe a user's hand-edited config silently.
+
+**Fix:** Use `--reconfigure`. It atomically backs up `.env` → `.env.bak` (and `api-keys.json` → `api-keys.json.bak` if present) before writing new ones, so a botched reconfigure is recoverable via `mv .env.bak .env`.
+
+```bash
+# Re-run interactively (re-prompt for each step)
+atlas init --reconfigure
+
+# Or non-interactively with new defaults
+atlas init --reconfigure --yes --image-tag v1.0.0
+
+# If you want fresh tier-derived knobs but keep your existing model:
+atlas init --reconfigure --yes --skip-download
+
+# Recovery after a reconfigure went wrong:
+mv .env.bak .env
+mv secrets/api-keys.json.bak secrets/api-keys.json
+```
+
+If you only need to change one or two values, editing `.env` directly is fine — the wizard doesn't have to be involved for spot edits. `--reconfigure` is for "regenerate from current defaults" cases.
+
+### `atlas init` refuses: "secrets/ exists with loose permissions"
+
+**Symptom:** Wizard prints `secrets/ exists with loose permissions (0755)` and stops without writing api-keys.json.
+
+**Cause:** PC-054 won't tighten an existing `secrets/` permission silently — the user might have intentionally chmod'd it for a multi-user setup, and chmodding under their feet would break that.
+
+**Fix:**
+```bash
+# If 0700 is what you want, re-run with --yes (acknowledges the chmod):
+atlas init --yes --reconfigure
+
+# Or chmod it yourself and re-run plain:
+chmod 0700 secrets
+atlas init --reconfigure
+```
+
 ### `atlas model install` refuses: "Another install is already in progress: PID N"
 
 **Symptom:** Install exits early with `Another install is already in progress: PID 12345 (started Ns ago).`

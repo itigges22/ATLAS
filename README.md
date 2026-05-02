@@ -101,9 +101,16 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 ```
 Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, pulls prebuilt service images from GHCR (no 75-min CUDA build), downloads model weights, brings the stack up, and prints a green "ready" banner. ~5–10 minutes on a fast connection.
 
+**Manual install (3 commands):**
+```bash
+git clone https://github.com/itigges22/ATLAS.git && cd ATLAS
+pip install -e . aider-chat
+atlas init --yes && docker compose up -d   # PC-054 wizard: probe + download + .env + api-keys.json
+```
+
 Then in any project directory: `atlas`.
 
-ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or Podman, and Python 3.9+. Currently tested on NVIDIA GPUs - ATLAS is not NVIDIA-specific, and ROCm support for AMD GPUs is on the roadmap. See **[SETUP.md](docs/SETUP.md)** for the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags.
+ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or Podman, and Python 3.9+. Currently tested on NVIDIA GPUs - ATLAS is not NVIDIA-specific, and ROCm support for AMD GPUs is on the roadmap. See **[SETUP.md](docs/SETUP.md)** for the full bootstrap flags and the alternative deployment paths (bare-metal, K3s); **[CLI.md → `atlas init`](docs/CLI.md#atlas-init--first-run-install-wizard-pc-054)** documents the wizard's full surface.
 
 ---
 

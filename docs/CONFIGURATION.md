@@ -6,6 +6,18 @@ Complete reference for all environment variables, command-line flags, and config
 
 ## Quick Start
 
+The recommended path on a fresh checkout is the wizard:
+
+```bash
+atlas init --yes        # probes hardware, downloads model, writes .env + secrets/api-keys.json
+docker compose up -d
+atlas doctor            # verify
+```
+
+`atlas init` writes every key the compose stack reads at boot, choosing tier-appropriate values for `ATLAS_CTX_SIZE`, `PARALLEL_SLOTS`, and `KV_CACHE_TYPE_K|V` based on `atlas tier`'s probe — so the `.env` it produces is more accurate than the default template. See [CLI.md → `atlas init`](CLI.md#atlas-init--first-run-install-wizard-pc-054) for the full surface.
+
+If you'd rather configure by hand:
+
 ```bash
 cp .env.example .env
 # Edit .env only if you need to change model path or ports
@@ -14,11 +26,13 @@ docker compose up -d
 
 The defaults work if your model is at `./models/Qwen3.5-9B-Q6_K.gguf`.
 
+> **Wizard ownership.** When `atlas init` writes `.env`, it owns the keys listed in section 1 below. Manual edits keep working — but `atlas init --reconfigure` will overwrite them (after backing the file up to `.env.bak`). If you want manual edits to survive a reconfigure, copy them out before running it, or skip the wizard for that knob and edit directly.
+
 ---
 
 ## 1. Docker Compose (.env)
 
-These variables are read by `docker-compose.yml` and control host-side port mappings and model paths. Copy `.env.example` to `.env` to configure.
+These variables are read by `docker-compose.yml` and control host-side port mappings and model paths. Either `atlas init --yes` (recommended, tier-aware defaults) or `cp .env.example .env` (manual) gets you a starting file.
 
 > **Source of truth for runtime knobs.** Don't pick values for
 > `ATLAS_MODEL_FILE`, `ATLAS_CTX_SIZE`, `PARALLEL_SLOTS`, or
