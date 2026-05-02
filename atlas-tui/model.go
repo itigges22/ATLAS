@@ -90,6 +90,16 @@ type tuiModel struct {
 	// to distinguish "user aborted" from "real failure".
 	userCancelled bool
 
+	// Highlight-to-copy state. Press inside the chat pane sets selStart;
+	// motion while held updates selEnd; release computes the line range
+	// covered and pushes those lines to the clipboard via copyToClipboard
+	// (OSC52 fallback works over SSH). Cell coords are screen-relative.
+	// We only copy when there was a real drag (non-zero delta), so a
+	// pure click doesn't trigger a copy.
+	selecting          bool
+	selStartX, selStartY int
+	selEndX, selEndY     int
+
 	// Files added via /add — appended as a hint to each /v1/agent message.
 	contextFiles map[string]bool
 
@@ -534,10 +544,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		// Wheel up/down scrolls the chat history. Other mouse events
-		// (click, drag) are ignored — we don't have any clickable UI
-		// yet, and motion noise is dropped here so it doesn't churn
-		// the textarea.
+		// Wheel scrolls the chat history.
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
@@ -545,6 +552,63 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.MouseButtonWheelDown:
 				m.scrollChat(-3)
+				return m, nil
+			}
+		}
+		// Highlight-to-copy: drag inside the chat pane → copy the
+		// covered lines to clipboard on release. Cell coords are
+		// screen-relative; lastChatTopY/BottomY/LeftX/RightX are set
+		// by layoutFullScreen each render.
+		inChat := func(x, y int) bool {
+			return y >= lastChatTopY && y <= lastChatBottomY &&
+				x >= lastChatLeftX && x <= lastChatRightX
+		}
+		switch msg.Action {
+		case tea.MouseActionPress:
+			if msg.Button == tea.MouseButtonLeft && inChat(msg.X, msg.Y) {
+				m.selecting = true
+				m.selStartX, m.selStartY = msg.X, msg.Y
+				m.selEndX, m.selEndY = msg.X, msg.Y
+			}
+		case tea.MouseActionMotion:
+			if m.selecting {
+				m.selEndX, m.selEndY = msg.X, msg.Y
+			}
+		case tea.MouseActionRelease:
+			if m.selecting {
+				m.selecting = false
+				// Pure click (no drag) → no copy. We only treat a
+				// real motion as a selection. Threshold = different
+				// row OR more than 1 column delta on the same row.
+				dy := m.selEndY - m.selStartY
+				if dy < 0 {
+					dy = -dy
+				}
+				dx := m.selEndX - m.selStartX
+				if dx < 0 {
+					dx = -dx
+				}
+				if dy == 0 && dx < 2 {
+					return m, nil
+				}
+				text := extractChatSelection(
+					m.selStartY, m.selEndY,
+					m.selStartX, m.selEndX)
+				if text == "" {
+					return m, nil
+				}
+				if err := copyToClipboard(text); err != nil {
+					m.chat = append(m.chat, chatMessage{
+						Role: roleSystem, Meta: "error",
+						Body: fmt.Sprintf("copy failed: %v", err),
+					})
+					return m, nil
+				}
+				m.chat = append(m.chat, chatMessage{
+					Role: roleSystem, Meta: "copy",
+					Body: fmt.Sprintf("✓ copied %d chars to clipboard.",
+						len(text)),
+				})
 				return m, nil
 			}
 		}
@@ -600,6 +664,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case envelopeMsg:
+		// While the user has cancelled, drop the trailing flurry of
+		// cancellation-shaped envelopes (LLM error, stage_end with
+		// success=false) so the events pane and pipeline pane don't
+		// surface a misleading FAIL/ERROR row. The chat already shows
+		// "turn cancelled" — that's the single user-visible signal.
+		if m.userCancelled && envelopeLooksCancelled(msg.ev) {
+			dlog("event", "suppressed_cancel", map[string]interface{}{
+				"type": msg.ev.Type, "stage": msg.ev.Stage,
+			})
+			return m, waitForEnvelope(m.events)
+		}
 		m.state.apply(msg.ev)
 		m.envelope = append(m.envelope, msg.ev)
 		if len(m.envelope) > m.maxLines {
@@ -1128,6 +1203,157 @@ func formatV3StageEvent(eventType string, data json.RawMessage) string {
 	return body
 }
 
+// extractChatSelection returns the plain text of chat lines covered by
+// a drag from (startX, startY) to (endX, endY) in screen coordinates.
+// Reads the layout snapshot vars (lastChatLines, lastChatViewStart,
+// lastChatTopY) populated by the most recent View().
+//
+// Behavior:
+//   - Selection is line-granular vertically; column granularity is
+//     applied only on the first/last line (so a left-to-right drag
+//     across one row clips correctly).
+//   - ANSI escape codes are stripped before returning so the clipboard
+//     gets readable text.
+//   - Out-of-bounds Y values are clamped to the visible window.
+func extractChatSelection(startY, endY, startX, endX int) string {
+	if len(lastChatLines) == 0 || lastChatBottomY < lastChatTopY {
+		return ""
+	}
+	if startY > endY {
+		startY, endY = endY, startY
+		startX, endX = endX, startX
+	}
+	// Clamp to visible chat window.
+	if startY < lastChatTopY {
+		startY = lastChatTopY
+	}
+	if endY > lastChatBottomY {
+		endY = lastChatBottomY
+	}
+	if endY < lastChatTopY || startY > lastChatBottomY {
+		return ""
+	}
+	// Translate screen Y to absolute line index in lastChatLines.
+	startLine := lastChatViewStart + (startY - lastChatTopY)
+	endLine := lastChatViewStart + (endY - lastChatTopY)
+	if startLine < 0 {
+		startLine = 0
+	}
+	if endLine >= len(lastChatLines) {
+		endLine = len(lastChatLines) - 1
+	}
+	if startLine > endLine {
+		return ""
+	}
+	out := make([]string, 0, endLine-startLine+1)
+	for i := startLine; i <= endLine; i++ {
+		raw := stripANSI(lastChatLines[i])
+		// Apply X clipping on the first / last line only. Middle
+		// lines come through whole.
+		if i == startLine && i == endLine {
+			lo, hi := startX, endX
+			if lo > hi {
+				lo, hi = hi, lo
+			}
+			raw = clipColumns(raw, lo-lastChatLeftX, hi-lastChatLeftX)
+		} else if i == startLine {
+			raw = clipColumns(raw, startX-lastChatLeftX, len(raw))
+		} else if i == endLine {
+			raw = clipColumns(raw, 0, endX-lastChatLeftX)
+		}
+		out = append(out, raw)
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n ")
+}
+
+// stripANSI removes ANSI CSI / OSC sequences from s. Bubbletea/lipgloss
+// embed lots of styling in chat lines; the clipboard only wants the
+// human-readable characters.
+func stripANSI(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if c == 0x1b && i+1 < len(s) {
+			next := s[i+1]
+			switch next {
+			case '[':
+				// CSI: ESC [ ... <final byte 0x40-0x7e>
+				j := i + 2
+				for j < len(s) {
+					if s[j] >= 0x40 && s[j] <= 0x7e {
+						j++
+						break
+					}
+					j++
+				}
+				i = j
+				continue
+			case ']':
+				// OSC: ESC ] ... BEL or ESC \
+				j := i + 2
+				for j < len(s) && s[j] != 0x07 {
+					if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
+						j += 2
+						break
+					}
+					j++
+				}
+				if j < len(s) && s[j] == 0x07 {
+					j++
+				}
+				i = j
+				continue
+			default:
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
+
+// clipColumns returns s[lo:hi] in rune positions, clamped to the
+// string's actual length. Used to apply the column-precision clip on
+// the first and last lines of a multi-line drag.
+func clipColumns(s string, lo, hi int) string {
+	r := []rune(s)
+	if lo < 0 {
+		lo = 0
+	}
+	if hi < lo {
+		hi = lo
+	}
+	if hi > len(r) {
+		hi = len(r)
+	}
+	if lo > len(r) {
+		return ""
+	}
+	return string(r[lo:hi])
+}
+
+// envelopeLooksCancelled returns true if a /events envelope is just
+// the cancellation echo we should hide from the events / pipeline pane
+// while m.userCancelled is set. Error envelopes always qualify; stage
+// _end with success=false qualifies because the only reason a stage
+// would mark itself failed during a user-cancelled turn is the
+// context-cancelled propagation.
+func envelopeLooksCancelled(ev Envelope) bool {
+	if ev.Type == EvtError {
+		return true
+	}
+	if ev.Type == EvtStageEnd {
+		if ok, _ := ev.Payload["success"].(bool); !ok {
+			return true
+		}
+	}
+	return false
+}
+
 // looksCancelled returns true if an error string looks like the
 // user-initiated context cancellation rather than a real failure.
 // The proxy/Go runtime surface this as "context canceled" /
@@ -1324,6 +1550,35 @@ func (m tuiModel) View() string {
 // value-semantics dance with the model. Single TUI process per session,
 // so no concurrency concern.
 var lastChatTotalRendered int
+
+// Layout snapshot used by the highlight-to-copy code. Updated by
+// layoutFullScreen on every render; read by the MouseMsg handler when
+// computing which chat lines the user just dragged across.
+//
+//	lastChatLines      — the FULL flattened chat (every line ever
+//	                     rendered for this turn), pre-window. Indexed
+//	                     by absolute line index.
+//	lastChatViewStart  — index of the first line currently *visible*
+//	                     in the chat pane. mouseY → chatLine via
+//	                     viewStart + (mouseY - chatTopY).
+//	lastChatTopY       — screen Y of the chat pane's first content row
+//	                     (one below the chat box's top border).
+//	lastChatBottomY    — screen Y of the chat pane's last content row.
+//	lastChatLeftX      — screen X of the chat pane's first content col
+//	                     (one right of the chat box's left border).
+//	lastChatRightX     — screen X of the chat pane's last content col.
+//
+// All values reflect the most recent View(); a Mouse event arriving
+// before the first render reads zeros and the handler treats that as
+// "no chat region known" → no copy.
+var (
+	lastChatLines     []string
+	lastChatViewStart int
+	lastChatTopY      int
+	lastChatBottomY   int
+	lastChatLeftX     int
+	lastChatRightX    int
+)
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 

@@ -122,22 +122,22 @@ const slashCommandHelp = `Slash commands
   /copy [N]               Copy last N chat messages to system clipboard (default 1).
   /quit                   Exit.
 
-Copying text  (TL;DR: Ctrl+C cancels; copy uses Ctrl+Shift+C / Cmd+C)
-  Three ways to get text out of the TUI:
-    1. /copy [N]      → copy the last N messages straight to clipboard.
-                         Easiest path. Uses xclip / wl-copy / pbcopy.
-    2. /mouse off     → disables mouse capture so drag-highlight works.
-                         Then your terminal's own copy hotkey takes over:
-                           Ctrl+Shift+C  (Linux / Windows)
-                           Cmd+C         (macOS)
-                           right-click → Copy  (most terminals)
-    3. Hold Shift     → (Linux/Win) or Option (macOS) while dragging
-                         to override capture for one selection without
-                         disabling it. iTerm2/Kitty/WezTerm/GNOME work.
-  Ctrl+C is bound to "cancel turn / quit" inside the TUI — it will NOT
-  copy text. /mouse off + Ctrl+Shift+C is the workflow you want.
+Copying text  (TL;DR: just drag-highlight in chat — auto-copies on release)
+  When mouse capture is on (default), drag-highlighting in the chat
+  pane auto-copies the covered lines to the system clipboard on
+  release and shows a "✓ copied N chars" toast in the chat. Uses
+  OSC52 escape, so it works locally and over SSH on iTerm2 / Kitty /
+  WezTerm / Alacritty / Ghostty / Windows Terminal / modern xterm.
+  Other ways:
+    /copy [N]      Copy last N chat messages to clipboard. Useful when
+                   you want the WHOLE last reply without dragging.
+    /mouse off     Disable capture so the terminal handles selection
+                   natively. Then use your terminal's copy hotkey
+                   (Ctrl+Shift+C / Cmd+C / right-click → Copy).
+    Hold Shift     (Linux/Win) or Option (macOS) while dragging to
+                   override capture for one selection without /mouse off.
+  Ctrl+C cancels the in-flight turn — it does NOT copy text.
   Launch with capture pre-disabled: ATLAS_TUI_MOUSE=off atlas tui
-  (or --mouse off). The setting does not persist across restarts.
 
 Input modes
   message text            Send to agent (Enter).

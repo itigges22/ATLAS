@@ -220,8 +220,17 @@ func renderChatPane(chat []chatMessage, renderer *glamour.TermRenderer,
 	if start < 0 {
 		start = 0
 	}
+	// Snapshot the full flattened chat for the highlight-to-copy
+	// handler. Strings are ANSI-styled; the consumer strips ANSI
+	// before pushing to clipboard.
+	lastChatLines = allLines
+	lastChatViewStart = start
 	out := append([]string(nil), allLines[start:end]...)
-	// Pad short content to height (newest stays at bottom).
+	// Pad short content to height (newest stays at bottom). When we
+	// pad ABOVE, the visual row → flat-line index relation shifts:
+	// the first padded row maps to line 0 (start = 0), but the user's
+	// mouse Y still indexes from the chat pane's top. The handler
+	// guards against negative line indices, so this is OK.
 	for len(out) < height {
 		out = append([]string{""}, out...)
 	}
@@ -629,6 +638,26 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		titleStyle.Render(chatTitle) + "\n" +
 			chatPane +
 			thinkingRow)
+
+	// Snapshot chat pane bounds so the highlight-to-copy mouse handler
+	// can map screen Y → chat-line index. Chat box layout (top→bottom):
+	//   row 0          top border
+	//   row 1          title
+	//   row 2..        chatPane content (chatContentH rows)
+	//   row 2+content  thinking row (if turnActive) — also "in" the
+	//                  chat pane visually but not part of allLines, so
+	//                  excluded from selection range.
+	//   row 2+content+(thinking?) bottom border
+	// Right column starts at screen Y = headerH; pipelineBox precedes
+	// chatBox if shown.
+	pipelineRowOffset := 0
+	if !hidePipeline {
+		pipelineRowOffset = pipelineH
+	}
+	lastChatTopY = headerH + pipelineRowOffset + 2
+	lastChatBottomY = lastChatTopY + chatContentH - 1
+	lastChatLeftX = 1                       // 1 = inside the box's left border
+	lastChatRightX = innerW - 2             // -2 = right border + safety
 
 	eventsBox := ""
 	if !hideEvents {
