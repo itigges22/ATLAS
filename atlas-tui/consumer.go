@@ -139,6 +139,9 @@ func streamEventsWithReconnect(ctx context.Context, eventsURL string, out chan<-
 			return // user quit / TUI shutdown
 		}
 		// Connection died; back off and retry.
+		dlog("conn", "events_disconnected", map[string]interface{}{
+			"err": fmt.Sprintf("%v", err), "backoff_ms": backoff.Milliseconds(),
+		})
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
@@ -148,6 +151,5 @@ func streamEventsWithReconnect(ctx context.Context, eventsURL string, out chan<-
 		if backoff > maxBackoff {
 			backoff = maxBackoff
 		}
-		_ = err // err is information for logs but we don't have a logger yet
 	}
 }

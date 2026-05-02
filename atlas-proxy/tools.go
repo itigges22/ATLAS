@@ -415,14 +415,37 @@ func writeFileTool() *ToolDef {
 	}
 }
 
-// writeFileDirect records content for Aider delivery.
-// Does NOT write to disk — Aider handles file writing from the whole-file
-// blocks in the SSE response. The proxy just needs to track what files
-// were "written" so formatForAider can generate the response.
+// writeFileDirect writes content to disk atomically (write tmp + rename).
+// Previously (Aider era) this was a no-op — the proxy just recorded
+// what was "written" and Aider parsed the SSE response to do the actual
+// file writes. With the TUI replacing Aider (PC-062) there's no longer
+// anything downstream of the proxy that does file I/O, so the proxy
+// must do the write itself or the file vanishes into the void (the
+// "agent says it wrote the file but it isn't there" bug).
 func writeFileDirect(path, content string) (*ToolResult, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fmt.Errorf("cannot create parent dir for %s: %w", path, err)
+	}
+	tmpPath := path + ".atlas.tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+		return nil, fmt.Errorf("cannot write %s: %w", path, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("cannot rename temp file: %w", err)
+	}
 	out := WriteFileOutput{BytesWritten: len(content)}
 	outBytes, _ := json.Marshal(out)
 	return &ToolResult{Success: true, Data: outBytes}, nil
+}
+
+// v3CandidatesTested unwraps a possibly-nil V3 response so the
+// stage_end envelope can carry a count even on error paths.
+func v3CandidatesTested(r *V3GenerateResponse) int {
+	if r == nil {
+		return 0
+	}
+	return r.CandidatesTested
 }
 
 // writeFileWithV3 routes through the V3 pipeline for T2/T3 tasks.
@@ -459,13 +482,103 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
 
-	// Call V3 service with streaming progress
+	// Tell the user V3 is taking over so they don't think the file
+	// vanished. write_file with V3 holds the disk write until V3 picks
+	// a winner \u2014 without this message the chat goes silent for the 1\u20133
+	// minute V3 cycle and looks broken.
+	if ctx.StreamFn != nil {
+		ctx.StreamFn("v3_progress", map[string]string{
+			"message": fmt.Sprintf("V3 pipeline starting for %s \u2014 generating diverse candidates and build-verifying each.", filepath.Base(path)),
+		})
+	}
+	Emit(NewEnvelope(EvtStageStart, "v3", map[string]interface{}{
+		"detail": fmt.Sprintf("file=%s", filepath.Base(path)),
+	}))
+	v3Start := time.Now()
+
+	// Call V3 service with streaming progress. Each stage callback also
+	// fires a typed envelope so the pipeline pane shows V3 progress.
+	// Three categories of progress events:
+	//   token       \u2014 per-LLM-token delta from V3's streaming generator
+	//   llm_start   \u2014 V3 is starting an LLM call (candidate gen, scoring\u2026)
+	//   llm_end     \u2014 V3's LLM call finished (with token/timing summary)
+	//   <other>     \u2014 pipeline stage marker (probe, plansearch, sandbox\u2026)
+	currentV3Stage := ""
 	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string) {
-		// Forward V3 pipeline progress to Aider via the agent loop's stream
+		// Token deltas: forward to the TUI on a separate SSE event so
+		// it can render them as a streaming dim row, mirroring how the
+		// agent's own LLM tokens are shown. No envelope (would bloat
+		// /events with thousands of metric events for a single call).
+		if stage == "token" {
+			if ctx.StreamFn != nil {
+				ctx.StreamFn("v3_token", map[string]string{"text": detail})
+			}
+			return
+		}
+		// LLM-call boundary markers. Match the chat protocol's
+		// llm_call_start/end shapes so the TUI can reuse handlers.
+		if stage == "llm_start" {
+			if ctx.StreamFn != nil {
+				ctx.StreamFn("v3_llm_start",
+					map[string]string{"detail": detail})
+			}
+			return
+		}
+		if stage == "llm_end" {
+			if ctx.StreamFn != nil {
+				ctx.StreamFn("v3_llm_end",
+					map[string]string{"detail": detail})
+			}
+			return
+		}
+
+		// Other stages: a human-readable progress line in chat plus a
+		// typed envelope for the pipeline pane.
 		if ctx.StreamFn != nil {
 			msg := fmt.Sprintf("  \u2502 [%s] %s", stage, detail)
 			ctx.StreamFn("v3_progress", map[string]string{"message": msg})
 		}
+		// Stage transitions emit start/end envelopes for the pipeline
+		// pane \u2014 close the previous stage when we see a new name.
+		if stage != currentV3Stage {
+			if currentV3Stage != "" {
+				Emit(Envelope{
+					EventID:   NewEventID(),
+					Timestamp: float64(time.Now().UnixNano()) / 1e9,
+					Type:      EvtStageEnd,
+					Stage:     "v3:" + currentV3Stage,
+					Payload: map[string]interface{}{
+						"success": true,
+					},
+				})
+			}
+			Emit(NewEnvelope(EvtStageStart, "v3:"+stage,
+				map[string]interface{}{"detail": detail}))
+			currentV3Stage = stage
+		} else {
+			Emit(NewEnvelope(EvtMetric, "v3:"+stage,
+				map[string]interface{}{"name": "progress", "value": detail}))
+		}
+	})
+	if currentV3Stage != "" {
+		Emit(Envelope{
+			EventID:   NewEventID(),
+			Timestamp: float64(time.Now().UnixNano()) / 1e9,
+			Type:      EvtStageEnd,
+			Stage:     "v3:" + currentV3Stage,
+			Payload:   map[string]interface{}{"success": err == nil},
+		})
+	}
+	Emit(Envelope{
+		EventID:    NewEventID(),
+		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+		Type:       EvtStageEnd,
+		Stage:      "v3",
+		DurationMS: time.Since(v3Start).Milliseconds(),
+		Payload: map[string]interface{}{
+			"success":           err == nil,
+			"candidates_tested": v3CandidatesTested(v3Result),
+		},
 	})
 	if err != nil {
 		// Fallback to direct write if V3 service unavailable
@@ -1107,6 +1220,18 @@ func classifyFileTier(filePath, content string) Tier {
 	// Larger files with application logic → T2
 	if hasLogicIndicators(content) {
 		return Tier2Medium
+	}
+
+	// Substantial markup files (HTML, JSX/TSX without obvious JS logic)
+	// — anything beyond ~150 lines benefits from V3's structural variety
+	// even without classic code indicators. Without this branch, every
+	// HTML/JSX/Vue mockup falls through to T1 and V3 never fires for
+	// the kinds of front-end work users actually request.
+	if lines >= 150 {
+		switch ext {
+		case ".html", ".htm", ".jsx", ".tsx", ".vue", ".svelte":
+			return Tier2Medium
+		}
 	}
 
 	// Default: T1 for anything we're not sure about

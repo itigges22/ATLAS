@@ -35,98 +35,6 @@ sys.stdout.reconfigure(line_buffering=True)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# PC-061: typed event envelope emission alongside the legacy
-# {stage, detail} shape. Legal envelope types and stage→type mapping
-# rules live here so v3-service stays self-contained.
-from atlas.cli.events import make_event
-
-# Suffix → envelope-type mapping. PC-061 step B. Keep this list short
-# and decisively mapped so producers stay predictable.
-_STAGE_SUFFIX_TYPE = (
-    ("_error",  "error"),       # *_error  → error
-    ("_failed", "stage_end"),   # *_failed → stage_end (success=False)
-    ("_pass",   "stage_end"),   # *_pass   → stage_end (success=True)
-    ("_done",   "stage_end"),   # *_done   → stage_end (success=True)
-    ("_skip",   "stage_end"),   # *_skip   → stage_end (success=True; skipped is success in flow)
-    ("_retry",  "stage_start"), # *_retry  → stage_start (re-attempt)
-)
-
-
-def _classify_stage(stage: str) -> tuple:
-    """Map a legacy stage name onto (envelope_type, success_flag).
-
-    success_flag is None for events that don't carry a success bit
-    (stage_start, error → success not applicable; we set it on the
-    payload in the helper below).
-    """
-    for suffix, etype in _STAGE_SUFFIX_TYPE:
-        if stage.endswith(suffix):
-            if etype == "stage_end":
-                return etype, (suffix != "_failed")
-            return etype, None
-    return "stage_start", None
-
-
-def _logical_stage(stage: str) -> str:
-    """Strip the suffix so stage_start("phase2") and stage_end("phase2")
-    share the same logical stage name (lets consumers pair them)."""
-    for suffix, _ in _STAGE_SUFFIX_TYPE:
-        if stage.endswith(suffix):
-            return stage[:-len(suffix)]
-    return stage
-
-
-def _emit_event(wfile, envelope_opt_in: bool, stage: str, detail: str,
-                  stage_start_ids: dict) -> None:
-    """Dual-emit a single event to an SSE wfile. Always writes the legacy
-    {stage, detail} shape; additionally writes a typed envelope when the
-    client opted in. Mutates `stage_start_ids` to track parent_id +
-    duration computation across emissions.
-
-    Extracted from `_handle_run` so it's testable without spinning up an
-    HTTP server (PC-061 step B).
-    """
-    legacy = json.dumps({"stage": stage, "detail": detail})
-    try:
-        wfile.write(f"data: {legacy}\n\n".encode())
-    except Exception:
-        return  # client disconnected — don't try the envelope either
-
-    if not envelope_opt_in:
-        try:
-            wfile.flush()
-        except Exception:
-            pass
-        return
-
-    etype, success = _classify_stage(stage)
-    logical = _logical_stage(stage)
-    payload: Dict[str, Any] = {"detail": detail} if detail else {}
-    parent_id = None
-    duration_ms = None
-
-    if etype == "stage_start":
-        ev = make_event("stage_start", logical, payload=payload)
-        stage_start_ids[logical] = (ev.event_id, ev.timestamp)
-    elif etype == "stage_end":
-        payload["success"] = bool(success)
-        if logical in stage_start_ids:
-            parent_id, t0 = stage_start_ids.pop(logical)
-            duration_ms = int((time.time() - t0) * 1000)
-        ev = make_event("stage_end", logical, payload=payload,
-                         parent_id=parent_id, duration_ms=duration_ms)
-    else:  # error
-        payload.update({"stage": logical, "message": detail,
-                        "recoverable": True})
-        ev = make_event("error", logical, payload=payload)
-
-    try:
-        wfile.write(f"data: {ev.to_json()}\n\n".encode())
-        wfile.flush()
-    except Exception:
-        pass
-
-
 from benchmark.runner import extract_code
 from benchmark.v3.budget_forcing import BudgetForcing, BudgetForcingConfig
 from benchmark.v3.plan_search import PlanSearch, PlanSearchConfig
@@ -231,7 +139,8 @@ class LLMAdapter:
             "prompt": prompt,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "stream": False,
+            "stream": True,  # streaming: per-token visibility + no
+                              # 300s urllib read-timeout on long gens.
             "stop": ["\n\n\n\n"],
             "top_k": 20,
             "top_p": 0.95,
@@ -240,23 +149,31 @@ class LLMAdapter:
             body["seed"] = seed
 
         start = time.time()
+        # Marker so the TUI can frame this LLM call. Mirrors what
+        # atlas-proxy emits around its own llama.cpp calls.
+        self._emit("llm_start", f"call #{self.call_count}")
         data = self._send(body)
+        # The streaming send already emitted token events; emit a
+        # closing marker with totals so the TUI can replace the live
+        # row with a compact summary.
+        elapsed_ms = (time.time() - start) * 1000
+        completion_tokens = data.get("usage", {}).get("completion_tokens", 0) \
+            or data.get("usage", {}).get("total_tokens", 0)
+        self._emit("llm_end", f"{completion_tokens} tok · {elapsed_ms:.0f}ms")
 
         # Parse response
         content = ""
-        tokens = 0
+        tokens = completion_tokens
         if "choices" in data:
             content = data["choices"][0].get("text", "")
-            tokens = data.get("usage", {}).get("completion_tokens", 0)
 
         # Strip thinking blocks
         content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
         if '</think>' in content and '<think>' not in content:
             content = content[content.index('</think>') + len('</think>'):].strip()
 
-        t_ms = (time.time() - start) * 1000
         self.total_tokens += tokens
-        return content, tokens, t_ms
+        return content, tokens, elapsed_ms
 
     def _send(self, body: dict) -> dict:
         """Send to llama-server via /v1/chat/completions.
@@ -298,8 +215,11 @@ class LLMAdapter:
             "messages": messages,
             "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
             "temperature": body.get("temperature", 0.6),
-            "stream": False,
+            "stream": bool(body.get("stream", False)),
         }
+        if chat_body["stream"]:
+            # Need usage in the final chunk so we can report token counts.
+            chat_body["stream_options"] = {"include_usage": True}
         if "seed" in body:
             chat_body["seed"] = body["seed"]
 
@@ -311,14 +231,48 @@ class LLMAdapter:
         for attempt in range(5):
             try:
                 with LLMAdapter._lock:
-                    with urllib.request.urlopen(req, timeout=300) as resp:
-                        data = json.loads(resp.read())
-                        # Convert chat response to completions format
-                        if "choices" in data and len(data["choices"]) > 0:
-                            choice = data["choices"][0]
-                            if "message" in choice:
-                                choice["text"] = choice["message"].get("content", "")
-                        return data
+                    with urllib.request.urlopen(req, timeout=600) as resp:
+                        if not chat_body["stream"]:
+                            data = json.loads(resp.read())
+                            # Convert chat response to completions format
+                            if "choices" in data and len(data["choices"]) > 0:
+                                choice = data["choices"][0]
+                                if "message" in choice:
+                                    choice["text"] = choice["message"].get("content", "")
+                            return data
+                        # Streaming path: parse SSE chunks, accumulate
+                        # delta content, and forward each delta to the
+                        # progress callback as ("token", text). The 600s
+                        # urllib timeout is per-read; with continuous
+                        # token flow each read is sub-second, so long
+                        # generations no longer hit the old 300s ceiling.
+                        full = []
+                        usage = {}
+                        for raw in resp:
+                            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                            if not line.startswith("data:"):
+                                continue
+                            payload = line[5:].lstrip()
+                            if payload == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(payload)
+                            except json.JSONDecodeError:
+                                continue
+                            choices = chunk.get("choices") or []
+                            if choices:
+                                delta = choices[0].get("delta", {}) \
+                                    .get("content", "")
+                                if delta:
+                                    full.append(delta)
+                                    self._emit("token", delta)
+                            u = chunk.get("usage")
+                            if u:
+                                usage = u
+                        return {
+                            "choices": [{"text": "".join(full)}],
+                            "usage": usage,
+                        }
             except (urllib.error.HTTPError, OSError) as e:
                 print(f"  [LLM] Attempt {attempt+1} failed: {e}", flush=True)
                 if attempt < 4:
@@ -1353,43 +1307,21 @@ class V3Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
 
-            # PC-061: opt-in to typed envelopes via Accept header or
-            # ?event_format=v2 query param. Default = legacy-only for
-            # back-compat with current Aider/CLI consumers.
-            envelope_opt_in = (
-                "application/json+envelope" in self.headers.get("Accept", "")
-                or "event_format=v2" in (self.path or "")
-            )
-            run_started_at = time.time()
-            stage_start_ids: dict = {}
-
             def emit_sse(stage, detail=""):
-                _emit_event(self.wfile, envelope_opt_in, stage, detail,
-                              stage_start_ids)
+                event = json.dumps({"stage": stage, "detail": detail})
+                try:
+                    self.wfile.write(f"data: {event}\n\n".encode())
+                    self.wfile.flush()
+                except Exception:
+                    pass
 
             result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
             _post_pattern_outcome(problem, result)
 
-            # Final result event (legacy `event: result` framing for
-            # current consumers).
+            # Final result event
             final = json.dumps(result, default=str)
             self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
-
-            # PC-061: typed `done` envelope as the last typed event.
-            # Consumers that opted into v2 use this to detect clean stream
-            # end vs. premature disconnect.
-            if envelope_opt_in:
-                done_payload = {
-                    "success": bool(result.get("success", False))
-                                if isinstance(result, dict) else False,
-                    "total_duration_ms": int((time.time() - run_started_at) * 1000),
-                }
-                done_ev = make_event("done", "pipeline", payload=done_payload)
-                try:
-                    self.wfile.write(f"data: {done_ev.to_json()}\n\n".encode())
-                except Exception:
-                    pass
             self.wfile.flush()
         else:
             result = pipeline.run(problem, task_id, files=files)

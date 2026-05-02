@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -32,6 +34,28 @@ var activeSessions sync.Map
 // The model emits tool calls (constrained by grammar), the proxy executes them,
 // and returns results. Continues until the model emits "done" or max turns hit.
 func runAgentLoop(ctx *AgentContext, userMessage string) error {
+	// Emit a stage_start envelope so the TUI's pipeline pane shows
+	// the agent is working. Mirrors the typed-event broker (PC-061).
+	loopStart := time.Now()
+	Emit(NewEnvelope(EvtStageStart, "agent", map[string]interface{}{
+		"detail": fmt.Sprintf("tier=%s msg=%q", ctx.Tier,
+			truncateStr(userMessage, 80)),
+	}))
+	defer func() {
+		Emit(Envelope{
+			EventID:    NewEventID(),
+			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+			Type:       EvtDone,
+			Stage:      "agent",
+			DurationMS: time.Since(loopStart).Milliseconds(),
+			Payload: map[string]interface{}{
+				"success":           true,
+				"total_duration_ms": time.Since(loopStart).Milliseconds(),
+				"total_tokens":      ctx.TotalTokens,
+			},
+		})
+	}()
+
 	// Build system prompt with tool descriptions and project context
 	systemPrompt := buildSystemPrompt(ctx)
 
@@ -39,40 +63,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	ctx.Messages = []AgentMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userMessage},
-	}
-
-	// PC-061: typed envelope for the agent loop. Pairs with the
-	// stage_end + done envelope emitted at every return path below.
-	agentLoopStart := time.Now()
-	agentStartEv := NewEnvelope(EvtStageStart, "agent", map[string]interface{}{
-		"detail": truncateStr(userMessage, 200),
-	})
-	Emit(agentStartEv)
-	emitAgentDone := func(success bool, summary string) {
-		duration := int64(time.Since(agentLoopStart) / time.Millisecond)
-		Emit(Envelope{
-			EventID:    NewEventID(),
-			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-			Type:       EvtStageEnd,
-			Stage:      "agent",
-			ParentID:   agentStartEv.EventID,
-			DurationMS: duration,
-			Payload: map[string]interface{}{
-				"success": success,
-				"summary": summary,
-			},
-		})
-		Emit(Envelope{
-			EventID:   NewEventID(),
-			Timestamp: float64(time.Now().UnixNano()) / 1e9,
-			Type:      EvtDone,
-			Stage:     "agent",
-			Payload: map[string]interface{}{
-				"success":           success,
-				"total_duration_ms": duration,
-				"summary":           summary,
-			},
-		})
 	}
 
 	// PC-045: Per-session cache scope. llama.cpp's KV slot persists between
@@ -106,8 +96,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			select {
 			case <-ctx.Ctx.Done():
 				log.Printf("[agent] cancelled at turn %d: %v", turn, ctx.Ctx.Err())
-				EmitSimple(EvtError, "agent", fmt.Sprintf("cancelled at turn %d: %v", turn, ctx.Ctx.Err()))
-				emitAgentDone(false, "cancelled by client")
 				return ctx.Ctx.Err()
 			default:
 			}
@@ -115,26 +103,94 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 		// Trim conversation history if it gets too long (prevent context overflow)
 		// Keep system prompt + last 8 messages
+		trimmed := false
 		if len(ctx.Messages) > 12 {
-			trimmed := make([]AgentMessage, 0, 10)
-			trimmed = append(trimmed, ctx.Messages[0]) // system prompt
-			trimmed = append(trimmed, ctx.Messages[1]) // user message
+			t := make([]AgentMessage, 0, 10)
+			t = append(t, ctx.Messages[0]) // system prompt
+			t = append(t, ctx.Messages[1]) // user message
 			// Keep last 8 messages (recent context)
 			start := len(ctx.Messages) - 8
-			trimmed = append(trimmed, ctx.Messages[start:]...)
-			ctx.Messages = trimmed
+			t = append(t, ctx.Messages[start:]...)
+			ctx.Messages = t
+			trimmed = true
 			log.Printf("[agent] trimmed conversation to %d messages", len(ctx.Messages))
 		}
 
+		// Per-turn streaming visibility: announce the start of the turn,
+		// then the LLM call boundaries. Without these the TUI sees a 10-30s
+		// gap between tool_result and the next tool_call while the model
+		// is generating — looks like a hang. PC-062 follow-up.
+		ctx.Stream("turn_start", map[string]interface{}{
+			"turn":     turn,
+			"messages": len(ctx.Messages),
+			"trimmed":  trimmed,
+		})
+		// Estimate prompt tokens up front (chars/4 — works for English
+		// + code, off by maybe 10–20%) so the TUI can pre-fill its
+		// context-utilization gauge while llama-server is still doing
+		// prompt eval. Authoritative count arrives in llm_call_end.
+		promptTokenEst := 0
+		for _, mm := range ctx.Messages {
+			promptTokenEst += len(mm.Content) / 4
+		}
+		ctx.Stream("llm_call_start", map[string]interface{}{
+			"turn":          turn,
+			"messages":      len(ctx.Messages),
+			"prompt_tokens": promptTokenEst,
+		})
+		Emit(NewEnvelope(EvtStageStart, "llm",
+			map[string]interface{}{"turn": turn, "messages": len(ctx.Messages)}))
+		llmStart := time.Now()
+
 		// Call LLM with grammar constraint
 		response, tokens, err := callLLMConstrained(ctx, schemaJSON)
+		llmElapsed := time.Since(llmStart)
 		if err != nil {
+			ctx.Stream("llm_call_end", map[string]interface{}{
+				"turn":         turn,
+				"tokens":       0,
+				"total_tokens": ctx.TotalTokens,
+				"ms":           llmElapsed.Milliseconds(),
+				"error":        err.Error(),
+			})
+			Emit(Envelope{
+				EventID:    NewEventID(),
+				Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+				Type:       EvtStageEnd,
+				Stage:      "llm",
+				DurationMS: llmElapsed.Milliseconds(),
+				Payload: map[string]interface{}{
+					"success": false, "error": err.Error(),
+				},
+			})
+			Emit(NewEnvelope(EvtError, "llm",
+				map[string]interface{}{"message": err.Error()}))
 			ctx.Stream("error", map[string]string{"error": err.Error()})
-			EmitSimple(EvtError, "agent", err.Error())
-			emitAgentDone(false, fmt.Sprintf("LLM call failed: %v", err))
 			return fmt.Errorf("LLM call failed on turn %d: %w", turn, err)
 		}
 		ctx.TotalTokens += tokens
+		ctx.Stream("llm_call_end", map[string]interface{}{
+			"turn":         turn,
+			"tokens":       tokens,
+			"total_tokens": ctx.TotalTokens,
+			"ms":           llmElapsed.Milliseconds(),
+			"chars":        len(response),
+		})
+		Emit(Envelope{
+			EventID:    NewEventID(),
+			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+			Type:       EvtStageEnd,
+			Stage:      "llm",
+			DurationMS: llmElapsed.Milliseconds(),
+			Payload: map[string]interface{}{
+				"success":      true,
+				"tokens":       tokens,
+				"total_tokens": ctx.TotalTokens,
+			},
+		})
+		Emit(NewEnvelope(EvtMetric, "llm", map[string]interface{}{
+			"name": "total_tokens", "value": ctx.TotalTokens,
+		}))
 
 		// Parse the response — extract JSON even if model added surrounding text
 		parsed, parseErr := extractModelResponse(response)
@@ -165,15 +221,24 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		switch parsed.Type {
 		case "done":
 			ctx.Stream("done", map[string]string{"summary": parsed.Summary})
-			emitAgentDone(true, parsed.Summary)
 			return nil
 
 		case "text":
+			// `text` is the agent's user-facing chat answer. End the turn
+			// here — the user gets one reply per message they send, and
+			// can follow up to continue. Looping after text caused two
+			// failures in earlier revisions:
+			//   1. trailing role=assistant tripped llama-server's
+			//      "prefill incompatible with enable_thinking" 400, and
+			//   2. with a "continue" nudge, the model would rabbit-hole
+			//      into nonsense tool_calls on conversational input
+			//      ("hi" → list_directory → run_command → 3 fails → bail).
+			// If the model wants to narrate before tool work, it should
+			// emit tool_call directly with the narration in the args or
+			// roll narration into the done.summary at the end.
 			ctx.Stream("text", map[string]string{"content": parsed.Content})
-			ctx.Messages = append(ctx.Messages, AgentMessage{
-				Role:    "assistant",
-				Content: response,
-			})
+			ctx.Stream("done", map[string]string{"summary": ""})
+			return nil
 
 		case "tool_call":
 			ctx.Stream("tool_call", map[string]interface{}{
@@ -181,10 +246,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				"args": json.RawMessage(parsed.Args),
 				"turn": turn,
 			})
-			Emit(NewEnvelope(EvtToolCall, "agent", map[string]interface{}{
-				"name":          parsed.Name,
-				"args_summary":  truncateStr(string(parsed.Args), 200),
-				"turn":          turn,
+			Emit(NewEnvelope(EvtToolCall, "tool", map[string]interface{}{
+				"name":         parsed.Name,
+				"args_summary": truncateStr(string(parsed.Args), 80),
+				"turn":         turn,
 			}))
 
 			// Check permissions
@@ -228,7 +293,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					consecutiveErrors++
 					if consecutiveErrors >= 3 {
 						ctx.Stream("done", map[string]string{"summary": "Stopped: content too large for tool calls. Try requesting smaller, targeted changes."})
-						emitAgentDone(false, "content too large for tool calls")
 						return nil
 					}
 					continue
@@ -285,12 +349,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				EventID:    NewEventID(),
 				Timestamp:  float64(time.Now().UnixNano()) / 1e9,
 				Type:       EvtToolResult,
-				Stage:      "agent",
+				Stage:      "tool",
 				DurationMS: elapsed.Milliseconds(),
 				Payload: map[string]interface{}{
 					"name":    parsed.Name,
 					"success": result.Success,
-					"summary": truncateStr(result.Error, 200),
+					"error":   truncateStr(result.Error, 120),
 				},
 			})
 
@@ -299,7 +363,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				result.Error = ""
 				// Don't stream anything — Aider interprets all text as file edits.
 				// The file deletion already happened on disk. Just end silently.
-				emitAgentDone(true, "destructive operation completed")
 				return nil
 			}
 
@@ -321,7 +384,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					log.Printf("[agent] breaking error loop: %d consecutive failures at turn %d (productive=%v)", consecutiveErrors, turn, madeProductiveChange)
 					if madeProductiveChange {
 						ctx.Stream("done", map[string]string{"summary": "Wrote your changes to disk; couldn't verify them automatically (the verification commands failed). Run them yourself to confirm — they're on disk."})
-						emitAgentDone(true, "wrote changes; verification failed")
 					} else {
 						// Non-productive 3-error exit. The previous message
 						// ("file may be too large") presumed a write/edit
@@ -331,7 +393,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// the failure mode and point at the tool errors so
 						// the user can correct course.
 						ctx.Stream("done", map[string]string{"summary": "Stopped after 3 tool failures with no successful changes. Common causes: the file you referenced isn't in the workspace, an empty path argument was passed, or a regex was malformed. Check the per-turn errors above, then try a more specific request (e.g. \"fix snake_game.py at line 95 — the curses bounds are wrong\")."})
-						emitAgentDone(false, "stopped after 3 tool failures with no productive changes")
 					}
 					return nil
 				}
@@ -411,8 +472,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	ctx.Stream("error", map[string]string{
 		"error": fmt.Sprintf("max turns (%d) exceeded for %s task", ctx.MaxTurns, ctx.Tier),
 	})
-	EmitSimple(EvtError, "agent", fmt.Sprintf("max turns (%d) exceeded for %s task", ctx.MaxTurns, ctx.Tier))
-	emitAgentDone(false, fmt.Sprintf("max turns (%d) exceeded", ctx.MaxTurns))
 	return fmt.Errorf("max turns exceeded (%d)", ctx.MaxTurns)
 }
 
@@ -487,9 +546,41 @@ func eraseLlamaSlot(ctx *AgentContext) {
 	log.Printf("[PC-045] erased llama slot 0 — fresh KV cache for this session")
 }
 
+// llmStreamClient is a long-lived HTTP client for streaming LLM calls.
+// Streaming responses can run for many minutes (a 4k-token write_file
+// generation at ~30 tok/s is ~2min, longer for big content). The old
+// 3-minute total Client.Timeout aborted those mid-decode with
+// "context deadline exceeded while awaiting headers". Streaming mode
+// also makes the total-timeout meaningless: we instead bound only the
+// dial + header phases and rely on ctx.Ctx for user-initiated cancel.
+//
+// ResponseHeaderTimeout note: llama.cpp doesn't flush HTTP response
+// headers until the FIRST decoded token arrives — i.e., header time
+// = prompt eval time. With a long conversation history (e.g. a 767-line
+// HTML file the assistant just wrote, ~8500 tokens) prompt eval can
+// take ~60s on the GPU. A tight ResponseHeaderTimeout would cancel
+// these legitimate calls. Bumped to 10 min: still bounds a truly hung
+// llama-server, but tolerates large prompts. User Ctrl+C still works
+// via the request context for any in-flight call.
+var llmStreamClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 10 * time.Minute,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
+
 // callLLMOnce is one round-trip to llama-server's /v1/chat/completions.
 // Extracted from callLLMConstrained so the empty-response retry can
 // reuse the same plumbing with a different temperature + message list.
+//
+// Uses SSE streaming so the proxy can forward per-token deltas to the
+// TUI as `llm_token` events. The first delta also fires `llm_first_token`
+// with the prompt-eval duration — that gap (request sent → first token)
+// is llama-server doing prompt processing, which the user couldn't see
+// before. Streaming mode also removes the 3-minute total-request timeout
+// that was killing long generations on a single write_file with
+// substantial content (HTML mockups, code with imports, etc.).
 func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64) (string, int, error) {
 	wireMessages := make([]map[string]string, len(messages))
 	for i, msg := range messages {
@@ -506,10 +597,20 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 		"messages":    wireMessages,
 		"temperature": temperature,
 		"max_tokens":  32768,
-		"stream":      false,
+		"stream":      true,
+		// Without include_usage, the final SSE chunk before [DONE] has no
+		// usage block, so we can't report total_tokens to the TUI.
+		"stream_options": map[string]bool{"include_usage": true},
 		"response_format": map[string]string{
 			"type": "json_object",
 		},
+		// Qwen3.5's chat template defaults enable_thinking=true, but the
+		// agent loop relies on grammar-constrained JSON output — thinking
+		// blocks would just bloat tokens and llama-server rejects the
+		// combination outright once a trailing assistant message looks
+		// like a "response prefill" (400: "Assistant response prefill is
+		// incompatible with enable_thinking"). Disable explicitly.
+		"enable_thinking": false,
 	}
 	body, _ := json.Marshal(reqBody)
 	endpoint := llamaURL + "/v1/chat/completions"
@@ -525,42 +626,87 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 		return "", 0, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
 
-	client := &http.Client{Timeout: 3 * time.Minute}
-	resp, err := client.Do(httpReq)
+	sentAt := time.Now()
+	resp, err := llmStreamClient.Do(httpReq)
 	if err != nil {
 		return "", 0, fmt.Errorf("LLM request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", 0, fmt.Errorf("read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("LLM returned %d: %s", resp.StatusCode, truncateStr(string(respBody), 500))
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", 0, fmt.Errorf("LLM returned %d: %s",
+			resp.StatusCode, truncateStr(string(respBody), 500))
 	}
 
-	var chatResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage struct {
-			TotalTokens int `json:"total_tokens"`
-		} `json:"usage"`
+	var (
+		contentBuf     strings.Builder
+		totalTokens    int
+		firstTokenSent bool
+	)
+
+	scanner := bufio.NewScanner(resp.Body)
+	// Default scanner buffer is 64KB which is fine per line, but bump
+	// the max in case llama-server emits a fat usage payload at the end.
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage *struct {
+				TotalTokens     int `json:"total_tokens"`
+				PromptTokens    int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		for _, c := range chunk.Choices {
+			if c.Delta.Content == "" {
+				continue
+			}
+			if !firstTokenSent {
+				ctx.Stream("llm_first_token", map[string]interface{}{
+					"prompt_ms": time.Since(sentAt).Milliseconds(),
+				})
+				firstTokenSent = true
+			}
+			contentBuf.WriteString(c.Delta.Content)
+			ctx.Stream("llm_token", map[string]interface{}{
+				"text": c.Delta.Content,
+			})
+		}
+		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+			totalTokens = chunk.Usage.TotalTokens
+		}
 	}
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", 0, fmt.Errorf("parse chat response: %w", err)
+	if err := scanner.Err(); err != nil {
+		return contentBuf.String(), totalTokens,
+			fmt.Errorf("read LLM stream: %w", err)
 	}
 
-	if len(chatResp.Choices) == 0 {
-		return "", 0, fmt.Errorf("no choices in response")
+	if contentBuf.Len() == 0 {
+		// No deltas at all — usually a llama-server hiccup. Caller's
+		// empty-response retry path (callLLMConstrained) will handle.
+		return "", totalTokens, nil
 	}
-
-	return chatResp.Choices[0].Message.Content, chatResp.Usage.TotalTokens, nil
+	return contentBuf.String(), totalTokens, nil
 }
 
 
@@ -606,6 +752,15 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("/nothink\nYou are ATLAS, a coding assistant that creates and modifies code by calling tools. ")
 	sb.WriteString("You have access to the filesystem and can run commands to verify your work.\n")
 	sb.WriteString("You MUST respond with ONLY a single valid JSON object, no other text.\n\n")
+
+	// Pick-the-right-shape guidance — this is what keeps "hi" out of the
+	// tool-call rabbit hole. Without it the model treats every input as a
+	// task and starts read_file'ing random paths.
+	sb.WriteString("## Choosing your response shape\n\n")
+	sb.WriteString("- **Conversational input** (greetings, small talk, questions about you, status checks): emit `{\"type\":\"text\",\"content\":\"...\"}` — the turn ends after one text reply, and the user can follow up. Do NOT call tools to answer \"hi\" or \"what can you do\".\n")
+	sb.WriteString("- **Coding tasks** (\"fix the bug\", \"add a feature\", \"refactor X\"): emit `{\"type\":\"tool_call\",...}` to make progress, repeat as needed, then emit `{\"type\":\"done\",\"summary\":\"...\"}` when finished.\n")
+	sb.WriteString("- **Don't use `text` mid-task.** Roll narration into the done.summary at the end, or skip it entirely. Mid-task `text` ends the turn early.\n")
+	sb.WriteString("- **When unsure** whether the user wants chat or work: ask in a single `text` reply. Don't speculatively start tool-calling.\n\n")
 
 	// Tool descriptions
 	sb.WriteString(buildToolDescriptions())
@@ -685,10 +840,19 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workingDir := req.WorkingDir
-	if workingDir == "" {
-		workingDir = "."
+	// Path translation: the TUI sends its host cwd (e.g. /home/isaac/snake)
+	// as working_dir, but the proxy runs in a container where that path
+	// doesn't exist — only /workspace (the bind-mount target) does. The
+	// startup wrapper (atlas/cli/repl.py:_align_workspace) already aligns
+	// the bind mount to the user's cwd, so /workspace IS the user's cwd
+	// from the proxy's perspective. Use ATLAS_WORKSPACE_DIR (set in
+	// docker-compose.yml) as the canonical write target. The original
+	// host path is kept on RealProjectDir for display / V3 metadata.
+	hostDir := req.WorkingDir
+	if hostDir == "" {
+		hostDir = "."
 	}
+	workingDir := envOr("ATLAS_WORKSPACE_DIR", hostDir)
 
 	// Classify tier from message
 	tier := classifyAgentTier(req.Message)
@@ -736,6 +900,17 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	// Flush headers immediately so the client sees the response as
+	// "established" before the first LLM call returns. Without this
+	// sentinel, net/http waits to flush headers until the first body
+	// write, which is the first ctx.Stream() call — and that doesn't
+	// happen until the agent loop emits its first event, which can
+	// take 10-60s for the first LLM round-trip. Clients with a
+	// reasonable ResponseHeaderTimeout (e.g. 30s) would time out
+	// before getting any data. PC-062 follow-up.
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
 
 	ctx.StreamFn = func(eventType string, data interface{}) {
 		event := SSEEvent{Type: eventType, Data: data}

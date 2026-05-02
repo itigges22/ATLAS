@@ -38,10 +38,12 @@ graph LR
 
 Services run as containers via Docker Compose (recommended) or as local processes via the `atlas` launcher. Only llama-server uses the GPU. Everything else runs on CPU.
 
-Two chat front-ends are supported:
+Two chat front-ends:
 
-- **atlas-tui (Bubbletea, PC-062)** — canonical client. Native Go terminal UI consuming both `/events` (typed envelope SSE for pipeline visibility) and `/v1/agent` (per-turn chat SSE). Launch with `atlas tui`. Pipeline pane shows V3 stages live; chat pane renders assistant markdown via glamour; slash commands `/add /diff /commit /run` etc. handle local file context and shell-out.
-- **Aider (legacy)** — original front-end via `atlas`. Talks to `/v1/chat/completions` and gets back Aider whole-file blocks. Still supported but the TUI surfaces ATLAS-specific signal (V3 stages, tool counters, /cancel) that Aider can't render.
+- **atlas-tui (Bubbletea, PC-062)** — canonical client. Native Go terminal UI consuming `/v1/agent` (per-turn chat SSE) and `/events` (global typed-envelope feed for the pipeline pane). Launch with `atlas tui`. Pipeline pane shows V3 stages live; chat pane renders assistant markdown via glamour; slash commands `/add /diff /commit /run` etc. handle local file context and shell-out. Mode-aware input (chat / `!bash` / `/slash`) with a hint dropdown.
+- **Aider (legacy, being retired)** — original front-end via `atlas`. Talks to `/v1/chat/completions` and gets back Aider whole-file blocks. Frozen — receives only critical fixes. The endpoint stays for SDK compatibility (see [API.md](API.md)), but new client work targets `/v1/agent`.
+
+Third-party clients should target `/v1/agent` directly. The contract is documented in [API.md](API.md); PC-063 tracks producing a fully-worked recipe and OpenAPI spec.
 
 ---
 
@@ -50,7 +52,7 @@ Two chat front-ends are supported:
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
 | **llama-server** | 8080 | C++ (llama.cpp) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
-| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, Aider format translation, `/events` typed SSE, `/cancel` |
+| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`, legacy `/v1/chat/completions` (Aider compat) |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. PC-062. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
@@ -60,7 +62,7 @@ Two chat front-ends are supported:
 
 ## 3. atlas-proxy (Outer Layer)
 
-The proxy receives chat completion requests from Aider and runs an internal agent loop.
+The proxy is the entry point for every chat front-end. It accepts user messages on `/v1/agent` (preferred — typed event stream) or `/v1/chat/completions` (legacy OpenAI shape, used by Aider) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. See [API.md](API.md) for the full event-type catalogue.
 
 ```mermaid
 graph LR
@@ -89,7 +91,7 @@ graph LR
 
 ```mermaid
 flowchart LR
-    Start["Aider msg"] --> Build["Build prompt"] --> Call["llama-server"] --> Parse["Parse JSON"]
+    Start["User msg"] --> Build["Build prompt"] --> Call["llama-server"] --> Parse["Parse JSON"]
     Parse --> Route{Type?}
 
     Route -->|"tool_call"| Tier{"T2?"}
@@ -491,7 +493,7 @@ graph LR
 
 ### Bare Metal
 
-The `atlas` CLI (`pip install -e .`) talks directly to services on their default ports. The bash launcher script can start all services as local processes and launch Aider, or detect a running Docker Compose stack and connect to it.
+The `atlas` CLI (`pip install -e .`) talks directly to services on their default ports. The bash launcher script can start all services as local processes and launch a front-end (atlas-tui by default; legacy `atlas` invokes Aider), or detect a running Docker Compose stack and connect to it.
 
 ### K3s
 
@@ -506,12 +508,12 @@ Manifests in `templates/` are processed by `scripts/generate-manifests.sh` from 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant A as Aider
+    participant A as Client
     participant P as atlas-proxy :8090
     participant L as llama-server :8080
 
     U->>A: "Create a config file"
-    A->>P: POST /v1/chat/completions (SSE)
+    A->>P: POST /v1/agent (SSE)
     P->>L: POST /v1/chat/completions<br/>response_format: json_object
     L-->>P: {"type":"tool_call","name":"write_file","args":{...}}
     Note over P: Tier = T1 (config file)<br/>Direct write, no V3
@@ -527,7 +529,7 @@ One LLM call. No V3 overhead.
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant A as Aider
+    participant A as Client
     participant P as atlas-proxy :8090
     participant L as llama-server :8080
     participant V as v3-service :8070
@@ -535,7 +537,7 @@ sequenceDiagram
     participant S as sandbox :30820
 
     U->>A: "Create a REST API handler"
-    A->>P: POST /v1/chat/completions (SSE)
+    A->>P: POST /v1/agent (SSE)
     P->>L: POST /v1/chat/completions<br/>response_format: json_object
     L-->>P: {"type":"tool_call","name":"write_file","args":{...}}
     Note over P: Tier = T2 (50+ lines, logic)<br/>Route to V3
@@ -574,12 +576,12 @@ Minimum 3 llama-server calls (1 probe generation + 1 self-test generation + 1 em
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant A as Aider
+    participant A as Client
     participant P as atlas-proxy :8090
     participant L as llama-server :8080
 
     U->>A: "Fix the bug in auth.py"
-    A->>P: POST /v1/chat/completions (SSE)
+    A->>P: POST /v1/agent (SSE)
     P->>L: POST /v1/chat/completions<br/>response_format: json_object
     L-->>P: {"type":"tool_call","name":"read_file","args":{"path":"auth.py"}}
     P-->>P: Read file from disk
@@ -593,43 +595,3 @@ sequenceDiagram
 ```
 
 Existing files over 100 lines are rejected for `write_file` — the model must use `edit_file` with targeted changes.
-
----
-
-## 10. Event Protocol (PC-061)
-
-ATLAS services emit a typed JSON event stream over SSE. This is the foundation Phase 1's UI/UX work consumes — the Bubbletea TUI, live decode streaming, per-stage spinners, and compute budget visualizer all read from it.
-
-**Two endpoints:**
-
-- `GET http://atlas-proxy:8090/events` — broadcasts envelope events from any active session. Heartbeat every 15s. Always-on; no opt-in needed.
-- `POST http://v3-service:8070/v3/run` — the existing pipeline endpoint, dual-emits the legacy `{stage, detail}` shape AND envelope events when the client opts in via `Accept: application/json+envelope` header or `?event_format=v2`.
-
-**Seven envelope types:** `stage_start`, `stage_end`, `tool_call`, `tool_result`, `metric`, `error`, `done`. Full schema, per-type payloads, suffix-mapping rules, and back-compat policy live in [`PROTOCOL.md`](PROTOCOL.md).
-
-**Where events come from:**
-
-```mermaid
-sequenceDiagram
-    participant U as TUI / Test
-    participant P as atlas-proxy :8090
-    participant V3 as v3-service :8070
-
-    U->>P: GET /events (SSE subscribe)
-    Note over P: Subscriber added to broker
-
-    Note over P: Agent loop starts (per-request)
-    P-->>U: stage_start "agent"
-    P-->>U: tool_call "edit_file"
-    P-->>U: tool_result "edit_file" success=true
-    P->>V3: POST /v3/run (Accept: application/json+envelope)
-    V3-->>U: stage_start "phase2"
-    V3-->>U: stage_end "phase2" success=true
-    V3-->>U: done success=true
-    P-->>U: stage_end "agent" success=true
-    P-->>U: done success=true
-```
-
-Events from the proxy and v3-service merge into one stream at the TUI. Each envelope carries enough context (`stage`, `event_id`, `parent_id`) for the consumer to nest them visually without needing a session id.
-
-**Consumer:** `atlas/cli/events.py` — `iter_events(url)` returns typed `Event` dataclasses. Use this rather than parsing SSE frames directly.

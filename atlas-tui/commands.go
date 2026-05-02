@@ -34,16 +34,43 @@ type slashResultMsg struct {
 
 // slashCommandHelp is the static text emitted by /help. Single source
 // of truth — keep in lockstep with handleSlash's switch.
-const slashCommandHelp = `Slash commands:
-  /add <path>     Add file to the agent's working context (path-only — agent reads on demand).
-  /drop <path>    Remove file from the working context.
-  /context        List files currently in context.
-  /diff [path]    Show git diff (optionally for a specific path).
-  /commit [msg]   Stage all changes and create a commit (default msg if omitted).
-  /undo           Revert the last commit, keeping changes in the working tree (git reset --soft HEAD~1).
-  /run <cmd>      Run a shell command in the working dir; stdout/stderr appears in chat.
-  /help           Show this help.
-  /quit           Exit (same as Ctrl+C from idle).`
+const slashCommandHelp = `Slash commands
+  /help                   Show this help.
+  /add <path>             Add file to the agent's working context.
+  /drop <path>            Remove file from the working context.
+  /context                List files currently in context.
+  /diff [path]            Show git diff.
+  /commit [msg]           Stage all changes and create a commit.
+  /undo                   Revert the last commit (keep changes in tree).
+  /run <cmd>              Run a shell command in the working dir.
+  /clear                  Clear the chat history (keeps session tokens).
+  /compact                Ask the agent to compact conversation history.
+  /hide <pane>            Hide a pane: files, pipeline, events, or all.
+  /show <pane>            Show a pane (or all).
+  /mouse on|off           Toggle mouse capture (off lets you copy text).
+  /quit                   Exit.
+
+Copying text
+  When mouse capture is on, selecting text is blocked by the TUI so
+  the wheel can scroll. To copy: either hold Shift (Linux/Windows) or
+  Option (macOS) while dragging — most terminals honor the override —
+  or run /mouse off to disable capture for the rest of the session.
+
+Input modes
+  message text            Send to agent (Enter).
+  ! <cmd>                 Run as bash (no agent call). Same as /run.
+  / <cmd>                 Slash command (this list).
+
+Keys
+  Enter                   Send message.
+  Shift+Enter             Newline in input.
+  Ctrl+C                  Cancel turn (or quit when idle).
+  Ctrl+L                  Clear chat.
+  Ctrl+T                  Cycle permission mode.
+  Ctrl+R                  Resend last message.
+  PgUp / PgDn             Scroll chat by ~10 rows.
+  Mouse wheel             Scroll chat by ~3 rows.
+  Ctrl+End / Ctrl+Home    Jump to bottom / top of chat.`
 
 // handleSlash interprets a slash-prefixed input. Returns:
 //
@@ -109,6 +136,72 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		// Pass the rest as a single shell string so quoting/pipes work.
 		return true, runShellCmd(m.workingDir, "/run",
 			[]string{"bash", "-lc", strings.Join(args, " ")}), false
+
+	case "/clear":
+		m.chat = nil
+		m.chatScroll = 0
+		return true, nil, false
+
+	case "/compact":
+		// Ask the agent to compact via a synthetic user message. The
+		// proxy's history-trimming kicks in at 12 messages; this lets
+		// the user trigger an explicit summarization.
+		compactMsg := "Summarize the conversation so far in 3-4 sentences and respond with only that summary, no tool calls."
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "compact",
+			Body: "Asking agent to compact conversation…",
+		})
+		return true, m.sendChatCmd(compactMsg), false
+
+	case "/hide":
+		if len(args) == 0 {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: "/hide files | pipeline | events | all",
+			})
+			return true, nil, false
+		}
+		m.applyPaneVisibility(args[0], true)
+		return true, nil, false
+
+	case "/show":
+		if len(args) == 0 {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: "/show files | pipeline | events | all",
+			})
+			return true, nil, false
+		}
+		m.applyPaneVisibility(args[0], false)
+		return true, nil, false
+
+	case "/mouse":
+		// Toggle mouse capture so users can copy text without holding
+		// Shift/Option. Defaults to "on" (capture); /mouse off disables
+		// capture for the session, /mouse on re-enables it.
+		want := ""
+		if len(args) > 0 {
+			want = strings.ToLower(args[0])
+		}
+		if want != "on" && want != "off" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: "/mouse on | off",
+			})
+			return true, nil, false
+		}
+		if want == "off" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "mouse",
+				Body: "mouse capture disabled — wheel-scroll won't work, but you can select/copy text normally. Run /mouse on to restore.",
+			})
+			return true, tea.DisableMouse, false
+		}
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "mouse",
+			Body: "mouse capture enabled — wheel scrolls chat. Hold Shift/Option to select text without disabling.",
+		})
+		return true, tea.EnableMouseCellMotion, false
 	}
 
 	// Unknown slash command — show help instead of sending to the
@@ -202,6 +295,38 @@ func (m *tuiModel) cmdListContext() tea.Cmd {
 		Body: "files in context:\n  " + strings.Join(paths, "\n  "),
 	})
 	return nil
+}
+
+// applyPaneVisibility flips the hide flags for the named pane.
+// Accepts: files, pipeline, events, all. Unknown names produce an
+// error row in chat so the user can correct.
+func (m *tuiModel) applyPaneVisibility(name string, hide bool) {
+	verb := "shown"
+	if hide {
+		verb = "hidden"
+	}
+	switch strings.ToLower(name) {
+	case "files":
+		m.hideFiles = hide
+	case "pipeline":
+		m.hidePipeline = hide
+	case "events":
+		m.hideEvents = hide
+	case "all":
+		m.hideFiles = hide
+		m.hidePipeline = hide
+		m.hideEvents = hide
+	default:
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "error",
+			Body: fmt.Sprintf("unknown pane %q. Use: files, pipeline, events, all.", name),
+		})
+		return
+	}
+	m.chat = append(m.chat, chatMessage{
+		Role: roleSystem, Meta: "panes",
+		Body: fmt.Sprintf("%s %s", name, verb),
+	})
 }
 
 // runShellCmd shells out and returns a tea.Cmd that delivers the

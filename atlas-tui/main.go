@@ -26,21 +26,44 @@ const (
 func main() {
 	proxyURL := flag.String("proxy", envOr("ATLAS_PROXY_URL", defaultProxyURL),
 		"atlas-proxy base URL (default: $ATLAS_PROXY_URL or http://localhost:8090)")
+	logPath := flag.String("log", envOr("ATLAS_TUI_LOG", ""),
+		"append-only debug log path (default: off; alt-screen makes copy hard, "+
+			"so tail this file to see what the TUI saw)")
 	flag.Parse()
+
+	if closer, err := initDebugLog(*logPath); err != nil {
+		fmt.Fprintf(os.Stderr, "atlas-tui: %v\n", err)
+		os.Exit(1)
+	} else if closer != nil {
+		defer closer()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	model := newTUIModel(*proxyURL)
 
+	// Surface the Python wrapper's startup warning (workspace mismatch
+	// etc.) inside the TUI. Without this the warning prints to stderr
+	// and is immediately covered by alt-screen.
+	if note := os.Getenv("ATLAS_TUI_STARTUP_NOTE"); note != "" {
+		model.chat = append(model.chat, chatMessage{
+			Role: roleSystem, Meta: "startup", Body: note,
+		})
+	}
+
 	// SSE consumer goroutine: pushes envelopes onto a channel that
 	// the Bubbletea program drains via a tea.Cmd.
 	go streamEventsWithReconnect(ctx, *proxyURL+"/events", model.events)
 
-	prog := tea.NewProgram(model,
-		tea.WithAltScreen(),       // alt-screen so quitting restores the terminal
-		tea.WithMouseCellMotion(), // cheap to enable; future panes might want it
-	)
+	// Mouse cell-motion capture so the wheel scrolls the chat pane.
+	// Cell-motion (vs all-motion) only captures when buttons are held
+	// or pressed, which keeps idle text selection working on most
+	// modern terminals. iTerm2/Kitty/WezTerm let users hold Option/
+	// Shift while dragging to override capture entirely; that's the
+	// recommended escape hatch when copy/paste is needed.
+	prog := tea.NewProgram(model, tea.WithAltScreen(),
+		tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "atlas-tui: %v\n", err)

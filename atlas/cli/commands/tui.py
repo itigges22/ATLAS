@@ -90,8 +90,11 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    # Ensure proxy is up — otherwise the TUI shows "waiting for events"
-    # forever. _ensure_proxy is in repl.py since both code paths share it.
+    # Ensure proxy is up AND its /workspace bind covers the user's cwd.
+    # _ensure_proxy() handles both: health check + auto-realign via
+    # force-recreate when cwd is outside the bind. The recreate is ~5s
+    # — fast enough to do unconditionally, and necessary for tool calls
+    # to work (the proxy can only read/write paths under its mount).
     from atlas.cli.repl import _ensure_proxy, PROXY_URL
     if not _ensure_proxy():
         sys.stderr.write(
@@ -105,6 +108,20 @@ def main(argv: List[str]) -> int:
     args = list(argv)
     if "--proxy" not in args:
         args = ["--proxy", PROXY_URL] + args
+
+    # Default --log to a stable path under ~/.cache so debugging the
+    # TUI doesn't require the user to remember a flag. Alt-screen mode
+    # makes it impractical to copy text out of the live view; the log
+    # is the operator's read-only record of what the TUI received.
+    # Override with --log <path> or ATLAS_TUI_LOG; "off" disables.
+    if "--log" not in args and not os.environ.get("ATLAS_TUI_LOG"):
+        log_dir = os.path.expanduser("~/.cache/atlas-tui")
+        os.makedirs(log_dir, exist_ok=True)
+        args = ["--log", os.path.join(log_dir, "debug.log")] + args
+        print(f"  TUI debug log: {os.path.join(log_dir, 'debug.log')}")
+    elif os.environ.get("ATLAS_TUI_LOG", "").lower() == "off":
+        # Explicit opt-out — strip any default we'd set.
+        os.environ.pop("ATLAS_TUI_LOG", None)
 
     # exec, not run — the TUI takes over the terminal and we want
     # signals (Ctrl+C, window resize) routed to it directly.

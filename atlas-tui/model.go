@@ -93,14 +93,127 @@ type tuiModel struct {
 	spinnerFrame int
 	lastUserMsg  string
 
+	// Token accounting from llm_call_end events. lastTurnTokens is the
+	// usage reported on the most recent LLM call (Qwen3.5 reports the
+	// FULL prompt+completion total, not a delta — that's the value we
+	// compare against maxContextTokens to gauge "how full is the
+	// window"). totalTokensSession sums per-call deltas across the
+	// whole session, used for the "tokens used overall" indicator.
+	lastTurnTokens     int
+	totalTokensSession int
+	maxContextTokens   int
+
+	// Per-LLM-call streaming state. While the model is decoding, every
+	// llm_token event appends to streamingLLMText, and the trailing
+	// "· llm ·" row is rewritten with header + tail so the user can
+	// watch the JSON tool call come together token-by-token. Cleared
+	// on llm_call_end.
+	streamingLLM       bool
+	streamingLLMText   string
+	streamingLLMHeader string
+
+	// Same idea, but for V3's *internal* LLM calls (candidate gen,
+	// scoring). Tracked separately so a v3_token doesn't overwrite the
+	// agent loop's row and vice versa.
+	streamingV3     bool
+	streamingV3Text string
+
+	// Chat scroll offset — number of rows scrolled UP from the bottom.
+	// 0 means "follow the latest" (auto-scroll on new messages); >0
+	// freezes the view at a position N rows above the latest. PgUp/PgDn
+	// /mouse-wheel adjust; End jumps back to follow. lastChatTotal is
+	// the line count from the most recent render (used to clamp scroll
+	// at the top so PgUp/wheel-up stops growing once you hit the start
+	// of history — without this, 100 PgUps requires 100 PgDns to undo).
+	chatScroll    int
+	lastChatTotal int
+
+	// Hide-pane toggles. Slash commands /hide files / pipeline / events
+	// drop the corresponding pane; /show <name> brings it back.
+	hideFiles    bool
+	hidePipeline bool
+	hideEvents   bool
+
+	// Input mode derived from leading char of the textarea value.
+	// "" / "bash" / "slash" — drives input-box border color and the
+	// completion hint above the box.
+	inputMode string
+
+	// Spinner verb cycle — every ~3s the "thinking" word changes so
+	// long generations don't feel static. Index advances based on
+	// spinnerFrame ticks rather than a separate timer.
+	thinkingVerbIdx int
+
+	// Sidebar file tree — flat list of entries scanned from workingDir,
+	// re-scanned every fileScanInterval and after every write/edit/
+	// delete tool result. modifiedFiles is the set of relative paths
+	// the agent has touched this session (highlighted in the sidebar).
+	fileEntries    []fileEntry
+	modifiedFiles  map[string]bool
+	lastFileScan   time.Time
+	fileScanScroll int
+
 	// Lifecycle
 	quitting bool
 }
 
+// scrollChat adjusts m.chatScroll by `delta` rows (positive = scroll
+// up toward older messages, negative = scroll down). Clamps to
+// [0, lastChatTotalRendered] so unbounded PgUp / wheel-up doesn't
+// accumulate state that requires equal-and-opposite PgDns to clear.
+func (m *tuiModel) scrollChat(delta int) {
+	m.chatScroll += delta
+	if max := lastChatTotalRendered; m.chatScroll > max {
+		m.chatScroll = max
+	}
+	if m.chatScroll < 0 {
+		m.chatScroll = 0
+	}
+}
+
+// replaceV3LLMRow rewrites the most recent v3-llm row's body. Used by
+// the v3_token / v3_llm_end handlers so a single row tracks the live
+// stream instead of spawning a fresh chat row per token.
+func (m *tuiModel) replaceV3LLMRow(body string) {
+	for i := len(m.chat) - 1; i >= 0; i-- {
+		if m.chat[i].Role == roleSystem && m.chat[i].Meta == "v3-llm" {
+			m.chat[i].Body = body
+			return
+		}
+	}
+	m.chat = append(m.chat, chatMessage{
+		Role: roleSystem, Meta: "v3-llm", Body: body,
+	})
+}
+
+// replaceLLMRow rewrites the body of the most recent system/llm row.
+// If no such row exists (shouldn't happen — llm_call_start always
+// inserts one — but defensive), append a fresh one. Used by every
+// llm_* event to keep one anchor row per LLM call rather than spawning
+// a new chat row per token.
+func (m *tuiModel) replaceLLMRow(body string) {
+	for i := len(m.chat) - 1; i >= 0; i-- {
+		if m.chat[i].Role == roleSystem && m.chat[i].Meta == "llm" {
+			m.chat[i].Body = body
+			return
+		}
+	}
+	m.chat = append(m.chat, chatMessage{
+		Role: roleSystem, Meta: "llm", Body: body,
+	})
+}
+
 func newTUIModel(proxyURL string) tuiModel {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message…  Enter=send  Shift+Enter=newline  Ctrl+L=clear  Ctrl+T=mode  Ctrl+R=resend  Ctrl+C=cancel/quit"
-	ta.Prompt = "> "
+	ta.Placeholder = "Type a message · ! for bash · / for command · ? for help"
+	// No per-line prompt — bubbles renders Prompt on EVERY soft-wrapped
+	// line, which made multi-line input look noisy ("> > > >"). The
+	// mode indicator lives in the input box's border color now.
+	ta.Prompt = ""
+	// Same reason we drop line numbers: bubbles defaults ShowLineNumbers
+	// to true, so a one-liner shows a stray "1" gutter that confuses
+	// users into thinking the input is a code editor.
+	ta.ShowLineNumbers = false
 	ta.CharLimit = 8000
 	ta.SetWidth(80)
 	ta.SetHeight(3)
@@ -108,24 +221,64 @@ func newTUIModel(proxyURL string) tuiModel {
 
 	wd, _ := os.Getwd()
 
-	// Glamour renderer for assistant markdown. Auto-style picks dark
-	// or light based on the terminal background. Width is set per
-	// render so we can adapt to resizes.
+	// Glamour renderer for assistant markdown. We avoid WithAutoStyle()
+	// here: it sends an OSC 11 background-color query to the terminal,
+	// and that query's response (e.g. `\e]11;rgb:...\e\\`) can leak
+	// into the user's view as visible "0x1b ]11;..." escape garbage if
+	// the terminal responds before Bubbletea's input parser is fully
+	// attached — exactly the symptom reported at startup. Standard
+	// "dark" works for the common case (dark terminals); users who want
+	// a different style can set $GLAMOUR_STYLE before launch.
+	style := os.Getenv("GLAMOUR_STYLE")
+	if style == "" {
+		style = "dark"
+	}
+	// Initial wrap is conservative — gets rebuilt on the first
+	// WindowSizeMsg with the actual chat width (terminal width minus
+	// sidebar minus border overhead). Anything wider than the chat box
+	// causes lipgloss to expand the box, hiding the sidebar.
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(78),
+		glamour.WithStandardStyle(style),
+		glamour.WithWordWrap(60),
 	)
 
 	return tuiModel{
-		proxyURL:     proxyURL,
-		events:       make(chan Envelope, 256),
-		state:        newPipelineState(),
-		maxLines:     1000,
-		input:        ta,
-		chatEvents:   make(chan chatEvent, 64),
-		chatRenderer: renderer,
-		workingDir:   wd,
-		mode:         "default",
+		proxyURL:         proxyURL,
+		events:           make(chan Envelope, 256),
+		state:            newPipelineState(),
+		maxLines:         1000,
+		input:            ta,
+		chatEvents:       make(chan chatEvent, 64),
+		chatRenderer:     renderer,
+		workingDir:       wd,
+		mode:             "default",
+		maxContextTokens: 32768, // Qwen3.5-9B context size; matches llama-server config
+		// File scan is dispatched async from Init() — see scanFilesCmd.
+		// Doing it synchronously here blocked tea.NewProgram from
+		// entering its event loop, during which the user's keystrokes
+		// hit the bare TTY (not the TUI), and the terminal's startup
+		// capability-query responses leaked through as visible
+		// escape sequences (the "0x1b ]]" the user reported).
+		fileEntries:   nil,
+		modifiedFiles: map[string]bool{},
+		lastFileScan:  time.Time{},
+	}
+}
+
+// scanFilesMsg carries the result of an async file scan back to the
+// model's Update loop. Triggered initially from Init() and again
+// after every write/edit/delete tool result + on the slow tick.
+type scanFilesMsg struct {
+	entries []fileEntry
+	at      time.Time
+}
+
+func scanFilesCmd(root string) tea.Cmd {
+	return func() tea.Msg {
+		return scanFilesMsg{
+			entries: scanFiles(root, 2, 500),
+			at:      time.Now(),
+		}
 	}
 }
 
@@ -133,8 +286,19 @@ func (m tuiModel) Init() tea.Cmd {
 	return tea.Batch(
 		waitForEnvelope(m.events),
 		waitForChatEvent(m.chatEvents),
-		tickEvery(time.Second),
+		tickEvery(150*time.Millisecond),
 		textarea.Blink,
+		// Run the initial file-tree scan off the main thread so it
+		// doesn't block the event loop. The empty sidebar shows for
+		// the ~10–50ms it takes scanFiles to complete on a typical
+		// project; results arrive via scanFilesMsg.
+		scanFilesCmd(m.workingDir),
+		// Ask Bubbletea to send a WindowSizeMsg right away. Some
+		// terminals/multiplexers (tmux, screen) delay or skip the
+		// initial resize event, leaving us rendering with safe
+		// defaults (width=100) longer than necessary — which hides
+		// the sidebar (threshold 90) and looks broken at startup.
+		tea.WindowSize(),
 	)
 }
 
@@ -269,6 +433,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.sendChatCmd(m.lastUserMsg + m.contextSuffix())
 			}
 			return m, nil
+
+		case "pgup":
+			m.scrollChat(10)
+			return m, nil
+		case "pgdown":
+			m.scrollChat(-10)
+			return m, nil
+		case "ctrl+home":
+			m.scrollChat(1 << 30) // clamped to lastChatTotal
+			return m, nil
+		case "ctrl+end":
+			m.chatScroll = 0
+			return m, nil
 		case "enter":
 			// Enter sends; Shift+Enter (or Alt+Enter) inserts newline.
 			// textarea handles Shift+Enter as KeyShiftEnter ("shift+enter").
@@ -278,8 +455,31 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.input.Reset()
+				dlog("user", "input", map[string]interface{}{"text": text})
+				// Bash mode: leading "!" runs as a shell command in the
+				// working dir, output appears as a system row. Same path
+				// as /run but with the conversational shorthand devs
+				// expect from Claude Code / Aider.
+				if strings.HasPrefix(text, "!") {
+					cmdStr := strings.TrimSpace(text[1:])
+					if cmdStr == "" {
+						m.chat = append(m.chat, chatMessage{
+							Role: roleSystem, Meta: "error",
+							Body: "Bash mode: type ! followed by a command.",
+						})
+						return m, nil
+					}
+					m.chat = append(m.chat, chatMessage{
+						Role: roleUser, Body: "! " + cmdStr,
+					})
+					return m, runShellCmd(m.workingDir, "!"+cmdStr,
+						[]string{"bash", "-lc", cmdStr})
+				}
 				// Slash commands intercepted before agent send.
 				if consumed, slashCmd, quit := m.handleSlash(text); consumed {
+					dlog("slash", "dispatched", map[string]interface{}{
+						"input": text, "quit": quit,
+					})
 					if quit {
 						m.quitting = true
 					}
@@ -294,23 +494,80 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Role: roleUser, Body: text,
 				})
 				m.lastUserMsg = text
+				dlog("turn", "started", map[string]interface{}{
+					"session_id": "(set in sendChatCmd)",
+					"len":        len(text),
+				})
 				cmds = append(cmds, m.sendChatCmd(text+m.contextSuffix()))
 				return m, tea.Batch(cmds...)
 			}
 		}
 
+	case tea.MouseMsg:
+		// Wheel up/down scrolls the chat history. Other mouse events
+		// (click, drag) are ignored — we don't have any clickable UI
+		// yet, and motion noise is dropped here so it doesn't churn
+		// the textarea.
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				m.scrollChat(3)
+				return m, nil
+			case tea.MouseButtonWheelDown:
+				m.scrollChat(-3)
+				return m, nil
+			}
+		}
+		// Don't forward to textarea — it would interpret motion as
+		// cursor moves and corrupt the input.
+		return m, nil
+
 	case tea.WindowSizeMsg:
+		// Drag-resizing modern terminals fires WindowSizeMsg dozens of
+		// times in quick succession. Glamour init isn't free (it loads
+		// styles + builds a renderer); doing it on every event was
+		// queueing slow Updates behind a flood of resize messages.
+		// Skip the rebuild when only the height changed, and skip
+		// duplicate-width events entirely.
+		widthChanged := msg.Width != m.width
+		if msg.Width == m.width && msg.Height == m.height {
+			return m, nil
+		}
 		m.width = msg.Width
 		m.height = msg.Height
-		// Textarea width = full screen minus border (2).
 		m.input.SetWidth(max(20, msg.Width-2))
-		// Re-build glamour renderer at the new width.
-		if r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(max(20, msg.Width-4)),
-		); err == nil {
-			m.chatRenderer = r
+		if widthChanged {
+			style := os.Getenv("GLAMOUR_STYLE")
+			if style == "" {
+				style = "dark"
+			}
+			// Glamour wrap MUST match the chat box's content width or
+			// lipgloss expands the box past where the sidebar sits.
+			// Mirror panes.go's layout: sidebar 26 cols when W>=90,
+			// chat box border (2) + indent (2) on either side.
+			wrap := msg.Width - 6
+			if msg.Width >= 90 {
+				wrap = msg.Width - 26 - 6
+			}
+			if wrap < 20 {
+				wrap = 20
+			}
+			if wrap > 100 {
+				wrap = 100 // cap for readability — long lines hurt scanning
+			}
+			if r, err := glamour.NewTermRenderer(
+				glamour.WithStandardStyle(style),
+				glamour.WithWordWrap(wrap),
+			); err == nil {
+				m.chatRenderer = r
+			}
 		}
+		// Force a full repaint of the alt-screen so leftover content
+		// from the prior size doesn't bleed through. Without this,
+		// shrinking the terminal can leave stale rows on screen and
+		// growing it can leave the new edges blank until the next
+		// natural redraw.
+		return m, tea.ClearScreen
 
 	case envelopeMsg:
 		m.state.apply(msg.ev)
@@ -318,6 +575,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.envelope) > m.maxLines {
 			m.envelope = m.envelope[len(m.envelope)-m.maxLines:]
 		}
+		dlog("event", msg.ev.Type, map[string]interface{}{
+			"stage": msg.ev.Stage, "payload": msg.ev.Payload,
+		})
 		return m, waitForEnvelope(m.events)
 
 	case chatStreamMsg:
@@ -333,7 +593,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Body: p.Err,
 				})
 			}
+			dlog("turn", "ended", map[string]interface{}{"err": p.Err})
 		} else {
+			// Skip dlog for llm_token — at ~30 tok/s a long generation
+			// produces thousands of entries and crowds out actually
+			// interesting events when reading the file.
+			if msg.ev.Type != "llm_token" {
+				dlog("chat", msg.ev.Type, map[string]interface{}{
+					"data": json.RawMessage(msg.ev.Data),
+				})
+			}
 			m.appendChatEvent(msg.ev)
 		}
 		return m, waitForChatEvent(m.chatEvents)
@@ -358,11 +627,34 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role: role, Meta: msg.command, Body: body,
 			Success: msg.err == nil,
 		})
+		dlog("slash", "result", map[string]interface{}{
+			"command": msg.command, "ok": msg.err == nil,
+			"output_len": len(msg.output),
+		})
 		return m, nil
 
 	case tickMsg:
 		m.spinnerFrame++
-		return m, tickEvery(time.Second)
+		// Rescan files periodically so external changes (agent wrote
+		// a file via /workspace, user added a file in another shell)
+		// show up in the sidebar without a manual refresh. Dispatch
+		// async so a slow disk doesn't stall the spinner.
+		var refresh tea.Cmd
+		if time.Since(m.lastFileScan) > 4*time.Second {
+			m.lastFileScan = time.Now() // mark to debounce overlapping scans
+			refresh = scanFilesCmd(m.workingDir)
+		}
+		return m, tea.Batch(tickEvery(150*time.Millisecond), refresh)
+
+	case scanFilesMsg:
+		// Result of an async scanFiles run. Apply only if newer than
+		// what we have, so an old/slow scan doesn't overwrite a more
+		// recent one.
+		if msg.at.After(m.lastFileScan) || m.lastFileScan.IsZero() {
+			m.fileEntries = msg.entries
+			m.lastFileScan = msg.at
+		}
+		return m, nil
 	}
 
 	// Forward remaining keystrokes to the textarea (typing, arrows…).
@@ -370,6 +662,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var taCmd tea.Cmd
 		m.input, taCmd = m.input.Update(msg)
 		cmds = append(cmds, taCmd)
+		// Track input mode so the input-box border colors itself
+		// (red=bash, purple=slash, default=cyan) and a completion
+		// hint above the box can list matching commands.
+		val := m.input.Value()
+		switch {
+		case strings.HasPrefix(val, "!"):
+			m.inputMode = "bash"
+		case strings.HasPrefix(val, "/"):
+			m.inputMode = "slash"
+		default:
+			m.inputMode = ""
+		}
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -378,6 +682,116 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // chat history rows.
 func (m *tuiModel) appendChatEvent(ev chatEvent) {
 	switch ev.Type {
+	case "turn_start":
+		// Visual separator + turn counter. Compact one-liner so a long
+		// task's chat doesn't drown in headers — but enough that the
+		// user can see "where am I, what turn just started".
+		var p struct {
+			Turn     int  `json:"turn"`
+			Messages int  `json:"messages"`
+			Trimmed  bool `json:"trimmed"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		body := fmt.Sprintf("turn %d  ·  ctx=%d msgs", p.Turn+1, p.Messages)
+		if p.Trimmed {
+			body += "  (trimmed)"
+		}
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "turn", Body: body,
+		})
+
+	case "llm_call_start":
+		// Marker: prompt is being encoded by llama-server. No tokens yet —
+		// time-to-first-token reflects prompt eval duration. The body is
+		// rewritten on llm_first_token (decoding starts) and again on
+		// llm_call_end (totals).
+		var p struct {
+			PromptTokens int `json:"prompt_tokens"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "llm",
+			Body: "encoding prompt…",
+		})
+		m.streamingLLM = true
+		m.streamingLLMText = ""
+		// Pre-fill the context gauge with the prompt-token estimate so
+		// the user sees ctx fill up the moment the call starts, not
+		// only on llm_call_end. Each llm_token below increments this
+		// further; llm_call_end replaces with the authoritative count.
+		if p.PromptTokens > 0 {
+			m.lastTurnTokens = p.PromptTokens
+		}
+
+	case "llm_first_token":
+		// Prompt eval finished — decoding has started. Show the prompt
+		// duration so the user can see "where the dead air went". The
+		// body is rebuilt below as tokens stream in.
+		var p struct {
+			PromptMS int64 `json:"prompt_ms"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		secs := float64(p.PromptMS) / 1000.0
+		header := fmt.Sprintf("decoding…  (prompt eval: %.1fs)", secs)
+		m.streamingLLMHeader = header
+		m.replaceLLMRow(header)
+
+	case "llm_token":
+		// One delta from the LLM stream. Append to the streaming buffer
+		// and re-render the trailing llm row with header + tail of the
+		// stream so the user sees the JSON come together token-by-token.
+		// The rendered row is dim grey ("machine internals" style) —
+		// the polished tool_call/text events below are the bright
+		// "outputs from the machine".
+		var p struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil && p.Text != "" {
+			m.streamingLLMText += p.Text
+			body := m.streamingLLMHeader + "\n" +
+				formatStreamingLLM(m.streamingLLMText)
+			m.replaceLLMRow(body)
+			// Live context-utilization update: each llm_token delta is
+			// roughly 1 model token, so increment the gauge per event.
+			// Authoritative count replaces this on llm_call_end.
+			m.lastTurnTokens++
+		}
+
+	case "llm_call_end":
+		// Replace the streaming row with totals so the scrollback shows
+		// a compact "model replied · 8421 tok · 12.3s" instead of the
+		// raw token tail. The actual tool_call / text output rows that
+		// follow are the bright "outputs from the machine"; this row is
+		// the dim "internals" summary.
+		var p struct {
+			Turn        int    `json:"turn"`
+			Tokens      int    `json:"tokens"`
+			TotalTokens int    `json:"total_tokens"`
+			MS          int64  `json:"ms"`
+			Chars       int    `json:"chars"`
+			Error       string `json:"error"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		secs := float64(p.MS) / 1000.0
+		var body string
+		if p.Error != "" {
+			body = fmt.Sprintf("model failed in %.1fs — %s", secs, p.Error)
+		} else {
+			body = fmt.Sprintf("model replied · %d tok · %d chars · %.1fs",
+				p.Tokens, p.Chars, secs)
+		}
+		m.replaceLLMRow(body)
+		m.streamingLLM = false
+		m.streamingLLMText = ""
+		m.streamingLLMHeader = ""
+		// Track tokens for the stats line. Qwen3.5's usage.total_tokens
+		// is "prompt + completion of *this* call", which is the right
+		// value for "context window utilization". The session-wide sum
+		// comes from the proxy's running ctx.TotalTokens (==accumulated
+		// per-call totals).
+		m.lastTurnTokens = p.Tokens
+		m.totalTokensSession = p.TotalTokens
+
 	case "text":
 		var p struct {
 			Content string `json:"content"`
@@ -396,9 +810,27 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		}
 		if json.Unmarshal(ev.Data, &p) == nil {
 			m.chat = append(m.chat, chatMessage{
-				Role: roleTool, Meta: p.Name,
+				Role: roleTool, Meta: "→ " + p.Name,
 				Body: summarizeToolArgs(p.Name, p.Args),
 			})
+			// Highlight files touched by write/edit/delete in the
+			// sidebar. The path is normalized to the same form
+			// scanFiles produces (relative to workingDir) so the map
+			// lookup hits in renderFilesPane. The actual rescan
+			// happens on the next tick — fast enough that the new
+			// file appears within a few hundred ms, but doesn't block
+			// the event handler.
+			switch p.Name {
+			case "write_file", "edit_file", "delete_file":
+				if path := extractWritePath(p.Args); path != "" {
+					if m.modifiedFiles == nil {
+						m.modifiedFiles = map[string]bool{}
+					}
+					m.modifiedFiles[path] = true
+					// Force-expire the debounce so the next tick scans.
+					m.lastFileScan = time.Time{}
+				}
+			}
 		}
 
 	case "tool_result":
@@ -407,14 +839,22 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			Success bool            `json:"success"`
 			Data    json.RawMessage `json:"data"`
 			Error   string          `json:"error"`
+			Elapsed string          `json:"elapsed"`
 		}
 		if json.Unmarshal(ev.Data, &p) == nil {
 			body := p.Error
 			if p.Success {
 				body = summarizeToolResult(p.Tool, p.Data)
 			}
+			if p.Elapsed != "" {
+				if body == "" {
+					body = p.Elapsed
+				} else {
+					body = fmt.Sprintf("%s  ·  %s", body, p.Elapsed)
+				}
+			}
 			m.chat = append(m.chat, chatMessage{
-				Role: roleTool, Meta: p.Tool,
+				Role: roleTool, Meta: "← " + p.Tool,
 				Success: p.Success, Body: body,
 			})
 		}
@@ -458,7 +898,129 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 				Role: roleSystem, Meta: "done", Body: p.Summary,
 			})
 		}
+
+	case "v3_llm_start":
+		// V3 is starting an LLM call. Insert a dim "v3-llm" row that
+		// the v3_token handler will fill in. Mirrors the agent's
+		// llm_call_start row, but with a "V3" tag so the user can
+		// tell V3-internal calls from agent-loop calls at a glance.
+		var p struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		body := "calling model…"
+		if p.Detail != "" {
+			body = p.Detail + " · calling model…"
+		}
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "v3-llm", Body: body,
+		})
+		m.streamingV3 = true
+		m.streamingV3Text = ""
+
+	case "v3_token":
+		// Per-token delta from V3's streaming LLM call. Append to the
+		// active v3-llm row (updated in place so we don't spawn
+		// thousands of chat rows during a long candidate generation).
+		var p struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil && p.Text != "" {
+			m.streamingV3Text += p.Text
+			body := "decoding…\n" + formatStreamingLLM(m.streamingV3Text)
+			m.replaceV3LLMRow(body)
+		}
+
+	case "v3_llm_end":
+		// V3's LLM call finished. Replace the streaming row with the
+		// summary detail ("1234 tok · 12345ms") so scrollback shows a
+		// compact line, not the raw token tail.
+		var p struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		body := "model replied"
+		if p.Detail != "" {
+			body = "model replied · " + p.Detail
+		}
+		m.replaceV3LLMRow(body)
+		m.streamingV3 = false
+		m.streamingV3Text = ""
+
+	case "v3_progress":
+		// V3 pipeline narration emitted by atlas-proxy/tools.go via
+		// ctx.StreamFn("v3_progress", {message: "..."}). One row per
+		// stage (e.g. "[probe] Generating probe candidate..."). These
+		// were silently dropped in the first cut — without this case
+		// the user sees a frozen chat pane during a 1-2 minute V3 run.
+		var p struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil && p.Message != "" {
+			// Trim the leading box-drawing prefix the proxy adds for
+			// Aider's pretty-print; the TUI styles its own rows.
+			msg := strings.TrimLeft(p.Message, " │└├")
+			msg = strings.TrimSpace(msg)
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "V3", Body: msg,
+			})
+		}
 	}
+}
+
+// formatStreamingLLM renders the partial JSON the model is mid-emitting.
+// For write_file calls, the bulk of tokens land inside `"content":"..."`
+// as JSON-escaped source code (\n, \", \t…). Showing those raw makes
+// the streaming view unreadable. We split at the content boundary and
+// unescape the suffix in-place so the user sees code as code.
+//
+// The escape order matters: replace `\\` last via a placeholder so it
+// doesn't double-substitute through \n / \". Truncated trailing escapes
+// (e.g. a stray `\` at the buffer tail) are left alone — they'll resolve
+// on the next token.
+func formatStreamingLLM(s string) string {
+	s = strings.TrimLeft(s, " \n\r\t")
+	var cut int
+	for _, marker := range []string{`"content":"`, `"content": "`} {
+		if i := strings.Index(s, marker); i >= 0 {
+			cut = i + len(marker)
+			break
+		}
+	}
+	if cut == 0 {
+		return s
+	}
+	prefix := s[:cut]
+	suffix := s[cut:]
+
+	// Order matters: protect literal backslashes via a placeholder so
+	// they don't double-substitute through the \n / \" rules.
+	const placeholder = "\x00BS\x00"
+	suffix = strings.ReplaceAll(suffix, `\\`, placeholder)
+	suffix = strings.ReplaceAll(suffix, `\"`, `"`)
+	suffix = strings.ReplaceAll(suffix, `\n`, "\n")
+	suffix = strings.ReplaceAll(suffix, `\r`, "")
+	suffix = strings.ReplaceAll(suffix, `\t`, "    ")
+	suffix = strings.ReplaceAll(suffix, placeholder, `\`)
+
+	// Cap to last N lines. The streaming buffer grows unbounded as the
+	// model decodes (a 30k-token write_file is many KB) and we re-wrap
+	// it on EVERY tick + token + resize event. Without a cap, drag-
+	// resizing the terminal fires dozens of WindowSizeMsg in quick
+	// succession; each one runs wrapPlain across the entire buffer,
+	// which on a big content payload looks like a freeze. The cap
+	// shows a tail view during streaming; the full buffer isn't lost
+	// — it's still there in m.streamingLLMText, just truncated for
+	// display until llm_call_end replaces the row with stats.
+	const streamTailLines = 80
+	lines := strings.Split(suffix, "\n")
+	if len(lines) > streamTailLines {
+		omitted := len(lines) - streamTailLines
+		head := fmt.Sprintf("… (%d earlier lines)", omitted)
+		suffix = head + "\n" + strings.Join(lines[len(lines)-streamTailLines:], "\n")
+	}
+
+	return prefix + "\n" + suffix
 }
 
 func summarizeToolArgs(name string, args json.RawMessage) string {
@@ -499,15 +1061,50 @@ func (m tuiModel) View() string {
 	if m.quitting {
 		return ""
 	}
-	if m.width == 0 {
-		return "atlas-tui: starting…"
+	// Render with safe defaults if WindowSizeMsg hasn't arrived yet.
+	// Some terminals / multiplexers don't reliably emit the initial
+	// resize on alt-screen startup — without these defaults the user
+	// stares at a blank "starting…" forever. The real size will swap
+	// in as soon as the first WindowSizeMsg fires (or on first SIGWINCH).
+	width, height := m.width, m.height
+	if width <= 0 {
+		width = 100
 	}
-
+	if height <= 0 {
+		height = 30
+	}
 	header := renderHeader(m.proxyURL, m.workingDir, m.mode, m.turnActive,
-		m.spinnerFrame, m.width)
-	return layoutFullScreen(&m.state, m.envelope, m.chat, m.input.View(),
-		m.chatRenderer, header, m.width, m.height)
+		m.spinnerFrame, width)
+	out, totalChatLines := layoutFullScreen(&m.state, m.envelope, m.chat,
+		m.input.View(), m.input.Value(), m.inputMode,
+		m.chatRenderer, header, m.turnActive, m.spinnerFrame,
+		m.chatScroll,
+		m.fileEntries, m.modifiedFiles, m.fileScanScroll, m.workingDir,
+		m.lastTurnTokens, m.totalTokensSession, m.maxContextTokens,
+		m.hideFiles, m.hidePipeline, m.hideEvents,
+		width, height)
+	// View is supposed to be pure, but we need to know the rendered
+	// line count to clamp PgUp / mouse-wheel-up. Stashing it on the
+	// model via a field write inside View is technically a side-effect
+	// — Bubbletea calls View after every Update, so the value is fresh
+	// by the next keystroke. The model value passes through Bubbletea's
+	// runtime by value but we use a pointer-like trick via the receiver.
+	// Update the model in-place is illegal in Go's value-receiver world,
+	// so we use a stashed sync.Once-like idiom: write through a package
+	// var. Avoiding that here — instead, scrollChat tolerates a stale
+	// max (only matters for one keystroke). Capture happens via the
+	// View → Update path: we write totalChatLines to a package-level
+	// variable that Update reads on the next event.
+	lastChatTotalRendered = totalChatLines
+	return out
 }
+
+// lastChatTotalRendered is updated by View() (which receives a value
+// receiver) and read by Update() to clamp scroll on the next keystroke.
+// Package-level so the side-effect is visible across Bubbletea's
+// value-semantics dance with the model. Single TUI process per session,
+// so no concurrency concern.
+var lastChatTotalRendered int
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 

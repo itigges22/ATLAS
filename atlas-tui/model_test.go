@@ -174,10 +174,15 @@ func TestViewContainsPaneTitlesWhenSized(t *testing.T) {
 	}
 }
 
-func TestViewBeforeWindowSizeShowsStartingPlaceholder(t *testing.T) {
+func TestViewBeforeWindowSizeRendersWithSafeDefaults(t *testing.T) {
+	// Some terminals don't reliably emit an initial WindowSizeMsg —
+	// View must render the actual UI with safe defaults so the user
+	// isn't stuck on a placeholder screen.
 	m := newTUIModel("http://test")
 	out := m.View()
-	if !strings.Contains(out, "starting") {
-		t.Errorf("pre-size view = %q, want starting placeholder", out)
+	for _, want := range []string{"Pipeline", "Chat", "Message"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("pre-size view missing %q; got %q", want, out)
+		}
 	}
 }
