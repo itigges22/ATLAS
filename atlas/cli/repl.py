@@ -11,7 +11,6 @@ import os
 import shutil
 import subprocess
 import time
-import signal
 import atexit
 from typing import Optional, List
 
@@ -95,7 +94,7 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
     output = os.path.expanduser("~/.local/bin/atlas-proxy-v2")
     os.makedirs(os.path.dirname(output), exist_ok=True)
 
-    print(f"  Building atlas-proxy from source...")
+    print("  Building atlas-proxy from source...")
     try:
         result = subprocess.run(
             [go_bin, "build", "-o", output, "."],
@@ -160,7 +159,6 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
 
 def _stop_local_proxy():
     """Stop the locally-launched proxy on exit."""
-    global _proxy_process
     if _proxy_process and _proxy_process.poll() is None:
         _proxy_process.terminate()
         try:
