@@ -2,10 +2,22 @@
 set -euo pipefail
 
 # ATLAS Model Downloader
-# Downloads model files (Qwen3.5-9B for V3.1, or Qwen3-14B for legacy V3.0)
+# Downloads the GGUF model + Geometric Lens weights for the Docker Compose
+# deployment. K3s users should call this through `scripts/install.sh` which
+# layers atlas.conf on top.
+#
+# Config resolution (first hit wins):
+#   1. Existing env vars (set by caller — e.g. atlas-bootstrap.sh)
+#   2. .env in repo root (Docker Compose convention)
+#   3. .env.example (the v3.1 defaults)
+#
+# We deliberately do NOT source scripts/lib/config.sh here. That library is
+# K3s-oriented (auto-writes .jwt_secret to the repo root, requires
+# atlas.conf, validates NodePorts) and explodes on a Docker Compose install
+# when the repo lives at /opt/atlas owned by root. PC-051.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/config.sh"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -16,8 +28,47 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Source .env (or .env.example) for ATLAS_* defaults. Only pulls in the
+# keys this script reads — ATLAS_MODELS_DIR, ATLAS_MODEL_FILE,
+# ATLAS_MAIN_MODEL, ATLAS_DRAFT_MODEL, ATLAS_ENABLE_SPECULATIVE,
+# ATLAS_LORA_DIR. If a key is already set in the environment, the env
+# value wins (so callers like atlas-bootstrap.sh can override).
+load_env_defaults() {
+    local env_file
+    if [[ -f "$REPO_ROOT/.env" ]]; then
+        env_file="$REPO_ROOT/.env"
+    elif [[ -f "$REPO_ROOT/.env.example" ]]; then
+        env_file="$REPO_ROOT/.env.example"
+        log_warn ".env not found — using .env.example defaults"
+    else
+        log_error "Neither .env nor .env.example present at $REPO_ROOT"
+        exit 1
+    fi
+    # Read line-by-line and only export ATLAS_* vars not already set.
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^ATLAS_[A-Z0-9_]+$ ]] || continue
+        # Strip surrounding quotes and trailing whitespace from value
+        value="${value%\"}"; value="${value#\"}"
+        value="${value%\'}"; value="${value#\'}"
+        if [[ -z "${!key:-}" ]]; then
+            export "$key=$value"
+        fi
+    done < <(grep -E '^[A-Z][A-Z0-9_]+=' "$env_file")
+}
+
+load_env_defaults
+
+# v3.1 defaults — used when neither .env nor caller env sets these.
+: "${ATLAS_MODELS_DIR:=$REPO_ROOT/models}"
+: "${ATLAS_MODEL_FILE:=Qwen3.5-9B-Q6_K.gguf}"
+: "${ATLAS_MAIN_MODEL:=$ATLAS_MODEL_FILE}"
+: "${ATLAS_DRAFT_MODEL:=}"
+: "${ATLAS_ENABLE_SPECULATIVE:=false}"
+: "${ATLAS_LORA_DIR:=$ATLAS_MODELS_DIR/lora}"
+
 # Model URLs (Hugging Face)
 # Note: Filenames are case-sensitive on Hugging Face
+QWEN35_9B_Q6_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf"
 QWEN3_14B_Q4_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf"
 QWEN3_14B_Q6_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q6_K.gguf"
 QWEN3_0_6B_URL="https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"
@@ -38,13 +89,12 @@ LENS_FILES=(
 # Manifest of model files we know how to fetch automatically.
 # Add an entry here when a new model file becomes publicly available.
 declare -A KNOWN_MODEL_URLS=(
+    # V3.1 default — published by unsloth.
+    ["Qwen3.5-9B-Q6_K.gguf"]="$QWEN35_9B_Q6_URL"
+    # Legacy V3.0 (Qwen3-14B) — kept so K3s benchmark runs still work.
     ["Qwen3-14B-Q4_K_M.gguf"]="$QWEN3_14B_Q4_URL"
     ["Qwen3-14B-Q6_K.gguf"]="$QWEN3_14B_Q6_URL"
     ["Qwen3-0.6B-Q8_0.gguf"]="$QWEN3_0_6B_URL"
-    # Qwen3.5-9B-Q6_K.gguf — V3.1 default per inference/entrypoint-v3.1-9b.sh
-    # and docker-compose.yml. NO PUBLIC URL KNOWN. Set ATLAS_MODEL_URL to
-    # override or place the file at $ATLAS_MODELS_DIR/Qwen3.5-9B-Q6_K.gguf
-    # by hand. See PC-018 in ISSUES.md.
 )
 
 download_model() {
@@ -149,7 +199,10 @@ main() {
     fi
 
     # Pick which model file to fetch.
-    # Priority: ATLAS_MODEL_FILE env > ATLAS_MAIN_MODEL config > VRAM autoselect.
+    # Priority: ATLAS_MODEL_FILE env > ATLAS_MAIN_MODEL config > V3.1 default.
+    # The VRAM-based autoselect was a V3.0 (Qwen3-14B) artifact — V3.1 ships
+    # Qwen3.5-9B-Q6_K as the canonical model and tier-specific overrides
+    # come from .env (or `atlas tier` recommendations).
     if [[ -n "${ATLAS_MODEL_FILE:-}" ]]; then
         MAIN_MODEL_FILE="$ATLAS_MODEL_FILE"
         log_info "Using ATLAS_MODEL_FILE=$MAIN_MODEL_FILE"
@@ -157,14 +210,8 @@ main() {
         MAIN_MODEL_FILE="$ATLAS_MAIN_MODEL"
         log_info "Using ATLAS_MAIN_MODEL=$MAIN_MODEL_FILE"
     else
-        GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "0")
-        if [[ $GPU_MEM -ge 20000 ]]; then
-            log_info "20GB+ VRAM detected, defaulting to Q6_K quantization"
-            MAIN_MODEL_FILE="Qwen3-14B-Q6_K.gguf"
-        else
-            log_info "Defaulting to Q4_K_M quantization for ${GPU_MEM}MB VRAM"
-            MAIN_MODEL_FILE="Qwen3-14B-Q4_K_M.gguf"
-        fi
+        MAIN_MODEL_FILE="Qwen3.5-9B-Q6_K.gguf"
+        log_info "Using V3.1 default: $MAIN_MODEL_FILE"
     fi
 
     # Resolve URL via manifest. Fail loudly if unknown rather than silently

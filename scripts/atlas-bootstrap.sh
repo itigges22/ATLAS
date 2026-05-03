@@ -89,6 +89,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Docker invocation prefix
+# ---------------------------------------------------------------------------
+# After install_docker adds the user to the docker group, the CURRENT shell
+# still doesn't have group membership (it's only refreshed by re-login or
+# `newgrp docker`). Every subsequent `docker ...` call in this script has
+# to know whether to use sudo. Set DOCKER_PREFIX once after the install,
+# then reuse it everywhere — no per-step heuristics. PC-051 follow-up.
+DOCKER_PREFIX=""
+detect_docker_prefix() {
+    if docker info &>/dev/null; then
+        DOCKER_PREFIX=""
+    elif [[ -n "$SUDO" ]] && $SUDO -n docker info &>/dev/null 2>&1; then
+        # `sudo -n` works (no password prompt expected); use sudo silently.
+        DOCKER_PREFIX="$SUDO"
+    elif [[ -n "$SUDO" ]]; then
+        # sudo would prompt — still set prefix; user already approved sudo above.
+        DOCKER_PREFIX="$SUDO"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Distro detection
 # ---------------------------------------------------------------------------
 
@@ -235,7 +256,7 @@ install_nvidia_toolkit() {
     fi
 
     # Already installed and working?
-    if docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
         log_ok "nvidia-container-toolkit already configured (Docker can see GPU)"
         return
     fi
@@ -266,14 +287,22 @@ install_nvidia_toolkit() {
     $SUDO nvidia-ctk runtime configure --runtime=docker >/dev/null \
         || die "nvidia-ctk runtime configure failed."
     $SUDO systemctl restart docker
-    sleep 2
+    sleep 3
 
-    # Verify
-    if docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+    # Verify (using DOCKER_PREFIX since user may not be in docker group yet).
+    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
         log_ok "nvidia-container-toolkit verified — Docker can see GPU"
     else
-        log_warn "nvidia-container-toolkit installed but GPU not visible to Docker yet."
-        log_warn "Try: $SUDO systemctl restart docker  # then re-run this script"
+        # One more time with a longer settle — first restart on some kernels
+        # takes a few seconds for the runtime to register.
+        sleep 5
+        if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+            log_ok "nvidia-container-toolkit verified — Docker can see GPU"
+        else
+            log_warn "nvidia-container-toolkit installed but GPU not visible to Docker."
+            log_warn "Most common cause: nouveau driver loaded. Check Step 4 output above."
+            log_warn "Recovery: $SUDO systemctl restart docker, then re-run this script."
+        fi
     fi
 }
 
@@ -356,8 +385,11 @@ ensure_repo_and_env() {
             log_info "Existing checkout at $install_dir — pulling latest"
             (cd "$install_dir" && git pull --ff-only) || die "git pull failed in $install_dir"
         else
-            $SUDO mkdir -p "$(dirname "$install_dir")"
-            $SUDO chown "$(id -u):$(id -g)" "$(dirname "$install_dir")"
+            $SUDO mkdir -p "$install_dir"
+            # Hand the install dir to the invoking user so subsequent steps
+            # (download-models.sh, .env writes, docker compose builds) don't
+            # need sudo and don't leave root-owned droppings in the tree.
+            $SUDO chown -R "$(id -u):$(id -g)" "$install_dir"
             git clone "$repo_url" "$install_dir" || die "git clone failed"
         fi
         cd "$install_dir"
@@ -366,9 +398,39 @@ ensure_repo_and_env() {
         log_ok "Already in an ATLAS checkout: $(pwd)"
     fi
 
+    # If the install dir is root-owned (e.g. user pre-cloned with sudo),
+    # take ownership now so downstream steps can write here. Idempotent —
+    # no-op if we already own the tree. Skips if running as root.
+    if [[ "$(id -u)" != "0" ]]; then
+        local owner
+        owner=$(stat -c '%u' . 2>/dev/null || echo "$(id -u)")
+        if [[ "$owner" != "$(id -u)" ]]; then
+            log_info "Install dir is owned by uid=$owner; chowning to $(id -un)…"
+            $SUDO chown -R "$(id -u):$(id -g)" . \
+                || die "chown failed; can't proceed without write access here."
+            log_ok "Install dir now owned by $(id -un)"
+        fi
+    fi
+
     # .env
     if [[ -f .env ]]; then
-        log_ok ".env exists ($(wc -l < .env) lines)"
+        # Make sure .env actually has the keys download-models.sh and
+        # docker compose need. A user-supplied .env (e.g. with only an
+        # ATLAS_IMAGE_TAG override) will fail downstream without them.
+        local missing=()
+        for key in ATLAS_MODELS_DIR ATLAS_MODEL_FILE ATLAS_MODEL_NAME ATLAS_CTX_SIZE; do
+            grep -q "^${key}=" .env || missing+=("$key")
+        done
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            log_warn ".env is missing required keys: ${missing[*]}"
+            log_info "Appending defaults from .env.example…"
+            for key in "${missing[@]}"; do
+                grep "^${key}=" .env.example >> .env || true
+            done
+            log_ok ".env patched with $((${#missing[@]})) missing keys"
+        else
+            log_ok ".env exists with all required keys"
+        fi
     else
         if [[ ! -f .env.example ]]; then
             die ".env.example not found — broken checkout?"
@@ -395,12 +457,35 @@ download_models() {
     fi
 
     log_info "Calling scripts/download-models.sh (this can take 10-30 min on first run)…"
-    if ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log | grep -E '^\[INFO\]|\[WARN\]|\[ERROR\]'; then
+    # Use PIPESTATUS to surface real script exit code, not the grep filter.
+    # Without this, `grep` returning empty (no matches → exit 1) masks
+    # successful runs and conversely a script crash that did emit some
+    # [INFO] lines reads as success.
+    set +e
+    ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log | grep -E '^\[INFO\]|\[WARN\]|\[ERROR\]'
+    local rc=${PIPESTATUS[0]}
+    set -e
+    if [[ $rc -eq 0 ]]; then
         log_ok "Model download complete. See /tmp/atlas-models.log for details."
     else
-        log_err "Model download failed. Last 20 lines of /tmp/atlas-models.log:"
-        tail -20 /tmp/atlas-models.log >&2 || true
-        die "Model download failed — check HuggingFace credentials or network."
+        log_err "Model download failed (exit $rc). Last 30 lines of /tmp/atlas-models.log:"
+        tail -30 /tmp/atlas-models.log >&2 || true
+        die "Model download failed — check HuggingFace credentials, disk space, or network."
+    fi
+
+    # Lens weights are a separate fetch — the main script's --lens
+    # subcommand drops them in geometric-lens/geometric_lens/models/.
+    # Without these, the lens service starts but returns neutral scores.
+    log_info "Fetching Geometric Lens weights…"
+    set +e
+    ./scripts/download-models.sh --lens >>/tmp/atlas-models.log 2>&1
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+        log_ok "Lens weights ready"
+    else
+        log_warn "Lens weight fetch failed (exit $rc) — service will run with neutral scores."
+        log_warn "Recovery: ./scripts/download-models.sh --lens"
     fi
 }
 
@@ -416,11 +501,10 @@ start_compose() {
         return
     fi
 
-    # Use current user's docker socket access; if they're not in the docker
-    # group yet (newly added in step 1), use sudo for this run.
-    local DC="docker compose"
-    if ! docker info &>/dev/null; then
-        DC="sudo docker compose"
+    # Use the same DOCKER_PREFIX we set up at the top — handles "user just
+    # added to docker group, current shell doesn't know yet" transparently.
+    local DC="$DOCKER_PREFIX docker compose"
+    if [[ -n "$DOCKER_PREFIX" ]]; then
         log_warn "Using sudo for docker compose (user not in docker group yet — log out/in to fix)"
     fi
 
@@ -429,7 +513,15 @@ start_compose() {
     # runs reuse the local cache. To force a rebuild from source instead
     # of pulling, run `docker compose build` before this.
     log_info "Pulling images from GHCR (first run only) and starting containers…"
+    set +e
     $DC up -d 2>&1 | tee /tmp/atlas-compose.log | tail -20
+    local rc=${PIPESTATUS[0]}
+    set -e
+    if [[ $rc -ne 0 ]]; then
+        log_err "docker compose up failed (exit $rc). Last 30 lines of /tmp/atlas-compose.log:"
+        tail -30 /tmp/atlas-compose.log >&2 || true
+        die "Compose start failed — see log above."
+    fi
     log_ok "Containers started. See /tmp/atlas-compose.log for details."
 }
 
@@ -445,8 +537,7 @@ wait_for_healthy() {
         return
     fi
 
-    local DC="docker compose"
-    docker info &>/dev/null || DC="sudo docker compose"
+    local DC="$DOCKER_PREFIX docker compose"
 
     local services=(redis llama-server geometric-lens v3-service sandbox atlas-proxy)
     local timeout=300  # 5 min — first start can be slow while llama-server warms
@@ -569,6 +660,13 @@ main() {
     echo
 
     install_docker
+    echo
+    # After Docker is installed (or confirmed present), pin down whether
+    # subsequent `docker` calls in this script need sudo. The user may have
+    # been added to the docker group in install_docker but their CURRENT
+    # shell doesn't see that yet — this prefix is what makes the rest of
+    # the script work without "permission denied on /var/run/docker.sock".
+    detect_docker_prefix
     echo
     install_nvidia_toolkit
     echo
