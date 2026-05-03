@@ -17,9 +17,34 @@ Or, from a checkout:
 ./scripts/atlas-bootstrap.sh
 ```
 
-Supported distros: Ubuntu/Debian, RHEL/Fedora/Rocky/Alma. Works around EPEL, firewalld, vm.overcommit_memory (PC-011), and nouveau driver conflicts automatically.
+**Supported distributions:**
 
-Skip flags (env vars):
+| Family | Distros |
+|---|---|
+| Debian (apt-get) | Ubuntu 20.04+, Debian 11+ |
+| RHEL (dnf) | RHEL 9+, Rocky 9+, AlmaLinux 9+, CentOS Stream 9+, Oracle Linux 9+ |
+| Fedora (dnf) | Fedora 38+ |
+
+Other distros with `ID_LIKE` matching one of the above (e.g. Linux Mint, Pop!_OS) are accepted with a warning. Distros not in this list — Arch, openSUSE, Alpine, NixOS — aren't tested and the script will refuse to run on them.
+
+The bootstrap works around EPEL, firewalld, `vm.overcommit_memory` (PC-011), nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
+
+**Run modes — both work:**
+
+```bash
+# Run as your normal user; sudo elevates as needed (Docker install, sysctl, etc).
+# Install ends up owned by you.
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+
+# Run via sudo. SUDO_USER is detected, install still ends up owned by you.
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
+
+# Real root login (no sudo) — install owned by root. Only do this if there's
+# no human user on the box (CI runner, container, etc).
+```
+
+**Configuration env vars:**
+
 | Flag | Effect |
 |---|---|
 | `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | Don't install Docker (already managed) |
@@ -27,8 +52,15 @@ Skip flags (env vars):
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
-| `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas`) |
+| `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
+
+**Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, survives `$HOME` cleanup, and lets multiple users on the same box share one install. If you'd rather it land in your home dir:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh \
+  | ATLAS_INSTALL_DIR=$HOME/atlas bash
+```
 
 When complete, prints a green "ATLAS ready" banner with quick-start commands. Total time on a fresh VM with a fast connection: ~10-30 minutes (model download dominates).
 

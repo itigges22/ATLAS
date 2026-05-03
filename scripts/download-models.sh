@@ -107,13 +107,21 @@ download_model() {
         return
     fi
 
-    log_info "Downloading $filename..."
-    log_info "This may take a while (8-12GB file)"
+    log_info "Downloading $filename from $url"
+    log_info "This may take 5-15 min depending on network (file is ~7-12GB)"
 
     mkdir -p "$ATLAS_MODELS_DIR"
 
-    # Use curl with resume support
-    curl -L -C - -o "$filepath.tmp" "$url"
+    # `-#` forces a progress bar even when stdout is piped (default curl
+    # only shows progress on a tty). Without this the user stares at a
+    # blank screen for 10 minutes wondering if the download is hung.
+    # `-C -` resumes a partial download if .tmp already exists from a
+    # previous interrupted run.
+    if ! curl -L -# -C - --fail -o "$filepath.tmp" "$url"; then
+        log_error "curl failed downloading $filename — see output above."
+        log_error "Recovery: re-run this script (curl resumes from .tmp)."
+        return 1
+    fi
     mv "$filepath.tmp" "$filepath"
 
     log_info "$filename downloaded successfully"
@@ -150,7 +158,11 @@ download_lens_weights() {
             continue
         fi
         log_info "  downloading $fname"
-        curl -fL -C - -o "$dest.tmp" "$ATLAS_LENS_HF_BASE/$fname"
+        if ! curl -fL -# -C - -o "$dest.tmp" "$ATLAS_LENS_HF_BASE/$fname"; then
+            log_warn "  $fname download failed (skipping — lens will degrade gracefully)"
+            rm -f "$dest.tmp"
+            continue
+        fi
         mv "$dest.tmp" "$dest"
     done
     log_info "Lens weights ready"

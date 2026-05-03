@@ -71,6 +71,47 @@ docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
 podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi
 ```
 
+### `libnvidia-ml.so.1: cannot open shared object file`
+
+**Symptom:** During `docker compose up`, llama-server fails with:
+
+```
+nvidia-container-cli: initialization error: load library failed:
+libnvidia-ml.so.1: cannot open shared object file: no such file or directory
+```
+
+**What it means:** the host has the NVIDIA *kernel module* (so `nvidia-smi` works) but the *userspace driver libraries* aren't where the container toolkit expects. On RHEL/Rocky/Alma minimal installs the `nvidia-driver-cuda-libs` package isn't pulled in by default; on Debian/Ubuntu the issue is usually a stale `ldconfig` cache after a driver upgrade.
+
+**Fix sequence** — try in order, stop when `docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi` works:
+
+1. **Refresh ldconfig + restart docker:**
+   ```bash
+   sudo ldconfig
+   sudo systemctl restart docker
+   ```
+
+2. **RHEL/Fedora — install missing driver libs:**
+   ```bash
+   sudo dnf install -y nvidia-driver-cuda nvidia-driver-cuda-libs
+   sudo ldconfig && sudo systemctl restart docker
+   ```
+
+3. **Ubuntu/Debian — install matching userspace libs:**
+   ```bash
+   DRV_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)
+   sudo apt install -y libnvidia-compute-${DRV_MAJOR}
+   sudo ldconfig && sudo systemctl restart docker
+   ```
+
+4. **Generate a CDI spec (newer toolkit replaces "legacy" mode):**
+   ```bash
+   sudo mkdir -p /etc/cdi
+   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+   docker run --rm --device=nvidia.com/gpu=all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+   ```
+
+The `atlas-bootstrap.sh` script now runs steps 1 + 4 automatically and surfaces the fix hint when step 2 or 3 is needed.
+
 ### First Build Fails (CUDA Not Found)
 
 **Symptom:** `docker compose build` fails with CUDA-related errors during llama-server compilation.

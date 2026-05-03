@@ -165,17 +165,30 @@ detect_distro() {
             if [[ "$DISTRO_LIKE" == *debian* || "$DISTRO_LIKE" == *ubuntu* ]]; then
                 DISTRO_FAMILY="debian"
                 PKG="apt-get"
+                log_warn "$DISTRO_ID isn't on the supported list but ID_LIKE matches Debian — proceeding with apt-get."
             elif [[ "$DISTRO_LIKE" == *rhel* || "$DISTRO_LIKE" == *fedora* ]]; then
                 DISTRO_FAMILY="rhel"
                 if command -v dnf &>/dev/null; then PKG="dnf"; else PKG="yum"; fi
+                log_warn "$DISTRO_ID isn't on the supported list but ID_LIKE matches RHEL — proceeding with $PKG."
             else
                 log_warn "Unknown distro '$DISTRO_ID' (ID_LIKE='$DISTRO_LIKE')."
-                log_warn "Bootstrap will attempt the closest match but may fail."
+                log_warn "Supported: Ubuntu 20.04+, Debian 11+, RHEL 9+, Rocky 9+, AlmaLinux 9+, Fedora 38+, CentOS Stream 9+"
                 die "Unsupported distro. Open an issue with your /etc/os-release contents."
             fi
             ;;
     esac
     log_info "Detected: ${BOLD}${DISTRO_ID}${NC} ${DISTRO_VERSION_ID} (${DISTRO_FAMILY} family, pkg=${PKG})"
+}
+
+print_supported_distros() {
+    cat <<EOF
+    Supported distributions:
+      - Ubuntu 20.04+ / Debian 11+ (apt-get)
+      - RHEL 9+ / Rocky 9+ / AlmaLinux 9+ / CentOS Stream 9+ (dnf)
+      - Fedora 38+ (dnf)
+      - Oracle Linux 9+ (dnf)
+    Other distros with ID_LIKE matching one of the above are accepted with a warning.
+EOF
 }
 
 # ---------------------------------------------------------------------------
@@ -312,24 +325,60 @@ install_nvidia_toolkit() {
     log_info "Configuring Docker runtime for NVIDIA…"
     $SUDO nvidia-ctk runtime configure --runtime=docker >/dev/null \
         || die "nvidia-ctk runtime configure failed."
+
+    # Refresh ld.so cache. On RHEL after a fresh nvidia-driver install the
+    # libnvidia-ml.so.1 symlink may exist but not be in /etc/ld.so.cache,
+    # which makes nvidia-container-cli fail with "load library failed".
+    $SUDO ldconfig 2>/dev/null || true
+
+    # Sanity-check the host has the userspace driver libs the toolkit needs.
+    # nvidia-smi working on the host means the kernel module is loaded, but
+    # the userspace libs (libnvidia-ml, libcuda) come from a separate package
+    # on RHEL (nvidia-driver-cuda-libs) and may be missing on minimal installs.
+    if ! $SUDO ldconfig -p 2>/dev/null | grep -q 'libnvidia-ml\.so\.1'; then
+        log_warn "libnvidia-ml.so.1 not in ld.so cache — the container toolkit needs it."
+        log_warn "Fix on RHEL/Fedora:"
+        log_warn "  $SUDO $PKG install -y nvidia-driver-cuda nvidia-driver-cuda-libs"
+        log_warn "Fix on Ubuntu/Debian:"
+        log_warn "  $SUDO $PKG install -y libnvidia-compute-\$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)"
+        log_warn "Then: $SUDO ldconfig && $SUDO systemctl restart docker"
+    fi
+
     $SUDO systemctl restart docker
     sleep 3
 
     # Verify (using DOCKER_PREFIX since user may not be in docker group yet).
-    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+    local verify_log=/tmp/atlas-nvidia-verify.log
+    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi >"$verify_log" 2>&1; then
         log_ok "nvidia-container-toolkit verified — Docker can see GPU"
-    else
-        # One more time with a longer settle — first restart on some kernels
-        # takes a few seconds for the runtime to register.
-        sleep 5
-        if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
-            log_ok "nvidia-container-toolkit verified — Docker can see GPU"
-        else
-            log_warn "nvidia-container-toolkit installed but GPU not visible to Docker."
-            log_warn "Most common cause: nouveau driver loaded. Check Step 4 output above."
-            log_warn "Recovery: $SUDO systemctl restart docker, then re-run this script."
+        return
+    fi
+    sleep 5
+    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi >"$verify_log" 2>&1; then
+        log_ok "nvidia-container-toolkit verified — Docker can see GPU"
+        return
+    fi
+
+    # Verify failed twice. Show the actual error so the user knows what's wrong.
+    log_err "nvidia-container-toolkit installed but Docker can't talk to the GPU."
+    log_err "Container error:"
+    grep -E 'error|failed|cannot' "$verify_log" | head -5 | sed 's/^/      /' >&2
+
+    # Diagnostic: try CDI mode (newer style — replaces legacy mode for
+    # newer drivers). Some setups need CDI generated explicitly.
+    if command -v nvidia-ctk &>/dev/null; then
+        log_info "Trying CDI mode as a fallback…"
+        $SUDO mkdir -p /etc/cdi
+        if $SUDO nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/dev/null 2>&1; then
+            if $DOCKER_PREFIX docker run --rm --device=nvidia.com/gpu=all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+                log_ok "CDI mode works (legacy mode does not). Compose may need updating to use CDI."
+                log_info "  See: https://github.com/NVIDIA/nvidia-container-toolkit/blob/main/docs/cdi.md"
+                return
+            fi
         fi
     fi
+
+    die "GPU not visible to Docker. Check the container error above and the libnvidia-ml.so.1 hint."
 }
 
 # ---------------------------------------------------------------------------
@@ -489,27 +538,26 @@ download_models() {
     fi
 
     log_info "Calling scripts/download-models.sh (this can take 10-30 min on first run)…"
+    log_info "Progress is shown live below; full output also saved to /tmp/atlas-models.log."
+    echo
     # Run as the target user so files end up owned by the human, not root.
-    # Wraps the shell pipeline in `sudo -u` only when we're root and have
-    # a real target user — otherwise the regular pipeline runs.
     local runner=""
     if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
         runner="$SUDO -u $TARGET_USER"
     fi
-    # Use PIPESTATUS to surface real script exit code, not the grep filter.
-    # Without this, `grep` returning empty (no matches → exit 1) masks
-    # successful runs and conversely a script crash that did emit some
-    # [INFO] lines reads as success.
+    # Stream output live (no grep filter — that hid curl's progress bar
+    # and any error messages that didn't match the [INFO]/[WARN]/[ERROR]
+    # pattern). `tee` preserves the log without breaking line buffering.
     set +e
-    $runner ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log | grep -E '^\[INFO\]|\[WARN\]|\[ERROR\]'
+    $runner ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log
     local rc=${PIPESTATUS[0]}
     set -e
+    echo
     if [[ $rc -eq 0 ]]; then
-        log_ok "Model download complete. See /tmp/atlas-models.log for details."
+        log_ok "Model download complete (log: /tmp/atlas-models.log)"
     else
-        log_err "Model download failed (exit $rc). Last 30 lines of /tmp/atlas-models.log:"
-        tail -30 /tmp/atlas-models.log >&2 || true
-        die "Model download failed — check HuggingFace credentials, disk space, or network."
+        log_err "Model download failed (exit $rc)."
+        die "Model download failed — check the live output above, /tmp/atlas-models.log, disk space, or network."
     fi
 
     # Lens weights are a separate fetch — the main script's --lens
@@ -517,8 +565,8 @@ download_models() {
     # Without these, the lens service starts but returns neutral scores.
     log_info "Fetching Geometric Lens weights…"
     set +e
-    $runner ./scripts/download-models.sh --lens >>/tmp/atlas-models.log 2>&1
-    rc=$?
+    $runner ./scripts/download-models.sh --lens 2>&1 | tee -a /tmp/atlas-models.log
+    rc=${PIPESTATUS[0]}
     set -e
     if [[ $rc -eq 0 ]]; then
         log_ok "Lens weights ready"
@@ -547,21 +595,36 @@ start_compose() {
         log_warn "Using sudo for docker compose (user not in docker group yet — log out/in to fix)"
     fi
 
-    # Compose v2 with `image:` set in compose.yml does `pull missing` by
-    # default — first run downloads the GHCR images (PC-052), subsequent
-    # runs reuse the local cache. To force a rebuild from source instead
-    # of pulling, run `docker compose build` before this.
-    log_info "Pulling images from GHCR (first run only) and starting containers…"
+    # Pull images first as a separate step so the user can see the layer-by-
+    # layer download progress (5 images, ~3GB total on first run). Without
+    # this split, `up -d` would silently pull during the up call and only
+    # surface output if it fails. PC-052.
+    log_info "Pulling images from GHCR (first run: ~3GB across 5 services)…"
+    echo
     set +e
-    $DC up -d 2>&1 | tee /tmp/atlas-compose.log | tail -20
+    $DC pull 2>&1 | tee /tmp/atlas-compose-pull.log
     local rc=${PIPESTATUS[0]}
     set -e
+    echo
     if [[ $rc -ne 0 ]]; then
-        log_err "docker compose up failed (exit $rc). Last 30 lines of /tmp/atlas-compose.log:"
-        tail -30 /tmp/atlas-compose.log >&2 || true
-        die "Compose start failed — see log above."
+        log_err "docker compose pull failed (exit $rc). Log: /tmp/atlas-compose-pull.log"
+        log_err "Common causes: GHCR rate-limit, network, or auth (private package)."
+        die "Image pull failed — see live output above."
     fi
-    log_ok "Containers started. See /tmp/atlas-compose.log for details."
+    log_ok "All images pulled."
+
+    log_info "Starting containers…"
+    echo
+    set +e
+    $DC up -d 2>&1 | tee /tmp/atlas-compose.log
+    rc=${PIPESTATUS[0]}
+    set -e
+    echo
+    if [[ $rc -ne 0 ]]; then
+        log_err "docker compose up failed (exit $rc). Log: /tmp/atlas-compose.log"
+        die "Compose start failed — see live output above."
+    fi
+    log_ok "Containers started (log: /tmp/atlas-compose.log)"
 }
 
 # ---------------------------------------------------------------------------
@@ -583,23 +646,39 @@ wait_for_healthy() {
     local elapsed=0
     local interval=5
 
+    log_info "Waiting up to ${timeout}s for all services to report healthy."
+    log_info "Tip: open another terminal and run \`$DC logs -f llama-server\` to watch model load."
+    echo
+
+    local last_status=""
     while [[ $elapsed -lt $timeout ]]; do
         local healthy=0
         local total=${#services[@]}
+        local status_line=""
         for s in "${services[@]}"; do
             local state
             state=$($DC ps --format '{{.Service}} {{.State}} {{.Health}}' 2>/dev/null \
                     | awk -v s="$s" '$1==s {print $2"/"$3; exit}')
-            # Healthy = "running/healthy" or "running/" (no healthcheck = running counts)
             if [[ "$state" == running/healthy || "$state" == running/ ]]; then
                 healthy=$((healthy + 1))
+                status_line+="✓"
+            elif [[ "$state" == running/starting ]]; then
+                status_line+="⠿"
+            elif [[ "$state" == running/unhealthy ]]; then
+                status_line+="✗"
+            else
+                status_line+="·"
             fi
         done
-        printf "\r    ${DIM}%d/%d services healthy (elapsed: %ds / %ds)${NC}" \
-            "$healthy" "$total" "$elapsed" "$timeout"
+        # Print status line on change OR every 30s, so the user sees life signs
+        # without flooding the screen on every 5s tick.
+        if [[ "$status_line" != "$last_status" || $((elapsed % 30)) -eq 0 ]]; then
+            printf "    ${DIM}[%s] %d/%d healthy after %ds (services: %s)${NC}\n" \
+                "$status_line" "$healthy" "$total" "$elapsed" "${services[*]}"
+            last_status="$status_line"
+        fi
         if [[ $healthy -eq $total ]]; then
-            echo
-            log_ok "All $total services healthy"
+            log_ok "All $total services healthy after ${elapsed}s"
             return 0
         fi
         sleep $interval
@@ -608,7 +687,9 @@ wait_for_healthy() {
 
     echo
     log_err "Timeout: not all services healthy after ${timeout}s"
-    log_err "Run '$DC ps' to see current state, or '$DC logs <service>' for details."
+    log_err "Current state:"
+    $DC ps 2>&1 | sed 's/^/      /' >&2
+    log_err "Inspect a stuck service: $DC logs <service-name>"
     return 1
 }
 
@@ -702,9 +783,18 @@ main() {
     fi
     echo
 
+    print_supported_distros
+    echo
+
     log_step "Detecting system"
     detect_distro
     detect_gpu
+    echo
+    log_info "Install location: ${BOLD}${ATLAS_INSTALL_DIR:-/opt/atlas}${NC} (override with ATLAS_INSTALL_DIR=...)"
+    log_info "  Why /opt/atlas? It's the standard prefix for system-wide third-party"
+    log_info "  software (FHS), survives \$HOME purges, and lets multiple users on the"
+    log_info "  same box share one install. Set ATLAS_INSTALL_DIR=\$HOME/atlas if you'd"
+    log_info "  rather it land in your home dir."
     echo
 
     install_docker
