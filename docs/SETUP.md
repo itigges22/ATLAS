@@ -2,17 +2,39 @@
 
 Four deployment methods: **one-shot bootstrap** (recommended for new installs), Docker Compose (manual), bare-metal, or K3s.
 
+<!-- DEV_BRANCH_SETUP_START: remove this entire callout once dev → main is merged. -->
+> ⚠️ **Pre-release status.** Active development is on the `dev` branch and `:latest`
+> GHCR images still point at the older main HEAD. Until the next promotion, every
+> `git clone` snippet below uses `-b dev` and every compose start sets
+> `ATLAS_IMAGE_TAG=dev`. Strip those two pieces once `dev` lands on `main` and the
+> GHA workflow republishes `:latest` — search this file for `DEV_BRANCH_SETUP` to
+> find every spot that needs to revert.
+<!-- DEV_BRANCH_SETUP_END -->
+
 ---
 
 ## Method 0: One-shot bootstrap (PC-051)
 
 Single curl command that detects your distro, installs Docker + nvidia-container-toolkit, sets sysctl knobs, downloads model weights, and brings the stack up. Idempotent — safe to re-run.
 
+<!-- DEV_BRANCH_SETUP: revert curl URL to /main/ and drop the ATLAS_IMAGE_TAG/clone-branch lines below once dev → main is merged. -->
 ```bash
+# Pre-release: clone dev manually first, then run bootstrap (it skips the
+# clone step when /opt/atlas already exists), with :dev images pinned.
+git clone -b dev https://github.com/itigges22/ATLAS.git /opt/atlas
+cd /opt/atlas
+echo 'ATLAS_IMAGE_TAG=dev' >> .env
+./scripts/atlas-bootstrap.sh
+```
+
+Once `dev` is promoted to `main`, this collapses back to the one-liner:
+
+```bash
+# Post-promotion form (don't use yet — see callout at top of file).
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
 
-Or, from a checkout:
+Or, from an existing checkout:
 ```bash
 ./scripts/atlas-bootstrap.sh
 ```
@@ -67,9 +89,10 @@ This is the tested deployment method for V3.0.1.
 
 ### Setup
 
+<!-- DEV_BRANCH_SETUP: drop the `-b dev` flag in step 1 and the ATLAS_IMAGE_TAG=dev line in step 5 once dev → main is merged. -->
 ```bash
-# 1. Clone
-git clone https://github.com/itigges22/ATLAS.git
+# 1. Clone (pre-release: pin to dev branch — drop `-b dev` post-promotion)
+git clone -b dev https://github.com/itigges22/ATLAS.git
 cd ATLAS
 
 # 2. Download model weights (~7GB)
@@ -86,6 +109,7 @@ pip install -e .
 
 # 5. Configure environment
 cp .env.example .env
+echo 'ATLAS_IMAGE_TAG=dev' >> .env   # pre-release: pin compose to :dev images (drop post-promotion)
 # Defaults work if your model is in ./models/ — edit .env only if you changed the path
 
 # 6. Start all services (first run builds container images — this takes several minutes)
@@ -228,10 +252,11 @@ docker compose logs --tail 50          # Last 50 lines from all services
 
 ### Updating
 
+<!-- DEV_BRANCH_SETUP: drop the `origin dev` argument once dev → main is merged. -->
 ```bash
-git pull
+git pull origin dev          # pre-release: pull from dev (drop `origin dev` post-promotion)
 docker compose down
-docker compose build         # Rebuild changed images
+docker compose pull          # grab fresh :dev (or :latest) images from GHCR
 docker compose up -d
 ```
 
@@ -252,9 +277,10 @@ Run all services as local processes without containers. Useful for development o
 
 ### Build
 
+<!-- DEV_BRANCH_SETUP: drop `-b dev` in step 1 once dev → main is merged. -->
 ```bash
-# 1. Clone and install Python CLI
-git clone https://github.com/itigges22/ATLAS.git
+# 1. Clone and install Python CLI (pre-release: pin to dev branch)
+git clone -b dev https://github.com/itigges22/ATLAS.git
 cd ATLAS
 pip install -e .
 
@@ -263,8 +289,8 @@ mkdir -p models
 wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
      -O models/Qwen3.5-9B-Q6_K.gguf
 
-# 3. Build atlas-proxy
-cd atlas-proxy
+# 3. Build the proxy
+cd proxy
 go build -o ~/.local/bin/atlas-proxy-v2 .
 cd ..
 
