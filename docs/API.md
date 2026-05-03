@@ -228,7 +228,7 @@ The `atlas_*` fields are ATLAS-specific metadata attached to non-streaming respo
 
 ### Tools available to the agent loop
 
-Defined in `atlas-proxy/tools.go`. Used by the model when responding `{"type":"tool_call","name":"<tool>","args":{...}}`.
+Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_call","name":"<tool>","args":{...}}`.
 
 | Tool | Purpose |
 |------|---------|
@@ -610,6 +610,6 @@ A minimal client needs three things:
 2. **POST `/cancel`** with `{session_id}` when the user wants to abort.
 3. *(Optional)* **GET `/events`** in a background goroutine/thread for the global typed-envelope feed if you want a pipeline-progress sidebar.
 
-The TUI ([atlas-tui](CLI.md)) is a Go reference implementation (~3 kloc) — its `model.go` shows how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `atlas-tui/` in the repo for a complete worked example.
+The TUI ([atlas tui](CLI.md)) is a Go reference implementation (~3 kloc) — its `model.go` shows how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example.
 
 PC-063 tracks producing a fully-worked web client recipe and an OpenAPI spec generated from `tools.go`. Until then, this document and the TUI source are the canonical reference.

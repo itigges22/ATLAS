@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Aider removed
-- `atlas-proxy/aider_format.go` (whole-file format translator), `handleChatCompletions` + `handleStreamingChat`, and the OpenAI-compat agent-loop wrapping are all deleted (~2000 lines). `/v1/chat/completions` on the proxy is now a transparent passthrough to llama-server via the catch-all handler.
+- `proxy/aider_format.go` (whole-file format translator), `handleChatCompletions` + `handleStreamingChat`, and the OpenAI-compat agent-loop wrapping are all deleted (~2000 lines). `/v1/chat/completions` on the proxy is now a transparent passthrough to llama-server via the catch-all handler.
 - `.aider.model.settings.yml`, `.aider.model.metadata.json`, the `.aider*` `.gitignore` exceptions, and the `_find_aider`/`launch_aider` paths in `atlas/cli/repl.py` are all gone. Bare `atlas` (interactive tty) now launches the TUI by default; pipe mode falls through to the built-in `/solve` REPL.
 - Proxy launcher (`atlas/cli/repl.py`) now reaps any pre-existing `atlas-proxy-v2` process before spawning a fresh one and redirects proxy stdout/stderr to `~/.cache/atlas/proxy.log` instead of `/dev/null`. Closes the "old binary in memory after rebuild" foot-gun.
 
@@ -14,7 +14,7 @@
 - Slash commands inside the TUI: `/add /drop /context /diff /commit /undo /run /help /quit`
 - New atlas-proxy `POST /cancel` endpoint indexed by `session_id` — TUI cancels the in-flight `/v1/agent` turn on Ctrl+C as defense-in-depth alongside TCP disconnect
 - 43 atlas-tui Go tests + 4 atlas-proxy `/cancel` tests, all green under `go test -race`
-- `atlas-tui/` is a standalone Go module (`github.com/itigges22/atlas-tui`) — depends on bubbletea, lipgloss, bubbles, glamour
+- `tui/` is a standalone Go module (`github.com/itigges22/atlas-tui`) — depends on bubbletea, lipgloss, bubbles, glamour
 
 ### Documentation
 - Added multilingual documentation: Simplified Chinese (zh-CN), Japanese (ja), Korean (ko) for README, SETUP, and TROUBLESHOOTING
@@ -44,7 +44,7 @@
 - Grammar-constrained output via llama-server `response_format:json_object` — 100% valid JSON
 - 8 tool definitions: `read_file`, `write_file`, `edit_file`, `delete_file`, `run_command`, `search_files`, `list_directory`, `plan_tasks`
 - Per-file tier classification: T1 (config/data) writes directly, T2 (logic/features) routes through V3 pipeline
-- 3400+ lines new Go code across 12 files in `atlas-proxy/`
+- 3400+ lines new Go code across 12 files in `proxy/`
 
 ### V3 Pipeline Integration
 - All 14 V3 steps wired into `write_file`/`edit_file` executors for T2/T3 files

@@ -24,7 +24,7 @@ echo "fix bug" | atlas   # pipe mode: routes through /solve
 `atlas` does the right thing automatically:
 
 1. **Locates the `atlas-tui` binary** on `$PATH` or in `~/.local/bin`.
-2. **Builds from source** in `atlas-tui/` if the binary is missing and Go
+2. **Builds from source** in `tui/` if the binary is missing and Go
    1.24+ is available. (~10 s on first run.)
 3. **Ensures atlas-proxy is running** via `_ensure_proxy()`. If the
    proxy's `/workspace` bind-mount doesn't already cover your current
@@ -52,7 +52,7 @@ install instructions and exits.
 │ ATLAS TUI   ⠹ Pondering · cwd:~/projects/snake · default                 │
 ├─ Pipeline ───────────────────────────────────┬──────── Files ────────────┤
 │ ⚙  llm           RUN   2.3s  turn=1          │ ● snake                   │
-│ ⚙  v3:probe      RUN   1.1s  generating cand │ ▸ atlas-tui/              │
+│ ⚙  v3:probe      RUN   1.1s  generating cand │ ▸ tui/                    │
 │ ✓  tool          OK    12ms  write_file      │ ▸ docs/                   │
 ├─ Chat ───────────────────────────────────────┤   ● index.html            │
 │ you                                          │   README.md               │
@@ -371,7 +371,7 @@ tmux intercepts mouse events. Either enable mouse passthrough in tmux
 By design: V3 only fires for files ≥150 lines (HTML/JSX/TSX/Vue/Svelte)
 or ≥50-line files with code-logic indicators. Short config/data files
 go through the direct write path. See `classifyFileTier` in
-`atlas-proxy/tools.go`.
+`proxy/tools.go`.
 
 ### "encoding prompt…" lingers for >30 s
 

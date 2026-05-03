@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-// chatEvent mirrors the SSEEvent shape in atlas-proxy/types.go.
+// chatEvent mirrors the SSEEvent shape in proxy/types.go.
 // Different from Envelope — this is the older, simpler chat protocol.
 type chatEvent struct {
 	Type string          `json:"type"`
@@ -34,7 +34,7 @@ type chatEvent struct {
 }
 
 // agentRequest is the POST body for /v1/agent. Field tags MUST match
-// the anonymous struct in atlas-proxy/agent.go:599.
+// the anonymous struct in proxy/agent.go:599.
 type agentRequest struct {
 	Message    string `json:"message"`
 	WorkingDir string `json:"working_dir"`

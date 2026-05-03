@@ -63,5 +63,5 @@ atlas-proxy-v2                          # listens on :8090
 ## Build
 
 ```bash
-cd atlas-proxy && go build -o ~/.local/bin/atlas-proxy-v2 .
+cd proxy && go build -o ~/.local/bin/atlas-proxy-v2 .
 ```

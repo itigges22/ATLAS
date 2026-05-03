@@ -47,14 +47,14 @@ def _find_go() -> Optional[str]:
 
 
 def _find_atlas_dir() -> str:
-    """Find the ATLAS repo root (where atlas-proxy/ source lives)."""
+    """Find the ATLAS repo root (where proxy/ source lives)."""
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(5):
-        if os.path.exists(os.path.join(d, "atlas-proxy", "main.go")):
+        if os.path.exists(os.path.join(d, "proxy", "main.go")):
             return d
         d = os.path.dirname(d)
     # Check CWD
-    if os.path.exists(os.path.join(os.getcwd(), "atlas-proxy", "main.go")):
+    if os.path.exists(os.path.join(os.getcwd(), "proxy", "main.go")):
         return os.getcwd()
     return ""
 
@@ -69,7 +69,7 @@ def _find_proxy_binary(atlas_dir: str) -> Optional[str]:
     # Check common locations
     for candidate in [
         os.path.expanduser("~/.local/bin/atlas-proxy-v2"),
-        os.path.join(atlas_dir, "atlas-proxy", "atlas-proxy-v2") if atlas_dir else None,
+        os.path.join(atlas_dir, "proxy", "atlas-proxy-v2") if atlas_dir else None,
     ]:
         if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
@@ -83,7 +83,7 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
     if not go_bin or not atlas_dir:
         return None
 
-    proxy_src = os.path.join(atlas_dir, "atlas-proxy")
+    proxy_src = os.path.join(atlas_dir, "proxy")
     if not os.path.isfile(os.path.join(proxy_src, "main.go")):
         return None
 

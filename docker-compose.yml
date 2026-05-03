@@ -153,7 +153,7 @@ services:
   atlas-proxy:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
     build:
-      context: ./atlas-proxy
+      context: ./proxy
     environment:
       - ATLAS_PROXY_PORT=8090
       - ATLAS_INFERENCE_URL=http://llama-server:8080

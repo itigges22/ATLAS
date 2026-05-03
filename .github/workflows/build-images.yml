@@ -50,8 +50,8 @@ jobs:
       matrix:
         service:
           - name: proxy
-            context: ./atlas-proxy
-            dockerfile: ./atlas-proxy/Dockerfile
+            context: ./proxy
+            dockerfile: ./proxy/Dockerfile
           - name: v3
             # Root context: v3-service/Dockerfile reads sibling dirs at build time.
             context: .

@@ -289,4 +289,4 @@ through the sandbox).
 | Pipeline speed optimization | Reduce per-task latency (current V3 is compute-heavy: best-of-3 + Lens + repair) | Faster end-to-end benchmark runs |
 | Target | 80-90% LCB pass@1 with improved throughput | |
 
-Full ablation data: `v3_ablation_results/`
+Full ablation data: `ablation/` (sibling to this file)

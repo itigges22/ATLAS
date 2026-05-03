@@ -156,10 +156,10 @@ v2_5_1/
 .atlas/
 
 # ----- Go build artifacts -----
-atlas-proxy/atlas-proxy
-atlas-proxy/atlas-proxy-v2
-atlas-proxy/cmd/
-atlas-tui/atlas-tui
+proxy/atlas-proxy
+proxy/atlas-proxy-v2
+proxy/cmd/
+tui/atlas-tui
 
 # ----- Geometric Lens large files (on HuggingFace, not in git) -----
 geometric-lens/geometric_lens/models/training_embeddings_*.json

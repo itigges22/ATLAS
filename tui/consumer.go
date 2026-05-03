@@ -1,6 +1,6 @@
 // PC-062: SSE event consumer for the TUI.
 //
-// Mirrors the Envelope struct in atlas-proxy/events.go and the Python
+// Mirrors the Envelope struct in proxy/events.go and the Python
 // dataclass in atlas/cli/events.py. The schema contract is documented
 // in docs/PROTOCOL.md — any change here MUST be made in lockstep
 // across all three implementations.
@@ -23,7 +23,7 @@ import (
 )
 
 // Envelope is the wire-format event. Field tags MUST match
-// atlas/cli/events.py and atlas-proxy/events.go exactly.
+// atlas/cli/events.py and proxy/events.go exactly.
 type Envelope struct {
 	EventID    string                 `json:"event_id"`
 	Timestamp  float64                `json:"timestamp"`

@@ -15,7 +15,7 @@ For first-time setup, see `docs/SETUP.md`. For configuration, see
 ## When to use dev mode
 
 Use it when you are actively editing Python in `geometric-lens/` or
-`v3-service/`, or Go in `atlas-proxy/`. Skip it for one-off
+`v3-service/`, or Go in `proxy/`. Skip it for one-off
 contributions where a single rebuild is acceptable.
 
 Dev mode does not change image behavior in production-like ways —

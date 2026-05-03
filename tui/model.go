@@ -1146,7 +1146,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		m.streamingV3Text = ""
 
 	case "v3_progress":
-		// V3 pipeline narration emitted by atlas-proxy/tools.go via
+		// V3 pipeline narration emitted by proxy/tools.go via
 		// ctx.StreamFn("v3_progress", {message: "..."}). One row per
 		// stage (e.g. "[probe] Generating probe candidate..."). These
 		// were silently dropped in the first cut — without this case

@@ -560,7 +560,7 @@ docker compose logs v3-service | grep "smoke_check"
   correctly.
 - `[smoke_check] compile=OK (python)` on a `.html` file —
   the proxy didn't pass `file_path` through. Check
-  `atlas-proxy/v3_bridge.go` and the
+  `proxy/v3_bridge.go` and the
   `V3GenerateRequest`.
 - `[smoke_check] compile=FAIL` followed by
   `[phase3] All candidates failed — entering repair

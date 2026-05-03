@@ -16,7 +16,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
 - [`CHANGELOG.md`](#root-docs) — Release history
 - [`CODE_OF_CONDUCT.md`](#root-docs) — Community guidelines
 - [`CONTRIBUTING.md`](#root-docs) — Contributor guide
-- [`atlas-proxy/`](#atlas-proxy) — Go proxy: agent loop, grammar, tool calls
+- [`proxy/`](#atlas-proxy) — Go proxy: agent loop, grammar, tool calls
   - [`main.go`](#atlas-proxy) — HTTP server, chat handler, verify-repair, tier classification
   - [`agent.go`](#atlas-proxy) — Agent loop, LLM dispatch, exploration budget, error recovery
   - [`tools.go`](#atlas-proxy) — 8 tool definitions + executors, tier classifier
@@ -31,8 +31,8 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`go.mod`](#atlas-proxy) — Go module definition
   - [`Dockerfile`](#atlas-proxy) — Multi-stage Go build
   - [`README.md`](#atlas-proxy) — Proxy documentation
-  - [`atlas-proxy`](#atlas-proxy) — Compiled Go binary (gitignored in production)
-- [`atlas-tui/`](#atlas-tui) — Bubbletea TUI client (Go) — PC-062
+  - [`atlas-proxy-v2`](#atlas-proxy) — Compiled Go binary (gitignored in production)
+- [`tui/`](#atlas-tui) — Bubbletea TUI client (Go) — PC-062
   - [`main.go`](#atlas-tui) — Entry point + Bubbletea program setup
   - [`model.go`](#atlas-tui) — Bubbletea model: events, chat, textarea, hotkeys
   - [`panes.go`](#atlas-tui) — Pure pane renderers (pipeline / chat / events / stats / input)
@@ -224,14 +224,14 @@ Every file in the repository. Click any directory in the tree to jump to its des
     - [`V3_1_STATUS.md`](#docs-reports) — V3.1 implementation status
   - [`images/banner.png`](#docs) — README banner image
   - [`images/ATLAS_CLI.png`](#docs) — CLI screenshot
-- [`v3_ablation_results/`](#v3-ablation-results) — Published ablation data
-  - [`README.md`](#v3-ablation-results) — Data format documentation
-  - [`config.json`](#v3-ablation-results) — Ablation run configuration
-  - [`preflight.json`](#v3-ablation-results) — Pre-run system checks
-  - `condition_a_baseline/` — Baseline (54.9%, 599 tasks)
-  - `condition_b_phase1/` — +Phase 1 (67.3%, 599 tasks)
-  - `condition_c_phase1_2/` — +Phase 1+2 (67.3%, 599 tasks)
-  - `condition_d_phase1_3/` — +Phase 1+3 (74.6%, 599 tasks)
+  - [`reports/ablation/`](#v3-ablation-results) — Published ablation data
+    - `README.md` — Data format documentation
+    - `config.json` — Ablation run configuration
+    - `preflight.json` — Pre-run system checks
+    - `condition_a_baseline/` — Baseline (54.9%, 599 tasks)
+    - `condition_b_phase1/` — +Phase 1 (67.3%, 599 tasks)
+    - `condition_c_phase1_2/` — +Phase 1+2 (67.3%, 599 tasks)
+    - `condition_d_phase1_3/` — +Phase 1+3 (74.6%, 599 tasks)
   - Each condition contains `summary.json`, `v3_lcb/results.json`, and `v3_lcb/per_task/` (599 per-task JSON files)
 
 ---
@@ -261,42 +261,42 @@ Every file in the repository. Click any directory in the tree to jump to its des
 | [`CONTRIBUTING.md`](../CONTRIBUTING.md) | How to contribute: fork, branch, test, PR workflow |
 
 <a id="atlas-proxy"></a>
-### atlas-proxy/ — Agent Loop (Go)
+### proxy/ — Agent Loop (Go)
 
 The core of the V3.0.1 CLI. Hosts `/v1/agent` (the structured agent endpoint the TUI drives), runs a grammar-constrained agent loop with 8 tools, and routes complex files through the V3 pipeline. `/v1/chat/completions` is a transparent passthrough to llama-server for OpenAI-compat clients.
 
 | File | Lines | Description |
 |------|-------|-------------|
-| [`main.go`](../atlas-proxy/main.go) | ~1600 | HTTP server, route registration, verify-repair pipeline scaffolding, format normalization, helpers shared with the agent loop |
-| [`agent.go`](../atlas-proxy/agent.go) | 740 | Agent loop iteration, JSON schema generation, system prompt building, LLM calls with grammar constraint, exploration budget, truncation recovery, `/v1/agent` + `/cancel` handlers |
-| [`tools.go`](../atlas-proxy/tools.go) | 905 | 8 tool definitions (read/write/edit/delete file, run command, search, list dir, plan tasks), per-file tier classifier, V3 routing |
-| [`grammar.go`](../atlas-proxy/grammar.go) | 192 | JSON schema (oneOf: tool_call/text/done) and GBNF grammar for constrained output, tool documentation generation |
-| [`types.go`](../atlas-proxy/types.go) | 390 | AgentContext, ToolDef, ToolResult, tier definitions (T0-T3), max turns per tier, permission types |
-| [`v3_bridge.go`](../atlas-proxy/v3_bridge.go) | 120 | HTTP bridge to Python V3 service with SSE progress streaming, Lens scoring bridge |
-| [`v3_adapter.go`](../atlas-proxy/v3_adapter.go) | 177 | Translates file write requests into V3GenerateRequest with project context, framework detection, constraint extraction |
-| [`build_verify.go`](../atlas-proxy/build_verify.go) | 157 | Per-file-type verification: tsc, py_compile, go build, cargo check, gcc, bash -n. Framework-specific overrides |
-| [`project.go`](../atlas-proxy/project.go) | 226 | Detects language (Node/Python/Rust/Go/C/Shell), framework (Next.js/Flask/Express), build/dev/test commands |
-| [`permissions.go`](../atlas-proxy/permissions.go) | 150 | Allow/deny rules, dangerous pattern detection (rm -rf, .env, credentials), mode-based access |
-| [`parallel.go`](../atlas-proxy/parallel.go) | 213 | plan_tasks executor: topological sort, concurrent sub-task execution (15-turn budget each) |
-| [`go.mod`](../atlas-proxy/go.mod) | — | Go module definition |
-| [`Dockerfile`](../atlas-proxy/Dockerfile) | — | Multi-stage Go build for containerized deployment |
+| [`main.go`](../proxy/main.go) | ~1600 | HTTP server, route registration, verify-repair pipeline scaffolding, format normalization, helpers shared with the agent loop |
+| [`agent.go`](../proxy/agent.go) | 740 | Agent loop iteration, JSON schema generation, system prompt building, LLM calls with grammar constraint, exploration budget, truncation recovery, `/v1/agent` + `/cancel` handlers |
+| [`tools.go`](../proxy/tools.go) | 905 | 8 tool definitions (read/write/edit/delete file, run command, search, list dir, plan tasks), per-file tier classifier, V3 routing |
+| [`grammar.go`](../proxy/grammar.go) | 192 | JSON schema (oneOf: tool_call/text/done) and GBNF grammar for constrained output, tool documentation generation |
+| [`types.go`](../proxy/types.go) | 390 | AgentContext, ToolDef, ToolResult, tier definitions (T0-T3), max turns per tier, permission types |
+| [`v3_bridge.go`](../proxy/v3_bridge.go) | 120 | HTTP bridge to Python V3 service with SSE progress streaming, Lens scoring bridge |
+| [`v3_adapter.go`](../proxy/v3_adapter.go) | 177 | Translates file write requests into V3GenerateRequest with project context, framework detection, constraint extraction |
+| [`build_verify.go`](../proxy/build_verify.go) | 157 | Per-file-type verification: tsc, py_compile, go build, cargo check, gcc, bash -n. Framework-specific overrides |
+| [`project.go`](../proxy/project.go) | 226 | Detects language (Node/Python/Rust/Go/C/Shell), framework (Next.js/Flask/Express), build/dev/test commands |
+| [`permissions.go`](../proxy/permissions.go) | 150 | Allow/deny rules, dangerous pattern detection (rm -rf, .env, credentials), mode-based access |
+| [`parallel.go`](../proxy/parallel.go) | 213 | plan_tasks executor: topological sort, concurrent sub-task execution (15-turn budget each) |
+| [`go.mod`](../proxy/go.mod) | — | Go module definition |
+| [`Dockerfile`](../proxy/Dockerfile) | — | Multi-stage Go build for containerized deployment |
 
 <a id="atlas-tui"></a>
-### atlas-tui/ — Bubbletea TUI Client (Go)
+### tui/ — Bubbletea TUI Client (Go)
 
 Native terminal UI that consumes both atlas-proxy SSE streams (`/events` for typed envelopes, `/v1/agent` for chat). The canonical chat front-end. PC-062.
 
 | File | Description |
 |------|-------------|
-| [`main.go`](../atlas-tui/main.go) | Entry point. Parses `--proxy`, spawns SSE consumer goroutine, runs Bubbletea program in alt-screen mode. |
-| [`model.go`](../atlas-tui/model.go) | Bubbletea model — owns Envelope channel, chat history, textarea input. Hotkeys: Enter/Ctrl+L/Ctrl+T/Ctrl+R/Ctrl+C. Spinner tick. |
-| [`panes.go`](../atlas-tui/panes.go) | Pure pane renderers: pipeline (stage table), chat (markdown via glamour), events (log), stats (counter strip), input (textarea wrapper). |
-| [`state.go`](../atlas-tui/state.go) | Pipeline state machine — pure function from Envelope sequence to derived UI state (stages, counters, active turn, done). |
-| [`consumer.go`](../atlas-tui/consumer.go) | `/events` SSE consumer mirroring atlas-proxy's Envelope struct. Reconnect with exponential backoff. |
-| [`chat.go`](../atlas-tui/chat.go) | `/v1/agent` POST + chat-protocol SSE parser. `/cancel` POST for explicit turn abort. Optional bearer auth from `secrets/api-keys.json`. |
-| [`commands.go`](../atlas-tui/commands.go) | Slash-command dispatch: `/add /drop /context /diff /commit /undo /run /help /quit`. Shell-out commands via `exec.CommandContext` with 60s deadline. |
-| [`*_test.go`](../atlas-tui/) | 39 tests covering state machine (12), slash commands (8), model integration (11), chat client + bearer loader (8). |
-| [`go.mod`](../atlas-tui/go.mod) | Go module definition (github.com/itigges22/atlas-tui). Deps: bubbletea, lipgloss, bubbles, glamour. |
+| [`main.go`](../tui/main.go) | Entry point. Parses `--proxy`, spawns SSE consumer goroutine, runs Bubbletea program in alt-screen mode. |
+| [`model.go`](../tui/model.go) | Bubbletea model — owns Envelope channel, chat history, textarea input. Hotkeys: Enter/Ctrl+L/Ctrl+T/Ctrl+R/Ctrl+C. Spinner tick. |
+| [`panes.go`](../tui/panes.go) | Pure pane renderers: pipeline (stage table), chat (markdown via glamour), events (log), stats (counter strip), input (textarea wrapper). |
+| [`state.go`](../tui/state.go) | Pipeline state machine — pure function from Envelope sequence to derived UI state (stages, counters, active turn, done). |
+| [`consumer.go`](../tui/consumer.go) | `/events` SSE consumer mirroring atlas-proxy's Envelope struct. Reconnect with exponential backoff. |
+| [`chat.go`](../tui/chat.go) | `/v1/agent` POST + chat-protocol SSE parser. `/cancel` POST for explicit turn abort. Optional bearer auth from `secrets/api-keys.json`. |
+| [`commands.go`](../tui/commands.go) | Slash-command dispatch: `/add /drop /context /diff /commit /undo /run /help /quit`. Shell-out commands via `exec.CommandContext` with 60s deadline. |
+| [`*_test.go`](../tui/) | 39 tests covering state machine (12), slash commands (8), model integration (11), chat client + bearer loader (8). |
+| [`go.mod`](../tui/go.mod) | Go module definition (github.com/itigges22/atlas-tui). Deps: bubbletea, lipgloss, bubbles, glamour. |
 
 <a id="atlas-cli"></a>
 ### atlas/ — Python CLI
@@ -561,9 +561,9 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`V3_1_STATUS.md`](reports/V3_1_STATUS.md) | V3.1 implementation status and roadmap |
 
 <a id="v3-ablation-results"></a>
-### v3_ablation_results/ — Published Evidence
+### docs/reports/ablation/ — Published Evidence
 
-Per-task pass/fail data for all V3 ablation conditions. 2,396 task results across 4 conditions. See [README](../v3_ablation_results/README.md) for data format.
+Per-task pass/fail data for all V3 ablation conditions. 2,396 task results across 4 conditions. See [README](reports/ablation/README.md) for data format.
 
 | Condition | Directory | Pass@1 | Tasks |
 |-----------|-----------|--------|-------|

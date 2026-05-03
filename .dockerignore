@@ -1,18 +1,19 @@
 # Root-level dockerignore. Applies to any build that uses the repo root as
 # context — currently just `v3-service` (per docker-compose.yml). Per-service
-# Dockerfiles in atlas-proxy/, geometric-lens/, sandbox/, inference/ use
+# Dockerfiles in proxy/, geometric-lens/, sandbox/, inference/ use
 # their own subdirectory as context and are unaffected by this file.
 #
 # Goal: keep the v3 build context to just `benchmark/` + `v3-service/main.py`
 # (what its Dockerfile actually COPYs), so CI doesn't ship docs/ + tests/ +
-# atlas-proxy sources / etc. across the wire on every build.
+# proxy sources / etc. across the wire on every build.
 
 # VCS + CI
 .git/
 .github/
 
 # Other services' source trees (v3 doesn't need them)
-atlas-proxy/
+proxy/
+tui/
 geometric-lens/
 sandbox/
 inference/
@@ -38,7 +39,7 @@ DELETE_BEFORE_PUSH/
 models/
 data/
 projects/
-v3_ablation_results/
+docs/reports/ablation/
 v2_5_results/
 v2_5_1_results/
 v2_5_1/

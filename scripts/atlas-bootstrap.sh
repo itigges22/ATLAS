@@ -347,7 +347,7 @@ ensure_repo_and_env() {
     log_step "Step 5: Repo & .env"
 
     # If we're not in a checkout, clone to ATLAS_INSTALL_DIR
-    if [[ ! -f "./docker-compose.yml" || ! -d "./atlas-proxy" ]]; then
+    if [[ ! -f "./docker-compose.yml" || ! -d "./proxy" ]]; then
         local install_dir="${ATLAS_INSTALL_DIR:-/opt/atlas}"
         local repo_url="${ATLAS_REPO_URL:-https://github.com/itigges22/ATLAS.git}"
 

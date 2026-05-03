@@ -21,7 +21,7 @@ sys.path.insert(0, '" + ATLAS_DIR + "/geometric-lens')
 
 LLAMA_EMBED_URL = "http://localhost:8080/embedding"
 MODELS_DIR = "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models"
-DATA_DIR = "" + ATLAS_DIR + "/v3_ablation_results/condition_a"
+DATA_DIR = "" + ATLAS_DIR + "/docs/reports/ablation/condition_a"
 
 
 def get_llama_embedding(text: str, retries=2) -> list:
