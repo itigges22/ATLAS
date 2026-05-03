@@ -416,12 +416,11 @@ func writeFileTool() *ToolDef {
 }
 
 // writeFileDirect writes content to disk atomically (write tmp + rename).
-// Previously (Aider era) this was a no-op — the proxy just recorded
-// what was "written" and Aider parsed the SSE response to do the actual
-// file writes. With the TUI replacing Aider (PC-062) there's no longer
-// anything downstream of the proxy that does file I/O, so the proxy
-// must do the write itself or the file vanishes into the void (the
-// "agent says it wrote the file but it isn't there" bug).
+// The proxy is the only thing downstream that touches the filesystem —
+// the TUI is read-only at the workspace level — so this is where any
+// write_file tool call ultimately lands. Without this the file would
+// vanish into the void ("agent says it wrote the file but it isn't
+// there" bug, fixed alongside PC-062).
 func writeFileDirect(path, content string) (*ToolResult, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, fmt.Errorf("cannot create parent dir for %s: %w", path, err)
@@ -950,7 +949,7 @@ func deleteFileTool() *ToolDef {
 
 			deleted := false
 
-			// Delete from the REAL project directory (where Aider's files live)
+			// Delete from the REAL project directory (where the user's files live)
 			if ctx.RealProjectDir != "" {
 				realPath := resolvePath(input.Path, ctx.RealProjectDir)
 				if info, err := os.Stat(realPath); err == nil {
@@ -981,7 +980,8 @@ func deleteFileTool() *ToolDef {
 			outBytes, _ := json.Marshal(out)
 			result := &ToolResult{Success: true, Data: outBytes}
 			// Signal the agent loop to stop after deletion — prevents the model
-			// from generating follow-up text that Aider could misinterpret as a file edit
+			// from generating follow-up text that would render as a noisy edit
+			// suggestion in chat after a destructive operation.
 			result.Error = "__FORCE_DONE__"
 			return result, nil
 		},

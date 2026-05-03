@@ -1,5 +1,8 @@
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
+> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+
+
 # ATLAS トラブルシューティングガイド
 
 ATLAS V3.0.1 のよくある問題と解決方法を、サービスごとにまとめています。

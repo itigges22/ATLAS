@@ -1,5 +1,8 @@
 > **[English](../../SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
 
+> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+
+
 # ATLAS 安装指南
 
 三种部署方式：Docker Compose（推荐且经过测试）、裸机部署和 K3s 部署。

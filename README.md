@@ -30,7 +30,8 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
 
 ## 🔥 Latest News
 
-- **2026-05-01** - **`atlas tui` ships** ([PC-062](ISSUES.md)) - native Bubbletea terminal UI replaces Aider as the canonical chat client; live V3 pipeline visibility, slash commands, in-turn cancel
+- **2026-05-02** - **Aider removed** — the Bubbletea TUI is now the only chat front-end. `/v1/chat/completions` on the proxy is a passthrough to llama-server; structured agent turns belong on `/v1/agent`.
+- **2026-05-01** - **`atlas tui` ships** ([PC-062](ISSUES.md)) - native Bubbletea terminal UI as the canonical chat client; live V3 pipeline visibility, slash commands, in-turn cancel
 - **2026-04-13** - ["How to Run an AI Coding Assistant on a $500 GPU and Beat Claude Sonnet"](https://devtrends.ru/python/itigges22-atlas) - devtrends.ru
 - **2026-04-05** - **[V3.0.1 released](CHANGELOG.md)** - interactive CLI, Docker Compose deployment, 95.8% reliability
 - **2026-04-03** - ["$500 GPU Beats Claude: Local AI Revolution for Web Devs"](https://ownet.it/blog/500-gpu-beats-claude-local-ai-revolution-for-web-devs) - ownet.it
@@ -102,16 +103,9 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 ```
 Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, pulls prebuilt service images from GHCR (no 75-min CUDA build), downloads model weights, brings the stack up, and prints a green "ready" banner. ~5–10 minutes on a fast connection.
 
-**Manual install (3 commands):**
-```bash
-git clone https://github.com/itigges22/ATLAS.git && cd ATLAS
-pip install -e . aider-chat
-atlas init --yes && docker compose up -d   # PC-054 wizard: probe + download + .env + api-keys.json
-```
-
 Then in any project directory: `atlas`.
 
-ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or Podman, and Python 3.9+. Currently tested on NVIDIA GPUs - ATLAS is not NVIDIA-specific, and ROCm support for AMD GPUs is on the roadmap. See **[SETUP.md](docs/SETUP.md)** for the full bootstrap flags and the alternative deployment paths (bare-metal, K3s); **[CLI.md → `atlas init`](docs/CLI.md#atlas-init--first-run-install-wizard-pc-054)** documents the wizard's full surface.
+ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or Podman, and Python 3.9+. Currently tested on NVIDIA GPUs - ATLAS is not NVIDIA-specific, and ROCm support for AMD GPUs is on the roadmap. See **[SETUP.md](docs/SETUP.md)** for the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags.
 
 ---
 

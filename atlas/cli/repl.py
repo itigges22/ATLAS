@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import time
+import signal
 import atexit
 from typing import Optional, List
 
@@ -40,18 +41,13 @@ def _check_url(url: str, timeout: int = 3) -> bool:
         return False
 
 
-def _find_aider() -> Optional[str]:
-    """Find aider binary on PATH."""
-    return shutil.which("aider")
-
-
 def _find_go() -> Optional[str]:
     """Find go binary on PATH."""
     return shutil.which("go")
 
 
 def _find_atlas_dir() -> str:
-    """Find the ATLAS repo root (where atlas-proxy/ and .aider configs live)."""
+    """Find the ATLAS repo root (where atlas-proxy/ source lives)."""
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(5):
         if os.path.exists(os.path.join(d, "atlas-proxy", "main.go")):
@@ -94,7 +90,7 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
     output = os.path.expanduser("~/.local/bin/atlas-proxy-v2")
     os.makedirs(os.path.dirname(output), exist_ok=True)
 
-    print("  Building atlas-proxy from source...")
+    print(f"  Building atlas-proxy from source...")
     try:
         result = subprocess.run(
             [go_bin, "build", "-o", output, "."],
@@ -114,9 +110,118 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
         return None
 
 
+def _kill_stale_proxy() -> None:
+    """Reap any pre-existing atlas-proxy-v2 process before launching a new
+    one. Without this, an orphaned proxy from a previous `atlas` session
+    (whose parent died ungracefully — terminal closed, SIGKILL, etc.)
+    keeps running with the OLD binary in memory even after a rebuild has
+    replaced the binary on disk. Users then see "I just fixed that bug"
+    confusion: the on-disk fix is real, but the running process never
+    picked it up. We re-find candidates two ways for robustness:
+
+      1. /proc walk for processes whose exe basename is atlas-proxy-v2
+         (catches orphans whose ppid=1).
+      2. ss/lsof on PROXY_PORT (catches the case where the binary was
+         renamed or replaced — /proc/<pid>/exe shows "(deleted)").
+
+    Anything found gets SIGTERM, then SIGKILL after 2s if still alive.
+    """
+    pids: List[int] = []
+    # /proc walk — works on Linux, where this proxy actually runs.
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid == os.getpid():
+                continue
+            try:
+                exe = os.readlink(f"/proc/{pid}/exe")
+            except (OSError, PermissionError):
+                continue
+            base = os.path.basename(exe.split(" ")[0])
+            # Match exact name or "<name> (deleted)" form.
+            if base == "atlas-proxy-v2" or base.startswith("atlas-proxy-v2"):
+                pids.append(pid)
+    except FileNotFoundError:
+        pass
+
+    # Fallback: anything listening on PROXY_PORT.
+    try:
+        result = subprocess.run(
+            ["ss", "-tlnpH", f"sport = :{PROXY_PORT}"],
+            capture_output=True, text=True, timeout=3,
+        )
+        for line in result.stdout.splitlines():
+            # Format: ... users:(("name",pid=N,fd=M))
+            if "pid=" in line:
+                for tok in line.split("pid="):
+                    digits = ""
+                    for c in tok:
+                        if c.isdigit():
+                            digits += c
+                        else:
+                            break
+                    if digits:
+                        pid = int(digits)
+                        if pid != os.getpid() and pid not in pids:
+                            pids.append(pid)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    for pid in pids:
+        try:
+            print(f"  Reaping stale atlas-proxy-v2 (pid {pid})")
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            print(f"  WARN: can't kill pid {pid} — not owned by us")
+            continue
+    if pids:
+        # Give SIGTERM ~2s to take, then escalate to SIGKILL.
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            alive = [p for p in pids if _pid_alive(p)]
+            if not alive:
+                break
+            time.sleep(0.1)
+        for pid in pids:
+            if _pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if the given pid currently exists."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _proxy_log_path() -> str:
+    """Path the proxy's stdout+stderr is redirected to. We want this in
+    one well-known place so panics aren't silently lost (the previous
+    /dev/null redirect ate every "[agent] error: ..." line and made
+    debugging impossible)."""
+    cache = os.path.expanduser("~/.cache/atlas")
+    os.makedirs(cache, exist_ok=True)
+    return os.path.join(cache, "proxy.log")
+
+
 def _launch_local_proxy(proxy_bin: str) -> bool:
     """Launch atlas-proxy-v2 as a local background process."""
     global _proxy_process
+
+    # Defensive: kill any leftover proxy from a previous session before
+    # we try to bind PROXY_PORT. Also handles the "rebuilt binary on
+    # disk but old binary still in memory" case — the running orphan
+    # gets reaped so the next launch picks up the fixed code.
+    _kill_stale_proxy()
 
     env = os.environ.copy()
     env["ATLAS_PROXY_PORT"] = PROXY_PORT
@@ -131,13 +236,20 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
     # invoked `atlas` from, overriding the proxy's stale-history heuristics.
     env["ATLAS_WORKSPACE_DIR"] = os.getcwd()
 
+    log_path = _proxy_log_path()
+    try:
+        log_fd = open(log_path, "ab", buffering=0)
+    except OSError as e:
+        print(f"  WARN: can't open {log_path}: {e}; proxy logs disabled")
+        log_fd = subprocess.DEVNULL
+
     try:
         _proxy_process = subprocess.Popen(
             [proxy_bin],
             env=env,
             cwd=os.getcwd(),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_fd,
+            stderr=subprocess.STDOUT,
         )
 
         # Register cleanup
@@ -147,9 +259,18 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
         for _ in range(30):
             time.sleep(0.5)
             if _check_url(PROXY_URL, timeout=1):
+                print(f"  Proxy logs → {log_path}")
                 return True
 
         print("  Proxy started but not responding on health check")
+        print(f"  Last 20 lines of {log_path}:")
+        try:
+            with open(log_path, "rb") as f:
+                tail = f.read()[-4096:].decode("utf-8", errors="replace")
+            for line in tail.splitlines()[-20:]:
+                print(f"    {line}")
+        except OSError:
+            pass
         return False
 
     except Exception as e:
@@ -159,6 +280,7 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
 
 def _stop_local_proxy():
     """Stop the locally-launched proxy on exit."""
+    global _proxy_process
     if _proxy_process and _proxy_process.poll() is None:
         _proxy_process.terminate()
         try:
@@ -282,48 +404,6 @@ def _ensure_proxy() -> bool:
     return False
 
 
-def launch_aider(extra_args: Optional[List[str]] = None):
-    """Launch Aider connected to the ATLAS proxy."""
-    aider_bin = _find_aider()
-    if not aider_bin:
-        display.error("Aider not found. Install with: pip install aider-chat")
-        display.info("Falling back to built-in REPL...")
-        return False
-
-    atlas_dir = _find_atlas_dir()
-    settings_file = os.path.join(atlas_dir, ".aider.model.settings.yml") if atlas_dir else ""
-    metadata_file = os.path.join(atlas_dir, ".aider.model.metadata.json") if atlas_dir else ""
-
-    env = os.environ.copy()
-    env["OPENAI_API_BASE"] = PROXY_URL
-    env["OPENAI_API_KEY"] = "atlas-local"
-
-    cmd = [
-        aider_bin,
-        "--model", "openai/atlas",
-        "--edit-format", "whole",
-        "--no-show-model-warnings",
-        "--no-check-update",
-        "--no-auto-commits",
-        "--no-pretty",
-    ]
-
-    if settings_file and os.path.exists(settings_file):
-        cmd.extend(["--model-settings-file", settings_file])
-    if metadata_file and os.path.exists(metadata_file):
-        cmd.extend(["--model-metadata-file", metadata_file])
-
-    # Pass through any extra args (--message, filenames, etc.)
-    if extra_args:
-        cmd.extend(extra_args)
-
-    try:
-        result = subprocess.run(cmd, env=env)
-        sys.exit(result.returncode)
-    except KeyboardInterrupt:
-        sys.exit(0)
-
-
 def startup_checks() -> bool:
     """Run startup health checks."""
     llm_ok, llm_model = client.check_llama()
@@ -409,44 +489,27 @@ def run():
     """Main entry point.
 
     Launch strategy:
-    1. `atlas init [...]` → first-run install wizard (PC-054)
-    2. `atlas doctor [...]` → run install diagnostic and exit (PC-053)
-    3. `atlas tier [...]` → hardware classification (PC-055)
-    4. `atlas model [...]` → registry: list / install / recommend / remove (PC-056)
-    5. Check if proxy is running or can be started locally (Go)
-    6. If proxy + Aider available → launch Aider (full coding assistant)
-    7. Otherwise → fall back to built-in REPL (/solve, /bench only)
+    1. `atlas doctor [...]` → run install diagnostic and exit (PC-053)
+    2. `atlas tier`/`atlas tui` → subcommand dispatch
+    3. Default (interactive tty) → launch the Bubbletea TUI
+    4. Pipe mode (no tty) → built-in REPL with /solve, /bench
     """
-    # Subcommand dispatch (must precede Aider passthrough)
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        from atlas.cli.commands import init
-        sys.exit(init.main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
         from atlas.cli.commands import doctor
         sys.exit(doctor.main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "tier":
         from atlas.cli.commands import tier
         sys.exit(tier.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "model":
-        from atlas.cli.commands import model
-        sys.exit(model.main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "tui":
         from atlas.cli.commands import tui
         sys.exit(tui.main(sys.argv[2:]))
 
-    extra_args = sys.argv[1:] if len(sys.argv) > 1 else None
-
-    # Try to get the proxy running
-    if _find_aider() and _ensure_proxy():
-        launch_aider(extra_args)
-        return
-
-    # Fall back to built-in REPL
-    if _find_aider() and not _check_url(PROXY_URL):
-        display.warn("Proxy not available — Aider needs the proxy for file operations.")
-        display.info("Start services first, or ensure the proxy is running.")
-        display.info("Or install Go 1.24+ for automatic local proxy: https://go.dev/dl/")
-        display.separator()
+    # Interactive default → TUI. Pipe mode (e.g. `echo "..." | atlas`) skips
+    # the TUI and runs the built-in /solve flow so scripts and CI usage
+    # don't get a fullscreen UI they can't drive.
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        from atlas.cli.commands import tui
+        sys.exit(tui.main(sys.argv[1:]))
 
     display.banner()
 

@@ -6,18 +6,7 @@ Common issues and solutions for ATLAS V3.0.1, organized by service.
 
 ## Quick Diagnostics
 
-**Always start with `atlas doctor`.** It runs **21 checks** across the host (Docker / Compose / NVIDIA), the running services (containers, health endpoints, image skew), the runtime contract (kernel `vm.overcommit_memory`, model file presence, Lens weights, e2e smoke), and the host-vs-tier match (configured model fits this hardware, CPU/RAM/disk meet the tier minimums). It supersedes the manual `curl` ritual that used to lead this section.
-
-```bash
-atlas doctor              # full check (~5–10 s)
-atlas doctor --quick      # skip the e2e smoke (~2 s)
-atlas doctor -v           # verbose: full detail per check
-atlas doctor --json       # machine output (for bootstrap / CI)
-```
-
-See [CLI.md → Diagnostic Commands](CLI.md#diagnostic-commands) for the full check list, flag table, and exit codes. Doctor exits `0` on pass-or-warn, `1` on any fail — bootstrap and CI gate on the exit code. If a check fails, run with `-v` to get the underlying command output and remediation hints.
-
-If `atlas doctor` is unavailable (e.g., you haven't `pip install -e .` yet), the manual fallbacks are:
+Run these first to identify where the problem is:
 
 ```bash
 # Docker Compose — check all services at once
@@ -50,12 +39,6 @@ The atlas-proxy health endpoint reports the status of all upstream services:
 ```
 
 If any field is `false`, that service is the problem.
-
-### Hardware classification
-
-If you're unsure whether your host can run ATLAS at the configured tier — or you just swapped GPUs — run `atlas tier`. It probes VRAM / RAM / CPU / disk, classifies the host into one of 5 tiers (`cpu` / `small` / `medium` / `large` / `xlarge`), and prints the recommended model + runtime knobs (context length, parallel slots, KV-cache quantization). The output also serves as the source-of-truth for `.env` values; see [CLI.md → `atlas tier`](CLI.md#atlas-tier) for the band table and flags.
-
-`atlas doctor` already runs the tier check (`tier_match` + `tier_constraints`) as part of its 21-check sweep, so most users don't need to invoke `atlas tier` directly — only when planning a config change or hardware swap.
 
 ---
 
@@ -175,15 +158,7 @@ If using Docker, ensure the NVIDIA container runtime is configured (see GPU sect
 
 **Symptom:** llama-server exits immediately with "failed to load model" or similar.
 
-**Diagnose first:** `atlas model list --installed` — shows which registry entries are present in `ATLAS_MODELS_DIR`. If your configured model isn't listed, the file is missing.
-
-**Fix path 1 — install via the registry:**
-```bash
-atlas model recommend                          # what should I have for this hardware?
-atlas model install Qwen3.5-9B-Q6_K            # download from HuggingFace
-```
-
-**Fix path 2 — manual placement.** Check the model path:
+**Fix:** Check the model path:
 ```bash
 # Docker Compose — model must be in ATLAS_MODELS_DIR (default: ./models/)
 ls -la models/Qwen3.5-9B-Q6_K.gguf
@@ -194,165 +169,14 @@ ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
 
 The filename must match `ATLAS_MODEL_FILE` in `.env` (default: `Qwen3.5-9B-Q6_K.gguf`).
 
-### `atlas model install` reports SHA256 mismatch
-
-**Symptom:** Download finishes but install exits 1 with "SHA256 mismatch — download may be corrupted or upstream has changed" and removes the `.part` file.
-
-**Cause distinction:**
-- **Transient corruption** (more common) — packet loss, flaky proxy, or interrupted CDN connection. Re-running the install will usually succeed.
-- **Stale registry SHA** (rare) — upstream re-uploaded the same filename with different bytes, but our registry hash is from before the re-upload. PC-056.1 pinned URLs to specific commit hashes (`/3885219b…/`) to prevent this; if it still happens, the upstream commit itself was re-pushed.
-
-**Fix path:**
-```bash
-# Try once with --no-resume to force a clean fetch (no leftover .part)
-atlas model install Qwen3.5-9B-Q6_K --no-resume
-
-# If it fails repeatedly, check whether the registry SHA is stale —
-# `atlas model verify` would show the same mismatch on any installed copy:
-atlas model verify Qwen3.5-9B-Q6_K
-
-# If the upstream actually changed: file an issue or pull a newer ATLAS release.
-```
-
-### `atlas init` refuses: "no docker-compose.yml found"
-
-**Symptom:** Running `atlas init` outside the ATLAS checkout exits 1 with `no docker-compose.yml found in <path> or any parent directory`.
-
-**Cause:** PC-054 audit safety gate. The wizard writes `.env` and `secrets/` *relative to atlas_root* — defined as the nearest ancestor directory containing `docker-compose.yml`. Without that anchor, the wizard would silently dump config into wherever the user happened to be running from, which is almost never what they wanted.
-
-**Fix:**
-```bash
-# Find / clone the ATLAS checkout, then re-run from there:
-git clone https://github.com/itigges22/ATLAS.git
-cd ATLAS
-atlas init --yes
-```
-
-### `atlas init` refuses: "No NVIDIA GPU detected"
-
-**Symptom:** Wizard exits 1 at the model-selection step with `No NVIDIA GPU detected. ATLAS v1 requires a CUDA GPU for llama.cpp inference.`
-
-**Cause:** PC-054 audit safety gate. `tier.classify` returned `cpu`. The only Lens-supported model in the registry today (`Qwen3.5-9B-Q6_K`) needs ~7 GB VRAM to load, so writing a `.env` for it on a GPU-less host would just push the failure out to `docker compose up -d` (llama-server would fail to load the model into a non-existent CUDA context). Refusing here is the friendlier outcome.
-
-**Fix:** None for v1 — ATLAS requires CUDA. ROCm support for AMD GPUs and Metal for Apple Silicon are on the roadmap (see SETUP.md → "Future hardware support"). If you do have an NVIDIA GPU but `nvidia-smi` isn't on PATH or returns nothing, fix that first (the wizard uses the same probe as `atlas tier`, which `atlas doctor` exercises under the `gpu_visible` check).
-
-### `atlas init` wrote the wrong thing — how do I rerun it?
-
-**Symptom:** Wizard picked the wrong model, you typo'd `--image-tag`, you want a different ctx_size, or the generated api-keys.json got committed somewhere it shouldn't have. Re-running plain `atlas init` refuses with "Already configured."
-
-**Cause:** PC-054's safety gate. Once `.env` exists, the wizard refuses by default — accidentally re-running on a working install would otherwise wipe a user's hand-edited config silently.
-
-**Fix:** Use `--reconfigure`. It atomically backs up `.env` → `.env.bak` (and `api-keys.json` → `api-keys.json.bak` if present) before writing new ones, so a botched reconfigure is recoverable via `mv .env.bak .env`.
-
-```bash
-# Re-run interactively (re-prompt for each step)
-atlas init --reconfigure
-
-# Or non-interactively with new defaults
-atlas init --reconfigure --yes --image-tag v1.0.0
-
-# If you want fresh tier-derived knobs but keep your existing model:
-atlas init --reconfigure --yes --skip-download
-
-# Recovery after a reconfigure went wrong:
-mv .env.bak .env
-mv secrets/api-keys.json.bak secrets/api-keys.json
-```
-
-If you only need to change one or two values, editing `.env` directly is fine — the wizard doesn't have to be involved for spot edits. `--reconfigure` is for "regenerate from current defaults" cases.
-
-### `atlas init` refuses: "secrets/ exists with loose permissions"
-
-**Symptom:** Wizard prints `secrets/ exists with loose permissions (0755)` and stops without writing api-keys.json.
-
-**Cause:** PC-054 won't tighten an existing `secrets/` permission silently — the user might have intentionally chmod'd it for a multi-user setup, and chmodding under their feet would break that.
-
-**Fix:**
-```bash
-# If 0700 is what you want, re-run with --yes (acknowledges the chmod):
-atlas init --yes --reconfigure
-
-# Or chmod it yourself and re-run plain:
-chmod 0700 secrets
-atlas init --reconfigure
-```
-
-### `atlas model install` refuses: "Another install is already in progress: PID N"
-
-**Symptom:** Install exits early with `Another install is already in progress: PID 12345 (started Ns ago).`
-
-**Cause:** PC-056.2 added a `<file>.part.lock` to prevent two install processes from corrupting each other's `.part` writes. Another `atlas model install` is currently downloading the same model file. (If you don't have one running, the lock holder probably crashed mid-download — the message tells you whether the PID is alive.)
-
-**Fix:**
-```bash
-# 1. Wait for the other install to finish (check with `ps -p <PID>`).
-# 2. If the holder is dead, the next install attempt should reclaim the lock
-#    automatically. If something is wedged, remove it manually:
-rm /path/to/models/<file>.part.lock
-atlas model install Qwen3.5-9B-Q6_K
-```
-
-The lock is auto-reclaimed if the holder PID is no longer alive (PC-056.2's stale-lock detection), so you should rarely need to delete it by hand.
-
-### `atlas model install` refuses: ".part file is larger than expected model size"
-
-**Symptom:** Install refuses to resume with a message about an oversized `.part` file and a hint to either `rm` it or pass `--no-resume`.
-
-**Cause:** PC-056.2 guard. The resume path trusts the `.part`'s current size and asks the server for `Range: bytes=N-`. If the existing `.part` is bigger than the registry's expected model size (more than 5% over to allow for normal quant variation), something is wrong: a renamed model left a stale `.part` behind, you switched mirrors, or the file was modified manually. Continuing would skip the whole download and fail SHA at the end.
-
-**Fix:**
-```bash
-# Either delete the .part:
-rm /path/to/models/<file>.gguf.part
-
-# Or restart from byte 0 (which discards the existing .part):
-atlas model install Qwen3.5-9B-Q6_K --no-resume
-```
-
-### `atlas model install` says "requires HuggingFace authentication"
-
-**Symptom:** Install of Qwen3.5-7B / 14B / 32B refuses with a message about setting `HF_TOKEN`.
-
-**Cause:** unsloth's 7B / 14B / 32B GGUF repos are gated (HTTP 401 anonymously). The 9B variants are public. PC-056.1 added the `requires_hf_token` registry flag and an HF_TOKEN gate that fires before the download attempts.
-
-**Fix:** Get a HuggingFace access token at https://huggingface.co/settings/tokens (read-only is fine), then:
-```bash
-export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'
-atlas model install Qwen3.5-14B-Q5_K_M --no-lens
-```
-
-The token can also be exported as `HUGGING_FACE_HUB_TOKEN` for HF Python SDK compatibility. `atlas model list` will show `gated, HF_TOKEN present` when the env var is set.
-
-Note that even with auth, the 7B/14B/32B models have `lens_status: no-artifacts` — G(x) verification will silently no-op. The `--no-lens` flag acknowledges that.
-
-### G(x) verification always returns "unavailable" or `gx_score: 0.5`
-
-**Symptom:** Generations come back from llama-server fine, but every Lens response shows `gx_score: 0.5, verdict: "unavailable"`. The C(x)/G(x) verification half of ATLAS isn't working.
-
-**Cause:** You're running a model that has no Lens artifacts (no trained metric tensor + embeddings for that specific model). The Lens silently no-ops on unknown models. Only `Qwen3.5-9B-Q6_K` ships with artifacts in the repo today; 7B / 14B / 32B were either never trained or had their artifacts removed.
-
-**Diagnose:**
-```bash
-atlas doctor                                   # tier_match check (#20) flags this directly
-atlas model list                               # look for Lens status column
-```
-
-**Fix:**
-- **Recommended:** switch to a `supported` model. `atlas model recommend` will surface the fallback (`Qwen3.5-9B-Q6_K`) regardless of which tier your hardware lands in.
-- **If you must run a `no-artifacts` model:** train Lens artifacts for it locally via `atlas lens build` (PC-058 — not yet shipped). Until that's available, you have to accept G(x) won't score generations.
-
-See [PC-058 roadmap](https://github.com/itigges22/ATLAS/issues/100) for the Lens training pipeline and [SETUP.md → Model Management](SETUP.md#model-management) for the full registry story.
-
 ### Out of VRAM
 
 **Symptom:** llama-server crashes or gets OOMKilled shortly after starting. `nvidia-smi` shows VRAM near 100%.
 
-**Diagnose first:** run `atlas doctor` — the `tier_match` check (#20) flags configured models that overshoot the host's tier (e.g., a 14B model on a 12 GB GPU). If it warns, you're running a tier above what the hardware supports; downgrade the model or upgrade the GPU. Run `atlas tier` for the recommended model + runtime knobs for your specific hardware.
-
-**Fix:** The default 9B Q6_K model needs ~8.2 GB VRAM (model + KV cache). Ensure:
+**Fix:** The 9B Q6_K model needs ~8.2 GB VRAM (model + KV cache). Ensure:
 1. No other GPU processes are running (`nvidia-smi` — check for other CUDA processes)
-2. You have at least 12 GB VRAM (medium tier minimum). For 8 GB cards, switch to the small-tier 7B Q4_K_M model.
-3. Context size isn't set too high (default 32K is fine, don't increase without checking VRAM). `atlas tier` shows the recommended `ATLAS_CTX_SIZE` for your tier.
+2. You have 16GB+ VRAM
+3. Context size isn't set too high (default 32K is fine, don't increase without checking VRAM)
 
 ```bash
 # Kill other GPU processes if needed
@@ -527,7 +351,7 @@ docker compose restart atlas-proxy llama-server
 ### Model Keeps Editing After V3 Already Confirmed the Fix
 
 **Symptom:** The agent makes a successful V3-verified
-edit (Aider TUI shows V3 progress events ending in
+edit (the TUI shows V3 progress events ending in
 `Probe passed`), then re-reads the same file and starts
 editing other unrelated functions. Each follow-on edit
 triggers another full V3 cycle (~110s), and the new edits
@@ -582,7 +406,7 @@ Most prompts dominate this bias, but model-fabricated
 filenames and other low-entropy outputs can pick it up.
 
 **What PC-045 does.** Every `runAgentLoop` invocation
-(one per Aider message) starts by POSTing
+(one per user turn) starts by POSTing
 `/slots/0?action=erase` to llama-server. The KV cache is
 reset; the next chat completion re-encodes the system
 prompt from scratch (~1-2s on warm GPU). Within the
@@ -594,7 +418,7 @@ normal.
 docker compose logs atlas-proxy | grep "PC-045"
 ```
 - `[PC-045] erased llama slot 0 — fresh KV cache for
-  this session` on every Aider message — working as
+  this session` on every user turn — working as
   intended.
 - `[PC-045] erase slot: ...` followed by an error — the
   HTTP call to llama-server failed. Slot may still hold
@@ -696,7 +520,7 @@ docker compose logs v3-service | grep "interactive_lint"
 the structural-reasoning gap (Issue B): it knows the
 file uses `curses.LINES - 1` but can't reliably
 synthesize the try/except wrap. Workaround: tell the
-model explicitly in your Aider prompt: *"wrap the
+model explicitly in your prompt: *"wrap the
 addstr call at line N in `try: ... except curses.error:
 pass`."*
 
@@ -793,45 +617,13 @@ Mention the file by name in the prompt — `app.py` is
 enough. The original `fileIndicators >= 1` gate still
 works for explicit file mentions.
 
-### "Hallucinated" Filenames From Aider Chat History
-
-**Symptom:** Brand-new prompt about `snake_game.py`,
-but the agent's first read is on `show_greeting.py` (or
-some other file you've never mentioned in this
-session). PC-045 fires correctly (you see
-`[PC-045] erased llama slot 0` in the proxy log), so
-it's not LLM cache pollution.
-
-**Cause.** Aider stores chat history per-project
-directory in `.aider.chat.history.md` and feeds it to
-the LLM as conversation context on **every** new
-prompt. Filenames mentioned in *prior sessions in the
-same directory* leak into the current session's
-context. PC-045 erases the LLM KV cache but cannot
-clear Aider's history file — that's outside the proxy's
-scope.
-
-**Fix:**
-```
-# In Aider:
-/clear
-
-# Or from a shell:
-rm .aider.chat.history.md
-```
-
-The recovery path works (read fails on the
-non-existent file → model pivots to list_directory →
-finds the real file), so this is just a one-turn
-waste, not a session-blocker.
-
 ### File Not Read Before Editing
 
 **Symptom:** `edit_file` fails with "file not read yet — use read_file first before editing."
 
 **Cause:** The proxy tracks which files the agent has read. If the model tries to edit a file it hasn't read in this session, the edit is rejected as a staleness protection.
 
-**Fix:** This is normal behavior — the model should read the file first. If it keeps failing, the model may be confused about which files it has seen. Try `/clear` in Aider and rephrase.
+**Fix:** This is normal behavior — the model should read the file first. If it keeps failing, the model may be confused about which files it has seen. Type `/clear` in the TUI to reset chat history and rephrase.
 
 ### File Modified Externally
 
@@ -940,267 +732,6 @@ Check available runtimes:
 ```bash
 curl -s http://localhost:30820/languages | python3 -m json.tool
 ```
-
----
-
-## Aider Issues
-
-### `atlas` Shows REPL Instead of Aider (No File Read/Write)
-
-**Symptom:** Running `atlas` shows the built-in REPL with a `Model`, `Speed`, `Lens`, `Sandbox` status block and a `◆` prompt. Typing requests works but no files are created or modified. `--message` flag is ignored.
-
-**Cause:** The `atlas` command auto-detects the proxy and Aider. If either is missing, it falls back to the built-in REPL which supports `/solve` and `/bench` but not file operations.
-
-**Fix:**
-1. Ensure the proxy is running: `curl -s http://localhost:8090/health`
-2. Ensure Aider is installed: `pip install aider-chat`
-3. Ensure services are up: `docker compose ps` (all should show "healthy")
-
-If the proxy is healthy and Aider is installed, `atlas` will automatically launch Aider with the full agent loop (tool calls, file read/write, V3 pipeline).
-
-If Go 1.24+ is installed, `atlas` can also build and launch the proxy automatically — you don't need to start it manually.
-
-### Proxy Lists Wrong Directory or `/tmp`
-
-**Symptom:** The model lists files from `/tmp` or the ATLAS repo instead of your project. `write_file` creates files in the wrong location.
-
-**Cause:** The Docker Compose proxy runs inside a container and can only see the directory mounted at startup. If you're working in a different directory, the proxy can't see it.
-
-**Fix (recommended):** Install Go 1.24+ ([https://go.dev/dl/](https://go.dev/dl/)). The `atlas` CLI will automatically build and launch the proxy locally in your current directory with full file access. No Docker mount needed.
-
-**Fix (without Go):** Set `ATLAS_PROJECT_DIR` in your `.env` to your project path, then restart the proxy:
-```bash
-# In .env:
-ATLAS_PROJECT_DIR=/path/to/your/project
-
-# Restart proxy to pick up new mount:
-docker compose up -d atlas-proxy
-```
-
-You must update this and restart each time you switch project directories. This is a limitation of running the proxy inside Docker.
-
-### `.env.example` Missing After Clone
-
-**Symptom:** `cp .env.example .env` fails with "No such file or directory".
-
-**Fix:** This was fixed in V3.0.1. If you cloned before the fix, pull the latest:
-```bash
-git pull
-cp .env.example .env
-```
-
-### Aider Disconnects on Long Tasks
-
-**Symptom:** Aider times out or disconnects before the agent loop completes, especially during V3 pipeline phases.
-
-**Fix:** Aider's HTTP request timeout needs to be long enough for V3 pipeline execution (which can take minutes). The `.aider.model.settings.yml` in the repo configures streaming mode which keeps the connection alive. If you're still seeing timeouts:
-
-1. Ensure you're using the repo's config files (`.aider.model.settings.yml` and `.aider.model.metadata.json`)
-2. Check that `streaming: true` is set in the settings file
-
-### "context deadline exceeded" mid-session
-
-**Symptom:** Aider shows
-`litellm.APIError ... context deadline exceeded` partway through
-a session, sometimes during a busy turn, sometimes after a quiet
-gap.
-
-**Two distinct causes — each fixed differently:**
-
-1. **In-session prompt-cache pressure (PC-029).** After ~4-5 turns
-   the llama-server prompt cache fills up and prompt-eval rate
-   drops from ~700 tok/s to ~100 tok/s. Tight 5s deadlines on the
-   classifier and lens-score paths blew out. **Fixed in atlas-proxy
-   v3.0.1+** — classifier ctx 5s→60s, lens client 5s→30s, background
-   stream-score 5s→30s. No user-side action needed beyond keeping
-   atlas-proxy current.
-
-2. **Cold-start after idle (PC-035).** After 1-2 minutes of
-   inactivity, the next request blows the 120s `forwardToLLM`
-   client timeout because the prompt cache is evicted and the
-   conversation has to be reprocessed cold. The error wording
-   distinguishes this case: it includes `Client.Timeout exceeded
-   while awaiting headers`, which is specific to Go's HTTP client
-   timeout (vs the context-cancel "deadline exceeded" wording for
-   case 1). **Fixed in atlas-proxy v3.0.1+** with two layers:
-   - Client timeout bumped 120s → 240s (cold-start budget).
-   - A 45s-interval keep-warm goroutine that pings llama-server
-     with a 1-token completion. Avoids the cold path entirely.
-     Disable with `ATLAS_KEEP_LLAMA_WARM=0` if running CPU-only
-     or under tight power constraints.
-
-If you still see this after upgrading, check
-`docker compose logs atlas-proxy` for `keep-warm: pinging …`
-on startup — its absence means the goroutine isn't running and
-the cold-start path is still in play.
-
-### Model says "command not found" / "Python is not installed"
-
-**Symptom:** Mid-session, the model issues `run_command` calls
-like `python -m py_compile foo.py` that fail in microseconds with
-no useful output, then concludes the environment lacks Python.
-You know your host has Python.
-
-**Cause (PC-032).** `run_command` runs inside the atlas-proxy
-container, which used to be alpine-bare (curl + bash only). Any
-`python`, `node`, `gcc`, `make` invocation hit "command not
-found" with no stderr surfaced to the UI (PC-033 compounded the
-diagnosis problem).
-
-**Fix:** atlas-proxy v3.0.1+ ships with python3, py3-pip,
-nodejs/npm, gcc, g++, make, and git baked into the runtime image.
-Targeted rebuild after pulling: `docker compose up -d --build
-atlas-proxy`. Verify:
-
-```bash
-docker compose exec atlas-proxy sh -c "which python3 node gcc make"
-```
-
-If anything is missing, you're on an older image; rebuild.
-
-The proper architectural fix (route `run_command` through the
-sandbox container's `/execute` endpoint, which is properly
-isolated) is tracked as a Phase 1+ follow-up under PC-032.
-
-### I closed Aider but my GPU stayed busy
-
-**Symptom:** You hit Ctrl-C in Aider, close the terminal, or your
-SSH session drops mid-generation — but `nvidia-smi` shows
-llama-server still pegged at high utilization for the next 30 sec
-to several minutes.
-
-**Cause (PC-036).** The proxy was not propagating Aider's
-cancellation down to llama-server. Aider closing its TCP
-connection cancelled `r.Context()` at the proxy boundary, but
-the agent loop and its LLM calls used `context.Background()`
-instead, so they kept running until the model finished
-generating to `max_tokens` or hit a stop sequence.
-
-**Fix:** atlas-proxy v3.0.1+ wires the request context all the
-way through: `handleStreamingChat` → `runInternalAgentLoop` →
-`AgentContext.Ctx` → `callLLMConstrained`'s HTTP request. The
-agent loop also checks `ctx.Done()` at each turn boundary. Now
-when Aider disconnects:
-- The current LLM call's TCP connection to llama-server closes
-  (within ~1 token tick).
-- llama.cpp detects the disconnect on the slot and aborts
-  generation, releasing the GPU.
-- The agent loop bails on the next turn and logs
-  `[agent] cancelled at turn N: context canceled`.
-
-Verify after rebuild: tail `docker compose logs -f atlas-proxy`,
-trigger a long generation, hit Ctrl-C in Aider — you should see
-the cancellation log line within a second, and `nvidia-smi`
-utilization should fall within 1-2 sec.
-
-### Agent says my file "doesn't exist" but I can see it in `ls`
-
-**Symptom:** You're in a project directory, the file is right
-there in `ls`, but ATLAS replies with something like "the file
-doesn't exist in the current workspace" and refuses to edit it.
-
-**Cause (PC-038).** The proxy container's `/workspace` is
-bind-mounted from `ATLAS_PROJECT_DIR` (default: the directory
-you ran `docker compose up` from). If you `cd` into a project
-elsewhere on the host and run `atlas`, the proxy used to still
-only see the original directory.
-
-**Fix:** the `atlas` CLI now auto-aligns the proxy's
-`/workspace` to your CWD on every invocation. When a mismatch is
-detected, you'll see:
-
-```
-$ atlas
-  Aligning proxy workspace → /home/isaac/your/project
-  ...
-```
-
-The container is recreated in ~5-8s on cached images. Same-CWD
-invocations are no-ops. If you've pre-mounted a parent (e.g.
-`ATLAS_PROJECT_DIR=$HOME`), no realignment happens because
-`$HOME` already covers your CWD.
-
-**Disable** with `ATLAS_AUTO_WORKSPACE=0` if you want manual
-control:
-```bash
-ATLAS_AUTO_WORKSPACE=0 atlas
-```
-
-**If the model still bails after the bind is correct** —
-e.g. you `cd`'d into the right project but the agent still
-exits with "Stopped after 3 tool failures with no successful
-changes" — Aider didn't `/add` the file, so the model has no
-content to work from and tries to discover it. Either:
-
-- `aider /add snake_game.py` once before your first prompt,
-  then ATLAS gets the file content directly from Aider, or
-- Just be explicit: "fix snake_game.py at line 95 — the
-  curses bounds are wrong." Naming the file in the prompt
-  triggers the model to run `find_file` / `list_directory`
-  to locate it. (PC-039 ensures empty-path tool calls get
-  redirected with a hint instead of silently failing.)
-
-**Manual alternative** (the path before PC-038 landed):
-```bash
-cd /home/isaac/ATLAS
-ATLAS_PROJECT_DIR=/path/to/your/project \
-    docker compose up -d --no-build atlas-proxy \
-    --no-deps --force-recreate
-cd /path/to/your/project
-atlas
-```
-
-### Model "loses" a file it just created (search_files returns 0)
-
-**Symptom:** The model writes `foo.py`, then on the next turn it
-runs `search_files "foo\.py"` and gets 0 matches. It then tries
-to recreate `foo.py` from scratch, and Aider prompts "Create new
-file? [Yes]:".
-
-**Cause (PC-028).** The old `search_files` description said it
-searches "in files," which the model read as "in filenames." The
-tool actually greps file *contents* — and file contents don't
-contain the literal string "foo.py", so it returned zero matches.
-
-**Fix:** atlas-proxy v3.0.1+ updates the `search_files`
-description to "search inside file CONTENTS" and adds a new
-`find_file` tool for name-based lookups. The model now uses
-`find_file "foo\.py"` (or `list_directory`) to check whether a
-file exists.
-
-If you're running an older version: workaround is to be explicit
-in the prompt ("the file already exists at foo.py — modify it
-in place"). The model can still call `read_file` directly to
-confirm a file exists.
-
-### Empty Response
-
-**Symptom:** Aider shows the completion summary but no file content was produced.
-
-**Cause:** The model emitted a `done` signal without making any file changes. This can happen with:
-- Very short conversational prompts ("hi", "thanks")
-- Ambiguous requests where the model doesn't know what file to create
-
-**Fix:** Be more specific. Tell the model exactly what file to create or edit.
-
-### Wrong Working Directory
-
-**Symptom:** Files created in the wrong location. `list_directory` shows unexpected contents.
-
-**Cause:** The proxy detects the project directory by finding the most recently modified `.aider.chat.history.md` file. If you have multiple Aider sessions open, the newest one wins.
-
-**Fix:** Close other Aider sessions, or `cd` into the correct project directory before running `atlas`.
-
-### "Model not found" Error
-
-**Symptom:** Aider fails to start with a model-related error.
-
-**Fix:** Ensure both Aider config files exist in the ATLAS root:
-```bash
-ls -la .aider.model.settings.yml .aider.model.metadata.json
-```
-
-These are included in the repository. If missing, re-clone or restore from backup. They tell Aider to use the `openai/atlas` model pointing at the proxy.
 
 ---
 

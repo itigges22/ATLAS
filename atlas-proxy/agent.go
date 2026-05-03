@@ -104,7 +104,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
 
 	for turn := 0; turn < ctx.MaxTurns; turn++ {
-		// Bail out fast if the upstream request was cancelled (Aider closed the
+		// Bail out fast if the upstream request was cancelled (the client closed the
 		// connection, user hit Ctrl-C, terminal exited). Without this check the
 		// loop would keep grinding LLM calls and tool work for a client that's
 		// already gone, burning GPU. See ISSUES.md PC-036.
@@ -377,8 +377,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// Force-stop after destructive operations that shouldn't have follow-up
 			if result.Error == "__FORCE_DONE__" {
 				result.Error = ""
-				// Don't stream anything — Aider interprets all text as file edits.
-				// The file deletion already happened on disk. Just end silently.
+				// Don't stream a follow-up message — the file deletion already
+				// happened on disk and any trailing text would just be noise
+				// for the TUI to render after a destructive op.
 				return nil
 			}
 
@@ -580,6 +581,15 @@ func eraseLlamaSlot(ctx *AgentContext) {
 // TUI as `total_est` so even without /slots data the user sees the
 // rough magnitude of what's being encoded.
 func pollPromptProgress(ctx *AgentContext, llamaURL string, stop <-chan struct{}, totalEst int) {
+	// Defense in depth: if anything panics inside this goroutine
+	// (e.g. a write to a closed flusher) don't take the whole proxy
+	// down with it. The WaitGroup in callLLMOnce should prevent the
+	// race that makes this possible, but a recover here is cheap.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[agent] pollPromptProgress recovered: %v", r)
+		}
+	}()
 	startedAt := time.Now()
 	client := &http.Client{Timeout: 2 * time.Second}
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -748,6 +758,15 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	// Don't reuse the TCP connection across turns. We were seeing
+	// `Post ".../v1/chat/completions": EOF` failures in 0ms between
+	// back-to-back turns: the previous streaming response left the
+	// connection in a state llama-server (--parallel 1) closed at its
+	// end, then the next turn's POST reused the dead idle connection
+	// from Go's pool and got EOF on first read. Setting Close=true
+	// forces a fresh dial per call. The dial overhead is negligible
+	// next to a 5k-token prompt eval, and the reliability win is huge.
+	httpReq.Close = true
 
 	sentAt := time.Now()
 
@@ -758,10 +777,24 @@ func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64
 	for _, m := range messages {
 		promptTokenEst += len(m.Content) / 4
 	}
+	// pollPromptProgress runs as a sibling goroutine while the LLM call is
+	// in flight; it streams elapsed_ms ticks back to the TUI. We MUST
+	// guarantee it has fully exited before callLLMOnce returns — otherwise
+	// it can call ctx.Stream (which writes to handleAgent's flusher) AFTER
+	// handleAgent has returned and the response writer is invalid, causing
+	// a SIGSEGV inside bufio.(*Writer).Flush. The defers run LIFO: stop
+	// the channel first, then wait on the WaitGroup until the goroutine
+	// exits.
 	stopProgress := make(chan struct{})
 	var stopOnce sync.Once
 	stopProgressFn := func() { stopOnce.Do(func() { close(stopProgress) }) }
-	go pollPromptProgress(ctx, llamaURL, stopProgress, promptTokenEst)
+	var pollWG sync.WaitGroup
+	pollWG.Add(1)
+	go func() {
+		defer pollWG.Done()
+		pollPromptProgress(ctx, llamaURL, stopProgress, promptTokenEst)
+	}()
+	defer pollWG.Wait()
 	defer stopProgressFn()
 
 	resp, err := llmStreamClient.Do(httpReq)

@@ -8,11 +8,8 @@ System architecture for ATLAS V3.0.1. Two-layer design: an outer agent loop hand
 
 ```mermaid
 graph LR
-    User["User"] --> Frontends{"chat front-end"}
-    Frontends -->|"atlas tui (default)"| TUI["atlas-tui\n(Bubbletea)"]
-    Frontends -->|"atlas (legacy)"| Aider["Aider"]
+    User["User"] --> TUI["atlas-tui\n(Bubbletea)"]
     TUI --> Proxy["atlas-proxy\n:8090"]
-    Aider --> Proxy
 
     subgraph outer["Outer Layer"]
         Proxy -->|"grammar JSON"| LLM["llama-server\n:8080"]
@@ -28,7 +25,6 @@ graph LR
 
     style User fill:#333,color:#fff
     style TUI fill:#1a3a5c,color:#fff
-    style Aider fill:#1a3a5c,color:#fff
     style Proxy fill:#1a3a5c,color:#fff
     style LLM fill:#5c1a1a,color:#fff
     style V3Service fill:#2d5016,color:#fff
@@ -38,12 +34,9 @@ graph LR
 
 Services run as containers via Docker Compose (recommended) or as local processes via the `atlas` launcher. Only llama-server uses the GPU. Everything else runs on CPU.
 
-Two chat front-ends:
+The chat front-end is the **atlas-tui** (Bubbletea, PC-062): a native Go terminal UI consuming `/v1/agent` (per-turn chat SSE) and `/events` (global typed-envelope feed for the pipeline pane). Launch with `atlas` (interactive default) or `atlas tui` (explicit). Pipeline pane shows V3 stages live; chat pane renders assistant markdown via glamour; slash commands `/add /diff /commit /run` etc. handle local file context and shell-out. Mode-aware input (chat / `!bash` / `/slash`) with a hint dropdown.
 
-- **atlas-tui (Bubbletea, PC-062)** — canonical client. Native Go terminal UI consuming `/v1/agent` (per-turn chat SSE) and `/events` (global typed-envelope feed for the pipeline pane). Launch with `atlas tui`. Pipeline pane shows V3 stages live; chat pane renders assistant markdown via glamour; slash commands `/add /diff /commit /run` etc. handle local file context and shell-out. Mode-aware input (chat / `!bash` / `/slash`) with a hint dropdown.
-- **Aider (legacy, being retired)** — original front-end via `atlas`. Talks to `/v1/chat/completions` and gets back Aider whole-file blocks. Frozen — receives only critical fixes. The endpoint stays for SDK compatibility (see [API.md](API.md)), but new client work targets `/v1/agent`.
-
-Third-party clients should target `/v1/agent` directly. The contract is documented in [API.md](API.md); PC-063 tracks producing a fully-worked recipe and OpenAPI spec.
+`/v1/chat/completions` on the proxy is a transparent passthrough to llama-server — kept for SDK compatibility but it does not run the agent loop. Third-party clients that want tool calls + V3 pipeline should target `/v1/agent` directly. The contract is documented in [API.md](API.md); PC-063 tracks producing a fully-worked recipe and OpenAPI spec.
 
 ---
 
@@ -52,7 +45,7 @@ Third-party clients should target `/v1/agent` directly. The contract is document
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
 | **llama-server** | 8080 | C++ (llama.cpp) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
-| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`, legacy `/v1/chat/completions` (Aider compat) |
+| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` passes through to llama-server unchanged. |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. PC-062. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
@@ -62,7 +55,7 @@ Third-party clients should target `/v1/agent` directly. The contract is document
 
 ## 3. atlas-proxy (Outer Layer)
 
-The proxy is the entry point for every chat front-end. It accepts user messages on `/v1/agent` (preferred — typed event stream) or `/v1/chat/completions` (legacy OpenAI shape, used by Aider) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. See [API.md](API.md) for the full event-type catalogue.
+The proxy is the entry point for chat front-ends. It accepts user messages on `/v1/agent` (typed event stream — what the TUI uses) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. The legacy `/v1/chat/completions` endpoint is a transparent passthrough to llama-server. See [API.md](API.md) for the full event-type catalogue.
 
 ```mermaid
 graph LR
@@ -76,7 +69,7 @@ graph LR
         VR["Verify-Repair"] --> BOK["Best-of-K"] --> BV["Build Verifier"]
     end
     subgraph format["I/O"]
-        AiderFmt["Aider Fmt"] --> V3Bridge["V3 Bridge"] --> ProjDet["Project Detector"]
+        SSE["SSE / Events"] --> V3Bridge["V3 Bridge"] --> ProjDet["Project Detector"]
     end
 
     core --> tools --> pipeline --> format
@@ -493,7 +486,7 @@ graph LR
 
 ### Bare Metal
 
-The `atlas` CLI (`pip install -e .`) talks directly to services on their default ports. The bash launcher script can start all services as local processes and launch a front-end (atlas-tui by default; legacy `atlas` invokes Aider), or detect a running Docker Compose stack and connect to it.
+The `atlas` CLI (`pip install -e .`) talks directly to services on their default ports. The bash launcher script can start all services as local processes and launch the atlas-tui front-end, or detect a running Docker Compose stack and connect to it.
 
 ### K3s
 

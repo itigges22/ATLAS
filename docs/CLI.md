@@ -2,16 +2,13 @@
 
 The ATLAS CLI launches the inference stack and drops you into an interactive
 coding session. The canonical chat client is the native Bubbletea TUI
-(`atlas tui`), introduced in PC-062 to replace Aider.
+(`atlas tui`, introduced in PC-062). Plain `atlas` in an interactive
+terminal launches the same TUI; pipe mode falls through to the built-in
+`/solve` REPL.
 
 <p align="center">
   <img src="images/ATLAS_CLI.png" alt="ATLAS CLI" width="600"/>
 </p>
-
-> **Aider users:** the legacy Aider front-end is being retired. `atlas tui`
-> is the supported entry point going forward; it surfaces V3 pipeline
-> stages, tool-call counters, and live token streaming that Aider can't
-> render.
 
 ---
 
@@ -19,10 +16,12 @@ coding session. The canonical chat client is the native Bubbletea TUI
 
 ```bash
 cd /path/to/your/project
-atlas tui
+atlas              # interactive: launches the TUI
+atlas tui          # explicit form
+echo "fix bug" | atlas   # pipe mode: routes through /solve
 ```
 
-`atlas tui` does the right thing automatically:
+`atlas` does the right thing automatically:
 
 1. **Locates the `atlas-tui` binary** on `$PATH` or in `~/.local/bin`.
 2. **Builds from source** in `atlas-tui/` if the binary is missing and Go
@@ -119,16 +118,21 @@ input event, so newlines in pasted text don't trigger a premature send.
 
 ### Copying text from the TUI
 
-Mouse capture is on by default so the wheel can scroll. Two ways to
-select/copy:
+Mouse capture is on by default. Drag-highlight inside any pane (chat,
+events, pipeline, files); on release, the highlighted text is auto-copied
+to your clipboard and a transient toast (`✓ copied N chars from <pane>`)
+appears in the header for ~2.5s. OSC52 fallback covers SSH sessions. No
+chat row gets pushed for the copy — it's pure overlay UX.
 
-1. **Hold Shift (Linux/Windows) or Option (macOS)** while dragging — most
-   modern terminals (iTerm2, Kitty, WezTerm, GNOME Terminal,
-   Windows Terminal) honor the override and let you select text without
-   disabling capture.
+If your terminal handles selection itself, you can also:
+
+1. **Hold Shift (Linux/Windows) or Option (macOS)** while dragging.
 2. **`/mouse off`** to disable capture for the rest of the session;
-   wheel-scroll stops working but you can drag normally. `/mouse on`
-   re-enables.
+   wheel-scroll stops working but native terminal select returns.
+   `/mouse on` re-enables.
+
+For programmatic copy of recent chat output use `/copy [N]` (defaults to
+the last message; pass an integer for the last N messages).
 
 ---
 
@@ -149,6 +153,8 @@ select/copy:
 | `/hide <pane>` | Hide a pane: `files`, `pipeline`, `events`, or `all` |
 | `/show <pane>` | Show a pane (or `all`) |
 | `/mouse on\|off` | Toggle mouse capture (off lets you copy text) |
+| `/copy [N]` | Copy the last N chat messages (default 1) to clipboard via OSC52 |
+| `/yank [N]` | Alias for `/copy` |
 | `/quit` | Exit (same as `Ctrl+D`) |
 
 The `/add /drop /context` set is TUI-side state — file paths are

@@ -1,9 +1,9 @@
 // PC-062: Bubbletea TUI for ATLAS — main entry point.
 //
 // Connects to atlas-proxy /events (typed envelope SSE stream from
-// PC-061) and renders a 3-pane layout: pipeline progress, event log,
-// stats + chat input. Replaces Aider as the canonical chat UI for
-// users who opt in via `atlas tui`.
+// PC-061) and renders the canonical chat UI: pipeline progress, event
+// log, stats + chat input. The default `atlas` command launches this
+// in interactive mode; pipe mode falls back to the built-in REPL.
 //
 // Bubbletea model is in model.go; pane rendering in panes.go;
 // chat/agent client in chat.go; SSE consumer in consumer.go.

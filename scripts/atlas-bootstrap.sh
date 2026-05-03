@@ -541,7 +541,7 @@ print_ready_banner() {
     echo -e "  ${BOLD}Quick start${NC}"
     echo -e "    ${DIM}# In any project directory you want to code in:${NC}"
     echo -e "    ${CYAN}cd /path/to/your/project${NC}"
-    echo -e "    ${CYAN}atlas${NC}                   ${DIM}# launches the Aider front-end${NC}"
+    echo -e "    ${CYAN}atlas${NC}                   ${DIM}# launches the TUI chat UI${NC}"
     echo
     echo -e "  ${BOLD}Diagnostics${NC}"
     echo -e "    ${CYAN}atlas doctor${NC}            ${DIM}# verify all services are healthy${NC}"

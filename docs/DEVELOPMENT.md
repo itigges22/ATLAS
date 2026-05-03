@@ -104,11 +104,11 @@ ATLAS_WORKSPACE_DIR=$(pwd)/.. \
 go run .
 ```
 
-Aider clients pointed at `http://localhost:8090` will hit the host
-process. Edits become live with a `Ctrl-C` + re-run. For
-auto-rebuild on save, install `air` (`go install
-github.com/air-verse/air@latest`) and run `air` in the same
-directory.
+The TUI (and any OpenAI-compat client) pointed at
+`http://localhost:8090` will hit the host process. Edits become live
+with a `Ctrl-C` + re-run. For auto-rebuild on save, install `air`
+(`go install github.com/air-verse/air@latest`) and run `air` in the
+same directory.
 
 When done, restart the container version:
 

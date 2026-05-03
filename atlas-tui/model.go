@@ -188,8 +188,31 @@ type tuiModel struct {
 	lastFileScan   time.Time
 	fileScanScroll int
 
+	// Toast notifications. Transient overlay messages that auto-decay
+	// (e.g. "✓ copied 1234 chars"). Pruned every tick (100ms) by the
+	// tickMsg handler. Rendered in View() as a banner spliced into the
+	// header row — not a chat message, so it doesn't pollute history.
+	toasts []toast
+
 	// Lifecycle
 	quitting bool
+}
+
+// toast is one transient notification. ExpiresAt is checked every tick
+// against time.Now(); expired entries get dropped from m.toasts.
+type toast struct {
+	Body      string
+	ExpiresAt time.Time
+}
+
+// showToast queues a transient overlay message that auto-dismisses
+// after 2.5s. Used for "copied N chars from <pane>" style feedback —
+// fire-and-forget UX hints that shouldn't pollute chat history.
+func (m *tuiModel) showToast(body string) {
+	m.toasts = append(m.toasts, toast{
+		Body:      body,
+		ExpiresAt: time.Now().Add(2500 * time.Millisecond),
+	})
 }
 
 // scrollChat adjusts m.chatScroll by `delta` rows (positive = scroll
@@ -496,7 +519,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Bash mode: leading "!" runs as a shell command in the
 				// working dir, output appears as a system row. Same path
 				// as /run but with the conversational shorthand devs
-				// expect from Claude Code / Aider.
+				// expect from Claude Code.
 				if strings.HasPrefix(text, "!") {
 					cmdStr := strings.TrimSpace(text[1:])
 					if cmdStr == "" {
@@ -513,8 +536,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						[]string{"bash", "-lc", cmdStr})
 				}
 				// "?" alone (or with trailing whitespace) is a shorthand
-				// for /help — same convention as Aider/Claude Code so
-				// users don't have to remember the slash form.
+				// for /help — same convention as Claude Code so users
+				// don't have to remember the slash form.
 				if text == "?" {
 					text = "/help"
 				}
@@ -570,6 +593,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selPane = pane.name
 					m.selStartX, m.selStartY = msg.X, msg.Y
 					m.selEndX, m.selEndY = msg.X, msg.Y
+					dlog("mouse", "press", map[string]interface{}{
+						"x": msg.X, "y": msg.Y, "pane": pane.name,
+						"paneTopY": pane.topY, "paneBottomY": pane.bottomY,
+						"viewStart": pane.viewStart, "lines": len(pane.lines),
+					})
 				}
 			}
 		case tea.MouseActionMotion:
@@ -595,21 +623,23 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				text := extractPaneSelection(selPane,
 					m.selStartY, m.selEndY,
 					m.selStartX, m.selEndX)
+				dlog("mouse", "release", map[string]interface{}{
+					"pane":     selPane,
+					"startX":   m.selStartX, "startY": m.selStartY,
+					"endX":     m.selEndX, "endY": m.selEndY,
+					"text_len": len(text),
+					"preview":  truncate(text, 60),
+				})
 				if text == "" {
+					m.showToast("nothing to copy")
 					return m, nil
 				}
 				if err := copyToClipboard(text); err != nil {
-					m.chat = append(m.chat, chatMessage{
-						Role: roleSystem, Meta: "error",
-						Body: fmt.Sprintf("copy failed: %v", err),
-					})
+					m.showToast(fmt.Sprintf("copy failed: %v", err))
 					return m, nil
 				}
-				m.chat = append(m.chat, chatMessage{
-					Role: roleSystem, Meta: "copy",
-					Body: fmt.Sprintf("✓ copied %d chars from %s pane to clipboard.",
-						len(text), selPane),
-				})
+				m.showToast(fmt.Sprintf("✓ copied %d chars from %s pane",
+					len(text), selPane))
 				return m, nil
 			}
 		}
@@ -739,6 +769,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.spinnerFrame++
+		// Prune expired toasts so the overlay disappears on its own.
+		if len(m.toasts) > 0 {
+			now := time.Now()
+			kept := m.toasts[:0]
+			for _, t := range m.toasts {
+				if t.ExpiresAt.After(now) {
+					kept = append(kept, t)
+				}
+			}
+			m.toasts = kept
+		}
 		// Tick-driven prompt-progress row update: while we're still in
 		// prompt eval (no first token yet), rewrite the streaming row
 		// every tick so the elapsed timer ticks smoothly even when the
@@ -1115,7 +1156,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		}
 		if json.Unmarshal(ev.Data, &p) == nil && p.Message != "" {
 			// Trim the leading box-drawing prefix the proxy adds for
-			// Aider's pretty-print; the TUI styles its own rows.
+			// legacy pretty-print; the TUI styles its own rows.
 			msg := strings.TrimLeft(p.Message, " │└├")
 			msg = strings.TrimSpace(msg)
 			m.chat = append(m.chat, chatMessage{
@@ -1231,8 +1272,33 @@ func extractPaneSelection(paneName string, startY, endY, startX, endX int) strin
 	if endY < pane.topY || startY > pane.bottomY {
 		return ""
 	}
-	startLine := pane.viewStart + (startY - pane.topY)
-	endLine := pane.viewStart + (endY - pane.topY)
+	// Account for top-padding rows that windowLines/renderChatPane add
+	// when there's less content than the pane height. The rendered pane
+	// has `padTop` blank rows BEFORE the real content, but `pane.lines`
+	// holds only the real content. So a click at screen Y maps to flat
+	// index `viewStart + (Y - paneTopY) - padTop`. Without the padTop
+	// subtraction, copies were offset by the number of pad rows — which
+	// is why the user saw "wrong text" copied for short panes.
+	paneH := pane.bottomY - pane.topY + 1
+	visible := len(pane.lines) - pane.viewStart
+	if visible > paneH {
+		visible = paneH
+	}
+	if visible < 0 {
+		visible = 0
+	}
+	padTop := paneH - visible
+	rowStart := (startY - pane.topY) - padTop
+	rowEnd := (endY - pane.topY) - padTop
+	if rowStart < 0 {
+		rowStart = 0
+	}
+	if rowEnd < 0 {
+		// Both clicks landed in padding — nothing to copy.
+		return ""
+	}
+	startLine := pane.viewStart + rowStart
+	endLine := pane.viewStart + rowEnd
 	if startLine < 0 {
 		startLine = 0
 	}
@@ -1589,7 +1655,63 @@ func (m tuiModel) View() string {
 	// View → Update path: we write totalChatLines to a package-level
 	// variable that Update reads on the next event.
 	lastChatTotalRendered = totalChatLines
+	if len(m.toasts) > 0 {
+		out = overlayToast(out, m.toasts[len(m.toasts)-1].Body, width)
+	}
 	return out
+}
+
+// toastStyle renders the floating overlay banner. Reverse video instead
+// of named bg/fg colors because lipgloss color rendering is profile-
+// dependent (256-color, truecolor, none) and can silently strip styles
+// in environments where TERM advertises poorly. Reverse(true) is the
+// most universally-honored ANSI attribute — it pops against any
+// underlying styling.
+var toastStyle = lipgloss.NewStyle().
+	Reverse(true).
+	Bold(true).
+	Padding(0, 1)
+
+// overlayToast splices the toast text into the right side of the
+// rendered header (top row). Auto-dismisses via tickMsg pruning. We
+// overlay onto the header rather than the bottom because the bottom is
+// the input box (lipgloss border characters at fixed positions) —
+// overwriting those breaks the box rendering. The header is a single
+// contiguous styled string we can safely truncate at the right edge.
+func overlayToast(rendered, body string, width int) string {
+	if body == "" || width < 30 {
+		return rendered
+	}
+	idx := strings.IndexByte(rendered, '\n')
+	if idx < 0 {
+		return rendered
+	}
+	head := rendered[:idx]
+	rest := rendered[idx:]
+	styled := toastStyle.Render(body)
+	tw := lipgloss.Width(styled)
+	if tw > width-4 {
+		max := width - 6
+		if max < 8 {
+			return rendered
+		}
+		styled = toastStyle.Render(truncate(body, max))
+		tw = lipgloss.Width(styled)
+	}
+	headW := lipgloss.Width(head)
+	if headW <= tw {
+		return styled + rest
+	}
+	// Strip ANSI and re-anchor: keep leftmost (headW - tw) visible cols
+	// then append the styled toast. Header's uniform style means losing
+	// its trailing ANSI codes at the right edge is harmless.
+	plain := stripANSI(head)
+	plainRunes := []rune(plain)
+	keep := len(plainRunes) - tw
+	if keep < 0 {
+		keep = 0
+	}
+	return string(plainRunes[:keep]) + styled + rest
 }
 
 // lastChatTotalRendered is updated by View() (which receives a value

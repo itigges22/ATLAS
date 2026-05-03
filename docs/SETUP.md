@@ -65,69 +65,38 @@ This is the tested deployment method for V3.0.1.
 - **Docker** with [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), **or Podman**
 - ~20GB disk space (model weights + container images)
 
-### Setup (recommended — `atlas init` wizard)
-
-Since PC-054, the wizard composes hardware probe + model registry + SHA-verified download + `.env` + `api-keys.json` into a single command.
+### Setup
 
 ```bash
 # 1. Clone
 git clone https://github.com/itigges22/ATLAS.git
 cd ATLAS
 
-# 2. Install the ATLAS CLI + Aider
-pip install -e . aider-chat
+# 2. Download model weights (~7GB)
+mkdir -p models
+wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
+     -O models/Qwen3.5-9B-Q6_K.gguf
 
-# 3. Run the first-run wizard
-atlas init                   # interactive — prompts to confirm the recommended model
-# or, for non-interactive bootstrap (CI / scripted):
-atlas init --yes             # accept all defaults: download recommended model + write .env + api-keys.json
-# or, if you've already placed a gguf in ./models/:
-atlas init --yes --skip-download
+# 3. Install the ATLAS CLI
+pip install -e .
 
 # 4. (Recommended) Install Go 1.24+ for full file access from any directory
 #    https://go.dev/dl/ — the proxy builds automatically on first run
+#    Without Go, the proxy runs in Docker with file access limited to ATLAS_PROJECT_DIR
 
-# 5. Bring up the stack (first run pulls prebuilt images from GHCR — ~3 min)
+# 5. Configure environment
+cp .env.example .env
+# Defaults work if your model is in ./models/ — edit .env only if you changed the path
+
+# 6. Start all services (first run builds container images — this takes several minutes)
 docker compose up -d         # or: podman-compose up -d
 
-# 6. Verify everything is healthy
-atlas doctor                 # 21-check install diagnostic — replaces "is it working?" log-grepping
+# 7. Verify everything is healthy (wait for all services to show "healthy")
 docker compose ps
 
-# 7. Start coding (from your project directory)
+# 8. Start coding (from your project directory)
 cd /path/to/your/project
 atlas
-```
-
-**What the wizard does** (each step delegates to existing primitives — same gates as `atlas tier` / `atlas model install`):
-
-1. Probes hardware via `atlas tier` (GPU/RAM/disk → one of 5 tiers).
-2. Picks a Lens-supported model from the registry (falls back to `Qwen3.5-9B-Q6_K` if your tier's default has no Lens artifacts — see [PC-056 model registry](../docs/CLI.md#atlas-model--registry-list--install--recommend--remove)).
-3. Downloads + SHA256-verifies into `./models/` via `atlas model install` (inherits the resume + concurrent-install lock + oversized-`.part` guard from PC-056.1/.2).
-4. Writes `.env` with tier-appropriate `ATLAS_CTX_SIZE` / `PARALLEL_SLOTS` / `KV_CACHE_TYPE_*` plus model + image-source keys.
-5. Generates `secrets/api-keys.json` (mode 0600, parent 0700) with a fresh `sk-atlas-…` bearer token labeled `user: local`. Prints the key — capture it for your client's `Authorization: Bearer` header.
-
-**Re-running the wizard.** A second `atlas init` refuses if `.env` already exists. To regenerate from new defaults (e.g., upgraded hardware, bumped a tier knob, or wrote the wrong model first time): `atlas init --reconfigure` backs up `.env` → `.env.bak` (and `api-keys.json` → `api-keys.json.bak` if present) before writing.
-
-#### Manual setup (if you'd rather not use the wizard)
-
-The pre-wizard flow still works:
-
-```bash
-# Download the model (or pick a different one from `atlas model list`)
-atlas model install Qwen3.5-9B-Q6_K
-
-# Copy the env template + edit if you changed paths
-cp .env.example .env
-
-# Generate an api-keys.json by hand
-mkdir -m 0700 -p secrets
-echo '{"sk-mykey": {"user": "local"}}' > secrets/api-keys.json
-chmod 600 secrets/api-keys.json
-
-# Bring up + verify
-docker compose up -d
-atlas doctor
 ```
 
 ### What Happens on First Run
@@ -140,7 +109,7 @@ atlas doctor
    below.
 2. llama-server loads the 7GB model into GPU VRAM (~1-2 min)
 3. All services start health checks
-4. Once all 5 services report healthy, `atlas` connects and launches Aider
+4. Once all 5 services report healthy, `atlas` connects and launches the Bubbletea TUI
 
 Subsequent `docker compose up -d` starts are fast (seconds) since images are cached.
 
@@ -194,11 +163,10 @@ Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/
 
 ### Verify Installation
 
-The fastest way is **`atlas doctor`** — runs **21 checks** across the host
-environment, the docker stack, a live model inference, and the
-host-vs-tier match. Returns exit 0 (healthy or warnings only) / 1 (any
-hard failure). This is what `atlas-bootstrap.sh` runs at the end of
-install, and what TROUBLESHOOTING.md leads with.
+The fastest way is **`atlas doctor`** — runs 19 checks across the host
+environment, the docker stack, and a live model inference, and returns
+exit 0 (healthy) / 1 (failures). This is also what `atlas-bootstrap.sh`
+runs at the end of install.
 
 ```bash
 atlas doctor              # full check (~5–10s)
@@ -207,7 +175,7 @@ atlas doctor --json       # machine output, for scripts/CI
 atlas doctor -v           # verbose: show detail for each check
 ```
 
-The 21 checks (PC-053 + PC-055 + PC-055.1):
+The 19 checks (PC-053):
 
 | Group | Check | What it confirms |
 |---|---|---|
@@ -215,14 +183,12 @@ The 21 checks (PC-053 + PC-055 + PC-055.1):
 | Host | compose | docker compose v2 installed |
 | Host | nvidia | nvidia-container-toolkit can run nvidia-smi inside Docker |
 | Host | vm.overcommit_memory | set to 1 (PC-011 — Redis AOF) |
-| Host | model_file | `ATLAS_MODEL_FILE` exists and is > 100 MB |
+| Host | model_file | `Qwen3.5-9B-Q6_K.gguf` exists and is > 100 MB |
 | Host | lens_weights | `cost_field.pt` + `metric_tensor.pt` present |
 | Stack | container/redis, llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 6 running and healthy |
 | Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag (PC-052) |
 | End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
-| Tier | tier_match (PC-055) | configured `ATLAS_MODEL_FILE` matches the recommended model for this hardware tier (warns on overshoot — OOM risk; passes on undershoot — just leaves perf on the table) |
-| Tier | tier_constraints (PC-055.1) | host meets the recommended tier's CPU / RAM / disk minimums. Multi-axis check — pure VRAM isn't enough since ATLAS is heavy on host RAM (5 containers + V3 PR-CoT) and disk (model + images + working space) |
 
 If you'd rather check by hand:
 
@@ -234,13 +200,13 @@ curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Functional test (requires aider: pip install aider-chat)
-atlas --message "Create hello.py that prints hello world"
+# Functional test
+echo "Create hello.py that prints hello world" | atlas
 ```
 
 All health endpoints should return `{"status": "ok"}` or `{"status": "healthy"}`.
 
-> **Note:** The `atlas` command auto-detects the proxy and launches Aider for the full agent loop (tool calls, V3 pipeline, file read/write). If Aider is not installed, it falls back to the built-in REPL which supports `/solve` and `/bench` but not file operations. Install Aider for the full experience: `pip install aider-chat`
+> **Note:** Plain `atlas` in an interactive terminal launches the Bubbletea TUI for the full agent loop (tool calls, V3 pipeline, file read/write). Pipe mode (e.g. the `echo | atlas` form above) routes through the built-in `/solve` flow for scripted/one-shot use.
 
 ### Stopping
 
@@ -281,7 +247,6 @@ Run all services as local processes without containers. Useful for development o
 |-------------|---------|
 | **Go 1.24+** | For building atlas-proxy |
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
-| **Aider** | `pip install aider-chat` |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
 
@@ -364,7 +329,7 @@ Alternatively, copy the launcher script to your PATH:
 ```bash
 cp /path/to/atlas-launcher ~/.local/bin/atlas
 chmod +x ~/.local/bin/atlas
-atlas    # Starts all missing services and launches Aider
+atlas    # Starts all missing services and launches the TUI
 ```
 
 The launcher auto-detects which services are already running and starts only what's missing. If it detects a Docker Compose stack, it connects to that instead.
@@ -479,86 +444,21 @@ which tier your hardware lands in and the exact `.env` values to use.
 ```bash
 atlas tier              # classify this host + show recommendations
 atlas tier list         # show all 5 tier definitions
-atlas tier --json       # machine output (consumed by PC-054 wizard, PC-056 registry)
+atlas tier --json       # machine output (for scripts)
 atlas tier --raw        # just the probe (no classification)
-atlas tier --install-dir /data/atlas   # measure disk free against an alternate path
 ```
 
-Use `--install-dir` when ATLAS lives on a non-root mount (e.g.,
-`/opt/atlas` on a `/data` partition) — the disk-free check defaults to
-`/`, which can mislead when the model + images live elsewhere. Doctor's
-`tier_constraints` check passes the right path automatically (it knows
-where `docker-compose.yml` lives), so this flag is mainly for direct
-`atlas tier` invocations.
-
 The medium tier is the ATLAS development target — `atlas-bootstrap.sh`
-defaults to its model+context settings. For other tiers, run `atlas init`
-(PC-054 wizard, shipped) which probes the host and writes a `.env` with
-the tier-appropriate `ATLAS_CTX_SIZE` / `PARALLEL_SLOTS` / `KV_CACHE_TYPE_*`
-without manual edits.
-
-#### Multi-axis constraint check (PC-055.1)
-
-`atlas tier` doesn't only classify by GPU VRAM — each tier carries
-floors for system RAM, CPU cores, and free disk, and the tier card
-prints a **constraint table** comparing the host against the
-recommended tier's minimums. ATLAS is heavy on host resources too:
-five containers each carry their own RSS, the V3 PR-CoT repair phase
-bursts memory, sandbox compiles need real CPU, and model + image
-storage adds up fast. A 16 GB GPU paired with 8 GB host RAM is a real
-OOM risk during V3 + sandbox compiles, with no warning from a
-VRAM-only check.
-
-| Tier | min RAM | min CPU cores | min free disk |
-|------|--------:|--------------:|--------------:|
-| small  | 12 GB | 4  | 20 GB |
-| medium | 16 GB | 4  | 25 GB |
-| large  | 24 GB | 8  | 35 GB |
-| xlarge | 32 GB | 16 | 60 GB |
-
-Status semantics:
-
-- **pass** — comfortably above the minimum
-- **warn** — RAM/disk shortage within 15% of the minimum, OR any CPU
-  shortage. CPU shortage is always warn (slow ≠ broken)
-- **fail** — RAM/disk shortage past the 15% threshold (will OOM during
-  V3 or fail to download / pull images)
-
-Hard minimums for the tier you intend to run:
+defaults to its model+context settings. Other tiers require manual `.env`
+edits (or wait for PC-054's first-run wizard which automates the
+selection).
 
 | Resource | Minimum | Recommended | Notes |
 |----------|---------|-------------|-------|
 | GPU VRAM | 8 GB | 16 GB | See tier table above |
-| System RAM | 12 GB | 16 GB+ | 5 containers + V3 PR-CoT burst memory + sandbox tmpfs |
-| Disk | 20 GB | 35 GB | Model (4.4–23 GB) + container images (5–8 GB) + working space |
-| CPU | 4 cores | 8+ cores | V3 pipeline + sandbox compiles + llama prompt processing |
-
-<a id="model-management"></a>
-### Model Management (`atlas model`, PC-056)
-
-Beyond classifying *which* model to run, ATLAS ships an `atlas model` subcommand for the install lifecycle. See [CLI.md → `atlas model`](CLI.md#atlas-model) for the full flag tables and examples; the short version:
-
-```bash
-atlas model list                            # show all known models with install + Lens columns
-atlas model recommend                       # composes atlas tier + registry, prints best fit
-atlas model install Qwen3.5-9B-Q6_K         # download from HuggingFace into ATLAS_MODELS_DIR
-atlas model install <name> --dry-run        # preview URL/target/SHA, no network
-atlas model remove <name> --yes             # delete from disk
-```
-
-**Truth in advertising — `lens_status`.** Every registry entry is one of `supported` (Lens artifacts shipped, G(x) verification works), `no-artifacts` (model can be downloaded but G(x) silently no-ops), or `unverified`. Today **only `Qwen3.5-9B-Q6_K` is `supported`** — the 7B / 14B / 32B entries are listed honestly as `no-artifacts` so users know what's missing before they install. This is why the Phase 0 development target is medium tier: it's the only tier where ATLAS is end-to-end functional today.
-
-To install a `no-artifacts` model anyway (you accept G(x) won't score generations), pass `--no-lens`. The 7B / 14B / 32B unsloth repos require **HuggingFace authentication** — set `HF_TOKEN` to a token from [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens):
-
-```bash
-export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'
-atlas model install Qwen3.5-14B-Q5_K_M --no-lens
-# downloads from gated upstream with auth header; G(x) still no-ops at runtime
-```
-
-`atlas model list` shows `(requires HF_TOKEN)` next to gated entries when the env var is missing, and `gated, HF_TOKEN present` when it's set. The `--no-resume` flag forces a fresh download from byte 0 (default behavior resumes from `<file>.part` if present). Use `atlas model verify` to recompute SHA256 of installed files vs. the registry — useful after suspected disk corruption or after pulling a new ATLAS release.
-
-Bringing more models to `supported` is the work of [PC-058 (`atlas lens build`)](https://github.com/itigges22/ATLAS/issues/100) — the multi-hour Lens-training pipeline that produces metric tensor + embeddings for new models. PC-056.1 added `Qwen3.5-9B-Q4_K_M` and `Qwen3.5-9B-Q8_0` as `unverified` quant variants — they share the Q6_K's Lens artifacts (different quant of the same model family, structurally similar embedding space) but the exact (quant, Lens) combinations haven't been validated end-to-end. See ISSUES.md for the full model-agnostic roadmap (PC-057 through PC-060).
+| System RAM | 14 GB | 16 GB+ | PyTorch runtime + container overhead |
+| Disk | 15 GB | 25 GB | Model (4.4–23 GB depending on tier) + container images (5–8 GB) + working space |
+| CPU | 4 cores | 8+ cores | V3 pipeline is CPU-intensive during repair phases |
 
 ### Supported GPUs
 

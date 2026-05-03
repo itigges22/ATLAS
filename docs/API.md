@@ -178,11 +178,11 @@ Use `/events` when you want a global observability feed (a TUI pipeline pane, a 
 
 ---
 
-### POST /v1/chat/completions (legacy)
+### POST /v1/chat/completions (passthrough)
 
-OpenAI-compatible chat completions. Predates `/v1/agent` and is kept for SDK compatibility. When `ATLAS_AGENT_LOOP=1` (default), it transparently runs the same agent loop and returns the final assistant message — but the streaming format is OpenAI-shaped (Aider-style chunk deltas) rather than the typed events above.
+OpenAI-compatible chat completions. Predates `/v1/agent` and is kept for SDK compatibility. The proxy passes these requests through to llama-server unchanged — **no agent loop, no tool calls, no V3 pipeline runs on this endpoint**. The response shape and streaming format is whatever llama-server returns natively.
 
-**For new clients, prefer `/v1/agent`.** It exposes the full event stream (tool calls, V3 progress, permission requests) that this endpoint flattens into a single text stream.
+**For agent turns and tool calls, use `/v1/agent`.** It exposes the full structured event stream (tool calls, V3 progress, permission requests) — all features that used to live on `/v1/chat/completions` were moved there when the legacy Aider-format wrapping was retired.
 
 **Request:**
 ```json

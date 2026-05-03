@@ -6,18 +6,6 @@ Complete reference for all environment variables, command-line flags, and config
 
 ## Quick Start
 
-The recommended path on a fresh checkout is the wizard:
-
-```bash
-atlas init --yes        # probes hardware, downloads model, writes .env + secrets/api-keys.json
-docker compose up -d
-atlas doctor            # verify
-```
-
-`atlas init` writes every key the compose stack reads at boot, choosing tier-appropriate values for `ATLAS_CTX_SIZE`, `PARALLEL_SLOTS`, and `KV_CACHE_TYPE_K|V` based on `atlas tier`'s probe — so the `.env` it produces is more accurate than the default template. See [CLI.md → `atlas init`](CLI.md#atlas-init--first-run-install-wizard-pc-054) for the full surface.
-
-If you'd rather configure by hand:
-
 ```bash
 cp .env.example .env
 # Edit .env only if you need to change model path or ports
@@ -26,44 +14,23 @@ docker compose up -d
 
 The defaults work if your model is at `./models/Qwen3.5-9B-Q6_K.gguf`.
 
-> **Wizard ownership.** When `atlas init` writes `.env`, it owns the keys listed in section 1 below. Manual edits keep working — but `atlas init --reconfigure` will overwrite them (after backing the file up to `.env.bak`). If you want manual edits to survive a reconfigure, copy them out before running it, or skip the wizard for that knob and edit directly.
-
 ---
 
 ## 1. Docker Compose (.env)
 
-These variables are read by `docker-compose.yml` and control host-side port mappings and model paths. Either `atlas init --yes` (recommended, tier-aware defaults) or `cp .env.example .env` (manual) gets you a starting file.
+These variables are read by `docker-compose.yml` and control host-side port mappings and model paths. Copy `.env.example` to `.env` to configure:
 
-> **Source of truth for runtime knobs.** Don't pick values for
-> `ATLAS_MODEL_FILE`, `ATLAS_CTX_SIZE`, `PARALLEL_SLOTS`, or
-> `KV_CACHE_TYPE_K|V` from this table directly — run `atlas tier` (for
-> tier-derived runtime knobs) or `atlas model recommend` (for the right
-> *model* given your hardware AND Lens artifact availability) and use the
-> values they print. The defaults below are tuned for the **medium tier**
-> (12–20 GB VRAM, ATLAS development target); small / large / xlarge boxes
-> need different settings to avoid OOM or leave perf on the table. See
-> [SETUP.md → Hardware Sizing](SETUP.md#hardware-sizing) for the full
-> tier table, [CLI.md → `atlas tier`](CLI.md#atlas-tier) for the
-> classification command, or [CLI.md → `atlas model`](CLI.md#atlas-model)
-> for the install lifecycle. Today only `Qwen3.5-9B-Q6_K` has end-to-end
-> Lens support; `atlas model recommend` will surface that fact for
-> users on other tiers.
-
-| Variable | Default (medium tier) | Description |
-|----------|----------------------:|-------------|
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `ATLAS_MODELS_DIR` | `./models` | Host path to directory containing GGUF model weights |
-| `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | Model filename (must exist in ATLAS_MODELS_DIR). `atlas tier` recommends per hardware. |
-| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses (matches MODEL_FILE without extension) |
-| `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens. Tier-dependent: small=8K, medium=32K, large=32K, xlarge=64K. |
-| `PARALLEL_SLOTS` | `1` | llama-server `--parallel`. Tier-dependent: small/medium=1, large/xlarge=2. Read by the llama entrypoint, not directly by docker-compose. |
-| `KV_CACHE_TYPE_K` | `q8_0` | KV-cache K quantization. Tier-dependent: small=q4_0, medium/large=q8_0, xlarge=f16. |
-| `KV_CACHE_TYPE_V` | `q4_0` | KV-cache V quantization. Tier-dependent: small=q4_0, medium=q4_0, large=q8_0, xlarge=f16. |
+| `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | Model filename (must exist in ATLAS_MODELS_DIR) |
+| `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses |
+| `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens |
 | `ATLAS_LLAMA_PORT` | `8080` | llama-server host port |
 | `ATLAS_LENS_PORT` | `8099` | Geometric Lens host port |
 | `ATLAS_V3_PORT` | `8070` | V3 Pipeline service host port |
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port (container listens on 8020) |
-| `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (Aider connects here) |
-| `HF_TOKEN` | (unset) | HuggingFace access token (PC-056.1). Read by `atlas model install` to authenticate against gated upstream repos. The 7B / 14B / 32B Qwen3.5 GGUFs all return HTTP 401 anonymously; with a valid token, install proceeds. Get one at https://huggingface.co/settings/tokens. `HUGGING_FACE_HUB_TOKEN` is honored as an alternative spelling for HF Python SDK compatibility. |
+| `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (TUI and OpenAI-compat clients connect here) |
 
 Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are hardcoded in `docker-compose.yml` and do not need to be configured by users.
 
@@ -71,7 +38,7 @@ Docker Compose also sets inter-service URLs using Docker networking (e.g., `http
 
 ## 2. atlas-proxy
 
-The Go proxy that runs the agent loop, routes tool calls, and translates between Aider and the ATLAS stack.
+The Go proxy that runs the agent loop, routes tool calls, and orchestrates the ATLAS pipeline (llama-server + Lens + V3 + sandbox).
 
 ### Environment Variables
 
@@ -85,9 +52,8 @@ The Go proxy that runs the agent loop, routes tool calls, and translates between
 | `ATLAS_V3_URL` | `http://localhost:8070` | V3 Pipeline service endpoint |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API responses |
 | `ATLAS_AGENT_LOOP` | (unset) | Set to `1` to enable tool-call agent loop. When unset or any other value, proxy forwards to llama-server directly. |
-| `ATLAS_V3_CLI` | (unset) | Set to `1` to enable V3 CLI mode (routes all generation through V3 service) |
 | `ATLAS_KEEP_LLAMA_WARM` | `1` | Set to `0` to disable the keep-warm goroutine that pings llama-server every 45s with a 1-token completion. Keeping warm avoids the cold-start path that fires after 1-2 min idle (see ISSUES.md PC-035). Disable for CPU-only or tightly power-budgeted setups. |
-| `ATLAS_FRESH_SLOT_PER_SESSION` | `1` | Set to `0` to disable per-session llama.cpp KV-slot erase. With it enabled (default), the proxy POSTs `/slots/0?action=erase` at the start of each agent loop invocation, giving each Aider message a clean cache. Adds ~1-2s to the first turn but prevents cross-session token-state leakage (e.g. filenames hallucinated from prior sessions). See ISSUES.md PC-045. |
+| `ATLAS_FRESH_SLOT_PER_SESSION` | `1` | Set to `0` to disable per-session llama.cpp KV-slot erase. With it enabled (default), the proxy POSTs `/slots/0?action=erase` at the start of each agent loop invocation, giving each turn a clean cache. Adds ~1-2s to the first turn but prevents cross-session token-state leakage (e.g. filenames hallucinated from prior sessions). See ISSUES.md PC-045. |
 
 ### Internal Settings (not configurable via env)
 
@@ -278,39 +244,7 @@ The standalone Python REPL (`pip install -e . && atlas`) reads these variables:
 
 ---
 
-## 8. Aider Configuration
-
-Two files in the project root control how Aider interacts with the ATLAS proxy:
-
-### `.aider.model.settings.yml`
-
-| Field | Value | Purpose |
-|-------|-------|---------|
-| `name` | `openai/atlas` | Model identifier Aider uses to find settings |
-| `edit_format` | `whole` | Aider sends full file content (not diffs) |
-| `weak_model_name` | `openai/atlas` | Same model for commit messages and summaries |
-| `use_repo_map` | `true` | Include repository file tree in context |
-| `send_undo_reply` | `true` | Notify model when user undoes a change |
-| `examples_as_sys_msg` | `true` | Put few-shot examples in system prompt |
-| `max_tokens` | `32768` | Must match llama-server context window |
-| `temperature` | `0.3` | Low temperature for deterministic tool calls |
-| `streaming` | `true` | Enable SSE streaming for real-time output |
-
-### `.aider.model.metadata.json`
-
-| Field | Value | Purpose |
-|-------|-------|---------|
-| `max_tokens` | `32768` | Max output tokens |
-| `max_input_tokens` | `32768` | Max input context |
-| `max_output_tokens` | `32768` | Max generation length |
-| `input_cost_per_token` | `0` | Free (local inference) |
-| `output_cost_per_token` | `0` | Free (local inference) |
-| `litellm_provider` | `openai` | OpenAI-compatible API protocol |
-| `mode` | `chat` | Chat completion mode |
-
----
-
-## 9. K3s Configuration (atlas.conf)
+## 8. K3s Configuration (atlas.conf)
 
 For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit:
 

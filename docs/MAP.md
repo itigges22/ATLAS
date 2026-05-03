@@ -6,8 +6,6 @@ Every file in the repository. Click any directory in the tree to jump to its des
 
 ## File Tree
 
-- [`.aider.model.metadata.json`](#root-config) — Aider model token limits and cost
-- [`.aider.model.settings.yml`](#root-config) — Aider model behavior settings
 - [`.env.example`](#root-config) — Docker Compose environment template
 - [`.gitignore`](#root-config) — Git ignore rules
 - [`atlas.conf.example`](#root-config) — K3s deployment configuration template
@@ -22,7 +20,6 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`main.go`](#atlas-proxy) — HTTP server, chat handler, verify-repair, tier classification
   - [`agent.go`](#atlas-proxy) — Agent loop, LLM dispatch, exploration budget, error recovery
   - [`tools.go`](#atlas-proxy) — 8 tool definitions + executors, tier classifier
-  - [`aider_format.go`](#atlas-proxy) — Agent results to Aider whole-file format
   - [`grammar.go`](#atlas-proxy) — JSON schema + GBNF grammar generation
   - [`types.go`](#atlas-proxy) — Shared types: ToolCall, AgentContext, tiers
   - [`v3_bridge.go`](#atlas-proxy) — Go-to-Python V3 service SSE bridge
@@ -56,6 +53,8 @@ Every file in the repository. Click any directory in the tree to jump to its des
       - [`solve.py`](#atlas-cli) — /solve command: generate + score + test
       - [`bench.py`](#atlas-cli) — /bench command: run V3 benchmarks
       - [`status.py`](#atlas-cli) — /status command: service health checks
+      - [`doctor.py`](#atlas-cli) — `atlas doctor` — install + service diagnostic
+      - [`tier.py`](#atlas-cli) — `atlas tier` — hardware probe + tier classification
       - [`tui.py`](#atlas-cli) — `atlas tui` — locate/build/exec the Bubbletea TUI binary (PC-062)
       - [`__init__.py`](#atlas-cli)
 - [`benchmark/`](#benchmark) — Benchmark runner and datasets
@@ -244,13 +243,11 @@ Every file in the repository. Click any directory in the tree to jump to its des
 
 | File | Description |
 |------|-------------|
-| [`.aider.model.metadata.json`](../.aider.model.metadata.json) | Aider model metadata: token limits (32K), cost ($0 — local), provider (openai) |
-| [`.aider.model.settings.yml`](../.aider.model.settings.yml) | Aider behavior: whole-file edit format, repo map enabled, streaming on, temperature 0.3 |
 | [`.env.example`](../.env.example) | Docker Compose env template: model path, ports (8080/8099/8070/30820/8090), context size |
 | [`atlas.conf.example`](../atlas.conf.example) | K3s deployment config: model, GPU layers, parallel slots, NodePorts, namespace |
 | [`docker-compose.yml`](../docker-compose.yml) | 5-service stack: llama-server, geometric-lens, v3-service, sandbox, atlas-proxy |
 | [`pyproject.toml`](../pyproject.toml) | Python package: `atlas` CLI entry point (`atlas.cli.repl:run`), requires Python >= 3.9 |
-| [`.gitignore`](../.gitignore) | Ignores: model weights, __pycache__, .aider* (except config files), logs, .env |
+| [`.gitignore`](../.gitignore) | Ignores: model weights, __pycache__, logs, .env, build artifacts |
 
 <a id="root-docs"></a>
 ### Root — Documentation
@@ -266,14 +263,13 @@ Every file in the repository. Click any directory in the tree to jump to its des
 <a id="atlas-proxy"></a>
 ### atlas-proxy/ — Agent Loop (Go)
 
-The core of the V3.0.1 CLI. Receives OpenAI-compatible requests from Aider, runs a grammar-constrained agent loop with 8 tools, and routes complex files through the V3 pipeline.
+The core of the V3.0.1 CLI. Hosts `/v1/agent` (the structured agent endpoint the TUI drives), runs a grammar-constrained agent loop with 8 tools, and routes complex files through the V3 pipeline. `/v1/chat/completions` is a transparent passthrough to llama-server for OpenAI-compat clients.
 
 | File | Lines | Description |
 |------|-------|-------------|
-| [`main.go`](../atlas-proxy/main.go) | 2890 | HTTP server, `/v1/chat/completions` handler, verify-repair pipeline, best-of-K, format normalization, error analysis, Lens scoring, sandbox testing |
-| [`agent.go`](../atlas-proxy/agent.go) | 740 | Agent loop iteration, JSON schema generation, system prompt building, LLM calls with grammar constraint, exploration budget, truncation recovery |
+| [`main.go`](../atlas-proxy/main.go) | ~1600 | HTTP server, route registration, verify-repair pipeline scaffolding, format normalization, helpers shared with the agent loop |
+| [`agent.go`](../atlas-proxy/agent.go) | 740 | Agent loop iteration, JSON schema generation, system prompt building, LLM calls with grammar constraint, exploration budget, truncation recovery, `/v1/agent` + `/cancel` handlers |
 | [`tools.go`](../atlas-proxy/tools.go) | 905 | 8 tool definitions (read/write/edit/delete file, run command, search, list dir, plan tasks), per-file tier classifier, V3 routing |
-| [`aider_format.go`](../atlas-proxy/aider_format.go) | 697 | Converts agent results to Aider whole-file blocks, streams real-time status with icons, project directory detection, delete fast-path |
 | [`grammar.go`](../atlas-proxy/grammar.go) | 192 | JSON schema (oneOf: tool_call/text/done) and GBNF grammar for constrained output, tool documentation generation |
 | [`types.go`](../atlas-proxy/types.go) | 390 | AgentContext, ToolDef, ToolResult, tier definitions (T0-T3), max turns per tier, permission types |
 | [`v3_bridge.go`](../atlas-proxy/v3_bridge.go) | 120 | HTTP bridge to Python V3 service with SSE progress streaming, Lens scoring bridge |
@@ -282,15 +278,13 @@ The core of the V3.0.1 CLI. Receives OpenAI-compatible requests from Aider, runs
 | [`project.go`](../atlas-proxy/project.go) | 226 | Detects language (Node/Python/Rust/Go/C/Shell), framework (Next.js/Flask/Express), build/dev/test commands |
 | [`permissions.go`](../atlas-proxy/permissions.go) | 150 | Allow/deny rules, dangerous pattern detection (rm -rf, .env, credentials), mode-based access |
 | [`parallel.go`](../atlas-proxy/parallel.go) | 213 | plan_tasks executor: topological sort, concurrent sub-task execution (15-turn budget each) |
-| [`events.go`](../atlas-proxy/events.go) | 175 | PC-061 typed event protocol (Phase 1 foundation): `Envelope` struct mirroring atlas/cli/events.py exactly, global pub/sub broker (non-blocking fan-out, slow-consumer drop), `Emit()` / `EmitSimple()` producers, `/events` SSE handler with 15s heartbeat. Wired into agent.go at the loop entry, every tool_call/tool_result, and every return path (success, cancellation, max-turns, LLM error, truncated-args 3-fail, productive-changes 3-fail). |
-| [`events_test.go`](../atlas-proxy/events_test.go) | 200 | Go unit tests (PC-061): event-id format/uniqueness, envelope JSON shape pinned against the Python schema, omitempty for parent_id/duration_ms, broker fan-out to multiple subscribers, unsubscribe stops delivery, slow-consumer doesn't block producer (drop semantics), concurrent subscribe/unsubscribe race-free, `EmitSimple` payload shape. Run with `go test -race`. |
 | [`go.mod`](../atlas-proxy/go.mod) | — | Go module definition |
 | [`Dockerfile`](../atlas-proxy/Dockerfile) | — | Multi-stage Go build for containerized deployment |
 
 <a id="atlas-tui"></a>
 ### atlas-tui/ — Bubbletea TUI Client (Go)
 
-Native terminal UI that consumes both atlas-proxy SSE streams (`/events` for typed envelopes, `/v1/agent` for chat). Replaces Aider as the canonical chat front-end. PC-062.
+Native terminal UI that consumes both atlas-proxy SSE streams (`/events` for typed envelopes, `/v1/agent` for chat). The canonical chat front-end. PC-062.
 
 | File | Description |
 |------|-------------|
@@ -307,7 +301,7 @@ Native terminal UI that consumes both atlas-proxy SSE streams (`/events` for typ
 <a id="atlas-cli"></a>
 ### atlas/ — Python CLI
 
-Standalone REPL for direct interaction with ATLAS services (without Aider).
+Standalone REPL for direct interaction with ATLAS services. Used for pipe-mode (`echo ... | atlas`) and as a fallback when the TUI can't run.
 
 | File | Description |
 |------|-------------|
@@ -317,13 +311,6 @@ Standalone REPL for direct interaction with ATLAS services (without Aider).
 | [`cli/commands/solve.py`](../atlas/cli/commands/solve.py) | /solve: generate code from LLM, extract from think blocks, score via Lens, test via sandbox |
 | [`cli/commands/bench.py`](../atlas/cli/commands/bench.py) | /bench: delegates to benchmark.v3_runner with dataset/strategy/task-count args |
 | [`cli/commands/status.py`](../atlas/cli/commands/status.py) | /status: check health of llama-server, Lens, sandbox |
-| [`cli/commands/doctor.py`](../atlas/cli/commands/doctor.py) | `atlas doctor` (PC-053): 21-check install diagnostic — Docker / Compose / NVIDIA / model file / Lens weights / containers / health endpoints / image skew / e2e smoke / overcommit / tier match / tier constraints. Exit 0 on pass-or-warn, 1 on any fail. |
-| [`cli/commands/tier.py`](../atlas/cli/commands/tier.py) | `atlas tier` (PC-055 + PC-055.1 + PC-055.2): hardware probe + classification into one of 5 tiers (cpu/small/medium/large/xlarge). Multi-axis constraint check (VRAM + RAM + CPU + disk). `TierProfile` carries runtime knobs only; model selection lives in `model_recommendations.py`. |
-| [`cli/commands/model_registry.py`](../atlas/cli/commands/model_registry.py) | Honest model registry (PC-056, hardened in PC-056.1). `Model` dataclass with `lens_status` (supported/no-artifacts/unverified), `requires_hf_token`, `lens_artifact_dir`, `lens_artifact_files` fields. `REGISTRY` has 6 entries: 4 tier presets + Q4_K_M and Q8_0 9B variants (unverified — share Q6_K's Lens artifacts). Helpers: `for_tier`, `tier_for_model`, `by_name`, `is_installed`, `installed_size_gb`, `compute_sha256`, `verify_installed`, `lens_artifact_dir_for`, `lens_artifacts_present`. URLs commit-pinned to `3885219b…` so SHA256s stay stable across upstream re-uploads. |
-| [`cli/commands/model_recommendations.py`](../atlas/cli/commands/model_recommendations.py) | PC-055.2 → PC-056 back-compat shim. Re-exports `for_tier` / `tier_for_model` / `Model` (aliased as `ModelRecommendation`) from `model_registry`. New code should import `model_registry` directly; this shim is removable once in-tree call sites migrate. |
-| [`cli/commands/model.py`](../atlas/cli/commands/model.py) | `atlas model` (PC-056, hardened in PC-056.1, edge cases in PC-056.2): `list` / `recommend` / `install` / `verify` / `remove`. Streams downloads via stdlib urllib with progress bar, **SHA256 enforcement** (delete + exit 1 on mismatch), **resume from .part** (Range: bytes=N-, hashes existing bytes first), **HF_TOKEN auth** (Authorization: Bearer header for gated upstreams). PC-056.2 adds **concurrent install lock** (`<file>.part.lock` via `O_CREAT\|O_EXCL` + PID-liveness reclaim of stale locks) and **oversized .part guard** (refuses resume when `.part > model_size * 1.05`). `verify` subcommand recomputes SHA of installed files vs registry. Lens-status safety gate refuses no-artifacts installs without `--no-lens`. Composes with `tier.classify()` for `recommend`. |
-| [`cli/commands/init.py`](../atlas/cli/commands/init.py) | `atlas init` (PC-054): first-run install wizard. 5-step composer over existing primitives — probe (`tier.classify`), pick model (`model_registry.for_tier` with supported-fallback), download (delegates to `model.main(["install", ...])` — inherits PC-056.1/.2 SHA verify + resume + lock + oversized-guard for free), write `.env` (tier-derived `ATLAS_CTX_SIZE` / `PARALLEL_SLOTS` / `KV_CACHE_TYPE_*` + model + image-source keys), generate `secrets/api-keys.json` (mode 0600, parent 0700, fresh `sk-atlas-<token_urlsafe(32)>` key labeled `user: local`). Flags: `--yes` (non-interactive), `--reconfigure` (back up `.env`/`api-keys.json` to `.bak` before writing), `--skip-download`, `--dry-run`, `--json`, `--models-dir`, `--image-tag`, `--ghcr-owner`. Already-configured guard refuses on existing `.env` without `--reconfigure`. |
-| [`cli/events.py`](../atlas/cli/events.py) | Typed event protocol (PC-061) — Phase 1 foundation. Defines the `Event` dataclass, the 7 legal types (`stage_start`, `stage_end`, `tool_call`, `tool_result`, `metric`, `error`, `done`), `make_event()` producer helper, `parse_envelope()` validator (raises `LegacyEventError` on the v3-service legacy `{stage, detail}` shape, `SchemaError` on malformed envelopes), `iter_sse_lines()` SSE framer, `iter_events(url)` typed consumer that streams from any compliant SSE endpoint. The schema is mirrored exactly in atlas-proxy's `events.go` and v3-service's `_emit_event` — schema doc lives in `docs/PROTOCOL.md`. |
 
 <a id="benchmark"></a>
 <a id="benchmark-core"></a>
@@ -549,14 +536,6 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`test_e2e_training.py`](../tests/integration/test_e2e_training.py) | End-to-end Lens training test |
 | **v3/** — 22 unit tests, one per V3 module | |
 | `test_plan_search.py` `test_div_sampling.py` `test_budget_forcing.py` `test_blend_asc.py` `test_reasc.py` `test_s_star.py` `test_candidate_selection.py` `test_failure_analysis.py` `test_constraint_refinement.py` `test_pr_cot.py` `test_derivation_chains.py` `test_refinement_loop.py` `test_metacognitive.py` `test_ace_pipeline.py` `test_self_test_gen.py` `test_lens_feedback.py` `test_embedding_store.py` `test_ablation_analysis.py` `test_ewc.py` `test_replay_buffer.py` `test_enhanced_retrain.py` `test_phase4_validation.py` `test_sandbox_adapter.py` | |
-| **cli/** — CLI subcommand unit tests | |
-| [`test_tier.py`](../tests/cli/test_tier.py) | 28 cases covering hardware classification + multi-axis constraints + PC-055.2 layering invariants. Regression tests for every paranoid-pass bug (multi-GPU pick-max, vram=0 + has_gpu=True, install_dir plumbing). Parametrized band-breakpoint cases at exact-edge VRAM values. |
-| [`test_model_registry.py`](../tests/cli/test_model_registry.py) | 35+ cases (PC-056 + PC-056.1) for the registry: shape locked at 6 entries, forward + reverse lookups, `is_installed` filesystem probe with sparse-file fixtures, PC-055.2 back-compat shim, commit-pinned URLs, `requires_hf_token` flag, three-quant 9B coverage, SHA256 helpers (`compute_sha256`, `verify_installed`), Lens artifact path resolution (`lens_artifact_dir_for`, `lens_artifacts_present`). |
-| [`test_model.py`](../tests/cli/test_model.py) | 50+ cases (PC-056 + PC-056.1 + PC-056.2) for the CLI: list filters, recommend composition, install safety gates (unknown name, no-artifacts refusal, **HF_TOKEN gate** with helpful message, existing-file overwrite), `atlas model verify` subcommand (corruption detection, no-expected-SHA path, JSON shape), HF_TOKEN env var rendering in list output, alt-spelling `HUGGING_FACE_HUB_TOKEN` honored, remove confirm + idempotence, path resolution (env > flag). PC-056.2: concurrent-install lock acquire/release/stale-PID-reclaim/unparseable-lock-reclaim/live-PID-refused, oversized .part refusal, mocked urlopen download path (fresh install, SHA mismatch, resume hash continuation, server-ignores-Range restart, HF_TOKEN Authorization header, 401 keeps .part). |
-| [`test_init.py`](../tests/cli/test_init.py) | 12 cases (PC-054) for `atlas init`: `--yes` happy path writes every required `.env` key + valid `secrets/api-keys.json`, file/dir permissions are 0600/0700, api-keys.json payload shape is one `sk-atlas-*` key labeled `user: local`, already-configured guard refuses without `--reconfigure` (and does NOT modify the existing .env), `--reconfigure` backs up `.env` → `.env.bak` and api-keys.json → `.bak` before overwriting, `--reconfigure` without an existing .env still works, `--skip-download` doesn't auto-create models dir, `--dry-run` touches no files, `--json` shape is stable for the bootstrap script, `--image-tag` / `--ghcr-owner` / `--models-dir` overrides land in .env. |
-| [`test_events.py`](../tests/cli/test_events.py) | 38 cases (PC-061) pinning the event protocol contract: `make_event` rejects unknown types, accepts every legal type, carries timestamps/parent_id/duration_ms; `to_dict` omits None-valued optionals, includes set ones, JSON is compact and round-trips exactly; `parse_envelope` rejects non-object/invalid-JSON/missing-required-field/unknown-type/non-numeric-timestamp/non-object-payload; legacy detection routes the full `{stage, detail}` and stage-only shapes to `LegacyEventError` without false-positiving envelopes that happen to have a `stage` key; `iter_sse_lines` handles `data:`, `event:`, `: heartbeat`, and both bytes/str input; sequencing helpers (`is_terminal`, `assert_monotonic`); end-to-end pipeline shape — emit → SSE-encode → decode → parse round-trips an 8-event probe sequence with monotonic timestamps. |
-| **v3-service/** | |
-| [`test_event_emission.py`](../tests/v3-service/test_event_emission.py) | 9 cases (PC-061 step B) pinning v3-service's dual-emit contract: legacy `{stage, detail}` always emitted (back-compat); envelope NOT emitted when opt-in is False; envelope IS emitted when True; `_pass`/`_failed`/`_error` suffixes route to the right envelope type with correct success flag; logical stage name has the suffix stripped; stage_end pairs to its earlier stage_start via `parent_id` + `duration_ms`; phase2_allocated stays under its own logical name (no false pairing); broken pipe (client disconnect mid-stream) is swallowed without raising; `_classify_stage` and `_logical_stage` cover all known suffix cases. |
 
 <a id="docs"></a>
 ### docs/ — Documentation
@@ -566,7 +545,7 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Two-layer architecture with 13 Mermaid diagrams, component breakdowns, sequence diagrams |
 | [`API.md`](API.md) | HTTP API reference: all endpoints for all 5 services, request/response formats |
 | [`CLI.md`](CLI.md) | CLI usage, streaming output format, workflow examples, troubleshooting |
-| [`CONFIGURATION.md`](CONFIGURATION.md) | Every environment variable across all services, internal constants, Aider config |
+| [`CONFIGURATION.md`](CONFIGURATION.md) | Every environment variable across all services, internal constants, K3s config |
 | [`MAP.md`](MAP.md) | This file — repository file map |
 | [`SETUP.md`](SETUP.md) | Installation: Docker Compose, bare-metal, K3s |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Common issues and solutions |

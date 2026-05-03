@@ -141,7 +141,7 @@ services:
     networks:
       - atlas
 
-  # --- ATLAS Proxy v2 (agent loop + grammar + Aider format) ---
+  # --- ATLAS Proxy (agent loop + grammar + structured tool calls) ---
   # The proxy needs access to your project files for read_file, write_file, etc.
   #
   # File-write target inside the container is /workspace, pinned via
