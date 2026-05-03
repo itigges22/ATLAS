@@ -89,6 +89,32 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Target user (who owns the install)
+# ---------------------------------------------------------------------------
+# The script supports both `curl | bash` (run as regular user, sudo prompts
+# for elevation) and `curl | sudo bash` (run as root, $SUDO_USER set to the
+# invoking user). In both cases we want the install tree at /opt/atlas to
+# be owned by the *human* using the system, not by root — otherwise every
+# later `atlas` invocation, `git pull`, or `docker compose build` would
+# trip permission-denied. Resolve the target once and use it everywhere.
+if [[ "$(id -u)" == "0" ]]; then
+    if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+        TARGET_USER="$SUDO_USER"
+        TARGET_UID=$(id -u "$SUDO_USER" 2>/dev/null || echo 0)
+        TARGET_GID=$(id -g "$SUDO_USER" 2>/dev/null || echo 0)
+    else
+        # Real root login (no sudo) — own as root and accept the consequence.
+        TARGET_USER="root"
+        TARGET_UID=0
+        TARGET_GID=0
+    fi
+else
+    TARGET_USER="$USER"
+    TARGET_UID=$(id -u)
+    TARGET_GID=$(id -g)
+fi
+
+# ---------------------------------------------------------------------------
 # Docker invocation prefix
 # ---------------------------------------------------------------------------
 # After install_docker adds the user to the docker group, the CURRENT shell
@@ -386,30 +412,36 @@ ensure_repo_and_env() {
             (cd "$install_dir" && git pull --ff-only) || die "git pull failed in $install_dir"
         else
             $SUDO mkdir -p "$install_dir"
-            # Hand the install dir to the invoking user so subsequent steps
-            # (download-models.sh, .env writes, docker compose builds) don't
-            # need sudo and don't leave root-owned droppings in the tree.
-            $SUDO chown -R "$(id -u):$(id -g)" "$install_dir"
-            git clone "$repo_url" "$install_dir" || die "git clone failed"
+            # Pre-chown the dir so the clone goes in user-owned, then
+            # re-chown after to catch any leftover root-owned bits (rare,
+            # but safer than assuming git inherits perms cleanly).
+            $SUDO chown -R "$TARGET_UID:$TARGET_GID" "$install_dir"
+            if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+                # Run the clone as the target user when bootstrapping via
+                # sudo, so .git/config, hooks, etc. get the right ownership.
+                $SUDO -u "$TARGET_USER" git clone "$repo_url" "$install_dir" \
+                    || die "git clone failed"
+            else
+                git clone "$repo_url" "$install_dir" || die "git clone failed"
+            fi
+            $SUDO chown -R "$TARGET_UID:$TARGET_GID" "$install_dir"
         fi
         cd "$install_dir"
-        log_ok "Working in $install_dir"
+        log_ok "Working in $install_dir (owner: $TARGET_USER)"
     else
         log_ok "Already in an ATLAS checkout: $(pwd)"
     fi
 
-    # If the install dir is root-owned (e.g. user pre-cloned with sudo),
-    # take ownership now so downstream steps can write here. Idempotent —
-    # no-op if we already own the tree. Skips if running as root.
-    if [[ "$(id -u)" != "0" ]]; then
-        local owner
-        owner=$(stat -c '%u' . 2>/dev/null || echo "$(id -u)")
-        if [[ "$owner" != "$(id -u)" ]]; then
-            log_info "Install dir is owned by uid=$owner; chowning to $(id -un)…"
-            $SUDO chown -R "$(id -u):$(id -g)" . \
-                || die "chown failed; can't proceed without write access here."
-            log_ok "Install dir now owned by $(id -un)"
-        fi
+    # If the install dir isn't owned by the target user (e.g. user pre-cloned
+    # with sudo, or a previous bootstrap left root-owned droppings), take
+    # ownership now so downstream steps can write here. Idempotent.
+    local owner
+    owner=$(stat -c '%u' . 2>/dev/null || echo "$TARGET_UID")
+    if [[ "$owner" != "$TARGET_UID" ]]; then
+        log_info "Install dir is owned by uid=$owner; chowning to $TARGET_USER…"
+        $SUDO chown -R "$TARGET_UID:$TARGET_GID" . \
+            || die "chown failed; can't proceed without write access here."
+        log_ok "Install dir now owned by $TARGET_USER"
     fi
 
     # .env
@@ -457,12 +489,19 @@ download_models() {
     fi
 
     log_info "Calling scripts/download-models.sh (this can take 10-30 min on first run)…"
+    # Run as the target user so files end up owned by the human, not root.
+    # Wraps the shell pipeline in `sudo -u` only when we're root and have
+    # a real target user — otherwise the regular pipeline runs.
+    local runner=""
+    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+        runner="$SUDO -u $TARGET_USER"
+    fi
     # Use PIPESTATUS to surface real script exit code, not the grep filter.
     # Without this, `grep` returning empty (no matches → exit 1) masks
     # successful runs and conversely a script crash that did emit some
     # [INFO] lines reads as success.
     set +e
-    ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log | grep -E '^\[INFO\]|\[WARN\]|\[ERROR\]'
+    $runner ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log | grep -E '^\[INFO\]|\[WARN\]|\[ERROR\]'
     local rc=${PIPESTATUS[0]}
     set -e
     if [[ $rc -eq 0 ]]; then
@@ -478,7 +517,7 @@ download_models() {
     # Without these, the lens service starts but returns neutral scores.
     log_info "Fetching Geometric Lens weights…"
     set +e
-    ./scripts/download-models.sh --lens >>/tmp/atlas-models.log 2>&1
+    $runner ./scripts/download-models.sh --lens >>/tmp/atlas-models.log 2>&1
     rc=$?
     set -e
     if [[ $rc -eq 0 ]]; then
@@ -652,6 +691,15 @@ main() {
     echo
     echo -e "${BOLD}ATLAS bootstrap${NC} — installing on $(uname -s) $(uname -r)"
     echo -e "${DIM}Started at $(date)${NC}"
+    if [[ "$(id -u)" == "0" ]]; then
+        if [[ "$TARGET_USER" == "root" ]]; then
+            echo -e "${DIM}Running as: root (no SUDO_USER detected — install will be root-owned)${NC}"
+        else
+            echo -e "${DIM}Running as: root (via sudo from $TARGET_USER — install owned by $TARGET_USER)${NC}"
+        fi
+    else
+        echo -e "${DIM}Running as: $TARGET_USER (will sudo as needed)${NC}"
+    fi
     echo
 
     log_step "Detecting system"
