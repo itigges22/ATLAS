@@ -90,11 +90,30 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    sudo systemctl restart docker
    ```
 
-2. **RHEL/Fedora — install missing driver libs:**
+2. **RHEL 9 — add CUDA repo + install open-dkms module** (verified working on RHEL 9.7 with RTX 5060 Ti):
    ```bash
-   sudo dnf install -y nvidia-driver-cuda nvidia-driver-cuda-libs
+   # Add NVIDIA's CUDA repo
+   sudo dnf config-manager --add-repo \
+     https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+
+   # Enable CodeReady Builder (provides dkms / kernel-devel)
+   sudo subscription-manager repos --enable=codeready-builder-for-rhel-9-x86_64-rpms
+
+   # Make sure EPEL is present
+   sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+
+   # Install the open driver module (REQUIRED for Blackwell — RTX 50xx)
+   sudo dnf module install -y nvidia-driver:open-dkms
+
    sudo ldconfig && sudo systemctl restart docker
    ```
+
+   **Rocky/Alma/CentOS Stream 9** — same as above, but replace the `subscription-manager` line with:
+   ```bash
+   sudo dnf config-manager --set-enabled crb
+   ```
+
+   > Note: the `nvidia-driver-cuda-libs` package only exists once the NVIDIA CUDA repo is added. RHEL 9's stock `BaseOS`/`AppStream` repos do not ship NVIDIA packages. The `nvidia-driver:open-dkms` module is **required** for Blackwell GPUs (RTX 5060/70/80/90); older GPUs accept either open or proprietary.
 
 3. **Ubuntu/Debian — install matching userspace libs:**
    ```bash
@@ -110,7 +129,7 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    docker run --rm --device=nvidia.com/gpu=all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
    ```
 
-The `atlas-bootstrap.sh` script now runs steps 1 + 4 automatically and surfaces the fix hint when step 2 or 3 is needed.
+The `atlas-bootstrap.sh` script now runs steps 1, 2 (auto-detects RHEL/Rocky/Alma vs subscription path), and 4 automatically. Step 3 is auto-handled on Debian/Ubuntu via `libnvidia-compute-NN` matched to the running driver version.
 
 ### First Build Fails (CUDA Not Found)
 

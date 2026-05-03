@@ -109,8 +109,14 @@ mkdir -p models
 wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
      -O models/Qwen3.5-9B-Q6_K.gguf
 
-# 3. Install the ATLAS CLI
-pip install -e .
+# 3. Install the ATLAS CLI (puts `atlas` in ~/.local/bin)
+pip install --user -e .
+
+# Make sure ~/.local/bin is on your PATH so `atlas` resolves:
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
+   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+   source ~/.bashrc
+;; esac
 
 # 4. (Recommended) Install Go 1.24+ for full file access from any directory
 #    https://go.dev/dl/ — the proxy builds automatically on first run

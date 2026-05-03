@@ -286,6 +286,92 @@ install_docker() {
 # Step 2: nvidia-container-toolkit
 # ---------------------------------------------------------------------------
 
+install_nvidia_driver_libs() {
+    # Called when libnvidia-ml.so.1 isn't in the ld.so cache. Installs the
+    # NVIDIA userspace driver libraries (libnvidia-ml, libcuda, etc) that
+    # nvidia-container-cli needs to bind into containers. The kernel module
+    # alone (which makes `nvidia-smi` work on the host) isn't enough.
+    #
+    # Per-distro logic:
+    #   - RHEL 9:        add CUDA repo + enable codeready-builder via
+    #                    subscription-manager + EPEL, then dnf module install
+    #                    nvidia-driver:open-dkms (Blackwell 50xx requires open).
+    #   - Rocky/Alma 9:  same but with `dnf config-manager --set-enabled crb`
+    #                    instead of subscription-manager.
+    #   - Fedora:        rpmfusion-nonfree + akmod-nvidia-open is the standard
+    #                    path; we add CUDA repo as the simpler universal route.
+    #   - Ubuntu/Debian: matched libnvidia-compute-NN package from the running
+    #                    driver's major version.
+    case "$DISTRO_FAMILY" in
+        rhel)
+            local cuda_repo="/etc/yum.repos.d/cuda-rhel9.repo"
+            if [[ ! -f "$cuda_repo" ]]; then
+                log_info "Adding NVIDIA CUDA repo for RHEL 9…"
+                $SUDO dnf config-manager --add-repo \
+                    "https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo" \
+                    >/dev/null 2>&1 \
+                    || { log_err "failed to add NVIDIA CUDA repo"; return 1; }
+            else
+                log_ok "CUDA repo already present"
+            fi
+
+            # CodeReady Builder (RHEL with subscription) or CRB (rebuilds)
+            # provides the dkms / kernel-devel packages the open-dkms
+            # module needs. Try both — only one applies to a given host.
+            if [[ "$DISTRO_ID" == "rhel" ]] && command -v subscription-manager &>/dev/null; then
+                log_info "Enabling CodeReady Builder repo…"
+                $SUDO subscription-manager repos --enable=codeready-builder-for-rhel-9-x86_64-rpms \
+                    >/dev/null 2>&1 \
+                    || log_warn "couldn't enable codeready-builder (subscription not active?)"
+            else
+                log_info "Enabling CRB repo…"
+                $SUDO dnf config-manager --set-enabled crb >/dev/null 2>&1 \
+                    || log_warn "couldn't enable crb (already enabled or unavailable)"
+            fi
+
+            # Make sure EPEL is present (dkms lives there).
+            if ! rpm -q epel-release &>/dev/null; then
+                $SUDO dnf install -y \
+                    "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm" \
+                    >/dev/null 2>&1 || log_warn "EPEL install failed (continuing)"
+            fi
+
+            # The open-dkms module is REQUIRED for Blackwell GPUs (RTX
+            # 5060/70/80/90). Older GPUs work with either open or proprietary;
+            # default to open since it's the future and works for both.
+            log_info "Installing nvidia-driver:open-dkms (this can take 5-10 min)…"
+            if $SUDO dnf module install -y nvidia-driver:open-dkms 2>&1 | tee /tmp/atlas-nvidia-install.log; then
+                log_ok "nvidia-driver:open-dkms installed"
+                return 0
+            else
+                log_err "nvidia-driver:open-dkms install failed. Last 20 lines:"
+                tail -20 /tmp/atlas-nvidia-install.log >&2 || true
+                return 1
+            fi
+            ;;
+        debian)
+            local drv_major
+            drv_major=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
+                        | head -1 | cut -d. -f1)
+            if [[ -z "$drv_major" || "$drv_major" == "0" ]]; then
+                log_err "nvidia-smi didn't return a driver version — install the NVIDIA driver first."
+                log_err "  $SUDO $PKG install -y nvidia-driver-XXX  (where XXX is your driver branch, e.g. 570)"
+                return 1
+            fi
+            log_info "Installing libnvidia-compute-$drv_major to match driver $drv_major…"
+            $SUDO $PKG install -y "libnvidia-compute-$drv_major" \
+                || { log_err "libnvidia-compute-$drv_major install failed"; return 1; }
+            log_ok "libnvidia-compute-$drv_major installed"
+            return 0
+            ;;
+        *)
+            log_err "Don't know how to install NVIDIA driver libs on $DISTRO_FAMILY."
+            log_err "Manual fix: install your distro's libnvidia-ml.so.1 provider, then re-run."
+            return 1
+            ;;
+    esac
+}
+
 install_nvidia_toolkit() {
     log_step "Step 2: NVIDIA Container Toolkit"
 
@@ -334,14 +420,11 @@ install_nvidia_toolkit() {
     # Sanity-check the host has the userspace driver libs the toolkit needs.
     # nvidia-smi working on the host means the kernel module is loaded, but
     # the userspace libs (libnvidia-ml, libcuda) come from a separate package
-    # on RHEL (nvidia-driver-cuda-libs) and may be missing on minimal installs.
+    # on RHEL and may be missing on minimal installs / fresh CUDA setups.
     if ! $SUDO ldconfig -p 2>/dev/null | grep -q 'libnvidia-ml\.so\.1'; then
-        log_warn "libnvidia-ml.so.1 not in ld.so cache — the container toolkit needs it."
-        log_warn "Fix on RHEL/Fedora:"
-        log_warn "  $SUDO $PKG install -y nvidia-driver-cuda nvidia-driver-cuda-libs"
-        log_warn "Fix on Ubuntu/Debian:"
-        log_warn "  $SUDO $PKG install -y libnvidia-compute-\$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)"
-        log_warn "Then: $SUDO ldconfig && $SUDO systemctl restart docker"
+        log_warn "libnvidia-ml.so.1 not in ld.so cache — installing missing driver libs."
+        install_nvidia_driver_libs || die "could not install NVIDIA driver libraries; see hints above."
+        $SUDO ldconfig 2>/dev/null || true
     fi
 
     $SUDO systemctl restart docker
@@ -448,7 +531,7 @@ configure_rhel_extras() {
 # ---------------------------------------------------------------------------
 
 ensure_repo_and_env() {
-    log_step "Step 5: Repo & .env"
+    log_step "Step 5: Repo, .env, and ATLAS CLI"
 
     # If we're not in a checkout, clone to ATLAS_INSTALL_DIR
     if [[ ! -f "./docker-compose.yml" || ! -d "./proxy" ]]; then
@@ -493,6 +576,11 @@ ensure_repo_and_env() {
         log_ok "Install dir now owned by $TARGET_USER"
     fi
 
+    # Pin ATLAS_INSTALL_DIR for downstream steps (run_doctor, etc) — pwd
+    # is wherever ensure_repo_and_env left us.
+    export ATLAS_INSTALL_DIR
+    ATLAS_INSTALL_DIR="$(pwd)"
+
     # .env
     if [[ -f .env ]]; then
         # Make sure .env actually has the keys download-models.sh and
@@ -518,6 +606,76 @@ ensure_repo_and_env() {
         fi
         cp .env.example .env
         log_ok "Created .env from .env.example (edit ATLAS_MODELS_DIR if needed)"
+    fi
+
+    install_atlas_cli
+}
+
+install_atlas_cli() {
+    # The Python CLI (`atlas`, `atlas tui`, `atlas doctor`, `atlas tier`)
+    # lives in the `atlas/` Python package. Without `pip install -e .`
+    # the user has the repo on disk but no `atlas` command on PATH —
+    # they hit "command not found" right after install completes.
+    if ! command -v python3 &>/dev/null; then
+        log_warn "python3 not found — skipping CLI install. \`atlas\` command will be unavailable."
+        log_warn "  Install Python 3.9+ then run: pip install --user -e ."
+        return
+    fi
+
+    # pip is sometimes a separate package on RHEL minimal installs.
+    if ! python3 -m pip --version &>/dev/null; then
+        log_info "python3-pip missing — installing…"
+        case "$DISTRO_FAMILY" in
+            debian) $SUDO $PKG install -y python3-pip >/dev/null 2>&1 ;;
+            rhel)   $SUDO $PKG install -y python3-pip >/dev/null 2>&1 ;;
+        esac
+        if ! python3 -m pip --version &>/dev/null; then
+            log_warn "couldn't install pip — skipping CLI install."
+            log_warn "  Install pip then run: pip install --user -e ."
+            return
+        fi
+    fi
+
+    # Run pip as the target user so it lands in their ~/.local/bin, not root's.
+    local runner=""
+    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+        runner="$SUDO -u $TARGET_USER -H"
+    fi
+    log_info "Installing ATLAS Python CLI (pip install --user -e .)…"
+    if $runner python3 -m pip install --user -e . --quiet 2>&1 | tee /tmp/atlas-pip.log; then
+        log_ok "ATLAS CLI installed"
+    else
+        log_warn "pip install failed (exit $?). Last 10 lines: /tmp/atlas-pip.log"
+        tail -10 /tmp/atlas-pip.log >&2 || true
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR && pip install --user -e ."
+        return
+    fi
+
+    # Ensure ~/.local/bin is on PATH for future shells. pip puts the
+    # `atlas` script there; without it on PATH, `atlas tui` says
+    # "command not found" until the user manually adds it. Append to the
+    # target user's .bashrc only if it's not already present.
+    local target_home
+    if [[ "$TARGET_USER" == "root" ]]; then
+        target_home="/root"
+    else
+        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
+        [[ -z "$target_home" ]] && target_home="$HOME"
+    fi
+    local bashrc="$target_home/.bashrc"
+    if [[ -f "$bashrc" ]] && ! grep -q '\.local/bin' "$bashrc" 2>/dev/null; then
+        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+            $SUDO -u "$TARGET_USER" sh -c "echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $bashrc"
+        else
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$bashrc"
+        fi
+        log_info "Added ~/.local/bin to PATH in $bashrc"
+        log_warn "  Run \`source ~/.bashrc\` or open a new shell for \`atlas\` to be on PATH."
+    fi
+
+    # Quick check: can we resolve `atlas` for the target user?
+    if [[ -x "$target_home/.local/bin/atlas" ]]; then
+        log_ok "atlas binary at: $target_home/.local/bin/atlas"
     fi
 }
 
@@ -715,9 +873,14 @@ run_doctor() {
     fi
 
     # Doctor lives in the repo. cd there, run --quick, capture exit code.
+    # ATLAS_INSTALL_DIR is set by ensure_repo_and_env; fall back to pwd
+    # in the unlikely case it wasn't (e.g. compose was skipped earlier).
+    local install_dir="${ATLAS_INSTALL_DIR:-$(pwd)}"
     local doctor_out doctor_rc
-    doctor_out=$(cd "$ATLAS_INSTALL_DIR" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1)
+    set +e
+    doctor_out=$(cd "$install_dir" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1)
     doctor_rc=$?
+    set -e
 
     if [[ $doctor_rc -ne 0 ]]; then
         log_err "atlas doctor reported failures:"
