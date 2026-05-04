@@ -73,7 +73,10 @@ jobs:
 
               # Copy the read-only checkout to a writable workspace —
               # the bootstrap chown-s + writes .env, so /atlas:ro fails.
-              cp -r /atlas /work
+              # Use -T (no-target-directory) so contents land in /work
+              # itself; plain `cp -r /atlas /work` would nest them at
+              # /work/atlas/ (because -w /work pre-creates the dir).
+              cp -rT /atlas /work
               cd /work
 
               # Run the bootstrap. With all skip flags set, this exercises

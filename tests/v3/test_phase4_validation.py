@@ -17,7 +17,8 @@ import tempfile
 import time
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
 
 # geometric-lens is a separate service
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))
