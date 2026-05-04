@@ -58,7 +58,6 @@ _ERROR_TYPE_MAP = {
     'ImportError': FailureType.IMPORT_ERROR,
     'ModuleNotFoundError': FailureType.IMPORT_ERROR,
     'AssertionError': FailureType.ASSERTION_ERROR,
-    'AssertionError': FailureType.ASSERTION_ERROR,
     'MemoryError': FailureType.MEMORY_ERROR,
     'TimeoutError': FailureType.TIMEOUT,
     'ZeroDivisionError': FailureType.RUNTIME_ERROR,

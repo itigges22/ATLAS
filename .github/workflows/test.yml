@@ -78,6 +78,29 @@ jobs:
             echo "::notice::${{ matrix.subset }} not present — skipping"
           fi
 
+  ruff:
+    name: ruff (python lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: ruff check
+        # --select F is Pyflakes — real-bug rules (undefined names, redefined
+        # symbols, local-before-assign, string-format errors). The three
+        # codes ignored are pure style noise we don't gate on:
+        #   F401 unused-import   F541 empty-f-string   F841 unused-variable
+        # Bug-catchers like F821 (undefined name) and F823 (local var
+        # referenced before assignment) stay on. Tighten later by removing
+        # entries from --ignore as the codebase gets cleaner.
+        run: |
+          pip install ruff
+          ruff check --select F --ignore F401,F541,F841 \
+            atlas/ tests/ benchmark/ geometric-lens/ v3-service/ sandbox/
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest

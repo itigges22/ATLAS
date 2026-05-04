@@ -1,0 +1,73 @@
+name: codeql
+
+# GitHub's semantic security scanner. Same engine that powers their
+# security advisories — catches SQL/command/path injection, hardcoded
+# credentials, unsafe deserialization, weak crypto, and other classes
+# the test/lint workflows can't see. Free for public repos and uses
+# its own runner pool, so it doesn't eat install/test minutes.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  # Re-scan weekly even without commits — query packs are updated by
+  # GitHub regularly and a stale code base can pick up new findings.
+  schedule:
+    - cron: '0 6 * * 1'  # Mondays 06:00 UTC
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to write findings to the Security tab.
+      security-events: write
+      # Required for actions/checkout on private repos; harmless on public.
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, go]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: init codeql (${{ matrix.language }})
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # security-and-quality runs the broader pack — catches both
+          # security bugs and general correctness issues. Default
+          # security-extended is also fine; we pick the wider one
+          # because we already gate Pyflakes via ruff.
+          queries: security-and-quality
+
+      - name: setup go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          # 1.24 floor for proxy. tui requires 1.26+ via go.mod;
+          # GOTOOLCHAIN=auto auto-fetches the newer toolchain.
+          go-version: '1.24'
+
+      - name: build go modules
+        # CodeQL needs to observe a real compile to extract dataflow.
+        # autobuild can't handle our two-module layout (proxy/ + tui/)
+        # so we do it manually. Each module's `go build ./...` is enough
+        # for extraction — we don't need the artifacts.
+        if: matrix.language == 'go'
+        run: |
+          (cd proxy && go build ./...)
+          (cd tui   && go build ./...)
+
+      - name: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
