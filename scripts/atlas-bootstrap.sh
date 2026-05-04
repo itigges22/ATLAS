@@ -609,6 +609,8 @@ ensure_repo_and_env() {
     fi
 
     install_atlas_cli
+    install_go
+    build_atlas_tui
 }
 
 install_atlas_cli() {
@@ -676,6 +678,130 @@ install_atlas_cli() {
     # Quick check: can we resolve `atlas` for the target user?
     if [[ -x "$target_home/.local/bin/atlas" ]]; then
         log_ok "atlas binary at: $target_home/.local/bin/atlas"
+    fi
+}
+
+install_go() {
+    # The TUI is a Go binary. proxy/go.mod requires 1.24+, tui/go.mod
+    # requires 1.26+. With Go 1.21+ auto-toolchain (default), installing
+    # any 1.24+ is enough — Go transparently downloads the newer
+    # toolchain when building tui. We pick 1.24 as the install target
+    # since it's the proven floor and the smallest stable download.
+    local need_version="1.24"
+    local install_version="${ATLAS_GO_VERSION:-1.24.0}"
+
+    # Already have new-enough Go?
+    if command -v go &>/dev/null; then
+        local cur
+        cur=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
+        if [[ -n "$cur" ]]; then
+            # Compare major.minor only — patch is irrelevant for capability.
+            local cur_mm need_mm
+            cur_mm=$(echo "$cur" | awk -F. '{printf "%d.%d", $1, $2}')
+            need_mm=$(echo "$need_version" | awk -F. '{printf "%d.%d", $1, $2}')
+            if [[ "$(printf '%s\n%s\n' "$need_mm" "$cur_mm" | sort -V | head -1)" == "$need_mm" ]]; then
+                log_ok "Go $cur already installed (need $need_version+)"
+                return 0
+            fi
+            log_info "Go $cur is older than $need_version — installing $install_version…"
+        fi
+    else
+        log_info "Installing Go $install_version (required for atlas-tui)…"
+    fi
+
+    local arch
+    case "$(uname -m)" in
+        x86_64)  arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *) log_warn "Unsupported architecture for Go install: $(uname -m). Skipping — atlas-tui will need manual build."; return 1 ;;
+    esac
+
+    local go_url="https://go.dev/dl/go${install_version}.linux-${arch}.tar.gz"
+    local tmp=/tmp/atlas-go.tar.gz
+    log_info "  Downloading $go_url…"
+    if ! curl -fL -# -o "$tmp" "$go_url"; then
+        log_warn "Go download failed — atlas-tui binary will need manual install."
+        log_warn "  Recovery: install Go from https://go.dev/dl/ then re-run this script."
+        return 1
+    fi
+
+    $SUDO rm -rf /usr/local/go
+    $SUDO tar -C /usr/local -xzf "$tmp" \
+        || { log_warn "Go tarball extract failed."; return 1; }
+    rm -f "$tmp"
+
+    # Make Go available in this script's PATH for the build step that follows.
+    export PATH="/usr/local/go/bin:$PATH"
+
+    # Persist for the target user's future shells. Skip if already added.
+    local target_home
+    if [[ "$TARGET_USER" == "root" ]]; then
+        target_home="/root"
+    else
+        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
+        [[ -z "$target_home" ]] && target_home="$HOME"
+    fi
+    local bashrc="$target_home/.bashrc"
+    if [[ -f "$bashrc" ]] && ! grep -q '/usr/local/go/bin' "$bashrc" 2>/dev/null; then
+        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+            $SUDO -u "$TARGET_USER" sh -c "echo 'export PATH=\"/usr/local/go/bin:\$PATH\"' >> $bashrc"
+        else
+            echo 'export PATH="/usr/local/go/bin:$PATH"' >> "$bashrc"
+        fi
+        log_info "Added /usr/local/go/bin to PATH in $bashrc"
+    fi
+
+    log_ok "Go installed: $(/usr/local/go/bin/go version | awk '{print $3}')"
+    return 0
+}
+
+build_atlas_tui() {
+    # Pre-build the TUI binary so `atlas tui` works immediately. The Python
+    # wrapper at atlas/cli/commands/tui.py CAN build on first run, but it
+    # only does so silently — and if Go isn't on PATH for that shell yet
+    # (because .bashrc wasn't sourced) the user just gets "binary not found
+    # and Go is not available". Pre-building dodges both.
+    if ! command -v go &>/dev/null && [[ ! -x /usr/local/go/bin/go ]]; then
+        log_warn "Go not available — skipping atlas-tui build."
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o ~/.local/bin/atlas-tui ."
+        return
+    fi
+
+    local target_home
+    if [[ "$TARGET_USER" == "root" ]]; then
+        target_home="/root"
+    else
+        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
+        [[ -z "$target_home" ]] && target_home="$HOME"
+    fi
+    local bin_dir="$target_home/.local/bin"
+    local out="$bin_dir/atlas-tui"
+
+    log_info "Building atlas-tui (~30s, downloads Go modules first time)…"
+
+    # Ensure the bin dir exists and is owned by the target user.
+    $SUDO -u "$TARGET_USER" mkdir -p "$bin_dir" 2>/dev/null \
+        || mkdir -p "$bin_dir" 2>/dev/null
+
+    local runner=""
+    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+        runner="$SUDO -u $TARGET_USER -H"
+    fi
+
+    # GOTOOLCHAIN=auto (Go 1.21+ default) handles the tui's go.mod
+    # requirement of Go 1.26+ — auto-downloads the newer toolchain even
+    # if the installed go is 1.24. PATH includes /usr/local/go/bin from
+    # install_go() above.
+    set +e
+    $runner sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH='/usr/local/go/bin:\$PATH' go build -o '$out' ." 2>&1 | tee /tmp/atlas-tui-build.log
+    local rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ $rc -eq 0 && -x "$out" ]]; then
+        log_ok "atlas-tui built: $out"
+    else
+        log_warn "atlas-tui build failed (exit $rc). Log: /tmp/atlas-tui-build.log"
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o $out ."
     fi
 }
 

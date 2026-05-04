@@ -118,9 +118,19 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
    source ~/.bashrc
 ;; esac
 
-# 4. (Recommended) Install Go 1.24+ for full file access from any directory
-#    https://go.dev/dl/ — the proxy builds automatically on first run
-#    Without Go, the proxy runs in Docker with file access limited to ATLAS_PROJECT_DIR
+# 4. Install Go 1.24+ — required for the TUI client (atlas tui) and
+#    optional for the proxy (proxy builds automatically on first run if Go
+#    is present; otherwise it runs in Docker with file access limited to
+#    ATLAS_PROJECT_DIR). Quickest path:
+mkdir -p /tmp/go-install && cd /tmp/go-install
+curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+cd -
+
+# Then build the TUI:
+cd tui && go build -o ~/.local/bin/atlas-tui . && cd ..
 
 # 5. Configure environment
 cp .env.example .env
