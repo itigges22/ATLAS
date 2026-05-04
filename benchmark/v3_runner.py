@@ -292,23 +292,11 @@ class LLMAdapter:
         return logprobs
 
     def _send_request(self, request_body: dict) -> dict:
-        """Send request to LLM server with retry.
+        """Send request to llama.cpp /completion endpoint with retry.
 
-        Supports llama.cpp (/completion) and legacy Fox (/v1/completions, unused).
         Uses manual ChatML formatting for thinking mode control.
         """
-        # Detect Fox vs llama.cpp: Fox uses /v1/completions with OpenAI format
-        use_fox = os.environ.get("ATLAS_USE_FOX", "0") == "1"
-        if use_fox:
-            endpoint = f"{self.runner.llm_url}/v1/completions"
-            # Convert llama.cpp format to OpenAI format
-            if "n_predict" in request_body:
-                request_body["max_tokens"] = request_body.pop("n_predict")
-            request_body.pop("cache_prompt", None)
-            request_body.pop("n_probs", None)
-            request_body.setdefault("model", os.environ.get("ATLAS_MODEL_NAME", "default"))
-        else:
-            endpoint = f"{self.runner.llm_url}/completion"
+        endpoint = f"{self.runner.llm_url}/completion"
 
         last_error = None
         max_attempts = self.max_retries + 3
@@ -370,15 +358,8 @@ class LLMAdapter:
         start_time = time.time()
         data = self._send_request(request_body)
 
-        # Parse response — Fox returns OpenAI format, llama.cpp returns legacy
-        if "choices" in data:
-            # Fox / OpenAI format
-            content = data["choices"][0].get("text", "")
-            tokens = data.get("usage", {}).get("completion_tokens", 0)
-        else:
-            # llama.cpp legacy format
-            content = data.get("content", "")
-            tokens = data.get("tokens_predicted", 0)
+        content = data.get("content", "")
+        tokens = data.get("tokens_predicted", 0)
         self.last_logprobs = self._parse_logprobs(data)
 
         # Strip thinking blocks. With --jinja, the model wraps reasoning
