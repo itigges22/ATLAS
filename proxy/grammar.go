@@ -174,7 +174,11 @@ func generateInputExample(toolName string) string {
 	case "write_file":
 		return `{"path": "src/main.py", "content": "#!/usr/bin/env python3\n..."}`
 	case "edit_file":
-		return `{"path": "src/main.py", "old_str": "def foo():", "new_str": "def bar():", "replace_all": false}`
+		// Real fix-style snippet — adding a None check, the most common
+		// kind of small targeted edit. Models cargo-cult the example
+		// shape, so a "rename foo to bar" placeholder steered them
+		// toward purely cosmetic edits instead of real bug-fix shapes.
+		return `{"path": "src/main.py", "old_str": "if x == 0:\n        return None", "new_str": "if x is None or x == 0:\n        return None", "replace_all": false}`
 	case "delete_file":
 		return `{"path": "old_file.py"}`
 	case "run_command":

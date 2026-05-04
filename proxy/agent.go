@@ -315,24 +315,53 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
-			// Fix A: Reject write_file for existing files — force edit_file.
-			// Writing entire files as JSON strings causes truncation for files >100 lines.
+			// Surgical-edit gate: reject write_file on existing files when the
+			// model is doing a near-rewrite (a small delta against current
+			// disk content) or a too-large generation. PC-159 Phase 0 — the
+			// existing primitives (edit_file with old_str/new_str) are fully
+			// capable; the model just keeps reaching for write_file. Catching
+			// it here and bouncing it back with a directive is the cheapest
+			// fix that doesn't need tree-sitter.
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
 					existingPath := resolvePath(wfInput.Path, ctx.WorkingDir)
-					if _, err := os.Stat(existingPath); err == nil {
-						// File exists — redirect to edit_file
-						lines := strings.Count(wfInput.Content, "\n") + 1
-						if lines > 100 {
-							log.Printf("[agent] rejecting write_file for existing %s (%d lines) — too large, must use edit_file", wfInput.Path, lines)
+					if existing, err := os.ReadFile(existingPath); err == nil {
+						newLines := strings.Count(wfInput.Content, "\n") + 1
+						existingLines := strings.Count(string(existing), "\n") + 1
+
+						// Two reject conditions:
+						//   1. New content is too large for a single write_file call —
+						//      truncation will eat it on the wire (PC-039 history).
+						//   2. New content keeps ≥70% of the existing file's lines —
+						//      the model is regenerating instead of editing. Only
+						//      enforced on files >50 lines so legitimate small-file
+						//      refactors aren't blocked.
+						var rejection string
+						if newLines > 100 {
+							rejection = fmt.Sprintf(
+								"File %s already exists (%d lines existing, %d lines new). Rewriting at this size truncates on the wire. Use edit_file with targeted old_str/new_str — many small edits succeed where one big write_file fails.",
+								wfInput.Path, existingLines, newLines)
+						} else if existingLines > 50 {
+							overlap := lineOverlapRatio(string(existing), wfInput.Content)
+							if overlap >= 0.70 {
+								keptPct := int(overlap * 100)
+								changedPct := 100 - keptPct
+								rejection = fmt.Sprintf(
+									"File %s already exists (%d lines) and your new content keeps %d%% of its lines — only ~%d%% is changed. Use edit_file with old_str/new_str to change just the differing lines. write_file is for creating brand new files, not for re-emitting an existing file with edits.",
+									wfInput.Path, existingLines, keptPct, changedPct)
+							}
+						}
+
+						if rejection != "" {
+							log.Printf("[agent] rejecting write_file for existing %s: %s", wfInput.Path, rejection)
 							ctx.Messages = append(ctx.Messages, AgentMessage{
 								Role:    "assistant",
 								Content: response,
 							})
 							ctx.Messages = append(ctx.Messages, AgentMessage{
 								Role:       "tool",
-								Content:    fmt.Sprintf(`{"success":false,"error":"File %s already exists (%d lines). Use edit_file with targeted old_str/new_str changes instead of rewriting the entire file. This avoids truncation."}`, wfInput.Path, lines),
+								Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
 								ToolCallID: fmt.Sprintf("call_%d", turn),
 								ToolName:   "write_file",
 							})
@@ -937,7 +966,10 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// Rules
 	sb.WriteString("## Rules\n\n")
 	sb.WriteString("- Always read a file before editing it (use read_file then edit_file)\n")
-	sb.WriteString("- IMPORTANT: Use edit_file for ALL changes to existing files. write_file is ONLY for creating brand new files. edit_file uses less tokens and avoids truncation.\n")
+	sb.WriteString("- MANDATORY: Use `edit_file` (targeted old_str/new_str) for any change to a file that already exists, no matter how small. `write_file` is ONLY for creating brand new files that don't exist yet. The agent layer rejects `write_file` against an existing file when ≥70% of the new content matches the old — your call won't execute and you'll get a tool error telling you to retry as edit_file. Don't re-emit a whole file to change a few lines.\n")
+	sb.WriteString("  Example — to add a None check to one branch, use:\n")
+	sb.WriteString("    edit_file {\"path\":\"src/foo.py\",\"old_str\":\"if x == 0:\\n        return None\",\"new_str\":\"if x is None or x == 0:\\n        return None\"}\n")
+	sb.WriteString("  NOT write_file with the entire file's new contents.\n")
 	sb.WriteString("- Use run_command to verify your changes work (build, test, lint)\n")
 	sb.WriteString("- When creating a project from scratch: create config/build files FIRST, verify they work (e.g., npm install, cargo check), THEN create feature code\n")
 	sb.WriteString("- Respond with {\"type\":\"done\",\"summary\":\"...\"} when the task is complete\n")
@@ -976,10 +1008,42 @@ func buildSystemPrompt(ctx *AgentContext) string {
 		for path := range ctx.FilesRead {
 			sb.WriteString(fmt.Sprintf("- %s\n", path))
 		}
-		sb.WriteString("\nUse read_file to inspect these files if needed. For modifications, prefer edit_file (targeted changes) over write_file (full rewrite) to avoid token limits.\n\n")
+		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file is rejected at the agent layer.\n\n")
 	}
 
 	return sb.String()
+}
+
+// lineOverlapRatio returns the multiset-intersection-over-max-length of two
+// texts, line by line. 1.0 = identical (or one is a permutation of the
+// other); 0.0 = nothing in common. Used by the write_file surgical-edit
+// gate to detect "the model regenerated this whole file with a small
+// change" and bounce it back with an edit_file directive.
+func lineOverlapRatio(a, b string) float64 {
+	aLines := strings.Split(a, "\n")
+	bLines := strings.Split(b, "\n")
+
+	counts := make(map[string]int, len(aLines))
+	for _, l := range aLines {
+		counts[l]++
+	}
+
+	matched := 0
+	for _, l := range bLines {
+		if counts[l] > 0 {
+			counts[l]--
+			matched++
+		}
+	}
+
+	maxLen := len(aLines)
+	if len(bLines) > maxLen {
+		maxLen = len(bLines)
+	}
+	if maxLen == 0 {
+		return 0
+	}
+	return float64(matched) / float64(maxLen)
 }
 
 // ---------------------------------------------------------------------------
