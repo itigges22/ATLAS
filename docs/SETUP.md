@@ -17,9 +17,34 @@ Or, from a checkout:
 ./scripts/atlas-bootstrap.sh
 ```
 
-Supported distros: Ubuntu/Debian, RHEL/Fedora/Rocky/Alma. Works around EPEL, firewalld, vm.overcommit_memory (PC-011), and nouveau driver conflicts automatically.
+**Supported distributions:**
 
-Skip flags (env vars):
+| Family | Distros |
+|---|---|
+| Debian (apt-get) | Ubuntu 20.04+, Debian 11+ |
+| RHEL (dnf) | RHEL 9+, Rocky 9+, AlmaLinux 9+, CentOS Stream 9+, Oracle Linux 9+ |
+| Fedora (dnf) | Fedora 38+ |
+
+Other distros with `ID_LIKE` matching one of the above (e.g. Linux Mint, Pop!_OS) are accepted with a warning. Distros not in this list — Arch, openSUSE, Alpine, NixOS — aren't tested and the script will refuse to run on them.
+
+The bootstrap works around EPEL, firewalld, `vm.overcommit_memory` (PC-011), nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
+
+**Run modes — both work:**
+
+```bash
+# Run as your normal user; sudo elevates as needed (Docker install, sysctl, etc).
+# Install ends up owned by you.
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+
+# Run via sudo. SUDO_USER is detected, install still ends up owned by you.
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
+
+# Real root login (no sudo) — install owned by root. Only do this if there's
+# no human user on the box (CI runner, container, etc).
+```
+
+**Configuration env vars:**
+
 | Flag | Effect |
 |---|---|
 | `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | Don't install Docker (already managed) |
@@ -27,8 +52,15 @@ Skip flags (env vars):
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
-| `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas`) |
+| `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
+
+**Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, survives `$HOME` cleanup, and lets multiple users on the same box share one install. If you'd rather it land in your home dir:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh \
+  | ATLAS_INSTALL_DIR=$HOME/atlas bash
+```
 
 When complete, prints a green "ATLAS ready" banner with quick-start commands. Total time on a fresh VM with a fast connection: ~10-30 minutes (model download dominates).
 
@@ -77,12 +109,28 @@ mkdir -p models
 wget https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q6_K.gguf \
      -O models/Qwen3.5-9B-Q6_K.gguf
 
-# 3. Install the ATLAS CLI
-pip install -e .
+# 3. Install the ATLAS CLI (puts `atlas` in ~/.local/bin)
+pip install --user -e .
 
-# 4. (Recommended) Install Go 1.24+ for full file access from any directory
-#    https://go.dev/dl/ — the proxy builds automatically on first run
-#    Without Go, the proxy runs in Docker with file access limited to ATLAS_PROJECT_DIR
+# Make sure ~/.local/bin is on your PATH so `atlas` resolves:
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
+   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+   source ~/.bashrc
+;; esac
+
+# 4. Install Go 1.24+ — required for the TUI client (atlas tui) and
+#    optional for the proxy (proxy builds automatically on first run if Go
+#    is present; otherwise it runs in Docker with file access limited to
+#    ATLAS_PROJECT_DIR). Quickest path:
+mkdir -p /tmp/go-install && cd /tmp/go-install
+curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+cd -
+
+# Then build the TUI:
+cd tui && go build -o ~/.local/bin/atlas-tui . && cd ..
 
 # 5. Configure environment
 cp .env.example .env

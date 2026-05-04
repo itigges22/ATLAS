@@ -71,6 +71,66 @@ docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
 podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi
 ```
 
+### `libnvidia-ml.so.1: cannot open shared object file`
+
+**Symptom:** During `docker compose up`, llama-server fails with:
+
+```
+nvidia-container-cli: initialization error: load library failed:
+libnvidia-ml.so.1: cannot open shared object file: no such file or directory
+```
+
+**What it means:** the host has the NVIDIA *kernel module* (so `nvidia-smi` works) but the *userspace driver libraries* aren't where the container toolkit expects. On RHEL/Rocky/Alma minimal installs the `nvidia-driver-cuda-libs` package isn't pulled in by default; on Debian/Ubuntu the issue is usually a stale `ldconfig` cache after a driver upgrade.
+
+**Fix sequence** — try in order, stop when `docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi` works:
+
+1. **Refresh ldconfig + restart docker:**
+   ```bash
+   sudo ldconfig
+   sudo systemctl restart docker
+   ```
+
+2. **RHEL 9 — add CUDA repo + install open-dkms module** (verified working on RHEL 9.7 with RTX 5060 Ti):
+   ```bash
+   # Add NVIDIA's CUDA repo
+   sudo dnf config-manager --add-repo \
+     https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+
+   # Enable CodeReady Builder (provides dkms / kernel-devel)
+   sudo subscription-manager repos --enable=codeready-builder-for-rhel-9-x86_64-rpms
+
+   # Make sure EPEL is present
+   sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+
+   # Install the open driver module (REQUIRED for Blackwell — RTX 50xx)
+   sudo dnf module install -y nvidia-driver:open-dkms
+
+   sudo ldconfig && sudo systemctl restart docker
+   ```
+
+   **Rocky/Alma/CentOS Stream 9** — same as above, but replace the `subscription-manager` line with:
+   ```bash
+   sudo dnf config-manager --set-enabled crb
+   ```
+
+   > Note: the `nvidia-driver-cuda-libs` package only exists once the NVIDIA CUDA repo is added. RHEL 9's stock `BaseOS`/`AppStream` repos do not ship NVIDIA packages. The `nvidia-driver:open-dkms` module is **required** for Blackwell GPUs (RTX 5060/70/80/90); older GPUs accept either open or proprietary.
+
+3. **Ubuntu/Debian — install matching userspace libs:**
+   ```bash
+   DRV_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)
+   sudo apt install -y libnvidia-compute-${DRV_MAJOR}
+   sudo ldconfig && sudo systemctl restart docker
+   ```
+
+4. **Generate a CDI spec (newer toolkit replaces "legacy" mode):**
+   ```bash
+   sudo mkdir -p /etc/cdi
+   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+   docker run --rm --device=nvidia.com/gpu=all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+   ```
+
+The `atlas-bootstrap.sh` script now runs steps 1, 2 (auto-detects RHEL/Rocky/Alma vs subscription path), and 4 automatically. Step 3 is auto-handled on Debian/Ubuntu via `libnvidia-compute-NN` matched to the running driver version.
+
 ### First Build Fails (CUDA Not Found)
 
 **Symptom:** `docker compose build` fails with CUDA-related errors during llama-server compilation.

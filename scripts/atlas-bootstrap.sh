@@ -28,6 +28,7 @@
 #   ATLAS_BOOTSTRAP_SKIP_NVIDIA=1     skip GPU/nvidia-container-toolkit
 #   ATLAS_BOOTSTRAP_SKIP_MODELS=1     skip model download
 #   ATLAS_BOOTSTRAP_SKIP_COMPOSE=1    skip `docker compose up`
+#   ATLAS_BOOTSTRAP_SKIP_SYSCTL=1     skip vm.overcommit_memory write (CI / unpriv. containers)
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
@@ -165,17 +166,30 @@ detect_distro() {
             if [[ "$DISTRO_LIKE" == *debian* || "$DISTRO_LIKE" == *ubuntu* ]]; then
                 DISTRO_FAMILY="debian"
                 PKG="apt-get"
+                log_warn "$DISTRO_ID isn't on the supported list but ID_LIKE matches Debian — proceeding with apt-get."
             elif [[ "$DISTRO_LIKE" == *rhel* || "$DISTRO_LIKE" == *fedora* ]]; then
                 DISTRO_FAMILY="rhel"
                 if command -v dnf &>/dev/null; then PKG="dnf"; else PKG="yum"; fi
+                log_warn "$DISTRO_ID isn't on the supported list but ID_LIKE matches RHEL — proceeding with $PKG."
             else
                 log_warn "Unknown distro '$DISTRO_ID' (ID_LIKE='$DISTRO_LIKE')."
-                log_warn "Bootstrap will attempt the closest match but may fail."
+                log_warn "Supported: Ubuntu 20.04+, Debian 11+, RHEL 9+, Rocky 9+, AlmaLinux 9+, Fedora 38+, CentOS Stream 9+"
                 die "Unsupported distro. Open an issue with your /etc/os-release contents."
             fi
             ;;
     esac
     log_info "Detected: ${BOLD}${DISTRO_ID}${NC} ${DISTRO_VERSION_ID} (${DISTRO_FAMILY} family, pkg=${PKG})"
+}
+
+print_supported_distros() {
+    cat <<EOF
+    Supported distributions:
+      - Ubuntu 20.04+ / Debian 11+ (apt-get)
+      - RHEL 9+ / Rocky 9+ / AlmaLinux 9+ / CentOS Stream 9+ (dnf)
+      - Fedora 38+ (dnf)
+      - Oracle Linux 9+ (dnf)
+    Other distros with ID_LIKE matching one of the above are accepted with a warning.
+EOF
 }
 
 # ---------------------------------------------------------------------------
@@ -273,6 +287,92 @@ install_docker() {
 # Step 2: nvidia-container-toolkit
 # ---------------------------------------------------------------------------
 
+install_nvidia_driver_libs() {
+    # Called when libnvidia-ml.so.1 isn't in the ld.so cache. Installs the
+    # NVIDIA userspace driver libraries (libnvidia-ml, libcuda, etc) that
+    # nvidia-container-cli needs to bind into containers. The kernel module
+    # alone (which makes `nvidia-smi` work on the host) isn't enough.
+    #
+    # Per-distro logic:
+    #   - RHEL 9:        add CUDA repo + enable codeready-builder via
+    #                    subscription-manager + EPEL, then dnf module install
+    #                    nvidia-driver:open-dkms (Blackwell 50xx requires open).
+    #   - Rocky/Alma 9:  same but with `dnf config-manager --set-enabled crb`
+    #                    instead of subscription-manager.
+    #   - Fedora:        rpmfusion-nonfree + akmod-nvidia-open is the standard
+    #                    path; we add CUDA repo as the simpler universal route.
+    #   - Ubuntu/Debian: matched libnvidia-compute-NN package from the running
+    #                    driver's major version.
+    case "$DISTRO_FAMILY" in
+        rhel)
+            local cuda_repo="/etc/yum.repos.d/cuda-rhel9.repo"
+            if [[ ! -f "$cuda_repo" ]]; then
+                log_info "Adding NVIDIA CUDA repo for RHEL 9…"
+                $SUDO dnf config-manager --add-repo \
+                    "https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo" \
+                    >/dev/null 2>&1 \
+                    || { log_err "failed to add NVIDIA CUDA repo"; return 1; }
+            else
+                log_ok "CUDA repo already present"
+            fi
+
+            # CodeReady Builder (RHEL with subscription) or CRB (rebuilds)
+            # provides the dkms / kernel-devel packages the open-dkms
+            # module needs. Try both — only one applies to a given host.
+            if [[ "$DISTRO_ID" == "rhel" ]] && command -v subscription-manager &>/dev/null; then
+                log_info "Enabling CodeReady Builder repo…"
+                $SUDO subscription-manager repos --enable=codeready-builder-for-rhel-9-x86_64-rpms \
+                    >/dev/null 2>&1 \
+                    || log_warn "couldn't enable codeready-builder (subscription not active?)"
+            else
+                log_info "Enabling CRB repo…"
+                $SUDO dnf config-manager --set-enabled crb >/dev/null 2>&1 \
+                    || log_warn "couldn't enable crb (already enabled or unavailable)"
+            fi
+
+            # Make sure EPEL is present (dkms lives there).
+            if ! rpm -q epel-release &>/dev/null; then
+                $SUDO dnf install -y \
+                    "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm" \
+                    >/dev/null 2>&1 || log_warn "EPEL install failed (continuing)"
+            fi
+
+            # The open-dkms module is REQUIRED for Blackwell GPUs (RTX
+            # 5060/70/80/90). Older GPUs work with either open or proprietary;
+            # default to open since it's the future and works for both.
+            log_info "Installing nvidia-driver:open-dkms (this can take 5-10 min)…"
+            if $SUDO dnf module install -y nvidia-driver:open-dkms 2>&1 | tee /tmp/atlas-nvidia-install.log; then
+                log_ok "nvidia-driver:open-dkms installed"
+                return 0
+            else
+                log_err "nvidia-driver:open-dkms install failed. Last 20 lines:"
+                tail -20 /tmp/atlas-nvidia-install.log >&2 || true
+                return 1
+            fi
+            ;;
+        debian)
+            local drv_major
+            drv_major=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
+                        | head -1 | cut -d. -f1)
+            if [[ -z "$drv_major" || "$drv_major" == "0" ]]; then
+                log_err "nvidia-smi didn't return a driver version — install the NVIDIA driver first."
+                log_err "  $SUDO $PKG install -y nvidia-driver-XXX  (where XXX is your driver branch, e.g. 570)"
+                return 1
+            fi
+            log_info "Installing libnvidia-compute-$drv_major to match driver $drv_major…"
+            $SUDO $PKG install -y "libnvidia-compute-$drv_major" \
+                || { log_err "libnvidia-compute-$drv_major install failed"; return 1; }
+            log_ok "libnvidia-compute-$drv_major installed"
+            return 0
+            ;;
+        *)
+            log_err "Don't know how to install NVIDIA driver libs on $DISTRO_FAMILY."
+            log_err "Manual fix: install your distro's libnvidia-ml.so.1 provider, then re-run."
+            return 1
+            ;;
+    esac
+}
+
 install_nvidia_toolkit() {
     log_step "Step 2: NVIDIA Container Toolkit"
 
@@ -312,24 +412,57 @@ install_nvidia_toolkit() {
     log_info "Configuring Docker runtime for NVIDIA…"
     $SUDO nvidia-ctk runtime configure --runtime=docker >/dev/null \
         || die "nvidia-ctk runtime configure failed."
+
+    # Refresh ld.so cache. On RHEL after a fresh nvidia-driver install the
+    # libnvidia-ml.so.1 symlink may exist but not be in /etc/ld.so.cache,
+    # which makes nvidia-container-cli fail with "load library failed".
+    $SUDO ldconfig 2>/dev/null || true
+
+    # Sanity-check the host has the userspace driver libs the toolkit needs.
+    # nvidia-smi working on the host means the kernel module is loaded, but
+    # the userspace libs (libnvidia-ml, libcuda) come from a separate package
+    # on RHEL and may be missing on minimal installs / fresh CUDA setups.
+    if ! $SUDO ldconfig -p 2>/dev/null | grep -q 'libnvidia-ml\.so\.1'; then
+        log_warn "libnvidia-ml.so.1 not in ld.so cache — installing missing driver libs."
+        install_nvidia_driver_libs || die "could not install NVIDIA driver libraries; see hints above."
+        $SUDO ldconfig 2>/dev/null || true
+    fi
+
     $SUDO systemctl restart docker
     sleep 3
 
     # Verify (using DOCKER_PREFIX since user may not be in docker group yet).
-    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+    local verify_log=/tmp/atlas-nvidia-verify.log
+    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi >"$verify_log" 2>&1; then
         log_ok "nvidia-container-toolkit verified — Docker can see GPU"
-    else
-        # One more time with a longer settle — first restart on some kernels
-        # takes a few seconds for the runtime to register.
-        sleep 5
-        if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
-            log_ok "nvidia-container-toolkit verified — Docker can see GPU"
-        else
-            log_warn "nvidia-container-toolkit installed but GPU not visible to Docker."
-            log_warn "Most common cause: nouveau driver loaded. Check Step 4 output above."
-            log_warn "Recovery: $SUDO systemctl restart docker, then re-run this script."
+        return
+    fi
+    sleep 5
+    if $DOCKER_PREFIX docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi >"$verify_log" 2>&1; then
+        log_ok "nvidia-container-toolkit verified — Docker can see GPU"
+        return
+    fi
+
+    # Verify failed twice. Show the actual error so the user knows what's wrong.
+    log_err "nvidia-container-toolkit installed but Docker can't talk to the GPU."
+    log_err "Container error:"
+    grep -E 'error|failed|cannot' "$verify_log" | head -5 | sed 's/^/      /' >&2
+
+    # Diagnostic: try CDI mode (newer style — replaces legacy mode for
+    # newer drivers). Some setups need CDI generated explicitly.
+    if command -v nvidia-ctk &>/dev/null; then
+        log_info "Trying CDI mode as a fallback…"
+        $SUDO mkdir -p /etc/cdi
+        if $SUDO nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/dev/null 2>&1; then
+            if $DOCKER_PREFIX docker run --rm --device=nvidia.com/gpu=all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+                log_ok "CDI mode works (legacy mode does not). Compose may need updating to use CDI."
+                log_info "  See: https://github.com/NVIDIA/nvidia-container-toolkit/blob/main/docs/cdi.md"
+                return
+            fi
         fi
     fi
+
+    die "GPU not visible to Docker. Check the container error above and the libnvidia-ml.so.1 hint."
 }
 
 # ---------------------------------------------------------------------------
@@ -339,16 +472,25 @@ install_nvidia_toolkit() {
 configure_sysctl() {
     log_step "Step 3: Kernel parameters (PC-011 — Redis overcommit)"
 
+    if [[ "${ATLAS_BOOTSTRAP_SKIP_SYSCTL:-0}" == "1" ]]; then
+        log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_SYSCTL=1)"
+        return
+    fi
+
     local current
     current=$(sysctl -n vm.overcommit_memory 2>/dev/null || echo "0")
     if [[ "$current" == "1" ]]; then
         log_ok "vm.overcommit_memory=1 already set"
     else
         log_info "Setting vm.overcommit_memory=1 (was $current)…"
-        $SUDO sysctl -w vm.overcommit_memory=1 >/dev/null
+        if ! $SUDO sysctl -w vm.overcommit_memory=1 >/dev/null 2>&1; then
+            log_warn "sysctl write failed (unprivileged container? read-only fs?). Skipping."
+            log_warn "  Set ATLAS_BOOTSTRAP_SKIP_SYSCTL=1 to silence this and continue."
+            return
+        fi
         # Persist via /etc/sysctl.d so it survives reboot
         if ! $SUDO grep -q '^vm.overcommit_memory' /etc/sysctl.d/99-atlas.conf 2>/dev/null; then
-            echo "vm.overcommit_memory=1" | $SUDO tee /etc/sysctl.d/99-atlas.conf >/dev/null
+            echo "vm.overcommit_memory=1" | $SUDO tee /etc/sysctl.d/99-atlas.conf >/dev/null 2>&1 || true
         fi
         log_ok "vm.overcommit_memory=1 (persisted to /etc/sysctl.d/99-atlas.conf)"
     fi
@@ -399,7 +541,7 @@ configure_rhel_extras() {
 # ---------------------------------------------------------------------------
 
 ensure_repo_and_env() {
-    log_step "Step 5: Repo & .env"
+    log_step "Step 5: Repo, .env, and ATLAS CLI"
 
     # If we're not in a checkout, clone to ATLAS_INSTALL_DIR
     if [[ ! -f "./docker-compose.yml" || ! -d "./proxy" ]]; then
@@ -444,6 +586,11 @@ ensure_repo_and_env() {
         log_ok "Install dir now owned by $TARGET_USER"
     fi
 
+    # Pin ATLAS_INSTALL_DIR for downstream steps (run_doctor, etc) — pwd
+    # is wherever ensure_repo_and_env left us.
+    export ATLAS_INSTALL_DIR
+    ATLAS_INSTALL_DIR="$(pwd)"
+
     # .env
     if [[ -f .env ]]; then
         # Make sure .env actually has the keys download-models.sh and
@@ -470,6 +617,217 @@ ensure_repo_and_env() {
         cp .env.example .env
         log_ok "Created .env from .env.example (edit ATLAS_MODELS_DIR if needed)"
     fi
+
+    install_atlas_cli
+    install_go
+    build_atlas_tui
+}
+
+install_atlas_cli() {
+    # The Python CLI (`atlas`, `atlas tui`, `atlas doctor`, `atlas tier`)
+    # lives in the `atlas/` Python package. Without `pip install -e .`
+    # the user has the repo on disk but no `atlas` command on PATH —
+    # they hit "command not found" right after install completes.
+    if ! command -v python3 &>/dev/null; then
+        log_warn "python3 not found — skipping CLI install. \`atlas\` command will be unavailable."
+        log_warn "  Install Python 3.9+ then run: pip install --user -e ."
+        return
+    fi
+
+    # pip is sometimes a separate package on RHEL minimal installs.
+    if ! python3 -m pip --version &>/dev/null; then
+        log_info "python3-pip missing — installing…"
+        case "$DISTRO_FAMILY" in
+            debian) $SUDO $PKG install -y python3-pip >/dev/null 2>&1 ;;
+            rhel)   $SUDO $PKG install -y python3-pip >/dev/null 2>&1 ;;
+        esac
+        if ! python3 -m pip --version &>/dev/null; then
+            log_warn "couldn't install pip — skipping CLI install."
+            log_warn "  Install pip then run: pip install --user -e ."
+            return
+        fi
+    fi
+
+    # Run pip as the target user so it lands in their ~/.local/bin, not root's.
+    local runner=""
+    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+        runner="$SUDO -u $TARGET_USER -H"
+    fi
+
+    # Editable install needs PEP 660 support, which requires setuptools >= 64
+    # AND a pip new enough to call build_editable. Ubuntu 22.04 ships pip 22 +
+    # setuptools 59 — both too old; the install fails with "missing the
+    # 'build_editable' hook". Upgrade pip + setuptools + wheel into the user
+    # site first so the next call uses modern versions.
+    #
+    # PIP_BREAK_SYSTEM_PACKAGES=1 sidesteps PEP 668 ("externally-managed-
+    # environment") on Debian 12 / Ubuntu 23.04+ / Fedora 38+. Older pip
+    # ignores it as an unknown env var, so it's safe to always set.
+    log_info "Upgrading pip + setuptools (PEP 660 editable install support)…"
+    PIP_BREAK_SYSTEM_PACKAGES=1 $runner python3 -m pip install --user --upgrade --quiet \
+        pip setuptools wheel >>/tmp/atlas-pip.log 2>&1 \
+        || log_warn "pip self-upgrade failed; continuing with system pip."
+
+    log_info "Installing ATLAS Python CLI (pip install --user -e .)…"
+    if PIP_BREAK_SYSTEM_PACKAGES=1 $runner python3 -m pip install --user -e . --quiet 2>&1 | tee -a /tmp/atlas-pip.log; then
+        log_ok "ATLAS CLI installed"
+    else
+        log_warn "pip install failed (exit ${PIPESTATUS[0]}). Last 20 lines: /tmp/atlas-pip.log"
+        tail -20 /tmp/atlas-pip.log >&2 || true
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR && pip install --user -e ."
+        return
+    fi
+
+    # Ensure ~/.local/bin is on PATH for future shells. pip puts the
+    # `atlas` script there; without it on PATH, `atlas tui` says
+    # "command not found" until the user manually adds it. Append to the
+    # target user's .bashrc only if it's not already present.
+    local target_home
+    if [[ "$TARGET_USER" == "root" ]]; then
+        target_home="/root"
+    else
+        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
+        [[ -z "$target_home" ]] && target_home="$HOME"
+    fi
+    local bashrc="$target_home/.bashrc"
+    if [[ -f "$bashrc" ]] && ! grep -q '\.local/bin' "$bashrc" 2>/dev/null; then
+        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+            $SUDO -u "$TARGET_USER" sh -c "echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $bashrc"
+        else
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$bashrc"
+        fi
+        log_info "Added ~/.local/bin to PATH in $bashrc"
+        log_warn "  Run \`source ~/.bashrc\` or open a new shell for \`atlas\` to be on PATH."
+    fi
+
+    # Quick check: can we resolve `atlas` for the target user?
+    if [[ -x "$target_home/.local/bin/atlas" ]]; then
+        log_ok "atlas binary at: $target_home/.local/bin/atlas"
+    fi
+}
+
+install_go() {
+    # The TUI is a Go binary. proxy/go.mod requires 1.24+, tui/go.mod
+    # requires 1.26+. With Go 1.21+ auto-toolchain (default), installing
+    # any 1.24+ is enough — Go transparently downloads the newer
+    # toolchain when building tui. We pick 1.24 as the install target
+    # since it's the proven floor and the smallest stable download.
+    local need_version="1.24"
+    local install_version="${ATLAS_GO_VERSION:-1.24.0}"
+
+    # Already have new-enough Go?
+    if command -v go &>/dev/null; then
+        local cur
+        cur=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
+        if [[ -n "$cur" ]]; then
+            # Compare major.minor only — patch is irrelevant for capability.
+            local cur_mm need_mm
+            cur_mm=$(echo "$cur" | awk -F. '{printf "%d.%d", $1, $2}')
+            need_mm=$(echo "$need_version" | awk -F. '{printf "%d.%d", $1, $2}')
+            if [[ "$(printf '%s\n%s\n' "$need_mm" "$cur_mm" | sort -V | head -1)" == "$need_mm" ]]; then
+                log_ok "Go $cur already installed (need $need_version+)"
+                return 0
+            fi
+            log_info "Go $cur is older than $need_version — installing $install_version…"
+        fi
+    else
+        log_info "Installing Go $install_version (required for atlas-tui)…"
+    fi
+
+    local arch
+    case "$(uname -m)" in
+        x86_64)  arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *) log_warn "Unsupported architecture for Go install: $(uname -m). Skipping — atlas-tui will need manual build."; return 1 ;;
+    esac
+
+    local go_url="https://go.dev/dl/go${install_version}.linux-${arch}.tar.gz"
+    local tmp=/tmp/atlas-go.tar.gz
+    log_info "  Downloading $go_url…"
+    if ! curl -fL -# -o "$tmp" "$go_url"; then
+        log_warn "Go download failed — atlas-tui binary will need manual install."
+        log_warn "  Recovery: install Go from https://go.dev/dl/ then re-run this script."
+        return 1
+    fi
+
+    $SUDO rm -rf /usr/local/go
+    $SUDO tar -C /usr/local -xzf "$tmp" \
+        || { log_warn "Go tarball extract failed."; return 1; }
+    rm -f "$tmp"
+
+    # Make Go available in this script's PATH for the build step that follows.
+    export PATH="/usr/local/go/bin:$PATH"
+
+    # Persist for the target user's future shells. Skip if already added.
+    local target_home
+    if [[ "$TARGET_USER" == "root" ]]; then
+        target_home="/root"
+    else
+        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
+        [[ -z "$target_home" ]] && target_home="$HOME"
+    fi
+    local bashrc="$target_home/.bashrc"
+    if [[ -f "$bashrc" ]] && ! grep -q '/usr/local/go/bin' "$bashrc" 2>/dev/null; then
+        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+            $SUDO -u "$TARGET_USER" sh -c "echo 'export PATH=\"/usr/local/go/bin:\$PATH\"' >> $bashrc"
+        else
+            echo 'export PATH="/usr/local/go/bin:$PATH"' >> "$bashrc"
+        fi
+        log_info "Added /usr/local/go/bin to PATH in $bashrc"
+    fi
+
+    log_ok "Go installed: $(/usr/local/go/bin/go version | awk '{print $3}')"
+    return 0
+}
+
+build_atlas_tui() {
+    # Pre-build the TUI binary so `atlas tui` works immediately. The Python
+    # wrapper at atlas/cli/commands/tui.py CAN build on first run, but it
+    # only does so silently — and if Go isn't on PATH for that shell yet
+    # (because .bashrc wasn't sourced) the user just gets "binary not found
+    # and Go is not available". Pre-building dodges both.
+    if ! command -v go &>/dev/null && [[ ! -x /usr/local/go/bin/go ]]; then
+        log_warn "Go not available — skipping atlas-tui build."
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o ~/.local/bin/atlas-tui ."
+        return
+    fi
+
+    local target_home
+    if [[ "$TARGET_USER" == "root" ]]; then
+        target_home="/root"
+    else
+        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
+        [[ -z "$target_home" ]] && target_home="$HOME"
+    fi
+    local bin_dir="$target_home/.local/bin"
+    local out="$bin_dir/atlas-tui"
+
+    log_info "Building atlas-tui (~30s, downloads Go modules first time)…"
+
+    # Ensure the bin dir exists and is owned by the target user.
+    $SUDO -u "$TARGET_USER" mkdir -p "$bin_dir" 2>/dev/null \
+        || mkdir -p "$bin_dir" 2>/dev/null
+
+    local runner=""
+    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+        runner="$SUDO -u $TARGET_USER -H"
+    fi
+
+    # GOTOOLCHAIN=auto (Go 1.21+ default) handles the tui's go.mod
+    # requirement of Go 1.26+ — auto-downloads the newer toolchain even
+    # if the installed go is 1.24. PATH includes /usr/local/go/bin from
+    # install_go() above.
+    set +e
+    $runner sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH='/usr/local/go/bin:\$PATH' go build -o '$out' ." 2>&1 | tee /tmp/atlas-tui-build.log
+    local rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ $rc -eq 0 && -x "$out" ]]; then
+        log_ok "atlas-tui built: $out"
+    else
+        log_warn "atlas-tui build failed (exit $rc). Log: /tmp/atlas-tui-build.log"
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o $out ."
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -489,27 +847,26 @@ download_models() {
     fi
 
     log_info "Calling scripts/download-models.sh (this can take 10-30 min on first run)…"
+    log_info "Progress is shown live below; full output also saved to /tmp/atlas-models.log."
+    echo
     # Run as the target user so files end up owned by the human, not root.
-    # Wraps the shell pipeline in `sudo -u` only when we're root and have
-    # a real target user — otherwise the regular pipeline runs.
     local runner=""
     if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
         runner="$SUDO -u $TARGET_USER"
     fi
-    # Use PIPESTATUS to surface real script exit code, not the grep filter.
-    # Without this, `grep` returning empty (no matches → exit 1) masks
-    # successful runs and conversely a script crash that did emit some
-    # [INFO] lines reads as success.
+    # Stream output live (no grep filter — that hid curl's progress bar
+    # and any error messages that didn't match the [INFO]/[WARN]/[ERROR]
+    # pattern). `tee` preserves the log without breaking line buffering.
     set +e
-    $runner ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log | grep -E '^\[INFO\]|\[WARN\]|\[ERROR\]'
+    $runner ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log
     local rc=${PIPESTATUS[0]}
     set -e
+    echo
     if [[ $rc -eq 0 ]]; then
-        log_ok "Model download complete. See /tmp/atlas-models.log for details."
+        log_ok "Model download complete (log: /tmp/atlas-models.log)"
     else
-        log_err "Model download failed (exit $rc). Last 30 lines of /tmp/atlas-models.log:"
-        tail -30 /tmp/atlas-models.log >&2 || true
-        die "Model download failed — check HuggingFace credentials, disk space, or network."
+        log_err "Model download failed (exit $rc)."
+        die "Model download failed — check the live output above, /tmp/atlas-models.log, disk space, or network."
     fi
 
     # Lens weights are a separate fetch — the main script's --lens
@@ -517,8 +874,8 @@ download_models() {
     # Without these, the lens service starts but returns neutral scores.
     log_info "Fetching Geometric Lens weights…"
     set +e
-    $runner ./scripts/download-models.sh --lens >>/tmp/atlas-models.log 2>&1
-    rc=$?
+    $runner ./scripts/download-models.sh --lens 2>&1 | tee -a /tmp/atlas-models.log
+    rc=${PIPESTATUS[0]}
     set -e
     if [[ $rc -eq 0 ]]; then
         log_ok "Lens weights ready"
@@ -547,21 +904,36 @@ start_compose() {
         log_warn "Using sudo for docker compose (user not in docker group yet — log out/in to fix)"
     fi
 
-    # Compose v2 with `image:` set in compose.yml does `pull missing` by
-    # default — first run downloads the GHCR images (PC-052), subsequent
-    # runs reuse the local cache. To force a rebuild from source instead
-    # of pulling, run `docker compose build` before this.
-    log_info "Pulling images from GHCR (first run only) and starting containers…"
+    # Pull images first as a separate step so the user can see the layer-by-
+    # layer download progress (5 images, ~3GB total on first run). Without
+    # this split, `up -d` would silently pull during the up call and only
+    # surface output if it fails. PC-052.
+    log_info "Pulling images from GHCR (first run: ~3GB across 5 services)…"
+    echo
     set +e
-    $DC up -d 2>&1 | tee /tmp/atlas-compose.log | tail -20
+    $DC pull 2>&1 | tee /tmp/atlas-compose-pull.log
     local rc=${PIPESTATUS[0]}
     set -e
+    echo
     if [[ $rc -ne 0 ]]; then
-        log_err "docker compose up failed (exit $rc). Last 30 lines of /tmp/atlas-compose.log:"
-        tail -30 /tmp/atlas-compose.log >&2 || true
-        die "Compose start failed — see log above."
+        log_err "docker compose pull failed (exit $rc). Log: /tmp/atlas-compose-pull.log"
+        log_err "Common causes: GHCR rate-limit, network, or auth (private package)."
+        die "Image pull failed — see live output above."
     fi
-    log_ok "Containers started. See /tmp/atlas-compose.log for details."
+    log_ok "All images pulled."
+
+    log_info "Starting containers…"
+    echo
+    set +e
+    $DC up -d 2>&1 | tee /tmp/atlas-compose.log
+    rc=${PIPESTATUS[0]}
+    set -e
+    echo
+    if [[ $rc -ne 0 ]]; then
+        log_err "docker compose up failed (exit $rc). Log: /tmp/atlas-compose.log"
+        die "Compose start failed — see live output above."
+    fi
+    log_ok "Containers started (log: /tmp/atlas-compose.log)"
 }
 
 # ---------------------------------------------------------------------------
@@ -583,23 +955,39 @@ wait_for_healthy() {
     local elapsed=0
     local interval=5
 
+    log_info "Waiting up to ${timeout}s for all services to report healthy."
+    log_info "Tip: open another terminal and run \`$DC logs -f llama-server\` to watch model load."
+    echo
+
+    local last_status=""
     while [[ $elapsed -lt $timeout ]]; do
         local healthy=0
         local total=${#services[@]}
+        local status_line=""
         for s in "${services[@]}"; do
             local state
             state=$($DC ps --format '{{.Service}} {{.State}} {{.Health}}' 2>/dev/null \
                     | awk -v s="$s" '$1==s {print $2"/"$3; exit}')
-            # Healthy = "running/healthy" or "running/" (no healthcheck = running counts)
             if [[ "$state" == running/healthy || "$state" == running/ ]]; then
                 healthy=$((healthy + 1))
+                status_line+="✓"
+            elif [[ "$state" == running/starting ]]; then
+                status_line+="⠿"
+            elif [[ "$state" == running/unhealthy ]]; then
+                status_line+="✗"
+            else
+                status_line+="·"
             fi
         done
-        printf "\r    ${DIM}%d/%d services healthy (elapsed: %ds / %ds)${NC}" \
-            "$healthy" "$total" "$elapsed" "$timeout"
+        # Print status line on change OR every 30s, so the user sees life signs
+        # without flooding the screen on every 5s tick.
+        if [[ "$status_line" != "$last_status" || $((elapsed % 30)) -eq 0 ]]; then
+            printf "    ${DIM}[%s] %d/%d healthy after %ds (services: %s)${NC}\n" \
+                "$status_line" "$healthy" "$total" "$elapsed" "${services[*]}"
+            last_status="$status_line"
+        fi
         if [[ $healthy -eq $total ]]; then
-            echo
-            log_ok "All $total services healthy"
+            log_ok "All $total services healthy after ${elapsed}s"
             return 0
         fi
         sleep $interval
@@ -608,7 +996,9 @@ wait_for_healthy() {
 
     echo
     log_err "Timeout: not all services healthy after ${timeout}s"
-    log_err "Run '$DC ps' to see current state, or '$DC logs <service>' for details."
+    log_err "Current state:"
+    $DC ps 2>&1 | sed 's/^/      /' >&2
+    log_err "Inspect a stuck service: $DC logs <service-name>"
     return 1
 }
 
@@ -634,9 +1024,14 @@ run_doctor() {
     fi
 
     # Doctor lives in the repo. cd there, run --quick, capture exit code.
+    # ATLAS_INSTALL_DIR is set by ensure_repo_and_env; fall back to pwd
+    # in the unlikely case it wasn't (e.g. compose was skipped earlier).
+    local install_dir="${ATLAS_INSTALL_DIR:-$(pwd)}"
     local doctor_out doctor_rc
-    doctor_out=$(cd "$ATLAS_INSTALL_DIR" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1)
+    set +e
+    doctor_out=$(cd "$install_dir" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1)
     doctor_rc=$?
+    set -e
 
     if [[ $doctor_rc -ne 0 ]]; then
         log_err "atlas doctor reported failures:"
@@ -702,9 +1097,18 @@ main() {
     fi
     echo
 
+    print_supported_distros
+    echo
+
     log_step "Detecting system"
     detect_distro
     detect_gpu
+    echo
+    log_info "Install location: ${BOLD}${ATLAS_INSTALL_DIR:-/opt/atlas}${NC} (override with ATLAS_INSTALL_DIR=...)"
+    log_info "  Why /opt/atlas? It's the standard prefix for system-wide third-party"
+    log_info "  software (FHS), survives \$HOME purges, and lets multiple users on the"
+    log_info "  same box share one install. Set ATLAS_INSTALL_DIR=\$HOME/atlas if you'd"
+    log_info "  rather it land in your home dir."
     echo
 
     install_docker

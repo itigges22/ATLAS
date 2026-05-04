@@ -17,7 +17,23 @@ import json
 import os
 import stat
 
-from atlas.cli.commands import init
+import pytest
+
+from atlas.cli.commands import init, tier
+
+
+# The wizard refuses on cpu tier (PC-054) — correct production behavior,
+# but it means the happy-path tests below would all return rc=1 on a
+# CPU-only host (e.g. GitHub runners). This autouse fixture mocks the
+# probe to a GPU-equipped host so tests proceed past the GPU guard.
+# The explicit cpu-refusal test (test_refuses_on_cpu_tier) overrides
+# this with its own monkeypatch.
+@pytest.fixture(autouse=True)
+def _mock_gpu_probe(monkeypatch):
+    gpu_probe = tier.Probe(
+        has_gpu=True, gpu_name="NVIDIA Test GPU", vram_gb=24.0, gpu_count=1,
+        system_ram_gb=64.0, cpu_cores=16, disk_free_gb=500.0, platform="linux")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: gpu_probe)
 
 
 def _make_atlas_root(tmp_path) -> str:
