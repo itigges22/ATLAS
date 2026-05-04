@@ -653,12 +653,27 @@ install_atlas_cli() {
     if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
         runner="$SUDO -u $TARGET_USER -H"
     fi
+
+    # Editable install needs PEP 660 support, which requires setuptools >= 64
+    # AND a pip new enough to call build_editable. Ubuntu 22.04 ships pip 22 +
+    # setuptools 59 — both too old; the install fails with "missing the
+    # 'build_editable' hook". Upgrade pip + setuptools + wheel into the user
+    # site first so the next call uses modern versions.
+    #
+    # PIP_BREAK_SYSTEM_PACKAGES=1 sidesteps PEP 668 ("externally-managed-
+    # environment") on Debian 12 / Ubuntu 23.04+ / Fedora 38+. Older pip
+    # ignores it as an unknown env var, so it's safe to always set.
+    log_info "Upgrading pip + setuptools (PEP 660 editable install support)…"
+    PIP_BREAK_SYSTEM_PACKAGES=1 $runner python3 -m pip install --user --upgrade --quiet \
+        pip setuptools wheel >>/tmp/atlas-pip.log 2>&1 \
+        || log_warn "pip self-upgrade failed; continuing with system pip."
+
     log_info "Installing ATLAS Python CLI (pip install --user -e .)…"
-    if $runner python3 -m pip install --user -e . --quiet 2>&1 | tee /tmp/atlas-pip.log; then
+    if PIP_BREAK_SYSTEM_PACKAGES=1 $runner python3 -m pip install --user -e . --quiet 2>&1 | tee -a /tmp/atlas-pip.log; then
         log_ok "ATLAS CLI installed"
     else
-        log_warn "pip install failed (exit $?). Last 10 lines: /tmp/atlas-pip.log"
-        tail -10 /tmp/atlas-pip.log >&2 || true
+        log_warn "pip install failed (exit ${PIPESTATUS[0]}). Last 20 lines: /tmp/atlas-pip.log"
+        tail -20 /tmp/atlas-pip.log >&2 || true
         log_warn "  Recovery: cd $ATLAS_INSTALL_DIR && pip install --user -e ."
         return
     fi

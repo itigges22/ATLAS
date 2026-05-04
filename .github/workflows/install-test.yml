@@ -65,8 +65,11 @@ jobs:
                   curl ca-certificates git python3 python3-pip python3-venv \
                   sudo tar gnupg lsb-release pciutils >/dev/null
               else
-                # rocky/rhel image — minimal install
-                dnf install -y -q \
+                # rocky/rhel image — minimal install. --allowerasing lets
+                # full `curl` swap in for the preinstalled `curl-minimal`
+                # (Rocky 9 base ships curl-minimal which conflicts with
+                # the full curl this dnf line pulls).
+                dnf install -y -q --allowerasing \
                   curl ca-certificates git python3 python3-pip \
                   sudo tar gnupg pciutils which >/dev/null
               fi
