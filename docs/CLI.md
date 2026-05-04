@@ -6,10 +6,6 @@ coding session. The canonical chat client is the native Bubbletea TUI
 terminal launches the same TUI; pipe mode falls through to the built-in
 `/solve` REPL.
 
-<p align="center">
-  <img src="images/ATLAS_CLI.png" alt="ATLAS CLI" width="600"/>
-</p>
-
 ---
 
 ## Launching
@@ -48,35 +44,31 @@ install instructions and exits.
 ## Layout
 
 ```
-┌─ Header ─────────────────────────────────────────────────────────────────┐
-│ ATLAS TUI   ⠹ Pondering · cwd:~/projects/snake · default                 │
-├─ Pipeline ───────────────────────────────────┬──────── Files ────────────┤
-│ ⚙  llm           RUN   2.3s  turn=1          │ ● snake                   │
-│ ⚙  v3:probe      RUN   1.1s  generating cand │ ▸ tui/                    │
-│ ✓  tool          OK    12ms  write_file      │ ▸ docs/                   │
-├─ Chat ───────────────────────────────────────┤   ● index.html            │
-│ you                                          │   README.md               │
-│   build me a SaaS landing-page mockup        │                           │
-│ ── turn 1 · ctx=2 msgs ──                    │                           │
-│ · llm · model replied · 8421 tok · 26.0s     │                           │
-│ → tool · write_file                          │                           │
-│   path=index.html                            │                           │
-│ ✓ tool · ← write_file  · 0.8ms               │                           │
-│ · v3 · model replied · 1024 tok · 9.3s       │                           │
-│   ⠹ Brewing…  (Ctrl+C to cancel)             │                           │
-├─ Events ─────────────────────────────────────┤                           │
-│ 14:32:01  stage_start  llm    turn=1         │                           │
-│ 14:32:08  stage_end    llm    1188 tokens    │                           │
-│ 14:32:08  tool_call    tool   write_file     │                           │
-├─ ● llm  turn:1  ctx:8.5k/32k (26%)  session:9.5k  tools:1✓/0✗  events:42─┤
-┌─ Message ────────────────────────────────────────────────────────────────┐
-│   Type a message · ! for bash · / for command · ? for help               │
-└──────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ Header                                                           │
+│   ATLAS TUI · status · cwd · permission mode                     │
+├──────────────────────────────────────┬───────────────────────────┤
+│ Pipeline                             │                           │
+│   live stage table from /events      │  Files                    │
+├──────────────────────────────────────┤   workspace tree (depth 2)│
+│ Chat                                 │   modified files marked   │
+│   user + agent messages              │                           │
+│   tool calls and results             │                           │
+│   live LLM token stream              │                           │
+├──────────────────────────────────────┤                           │
+│ Events                               │                           │
+│   raw typed-envelope log             │                           │
+├──────────────────────────────────────┴───────────────────────────┤
+│ Stats   stage · turn · ctx % · session · tools · events          │
+├──────────────────────────────────────────────────────────────────┤
+│ Message   chat (default) · ! bash · / command · ? help           │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-The **Files** sidebar appears on the right when the terminal is ≥90 cols
-wide. The pipeline, events, and files panes can each be hidden via slash
-commands.
+The **Files** sidebar appears when the terminal is ≥90 columns wide;
+below that, the remaining panes stack vertically. **Pipeline**,
+**Events**, and **Files** can each be hidden with `/hide <pane>`. See
+[Panes](#panes) for what each region renders in detail.
 
 ---
 

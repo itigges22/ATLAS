@@ -223,7 +223,6 @@ Every file in the repository. Click any directory in the tree to jump to its des
     - [`V3_STATUS.md`](#docs-reports) — V3 implementation status (historical)
     - [`V3_1_STATUS.md`](#docs-reports) — V3.1 implementation status
   - [`images/banner.png`](#docs) — README banner image
-  - [`images/ATLAS_CLI.png`](#docs) — CLI screenshot
   - [`reports/ablation/`](#v3-ablation-results) — Published ablation data
     - `README.md` — Data format documentation
     - `config.json` — Ablation run configuration
