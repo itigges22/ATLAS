@@ -415,19 +415,36 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 		if i == lastUserIdx {
 			continue
 		}
-		var role string
-		switch row.Role {
-		case roleUser:
-			role = "user"
-		case roleAssistant:
-			role = "assistant"
-		default:
-			continue // tool / system rows: skip
-		}
 		if row.Body == "" {
 			continue
 		}
-		out = append(out, historyMessage{Role: role, Content: row.Body})
+		var role, content string
+		switch row.Role {
+		case roleUser:
+			role = "user"
+			content = row.Body
+		case roleAssistant:
+			role = "assistant"
+			// CRITICAL: wrap the assistant's prior text in the JSON
+			// envelope shape the model is supposed to emit. m.chat
+			// stores only the extracted .content, but the LLM saw a
+			// full {"type":"text","content":"..."} when it generated
+			// this turn. Sending raw text here teaches the model the
+			// format is plain text — next turn it emits raw text and
+			// the proxy parse fails. Re-wrap to keep the format
+			// signal consistent across turns.
+			env, err := json.Marshal(map[string]string{
+				"type":    "text",
+				"content": row.Body,
+			})
+			if err != nil {
+				continue
+			}
+			content = string(env)
+		default:
+			continue // tool / system rows: skip
+		}
+		out = append(out, historyMessage{Role: role, Content: content})
 	}
 	if len(out) == 0 {
 		return nil

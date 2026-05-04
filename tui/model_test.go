@@ -204,9 +204,12 @@ func TestBuildChatHistoryExcludesLastUserAndNonTextRoles(t *testing.T) {
 		{Role: roleUser, Body: "current message — being sent now"},
 	}
 	got := m.buildChatHistory()
+	// Assistant bodies are re-wrapped in the JSON envelope shape so the
+	// model keeps emitting JSON next turn (raw text in history teaches
+	// the model that text-only is OK and breaks the envelope contract).
 	want := []historyMessage{
 		{Role: "user", Content: "first ask"},
-		{Role: "assistant", Content: "first reply"},
+		{Role: "assistant", Content: `{"content":"first reply","type":"text"}`},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("buildChatHistory len = %d, want %d (got=%v)", len(got), len(want), got)
@@ -231,9 +234,11 @@ func TestBuildChatHistoryCapsAt40(t *testing.T) {
 	if len(got) != 40 {
 		t.Errorf("buildChatHistory cap = %d, want 40", len(got))
 	}
-	// Cap keeps the most recent rows, not the oldest.
-	if got[len(got)-1].Content != "a" {
-		t.Errorf("last history row = %q, want %q (most-recent assistant)", got[len(got)-1].Content, "a")
+	// Cap keeps the most recent rows, not the oldest. Last row is an
+	// assistant — re-wrapped in the JSON envelope.
+	wantLast := `{"content":"a","type":"text"}`
+	if got[len(got)-1].Content != wantLast {
+		t.Errorf("last history row = %q, want %q (most-recent assistant, wrapped)", got[len(got)-1].Content, wantLast)
 	}
 }
 
