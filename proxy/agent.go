@@ -75,11 +75,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// Build system prompt with tool descriptions and project context
 	systemPrompt := buildSystemPrompt(ctx)
 
-	// Initialize messages
-	ctx.Messages = []AgentMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userMessage},
-	}
+	// Initialize messages: system prompt, then any prior-turn history
+	// the TUI shipped, then the new user message. PriorHistory is
+	// already filtered to role=user|assistant text turns (no tool
+	// calls/results, no system spam) on the TUI side. Without this,
+	// every user message starts a fresh agent loop and the model can't
+	// answer follow-ups like "what did you just delete?".
+	ctx.Messages = make([]AgentMessage, 0, 2+len(ctx.PriorHistory))
+	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "system", Content: systemPrompt})
+	ctx.Messages = append(ctx.Messages, ctx.PriorHistory...)
+	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: userMessage})
 
 	// PC-045: Per-session cache scope. llama.cpp's KV slot persists between
 	// requests by default — that's PC-035's keep-warm behavior. But the slot
@@ -1057,11 +1062,16 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	type historyMsg struct {
+		Role    string `json:"role"`    // "user" or "assistant"
+		Content string `json:"content"`
+	}
 	var req struct {
-		Message    string `json:"message"`
-		WorkingDir string `json:"working_dir"`
-		Mode       string `json:"mode"`       // "default", "accept-edits", "yolo"
-		SessionID  string `json:"session_id"` // optional — required for /cancel
+		Message    string       `json:"message"`
+		WorkingDir string       `json:"working_dir"`
+		Mode       string       `json:"mode"`       // "default", "accept-edits", "yolo"
+		SessionID  string       `json:"session_id"` // optional — required for /cancel
+		History    []historyMsg `json:"history,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -1096,6 +1106,33 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	ctx.SandboxURL = sandboxURL
 	ctx.LensURL = lensURL
 	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
+
+	// Seed prior-turn transcript from the request body. The TUI ships
+	// user/assistant text rows from its local chat history so the agent
+	// can answer follow-ups; without it, every /v1/agent call starts
+	// fresh. Cap defensively at 40 messages here too — the proxy's own
+	// trim logic in runAgentLoop handles further overflow.
+	if n := len(req.History); n > 0 {
+		if n > 40 {
+			req.History = req.History[n-40:]
+		}
+		ctx.PriorHistory = make([]AgentMessage, 0, len(req.History))
+		for _, h := range req.History {
+			// Only accept the two roles that make sense as conversation
+			// history; anything else is skipped silently rather than
+			// passed through to the LLM as an unknown role.
+			if h.Role != "user" && h.Role != "assistant" {
+				continue
+			}
+			if h.Content == "" {
+				continue
+			}
+			ctx.PriorHistory = append(ctx.PriorHistory, AgentMessage{
+				Role:    h.Role,
+				Content: h.Content,
+			})
+		}
+	}
 	// Carry the upstream cancellation through so disconnects abort the loop
 	// and llama-server's in-flight generation. See ISSUES.md PC-036.
 	//

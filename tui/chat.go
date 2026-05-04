@@ -33,13 +33,22 @@ type chatEvent struct {
 	Data json.RawMessage `json:"data"`
 }
 
+// historyMessage is one prior-turn user/assistant text row sent to the
+// proxy on each /v1/agent call. Field shape MUST match the historyMsg
+// struct in proxy/agent.go's handleAgent.
+type historyMessage struct {
+	Role    string `json:"role"`    // "user" or "assistant"
+	Content string `json:"content"`
+}
+
 // agentRequest is the POST body for /v1/agent. Field tags MUST match
-// the anonymous struct in proxy/agent.go:599.
+// the anonymous struct in proxy/agent.go's handleAgent.
 type agentRequest struct {
-	Message    string `json:"message"`
-	WorkingDir string `json:"working_dir"`
-	Mode       string `json:"mode"`       // "default" | "accept-edits" | "yolo"
-	SessionID  string `json:"session_id"` // PC-062: required so /cancel can target this turn
+	Message    string           `json:"message"`
+	WorkingDir string           `json:"working_dir"`
+	Mode       string           `json:"mode"`       // "default" | "accept-edits" | "yolo"
+	SessionID  string           `json:"session_id"` // PC-062: required so /cancel can target this turn
+	History    []historyMessage `json:"history,omitempty"`
 }
 
 // cancelTurn POSTs /cancel for a session_id. Best-effort: returns
@@ -72,14 +81,18 @@ func cancelTurn(proxyURL, sessionID string) error {
 // sendChat opens an SSE POST to /v1/agent and forwards each parsed
 // event to out. Returns nil on clean [DONE], err otherwise. Caller is
 // responsible for closing the channel after this returns.
+//
+// history is the prior-turn user/assistant transcript so the agent can
+// answer follow-ups. Pass nil for the first turn of a session.
 func sendChat(ctx context.Context, proxyURL, message, workingDir, mode,
-	sessionID string, out chan<- chatEvent) error {
+	sessionID string, history []historyMessage, out chan<- chatEvent) error {
 
 	body, err := json.Marshal(agentRequest{
 		Message:    message,
 		WorkingDir: workingDir,
 		Mode:       mode,
 		SessionID:  sessionID,
+		History:    history,
 	})
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)

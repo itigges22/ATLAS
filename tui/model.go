@@ -386,6 +386,58 @@ func tickEvery(d time.Duration) tea.Cmd {
 	})
 }
 
+// buildChatHistory packs prior user/assistant text rows from m.chat
+// into the wire shape /v1/agent expects. Excludes:
+//   - the most recent roleUser entry (that's the message being sent
+//     this turn — handleAgent pairs it with PriorHistory, so sending
+//     it twice would duplicate)
+//   - tool / system rows (within-turn machinery, not conversation)
+//   - empty bodies
+//
+// Cap at the last 40 rows; the proxy trims further if needed. Returns
+// nil when there's no prior history (first turn of a session) so the
+// JSON payload omits the field entirely.
+func (m *tuiModel) buildChatHistory() []historyMessage {
+	if len(m.chat) == 0 {
+		return nil
+	}
+	// Locate the last user row — that's the just-appended new message.
+	lastUserIdx := -1
+	for i := len(m.chat) - 1; i >= 0; i-- {
+		if m.chat[i].Role == roleUser {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	out := make([]historyMessage, 0, len(m.chat))
+	for i, row := range m.chat {
+		if i == lastUserIdx {
+			continue
+		}
+		var role string
+		switch row.Role {
+		case roleUser:
+			role = "user"
+		case roleAssistant:
+			role = "assistant"
+		default:
+			continue // tool / system rows: skip
+		}
+		if row.Body == "" {
+			continue
+		}
+		out = append(out, historyMessage{Role: role, Content: row.Body})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	if len(out) > 40 {
+		out = out[len(out)-40:]
+	}
+	return out
+}
+
 // sendChatCmd kicks off a /v1/agent turn. Runs sendChat in a goroutine
 // because Bubbletea Cmds should be quick — the goroutine pumps events
 // onto m.chatEvents which the model drains via waitForChatEvent.
@@ -401,10 +453,11 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 	workingDir := m.workingDir
 	mode := m.mode
 	out := m.chatEvents
+	history := m.buildChatHistory()
 
 	return func() tea.Msg {
 		go func() {
-			err := sendChat(ctx, proxyURL, message, workingDir, mode, sessionID, out)
+			err := sendChat(ctx, proxyURL, message, workingDir, mode, sessionID, history, out)
 			// Signal turn end via the same channel using a sentinel
 			// chatEvent (type="__turn_done__") — keeps the event
 			// ordering: all messages drain before the done marker.

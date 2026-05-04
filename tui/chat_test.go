@@ -80,7 +80,7 @@ func TestSendChatPostsRequestBodyAndStreamsEvents(t *testing.T) {
 	defer cancel()
 
 	if err := sendChat(ctx, srv.URL, "fix bug", "/work", "default",
-		"sess-1", out); err != nil {
+		"sess-1", nil, out); err != nil {
 		t.Fatalf("sendChat: %v", err)
 	}
 	close(out)
@@ -116,7 +116,7 @@ func TestSendChatHandlesNon200Status(t *testing.T) {
 	}))
 	defer srv.Close()
 	out := make(chan chatEvent, 1)
-	err := sendChat(context.Background(), srv.URL, "hi", "/", "default", "s", out)
+	err := sendChat(context.Background(), srv.URL, "hi", "/", "default", "s", nil, out)
 	if err == nil {
 		t.Fatal("sendChat should return error on 503")
 	}
@@ -151,7 +151,7 @@ func TestSendChatContextCancelStopsStream(t *testing.T) {
 		time.Sleep(80 * time.Millisecond)
 		cancel()
 	}()
-	err := sendChat(ctx, srv.URL, "hi", "/", "default", "s", out)
+	err := sendChat(ctx, srv.URL, "hi", "/", "default", "s", nil, out)
 	if err == nil {
 		// context cancellation on read returns ctx.Err() or io.EOF;
 		// either is acceptable. nil means the stream completed before

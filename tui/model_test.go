@@ -186,3 +186,67 @@ func TestViewBeforeWindowSizeRendersWithSafeDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildChatHistoryEmpty(t *testing.T) {
+	m := newTUIModel("http://test")
+	if got := m.buildChatHistory(); got != nil {
+		t.Errorf("buildChatHistory on empty chat = %v, want nil", got)
+	}
+}
+
+func TestBuildChatHistoryExcludesLastUserAndNonTextRoles(t *testing.T) {
+	m := newTUIModel("http://test")
+	m.chat = []chatMessage{
+		{Role: roleUser, Body: "first ask"},
+		{Role: roleAssistant, Body: "first reply"},
+		{Role: roleTool, Body: "list_directory result", Meta: "list_directory"},
+		{Role: roleSystem, Body: "spinner update", Meta: "llm"},
+		{Role: roleUser, Body: "current message — being sent now"},
+	}
+	got := m.buildChatHistory()
+	want := []historyMessage{
+		{Role: "user", Content: "first ask"},
+		{Role: "assistant", Content: "first reply"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("buildChatHistory len = %d, want %d (got=%v)", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("buildChatHistory[%d] = %+v, want %+v", i, got[i], w)
+		}
+	}
+}
+
+func TestBuildChatHistoryCapsAt40(t *testing.T) {
+	m := newTUIModel("http://test")
+	// 30 user/assistant pairs = 60 rows, plus the just-sent user row.
+	for i := 0; i < 30; i++ {
+		m.chat = append(m.chat,
+			chatMessage{Role: roleUser, Body: "u"},
+			chatMessage{Role: roleAssistant, Body: "a"})
+	}
+	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: "current"})
+	got := m.buildChatHistory()
+	if len(got) != 40 {
+		t.Errorf("buildChatHistory cap = %d, want 40", len(got))
+	}
+	// Cap keeps the most recent rows, not the oldest.
+	if got[len(got)-1].Content != "a" {
+		t.Errorf("last history row = %q, want %q (most-recent assistant)", got[len(got)-1].Content, "a")
+	}
+}
+
+func TestBuildChatHistorySkipsEmptyBodies(t *testing.T) {
+	m := newTUIModel("http://test")
+	m.chat = []chatMessage{
+		{Role: roleUser, Body: "real ask"},
+		{Role: roleAssistant, Body: ""}, // empty assistant — skip
+		{Role: roleAssistant, Body: "real reply"},
+		{Role: roleUser, Body: "current"},
+	}
+	got := m.buildChatHistory()
+	if len(got) != 2 {
+		t.Fatalf("buildChatHistory len = %d, want 2 (got=%v)", len(got), got)
+	}
+}

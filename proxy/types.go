@@ -267,6 +267,14 @@ type AgentContext struct {
 
 	// State
 	Messages     []AgentMessage
+	// PriorHistory is the prior-turn user/assistant transcript, sent by
+	// the TUI on each /v1/agent request so the agent can answer follow-ups
+	// like "what did you just delete?" — without it, every user message
+	// is a fresh agent loop with empty context. Populated by handleAgent
+	// from the request body; consumed once at the top of runAgentLoop
+	// and then ignored. Tool/system rows are filtered out at the TUI
+	// boundary; only role=user|assistant text turns flow through here.
+	PriorHistory []AgentMessage
 	FileReadTimes map[string]time.Time // for staleness detection
 	FilesRead     map[string]string    // cache of read file contents
 	TotalTokens  int
