@@ -1,0 +1,117 @@
+name: install matrix
+
+# Dry-runs scripts/atlas-bootstrap.sh inside the Tier-1 distro containers
+# we officially support. Skips Docker install (containers can't run
+# Docker-in-Docker without --privileged), NVIDIA setup (no GPU on free
+# runners), model download (7GB), and compose-up — what's left is
+# everything that actually breaks on real installs:
+#
+#   - distro detection
+#   - .env handling + missing-key patching
+#   - repo step (chown, ownership detection)
+#   - Python CLI install (pip + ~/.local/bin handling)
+#   - Go install (tarball + extract + PATH)
+#   - atlas-tui build (proves Go + module path + build steps work)
+#
+# That's the surface where PC-051+ install bugs have actually lived.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap-dry-run:
+    name: bootstrap on ${{ matrix.distro.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          - { name: 'ubuntu-22.04', image: 'ubuntu:22.04', pkg: 'apt' }
+          - { name: 'ubuntu-24.04', image: 'ubuntu:24.04', pkg: 'apt' }
+          - { name: 'debian-12',    image: 'debian:12',    pkg: 'apt' }
+          - { name: 'rockylinux-9', image: 'rockylinux:9', pkg: 'dnf' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bootstrap inside ${{ matrix.distro.image }}
+        run: |
+          docker run --rm \
+            -v "$PWD":/atlas:ro \
+            -w /work \
+            -e ATLAS_BOOTSTRAP_SKIP_DOCKER=1 \
+            -e ATLAS_BOOTSTRAP_SKIP_NVIDIA=1 \
+            -e ATLAS_BOOTSTRAP_SKIP_MODELS=1 \
+            -e ATLAS_BOOTSTRAP_SKIP_COMPOSE=1 \
+            -e ATLAS_BOOTSTRAP_SKIP_SYSCTL=1 \
+            ${{ matrix.distro.image }} \
+            bash -c '
+              set -euo pipefail
+
+              # Install the prereqs the bootstrap assumes are present.
+              # `curl ca-certificates git python3 sudo tar` is the
+              # baseline; pip + lspci come from the bootstrap path.
+              if command -v apt-get &>/dev/null; then
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get update -qq
+                apt-get install -y -qq --no-install-recommends \
+                  curl ca-certificates git python3 python3-pip python3-venv \
+                  sudo tar gnupg lsb-release pciutils >/dev/null
+              else
+                # rocky/rhel image — minimal install
+                dnf install -y -q \
+                  curl ca-certificates git python3 python3-pip \
+                  sudo tar gnupg pciutils which >/dev/null
+              fi
+
+              # Copy the read-only checkout to a writable workspace —
+              # the bootstrap chown-s + writes .env, so /atlas:ro fails.
+              cp -r /atlas /work
+              cd /work
+
+              # Run the bootstrap. With all skip flags set, this exercises
+              # ensure_repo_and_env, install_atlas_cli, install_go,
+              # build_atlas_tui — the parts that historically broke.
+              ./scripts/atlas-bootstrap.sh
+
+              # Verify the artifacts the bootstrap was supposed to leave.
+              echo
+              echo "=== Verifying bootstrap outputs ==="
+
+              # 1. .env exists and has the required keys
+              for key in ATLAS_MODELS_DIR ATLAS_MODEL_FILE ATLAS_MODEL_NAME ATLAS_CTX_SIZE; do
+                grep -q "^${key}=" .env || { echo "::error::.env missing $key"; exit 1; }
+              done
+              echo "✓ .env has all required keys"
+
+              # 2. Python CLI is installed and importable
+              python3 -m atlas.cli.commands.doctor --help >/dev/null \
+                || { echo "::error::atlas Python CLI not importable"; exit 1; }
+              echo "✓ atlas Python module installed"
+
+              # 3. atlas binary exists in $HOME/.local/bin (pip --user target)
+              # Running as root inside container, so $HOME=/root.
+              test -x /root/.local/bin/atlas \
+                || { echo "::error::/root/.local/bin/atlas not built"; ls -la /root/.local/bin/ || true; exit 1; }
+              echo "✓ atlas binary at /root/.local/bin/atlas"
+
+              # 4. atlas-tui Go binary built
+              test -x /root/.local/bin/atlas-tui \
+                || { echo "::error::/root/.local/bin/atlas-tui not built"; ls -la /root/.local/bin/ || true; exit 1; }
+              echo "✓ atlas-tui binary at /root/.local/bin/atlas-tui"
+
+              # 5. Go is on PATH (or under /usr/local/go/bin)
+              [[ -x /usr/local/go/bin/go ]] || command -v go >/dev/null \
+                || { echo "::error::go not installed"; exit 1; }
+              echo "✓ go installed: $(/usr/local/go/bin/go version 2>/dev/null || go version)"
+
+              echo
+              echo "=== ${{ matrix.distro.name }}: PASS ==="
+            '

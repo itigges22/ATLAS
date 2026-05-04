@@ -1,0 +1,124 @@
+name: tests
+
+# Runs on every push to main/dev and every PR. All jobs run on the free
+# ubuntu-latest runner — no GPU, no large model downloads, no real
+# Docker compose stack. The install-test.yml workflow handles the
+# distro-matrix bootstrap dry-run; this file is for code-level checks
+# (Go test, Python pytest, shellcheck, compose validate).
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+# Cancel in-flight runs on the same ref when a newer commit lands —
+# saves runner minutes on rapid-fire pushes.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-tests:
+    name: go test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [proxy, tui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # 1.24 floor for proxy. tui requires 1.26+ via go.mod, but
+          # GOTOOLCHAIN=auto (1.21+ default) auto-fetches the newer
+          # toolchain when needed — same path as a real install.
+          go-version: '1.24'
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: go test -race
+        working-directory: ${{ matrix.module }}
+        run: go test -race ./...
+
+  python-tests:
+    name: pytest (${{ matrix.subset }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # tests/v3/ and tests/cli/ are pure unit tests — no services
+        # needed. tests/integration/ + tests/infrastructure/ require
+        # a live llama-server / sandbox / lens, gated separately by
+        # the integration workflow (not yet wired up — PC-064).
+        subset:
+          - tests/v3
+          - tests/cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+
+      - name: pytest
+        run: |
+          # If the subset directory doesn't exist, skip cleanly rather
+          # than failing CI with "no tests collected".
+          if [[ -d "${{ matrix.subset }}" ]]; then
+            pytest "${{ matrix.subset }}" --no-header -q
+          else
+            echo "::notice::${{ matrix.subset }} not present — skipping"
+          fi
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      - name: shellcheck
+        # --severity=error catches real bugs (unquoted vars in dangerous
+        # contexts, misuse of [[ ]], etc) without bikeshedding on style.
+        # Bump to `warning` later once the scripts are stable.
+        run: |
+          shellcheck --severity=error \
+            scripts/atlas-bootstrap.sh \
+            scripts/download-models.sh
+
+  compose-validate:
+    name: docker compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: validate compose YAML
+        # The runner has docker compose v2 pre-installed. `config -q`
+        # parses + validates docker-compose.yml without pulling images.
+        # Set dummy env so vars don't fail the parse.
+        run: |
+          touch .env  # compose reads .env for ${VAR} interpolation
+          docker compose config -q
+
+  yamllint:
+    name: yamllint (workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: yamllint
+        run: |
+          pip install yamllint
+          # Only lint workflow YAML — docker-compose.yml is validated
+          # by compose-validate above; broader yamllint can come later.
+          yamllint -d "{rules: {line-length: disable, document-start: disable}}" .github/workflows/

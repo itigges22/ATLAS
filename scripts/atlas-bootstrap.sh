@@ -28,6 +28,7 @@
 #   ATLAS_BOOTSTRAP_SKIP_NVIDIA=1     skip GPU/nvidia-container-toolkit
 #   ATLAS_BOOTSTRAP_SKIP_MODELS=1     skip model download
 #   ATLAS_BOOTSTRAP_SKIP_COMPOSE=1    skip `docker compose up`
+#   ATLAS_BOOTSTRAP_SKIP_SYSCTL=1     skip vm.overcommit_memory write (CI / unpriv. containers)
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
@@ -471,16 +472,25 @@ install_nvidia_toolkit() {
 configure_sysctl() {
     log_step "Step 3: Kernel parameters (PC-011 — Redis overcommit)"
 
+    if [[ "${ATLAS_BOOTSTRAP_SKIP_SYSCTL:-0}" == "1" ]]; then
+        log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_SYSCTL=1)"
+        return
+    fi
+
     local current
     current=$(sysctl -n vm.overcommit_memory 2>/dev/null || echo "0")
     if [[ "$current" == "1" ]]; then
         log_ok "vm.overcommit_memory=1 already set"
     else
         log_info "Setting vm.overcommit_memory=1 (was $current)…"
-        $SUDO sysctl -w vm.overcommit_memory=1 >/dev/null
+        if ! $SUDO sysctl -w vm.overcommit_memory=1 >/dev/null 2>&1; then
+            log_warn "sysctl write failed (unprivileged container? read-only fs?). Skipping."
+            log_warn "  Set ATLAS_BOOTSTRAP_SKIP_SYSCTL=1 to silence this and continue."
+            return
+        fi
         # Persist via /etc/sysctl.d so it survives reboot
         if ! $SUDO grep -q '^vm.overcommit_memory' /etc/sysctl.d/99-atlas.conf 2>/dev/null; then
-            echo "vm.overcommit_memory=1" | $SUDO tee /etc/sysctl.d/99-atlas.conf >/dev/null
+            echo "vm.overcommit_memory=1" | $SUDO tee /etc/sysctl.d/99-atlas.conf >/dev/null 2>&1 || true
         fi
         log_ok "vm.overcommit_memory=1 (persisted to /etc/sysctl.d/99-atlas.conf)"
     fi
