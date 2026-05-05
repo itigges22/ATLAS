@@ -349,7 +349,14 @@ class EmbedAdapter:
 # --- Lens Scorer (calls Geometric Lens) ---------------------------------------------
 
 def score_candidate(code: str) -> Tuple[float, float]:
-    """Score code with Geometric Lens C(x). Returns (raw_energy, normalized)."""
+    """Score code with Geometric Lens C(x). Returns (raw_energy, normalized).
+
+    Timeout note: 10s was tight under load — the lens shares the box with
+    V3's streaming generator and llama-server, and a single hot probe
+    could starve scoring long enough to trip the fallback. Bumped to 30s
+    so transient contention doesn't masquerade as a broken lens
+    (symptom: C(x)=0.00 / gx=0.50 sentinel pair).
+    """
     try:
         body = json.dumps({"text": code}).encode()
         req = urllib.request.Request(
@@ -357,10 +364,11 @@ def score_candidate(code: str) -> Tuple[float, float]:
             data=body,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
             return data.get("cx_energy", 0.0), data.get("gx_score", 0.5)
-    except Exception:
+    except Exception as e:
+        print(f"  [lens] score_candidate failed: {e} — falling back to (0.0, 0.5)", flush=True)
         return 0.0, 0.5
 
 
