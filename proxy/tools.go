@@ -396,6 +396,17 @@ func writeFileTool() *ToolDef {
 
 			path := resolvePath(input.Path, ctx.WorkingDir)
 
+			// Sanitise model output before anything else touches it.
+			// Otherwise a markdown-fenced response with a prose preamble
+			// ("Looking at the task..." / ```html / actual code / ```)
+			// lands on disk verbatim and the file becomes unparseable.
+			cleaned, sanitized := sanitizeFileContent(input.Path, input.Content)
+			if sanitized {
+				log.Printf("[write_file] sanitised markdown wrapper from %s (was %d chars, now %d)",
+					input.Path, len(input.Content), len(cleaned))
+				input.Content = cleaned
+			}
+
 			// Per-file tier classification — determines V3 pipeline activation
 			fileTier := classifyFileTier(input.Path, input.Content)
 			log.Printf("[write_file] %s → %s (%d lines)", input.Path, fileTier, strings.Count(input.Content, "\n")+1)
@@ -620,6 +631,15 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		code = baselineContent
 	}
 
+	// Sanitise V3 output. The pipeline's underlying LLM response
+	// occasionally arrives with markdown fences and prose preamble
+	// intact; if we don't strip them, every V3-rewritten file ships
+	// with a "Looking at the task..." header on disk.
+	if cleaned, sanitized := sanitizeFileContent(path, code); sanitized {
+		log.Printf("[write_file] sanitised V3 output for %s", path)
+		code = cleaned
+	}
+
 	// Stream V3 completion summary
 	if ctx.StreamFn != nil {
 		ctx.StreamFn("v3_progress", map[string]string{
@@ -717,6 +737,16 @@ func editFileTool() *ToolDef {
 				return nil, fmt.Errorf("old_str and new_str are identical — no change to make")
 			}
 
+			// Sanitise the replacement string before splicing it in. The
+			// model occasionally fences the new_str ("```python\n...\n```")
+			// even though it's a fragment, not a whole file. If we let
+			// that slip through, every line of the edit would have a
+			// stray ``` at the top and bottom.
+			if cleanedNew, sanitized := sanitizeFileContent(input.Path, input.NewStr); sanitized {
+				log.Printf("[edit_file] sanitised markdown wrapper from new_str of %s", input.Path)
+				input.NewStr = cleanedNew
+			}
+
 			var newContent string
 			if input.ReplaceAll {
 				newContent = strings.ReplaceAll(content, actualOldStr, input.NewStr)
@@ -740,6 +770,15 @@ func editFileTool() *ToolDef {
 				if err != nil {
 					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
 				} else if improved != "" {
+					// V3 sometimes returns code wrapped in markdown
+					// fences (the underlying llama-server response had a
+					// preamble it didn't strip). Sanitise here too —
+					// otherwise every V3-improved file ships with a
+					// "Looking at the task..." header on disk.
+					if cleanedImproved, sanitized := sanitizeFileContent(input.Path, improved); sanitized {
+						log.Printf("[edit_file] sanitised V3 output for %s", input.Path)
+						improved = cleanedImproved
+					}
 					newContent = improved
 					v3Out = meta
 				}

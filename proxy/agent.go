@@ -363,6 +363,35 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
+			// Shell-op guardrail: bounce destructive filesystem verbs in
+			// run_command. The native edit_file/write_file/delete_file
+			// tools are the supported mutation path — they go through
+			// V3, the surgical-edit gate, and audit logging. Shell `mv`,
+			// `rm`, `cp`, `find -delete` bypass all of that and led to
+			// today's "agent moved templates into venv mid-task" disaster.
+			// Yolo mode opts out of this for users who want the model to
+			// have free rein.
+			if parsed.Name == "run_command" && !ctx.YoloMode {
+				var rc RunCommandInput
+				if json.Unmarshal(parsed.Args, &rc) == nil {
+					if rejection := validateShellCommand(rc.Command); rejection != "" {
+						log.Printf("[agent] rejecting run_command %q: %s",
+							truncateStr(rc.Command, 80), rejection)
+						ctx.Messages = append(ctx.Messages, AgentMessage{
+							Role:    "assistant",
+							Content: response,
+						})
+						ctx.Messages = append(ctx.Messages, AgentMessage{
+							Role:       "tool",
+							Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+							ToolCallID: fmt.Sprintf("call_%d", turn),
+							ToolName:   "run_command",
+						})
+						continue
+					}
+				}
+			}
+
 			// Execute tool
 			startTime := time.Now()
 			result := executeToolCall(parsed.Name, parsed.Args, ctx)
@@ -962,7 +991,9 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("  Example — to add a None check to one branch, use:\n")
 	sb.WriteString("    edit_file {\"path\":\"src/foo.py\",\"old_str\":\"if x == 0:\\n        return None\",\"new_str\":\"if x is None or x == 0:\\n        return None\"}\n")
 	sb.WriteString("  NOT write_file with the entire file's new contents.\n")
-	sb.WriteString("- Use run_command to verify your changes work (build, test, lint)\n")
+	sb.WriteString("- The `content` you put in write_file / edit_file goes verbatim onto disk. **No markdown fences. No prose preamble (\"Looking at the task...\", \"Here's the file:\"). No trailing explanation.** Just the raw file contents. The agent layer strips fenced wrappers before writing, but the right move is to never emit them in the first place.\n")
+	sb.WriteString("- **Never use shell `rm`, `mv`, `cp`, or `find -delete` to mutate workspace files.** Use the dedicated tools — `edit_file` for changes, `write_file` for new files, `delete_file` for removal. Shell mutation bypasses the safety gates and will be rejected by the agent layer. `run_command` is for build / test / run / inspection only (python, pytest, npm, go, ls, cat, curl, etc.).\n")
+	sb.WriteString("- Use run_command to verify your changes work (build, test, lint, curl). When the user says \"fix\" or \"isn't working\", verify before declaring done — start the server, hit the endpoint, run the test. \"Done\" without a verification step is a guess.\n")
 	sb.WriteString("- When creating a project from scratch: create config/build files FIRST, verify they work (e.g., npm install, cargo check), THEN create feature code\n")
 	sb.WriteString("- Respond with {\"type\":\"done\",\"summary\":\"...\"} when the task is complete\n")
 	sb.WriteString("- If a command fails, read the error output, fix the issue, and try again\n")
