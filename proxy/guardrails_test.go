@@ -133,6 +133,28 @@ func TestValidateShellCommandAllowsDevNullRedirect(t *testing.T) {
 	}
 }
 
+func TestValidateShellCommandAllowsStderrRedirects(t *testing.T) {
+	// stderr→stdout merge (`2>&1`), stderr→file, and `&>` are all
+	// standard verification idioms. The early version of the regex
+	// treated any `>` as a "truncating redirect" and rejected
+	// `python app.py 2>&1` — confirmed in May 2026 user logs where
+	// every verification attempt with `2>&1` was bounced. Regression
+	// tests for each shape so it doesn't drift back.
+	allowed := []string{
+		"python app.py 2>&1",
+		"python3 -c 'import flask' 2>&1",
+		"pytest -v 2> errors.log",
+		"curl http://localhost:5000/ 2>/dev/null",
+		"node app.js >& output.log",        // bash &> shorthand variant
+		"go test ./... 2>&1 | tee out.log", // pipe + merge
+	}
+	for _, cmd := range allowed {
+		if got := validateShellCommand(cmd); got != "" {
+			t.Errorf("validateShellCommand(%q) rejected: %s", cmd, got)
+		}
+	}
+}
+
 func TestValidateShellCommandBlocksBashCBypass(t *testing.T) {
 	// The deny-list is bypassable if the model wraps the destructive
 	// verb inside `bash -c "..."`. Roo Code's regression test case.

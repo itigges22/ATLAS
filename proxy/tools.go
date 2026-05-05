@@ -1218,9 +1218,32 @@ func runCommandTool() *ToolDef {
 				ExitCode: exitCode,
 			}
 			outBytes, _ := json.Marshal(out)
+			// On failure, surface a useful error string so the agent
+			// log line "tool=run_command FAIL: <err>" actually shows
+			// what went wrong. Without this the Error field stayed
+			// empty, the model saw only the JSON Data payload, and
+			// the proxy log read "FAIL:" with no signal — which is
+			// exactly what happened in the May 2026 user session.
+			// Prefer stderr; fall back to last stdout line; final
+			// fallback is the bare exit code.
+			var errMsg string
+			if exitCode != 0 {
+				errMsg = strings.TrimSpace(stderr.String())
+				if errMsg == "" {
+					if s := strings.TrimSpace(stdout.String()); s != "" {
+						lines := strings.Split(s, "\n")
+						errMsg = lines[len(lines)-1]
+					}
+				}
+				if errMsg == "" {
+					errMsg = fmt.Sprintf("exit %d (no output)", exitCode)
+				}
+				errMsg = truncateStr(errMsg, 400)
+			}
 			return &ToolResult{
 				Success: exitCode == 0,
 				Data:    outBytes,
+				Error:   errMsg,
 			}, nil
 		},
 	}

@@ -117,6 +117,54 @@ func TestSamplePlanContextEmptyOnMissingDir(t *testing.T) {
 	}
 }
 
+func TestSamplePlanContextWalksSubdirsForPriorityFiles(t *testing.T) {
+	// May 2026 user case: workspace root has no app.py, but a
+	// snake/ subdir does. Sampler should pick up snake/app.py with
+	// the path keyed as "snake/app.py" so the planner emits tool
+	// calls using that exact path.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "snake", "templates"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "snake", "app.py"),
+		[]byte("from flask import Flask\napp=Flask(__name__)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "snake", "templates", "index.html"),
+		[]byte("<html>hi</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := samplePlanContext(dir, 6, 2000)
+	if _, ok := got["snake/app.py"]; !ok {
+		t.Errorf("expected snake/app.py via subdir walk, got keys %v", keys(got))
+	}
+	if _, ok := got["snake/templates/index.html"]; !ok {
+		t.Errorf("expected snake/templates/index.html via subdir walk, got keys %v", keys(got))
+	}
+}
+
+func TestSamplePlanContextSkipsNoiseDirs(t *testing.T) {
+	// venv/ and node_modules/ shouldn't be walked even if they
+	// contain a priority filename — these are cache/vendor dirs.
+	dir := t.TempDir()
+	for _, junk := range []string{"venv", "node_modules", ".git", "__pycache__"} {
+		if err := os.MkdirAll(filepath.Join(dir, junk), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, junk, "app.py"),
+			[]byte("# noise"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := samplePlanContext(dir, 6, 2000)
+	for _, junk := range []string{"venv/app.py", "node_modules/app.py", ".git/app.py", "__pycache__/app.py"} {
+		if _, ok := got[junk]; ok {
+			t.Errorf("noise path %q leaked into context", junk)
+		}
+	}
+}
+
 func TestShouldGeneratePlanGates(t *testing.T) {
 	cases := []struct {
 		name string

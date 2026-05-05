@@ -245,12 +245,31 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		if parseErr != nil {
 			log.Printf("[agent] parse error: %v | raw_len=%d | raw: %q", parseErr, len(response), truncateStr(response, 500))
 			ctx.Stream("error", map[string]string{
-				"error":    "failed to parse model response",
+				"error": "failed to parse model response",
 			})
+			// Targeted feedback — generic "your response wasn't JSON"
+			// led to the May 2026 user-session bug where the model
+			// retried the same 1100-char edit_file with a giant old_str
+			// 5 times in a row. The response was being truncated at the
+			// llama-server token cap; the model couldn't see that and
+			// kept emitting the same too-big payload. Detect the
+			// truncation shape and tell the model explicitly.
+			feedback := classifyParseFailure(response)
 			ctx.Messages = append(ctx.Messages, AgentMessage{
 				Role:    "user",
-				Content: "Your response was not valid JSON. Respond with ONLY a JSON object, no other text. Example: {\"type\":\"tool_call\",\"name\":\"write_file\",\"args\":{\"path\":\"file.py\",\"content\":\"code\"}}",
+				Content: feedback,
 			})
+			// Cap parse failures the same way we cap tool failures.
+			// Five identical parse errors in a row is a stuck loop;
+			// bailing keeps us from burning 6 more LLM round-trips.
+			consecutiveErrors++
+			if consecutiveErrors >= 3 {
+				log.Printf("[agent] breaking parse-error loop at turn %d (%d consecutive)", turn, consecutiveErrors)
+				ctx.Stream("done", map[string]string{
+					"summary": "Stopped after 3 unparseable responses — the model's tool calls keep getting truncated. Try a more targeted request (e.g. 'edit just the @app.route(\"/product\") handler in app.py') so the response stays under the token cap.",
+				})
+				return nil
+			}
 			continue
 		}
 
@@ -1381,6 +1400,54 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
 }
 
+// classifyParseFailure produces a targeted feedback message based on
+// what the model emitted. The model can't see why parsing failed, so
+// a generic "respond in JSON" message lets it loop forever on the same
+// pattern. We pattern-match on the raw response shape:
+//
+//   - starts with `{"type":"tool_call",...,"name":"<edit_file|write_file>",...}` and looks
+//     truncated → it tried a too-big edit; tell it to shrink old_str/new_str
+//   - non-JSON prose → standard "respond JSON only" reminder
+//   - empty or whitespace → continuation nudge
+//
+// The bug this addresses: in May 2026 a user fix-intent prompt put the
+// model in a loop emitting the same 1100-char edit_file with all 5
+// flask routes embedded in old_str. Llama-server's response cap cut it
+// mid-string, parse failed, we didn't tell the model why, it retried
+// identically. classifyParseFailure breaks the cycle by naming the
+// failure mode.
+func classifyParseFailure(raw string) string {
+	stripped := strings.TrimSpace(raw)
+	if stripped == "" {
+		return "Your response was empty. Respond with ONLY a single JSON object — {\"type\":\"tool_call\",...} or {\"type\":\"text\",\"content\":\"...\"} or {\"type\":\"done\",\"summary\":\"...\"}."
+	}
+	// Truncated tool_call detection: response starts with the tool-call
+	// preamble but doesn't have a properly closed args object. We look
+	// for the opening shape and the absence of a clean trailing `}}` —
+	// if both, treat it as truncation.
+	looksLikeToolCall := strings.HasPrefix(stripped, `{"type":"tool_call"`) ||
+		strings.HasPrefix(stripped, `{ "type": "tool_call"`) ||
+		strings.HasPrefix(stripped, `{"type": "tool_call"`)
+	if looksLikeToolCall {
+		hasEditOrWrite := strings.Contains(stripped, `"edit_file"`) ||
+			strings.Contains(stripped, `"write_file"`)
+		// Crude truncation heuristic — if the response doesn't end with
+		// at least one closing brace it's almost certainly cut off
+		// mid-args. (A complete tool_call ends `...}}`.)
+		truncated := !strings.HasSuffix(stripped, "}}") &&
+			!strings.HasSuffix(stripped, "}") &&
+			!strings.HasSuffix(stripped, "]")
+		if hasEditOrWrite && truncated {
+			return "Your last tool call was TRUNCATED — the response hit the token cap mid-args. The fix is to shrink old_str/new_str: edit ONE function or block per call, not the whole file. If you need to change multiple routes/functions, do them in separate edit_file calls (one per turn). Common offenders: pasting all of app.py into old_str, embedding 5+ @app.route handlers in a single replacement. Respond now with a smaller edit_file targeting just the next change."
+		}
+		if truncated {
+			return "Your tool call was truncated mid-args. Make a smaller call — keep `content`, `old_str`, and `new_str` short (under ~30 lines). Respond now with the corrected, smaller call."
+		}
+		return "Your tool_call JSON was malformed. Re-emit it as a single valid JSON object: {\"type\":\"tool_call\",\"name\":\"<tool>\",\"args\":{...}}. No prose, no markdown fences, no trailing commas."
+	}
+	return "Your response was not valid JSON. Respond with ONLY a JSON object, no other text. Example: {\"type\":\"tool_call\",\"name\":\"write_file\",\"args\":{\"path\":\"file.py\",\"content\":\"code\"}}"
+}
+
 // extractModelResponse extracts a ModelResponse from the LLM output,
 // handling cases where the model adds text before/after the JSON or
 // where the JSON is truncated.
@@ -1706,44 +1773,93 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 		}
 		out[rel] = s
 	}
-	// If priority files yielded nothing (uncommon repo layout), fall
-	// back to a shallow walk of the working dir picking up anything
-	// that *looks* like source. Don't recurse — top level is enough
-	// to give the planner a sense of project shape.
+	// If priority files yielded nothing at the workspace root, the
+	// project may live one level down — common when the user's
+	// `atlas tui` cwd was the parent dir (e.g. /workspace) but the
+	// flask app is at /workspace/snake/. Walk one level looking for
+	// the SAME priority filenames inside subdirectories. Without
+	// this, the May 2026 user-session planner saw zero context and
+	// the agent wasted 3 turns finding `snake/app.py`.
 	if len(out) == 0 {
 		entries, err := os.ReadDir(workingDir)
 		if err != nil {
 			return nil
 		}
+		// First pass: peek into subdirectories for priority files.
 		for _, e := range entries {
-			if len(out) >= maxFiles {
-				break
-			}
-			if e.IsDir() {
+			if !e.IsDir() {
 				continue
 			}
 			name := e.Name()
-			ext := strings.ToLower(filepath.Ext(name))
-			switch ext {
-			case ".py", ".go", ".js", ".ts", ".tsx", ".jsx",
-				".html", ".rs", ".rb", ".java", ".kt", ".swift":
-				// pass
-			default:
+			// Skip caches, vendors, dot-dirs — these aren't projects.
+			if strings.HasPrefix(name, ".") || name == "node_modules" ||
+				name == "venv" || name == "__pycache__" ||
+				name == "dist" || name == "build" || name == "target" ||
+				name == "vendor" {
 				continue
 			}
-			info, err := e.Info()
-			if err != nil || info.Size() > int64(maxBytes)*4 {
-				continue
+			for _, rel := range priority {
+				if len(out) >= maxFiles {
+					break
+				}
+				full := filepath.Join(workingDir, name, rel)
+				info, err := os.Stat(full)
+				if err != nil || info.IsDir() {
+					continue
+				}
+				if info.Size() > int64(maxBytes)*4 {
+					continue
+				}
+				data, err := os.ReadFile(full)
+				if err != nil {
+					continue
+				}
+				s := string(data)
+				if len(s) > maxBytes {
+					s = s[:maxBytes] + "\n... (truncated)"
+				}
+				// Key uses subdir/filename so the planner sees the
+				// path the agent will need to use in tool calls.
+				out[filepath.Join(name, rel)] = s
 			}
-			data, err := os.ReadFile(filepath.Join(workingDir, name))
-			if err != nil {
-				continue
+			if len(out) >= maxFiles {
+				break
 			}
-			s := string(data)
-			if len(s) > maxBytes {
-				s = s[:maxBytes] + "\n... (truncated)"
+		}
+		// Second pass: shallow walk of the workspace root for any
+		// source-looking files (uncommon repo layout, no priority
+		// hits anywhere).
+		if len(out) == 0 {
+			for _, e := range entries {
+				if len(out) >= maxFiles {
+					break
+				}
+				if e.IsDir() {
+					continue
+				}
+				name := e.Name()
+				ext := strings.ToLower(filepath.Ext(name))
+				switch ext {
+				case ".py", ".go", ".js", ".ts", ".tsx", ".jsx",
+					".html", ".rs", ".rb", ".java", ".kt", ".swift":
+					// pass
+				default:
+					continue
+				}
+				info, err := e.Info()
+				if err != nil || info.Size() > int64(maxBytes)*4 {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(workingDir, name))
+				if err != nil {
+					continue
+				}
+				s := string(data)
+				if len(s) > maxBytes {
+					s = s[:maxBytes] + "\n... (truncated)"
+				}
+				out[name] = s
 			}
-			out[name] = s
 		}
 	}
 	return out

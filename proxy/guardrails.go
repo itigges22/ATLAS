@@ -102,11 +102,19 @@ var shellDestructiveRe = regexp.MustCompile(
 var shellFindDeleteRe = regexp.MustCompile(
 	`\bfind\b.*?(-delete\b|-exec\s+rm\b)`)
 
-// shellTruncatingRedirectRe catches `> path` (overwrite) but not `>>`
-// (append) and not `> /dev/null` (the model uses this to silence
-// output, which is fine).
+// shellTruncatingRedirectRe catches `> path` (overwrite) but excludes:
+//   - `>>`            append (handled by [^>] predecessor)
+//   - `2>`, `1>`      stderr/stdout fd redirect (handled by [^0-9])
+//   - `>&1`, `>&2`    fd dup (handled by [^&] in dest leading char)
+//   - `> /dev/null`   discard, allowed downstream
+//
+// The destination's leading char is split out so `&` (fd duplication)
+// and `>` (would be `>>`, already excluded) are rejected without
+// double-checking. Composite redirects like `2>&1` are entirely
+// non-truncating and must not trip this — the previous regex did,
+// breaking every legit `python app.py 2>&1` verification call.
 var shellTruncatingRedirectRe = regexp.MustCompile(
-	`(^|[^>])>\s*(?:[^>\s]+)`)
+	`(^|[^>0-9])>\s*([^>&\s][^>\s]*)`)
 
 // validateShellCommand returns a non-empty rejection reason if the
 // command would mutate user files via the shell. Build/test/lint
