@@ -1,109 +1,185 @@
 package main
 
 import (
-	"math"
 	"testing"
 )
 
-func TestLineOverlapRatio(t *testing.T) {
-	tests := []struct {
-		name string
-		a    string
-		b    string
-		want float64
-	}{
-		{
-			name: "identical files",
-			a:    "alpha\nbeta\ngamma",
-			b:    "alpha\nbeta\ngamma",
-			want: 1.0,
-		},
-		{
-			name: "one line different out of three",
-			a:    "alpha\nbeta\ngamma",
-			b:    "alpha\nbeta\nDELTA",
-			// 2/3 overlap — below 0.70 threshold, so a 3-line file with
-			// one changed line stays UNDER the gate (file too small to
-			// gate on anyway, but this asserts the math).
-			want: 2.0 / 3.0,
-		},
-		{
-			name: "near rewrite — 99 of 100 lines kept",
-			a:    repeatLines("x", 100),
-			b:    repeatLines("x", 99) + "\ny",
-			// Multiset: existing has 100 'x' + 0 'y'; new has 99 'x' + 1 'y'.
-			// matched = 99 (the x lines); maxLen = 100 → 0.99.
-			// This case MUST trip the surgical-edit gate.
-			want: 0.99,
-		},
-		{
-			name: "complete rewrite — no shared lines",
-			a:    "old1\nold2\nold3",
-			b:    "new1\nnew2\nnew3",
-			want: 0.0,
-		},
-		{
-			name: "legitimate refactor — 50% changed",
-			a:    "L1\nL2\nL3\nL4",
-			b:    "L1\nL2\nNEW3\nNEW4",
-			// matched = 2, max = 4 → 0.5. Below 0.70 → NOT gated, which
-			// is what we want: legitimate restructuring should pass.
-			want: 0.5,
-		},
-		{
-			name: "growing a small file — additive, all old kept",
-			a:    "a\nb",
-			b:    "a\nb\nc\nd\ne",
-			// matched = 2, max = 5 → 0.4. Big additions are not rewrites;
-			// shouldn't gate.
-			want: 2.0 / 5.0,
-		},
-		{
-			name: "empty old, non-empty new — no overlap",
-			a:    "",
-			b:    "line1\nline2",
-			// strings.Split("", "\n") returns [""] — one empty "line".
-			// It doesn't match either non-empty line in b, so matched=0,
-			// max=2 → 0.0. We never reach this code path in practice
-			// (file doesn't exist → ReadFile errors out before
-			// lineOverlapRatio is called); asserting it can't spuriously
-			// fire the gate on a file that's about to be created.
-			want: 0.0,
-		},
-		{
-			name: "both empty",
-			a:    "",
-			b:    "",
-			want: 1.0, // matched=1, max=1 (both have a single "" element)
-		},
-		{
-			name: "duplicate lines in source — multiset semantics",
-			a:    "x\nx\nx\ny",
-			b:    "x\nx\ny",
-			// Multiset intersection respects counts: matched = 2 'x' + 1 'y' = 3.
-			// max = 4. → 0.75. Without multiset semantics we'd over-count.
-			want: 0.75,
-		},
+func TestTrimMessagesPinsRecentUser(t *testing.T) {
+	// system + user instruction + 10 tool exchanges. keepLast=8 means the
+	// raw tail starts at index 3 — the user instruction (index 1) is gone.
+	// Pin must restore it.
+	msgs := []AgentMessage{{Role: "system", Content: "sys"}}
+	msgs = append(msgs, AgentMessage{Role: "user", Content: "fix the bug"})
+	for i := 0; i < 10; i++ {
+		msgs = append(msgs,
+			AgentMessage{Role: "assistant", Content: "tool call"},
+			AgentMessage{Role: "tool", Content: "result"})
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := lineOverlapRatio(tt.a, tt.b)
-			if math.Abs(got-tt.want) > 1e-9 {
-				t.Errorf("lineOverlapRatio() = %v, want %v", got, tt.want)
-			}
-		})
+	got := trimMessages(msgs, 8)
+
+	if got[0].Role != "system" {
+		t.Fatalf("got[0].Role = %q, want system", got[0].Role)
+	}
+	if got[1].Role != "user" || got[1].Content != "fix the bug" {
+		t.Fatalf("got[1] = %+v, want pinned user 'fix the bug'", got[1])
+	}
+	if len(got) != 1+1+8 {
+		t.Errorf("len(got) = %d, want 10 (system + pin + 8 tail)", len(got))
 	}
 }
 
-// repeatLines returns line\nline\n... repeated n times (no trailing newline).
-func repeatLines(line string, n int) string {
-	out := ""
-	for i := 0; i < n; i++ {
-		if i > 0 {
-			out += "\n"
+func TestTrimMessagesNoDuplicateWhenPinInWindow(t *testing.T) {
+	// Short conversation: user instruction is already in the tail window.
+	// Don't duplicate it.
+	msgs := []AgentMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "u1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2 — current"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "tool", Content: "t1"},
+		{Role: "assistant", Content: "a3"},
+		{Role: "tool", Content: "t2"},
+		{Role: "assistant", Content: "a4"},
+		{Role: "tool", Content: "t3"},
+		{Role: "assistant", Content: "a5"},
+		{Role: "tool", Content: "t4"},
+		{Role: "assistant", Content: "a6"},
+	}
+	// 13 messages, keepLast=8 → tailStart=5. Most-recent user is at idx 3,
+	// outside window → gets pinned.
+	got := trimMessages(msgs, 8)
+	userCount := 0
+	for _, m := range got {
+		if m.Role == "user" {
+			userCount++
 		}
-		out += line
 	}
-	return out
+	if userCount != 1 {
+		t.Errorf("user count = %d, want 1 (no duplicate pin)", userCount)
+	}
+	if got[1].Content != "u2 — current" {
+		t.Errorf("pinned msg = %q, want most-recent user 'u2 — current'", got[1].Content)
+	}
 }
+
+func TestTrimMessagesPinAlreadyInTailNoDuplicate(t *testing.T) {
+	// User msg is inside tail window — function shouldn't pin (would dup).
+	msgs := []AgentMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "assistant", Content: "old1"},
+		{Role: "tool", Content: "old2"},
+		{Role: "assistant", Content: "old3"},
+		{Role: "user", Content: "current ask"},
+		{Role: "assistant", Content: "tail1"},
+		{Role: "tool", Content: "tail2"},
+		{Role: "assistant", Content: "tail3"},
+		{Role: "tool", Content: "tail4"},
+		{Role: "assistant", Content: "tail5"},
+		{Role: "tool", Content: "tail6"},
+		{Role: "assistant", Content: "tail7"},
+	}
+	// 12 messages, keepLast=8 → tailStart=4. User at idx 4 → in window.
+	got := trimMessages(msgs, 8)
+	userCount := 0
+	for _, m := range got {
+		if m.Role == "user" {
+			userCount++
+		}
+	}
+	if userCount != 1 {
+		t.Errorf("user count = %d, want 1 (already in tail, no dup)", userCount)
+	}
+	if len(got) != 1+8 {
+		t.Errorf("len(got) = %d, want 9 (system + 8 tail, no pin)", len(got))
+	}
+}
+
+func TestTrimMessagesShortConversationUnchanged(t *testing.T) {
+	msgs := []AgentMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "hello"},
+	}
+	got := trimMessages(msgs, 8)
+	if len(got) != 3 {
+		t.Errorf("len(got) = %d, want 3 (under threshold, no trim)", len(got))
+	}
+}
+
+func TestTrimMessagesPriorHistoryDoesNotConfusePin(t *testing.T) {
+	// Reproduces the bug: PriorHistory put a prior-turn user msg at idx 1.
+	// Hardcoded ctx.Messages[1] would have pinned the WRONG user message.
+	// trimMessages scans backwards, so it picks the current-turn user.
+	msgs := []AgentMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "PRIOR turn ask"},      // from PriorHistory
+		{Role: "assistant", Content: "PRIOR turn reply"}, // from PriorHistory
+		{Role: "user", Content: "CURRENT turn ask"},
+	}
+	for i := 0; i < 10; i++ {
+		msgs = append(msgs,
+			AgentMessage{Role: "assistant", Content: "tool call"},
+			AgentMessage{Role: "tool", Content: "result"})
+	}
+
+	got := trimMessages(msgs, 8)
+	if got[1].Content != "CURRENT turn ask" {
+		t.Errorf("pinned = %q, want 'CURRENT turn ask' (most-recent, not idx-1)", got[1].Content)
+	}
+}
+
+func TestClassifyAgentTierTrivialChatStaysT0(t *testing.T) {
+	for _, msg := range []string{
+		"hi", "Hello", "hey", "thanks", "thank you", "ok", "yes", "no",
+		"perfect", "got it", "cool", "bye",
+	} {
+		if got := classifyAgentTier(msg); got != Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = %v, want T0", msg, got)
+		}
+	}
+}
+
+func TestClassifyAgentTierEmptyOrSubFiveCharsStaysT0(t *testing.T) {
+	for _, msg := range []string{"", " ", "  \n", "abc", "a"} {
+		if got := classifyAgentTier(msg); got != Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = %v, want T0", msg, got)
+		}
+	}
+}
+
+func TestClassifyAgentTierRealTaskDefaultsToT2(t *testing.T) {
+	// These were T1 under the old cascade — too quick a fall-through.
+	// New rule: anything that isn't trivial chat is T2 minimum, so V3
+	// has a chance to fire on every real task.
+	t2Prompts := []string{
+		"fix the issues in the flask web app",
+		"why isn't this rendering",
+		"add a button to the page",
+		"the form submission is broken",
+		"can you check what's wrong",
+		"make a quick utility",
+		"refactor this function",
+		"remove the unused import",
+	}
+	for _, msg := range t2Prompts {
+		if got := classifyAgentTier(msg); got < Tier2Medium {
+			t.Errorf("classifyAgentTier(%q) = %v, want >= T2", msg, got)
+		}
+	}
+}
+
+func TestClassifyAgentTierMultiComponentStaysT3(t *testing.T) {
+	// T3 budget should still trip on explicit multi-component prompts.
+	t3Prompts := []string{
+		"build a full application with frontend and backend authentication",
+		"set up middleware, database, and authentication for the api",
+	}
+	for _, msg := range t3Prompts {
+		if got := classifyAgentTier(msg); got != Tier3Hard {
+			t.Errorf("classifyAgentTier(%q) = %v, want T3", msg, got)
+		}
+	}
+}
+

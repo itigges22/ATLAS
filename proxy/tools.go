@@ -724,18 +724,18 @@ func editFileTool() *ToolDef {
 				newContent = strings.Replace(content, actualOldStr, input.NewStr, 1)
 			}
 
-			// PC-042: Route through V3 pipeline when the request tier and
-			// the file tier both indicate non-trivial logic. The system
-			// prompt tells the model to use edit_file for ALL changes to
-			// existing files, so without this branch V3 never fires on
-			// edits — only on brand-new files. V3 takes the post-edit
-			// content as baseline candidate #0; if its diverse alternatives
+			// Route through V3 pipeline when the file warrants it. The
+			// gate now mirrors write_file (file-tier only, no request-tier
+			// AND-gate) — having two separate tier checks meant V3 only
+			// fired when both classifiers happened to agree, which was
+			// rare in practice. V3 takes the post-edit content as
+			// baseline candidate #0; if its diverse alternatives
 			// build-verify better, V3 wins; otherwise the baseline (=our
 			// edit) wins. Either way the answer is build-verified.
 			fileTier := classifyFileTier(input.Path, newContent)
 			v3Out := V3EditMetadata{}
-			if ctx.Tier >= Tier2Medium && fileTier >= Tier2Medium && ctx.V3URL != "" {
-				log.Printf("[edit_file] V3 pipeline activating for %s (req_tier=%d, file_tier=%d)", input.Path, ctx.Tier, fileTier)
+			if fileTier >= Tier2Medium && ctx.V3URL != "" {
+				log.Printf("[edit_file] V3 pipeline activating for %s (file_tier=%d, req_tier=%d)", input.Path, fileTier, ctx.Tier)
 				improved, meta, err := improveContentWithV3(path, newContent, ctx)
 				if err != nil {
 					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
@@ -826,12 +826,53 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
 
-	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, _ map[string]interface{}) {
-		if ctx.StreamFn != nil {
+	// Same callback logic as the write_file V3 path: tokens forward to
+	// the dedicated v3_token SSE event so the TUI updates one streaming
+	// row instead of spawning a chat row per token; LLM-call boundaries
+	// match the chat protocol's start/end shapes; structured stages
+	// emit typed events (v3_phase, v3_sandbox, etc.); only truly
+	// unknown stages fall back to the v3_progress text line. Without
+	// this branching, edit_file with V3 floods the chat pane with
+	// thousands of "[token] X" rows during a single candidate generation.
+	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+		if ctx.StreamFn == nil {
+			return
+		}
+		if stage == "token" {
+			ctx.StreamFn("v3_token", map[string]string{"text": detail})
+			return
+		}
+		if stage == "llm_start" {
+			payload := map[string]interface{}{"detail": detail}
+			for k, v := range data {
+				payload[k] = v
+			}
+			ctx.StreamFn("v3_llm_start", payload)
+			return
+		}
+		if stage == "llm_end" {
+			payload := map[string]interface{}{"detail": detail}
+			for k, v := range data {
+				payload[k] = v
+			}
+			ctx.StreamFn("v3_llm_end", payload)
+			return
+		}
+		eventName := v3StageToEvent(stage)
+		if eventName == "v3_progress" {
 			ctx.StreamFn("v3_progress", map[string]string{
 				"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
 			})
+			return
 		}
+		payload := map[string]interface{}{
+			"stage":  stage,
+			"detail": detail,
+		}
+		for k, v := range data {
+			payload[k] = v
+		}
+		ctx.StreamFn(eventName, payload)
 	})
 	if err != nil {
 		return "", V3EditMetadata{}, err
@@ -1238,31 +1279,43 @@ func classifyFileTier(filePath, content string) Tier {
 		return Tier1Simple
 	}
 
-	// Short files → T1 always. V3 pipeline can't meaningfully improve
-	// a file under 50 lines — the overhead (3-5 min) vastly exceeds any
-	// quality gain from diverse candidate generation on small files.
-	if lines < 50 {
+	// Trivially tiny files → T1 always. Below 10 lines there's nothing
+	// for V3 to meaningfully diversify on (the prior 50-line floor was
+	// too conservative — flask app.py with 7 routes is 33 lines and is
+	// exactly the kind of file V3 should help with).
+	if lines < 10 {
 		return Tier1Simple
 	}
 
-	// Larger files with application logic → T2
+	// Code files with any application logic → T2. Lower threshold than
+	// before to catch small-but-routed files (flask blueprints, express
+	// routers, etc.) that the previous 3-indicator rule missed.
 	if hasLogicIndicators(content) {
 		return Tier2Medium
 	}
 
-	// Substantial markup files (HTML, JSX/TSX without obvious JS logic)
-	// — anything beyond ~150 lines benefits from V3's structural variety
-	// even without classic code indicators. Without this branch, every
-	// HTML/JSX/Vue mockup falls through to T1 and V3 never fires for
-	// the kinds of front-end work users actually request.
-	if lines >= 150 {
-		switch ext {
-		case ".html", ".htm", ".jsx", ".tsx", ".vue", ".svelte":
-			return Tier2Medium
-		}
+	// Source-code and markup extensions get the benefit of the doubt
+	// at T2 even without obvious logic-pattern matches — naming a file
+	// foo.py / foo.go / foo.html is itself a strong signal that V3's
+	// diverse candidate generation is worth the cost. HTML / JSX
+	// templates used to require ≥150 lines to clear the markup branch,
+	// which made V3 silent on every typical flask/express template
+	// (usually 30–120 lines). Now any file at ≥10 lines with a
+	// recognized code/markup extension goes T2.
+	codeExts := map[string]bool{
+		".py": true, ".go": true, ".rs": true,
+		".ts": true, ".tsx": true, ".js": true, ".jsx": true,
+		".c": true, ".cpp": true, ".cc": true, ".h": true, ".hpp": true,
+		".java": true, ".kt": true, ".swift": true,
+		".rb": true, ".php": true,
+		".vue": true, ".svelte": true,
+		".html": true, ".htm": true,
+	}
+	if codeExts[ext] {
+		return Tier2Medium
 	}
 
-	// Default: T1 for anything we're not sure about
+	// Default: T1 for unknown extensions / pure markup we're not sure about.
 	return Tier1Simple
 }
 
@@ -1278,9 +1331,16 @@ func hasLogicIndicators(content string) bool {
 		"if ", "else ", "switch ", "match ", "for ", "while ",
 		// Error handling
 		"try ", "catch ", "except ", "throw ", "raise ",
-		// API/handler patterns
+		// Flask / FastAPI / Django routing — was missing before, which
+		// caused a 33-line app.py with 7 @app.route handlers to register
+		// only one indicator ("def ") and fall through to T1.
+		"@app.route", "@app.get", "@app.post", "@app.put", "@app.delete",
+		"@blueprint", "render_template", "url_for", "request.method",
+		"flask.", "from flask",
+		// Express / Node API patterns
 		"export default", "export async", "module.exports",
-		"app.get", "app.post", "router.", "handler",
+		"app.get", "app.post", "app.put", "app.delete",
+		"router.", "handler",
 		"NextResponse", "Response(", "Request",
 		// State/data management
 		"useState", "useEffect", "useRef", "useCallback",
@@ -1303,8 +1363,11 @@ func hasLogicIndicators(content string) bool {
 		}
 	}
 
-	// 3+ logic indicators → has real application logic
-	return indicators >= 3
+	// 2+ logic indicators → has real application logic. Lowered from 3
+	// because the original threshold was tuned for large files and
+	// caused small-but-real apps (e.g. a flask routing module) to slip
+	// through to T1 even though V3 would have helped.
+	return indicators >= 2
 }
 
 // ---------------------------------------------------------------------------

@@ -122,17 +122,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			}
 		}
 
-		// Trim conversation history if it gets too long (prevent context overflow)
-		// Keep system prompt + last 8 messages
+		// Trim conversation history if it gets too long (prevent context overflow).
+		// Keep system + most-recent-user-instruction + last 8 messages.
+		//
+		// Pinning the most recent user message is critical: long agent loops
+		// (5+ tool calls) push the user's task beyond the trim window, and
+		// the next LLM call sees only system + tool exchanges. Model has no
+		// instruction to work from and goes generic ("Hi! I'm ATLAS...").
+		// Hardcoding ctx.Messages[1] as the user msg used to work, but
+		// PriorHistory makes that index a prior-turn message instead — so
+		// scan backwards for the actual current-turn user role.
 		trimmed := false
 		if len(ctx.Messages) > 12 {
-			t := make([]AgentMessage, 0, 10)
-			t = append(t, ctx.Messages[0]) // system prompt
-			t = append(t, ctx.Messages[1]) // user message
-			// Keep last 8 messages (recent context)
-			start := len(ctx.Messages) - 8
-			t = append(t, ctx.Messages[start:]...)
-			ctx.Messages = t
+			ctx.Messages = trimMessages(ctx.Messages, 8)
 			trimmed = true
 			log.Printf("[agent] trimmed conversation to %d messages", len(ctx.Messages))
 		}
@@ -320,46 +322,31 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
-			// Surgical-edit gate: reject write_file on existing files when the
-			// model is doing a near-rewrite (a small delta against current
-			// disk content) or a too-large generation. PC-159 Phase 0 — the
-			// existing primitives (edit_file with old_str/new_str) are fully
-			// capable; the model just keeps reaching for write_file. Catching
-			// it here and bouncing it back with a directive is the cheapest
-			// fix that doesn't need tree-sitter.
+			// Surgical-edit gate: reject write_file on existing files
+			// outright. write_file is for *creating* files; edits to an
+			// existing file must use edit_file with old_str/new_str.
+			//
+			// PC-159 Phase 0 originally only blocked near-rewrites
+			// (>= 70% line overlap) or >100-line writes. That left a
+			// hole: a *complete* rewrite of a 90-line template (low
+			// overlap, under the size cap) would slip through and
+			// destroy the original. Hardened to reject every write
+			// against an existing path. Trivially-small files (<= 5
+			// lines, e.g. a single-line config) are still allowed
+			// because there's no edit-vs-rewrite distinction at that
+			// size — anything below that is faster to overwrite than
+			// to surgically edit.
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
 					existingPath := resolvePath(wfInput.Path, ctx.WorkingDir)
 					if existing, err := os.ReadFile(existingPath); err == nil {
-						newLines := strings.Count(wfInput.Content, "\n") + 1
 						existingLines := strings.Count(string(existing), "\n") + 1
-
-						// Two reject conditions:
-						//   1. New content is too large for a single write_file call —
-						//      truncation will eat it on the wire (PC-039 history).
-						//   2. New content keeps ≥70% of the existing file's lines —
-						//      the model is regenerating instead of editing. Only
-						//      enforced on files >50 lines so legitimate small-file
-						//      refactors aren't blocked.
-						var rejection string
-						if newLines > 100 {
-							rejection = fmt.Sprintf(
-								"File %s already exists (%d lines existing, %d lines new). Rewriting at this size truncates on the wire. Use edit_file with targeted old_str/new_str — many small edits succeed where one big write_file fails.",
-								wfInput.Path, existingLines, newLines)
-						} else if existingLines > 50 {
-							overlap := lineOverlapRatio(string(existing), wfInput.Content)
-							if overlap >= 0.70 {
-								keptPct := int(overlap * 100)
-								changedPct := 100 - keptPct
-								rejection = fmt.Sprintf(
-									"File %s already exists (%d lines) and your new content keeps %d%% of its lines — only ~%d%% is changed. Use edit_file with old_str/new_str to change just the differing lines. write_file is for creating brand new files, not for re-emitting an existing file with edits.",
-									wfInput.Path, existingLines, keptPct, changedPct)
-							}
-						}
-
-						if rejection != "" {
-							log.Printf("[agent] rejecting write_file for existing %s: %s", wfInput.Path, rejection)
+						if existingLines > 5 {
+							rejection := fmt.Sprintf(
+								"File %s already exists (%d lines). write_file is for creating new files, not modifying existing ones. Use edit_file with old_str/new_str to make targeted changes — read the file first if you need to confirm the exact text to replace.",
+								wfInput.Path, existingLines)
+							log.Printf("[agent] rejecting write_file for existing %s (%d lines)", wfInput.Path, existingLines)
 							ctx.Messages = append(ctx.Messages, AgentMessage{
 								Role:    "assistant",
 								Content: response,
@@ -971,7 +958,7 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// Rules
 	sb.WriteString("## Rules\n\n")
 	sb.WriteString("- Always read a file before editing it (use read_file then edit_file)\n")
-	sb.WriteString("- MANDATORY: Use `edit_file` (targeted old_str/new_str) for any change to a file that already exists, no matter how small. `write_file` is ONLY for creating brand new files that don't exist yet. The agent layer rejects `write_file` against an existing file when ≥70% of the new content matches the old — your call won't execute and you'll get a tool error telling you to retry as edit_file. Don't re-emit a whole file to change a few lines.\n")
+	sb.WriteString("- MANDATORY: Use `edit_file` (targeted old_str/new_str) for any change to a file that already exists, no matter how small. `write_file` is ONLY for creating brand-new files. The agent layer rejects every `write_file` call against an existing file >5 lines — your call won't execute and you'll get a tool error directing you to edit_file. Don't re-emit a whole file to change a few lines.\n")
 	sb.WriteString("  Example — to add a None check to one branch, use:\n")
 	sb.WriteString("    edit_file {\"path\":\"src/foo.py\",\"old_str\":\"if x == 0:\\n        return None\",\"new_str\":\"if x is None or x == 0:\\n        return None\"}\n")
 	sb.WriteString("  NOT write_file with the entire file's new contents.\n")
@@ -1013,42 +1000,42 @@ func buildSystemPrompt(ctx *AgentContext) string {
 		for path := range ctx.FilesRead {
 			sb.WriteString(fmt.Sprintf("- %s\n", path))
 		}
-		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file is rejected at the agent layer.\n\n")
+		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")
 	}
 
 	return sb.String()
 }
 
-// lineOverlapRatio returns the multiset-intersection-over-max-length of two
-// texts, line by line. 1.0 = identical (or one is a permutation of the
-// other); 0.0 = nothing in common. Used by the write_file surgical-edit
-// gate to detect "the model regenerated this whole file with a small
-// change" and bounce it back with an edit_file directive.
-func lineOverlapRatio(a, b string) float64 {
-	aLines := strings.Split(a, "\n")
-	bLines := strings.Split(b, "\n")
-
-	counts := make(map[string]int, len(aLines))
-	for _, l := range aLines {
-		counts[l]++
+// trimMessages caps a conversation at roughly 1 (system) + 1 (pinned user) +
+// keepLast tail messages, dropping the middle. The pin is the most recent
+// role=="user" message — the user's current task. Without the pin, long agent
+// loops (5+ tool calls) push the user's instruction off the end of the
+// keepLast window, the model loses the task, and replies generically
+// ("Hi! I'm ATLAS..."). If the pinned message already lives inside the tail
+// window we don't duplicate it.
+//
+// Assumes msgs[0] is the system prompt.
+func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
+	if len(msgs) <= keepLast+1 {
+		return msgs
 	}
 
-	matched := 0
-	for _, l := range bLines {
-		if counts[l] > 0 {
-			counts[l]--
-			matched++
+	pinIdx := -1
+	for i := len(msgs) - 1; i >= 1; i-- {
+		if msgs[i].Role == "user" {
+			pinIdx = i
+			break
 		}
 	}
 
-	maxLen := len(aLines)
-	if len(bLines) > maxLen {
-		maxLen = len(bLines)
+	tailStart := len(msgs) - keepLast
+	out := make([]AgentMessage, 0, keepLast+2)
+	out = append(out, msgs[0])
+	if pinIdx >= 1 && pinIdx < tailStart {
+		out = append(out, msgs[pinIdx])
 	}
-	if maxLen == 0 {
-		return 0
-	}
-	return float64(matched) / float64(maxLen)
+	out = append(out, msgs[tailStart:]...)
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -1459,22 +1446,52 @@ func recoverTruncatedWriteFile(partial string) (ModelResponse, error) {
 }
 
 // classifyAgentTier classifies the task tier using fast heuristics.
-// This is separate from main.go's classifyIntent which uses an LLM call —
-// the agent loop needs faster classification that errs toward T1 (simpler).
-// V3 pipeline is expensive; only activate for genuinely complex tasks.
+//
+// Inversion (PC-159 follow-up): the prior cascade defaulted to T1, which
+// kept V3 dormant on most real prompts (it only fires at T2+). After
+// observing real flask-app debugging sessions where V3 never engaged,
+// the rule is now: T2 is the floor for any non-trivial message, T0/T1
+// are the narrow cases. Trivial chat ("hi", "thanks", "yes") stays T0.
+// Single greetings or sub-15-char acknowledgements stay below the V3
+// threshold; everything else gets the pipeline.
 func classifyAgentTier(message string) Tier {
-	lower := strings.ToLower(message)
+	trimmed := strings.TrimSpace(message)
+	lower := strings.ToLower(trimmed)
 
-	// All messages go through the agent loop (even conversational).
-	// The agent loop handles grammar enforcement which prevents the model
-	// from outputting raw thinking blocks. Short messages still get T1
-	// so the loop runs with a low turn budget.
-	if len(strings.TrimSpace(message)) < 5 {
-		// Only truly empty/trivial messages get T0
+	// T0: empty / sub-5-char garbage.
+	if len(trimmed) < 5 {
 		return Tier0Conversational
 	}
 
-	// Count how many files/components are mentioned
+	// T0: trivial chat — exact-match against a small list of greetings
+	// and acknowledgements. Anything more substantial than these is
+	// assumed to be a task, even if it looks short.
+	trivialChat := map[string]bool{
+		"hi": true, "hello": true, "hey": true, "yo": true, "sup": true,
+		"thanks": true, "thank you": true, "ty": true, "thx": true,
+		"ok": true, "okay": true, "k": true,
+		"yes": true, "yep": true, "yeah": true, "no": true, "nope": true,
+		"sure": true, "got it": true, "cool": true, "nice": true,
+		"good": true, "great": true, "perfect": true,
+		"bye": true, "goodbye": true, "later": true, "cya": true,
+	}
+	if trivialChat[lower] {
+		return Tier0Conversational
+	}
+
+	// Count multi-component indicators for T3 detection.
+	multiIndicators := 0
+	multiPatterns := []string{
+		"multiple files", "several files", "full application",
+		"api routes", "middleware", "database", "authentication",
+		"frontend and backend", "client and server",
+		"multiple endpoints", "with tests",
+	}
+	for _, p := range multiPatterns {
+		if strings.Contains(lower, p) {
+			multiIndicators++
+		}
+	}
 	fileIndicators := 0
 	filePatterns := []string{
 		".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".c", ".h",
@@ -1487,81 +1504,14 @@ func classifyAgentTier(message string) Tier {
 		}
 	}
 
-	// Multi-component indicators
-	multiIndicators := 0
-	multiPatterns := []string{
-		"multiple files", "several files", "project", "full application",
-		"api routes", "middleware", "database", "authentication",
-		"frontend and backend", "client and server",
-		"3 routes", "multiple endpoints", "with tests",
-	}
-	for _, p := range multiPatterns {
-		if strings.Contains(lower, p) {
-			multiIndicators++
-		}
-	}
-
-	// T3: Explicit multi-component or architectural complexity
+	// T3: explicit multi-component or architectural complexity. Costs
+	// the most (more turn budget, deeper V3 candidate generation), so
+	// the bar stays high.
 	if multiIndicators >= 2 || (fileIndicators >= 4 && multiIndicators >= 1) {
 		return Tier3Hard
 	}
 
-	// T2: Genuinely multi-component (not just 2 files)
-	if fileIndicators >= 5 || multiIndicators >= 2 {
-		return Tier2Medium
-	}
-
-	// Fix-intent against an existing file: never collapse to T1 — fixing a
-	// bug in pre-existing code is harder than writing a fresh file, even when
-	// only one file is mentioned. See ISSUES.md PC-025 Sub-finding A.
-	//
-	// PC-049: original list missed natural-language fix prompts like "still
-	// does not", "isn't working", "try again", "the X is not Y". Real users
-	// describe bugs without saying the word "bug" or "fix". Expanded
-	// vocabulary, plus weakened the file-indicator requirement: a clear
-	// continuation marker like "still" or "again" implies the user is
-	// iterating on existing code even without naming the file extension.
-	fixIntent := false
-	for _, w := range []string{
-		"fix", "broken", "doesn't work", "doesn't", "does not work", "does not",
-		"not working", "isn't working", "isn't", "is not", "aren't", "wasn't",
-		"didn't", "won't", "can't", "bug", "issue", "problem", "error",
-		"failed", "fails", "failing", "incorrect", "wrong",
-	} {
-		if strings.Contains(lower, w) {
-			fixIntent = true
-			break
-		}
-	}
-	// Continuation markers indicate the user is iterating on prior work,
-	// which by definition involves an existing file even when the prompt
-	// doesn't name an extension.
-	continuation := false
-	for _, w := range []string{"still", "again", "try again", "retry", "another", "also fix"} {
-		if strings.Contains(lower, w) {
-			continuation = true
-			break
-		}
-	}
-	if fixIntent && (fileIndicators >= 1 || continuation) {
-		return Tier2Medium
-	}
-	// Strong continuation alone (e.g. "still doesn't pick up the food") is a
-	// fix request even without explicit fix vocabulary.
-	if continuation && len(strings.TrimSpace(message)) > 30 {
-		return Tier2Medium
-	}
-
-	// T1: Default for coding tasks (single file creation/edit)
-	codingTerms := []string{
-		"create", "write", "build", "make", "implement", "add", "fix",
-		"function", "class", "script", "program", "app", "tool",
-	}
-	for _, t := range codingTerms {
-		if strings.Contains(lower, t) {
-			return Tier1Simple
-		}
-	}
-
-	return Tier1Simple
+	// T2: default. Anything that survived the T0 gate above is a real
+	// task and gets the pipeline.
+	return Tier2Medium
 }
