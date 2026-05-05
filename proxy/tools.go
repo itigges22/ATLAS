@@ -1489,6 +1489,13 @@ func v3StageToEvent(stage string) string {
 	case "self_test_gen", "self_test_done", "self_test_error",
 		"self_test_skip", "self_test_verify":
 		return "v3_self_test"
+	case "plan_start", "plan_candidate", "plan_candidate_unparseable",
+		"plan_candidate_error", "plan_candidate_scored", "plan_selected",
+		"plan_failed":
+		// All plan-pipeline stages collapse to one TUI event family. The
+		// TUI reads the stage name off the payload to decide between
+		// "scoring..." spinner, "winner: plan #N" summary, etc.
+		return "v3_plan"
 	}
 	return "v3_progress"
 }

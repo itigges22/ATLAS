@@ -286,6 +286,28 @@ type AgentContext struct {
 	TotalTokens  int
 	mu           sync.Mutex
 
+	// Plan is the optional pre-flight plan produced by /v3/plan. Set
+	// once at the top of the agent loop for non-trivial requests; nil
+	// when we skipped planning (T0, simple greetings, dev mode without
+	// V3). Read by the plan-adherence gate to compare actual tool calls
+	// against the planned step actions.
+	Plan *Plan
+
+	// PlanStepsSatisfied[i] flips true once a tool call has matched
+	// plan step i. Length tracks len(Plan.Steps); nil when no plan.
+	// Reset whenever the plan is revised so we re-track from scratch.
+	PlanStepsSatisfied []bool
+
+	// PlanOffStreak counts consecutive tool calls that DIDN'T match
+	// any unsatisfied plan step. Crosses the auto-revise threshold ->
+	// planner re-runs with whatever context we've discovered so far.
+	PlanOffStreak int
+
+	// PlanRevisions counts how many times we've auto-regenerated the
+	// plan in this loop. Capped to keep us from thrashing — after the
+	// cap is hit we stop revising and let the agent run plan-free.
+	PlanRevisions int
+
 	// Streaming callback
 	StreamFn func(eventType string, data interface{})
 
@@ -404,6 +426,38 @@ type V3GenerateResponse struct {
 }
 
 // LensScore is already defined in main.go — reused here.
+
+// V3PlanRequest is sent to the Python V3 service for plan generation.
+// project_context inlines small file contents (truncated server-side) so
+// the planner sees what's actually in the working directory.
+type V3PlanRequest struct {
+	UserMessage    string            `json:"user_message"`
+	WorkingDir     string            `json:"working_dir,omitempty"`
+	ProjectContext map[string]string `json:"project_context,omitempty"`
+	NCandidates    int               `json:"n_candidates,omitempty"` // 0 → server default (3)
+}
+
+// PlanStep is a single step in a Plan. Mirrors v3-service/main.py's
+// PLAN_PROMPT_TEMPLATE shape: id, action, target, why.
+type PlanStep struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+	Target string `json:"target"`
+	Why    string `json:"why"`
+}
+
+// Plan is the structured plan returned by /v3/plan. The agent loop
+// consults this to gate tool calls (PC plan-adherence) and replays
+// VerifyStep at the verification gate.
+type Plan struct {
+	Steps            []PlanStep `json:"steps"`
+	VerifyStep       string     `json:"verify_step"`
+	Rationale        string     `json:"rationale"`
+	CandidatesTested int        `json:"candidates_tested"`
+	WinningScore     float64    `json:"winning_score"`
+	WinningIndex     int        `json:"winning_index"`
+	Reasons          []string   `json:"reasons"`
+}
 
 // ---------------------------------------------------------------------------
 // SSE event types for the CLI protocol

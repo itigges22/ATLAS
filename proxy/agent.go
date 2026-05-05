@@ -73,7 +73,22 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		})
 	}()
 
-	// Build system prompt with tool descriptions and project context
+	// Pre-flight plan generation. Runs BEFORE buildSystemPrompt so
+	// the system prompt can reference the planned steps — the model
+	// gets explicit guidance on what to do first instead of having
+	// to infer it from the user message alone. Skipped for trivial
+	// chat / acks where the ~5-15s cost isn't worth it. Failures
+	// degrade silently — the loop runs without adherence gating.
+	if shouldGeneratePlan(ctx, userMessage) {
+		if plan := generatePlan(ctx, userMessage); plan != nil {
+			ctx.Plan = plan
+			log.Printf("[agent] plan: %d steps, verify=%s, score=%.2f",
+				len(plan.Steps), plan.VerifyStep, plan.WinningScore)
+		}
+	}
+
+	// Build system prompt with tool descriptions, project context,
+	// and (when present) the planned steps.
 	systemPrompt := buildSystemPrompt(ctx)
 
 	// Initialize messages: system prompt, then any prior-turn history
@@ -484,6 +499,18 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					log.Printf("[agent] verification recorded: turn=%d cmd=%q",
 						turn, truncateStr(rc.Command, 60))
 				}
+			}
+
+			// Plan-adherence accounting. Records whether this tool
+			// call satisfied an unsatisfied step on ctx.Plan (if any),
+			// updates the off-streak counter, and asks us to revise
+			// the plan if the streak crossed the threshold. Advisory
+			// — never blocks the call. recordPlanAdherence is a no-op
+			// when ctx.Plan is nil (T0 / planner failure).
+			if shouldRevise := recordPlanAdherence(ctx, parsed.Name, parsed.Args, result.Success); shouldRevise {
+				revisePlan(ctx, userMessage,
+					fmt.Sprintf("agent went off-plan for %d consecutive tool calls (last: %s)",
+						ctx.PlanOffStreak, parsed.Name))
 			}
 
 			// Break error loops: if 3 tool calls fail in a row, stop. PC-025
@@ -1081,6 +1108,33 @@ func buildSystemPrompt(ctx *AgentContext) string {
 		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")
 	}
 
+	// Plan section. When the planner returned a plan, surface it so
+	// the model has explicit step guidance instead of having to infer
+	// the right shape from the user message alone. Plans are advisory
+	// (the agent layer doesn't hard-block off-plan calls), but having
+	// them in the system prompt visibly improves first-call accuracy.
+	if ctx.Plan != nil && len(ctx.Plan.Steps) > 0 {
+		sb.WriteString("## Plan\n\n")
+		sb.WriteString("A planner has proposed these steps for the user's request. ")
+		sb.WriteString("Follow them in order when sensible. ")
+		sb.WriteString("Deviate only if a step's premise is wrong (file doesn't exist, command unavailable, etc.) — the agent layer notices repeated off-plan calls and will silently revise the plan with what you've discovered.\n\n")
+		for i, step := range ctx.Plan.Steps {
+			marker := " "
+			if step.ID == ctx.Plan.VerifyStep {
+				marker = "✓" // verify step
+			}
+			sb.WriteString(fmt.Sprintf("%d. [%s] **%s** %s — %s\n",
+				i+1, marker, step.Action, step.Target, step.Why))
+		}
+		if ctx.Plan.Rationale != "" {
+			sb.WriteString(fmt.Sprintf("\n_%s_\n", ctx.Plan.Rationale))
+		}
+		if ctx.Plan.VerifyStep != "" {
+			sb.WriteString(fmt.Sprintf("\nThe verify step (%s) is your evidence the fix worked — don't emit `done` until it has run successfully.\n", ctx.Plan.VerifyStep))
+		}
+		sb.WriteString("\n")
+	}
+
 	return sb.String()
 }
 
@@ -1601,4 +1655,213 @@ func classifyAgentTier(message string) Tier {
 	// T2: default. Anything that survived the T0 gate above is a real
 	// task and gets the pipeline.
 	return Tier2Medium
+}
+
+// samplePlanContext walks ctx.WorkingDir and reads a handful of files
+// the planner is most likely to need: source files, templates,
+// manifests. Limited to maxFiles per call, each truncated to maxBytes.
+//
+// The planner runs *before* any tool calls have happened in the loop,
+// so ctx.FilesRead is empty — without this, plans for "fix the flask
+// app" would have no signal about what's in app.py and would generate
+// generic 5-step recipes. We pay one fs walk + a few small reads up
+// front; the budget is small (~5 files × 2KB) and the planning quality
+// jump is large.
+func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]string {
+	if workingDir == "" {
+		return nil
+	}
+	out := map[string]string{}
+	// Files we always inline if present — most projects have at least
+	// one of these and they describe shape (deps, entry point).
+	priority := []string{
+		"app.py", "main.py", "manage.py", "wsgi.py",
+		"index.html", "templates/index.html", "templates/base.html",
+		"package.json", "tsconfig.json", "vite.config.ts", "vite.config.js",
+		"go.mod", "main.go",
+		"Cargo.toml", "src/main.rs", "src/lib.rs",
+		"requirements.txt", "pyproject.toml", "setup.py",
+		"README.md",
+	}
+	for _, rel := range priority {
+		if len(out) >= maxFiles {
+			break
+		}
+		full := filepath.Join(workingDir, rel)
+		info, err := os.Stat(full)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		// Skip oversized files — the planner doesn't need a 50KB README.
+		if info.Size() > int64(maxBytes)*4 {
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			continue
+		}
+		s := string(data)
+		if len(s) > maxBytes {
+			s = s[:maxBytes] + "\n... (truncated)"
+		}
+		out[rel] = s
+	}
+	// If priority files yielded nothing (uncommon repo layout), fall
+	// back to a shallow walk of the working dir picking up anything
+	// that *looks* like source. Don't recurse — top level is enough
+	// to give the planner a sense of project shape.
+	if len(out) == 0 {
+		entries, err := os.ReadDir(workingDir)
+		if err != nil {
+			return nil
+		}
+		for _, e := range entries {
+			if len(out) >= maxFiles {
+				break
+			}
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			ext := strings.ToLower(filepath.Ext(name))
+			switch ext {
+			case ".py", ".go", ".js", ".ts", ".tsx", ".jsx",
+				".html", ".rs", ".rb", ".java", ".kt", ".swift":
+				// pass
+			default:
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || info.Size() > int64(maxBytes)*4 {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(workingDir, name))
+			if err != nil {
+				continue
+			}
+			s := string(data)
+			if len(s) > maxBytes {
+				s = s[:maxBytes] + "\n... (truncated)"
+			}
+			out[name] = s
+		}
+	}
+	return out
+}
+
+// shouldGeneratePlan decides whether a turn warrants the ~5-15s plan
+// pipeline cost. We skip plans for:
+//   - T0 (trivial chat — "hi", "thanks") where a plan is wasted budget
+//   - explicit follow-up / clarification requests that depend on the
+//     prior turn's plan, which we'd just regenerate identically
+//
+// Everything else gets a plan — we'd rather plan and have the model
+// ignore it than not plan and let the model thrash.
+func shouldGeneratePlan(ctx *AgentContext, message string) bool {
+	if ctx.Tier == Tier0Conversational {
+		return false
+	}
+	// Single-line ack-style messages where the user is just steering
+	// the existing direction ("yes do that", "looks good", "try again")
+	// — already-running plan is still relevant; a fresh one would just
+	// re-derive it.
+	trimmed := strings.ToLower(strings.TrimSpace(message))
+	if len(trimmed) < 12 {
+		return false
+	}
+	return true
+}
+
+// generatePlan hits /v3/plan with a sampled project context and the
+// user's message, streaming plan_* stage events out to the TUI as
+// `v3_plan` events. Returns the winning Plan or nil if the planner
+// errored — callers should treat nil as "no plan, proceed without
+// adherence gating".
+func generatePlan(ctx *AgentContext, userMessage string) *Plan {
+	if ctx.V3URL == "" {
+		return nil
+	}
+	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
+	req := V3PlanRequest{
+		UserMessage:    userMessage,
+		WorkingDir:     ctx.WorkingDir,
+		ProjectContext: pctx,
+		NCandidates:    3,
+	}
+
+	planStart := time.Now()
+	Emit(NewEnvelope(EvtStageStart, "v3:plan", map[string]interface{}{
+		"detail":     fmt.Sprintf("planning: %s", truncateStr(userMessage, 60)),
+		"context_n":  len(pctx),
+		"candidates": req.NCandidates,
+	}))
+
+	plan, err := callV3PlanStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+		// Filter out per-token events — the LLM emits ~150 token deltas
+		// per candidate × 3 candidates = ~450 streamed events. Forwarding
+		// every one to the TUI as a separate v3_plan row clogs the
+		// pipeline pane (same regression as the v3-generation token
+		// spam we already fixed). The structural plan stages
+		// (plan_candidate, plan_candidate_scored, plan_selected) are
+		// what the renderer actually wants — token-level visibility is
+		// debug noise.
+		switch stage {
+		case "token", "llm_start", "llm_end":
+			return
+		}
+		payload := map[string]interface{}{"stage": stage, "detail": detail}
+		for k, v := range data {
+			payload[k] = v
+		}
+		ctx.Stream("v3_plan", payload)
+		// Mirror to the typed broker so non-TUI consumers (logs, audit)
+		// see the same stream.
+		Emit(NewEnvelope(EvtMetric, "v3:plan:"+stage, payload))
+	})
+	dur := time.Since(planStart).Milliseconds()
+
+	if err != nil {
+		log.Printf("[agent] plan generation failed: %v", err)
+		Emit(Envelope{
+			EventID:    NewEventID(),
+			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+			Type:       EvtStageEnd,
+			Stage:      "v3:plan",
+			DurationMS: dur,
+			Payload:    map[string]interface{}{"success": false, "error": err.Error()},
+		})
+		return nil
+	}
+
+	Emit(Envelope{
+		EventID:    NewEventID(),
+		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+		Type:       EvtStageEnd,
+		Stage:      "v3:plan",
+		DurationMS: dur,
+		Payload: map[string]interface{}{
+			"success":           true,
+			"steps":             len(plan.Steps),
+			"verify_step":       plan.VerifyStep,
+			"winning_score":     plan.WinningScore,
+			"candidates_tested": plan.CandidatesTested,
+		},
+	})
+
+	// Stream the full plan structure so the TUI / IDE plugins can
+	// render the step list. Per-stage events (plan_start, plan_selected,
+	// etc.) only carry counts and indices — the actual step rows live
+	// here. One event per plan: subsequent step satisfaction goes
+	// through plan_adherence, and a revision fires another plan_loaded.
+	planPayload := map[string]interface{}{
+		"steps":         plan.Steps,
+		"verify_step":   plan.VerifyStep,
+		"rationale":     plan.Rationale,
+		"winning_score": plan.WinningScore,
+		"revision":      0,
+	}
+	ctx.Stream("plan_loaded", planPayload)
+	Emit(NewEnvelope(EvtMetric, "v3:plan:loaded", planPayload))
+
+	return plan
 }

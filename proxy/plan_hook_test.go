@@ -1,0 +1,151 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestSamplePlanContextPicksUpPriorityFiles(t *testing.T) {
+	dir := t.TempDir()
+	// Lay down a typical flask app shape.
+	if err := os.WriteFile(filepath.Join(dir, "app.py"),
+		[]byte("from flask import Flask\napp = Flask(__name__)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "templates"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "templates", "index.html"),
+		[]byte("<html><body>hi</body></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A noisy unrelated file that shouldn't appear.
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"),
+		[]byte("unrelated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := samplePlanContext(dir, 6, 2000)
+	if _, ok := got["app.py"]; !ok {
+		t.Errorf("expected app.py in context, got keys %v", keys(got))
+	}
+	if _, ok := got["templates/index.html"]; !ok {
+		t.Errorf("expected templates/index.html in context, got keys %v", keys(got))
+	}
+	if _, ok := got["notes.txt"]; ok {
+		t.Errorf("notes.txt leaked into priority context")
+	}
+}
+
+func TestSamplePlanContextTruncatesLargeFiles(t *testing.T) {
+	// File between maxBytes (1000) and the hard-skip ceiling (4×maxBytes
+	// = 4000) should pass the size gate and get truncated. Files above
+	// 4000 are skipped wholesale to avoid yanking a 50KB README into
+	// the planner.
+	dir := t.TempDir()
+	big := make([]byte, 3000)
+	for i := range big {
+		big[i] = 'a'
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := samplePlanContext(dir, 6, 1000)
+	content, ok := got["main.py"]
+	if !ok {
+		t.Fatal("main.py missing from sampled context")
+	}
+	// 1000 bytes of body + "\n... (truncated)" marker.
+	if len(content) > 1100 {
+		t.Errorf("content %d bytes — sampler should truncate to ~1000", len(content))
+	}
+	if len(content) < 1000 {
+		t.Errorf("content %d bytes — sampler shouldn't truncate below maxBytes", len(content))
+	}
+}
+
+func TestSamplePlanContextSkipsHugeFiles(t *testing.T) {
+	// Files >4×maxBytes are skipped wholesale to keep the planner
+	// budget small. Verifies the hard-skip ceiling.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.py"),
+		[]byte("from flask import Flask\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	huge := make([]byte, 10_000)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), huge, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := samplePlanContext(dir, 6, 1000)
+	if _, ok := got["README.md"]; ok {
+		t.Errorf("10KB README should be skipped at maxBytes=1000")
+	}
+	if _, ok := got["app.py"]; !ok {
+		t.Errorf("small app.py should still be picked up")
+	}
+}
+
+func TestSamplePlanContextFallsBackToShallowWalk(t *testing.T) {
+	// No priority files — sampler should still pick up source files
+	// from a shallow read of the working dir.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "weird_entry.go"),
+		[]byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ignored.dat"),
+		[]byte("binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := samplePlanContext(dir, 6, 2000)
+	if _, ok := got["weird_entry.go"]; !ok {
+		t.Errorf("expected weird_entry.go in fallback walk, got %v", keys(got))
+	}
+	if _, ok := got["ignored.dat"]; ok {
+		t.Errorf(".dat file leaked through extension filter")
+	}
+}
+
+func TestSamplePlanContextEmptyOnMissingDir(t *testing.T) {
+	got := samplePlanContext("", 5, 1000)
+	if got != nil {
+		t.Errorf("expected nil for empty workingDir, got %v", got)
+	}
+}
+
+func TestShouldGeneratePlanGates(t *testing.T) {
+	cases := []struct {
+		name string
+		tier Tier
+		msg  string
+		want bool
+	}{
+		{"T0 trivial chat", Tier0Conversational, "thanks man", false},
+		{"short ack", Tier2Medium, "yes", false},
+		{"borderline short", Tier2Medium, "fix it", false}, // 6 chars
+		{"real fix request", Tier2Medium, "fix the index.html template", true},
+		{"feature add", Tier2Medium, "add a /hello route to app.py", true},
+		{"T3 architectural", Tier3Hard, "build a flask app with auth and a database", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &AgentContext{Tier: tc.tier}
+			if got := shouldGeneratePlan(ctx, tc.msg); got != tc.want {
+				t.Errorf("shouldGeneratePlan(%q, tier=%v) = %v, want %v",
+					tc.msg, tc.tier, got, tc.want)
+			}
+		})
+	}
+}
+
+func keys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

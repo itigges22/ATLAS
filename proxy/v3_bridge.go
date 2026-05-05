@@ -99,6 +99,83 @@ func callV3GenerateStreaming(v3URL string, req V3GenerateRequest, onProgress V3P
 	return result, nil
 }
 
+// callV3PlanStreaming sends a plan-generation request to the V3 Python
+// service and streams plan_* progress events through the callback.
+// Returns the winning Plan when the planner finishes.
+//
+// Plans are cheap-but-not-free: 3 candidate samples × ~5s each = ~15s
+// wall time, mostly dominated by the LLM. Timeout is 5 min — well above
+// expected (15s) and below the agent loop's overall request timeout.
+func callV3PlanStreaming(v3URL string, req V3PlanRequest, onProgress V3ProgressFn) (*Plan, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal plan request: %w", err)
+	}
+
+	endpoint := v3URL + "/v3/plan"
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create plan request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("plan call failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("plan service returned %d", resp.StatusCode)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+
+	var plan *Plan
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "event: result") {
+			if scanner.Scan() {
+				dataLine := scanner.Text()
+				if strings.HasPrefix(dataLine, "data: ") {
+					data := strings.TrimPrefix(dataLine, "data: ")
+					var p Plan
+					if json.Unmarshal([]byte(data), &p) == nil {
+						plan = &p
+					}
+				}
+			}
+			continue
+		}
+
+		if line == "data: [DONE]" {
+			break
+		}
+
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			var event struct {
+				Stage  string                 `json:"stage"`
+				Detail string                 `json:"detail"`
+				Data   map[string]interface{} `json:"data"`
+			}
+			if json.Unmarshal([]byte(data), &event) == nil && onProgress != nil {
+				onProgress(event.Stage, event.Detail, event.Data)
+			}
+		}
+	}
+
+	if plan == nil {
+		return nil, fmt.Errorf("plan service completed without result")
+	}
+
+	return plan, nil
+}
+
 // callV3Score sends code to the Geometric Lens for C(x)/G(x) scoring.
 func callV3Score(lensURL, code string) (*LensScore, error) {
 	body, _ := json.Marshal(map[string]string{"text": code})
