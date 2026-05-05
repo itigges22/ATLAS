@@ -147,6 +147,10 @@ func validateShellCommand(cmd string) string {
 			return shellRejectionMessage("find -delete",
 				"`find` with -delete or -exec rm")
 		}
+		if shellHiddenCommandRe.MatchString(seg) {
+			return shellRejectionMessage("bash -c / sh -c / eval",
+				"a shell wrapper (bash -c, sh -c, eval, …) — these hide arbitrary commands inside a quoted argument and bypass the per-segment safety check")
+		}
 		// Truncating redirect: `... > some/path`. We only reject when
 		// the target isn't /dev/null and isn't an obvious build artefact
 		// suffix (.log, .out) — those are usually intentional.
@@ -174,6 +178,81 @@ func validateShellCommand(cmd string) string {
 // or delete_file.
 func shellRejectionMessage(verb, detail string) string {
 	return "run_command refused: " + detail + ". Modify files with the dedicated tools — `edit_file` (old_str/new_str) for content changes, `write_file` for brand-new files, `delete_file` for removal. Shell `" + verb + "` bypasses the surgical-edit gate, the V3 pipeline, and audit logging, and will be rejected."
+}
+
+// shellHiddenCommandRe catches `bash -c "..."` / `sh -c "..."` /
+// `zsh -c "..."` / `dash -c "..."` / `eval ...`. These wrappers can
+// hide arbitrary destructive commands inside a quoted argument that
+// the leading-token check above can't see — Roo Code's bypass test
+// case is `bash -c "rm -rf foo"`. We don't try to parse the inner
+// command (that's a recursive-shell-parser rabbit hole); we reject
+// the wrapper itself. Build/test commands that need shell features
+// (pipes, redirects, env vars) work fine without `bash -c`.
+var shellHiddenCommandRe = regexp.MustCompile(
+	`^\s*(bash|sh|zsh|dash|ksh)\s+-c\b|^\s*eval(\s+|$)`)
+
+// fixIntentWords tracks vocabulary that signals "the user wants
+// something repaired or verified." Reused by the verification gate
+// to decide when "done" needs a build/test/run before it passes.
+// Kept in sync with classifyAgentTier's fix-intent list.
+var fixIntentWords = []string{
+	"fix", "broken", "doesn't work", "doesn't", "does not work", "does not",
+	"not working", "isn't working", "isn't", "is not", "aren't", "wasn't",
+	"didn't", "won't", "can't", "bug", "issue", "problem", "error",
+	"failed", "fails", "failing", "incorrect", "wrong", "verify",
+	"render", "renders", "rendering", "load", "loads", "loading",
+}
+
+// isFixIntentMessage returns true when the user prompt looks like a
+// repair/verification request. The verification gate uses this to
+// decide whether `done` requires a real verification step. Pure
+// feature requests ("add a logout button") don't trip the gate —
+// adding code doesn't always need a curl/test to declare done.
+func isFixIntentMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, w := range fixIntentWords {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// verificationCommandRe matches the leading token of commands that
+// actually verify something (build, test, run, fetch). Used by the
+// verification gate to recognise when the model has done due
+// diligence before declaring done. ls/cat/grep/echo deliberately
+// excluded — those are recon, not verification.
+var verificationCommandRe = regexp.MustCompile(
+	`^\s*(` +
+		// Test runners
+		`pytest|python\s+-m\s+pytest|nose|tox|` +
+		// Build / type-check / static analysis
+		`mypy|ruff|pylint|tsc|eslint|gofmt|vet|` +
+		// Run-the-thing
+		`python|python3|node|deno|bun|ruby|cargo\s+run|cargo\s+test|cargo\s+check|cargo\s+build|` +
+		`go\s+run|go\s+test|go\s+build|go\s+vet|` +
+		`npm\s+(test|run|start)|yarn\s+(test|run|start)|pnpm\s+(test|run|start)|` +
+		`make(\s+|$)|just(\s+|$)|` +
+		// HTTP probes
+		`curl|wget|http\b|httpie\b` +
+		`)`)
+
+// isVerificationCommand returns true when a run_command call counts
+// as proof the agent verified its work. Recon (ls, cat, grep, find)
+// returns false — listing a directory doesn't tell you the code
+// works. Build/test/run/curl returns true: those exercise the code
+// path and a clean exit means something.
+func isVerificationCommand(cmd string) bool {
+	return verificationCommandRe.MatchString(strings.TrimSpace(cmd))
+}
+
+// verificationRejectionMessage tells the model exactly what's
+// missing and what to run. We prefer concrete suggestions over
+// abstract "verify your work" prompts — the model is more likely to
+// pick a sensible command when given a category.
+func verificationRejectionMessage(userMsg string) string {
+	return "Cannot declare `done` yet — this is a fix/repair request and you haven't verified the change works. Before emitting `done`, run a verification command and confirm it succeeded. Examples: `python app.py` to start a server, `curl http://localhost:5000/` to probe a route, `pytest tests/` to run tests, `npm test` for Node, `go test ./...` for Go. \"Done\" without a clean verification exit is a guess, not a fix."
 }
 
 // splitShellSegments splits a command line on `&&`, `||`, `;`, `|`

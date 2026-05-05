@@ -107,6 +107,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
 	// Used to soften the consecutiveErrors exit: post-write run_command failures
 	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
+	verifiedThisLoop := false // Set when a verification command (pytest, curl,
+	// python script, go test, ...) completes successfully in any turn of this
+	// run. Used by the fix-intent gate before `done` is allowed to pass.
+	// One successful verification per loop is enough — the model can iterate
+	// inside the loop without re-verifying every turn.
+
+	// Whether the user prompt is a repair/fix request. Computed once because
+	// the user message doesn't change mid-loop. Drives the verification gate.
+	userWantsVerification := isFixIntentMessage(userMessage)
 
 	for turn := 0; turn < ctx.MaxTurns; turn++ {
 		// Bail out fast if the upstream request was cancelled (the client closed the
@@ -243,6 +252,30 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 		switch parsed.Type {
 		case "done":
+			// Verification gate. When the user asked to "fix" / "verify" /
+			// "render" something and the model is declaring done without
+			// having ever run a verification command (pytest, curl, python
+			// app.py, go test, ...), bounce the done with a directive.
+			// Reactive form of Roo Code's AttemptCompletionTool — we don't
+			// require a structured verification field, just evidence in the
+			// loop that the agent ran something that exits non-zero on
+			// failure.
+			if userWantsVerification && !verifiedThisLoop && !ctx.YoloMode {
+				rejection := verificationRejectionMessage(userMessage)
+				log.Printf("[agent] verification gate: bouncing done at turn %d (user prompt %q has fix-intent, no successful verification command this loop)",
+					turn, truncateStr(userMessage, 60))
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:    "assistant",
+					Content: response,
+				})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "verification_gate",
+				})
+				continue
+			}
 			ctx.Stream("done", map[string]string{"summary": parsed.Summary})
 			return nil
 
@@ -437,6 +470,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// Used below to soften the error-loop exit when work was completed.
 			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" || parsed.Name == "delete_file") {
 				madeProductiveChange = true
+			}
+
+			// Track verification — a successful run_command of a build /
+			// test / probe / runner. Recon (ls, cat, grep) doesn't count.
+			// Once any verification succeeds in this loop, the fix-intent
+			// gate stops blocking `done`.
+			if result.Success && parsed.Name == "run_command" {
+				var rc RunCommandInput
+				if json.Unmarshal(parsed.Args, &rc) == nil && isVerificationCommand(rc.Command) {
+					verifiedThisLoop = true
+					log.Printf("[agent] verification recorded: turn=%d cmd=%q",
+						turn, truncateStr(rc.Command, 60))
+				}
 			}
 
 			// Break error loops: if 3 tool calls fail in a row, stop. PC-025

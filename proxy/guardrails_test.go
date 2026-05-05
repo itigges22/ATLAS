@@ -133,6 +133,102 @@ func TestValidateShellCommandAllowsDevNullRedirect(t *testing.T) {
 	}
 }
 
+func TestValidateShellCommandBlocksBashCBypass(t *testing.T) {
+	// The deny-list is bypassable if the model wraps the destructive
+	// verb inside `bash -c "..."`. Roo Code's regression test case.
+	cases := []string{
+		`bash -c "rm -rf foo"`,
+		`sh -c 'mv templates venv/'`,
+		`zsh -c "echo malicious"`,
+		`dash -c "find . -delete"`,
+		`eval "rm -rf $HOME"`,
+		`eval $command`,
+	}
+	for _, cmd := range cases {
+		if got := validateShellCommand(cmd); got == "" {
+			t.Errorf("validateShellCommand(%q) = empty, want rejection", cmd)
+		}
+	}
+}
+
+func TestValidateShellCommandStillAllowsLegitShellWork(t *testing.T) {
+	// `bash -c` is the bypass; bash with no -c (or other flags) is fine.
+	// `python -c` is a common, legit verification idiom and should pass.
+	allowed := []string{
+		"bash --version",
+		"python -c 'import flask; print(flask.__version__)'",
+		"node -e 'console.log(1+1)'",
+		"git log -c",
+	}
+	for _, cmd := range allowed {
+		if got := validateShellCommand(cmd); got != "" {
+			t.Errorf("validateShellCommand(%q) rejected: %s", cmd, got)
+		}
+	}
+}
+
+func TestIsFixIntentMessage(t *testing.T) {
+	fixIntents := []string{
+		"fix the bug in app.py",
+		"the form submission is broken",
+		"why isn't this rendering",
+		"the page won't load",
+		"I'm getting an error",
+		"can you verify it works",
+	}
+	for _, m := range fixIntents {
+		if !isFixIntentMessage(m) {
+			t.Errorf("isFixIntentMessage(%q) = false, want true", m)
+		}
+	}
+	notFix := []string{
+		"add a logout button to the header",
+		"create a new flask route for /admin",
+		"write a test for the login function",
+		"hi", // doesn't trip — bare greeting
+	}
+	for _, m := range notFix {
+		if isFixIntentMessage(m) {
+			t.Errorf("isFixIntentMessage(%q) = true, want false", m)
+		}
+	}
+}
+
+func TestIsVerificationCommand(t *testing.T) {
+	verifies := []string{
+		"pytest tests/",
+		"python app.py",
+		"python3 -m pytest",
+		"go test ./...",
+		"go build",
+		"cargo test",
+		"npm test",
+		"npm run build",
+		"curl http://localhost:5000/",
+		"make test",
+		"ruff check src/",
+		"mypy app.py",
+	}
+	for _, cmd := range verifies {
+		if !isVerificationCommand(cmd) {
+			t.Errorf("isVerificationCommand(%q) = false, want true", cmd)
+		}
+	}
+	recon := []string{
+		"ls -la",
+		"cat app.py",
+		"grep -r TODO src/",
+		"find . -name '*.py'",
+		"echo hello",
+		"pip install flask",
+	}
+	for _, cmd := range recon {
+		if isVerificationCommand(cmd) {
+			t.Errorf("isVerificationCommand(%q) = true, want false (recon, not verification)", cmd)
+		}
+	}
+}
+
 func TestSplitShellSegmentsRespectsQuotes(t *testing.T) {
 	// `;` inside single quotes shouldn't split.
 	got := splitShellSegments(`echo 'a;b'; rm foo`)
