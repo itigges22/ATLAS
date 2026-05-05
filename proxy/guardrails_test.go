@@ -155,6 +155,29 @@ func TestValidateShellCommandAllowsStderrRedirects(t *testing.T) {
 	}
 }
 
+func TestValidateShellCommandAllowsLogRedirectWithTrailingFlags(t *testing.T) {
+	// Confirmed in May 2026 user logs: the model issued
+	// `python app.py > flask.log 2>&1 &` to background a flask server
+	// for verification, and the guardrail rejected it. Root cause was
+	// a too-greedy tail extraction that pulled in the `2>&1 &` after
+	// the destination, defeating the .log/.out suffix exception.
+	// Regression: every shape below has a build-artefact destination
+	// followed by trailing flags that must NOT bleed into the path.
+	allowed := []string{
+		"python app.py > flask.log 2>&1 &",
+		"python app.py > server.out 2>&1",
+		"python app.py >flask.log 2>&1",
+		"node app.js > app.log 2>&1 &",
+		"go run main.go > out.log 2>/dev/null",
+		"python app.py > /dev/null 2>&1 &",
+	}
+	for _, cmd := range allowed {
+		if got := validateShellCommand(cmd); got != "" {
+			t.Errorf("validateShellCommand(%q) rejected: %s", cmd, got)
+		}
+	}
+}
+
 func TestValidateShellCommandBlocksBashCBypass(t *testing.T) {
 	// The deny-list is bypassable if the model wraps the destructive
 	// verb inside `bash -c "..."`. Roo Code's regression test case.

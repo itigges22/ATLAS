@@ -23,9 +23,12 @@ echo "fix bug" | atlas   # pipe mode: routes through /solve
 2. **Builds from source** in `tui/` if the binary is missing and Go
    1.24+ is available. (~10 s on first run.)
 3. **Ensures atlas-proxy is running** via `_ensure_proxy()`. If the
-   proxy's `/workspace` bind-mount doesn't already cover your current
-   directory, the wrapper force-recreates the proxy container with the
-   correct mount (~5 s) so tool calls can read and write your files.
+   proxy's *or* sandbox's `/workspace` bind-mount doesn't already cover
+   your current directory, the wrapper force-recreates *both* containers
+   with the correct mount (~5 s) so tool calls can read and write your
+   files **and** `run_command` can execute them. Both binds must match —
+   if they drift, the model can read `app.py` through the proxy but
+   `python app.py` in the sandbox will 404 (PC-189).
 4. **Execs the TUI** with `--proxy http://localhost:8090` and a debug
    log path under `~/.cache/atlas-tui/debug.log`.
 
@@ -274,21 +277,28 @@ Override the path via `--log <path>` or `$ATLAS_TUI_LOG`. Set
 
 ## Workspace alignment
 
-The proxy executes file operations against `/workspace` inside its
-container, which is bind-mounted to a directory on host disk (set in
-`docker-compose.yml`). For tool calls to land in your project, that
-mount has to point at the directory you're working in.
+Two containers mount `/workspace`: the **proxy** (file read/write) and
+the **sandbox** (`run_command` execution). Both are bind-mounted to a
+host directory set via `ATLAS_PROJECT_DIR` in `docker-compose.yml`. For
+tool calls to land in your project — and for `python app.py` to actually
+find `app.py` — both binds have to point at the same host directory.
 
 `atlas tui` aligns this automatically:
 
-1. On startup, `_ensure_proxy()` checks whether the proxy's existing
-   `/workspace` mount covers `os.getcwd()`.
-2. If not, it force-recreates the `atlas-proxy` container with
-   `ATLAS_PROJECT_DIR=$(pwd)` so the bind mount points at your cwd.
-   This takes ~5 s.
+1. On startup, `_ensure_proxy()` checks both containers' `/workspace`
+   mounts against `os.getcwd()`.
+2. If either is out of range, it force-recreates **both** the
+   `atlas-proxy` and `sandbox` containers with `ATLAS_PROJECT_DIR=$(pwd)`
+   so their binds match and cover your cwd. This takes ~5 s.
 3. The proxy itself overrides any `working_dir` field in `/v1/agent`
    requests with the container-internal `/workspace` path, so the
    agent's `read_file`/`write_file` calls always resolve correctly.
+
+> **Why both must match (PC-189):** the agent loop reads files via the
+> proxy and runs commands via the sandbox. If their binds drift, the
+> model can `read_file("/workspace/app.py")` successfully but
+> `run_command("python app.py")` fails with "No such file or directory".
+> The recreate is bundled to keep them in lockstep.
 
 If you write code from one shell and `atlas tui` is running in another
 that's pointing at a different directory, restart the TUI in the right

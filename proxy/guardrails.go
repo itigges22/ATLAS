@@ -162,19 +162,22 @@ func validateShellCommand(cmd string) string {
 		// Truncating redirect: `... > some/path`. We only reject when
 		// the target isn't /dev/null and isn't an obvious build artefact
 		// suffix (.log, .out) — those are usually intentional.
-		if m := shellTruncatingRedirectRe.FindStringIndex(seg); m != nil {
-			tail := seg[m[0]:]
-			tail = strings.TrimLeft(tail, " >")
-			tail = strings.TrimSpace(tail)
-			if tail == "/dev/null" || tail == "/dev/stderr" {
+		//
+		// Use FindStringSubmatch so we read just the destination path
+		// (capture group 2), not "everything after the >". Trailing
+		// flags like `2>&1 &` would otherwise glue onto the path and
+		// break the suffix exception (see PC-189).
+		if sm := shellTruncatingRedirectRe.FindStringSubmatch(seg); sm != nil {
+			dest := sm[2]
+			if dest == "/dev/null" || dest == "/dev/stderr" {
 				continue
 			}
-			lowerTail := strings.ToLower(tail)
-			if strings.HasSuffix(lowerTail, ".log") || strings.HasSuffix(lowerTail, ".out") {
+			lowerDest := strings.ToLower(dest)
+			if strings.HasSuffix(lowerDest, ".log") || strings.HasSuffix(lowerDest, ".out") {
 				continue
 			}
 			return shellRejectionMessage("> redirect",
-				"a truncating redirect into "+tail)
+				"a truncating redirect into "+dest)
 		}
 	}
 	return ""

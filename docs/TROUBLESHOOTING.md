@@ -538,6 +538,45 @@ curl -X POST http://localhost:30820/execute -d '{
 }'
 ```
 
+### `run_command` 404s on Files the Agent Just Read (Workspace Drift)
+
+**Symptom:** The agent reads `app.py` successfully via
+`read_file`, edits it, then runs `python app.py` to
+verify — and `run_command` returns
+`python: can't open file '/workspace/app.py'`. The file
+is right there in the proxy's `/workspace`, but the
+sandbox can't see it.
+
+**Cause (PC-189).** The proxy and sandbox each mount
+`${ATLAS_PROJECT_DIR:-.}:/workspace`, but they were
+last recreated at different times with different env.
+`atlas tui` previously aligned only the proxy's bind
+when it detected drift, so the sandbox kept whatever
+host directory it inherited from the original
+`docker compose up` (often the ATLAS repo itself
+rather than the user's project). Result: the proxy
+sees `/home/isaac/myproj`, the sandbox sees
+`/home/isaac/ATLAS`, and `python app.py` 404s.
+
+**Fix.** Recreate both containers with the right env:
+```bash
+ATLAS_PROJECT_DIR=$(pwd) docker compose up -d \
+  --no-deps --no-build --force-recreate \
+  atlas-proxy sandbox
+```
+Then verify the binds match:
+```bash
+docker inspect atlas-atlas-proxy-1 atlas-sandbox-1 \
+  --format '{{.Name}} {{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+```
+Both should print the same host path.
+
+**Permanent fix.** As of PC-189, `_align_workspace`
+checks both binds on TUI startup and recreates them
+together if either is out of range — restart the TUI
+in your project directory and the alignment is
+automatic.
+
 ### Curses Bottom-Row `addwstr() returned ERR`
 
 **Symptom:** Your curses program (snake game, TUI menu,

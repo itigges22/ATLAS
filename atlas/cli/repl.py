@@ -289,17 +289,17 @@ def _stop_local_proxy():
             _proxy_process.kill()
 
 
-def _docker_proxy_workspace() -> Optional[str]:
-    """Return the host path bind-mounted to /workspace inside the Docker
-    atlas-proxy container, or None if the proxy isn't running in Docker
-    (or docker isn't on PATH). See ISSUES.md PC-038.
+def _docker_workspace_for(container: str) -> Optional[str]:
+    """Return the host path bind-mounted to /workspace inside the named
+    Docker container, or None if the container isn't running (or docker
+    isn't on PATH). See ISSUES.md PC-038, PC-189.
     """
     if not shutil.which("docker"):
         return None
     try:
         result = subprocess.run(
             [
-                "docker", "inspect", "atlas-atlas-proxy-1",
+                "docker", "inspect", container,
                 "--format",
                 "{{range .Mounts}}{{if eq .Destination \"/workspace\"}}{{.Source}}{{end}}{{end}}",
             ],
@@ -313,33 +313,47 @@ def _docker_proxy_workspace() -> Optional[str]:
         return None
 
 
+def _docker_proxy_workspace() -> Optional[str]:
+    return _docker_workspace_for("atlas-atlas-proxy-1")
+
+
+def _docker_sandbox_workspace() -> Optional[str]:
+    return _docker_workspace_for("atlas-sandbox-1")
+
+
 def _recreate_docker_proxy(atlas_dir: str, project_dir: str) -> bool:
-    """Recreate the Docker atlas-proxy container with a new ATLAS_PROJECT_DIR
-    bind. Returns True when the proxy is back up and healthy. See PC-038.
+    """Recreate the Docker atlas-proxy AND sandbox containers with a new
+    ATLAS_PROJECT_DIR bind. Both services mount ${ATLAS_PROJECT_DIR}:/workspace
+    and MUST share the same host path — the agent loop reads files via the
+    proxy and runs commands via the sandbox; if their /workspace binds drift,
+    the model can read app.py through the proxy but `python app.py` in the
+    sandbox 404s. Returns True when both are back up and healthy.
+    See PC-038, PC-189.
     """
     if not atlas_dir:
         return False
-    print(f"  Aligning proxy workspace → {project_dir}")
+    print(f"  Aligning proxy + sandbox workspace → {project_dir}")
     env = os.environ.copy()
     env["ATLAS_PROJECT_DIR"] = project_dir
     try:
         result = subprocess.run(
             [
                 "docker", "compose", "up", "-d",
-                "atlas-proxy", "--no-deps", "--no-build", "--force-recreate",
+                "atlas-proxy", "sandbox",
+                "--no-deps", "--no-build", "--force-recreate",
             ],
             cwd=atlas_dir, env=env,
             capture_output=True, text=True, timeout=60,
         )
         if result.returncode != 0:
             tail = (result.stderr or result.stdout)[:240]
-            print(f"  Proxy recreate failed: {tail}")
+            print(f"  Workspace recreate failed: {tail}")
             return False
         for _ in range(40):
             time.sleep(0.5)
             if _check_url(PROXY_URL, timeout=1):
                 return True
-        print("  Proxy recreated but not responding on health check")
+        print("  Recreated but proxy not responding on health check")
         return False
     except Exception as e:
         print(f"  Recreate failed: {e}")
@@ -356,22 +370,28 @@ def _align_workspace(atlas_dir: str) -> None:
     if os.environ.get("ATLAS_AUTO_WORKSPACE", "1") == "0":
         return
     cwd = os.path.realpath(os.getcwd())
-    bound = _docker_proxy_workspace()
-    if bound is None:
+    proxy_bound = _docker_proxy_workspace()
+    if proxy_bound is None:
         # Local proxy (not in Docker) — _launch_local_proxy already pinned
         # ATLAS_WORKSPACE_DIR to os.getcwd(), so nothing to do.
         return
-    bound_real = os.path.realpath(bound)
-    # No-op if the bound directory is the cwd or an ancestor of it
-    # (so e.g. binding $HOME covers any subproject without recreating).
-    try:
-        rel = os.path.relpath(cwd, bound_real)
-    except ValueError:
-        rel = ".."
-    if rel == "." or not rel.startswith(".."):
+    sandbox_bound = _docker_sandbox_workspace()
+
+    # No-op if BOTH binds cover cwd. Either being out of range triggers a
+    # recreate of both — they must share a path (PC-189).
+    def _covers_cwd(bound: Optional[str]) -> bool:
+        if not bound:
+            return False
+        try:
+            rel = os.path.relpath(cwd, os.path.realpath(bound))
+        except ValueError:
+            return False
+        return rel == "." or not rel.startswith("..")
+
+    if _covers_cwd(proxy_bound) and _covers_cwd(sandbox_bound):
         return
     if not _recreate_docker_proxy(atlas_dir, cwd):
-        print("  Continuing with the existing proxy workspace — file operations may not see your project.")
+        print("  Continuing with the existing workspace — file operations may not see your project.")
 
 
 def _ensure_proxy() -> bool:
