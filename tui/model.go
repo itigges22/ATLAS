@@ -151,6 +151,11 @@ type tuiModel struct {
 	streamingV3     bool
 	streamingV3Text string
 
+	// Plan state — populated by plan_loaded events from the proxy.
+	// One planView per turn (replaced on revision). nil when the
+	// current turn skipped planning (T0 / planner failure).
+	plan *planView
+
 	// Chat scroll offset — number of rows scrolled UP from the bottom.
 	// 0 means "follow the latest" (auto-scroll on new messages); >0
 	// freezes the view at a position N rows above the latest. PgUp/PgDn
@@ -1246,6 +1251,48 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		if body != "" {
 			m.chat = append(m.chat, chatMessage{
 				Role: roleSystem, Meta: "V3", Body: body,
+			})
+		}
+
+	// Plan pipeline progress (planner candidate generation, scoring,
+	// selection). Lots of these fire during a 3-candidate sweep but
+	// we already drop per-token noise in the proxy callback — what
+	// arrives here is structural ("candidate 1/3 scored 0.80") and
+	// fits one row per event.
+	case "v3_plan":
+		body := formatV3StageEvent(ev.Type, ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "plan", Body: body,
+			})
+		}
+
+	// Plan loaded — proxy emits one of these after a plan is selected
+	// (initial generation OR revision). Carries the full step list,
+	// which we stash on m.plan and render as a multi-line chat row.
+	case "plan_loaded":
+		if msg, ok := applyPlanLoaded(m, ev.Data); ok {
+			m.chat = append(m.chat, msg)
+		}
+
+	// Plan adherence — fires per tool call. Matched=true ticks off a
+	// step in m.plan and renders a one-liner; matched=false (off-plan)
+	// is silent here to avoid clogging chat. The off-streak that
+	// triggers a revision flows through plan_revise below.
+	case "plan_adherence":
+		if body := applyPlanAdherence(m, ev.Data); body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "plan", Body: body,
+			})
+		}
+
+	// Plan revising — agent went off-plan past the threshold. The
+	// next plan_loaded supersedes m.plan; this row tells the user
+	// re-planning is in flight.
+	case "plan_revise":
+		if body := applyPlanRevise(m, ev.Data); body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "plan", Body: body,
 			})
 		}
 	}
