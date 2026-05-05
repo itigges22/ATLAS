@@ -229,6 +229,46 @@ func TestIsVerificationCommand(t *testing.T) {
 	}
 }
 
+func TestResolveAgentPathTranslatesHostPrefix(t *testing.T) {
+	ctx := &AgentContext{
+		WorkingDir:     "/workspace",
+		HostWorkingDir: "/home/isaac/snake",
+	}
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"absolute host path → container", "/home/isaac/snake/app.py", "/workspace/app.py"},
+		{"absolute host path nested", "/home/isaac/snake/templates/index.html", "/workspace/templates/index.html"},
+		{"host root itself", "/home/isaac/snake", "/workspace"},
+		{"host path with trailing slash", "/home/isaac/snake/", "/workspace"},
+		{"relative path → joined", "app.py", "/workspace/app.py"},
+		{"absolute non-host path passes through", "/etc/passwd", "/etc/passwd"},
+		{"host-prefix lookalike does not match", "/home/isaac/snakebar/app.py", "/home/isaac/snakebar/app.py"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveAgentPath(ctx, tc.in); got != tc.want {
+				t.Errorf("resolveAgentPath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveAgentPathNoHostMappingFallsBack(t *testing.T) {
+	// Without HostWorkingDir set (dev/test mode), absolute paths
+	// pass through and relative paths join against WorkingDir —
+	// matching the original resolvePath behaviour.
+	ctx := &AgentContext{WorkingDir: "/tmp/proj"}
+	if got := resolveAgentPath(ctx, "/home/x/file.py"); got != "/home/x/file.py" {
+		t.Errorf("got %q, want pass-through", got)
+	}
+	if got := resolveAgentPath(ctx, "src/x.py"); got != "/tmp/proj/src/x.py" {
+		t.Errorf("got %q, want joined", got)
+	}
+}
+
 func TestSplitShellSegmentsRespectsQuotes(t *testing.T) {
 	// `;` inside single quotes shouldn't split.
 	got := splitShellSegments(`echo 'a;b'; rm foo`)

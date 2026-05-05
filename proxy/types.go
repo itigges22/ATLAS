@@ -251,8 +251,14 @@ type AgentContext struct {
 	// Configuration
 	Tier           Tier
 	MaxTurns       int
-	WorkingDir     string       // Project directory for agent operations
+	WorkingDir     string       // Project directory for agent operations (container path, e.g. /workspace)
 	RealProjectDir string       // Same as WorkingDir; kept for delete_file compatibility
+	HostWorkingDir string       // The host-side path that's bind-mounted as WorkingDir
+	// (e.g. /home/isaac/snake when /workspace is mounted from there).
+	// Used to translate absolute host paths the model receives back from
+	// the user's prompt — e.g. "fix /home/isaac/snake/app.py" — into
+	// container paths the proxy can actually open. Empty when the proxy
+	// runs without a bind mount (dev / test).
 	PermissionMode PermissionMode
 	YoloMode       bool
 

@@ -151,7 +151,7 @@ func readFileTool() *ToolDef {
 				}, nil
 			}
 
-			path := resolvePath(input.Path, ctx.WorkingDir)
+			path := resolveAgentPath(ctx, input.Path)
 
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -229,7 +229,7 @@ func searchFilesTool() *ToolDef {
 
 			searchPath := ctx.WorkingDir
 			if input.Path != "" {
-				searchPath = resolvePath(input.Path, ctx.WorkingDir)
+				searchPath = resolveAgentPath(ctx, input.Path)
 			}
 
 			re, err := regexp.Compile(input.Pattern)
@@ -331,7 +331,7 @@ func listDirectoryTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			dirPath := resolvePath(input.Path, ctx.WorkingDir)
+			dirPath := resolveAgentPath(ctx, input.Path)
 
 			entries, err := os.ReadDir(dirPath)
 			if err != nil {
@@ -394,7 +394,7 @@ func writeFileTool() *ToolDef {
 				}, nil
 			}
 
-			path := resolvePath(input.Path, ctx.WorkingDir)
+			path := resolveAgentPath(ctx, input.Path)
 
 			// Sanitise model output before anything else touches it.
 			// Otherwise a markdown-fenced response with a prose preamble
@@ -695,7 +695,7 @@ func editFileTool() *ToolDef {
 				}, nil
 			}
 
-			path := resolvePath(input.Path, ctx.WorkingDir)
+			path := resolveAgentPath(ctx, input.Path)
 
 			// Require file was read first (staleness protection)
 			if !ctx.WasFileRead(path) {
@@ -1046,7 +1046,7 @@ func deleteFileTool() *ToolDef {
 			}
 
 			// Also delete from temp/working dir if it exists there
-			path := resolvePath(input.Path, ctx.WorkingDir)
+			path := resolveAgentPath(ctx, input.Path)
 			if _, err := os.Stat(path); err == nil {
 				os.Remove(path)
 				deleted = true
@@ -1100,7 +1100,7 @@ func findFileTool() *ToolDef {
 
 			searchPath := ctx.WorkingDir
 			if input.Path != "" {
-				searchPath = resolvePath(input.Path, ctx.WorkingDir)
+				searchPath = resolveAgentPath(ctx, input.Path)
 			}
 
 			re, err := regexp.Compile(input.Pattern)
@@ -1177,7 +1177,7 @@ func runCommandTool() *ToolDef {
 
 			cwd := ctx.WorkingDir
 			if input.Cwd != "" {
-				cwd = resolvePath(input.Cwd, ctx.WorkingDir)
+				cwd = resolveAgentPath(ctx, input.Cwd)
 			}
 
 			cmd := exec.Command("bash", "-c", input.Command)
@@ -1414,11 +1414,47 @@ func hasLogicIndicators(content string) bool {
 // ---------------------------------------------------------------------------
 
 // resolvePath resolves a relative path against the working directory.
+//
+// Absolute paths pass through unchanged — but the model frequently
+// emits the host-side absolute path it saw in the user's prompt
+// (e.g. "/home/isaac/snake/app.py") which doesn't exist inside the
+// proxy container. Use resolveAgentPath when you have an
+// AgentContext available — it translates host paths to container
+// paths via ctx.HostWorkingDir. resolvePath is the lower-level
+// primitive kept for sites that don't have a context (e.g. V3
+// adapter helpers).
 func resolvePath(path, workingDir string) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(filepath.Join(workingDir, path))
+}
+
+// resolveAgentPath is the path resolver every tool handler should
+// use. It first translates host-side absolute paths into the
+// container path (when HostWorkingDir is set and the input falls
+// inside that prefix), then resolves the result against
+// ctx.WorkingDir. This is what makes the agent forgiving when the
+// user pastes "/home/isaac/snake/app.py" into a prompt — the model
+// copies the absolute path, the proxy rewrites it to /workspace/app.py,
+// and read_file actually finds the file.
+func resolveAgentPath(ctx *AgentContext, path string) string {
+	if filepath.IsAbs(path) && ctx.HostWorkingDir != "" {
+		clean := filepath.Clean(path)
+		host := filepath.Clean(ctx.HostWorkingDir)
+		if clean == host {
+			return filepath.Clean(ctx.WorkingDir)
+		}
+		// Match `host` as a directory prefix — require the next character
+		// to be a separator so "/home/isaac/snakebar" doesn't match
+		// "/home/isaac/snake".
+		if strings.HasPrefix(clean, host+string(filepath.Separator)) {
+			rel := strings.TrimPrefix(clean, host+string(filepath.Separator))
+			translated := filepath.Join(ctx.WorkingDir, rel)
+			return filepath.Clean(translated)
+		}
+	}
+	return resolvePath(path, ctx.WorkingDir)
 }
 
 // v3StageToEvent maps a V3 pipeline stage name to the TUI event type

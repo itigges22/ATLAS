@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -372,7 +373,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
-					existingPath := resolvePath(wfInput.Path, ctx.WorkingDir)
+					existingPath := resolveAgentPath(ctx, wfInput.Path)
 					if existing, err := os.ReadFile(existingPath); err == nil {
 						existingLines := strings.Count(string(existing), "\n") + 1
 						if existingLines > 5 {
@@ -1166,6 +1167,15 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Create agent context
 	ctx := NewAgentContext(workingDir, tier)
+	// Stash the host path so resolveAgentPath can translate absolute
+	// host paths the model receives in user prompts (e.g. "fix
+	// /home/isaac/snake/app.py") into the container path. Without this
+	// the model copies the user's host path verbatim into read_file
+	// and the open() fails because that path doesn't exist inside the
+	// proxy container — only /workspace does.
+	if hostDir != "" && hostDir != "." {
+		ctx.HostWorkingDir = filepath.Clean(hostDir)
+	}
 	ctx.InferenceURL = inferenceURL
 	ctx.SandboxURL = sandboxURL
 	ctx.LensURL = lensURL
