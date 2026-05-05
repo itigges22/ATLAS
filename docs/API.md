@@ -80,6 +80,10 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_repair` | Phase 3 repair strategy (`phase3`, `pr_cot*`, `refinement*`, `derivation*`, `fallback`) | `stage`, `detail`, `strategy` (string: `pr_cot` / `refinement` / `derivation`), `failing` (int), `iterations` (int, on `refinement_pass`), `tokens` (int, on `_pass`) |
 | `v3_probe` | Probe phase events (`probe`, `probe_light`, `probe_retry`, `probe_failed`, `probe_scored`, `probe_sandbox`, `probe_pass`) | `stage`, `detail` |
 | `v3_self_test` | Self-test generation/verify events (`self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip`, `self_test_verify`) | `stage`, `detail` |
+| `v3_plan` | Plan-pipeline progress (`plan_start`, `plan_candidate`, `plan_candidate_scored`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_selected`, `plan_failed`). Per-token `token`/`llm_start`/`llm_end` events are filtered out at the proxy. | `stage`, `detail`, `index` (int, per-candidate), `score` (float, on `_scored`/`_selected`), `revision` (int, set when fired during a revise) |
+| `plan_loaded` | A winning plan has been generated. Fires once after initial generation and again after each revision. Carries the full step list. | `steps` (array of `{id, action, target, why}`), `verify_step` (string id), `rationale` (string), `winning_score` (float), `revision` (int — 0 for initial plan, 1+ for revisions) |
+| `plan_adherence` | Emitted after each tool call, indicating whether the call satisfied an outstanding plan step. Off-plan calls (`matched=false`) accumulate into the off-streak counter that drives auto-revise. | On match: `matched=true`, `step_index`, `step_id`, `step_action`, `satisfied` (steps satisfied so far), `total`. On miss: `matched=false`, `tool`, `off_streak` (consecutive off-plan calls), `satisfied`, `total`. |
+| `plan_revise` | The off-streak crossed `planAutoReviseThreshold` (3) — a fresh plan is being generated. The next `plan_loaded` (with `revision>0`) supersedes the prior plan; `Satisfied` flags reset. | `reason` (string), `revision` (int, 1-indexed) |
 | `done` | Agent loop ended cleanly | `summary` (string — empty for a `text`-shaped turn) |
 | `error` | LLM/parse/turn-cap error | `error` (string) |
 
@@ -349,6 +353,54 @@ Simplified endpoint for running the pipeline on a problem description (used by t
 ```
 
 **Response:** Same SSE format as `/v3/generate`.
+
+### POST /v3/plan
+
+Generates a step-by-step plan for a coding task using diverse LLM sampling and heuristic scoring. Used by the proxy's agent loop to seed each turn with explicit step guidance — see [PLAN_MODE.md](PLAN_MODE.md) for the consumer side.
+
+**Request:**
+```json
+{
+  "user_message": "fix the broken index.html template",
+  "working_dir": "/workspace",
+  "project_context": {
+    "app.py": "from flask import Flask...",
+    "templates/index.html": "<!DOCTYPE html>..."
+  },
+  "n_candidates": 3
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `user_message` | yes | The original user request the planner must address. |
+| `working_dir` | optional | Used in the planner prompt for path-context. Defaults to `/workspace`. |
+| `project_context` | optional | Map of `relative_path → file_content`. Files are truncated to ~200 chars in the planner prompt. |
+| `n_candidates` | optional | How many candidate plans to sample. Defaults to 3. Each is sampled at a different temperature (0.3 / 0.5 / 0.7) for diversity. |
+
+**Response:** SSE stream of `{stage, detail, data}` events ending with `event: result\ndata: <plan-json>` and `data: [DONE]`.
+
+Plan-pipeline stages: `plan_start`, `plan_candidate`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_candidate_scored`, `plan_selected`, `plan_failed`. Per-candidate token streaming flows under `token` / `llm_start` / `llm_end` (filtered out by the proxy bridge before reaching `/v1/agent`).
+
+The final `event: result` payload has the shape:
+
+```json
+{
+  "steps": [
+    {"id": "s1", "action": "read_file", "target": "templates/index.html", "why": "inspect"},
+    {"id": "s2", "action": "edit_file", "target": "templates/index.html", "why": "fix structural HTML"},
+    {"id": "s3", "action": "run_command", "target": "curl http://localhost:5000/", "why": "verify"}
+  ],
+  "verify_step": "s3",
+  "rationale": "investigate, change, verify.",
+  "candidates_tested": 3,
+  "winning_score": 1.0,
+  "winning_index": 0,
+  "reasons": ["step count 3 in range", "verify_step=s3", ...]
+}
+```
+
+If all candidates fail to parse, the endpoint returns a single-step fallback (`{steps:[{action:"investigate the request and act"}], verify_step:null, winning_index:-1}`) rather than 5xx — callers can detect the fallback by `winning_index<0` or `reasons` containing "all candidates failed".
 
 ### GET /health
 

@@ -214,6 +214,8 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`CLI.md`](#docs) — CLI usage, streaming output, troubleshooting
   - [`CONFIGURATION.md`](#docs) — All environment variables and settings
   - [`MAP.md`](#docs) — This file
+  - [`PLAN_MODE.md`](#docs) — Plan-mode pipeline (`/v3/plan`, adherence gate, auto-revise)
+  - [`PROTOCOL.md`](#docs) — Typed-event envelope schema for `/events` consumers
   - [`SETUP.md`](#docs) — Installation guide (Docker, bare-metal, K3s)
   - [`TROUBLESHOOTING.md`](#docs) — Common issues and solutions
   - [`reports/`](#docs-reports) — Ablation studies, status tracking, migration guides

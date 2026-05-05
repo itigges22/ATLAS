@@ -84,24 +84,36 @@ graph LR
 
 ```mermaid
 flowchart LR
-    Start["User msg"] --> Build["Build prompt"] --> Call["llama-server"] --> Parse["Parse JSON"]
+    Start["User msg"] --> PlanGate{"T0 / short ack?"}
+    PlanGate -->|"No"| Plan["/v3/plan\n(3 candidates)"] --> Build["Build prompt\n(plan inlined)"]
+    PlanGate -->|"Yes"| Build
+    Build --> Call["llama-server"] --> Parse["Parse JSON"]
     Parse --> Route{Type?}
 
     Route -->|"tool_call"| Tier{"T2?"}
     Tier -->|"Yes"| V3["V3 Pipeline"] --> Result["Append result"]
     Tier -->|"No"| Exec["Execute tool"] --> Result
-    Result --> Budget{"Budget?"}
+    Result --> Adhere["Plan adherence\n(off-streak counter)"]
+    Adhere --> Revise{"streak ≥ 3?"}
+    Revise -->|"Yes"| RePlan["/v3/plan\n(revised)"] --> Budget
+    Revise -->|"No"| Budget{"Budget?"}
     Budget -->|"< 4"| Call
     Budget -->|"4"| Warn["Nudge: write now"] --> Call
     Budget -->|"5+"| Skip["Skip read"] --> Call
 
     Route -->|"text"| Stream["Stream"] --> Call
-    Route -->|"done"| Done["End"]
+    Route -->|"done"| VerifyGate{"verified?"}
+    VerifyGate -->|"Yes"| Done["End"]
+    VerifyGate -->|"No"| Reject["Reject: run verify_step"] --> Call
 
     style Start fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
     style V3 fill:#2d5016,color:#fff
+    style Plan fill:#2d5016,color:#fff
+    style RePlan fill:#5c3a1a,color:#fff
 ```
+
+**Plan mode** (PC-183 → PC-187) inserts a pre-flight planning step before the first LLM call: see [PLAN_MODE.md](PLAN_MODE.md). The planner samples 3 plan candidates, scores them heuristically, and inlines the winner into the system prompt. An adherence gate counts off-plan tool calls; after 3 in a row the plan auto-revises with whatever context the agent has discovered. Skipped for trivial-chat tier (T0) and short acks.
 
 ### Grammar Enforcement
 
