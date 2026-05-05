@@ -243,7 +243,7 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
 | `find_file` | Regex search by file **name** or relative path. Use to check whether a file exists. (PC-028) |
 | `list_directory` | List files and subdirectories at a given path |
-| `run_command` | Execute a shell command via bash. Runs inside the atlas-proxy container, which ships with python3, py3-pip, nodejs/npm, gcc, g++, make, and git. (PC-032 will route this through the sandbox container.) |
+| `run_command` | Execute a shell command via bash inside the **sandbox container** (PC-188). Sees `/workspace` (your project, bind-mounted rw, same path as the proxy). Has python3 + pip, node + npm, go, rust, gcc/g++, bash, pytest, tsx pre-installed. Falls back to local proxy exec when the sandbox is unreachable so the dev/test workflow without docker compose still works. The proxy still runs `validateShellCommand` upstream as the destructive-verb gate — this entry just picks the executor. |
 | `plan_tasks` | Decompose work into parallel tasks with dependencies |
 
 ---
@@ -502,7 +502,43 @@ These are used internally by other ATLAS services. They are stable but not part 
 
 ## Sandbox (Port 30820 → container 8020)
 
-Isolated code execution with compilation, testing, and linting support.
+Isolated code execution with compilation, testing, and linting support. The container is read-only with `/workspace` bind-mounted (rw) from `ATLAS_PROJECT_DIR` — the same path the proxy sees, so paths the agent learned via `read_file`/`list_directory` work verbatim in `/shell` calls.
+
+### POST /shell
+
+Run a shell command against the bind-mounted workspace. The proxy's `run_command` tool routes here (PC-188) so the agent's verification commands (`pytest`, `python app.py`, `npm run build`, `curl`, etc.) execute against the user's actual files with the full language matrix the proxy lacks.
+
+**Request:**
+```json
+{
+  "command": "cd flask_app && pip install -q -r requirements.txt && python app.py",
+  "cwd": "/workspace",
+  "timeout": 30,
+  "env": {"FLASK_ENV": "development"}
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `command` | string | (required) | Shell command run via `bash -c`. |
+| `cwd` | string | `/workspace` | Absolute path inside the container. **Must be under `/workspace`** — `/etc`, `/`, etc. are rejected with HTTP 400. The path must already exist (no auto-mkdir). |
+| `timeout` | int | 30 | Max execution time in seconds. Capped at `MAX_EXECUTION_TIME` (60s default, env-overridable). |
+| `env` | object | null | Extra env vars merged on top of the container's environment. |
+
+**Response:**
+```json
+{
+  "success": true,
+  "stdout": "Hello World\n",
+  "stderr": "",
+  "exit_code": 0,
+  "elapsed_ms": 78
+}
+```
+
+`success` is `exit_code == 0`. Stdout/stderr are returned in full (truncated by the proxy bridge, not here). State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
+
+The container's destructive-verb gate (`validateShellCommand` in the proxy) blocks `rm`/`mv`/`cp`/`find -delete`/`bash -c` bypass etc. *before* the call ever reaches `/shell`. This endpoint is the executor, not the gate.
 
 ### POST /execute
 

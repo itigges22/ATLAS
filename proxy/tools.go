@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1167,12 +1169,12 @@ func runCommandTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			timeout := 30 * time.Second
+			timeoutSec := 30
 			if input.Timeout != nil && *input.Timeout > 0 {
-				timeout = time.Duration(*input.Timeout) * time.Second
+				timeoutSec = *input.Timeout
 			}
-			if timeout > 5*time.Minute {
-				timeout = 5 * time.Minute
+			if timeoutSec > 300 {
+				timeoutSec = 300
 			}
 
 			cwd := ctx.WorkingDir
@@ -1180,72 +1182,138 @@ func runCommandTool() *ToolDef {
 				cwd = resolveAgentPath(ctx, input.Cwd)
 			}
 
-			cmd := exec.Command("bash", "-c", input.Command)
-			cmd.Dir = cwd
-
-			// Capture stdout and stderr separately
-			var stdout, stderr strings.Builder
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-
-			// Run with timeout
-			done := make(chan error, 1)
-			go func() {
-				done <- cmd.Run()
-			}()
-
-			var exitCode int
-			select {
-			case err := <-done:
-				if err != nil {
-					if exitErr, ok := err.(*exec.ExitError); ok {
-						exitCode = exitErr.ExitCode()
-					} else {
-						return nil, fmt.Errorf("command error: %w", err)
-					}
-				}
-			case <-time.After(timeout):
-				if cmd.Process != nil {
-					cmd.Process.Kill()
-				}
-				exitCode = 124 // timeout exit code (like GNU timeout)
-				stderr.WriteString(fmt.Sprintf("\nCommand timed out after %s", timeout))
+			// PC-188: route shell execution through the sandbox container.
+			// The proxy is a slim Go binary with no python/pip/node, so
+			// running locally meant every "verify" command failed with
+			// "command not found". The sandbox has the language matrix
+			// pre-installed AND has /workspace bind-mounted at the same
+			// path the proxy sees, so paths the agent learned via
+			// read_file / list_directory still work. validateShellCommand
+			// upstream is the gate; this is the executor. Falls back to
+			// local exec when the sandbox is unreachable so the dev /
+			// test loop still works without docker compose.
+			out, err := runViaSandbox(ctx, input.Command, cwd, timeoutSec)
+			if err != nil {
+				log.Printf("[run_command] sandbox unreachable, falling back to local exec: %v", err)
+				out = runLocally(input.Command, cwd, time.Duration(timeoutSec)*time.Second)
 			}
 
-			out := RunCommandOutput{
-				Stdout:   truncateStr(stdout.String(), 8000),
-				Stderr:   truncateStr(stderr.String(), 4000),
-				ExitCode: exitCode,
-			}
 			outBytes, _ := json.Marshal(out)
-			// On failure, surface a useful error string so the agent
-			// log line "tool=run_command FAIL: <err>" actually shows
-			// what went wrong. Without this the Error field stayed
-			// empty, the model saw only the JSON Data payload, and
-			// the proxy log read "FAIL:" with no signal — which is
-			// exactly what happened in the May 2026 user session.
-			// Prefer stderr; fall back to last stdout line; final
-			// fallback is the bare exit code.
 			var errMsg string
-			if exitCode != 0 {
-				errMsg = strings.TrimSpace(stderr.String())
+			if out.ExitCode != 0 {
+				errMsg = strings.TrimSpace(out.Stderr)
 				if errMsg == "" {
-					if s := strings.TrimSpace(stdout.String()); s != "" {
+					if s := strings.TrimSpace(out.Stdout); s != "" {
 						lines := strings.Split(s, "\n")
 						errMsg = lines[len(lines)-1]
 					}
 				}
 				if errMsg == "" {
-					errMsg = fmt.Sprintf("exit %d (no output)", exitCode)
+					errMsg = fmt.Sprintf("exit %d (no output)", out.ExitCode)
 				}
 				errMsg = truncateStr(errMsg, 400)
 			}
 			return &ToolResult{
-				Success: exitCode == 0,
+				Success: out.ExitCode == 0,
 				Data:    outBytes,
 				Error:   errMsg,
 			}, nil
 		},
+	}
+}
+
+// runViaSandbox POSTs the command to the sandbox /shell endpoint.
+// Returns a populated RunCommandOutput on success, or an error if the
+// sandbox is unreachable / returned a non-2xx (caller falls back to
+// local exec). Timeout is in seconds and is enforced server-side; we
+// add a generous client-side margin so the HTTP call doesn't kill
+// long-running commands prematurely.
+func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunCommandOutput, error) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"command": command,
+		"cwd":     cwd,
+		"timeout": timeoutSec,
+	})
+	endpoint := ctx.SandboxURL + "/shell"
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return RunCommandOutput{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: time.Duration(timeoutSec+30) * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return RunCommandOutput{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		// 4xx is usually a validation error (bad cwd, etc.) — propagate
+		// as a regular failure, not a sandbox-unreachable signal. Read
+		// the FastAPI detail so the model sees what went wrong.
+		var errBody struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		return RunCommandOutput{
+			Stderr:   fmt.Sprintf("sandbox /shell %d: %s", resp.StatusCode, errBody.Detail),
+			ExitCode: 1,
+		}, nil
+	}
+	var sr struct {
+		Success   bool   `json:"success"`
+		Stdout    string `json:"stdout"`
+		Stderr    string `json:"stderr"`
+		ExitCode  int    `json:"exit_code"`
+		ElapsedMS int    `json:"elapsed_ms"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+		return RunCommandOutput{}, fmt.Errorf("decode sandbox response: %w", err)
+	}
+	return RunCommandOutput{
+		Stdout:   truncateStr(sr.Stdout, 8000),
+		Stderr:   truncateStr(sr.Stderr, 4000),
+		ExitCode: sr.ExitCode,
+	}, nil
+}
+
+// runLocally executes the command in the proxy container as a fallback
+// when the sandbox is unreachable (e.g. running tests outside docker
+// compose). Same code path as the original local exec — kept verbatim
+// so dev workflows that don't bring up the sandbox still work.
+func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = cwd
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Run() }()
+
+	var exitCode int
+	select {
+	case err := <-done:
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				stderr.WriteString(err.Error())
+				exitCode = 1
+			}
+		}
+	case <-time.After(timeout):
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		exitCode = 124
+		stderr.WriteString(fmt.Sprintf("\nCommand timed out after %s", timeout))
+	}
+
+	return RunCommandOutput{
+		Stdout:   truncateStr(stdout.String(), 8000),
+		Stderr:   truncateStr(stderr.String(), 4000),
+		ExitCode: exitCode,
 	}
 }
 

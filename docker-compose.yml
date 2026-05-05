@@ -128,9 +128,21 @@ services:
       context: ./sandbox
     tmpfs:
       - /tmp/sandbox:size=512M
+    # The container fs stays read-only (hardening). The user's project
+    # is bind-mounted at /workspace — same path the proxy sees — so the
+    # /shell endpoint can run pip install, python app.py, etc. against
+    # the actual files the agent edited. Without this, run_command
+    # hits "command not found" in the proxy container (proxy has no
+    # python) and verify-step plans never complete. See PC-188.
     read_only: true
     security_opt:
       - no-new-privileges:true
+    # Don't override working_dir — the image uses WORKDIR=/app for
+    # executor_server.py. The /shell endpoint defaults its cwd to
+    # /workspace at request time, which is the bind-mounted user
+    # project — that's where commands actually run.
+    volumes:
+      - ${ATLAS_PROJECT_DIR:-.}:/workspace
     ports:
       - "${ATLAS_SANDBOX_PORT:-30820}:8020"
     healthcheck:

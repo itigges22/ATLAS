@@ -115,6 +115,84 @@ def list_languages():
     return {"languages": versions}
 
 
+# ---------------------------------------------------------------------------
+# /shell — arbitrary command execution against the bind-mounted workspace.
+#
+# The agent loop's run_command tool used to fork bash inside the proxy
+# container, but the proxy is a slim Go binary with no python/pip/node/etc
+# — every "verify your fix" call hit "command not found". We now route
+# shell commands through the sandbox, which has the full language matrix
+# pre-installed AND has /workspace bind-mounted (rw) at the same path the
+# proxy sees, so paths the agent learned from read_file / list_directory
+# carry over verbatim.
+#
+# Safety: the proxy's validateShellCommand still blocks destructive verbs
+# (rm/mv/cp/find -delete + bash -c bypass) BEFORE the call ever reaches
+# us. This endpoint is the executor, not the gate. The container itself
+# runs no-new-privileges with /workspace as the only writable host mount.
+# ---------------------------------------------------------------------------
+
+
+class ShellRequest(BaseModel):
+    command: str
+    cwd: Optional[str] = None  # absolute path inside container, defaults to /workspace
+    timeout: int = 30          # seconds; capped at MAX_EXECUTION_TIME
+    env: Optional[Dict[str, str]] = None
+
+
+class ShellResponse(BaseModel):
+    success: bool
+    stdout: str
+    stderr: str
+    exit_code: int
+    elapsed_ms: int
+
+
+WORKSPACE_ROOT = Path("/workspace")
+
+
+@app.post("/shell", response_model=ShellResponse)
+def run_shell(request: ShellRequest):
+    """Run a shell command against the bind-mounted workspace."""
+    if not request.command or not request.command.strip():
+        raise HTTPException(status_code=400, detail="command is required")
+
+    timeout = min(max(1, request.timeout), MAX_EXECUTION_TIME)
+
+    # Resolve cwd. Default to /workspace; if the caller provides one,
+    # require it to live under /workspace so a model can't `cd /etc`
+    # to read host secrets — the workspace mount is the agreed
+    # boundary. The path must already exist (no auto-mkdir — that
+    # would let the model litter the host fs with empty dirs).
+    if request.cwd:
+        try:
+            cwd = Path(request.cwd).resolve()
+        except (OSError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"invalid cwd: {e}")
+        if not (cwd == WORKSPACE_ROOT or WORKSPACE_ROOT in cwd.parents):
+            raise HTTPException(
+                status_code=400,
+                detail=f"cwd must be under {WORKSPACE_ROOT}, got {cwd}",
+            )
+        if not cwd.exists():
+            raise HTTPException(status_code=400, detail=f"cwd does not exist: {cwd}")
+    else:
+        cwd = WORKSPACE_ROOT
+
+    start = time.time()
+    result = _run_cmd(["bash", "-c", request.command],
+                      timeout=timeout, cwd=cwd, env=request.env)
+    elapsed_ms = int((time.time() - start) * 1000)
+
+    return ShellResponse(
+        success=result["success"],
+        stdout=result["stdout"],
+        stderr=result["stderr"],
+        exit_code=result["returncode"],
+        elapsed_ms=elapsed_ms,
+    )
+
+
 @app.post("/execute", response_model=ExecuteResponse)
 def execute_code(request: ExecuteRequest):
     """Execute code in isolated environment."""
