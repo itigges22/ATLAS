@@ -470,7 +470,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					existingPath := resolveAgentPath(ctx, wfInput.Path)
 					if existing, err := os.ReadFile(existingPath); err == nil {
 						existingLines := strings.Count(string(existing), "\n") + 1
-						if existingLines > 5 {
+						// PC-201 — exempt corrupted files. If the existing
+						// file looks like it has prose preamble or stray
+						// markdown fences (sanitizeFileContent would change
+						// it), the only way to clean it up is full
+						// replacement. edit_file can't express "remove
+						// these specific corrupted lines" cleanly; the
+						// model proved this by emitting old_str = new_str
+						// for 53 wall-minutes (May 6 18:30 → 19:23).
+						// Allow write_file in that case and log the
+						// self-heal.
+						if existingLines > 5 && !looksCorruptedOnDisk(existingPath, string(existing)) {
 							rejection := fmt.Sprintf(
 								"File %s already exists (%d lines). write_file is for creating new files, not modifying existing ones. Use edit_file with old_str/new_str to make targeted changes — read the file first if you need to confirm the exact text to replace.",
 								wfInput.Path, existingLines)
@@ -486,6 +496,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								ToolName:   "write_file",
 							})
 							continue
+						}
+						if existingLines > 5 {
+							log.Printf("[agent] PC-201: allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
 						}
 					}
 				}

@@ -494,3 +494,26 @@ func (r *readTracker) snapshot() map[string]struct{} {
 	}
 	return out
 }
+
+// looksCorruptedOnDisk returns true when the file at displayPath has
+// the markdown-fence-with-prose corruption pattern that
+// sanitizeFileContent strips on input. PC-201.
+//
+// The corruption shape is what `<model> generated` left behind in
+// May 2026 templates: prose preamble ("Looking at the task, I need
+// to create..."), then a ```html fence, then real HTML, then a
+// closing fence with trailing commentary. Once on disk, this file
+// is unparseable to Jinja/the browser, but PC-159's surgical-edit
+// gate blocks write_file from cleaning it up. This helper tells the
+// agent loop "the file is broken, let write_file overwrite it."
+//
+// Mechanism: re-runs the same sanitizer that filters write_file
+// inputs against the existing on-disk content. If sanitizing would
+// change anything, the file is corrupted in the way we know how to
+// recognize. False positives are bounded — sanitizeFileContent only
+// strips when a fence is present, so a clean file (no fence) always
+// returns false here.
+func looksCorruptedOnDisk(displayPath, existing string) bool {
+	cleaned, sanitized := sanitizeFileContent(displayPath, existing)
+	return sanitized && cleaned != existing
+}

@@ -456,3 +456,24 @@ func TestResolveAgentPathStripsWorkspacePrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestLooksCorruptedOnDiskDetectsProsePreamble(t *testing.T) {
+	// The exact corruption pattern from /home/isaac/snake/templates/index.html.
+	// Without PC-201, write_file gets blocked by the >5-line gate and the
+	// model loops forever trying to clean it via edit_file.
+	corrupt := "Looking at the task, I need to create a complete `index.html` file...\n\n```html\n<!DOCTYPE html>\n<html><body>hi</body></html>\n```\n\nThis file:\n1. Renders correctly\n"
+	if !looksCorruptedOnDisk("templates/index.html", corrupt) {
+		t.Error("expected corrupted prose+fence file to be detected")
+	}
+
+	clean := "<!DOCTYPE html>\n<html><body>hi</body></html>\n"
+	if looksCorruptedOnDisk("templates/index.html", clean) {
+		t.Error("clean HTML file should NOT be flagged as corrupted")
+	}
+
+	// Markdown files legitimately contain fences — never flagged.
+	md := "# Title\n\n```python\nprint('hi')\n```\n"
+	if looksCorruptedOnDisk("README.md", md) {
+		t.Error("markdown file with fence should NOT be flagged")
+	}
+}
