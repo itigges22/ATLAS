@@ -374,3 +374,41 @@ func TestHasUserPackagesIgnoresPipOnly(t *testing.T) {
 		t.Error("flask present should count as user package")
 	}
 }
+
+func TestTierMaxTurnsRaisedDefaults(t *testing.T) {
+	t.Setenv("ATLAS_MAX_TURNS", "")
+	if got := TierMaxTurns(Tier2Medium); got != 60 {
+		t.Errorf("T2 = %d, want 60 (PC-200 raised cap)", got)
+	}
+	if got := TierMaxTurns(Tier3Hard); got != 100 {
+		t.Errorf("T3 = %d, want 100 (PC-200 raised cap)", got)
+	}
+}
+
+func TestTierMaxTurnsEnvOverride(t *testing.T) {
+	t.Setenv("ATLAS_MAX_TURNS", "150")
+	if got := TierMaxTurns(Tier2Medium); got != 150 {
+		t.Errorf("env override = %d, want 150", got)
+	}
+}
+
+func TestTierMaxTurnsZeroMeansAbsoluteMax(t *testing.T) {
+	t.Setenv("ATLAS_MAX_TURNS", "0")
+	if got := TierMaxTurns(Tier2Medium); got != absoluteMaxTurns {
+		t.Errorf("env=0 = %d, want %d (absolute hard wall)", got, absoluteMaxTurns)
+	}
+}
+
+func TestTierMaxTurnsClampsAboveAbsolute(t *testing.T) {
+	t.Setenv("ATLAS_MAX_TURNS", "999")
+	if got := TierMaxTurns(Tier2Medium); got != absoluteMaxTurns {
+		t.Errorf("env=999 = %d, want clamped to %d", got, absoluteMaxTurns)
+	}
+}
+
+func TestTierMaxTurnsInvalidEnvFallsThrough(t *testing.T) {
+	t.Setenv("ATLAS_MAX_TURNS", "garbage")
+	if got := TierMaxTurns(Tier2Medium); got != 60 {
+		t.Errorf("invalid env = %d, want 60 (tier default)", got)
+	}
+}

@@ -133,7 +133,26 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// the user message doesn't change mid-loop. Drives the verification gate.
 	userWantsVerification := isFixIntentMessage(userMessage)
 
+	// PC-200 — flag whether we've already injected the
+	// approaching-budget hint, so we don't fire it every turn after
+	// crossing the threshold.
+	budgetHintFired := false
+
 	for turn := 0; turn < ctx.MaxTurns; turn++ {
+		// PC-200 — at 80% of the turn cap, inject a one-time tool-result
+		// hint nudging the model to wrap up rather than getting stuck in
+		// recon mid-job. Goes via Messages so it lands in the next LLM
+		// prompt as a system note, not a user message.
+		if !budgetHintFired && turn > 0 && turn*5 >= ctx.MaxTurns*4 {
+			budgetHintFired = true
+			ctx.Messages = append(ctx.Messages, AgentMessage{
+				Role: "system",
+				Content: fmt.Sprintf(
+					"Turn budget notice: you're at turn %d of %d. If significant work remains, prioritize finishing the highest-impact items and verifying them — do not start new exploration. If you can finish in the remaining turns, keep going. If you cannot, summarize what's done and what's not in your `done` summary so the user knows what to follow up on.",
+					turn, ctx.MaxTurns),
+			})
+		}
+
 		// Bail out fast if the upstream request was cancelled (the client closed the
 		// connection, user hit Ctrl-C, terminal exited). Without this check the
 		// loop would keep grinding LLM calls and tool work for a client that's
@@ -326,7 +345,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// said something like "added /admin route" — no claim about
 			// the rest of the app) or when there are no gaps. Bounce
 			// only when both fire.
-			if !ctx.YoloMode && claimsUniversal(parsed.Summary) {
+			// PC-199 — fire claim-check ALSO when the user prompt was
+			// multi-issue ("LOTS of issues", "fix all the bugs",
+			// plurals like "routes", "tests", "endpoints"). The model's
+			// failure mode there is a NARROW done summary ("fixed the
+			// product route") that bypasses the universal-claim wording
+			// gate. By treating the prompt as the trigger condition,
+			// we catch "fixed 1 of N" cases regardless of how the
+			// model worded the summary. Structural check is the same.
+			shouldCheck := claimsUniversal(parsed.Summary) || promptIsMultiIssue(userMessage)
+			if !ctx.YoloMode && shouldCheck {
 				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Summary); gap != "" {
 					log.Printf("[agent] claim-check gate: bouncing done at turn %d — %s",
 						turn, truncateStr(gap, 200))

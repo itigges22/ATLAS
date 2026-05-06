@@ -129,3 +129,58 @@ def view(name): return render_template(name)
 		t.Errorf("dynamic render tripped check: %s", got)
 	}
 }
+
+func TestPromptIsMultiIssueCatchesPlurals(t *testing.T) {
+	yes := []string{
+		"there are LOTS of issues with the flask app",
+		"a ton of bugs in this code",
+		"fix all the bugs",
+		"the routes don't work — fix everything",
+		"multiple problems here",
+		"it doesn't work",
+		"all routes are broken",
+		"nothing works",
+		"can you fix the bugs?",
+	}
+	for _, m := range yes {
+		if !promptIsMultiIssue(m) {
+			t.Errorf("promptIsMultiIssue(%q) = false, want true", m)
+		}
+	}
+	no := []string{
+		"add a /admin route to the flask app",
+		"fix the typo on line 42",
+		"create a new endpoint for /health",
+		"why does index.html return 500?",
+		"what does this function do?",
+	}
+	for _, m := range no {
+		if promptIsMultiIssue(m) {
+			t.Errorf("promptIsMultiIssue(%q) = true, want false", m)
+		}
+	}
+}
+
+func TestPromptMultiIssueTriggersClaimCheck(t *testing.T) {
+	// Smoke: a multi-issue prompt + narrow done summary +
+	// missing templates → gap fires. Without PC-199, narrow
+	// summary would skip the check.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.py"), []byte(
+		`from flask import render_template
+def x(): return render_template('a.html')
+def y(): return render_template('b.html')`), 0o644)
+	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
+	os.WriteFile(filepath.Join(dir, "templates", "a.html"), []byte("ok"), 0o644)
+
+	narrow := "Fixed the /a route."
+	if claimsUniversal(narrow) {
+		t.Fatal("test premise broken: narrow summary should not be universal")
+	}
+	if !promptIsMultiIssue("LOTS of issues with the flask app, fix the bugs") {
+		t.Fatal("test premise broken: multi-issue prompt not detected")
+	}
+	if got := verifyCompletionClaims(dir, narrow); got == "" || !strings.Contains(got, "b.html") {
+		t.Errorf("gap report missing b.html, got: %q", got)
+	}
+}

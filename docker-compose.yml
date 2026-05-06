@@ -202,6 +202,11 @@ services:
       # proxy can only see its own container fs). Per-project override
       # via /workspace/.atlas/config.toml [execution] target=host.
       - ATLAS_VERIFY_IN=${ATLAS_VERIFY_IN:-sandbox}
+      # PC-200: turn cap override. Defaults to tier-based caps
+      # (T2:60, T3:100). Set a positive int to override, or 0 to use
+      # the absolute hard wall (200). Useful for "fix the entire app"
+      # prompts that legitimately need more turns.
+      - ATLAS_MAX_TURNS=${ATLAS_MAX_TURNS:-}
       # Pins the proxy's "where to write files" target. Must match the
       # working_dir below and the right-hand side of the volume mount.
       - ATLAS_WORKSPACE_DIR=/workspace

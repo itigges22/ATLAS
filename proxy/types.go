@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -13,18 +15,51 @@ import (
 // ---------------------------------------------------------------------------
 
 // TierMaxTurns returns the maximum agent loop iterations for this tier.
+//
+// PC-200 — caps raised from T2:30/T3:60 to T2:60/T3:100. Real fix-many-bugs
+// runs hit the old limits before the model could finish (May 6 18:20: model
+// declared done at turn 11 with 5 of 8 routes still 500 — not because of
+// the cap, but the cap removed the runway to retry after the strengthened
+// claim-check bounces).
+//
+// Override via ATLAS_MAX_TURNS env (any positive int wins; 0 = uncapped
+// up to absoluteMaxTurns; see envOverrideMaxTurns).
+const absoluteMaxTurns = 200 // hard wall to prevent stuck-model runaway
+
 func TierMaxTurns(t Tier) int {
+	if n := envOverrideMaxTurns(); n > 0 {
+		return n
+	}
 	switch t {
 	case Tier0Conversational:
 		return 5
 	case Tier1Simple:
 		return 30
 	case Tier2Medium:
-		return 30
-	case Tier3Hard:
 		return 60
+	case Tier3Hard:
+		return 100
 	}
-	return 30
+	return 60
+}
+
+// envOverrideMaxTurns reads ATLAS_MAX_TURNS. Returns:
+//   - n > 0  → use n (capped at absoluteMaxTurns)
+//   - n == 0 → use absoluteMaxTurns (effectively "uncapped")
+//   - unset / invalid → 0 (caller falls through to tier defaults)
+func envOverrideMaxTurns() int {
+	raw := os.Getenv("ATLAS_MAX_TURNS")
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	if n == 0 || n > absoluteMaxTurns {
+		return absoluteMaxTurns
+	}
+	return n
 }
 
 // TierUsesV3 returns whether write_file/edit_file should route through V3.

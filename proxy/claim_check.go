@@ -31,6 +31,35 @@ import (
 	"strings"
 )
 
+// multiIssueWords trips when the USER PROMPT (not the summary) signals
+// "fix multiple things." Models bypass claimsUniversal by writing a
+// narrow done summary ("fixed the product route") even when the user
+// clearly asked for the whole app to work. Catching it on the prompt
+// side handles that. PC-199.
+var multiIssueWords = []string{
+	"lots of", "ton of", "tons of", "many", "multiple", "several",
+	"all bugs", "all the bugs", "all issues", "all the issues",
+	"all errors", "all the errors", "all routes", "all endpoints",
+	"all tests", "all pages", "all the routes", "all the endpoints",
+	"fix all", "fix everything", "fix the bugs", "fix the issues",
+	"all of the", "everything", "nothing works",
+	"it does not work", "doesn't work", "isn't working",
+}
+
+// promptIsMultiIssue returns true when the user explicitly framed the
+// task as "fix multiple things" or "make this whole thing work."
+// Used as an alternate trigger for the claim-check gate so a narrow
+// done summary still gets verified against the workspace.
+func promptIsMultiIssue(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	for _, w := range multiIssueWords {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	return false
+}
+
 // claimWords trips the universal-claim filter. The phrases below are
 // what models actually emit when they oversummarize ("all", "every",
 // "no errors", "everything works", "fully functional", etc.).
