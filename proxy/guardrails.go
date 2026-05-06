@@ -17,9 +17,12 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // sanitizeFileContent strips markdown wrappers and prose preamble from
@@ -309,6 +312,185 @@ func splitShellSegments(cmd string) []string {
 	}
 	if cur.Len() > 0 {
 		out = append(out, cur.String())
+	}
+	return out
+}
+
+// isNewWrite returns true when the resolved path doesn't yet exist on
+// disk. Used by stub-detection / pattern-reflex gates to scope their
+// rejection logic to genuinely new files — modifying an existing file
+// is a different shape and the V3 / surgical-edit gate handles those.
+func isNewWrite(resolvedPath string) bool {
+	_, err := os.Stat(resolvedPath)
+	return os.IsNotExist(err)
+}
+
+// stubHTMLRe catches `<h1>Foo Page</h1>` / `<h1>Bar Section</h1>` —
+// the exact shape the model emits when it gives up and ships a
+// placeholder. Matches inside <body>, allows whitespace.
+var stubHTMLRe = regexp.MustCompile(
+	`(?is)<h\d>\s*[A-Za-z]+\s+(page|section|title|content|view)\s*</h\d>`)
+
+// looksLikeStub returns a non-empty rejection string when the content
+// looks like a placeholder/stub. PC-195. The model's lazy-completion
+// failure mode is to ship 8-line skeletons that pass syntactic gates
+// but ship the absolute minimum content to claim "done." Catches the
+// most egregious shapes per file type; deliberately conservative —
+// short content that has REAL substance (one-liner shell scripts,
+// minimal Dockerfiles, single-import test files) passes through.
+//
+// The fix is to either model the file from a sibling (templates/index.html
+// usually has the right scaffold) or — if the user really did ask for
+// a placeholder — say so in the response so the user knows.
+func looksLikeStub(displayPath, content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "write_file refused: content is empty. If you mean to create an empty file, write a meaningful starting structure or `touch` it via run_command."
+	}
+
+	ext := strings.ToLower(filepath.Ext(displayPath))
+	lineCount := strings.Count(trimmed, "\n") + 1
+
+	switch ext {
+	case ".html", ".htm":
+		// 200 chars is the cliff — full pages don't fit under that.
+		if len(trimmed) < 200 && stubHTMLRe.MatchString(trimmed) {
+			return stubRejectionMessage(displayPath,
+				"the body is just `<h1>X Page</h1>` with no real content")
+		}
+	case ".py":
+		// Functions whose body is `pass` or a single TODO comment.
+		if lineCount <= 5 && (regexp.MustCompile(`(?m)^\s*pass\s*$`).MatchString(trimmed) ||
+			regexp.MustCompile(`(?im)^\s*#\s*TODO\b.*$`).MatchString(trimmed)) {
+			if !strings.Contains(trimmed, "import ") && !strings.Contains(trimmed, "def ") && !strings.Contains(trimmed, "class ") {
+				return stubRejectionMessage(displayPath,
+					"the file body is just `pass` / `# TODO` with no real implementation")
+			}
+		}
+	case ".md", ".markdown":
+		if len(trimmed) < 100 && (strings.Contains(strings.ToLower(trimmed), "todo") ||
+			strings.Contains(strings.ToLower(trimmed), "placeholder")) {
+			return stubRejectionMessage(displayPath,
+				"the document is just a TODO/placeholder marker")
+		}
+	case ".js", ".ts", ".tsx", ".jsx":
+		// React component / module that's just an empty fragment or
+		// a `<div>Page</div>` placeholder.
+		if len(trimmed) < 200 && regexp.MustCompile(`(?is)return\s*\(?\s*<[a-z0-9]+>\s*[A-Za-z]+\s+(page|section|view)\s*</[a-z0-9]+>\s*\)?`).MatchString(trimmed) {
+			return stubRejectionMessage(displayPath,
+				"the component just returns `<X>Foo Page</X>` with no real markup")
+		}
+	}
+	return ""
+}
+
+func stubRejectionMessage(path, why string) string {
+	return fmt.Sprintf(
+		"write_file refused: %s looks like a placeholder stub — %s. Either (a) read a sibling file in the same directory to model the structure (the project's other %s files almost certainly have the right scaffold), or (b) if the user explicitly asked for an empty placeholder, acknowledge that in your response so they know the file needs to be filled in. Don't ship stubs and call the task done.",
+		path, why, strings.TrimPrefix(filepath.Ext(path), "."))
+}
+
+// patternMatchHint returns a non-empty rejection string when the model
+// is creating a NEW file in a directory that already contains files of
+// the same extension AND it hasn't read any of those siblings in this
+// session. PC-194. Forces the "model from existing patterns" reflex
+// instead of generating from scratch — a NEW route handler should
+// match the project's existing route handlers, a new test should match
+// the existing test conventions, etc.
+//
+// Only fires when:
+//   - The target path doesn't exist (genuinely new file, not an edit)
+//   - The parent directory contains ≥1 sibling with the same extension
+//   - ctx.FilesRead doesn't include any of those siblings
+//
+// Soft-coupled to AgentContext via the FilesRead snapshot we pass in;
+// keeps the helper testable without dragging the whole context type in.
+func patternMatchHint(resolvedPath, _ string) string {
+	if !isNewWrite(resolvedPath) {
+		return ""
+	}
+	dir := filepath.Dir(resolvedPath)
+	ext := strings.ToLower(filepath.Ext(resolvedPath))
+	if ext == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var siblings []string
+	for _, e := range entries {
+		if e.IsDir() || strings.ToLower(filepath.Ext(e.Name())) != ext {
+			continue
+		}
+		full := filepath.Join(dir, e.Name())
+		if full == resolvedPath {
+			continue
+		}
+		siblings = append(siblings, e.Name())
+	}
+	// Need a meaningful neighborhood — single-sibling dirs are too noisy
+	// (one-off configs, isolated entry points). Two or more is enough
+	// to call it a "pattern."
+	if len(siblings) < 2 {
+		return ""
+	}
+	// Don't gate when no session context is available — would block
+	// the first write of every new project. The agent loop wires this
+	// to ctx.FilesRead via the read-tracker; absence here means we
+	// can't reason about it.
+	read := patternReadTracker.snapshot()
+	for _, s := range siblings {
+		if _, ok := read[filepath.Join(dir, s)]; ok {
+			return ""
+		}
+	}
+	preview := siblings
+	if len(preview) > 3 {
+		preview = preview[:3]
+	}
+	return fmt.Sprintf(
+		"write_file deferred: you're creating a new %s file in %s, which already contains %d sibling %s files (e.g. %s). Read at least one of those first so this new file follows the project's existing conventions (style, imports, structure). Then re-issue the write_file call.",
+		ext, dir, len(siblings), ext, strings.Join(preview, ", "))
+}
+
+// patternReadTracker is a tiny indirection so patternMatchHint can ask
+// "did the agent read any of these sibling files?" without taking an
+// AgentContext dep that would force the function into the agent
+// package's import cycle. The agent loop populates this on every
+// successful read_file via patternReadTracker.add(absPath); the gate
+// reads from snapshot(). Cleared per-session via reset().
+//
+// Tradeoff: the tracker is process-global, so concurrent sessions in
+// one proxy share it. That's fine — a sibling read by ANY recent
+// session is signal that the model's been there. We bound memory by
+// capping at 200 entries (LRU-ish via insertion order).
+var patternReadTracker = newReadTracker()
+
+type readTracker struct {
+	mu    sync.Mutex
+	items map[string]struct{}
+}
+
+func newReadTracker() *readTracker { return &readTracker{items: map[string]struct{}{}} }
+
+func (r *readTracker) add(absPath string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.items) > 200 {
+		// Cheap eviction: drop the whole map. Anything still
+		// relevant will be re-added on next read.
+		r.items = map[string]struct{}{}
+	}
+	r.items[absPath] = struct{}{}
+}
+
+func (r *readTracker) snapshot() map[string]struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]struct{}, len(r.items))
+	for k := range r.items {
+		out[k] = struct{}{}
 	}
 	return out
 }

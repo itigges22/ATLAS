@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -322,5 +324,113 @@ func TestSplitShellSegmentsRespectsQuotes(t *testing.T) {
 	}
 	if !strings.Contains(got[0], "a;b") {
 		t.Errorf("first segment lost the quoted body: %q", got[0])
+	}
+}
+
+func TestLooksLikeStubHTMLPlaceholder(t *testing.T) {
+	// Exactly the shape the model emitted in the May 6 flask run.
+	stub := "<!DOCTYPE html>\n<html>\n<head>\n    <title>Pricing</title>\n</head>\n<body>\n    <h1>Pricing Page</h1>\n</body>\n</html>"
+	if got := looksLikeStub("templates/pricing.html", stub); got == "" {
+		t.Error("stub HTML should be rejected")
+	}
+}
+
+func TestLooksLikeStubAcceptsRealHTML(t *testing.T) {
+	// A real templated page with content — not a stub.
+	real := `<!DOCTYPE html>
+<html><head><title>Pricing</title></head>
+<body>
+  <h1>Pricing Page</h1>
+  <p>Choose the plan that fits your needs.</p>
+  <ul>
+    <li>Free — $0/mo: 1 project, 100 calls/day</li>
+    <li>Pro — $20/mo: unlimited projects, 10k calls/day</li>
+    <li>Team — $80/mo: SSO, audit log, priority support</li>
+  </ul>
+  <p>All plans include a 14-day trial.</p>
+</body></html>`
+	if got := looksLikeStub("templates/pricing.html", real); got != "" {
+		t.Errorf("real HTML rejected as stub: %s", got)
+	}
+}
+
+func TestLooksLikeStubPython(t *testing.T) {
+	if got := looksLikeStub("widget.py", "pass"); got == "" {
+		t.Error("`pass`-only file should be rejected")
+	}
+	if got := looksLikeStub("widget.py", "# TODO: implement\n"); got == "" {
+		t.Error("`# TODO`-only file should be rejected")
+	}
+	// Real one-liner — not a stub.
+	if got := looksLikeStub("widget.py", "from flask import Blueprint\nbp = Blueprint('widget', __name__)\n"); got != "" {
+		t.Errorf("real one-liner rejected: %s", got)
+	}
+}
+
+func TestLooksLikeStubEmpty(t *testing.T) {
+	if got := looksLikeStub("a.txt", ""); got == "" {
+		t.Error("empty content should be rejected")
+	}
+}
+
+func TestLooksLikeStubAcceptsShortShellScript(t *testing.T) {
+	// Short content is fine if it has substance.
+	if got := looksLikeStub("scripts/probe.sh", "#!/bin/sh\nexec curl -sf http://localhost:8080/health\n"); got != "" {
+		t.Errorf("real shell one-liner rejected: %s", got)
+	}
+}
+
+func TestPatternMatchHintNewFileInDirOfSiblings(t *testing.T) {
+	dir := t.TempDir()
+	// 3 siblings with the same extension.
+	for _, name := range []string{"index.html", "about.html", "contact.html"} {
+		os.WriteFile(filepath.Join(dir, name), []byte("<html/>"), 0o644)
+	}
+	target := filepath.Join(dir, "pricing.html")
+	if got := patternMatchHint(target, "<html/>"); got == "" {
+		t.Error("expected hint when no siblings have been read")
+	}
+	// Now register a sibling read — hint should disappear.
+	patternReadTracker.add(filepath.Join(dir, "index.html"))
+	if got := patternMatchHint(target, "<html/>"); got != "" {
+		t.Errorf("hint should disappear after sibling read: %s", got)
+	}
+}
+
+func TestPatternMatchHintSkipsExistingFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.html"), []byte("a"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.html"), []byte("b"), 0o644)
+	target := filepath.Join(dir, "a.html") // exists already → not a new write
+	if got := patternMatchHint(target, "x"); got != "" {
+		t.Errorf("editing existing file should not trip hint: %s", got)
+	}
+}
+
+func TestPatternMatchHintSkipsLonelyDir(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "only.go"), []byte("package x"), 0o644)
+	target := filepath.Join(dir, "new.go")
+	if got := patternMatchHint(target, "package x"); got != "" {
+		t.Errorf("single-sibling dir shouldn't trip hint: %s", got)
+	}
+}
+
+func TestResolveVerifyTargetEnvAndConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ATLAS_VERIFY_IN", "")
+	if got := resolveVerifyTarget(dir); got != "sandbox" {
+		t.Errorf("default = %q, want sandbox", got)
+	}
+	t.Setenv("ATLAS_VERIFY_IN", "host")
+	if got := resolveVerifyTarget(dir); got != "host" {
+		t.Errorf("env-host = %q, want host", got)
+	}
+	// Per-project config wins.
+	os.MkdirAll(filepath.Join(dir, ".atlas"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".atlas", "config.toml"),
+		[]byte("[execution]\ntarget = \"sandbox\"\n"), 0o644)
+	if got := resolveVerifyTarget(dir); got != "sandbox" {
+		t.Errorf("config override = %q, want sandbox", got)
 	}
 }
