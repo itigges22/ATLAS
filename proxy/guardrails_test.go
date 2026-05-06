@@ -434,3 +434,25 @@ func TestResolveVerifyTargetEnvAndConfig(t *testing.T) {
 		t.Errorf("config override = %q, want sandbox", got)
 	}
 }
+
+func TestResolveAgentPathStripsWorkspacePrefix(t *testing.T) {
+	// PC-198 — model frequently emits `workspace/X` (no leading slash)
+	// when it means the project root. resolveAgentPath must strip
+	// the prefix instead of joining it onto cwd, which would
+	// produce `/workspace/workspace/X` and 404.
+	ctx := &AgentContext{WorkingDir: "/workspace"}
+	cases := []struct {
+		in, want string
+	}{
+		{"workspace/app.py", "/workspace/app.py"},
+		{"workspace", "/workspace"},
+		{"./workspace/app.py", "/workspace/app.py"},
+		{"app.py", "/workspace/app.py"},          // no prefix → unchanged
+		{"src/main.go", "/workspace/src/main.go"},
+	}
+	for _, tc := range cases {
+		if got := resolveAgentPath(ctx, tc.in); got != tc.want {
+			t.Errorf("resolveAgentPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

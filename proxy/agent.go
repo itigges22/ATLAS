@@ -1118,13 +1118,13 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("  NOT write_file with the entire file's new contents.\n")
 	sb.WriteString("- The `content` you put in write_file / edit_file goes verbatim onto disk. **No markdown fences. No prose preamble (\"Looking at the task...\", \"Here's the file:\"). No trailing explanation.** Just the raw file contents. The agent layer strips fenced wrappers before writing, but the right move is to never emit them in the first place.\n")
 	sb.WriteString("- **Never use shell `rm`, `mv`, `cp`, or `find -delete` to mutate workspace files.** Use the dedicated tools — `edit_file` for changes, `write_file` for new files, `delete_file` for removal. Shell mutation bypasses the safety gates and will be rejected by the agent layer. `run_command` is for build / test / run / inspection only (python, pytest, npm, go, ls, cat, curl, etc.).\n")
-	sb.WriteString("- Use run_command to verify your changes work (build, test, lint, curl). When the user says \"fix\" or \"isn't working\", verify before declaring done — start the server, hit the endpoint, run the test. \"Done\" without a verification step is a guess.\n")
-	sb.WriteString("- For LONG-RUNNING commands (servers, watchers — anything that doesn't exit on its own): use `run_background` instead of `run_command`. The pattern is: `run_background(\"python app.py\")` → wait for it to bind → `run_command(\"curl -sf http://localhost:5000/\")` → `stop_background(job_id)`. NEVER use `timeout 5 ... || true` to fake-background a server — the server dies before the curl can hit it. Always `stop_background` when done; jobs left running waste slots.\n")
+	sb.WriteString("- Use run_command to verify your changes (build, test, lint, curl). For \"fix\"/\"isn't working\" prompts, verify before `done`.\n")
+	sb.WriteString("- For LONG-RUNNING commands (servers): `run_background(cmd)` → `run_command(\"curl ...\")` → `stop_background(job_id)`. Don't use `timeout 5 ... || true` — server dies before probe hits.\n")
 	sb.WriteString("- When creating a project from scratch: create config/build files FIRST, verify they work (e.g., npm install, cargo check), THEN create feature code\n")
 	sb.WriteString("- Respond with {\"type\":\"done\",\"summary\":\"...\"} when the task is complete\n")
 	sb.WriteString("- If a command fails, read the error output, fix the issue, and try again\n")
 	sb.WriteString("- Do not guess at file contents — read first, then edit\n")
-	sb.WriteString("- ALWAYS use relative file paths (e.g., 'app.py', 'src/main.rs'), NEVER absolute paths\n")
+	sb.WriteString("- ALWAYS use relative file paths (`app.py`, `src/main.rs`), NEVER absolute paths and NEVER prefix with `workspace/` — that's the parent dir, not your project root.\n")
 	sb.WriteString("- When adding features to an existing project, read at most 2-3 files to understand the structure, then immediately write your changes. Do not explore the entire directory tree. Prioritize writing code over reading code.\n\n")
 
 	// Project context
@@ -1157,31 +1157,25 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// universal pattern from PC-191. Probe-first hints (PC-193) are
 	// added per-toolchain when present.
 	if tcs := detectProjectToolchains(ctx.WorkingDir); len(tcs) > 0 {
-		sb.WriteString("## Toolchains\n\n")
-		sb.WriteString("This project uses the following language toolchains. Use the listed runner for verification commands so they execute against the project's pinned deps:\n\n")
+		sb.WriteString("## Toolchains\n")
 		for _, tc := range tcs {
-			sb.WriteString(fmt.Sprintf("- **%s** (manifests: %s)\n", tc.Name, strings.Join(tc.Manifests, ", ")))
-			sb.WriteString(fmt.Sprintf("  - Runner: `%s`\n", tc.Runner))
+			line := fmt.Sprintf("- **%s** — runner `%s`", tc.Name, displayRelativeRunner(tc.Runner, ctx.WorkingDir))
 			if tc.InstallCommand != "" {
-				sb.WriteString(fmt.Sprintf("  - Install deps: `%s` (only if probe says deps are missing)\n", tc.InstallCommand))
+				line += fmt.Sprintf(", install `%s`", tc.InstallCommand)
 			}
 			if tc.TestCommand != "" {
-				sb.WriteString(fmt.Sprintf("  - Tests: `%s`\n", tc.TestCommand))
+				line += fmt.Sprintf(", tests `%s`", tc.TestCommand)
 			}
 			if probe := probeToolchainReady(ctx.WorkingDir, tc); probe != "" {
-				sb.WriteString(fmt.Sprintf("  - Status: %s\n", probe))
+				line += " [" + probe + "]"
 			}
+			sb.WriteString(line + "\n")
 		}
-		sb.WriteString("\n**Don't reinstall deps that are already working.** The probe above tells you whether the project is ready to run as-is. If yes, go straight to verification. If a needed dep is missing, install only that dep, not the world.\n\n")
+		sb.WriteString("Skip install when status is `ready`; install only what's missing.\n\n")
 	}
 
-	// Execution target hint — surfaces whether run_command is going
-	// to the sandbox container (default, isolated) or directly to the
-	// host (PC-192, opt-in via ATLAS_VERIFY_IN=host). The model needs
-	// to know because host-mode means commands see the user's actual
-	// venv binaries, system tools, env vars, and running services.
 	if ctx.VerifyOnHost {
-		sb.WriteString("**Execution target: host machine.** `run_command` runs directly on the user's host (not the sandbox container). This means: commands see the host's installed tools, env vars, and running services (databases, etc.); paths resolve against the host filesystem; and verifications run against the same environment the user uses themselves. The shell-op safety gates (no rm/mv/cp/find -delete/bash -c) still apply.\n\n")
+		sb.WriteString("`run_command` targets the host (not sandbox). Sees host env/services/paths.\n\n")
 	}
 
 	// Show which files are in the project (names only, not full content).
@@ -1984,91 +1978,94 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 func probeToolchainReady(workingDir string, tc Toolchain) string {
 	switch tc.Name {
 	case "python":
-		// Strong signal: a venv with at least one third-party package
-		// installed. We check for the venv's site-packages directory
-		// containing anything beyond pip/setuptools.
 		for _, vd := range []string{"venv", ".venv", "env", ".env-py"} {
 			sp := filepath.Join(workingDir, vd, "lib")
 			if entries, err := os.ReadDir(sp); err == nil {
 				for _, e := range entries {
 					if strings.HasPrefix(e.Name(), "python") && e.IsDir() {
-						pkgs := filepath.Join(sp, e.Name(), "site-packages")
-						if hasUserPackages(pkgs) {
-							return "deps appear installed in project venv — skip install, go straight to verify"
+						if hasUserPackages(filepath.Join(sp, e.Name(), "site-packages")) {
+							return "ready"
 						}
 					}
 				}
 			}
 		}
-		// No venv but a requirements.txt or pyproject.toml exists.
 		if hasFile(workingDir, "requirements.txt") || hasFile(workingDir, "pyproject.toml") {
-			return "deps NOT installed (no populated venv found) — run install before verify"
+			return "needs install"
 		}
-		return "no manifest, no venv — single-file script, just run it"
+		return "no manifest"
 
 	case "node":
-		// node_modules present and not empty → deps installed.
-		nm := filepath.Join(workingDir, "node_modules")
-		if entries, err := os.ReadDir(nm); err == nil && len(entries) > 0 {
-			return "node_modules populated — skip install, go straight to verify"
+		if entries, err := os.ReadDir(filepath.Join(workingDir, "node_modules")); err == nil && len(entries) > 0 {
+			return "ready"
 		}
-		return "node_modules missing — run install before verify"
+		return "needs install"
 
 	case "rust":
-		// target/ exists → at least one build has happened.
 		if info, err := os.Stat(filepath.Join(workingDir, "target")); err == nil && info.IsDir() {
-			return "target/ exists — incremental build will be fast"
+			return "warm"
 		}
-		return "no target/ — first build will compile from scratch"
+		return "cold"
 
 	case "go":
-		// Hard to probe without GOPATH inspection; presence of go.sum
-		// + non-empty vendor/ is the surest filesystem signal.
 		if info, err := os.Stat(filepath.Join(workingDir, "vendor")); err == nil && info.IsDir() {
-			return "vendor/ present — deps vendored, skip install"
+			return "vendored"
 		}
 		if hasFile(workingDir, "go.sum") {
-			return "go.sum present — `go run`/`go test` will fetch as needed"
+			return "ready"
 		}
-		return "no go.sum yet — run `go mod tidy` before verify"
+		return "needs `go mod tidy`"
 
 	case "ruby":
 		if info, err := os.Stat(filepath.Join(workingDir, "vendor", "bundle")); err == nil && info.IsDir() {
-			return "vendor/bundle present — skip install"
+			return "ready"
 		}
-		return "no vendor/bundle — run install before verify"
+		return "needs install"
 
-	case "java-maven":
-		if info, err := os.Stat(filepath.Join(workingDir, "target")); err == nil && info.IsDir() {
-			return "target/ present — incremental build will be fast"
+	case "java-maven", "java-gradle":
+		dir := "target"
+		if tc.Name == "java-gradle" {
+			dir = "build"
 		}
-		return "no target/ — first build will compile + download deps"
-
-	case "java-gradle":
-		if info, err := os.Stat(filepath.Join(workingDir, "build")); err == nil && info.IsDir() {
-			return "build/ present — incremental build will be fast"
+		if info, err := os.Stat(filepath.Join(workingDir, dir)); err == nil && info.IsDir() {
+			return "warm"
 		}
-		return "no build/ — first build will compile + download deps"
+		return "cold"
 
 	case "php":
 		if info, err := os.Stat(filepath.Join(workingDir, "vendor")); err == nil && info.IsDir() {
-			return "vendor/ present — skip composer install"
+			return "ready"
 		}
-		return "no vendor/ — run composer install before verify"
+		return "needs install"
 
 	case "dotnet":
 		if info, err := os.Stat(filepath.Join(workingDir, "bin")); err == nil && info.IsDir() {
-			return "bin/ present — `dotnet run` will use cached restore"
+			return "warm"
 		}
-		return "no bin/ — first run does an implicit restore"
+		return "cold"
 
 	case "dart":
 		if info, err := os.Stat(filepath.Join(workingDir, ".dart_tool")); err == nil && info.IsDir() {
-			return ".dart_tool/ present — pub get already run"
+			return "ready"
 		}
-		return "no .dart_tool/ — run pub get before verify"
+		return "needs install"
 	}
 	return ""
+}
+
+// displayRelativeRunner converts an absolute runner path to its
+// project-relative form when it lives under workingDir. Compresses
+// `/workspace/venv/bin/python` to `venv/bin/python` in prompt output —
+// matches the existing "use relative paths" rule and stops the model
+// confusing itself into emitting `workspace/app.py`.
+func displayRelativeRunner(runner, workingDir string) string {
+	if !filepath.IsAbs(runner) {
+		return runner
+	}
+	if rel, err := filepath.Rel(workingDir, runner); err == nil && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return runner
 }
 
 // hasUserPackages returns true when site-packages contains anything

@@ -1580,6 +1580,23 @@ func resolvePath(path, workingDir string) string {
 // copies the absolute path, the proxy rewrites it to /workspace/app.py,
 // and read_file actually finds the file.
 func resolveAgentPath(ctx *AgentContext, path string) string {
+	// PC-198 — defensive prefix strip. The local model frequently
+	// emits `workspace/app.py` (no leading slash) when it means the
+	// project root. Without this, resolvePath joins it onto cwd and
+	// produces `/workspace/workspace/app.py`, which 404s. Strip the
+	// `workspace/` prefix when WorkingDir is exactly `/workspace`.
+	// Also handles a bare `workspace` (no trailing slash) for
+	// list_directory.
+	if ctx.WorkingDir == "/workspace" {
+		switch {
+		case path == "workspace":
+			path = "."
+		case strings.HasPrefix(path, "workspace/"):
+			path = strings.TrimPrefix(path, "workspace/")
+		case strings.HasPrefix(path, "./workspace/"):
+			path = strings.TrimPrefix(path, "./workspace/")
+		}
+	}
 	if filepath.IsAbs(path) && ctx.HostWorkingDir != "" {
 		clean := filepath.Clean(path)
 		host := filepath.Clean(ctx.HostWorkingDir)

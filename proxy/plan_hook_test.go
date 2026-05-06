@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -322,14 +321,14 @@ func TestProbeToolchainReadyPythonVenv(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644)
 	tcs := detectProjectToolchains(dir)
-	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "NOT installed") {
-		t.Errorf("no venv yet, got %q", got)
+	if got := probeToolchainReady(dir, tcs[0]); got != "needs install" {
+		t.Errorf("no venv yet, got %q want %q", got, "needs install")
 	}
 	// Now scaffold a populated venv.
 	sp := filepath.Join(dir, "venv", "lib", "python3.11", "site-packages", "flask")
 	os.MkdirAll(sp, 0o755)
-	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "appear installed") {
-		t.Errorf("populated venv not detected: %q", got)
+	if got := probeToolchainReady(dir, tcs[0]); got != "ready" {
+		t.Errorf("populated venv not detected: %q want %q", got, "ready")
 	}
 }
 
@@ -337,12 +336,28 @@ func TestProbeToolchainReadyNodeModules(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0o644)
 	tcs := detectProjectToolchains(dir)
-	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "missing") {
-		t.Errorf("no node_modules, got %q", got)
+	if got := probeToolchainReady(dir, tcs[0]); got != "needs install" {
+		t.Errorf("no node_modules, got %q want %q", got, "needs install")
 	}
 	os.MkdirAll(filepath.Join(dir, "node_modules", "express"), 0o755)
-	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "populated") {
-		t.Errorf("populated node_modules not detected: %q", got)
+	if got := probeToolchainReady(dir, tcs[0]); got != "ready" {
+		t.Errorf("populated node_modules not detected: %q want %q", got, "ready")
+	}
+}
+
+func TestDisplayRelativeRunner(t *testing.T) {
+	cases := []struct {
+		runner, cwd, want string
+	}{
+		{"/workspace/venv/bin/python", "/workspace", "venv/bin/python"},
+		{"node", "/workspace", "node"},
+		{"/usr/bin/python", "/workspace", "/usr/bin/python"}, // outside cwd → unchanged
+		{"./gradlew run", "/workspace", "./gradlew run"},
+	}
+	for _, tc := range cases {
+		if got := displayRelativeRunner(tc.runner, tc.cwd); got != tc.want {
+			t.Errorf("displayRelativeRunner(%q, %q) = %q, want %q", tc.runner, tc.cwd, got, tc.want)
+		}
 	}
 }
 
