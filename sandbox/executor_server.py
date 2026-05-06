@@ -8,11 +8,15 @@ Provides isolated code execution with resource limits and structured error repor
 import os
 import sys
 import shutil
+import signal
 import tempfile
 import subprocess
 import logging
 import re
+import threading
 import time
+import uuid
+from collections import deque
 from typing import Dict, Optional, List
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
@@ -149,6 +153,223 @@ class ShellResponse(BaseModel):
 
 
 WORKSPACE_ROOT = Path("/workspace")
+
+
+# ---------------------------------------------------------------------------
+# Background jobs (PC-196)
+# ---------------------------------------------------------------------------
+#
+# The agent's verify reflex is "run python app.py / npm start / cargo run
+# and curl the result." Foreground /shell can't do that — the server
+# blocks until killed. Models work around it with `timeout 5 ... || true`
+# hacks that capture the startup banner but tear the server down before
+# anything can curl it.
+#
+# Background jobs solve this cleanly: start_background spawns the
+# command and returns a job_id immediately, tail_background lets the
+# model peek at stdout/stderr, stop_background kills it. The model can
+# now run a server, hit it from another command, then clean up.
+#
+# Process-global registry. Keyed by job_id (uuid4). Each entry holds:
+#   proc:    subprocess.Popen
+#   stdout:  deque of recent lines (bounded — long-running servers
+#            otherwise eat unbounded memory)
+#   stderr:  deque of recent lines
+#   command: original command string for diagnostics
+#   started: time.time() of spawn
+#
+# Cleanup: a janitor thread sweeps finished jobs every 30s, dropping
+# entries older than BG_RETENTION_SEC. Models can still query a job
+# right after it exits to read final output.
+
+BG_MAX_LINES = 500          # ring buffer per stream
+BG_MAX_JOBS = 32            # hard cap so a misbehaving model can't OOM us
+BG_RETENTION_SEC = 600      # keep finished jobs around for 10 min
+
+_bg_jobs: Dict[str, dict] = {}
+_bg_lock = threading.Lock()
+
+
+def _bg_drain_stream(job_id: str, stream_name: str, fh):
+    """Tail a Popen pipe in a background thread, append each line to
+    the job's deque. Runs until the pipe closes (process exit)."""
+    try:
+        for raw in iter(fh.readline, ""):
+            if raw == "":
+                break
+            with _bg_lock:
+                job = _bg_jobs.get(job_id)
+                if job is None:
+                    return
+                job[stream_name].append(raw.rstrip("\n"))
+    except (OSError, ValueError):
+        # pipe closed / process gone — normal end of life
+        return
+
+
+def _bg_janitor():
+    """Sweep finished jobs older than retention. Daemon thread."""
+    while True:
+        time.sleep(30)
+        cutoff = time.time() - BG_RETENTION_SEC
+        with _bg_lock:
+            for jid in list(_bg_jobs.keys()):
+                job = _bg_jobs[jid]
+                if job["proc"].poll() is not None and job.get("ended_at", 0) < cutoff:
+                    del _bg_jobs[jid]
+
+
+threading.Thread(target=_bg_janitor, daemon=True).start()
+
+
+class BackgroundStartRequest(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+    env: Optional[Dict[str, str]] = None
+
+
+class BackgroundStartResponse(BaseModel):
+    job_id: str
+    pid: int
+    started_at: float
+
+
+class BackgroundOutputResponse(BaseModel):
+    job_id: str
+    running: bool
+    exit_code: Optional[int]
+    stdout: List[str]
+    stderr: List[str]
+    elapsed_sec: float
+    command: str
+
+
+class BackgroundStopResponse(BaseModel):
+    job_id: str
+    killed: bool
+    exit_code: Optional[int]
+    stdout: List[str]
+    stderr: List[str]
+
+
+def _resolve_bg_cwd(raw_cwd: Optional[str]) -> Path:
+    """Same workspace-boundary check as run_shell."""
+    if raw_cwd:
+        try:
+            cwd = Path(raw_cwd).resolve()
+        except (OSError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"invalid cwd: {e}")
+        if not (cwd == WORKSPACE_ROOT or WORKSPACE_ROOT in cwd.parents):
+            raise HTTPException(
+                status_code=400,
+                detail=f"cwd must be under {WORKSPACE_ROOT}, got {cwd}",
+            )
+        if not cwd.exists():
+            raise HTTPException(status_code=400, detail=f"cwd does not exist: {cwd}")
+        return cwd
+    return WORKSPACE_ROOT
+
+
+@app.post("/jobs/start", response_model=BackgroundStartResponse)
+def background_start(request: BackgroundStartRequest):
+    """Spawn a background process and return a job_id.
+    Returns immediately — does NOT wait for the process to print
+    anything. Caller polls /jobs/{id}/output for stdout/stderr."""
+    if not request.command or not request.command.strip():
+        raise HTTPException(status_code=400, detail="command is required")
+    cwd = _resolve_bg_cwd(request.cwd)
+    with _bg_lock:
+        if len(_bg_jobs) >= BG_MAX_JOBS:
+            raise HTTPException(
+                status_code=429,
+                detail=f"too many active jobs ({BG_MAX_JOBS}). Stop existing jobs first.",
+            )
+    env = os.environ.copy()
+    if request.env:
+        env.update(request.env)
+    try:
+        proc = subprocess.Popen(
+            ["bash", "-c", request.command],
+            cwd=str(cwd),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True,  # so /jobs/stop can kill the whole group
+        )
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=500, detail=f"spawn failed: {e}")
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "proc": proc,
+        "command": request.command,
+        "started_at": time.time(),
+        "stdout": deque(maxlen=BG_MAX_LINES),
+        "stderr": deque(maxlen=BG_MAX_LINES),
+    }
+    with _bg_lock:
+        _bg_jobs[job_id] = job
+    threading.Thread(target=_bg_drain_stream, args=(job_id, "stdout", proc.stdout), daemon=True).start()
+    threading.Thread(target=_bg_drain_stream, args=(job_id, "stderr", proc.stderr), daemon=True).start()
+    return BackgroundStartResponse(job_id=job_id, pid=proc.pid, started_at=job["started_at"])
+
+
+@app.get("/jobs/{job_id}/output", response_model=BackgroundOutputResponse)
+def background_output(job_id: str, lines: int = 50):
+    """Snapshot of the job's recent stdout/stderr + run state."""
+    with _bg_lock:
+        job = _bg_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"unknown job_id: {job_id}")
+        proc = job["proc"]
+        rc = proc.poll()
+        running = rc is None
+        if not running and "ended_at" not in job:
+            job["ended_at"] = time.time()
+        # Snapshot the deques (thread-safe copy under lock)
+        stdout = list(job["stdout"])[-max(1, lines):]
+        stderr = list(job["stderr"])[-max(1, lines):]
+        elapsed = time.time() - job["started_at"]
+        cmd = job["command"]
+    return BackgroundOutputResponse(
+        job_id=job_id, running=running, exit_code=rc,
+        stdout=stdout, stderr=stderr, elapsed_sec=elapsed, command=cmd,
+    )
+
+
+@app.post("/jobs/{job_id}/stop", response_model=BackgroundStopResponse)
+def background_stop(job_id: str):
+    """SIGTERM the process group, wait briefly, SIGKILL if still alive.
+    Returns the final stdout/stderr buffer."""
+    with _bg_lock:
+        job = _bg_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"unknown job_id: {job_id}")
+        proc = job["proc"]
+    killed = False
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait(timeout=2)
+        killed = True
+    with _bg_lock:
+        job["ended_at"] = time.time()
+        stdout = list(job["stdout"])
+        stderr = list(job["stderr"])
+    return BackgroundStopResponse(
+        job_id=job_id, killed=killed, exit_code=proc.poll(),
+        stdout=stdout[-50:], stderr=stderr[-50:],
+    )
 
 
 @app.post("/shell", response_model=ShellResponse)

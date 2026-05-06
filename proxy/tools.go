@@ -32,6 +32,9 @@ func init() {
 	registerTool(findFileTool())
 	registerTool(listDirectoryTool())
 	registerTool(planTasksTool())
+	registerTool(runBackgroundTool())
+	registerTool(tailBackgroundTool())
+	registerTool(stopBackgroundTool())
 }
 
 func registerTool(t *ToolDef) {
@@ -1658,4 +1661,220 @@ func firstNonEmptyLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// ---------------------------------------------------------------------------
+// Background commands (PC-196)
+// ---------------------------------------------------------------------------
+//
+// Three tools wrap the sandbox /jobs/* endpoints. The pattern the model
+// learns is: run_background(server) → tail_background or curl via
+// run_command → stop_background. Without these, foreground servers
+// (flask, npm start, cargo run) can't be verified — they don't exit
+// and the model invents `timeout 5 ... || true` workarounds that tear
+// the server down before any probe can hit it.
+//
+// All three tools require ATLAS_VERIFY_IN=sandbox (the default). Host
+// mode bypasses the sandbox entirely; running long-lived processes on
+// the host without any reaping is a foot-gun we don't want to ship,
+// so we surface a clear error instead.
+
+func runBackgroundTool() *ToolDef {
+	return &ToolDef{
+		Name: "run_background",
+		Description: "Start a long-running command (server, watcher, etc.) in the background and return a job_id. Use for `python app.py`, `npm start`, `cargo run`, `flask run` — anything that doesn't exit. Returns initial stdout/stderr captured during a brief settle window so you can confirm startup. Pair with run_command/curl to probe the running service, then stop_background to clean up.",
+		InputSchema: RunBackgroundInput{},
+		ReadOnly:    false,
+		Destructive: false,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input RunBackgroundInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(input.Command) == "" {
+				return &ToolResult{Success: false, Error: "run_background: command cannot be empty"}, nil
+			}
+			if reason := validateShellCommand(input.Command); reason != "" {
+				return &ToolResult{Success: false, Error: reason}, nil
+			}
+			if ctx.VerifyOnHost {
+				return &ToolResult{
+					Success: false,
+					Error:   "run_background is only available in sandbox mode (ATLAS_VERIFY_IN=sandbox). On the host, use `run_command` with `nohup ... &` and track the PID yourself.",
+				}, nil
+			}
+			cwd := ctx.WorkingDir
+			if input.Cwd != "" {
+				cwd = resolveAgentPath(ctx, input.Cwd)
+			}
+			settleMs := 1500
+			if input.SettleMs != nil {
+				settleMs = *input.SettleMs
+				if settleMs < 0 {
+					settleMs = 0
+				} else if settleMs > 10000 {
+					settleMs = 10000
+				}
+			}
+			jobID, pid, err := sandboxStartBackground(ctx, input.Command, cwd)
+			if err != nil {
+				return &ToolResult{Success: false, Error: fmt.Sprintf("sandbox start failed: %v", err)}, nil
+			}
+			// Settle window — give the process time to bind a port, fail
+			// to import, etc., before we hand back to the model.
+			time.Sleep(time.Duration(settleMs) * time.Millisecond)
+			tail, _ := sandboxTailBackground(ctx, jobID, 50)
+			out := RunBackgroundOutput{
+				JobID:   jobID,
+				PID:     pid,
+				Stdout:  tail.Stdout,
+				Stderr:  tail.Stderr,
+				Running: tail.Running,
+			}
+			if !tail.Running {
+				out.ExitCode = tail.ExitCode
+			}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
+		},
+	}
+}
+
+func tailBackgroundTool() *ToolDef {
+	return &ToolDef{
+		Name: "tail_background",
+		Description: "Read the recent stdout/stderr of a background job started via run_background. Returns the last N lines of each stream (default 50), the run state (running/exited), and the exit code if applicable. Use to check whether a server is still up, watch test runner output, or read the failure traceback after a crash.",
+		InputSchema: TailBackgroundInput{},
+		ReadOnly:    true,
+		Destructive: false,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input TailBackgroundInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(input.JobID) == "" {
+				return &ToolResult{Success: false, Error: "tail_background: job_id required"}, nil
+			}
+			lines := 50
+			if input.Lines != nil {
+				lines = *input.Lines
+				if lines < 1 {
+					lines = 1
+				} else if lines > 500 {
+					lines = 500
+				}
+			}
+			out, err := sandboxTailBackground(ctx, input.JobID, lines)
+			if err != nil {
+				return &ToolResult{Success: false, Error: err.Error()}, nil
+			}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
+		},
+	}
+}
+
+func stopBackgroundTool() *ToolDef {
+	return &ToolDef{
+		Name: "stop_background",
+		Description: "Stop a background job started via run_background. Sends SIGTERM, waits briefly, then SIGKILL if needed. Returns the final stdout/stderr buffer. Always call this when you're done with a background job — leaving them running blocks future job slots.",
+		InputSchema: StopBackgroundInput{},
+		ReadOnly:    false,
+		Destructive: true,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input StopBackgroundInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(input.JobID) == "" {
+				return &ToolResult{Success: false, Error: "stop_background: job_id required"}, nil
+			}
+			out, err := sandboxStopBackground(ctx, input.JobID)
+			if err != nil {
+				return &ToolResult{Success: false, Error: err.Error()}, nil
+			}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
+		},
+	}
+}
+
+// sandboxStartBackground POSTs to /jobs/start. Returns (job_id, pid, err).
+func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int, error) {
+	if ctx.SandboxURL == "" {
+		return "", 0, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
+	}
+	body, _ := json.Marshal(map[string]interface{}{"command": command, "cwd": cwd})
+	req, err := http.NewRequest("POST", ctx.SandboxURL+"/jobs/start", bytes.NewReader(body))
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		var d struct{ Detail string `json:"detail"` }
+		_ = json.NewDecoder(resp.Body).Decode(&d)
+		if d.Detail != "" {
+			return "", 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, d.Detail)
+		}
+		return "", 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		JobID string `json:"job_id"`
+		PID   int    `json:"pid"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", 0, err
+	}
+	return out.JobID, out.PID, nil
+}
+
+func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (TailBackgroundOutput, error) {
+	if ctx.SandboxURL == "" {
+		return TailBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
+	}
+	url := fmt.Sprintf("%s/jobs/%s/output?lines=%d", ctx.SandboxURL, jobID, lines)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(url)
+	if err != nil {
+		return TailBackgroundOutput{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return TailBackgroundOutput{}, fmt.Errorf("unknown job_id %q (already cleaned up?)", jobID)
+	}
+	if resp.StatusCode != 200 {
+		return TailBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var out TailBackgroundOutput
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return TailBackgroundOutput{}, err
+	}
+	return out, nil
+}
+
+func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutput, error) {
+	if ctx.SandboxURL == "" {
+		return StopBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
+	}
+	url := fmt.Sprintf("%s/jobs/%s/stop", ctx.SandboxURL, jobID)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Post(url, "application/json", nil)
+	if err != nil {
+		return StopBackgroundOutput{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return StopBackgroundOutput{}, fmt.Errorf("unknown job_id %q", jobID)
+	}
+	if resp.StatusCode != 200 {
+		return StopBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var out StopBackgroundOutput
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return StopBackgroundOutput{}, err
+	}
+	return out, nil
 }

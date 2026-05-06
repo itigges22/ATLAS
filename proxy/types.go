@@ -164,6 +164,59 @@ type RunCommandOutput struct {
 	ExitCode int    `json:"exit_code"`
 }
 
+// -- background commands (PC-196) --
+//
+// Three tools wrap the sandbox /jobs/* endpoints so the model can
+// run a server, probe it from another command, and clean up. Used
+// for the "verify HTTP routes" workflow that foreground run_command
+// can't satisfy (server doesn't exit).
+
+type RunBackgroundInput struct {
+	Command string `json:"command"`
+	Cwd     string `json:"cwd,omitempty"`
+	// SettleMs gives the process time to print initial output before
+	// we return — typical use is "wait 1500ms for the dev server's
+	// startup banner so the model can confirm it bound the port."
+	// Default 1500. Capped at 10000 server-side.
+	SettleMs *int `json:"settle_ms,omitempty"`
+}
+
+type RunBackgroundOutput struct {
+	JobID    string   `json:"job_id"`
+	PID      int      `json:"pid"`
+	Stdout   []string `json:"stdout"` // initial output captured during settle
+	Stderr   []string `json:"stderr"`
+	Running  bool     `json:"running"` // false if the process exited within settle window
+	ExitCode *int     `json:"exit_code,omitempty"`
+}
+
+type TailBackgroundInput struct {
+	JobID string `json:"job_id"`
+	Lines *int   `json:"lines,omitempty"` // default 50, max 500
+}
+
+type TailBackgroundOutput struct {
+	JobID      string   `json:"job_id"`
+	Running    bool     `json:"running"`
+	ExitCode   *int     `json:"exit_code,omitempty"`
+	Stdout     []string `json:"stdout"`
+	Stderr     []string `json:"stderr"`
+	ElapsedSec float64  `json:"elapsed_sec"`
+	Command    string   `json:"command"`
+}
+
+type StopBackgroundInput struct {
+	JobID string `json:"job_id"`
+}
+
+type StopBackgroundOutput struct {
+	JobID    string   `json:"job_id"`
+	Killed   bool     `json:"killed"`
+	ExitCode *int     `json:"exit_code,omitempty"`
+	Stdout   []string `json:"stdout"`
+	Stderr   []string `json:"stderr"`
+}
+
 // -- search_files --
 
 type SearchFilesInput struct {

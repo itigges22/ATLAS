@@ -311,6 +311,38 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				})
 				continue
 			}
+
+			// PC-197 — completion-claim verification. The model's done
+			// summary often contains universals ("all routes work",
+			// "fixed all bugs", "verified everything") that we can
+			// structurally check against the workspace. The May 2026
+			// flask run had the model claim "All routes are functioning
+			// properly" while only 3 of 7 templates existed. Scan the
+			// summary for claim language; if present, run cheap structural
+			// checks (template references, view references, import
+			// targets) and bounce if there's a concrete gap.
+			//
+			// Quiet pass when summary makes no universal claim (model
+			// said something like "added /admin route" — no claim about
+			// the rest of the app) or when there are no gaps. Bounce
+			// only when both fire.
+			if !ctx.YoloMode && claimsUniversal(parsed.Summary) {
+				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Summary); gap != "" {
+					log.Printf("[agent] claim-check gate: bouncing done at turn %d — %s",
+						turn, truncateStr(gap, 200))
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:    "assistant",
+						Content: response,
+					})
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf(`{"success":false,"error":%q}`, gap),
+						ToolCallID: fmt.Sprintf("call_%d", turn),
+						ToolName:   "claim_check",
+					})
+					continue
+				}
+			}
 			ctx.Stream("done", map[string]string{"summary": parsed.Summary})
 			return nil
 
@@ -1087,6 +1119,7 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("- The `content` you put in write_file / edit_file goes verbatim onto disk. **No markdown fences. No prose preamble (\"Looking at the task...\", \"Here's the file:\"). No trailing explanation.** Just the raw file contents. The agent layer strips fenced wrappers before writing, but the right move is to never emit them in the first place.\n")
 	sb.WriteString("- **Never use shell `rm`, `mv`, `cp`, or `find -delete` to mutate workspace files.** Use the dedicated tools — `edit_file` for changes, `write_file` for new files, `delete_file` for removal. Shell mutation bypasses the safety gates and will be rejected by the agent layer. `run_command` is for build / test / run / inspection only (python, pytest, npm, go, ls, cat, curl, etc.).\n")
 	sb.WriteString("- Use run_command to verify your changes work (build, test, lint, curl). When the user says \"fix\" or \"isn't working\", verify before declaring done — start the server, hit the endpoint, run the test. \"Done\" without a verification step is a guess.\n")
+	sb.WriteString("- For LONG-RUNNING commands (servers, watchers — anything that doesn't exit on its own): use `run_background` instead of `run_command`. The pattern is: `run_background(\"python app.py\")` → wait for it to bind → `run_command(\"curl -sf http://localhost:5000/\")` → `stop_background(job_id)`. NEVER use `timeout 5 ... || true` to fake-background a server — the server dies before the curl can hit it. Always `stop_background` when done; jobs left running waste slots.\n")
 	sb.WriteString("- When creating a project from scratch: create config/build files FIRST, verify they work (e.g., npm install, cargo check), THEN create feature code\n")
 	sb.WriteString("- Respond with {\"type\":\"done\",\"summary\":\"...\"} when the task is complete\n")
 	sb.WriteString("- If a command fails, read the error output, fix the issue, and try again\n")
