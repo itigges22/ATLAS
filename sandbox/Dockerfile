@@ -33,13 +33,42 @@ RUN rustc --version && cargo --version
 RUN npm install -g typescript tsx
 RUN tsc --version
 
-# Install Python dependencies
+# Install Python dependencies.
+#
+# Two groups, both pre-baked because the sandbox runs read_only=true
+# in production — the agent CANNOT `pip install` at verify time, and
+# the read-only fs error kills runs that would have otherwise succeeded
+# (PC-190). Compose provides a tmpfs at /root/.local for the long
+# tail, but the common verify stack lives here so the happy path
+# never needs to write to disk.
+#
+# Group 1: server runtime (executor_server.py and friends)
+# Group 2: common verify deps. Picked from "what does the model
+#          reach for in fix-an-app prompts": flask/django for web,
+#          requests for HTTP probes, pytest+ruff+mypy for tests/lint,
+#          numpy/pandas for data scripts, pyyaml for config files,
+#          jinja2/markupsafe transitive but pinned for completeness.
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
     pylint \
     pytest \
-    pydantic
+    pydantic \
+    flask \
+    django \
+    requests \
+    httpx \
+    numpy \
+    pandas \
+    pyyaml \
+    jinja2 \
+    markupsafe \
+    werkzeug \
+    itsdangerous \
+    blinker \
+    click \
+    ruff \
+    mypy
 
 # Create sandbox workspace
 RUN mkdir -p /tmp/sandbox && chmod 777 /tmp/sandbox

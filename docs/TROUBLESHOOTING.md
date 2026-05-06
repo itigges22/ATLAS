@@ -538,6 +538,58 @@ curl -X POST http://localhost:30820/execute -d '{
 }'
 ```
 
+### `pip install` Fails with `Read-only file system: '/root/.local'`
+
+**Symptom:** Verification step needs a Python package
+the sandbox doesn't have. Model emits
+`pip install <pkg>` and gets:
+```
+ERROR: Could not install packages due to an OSError:
+[Errno 30] Read-only file system: '/root/.local'
+```
+The agent loop trips the plan-adherence gate after
+three consecutive failures and ends the session
+with no successful changes.
+
+**Cause (PC-190).** The sandbox container runs with
+`read_only: true` for hardening, so `pip install`
+can't write to system site-packages **or** `--user`
+site-packages. Pre-PC-190 the only writable mounts
+were `/tmp/sandbox` and `/workspace`, neither of
+which is on Python's search path.
+
+**Fix.** PC-190 ships three layers of mitigation:
+
+1. **Pre-baked verify stack** in
+   `sandbox/Dockerfile`: `flask`, `django`,
+   `requests`, `httpx`, `numpy`, `pandas`,
+   `pyyaml`, `jinja2`, `werkzeug`, `pytest`,
+   `ruff`, `mypy`. Covers ~80% of fix-an-app
+   verification runs without any install.
+2. **Tmpfs at `/root/.local`** in
+   `docker-compose.yml`. `pip install --user` now
+   succeeds for packages NOT in the pre-bake
+   list. Wiped on container restart — never used
+   as a cache.
+3. **Venv hint in the system prompt**
+   (`buildSystemPrompt` in `proxy/agent.go`).
+   When the project has its own `venv/`, `.venv/`,
+   or `env/`, the proxy detects it server-side
+   and tells the model to use
+   `/workspace/venv/bin/python` so verification
+   runs against the project's pinned deps.
+
+**Diagnose.** Check that the sandbox container
+inherited the new image:
+```bash
+docker exec atlas-sandbox-1 python -c \
+  "import flask, requests, numpy; print('ok')"
+```
+Should print `ok` (with possibly a Flask
+deprecation warning). If `ModuleNotFoundError`,
+your sandbox image is stale —
+`docker compose build sandbox` and recreate.
+
 ### `run_command` 404s on Files the Agent Just Read (Workspace Drift)
 
 **Symptom:** The agent reads `app.py` successfully via

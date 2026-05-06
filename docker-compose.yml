@@ -126,8 +126,15 @@ services:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: ./sandbox
+    # /tmp/sandbox: scratch space for executor_server.
+    # /root/.local: ephemeral writable target for `pip install --user`
+    # so the model's reflex install works even though the root fs is
+    # read-only. The common verify stack is pre-baked into the image,
+    # so this is just for the long tail. Wiped on every container
+    # restart — never used as a cache. See PC-190.
     tmpfs:
       - /tmp/sandbox:size=512M
+      - /root/.local:size=256M
     # The container fs stays read-only (hardening). The user's project
     # is bind-mounted at /workspace — same path the proxy sees — so the
     # /shell endpoint can run pip install, python app.py, etc. against

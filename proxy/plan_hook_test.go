@@ -197,3 +197,59 @@ func keys(m map[string]string) []string {
 	}
 	return out
 }
+
+func TestDetectProjectVenvPythonFindsCommonShapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		layout  []string // relative paths to create as files
+		wantRel string   // expected venv-python relative path
+	}{
+		{"venv/bin/python", []string{"venv/bin/python"}, "venv/bin/python"},
+		{".venv/bin/python", []string{".venv/bin/python"}, ".venv/bin/python"},
+		{"env/bin/python3", []string{"env/bin/python3"}, "env/bin/python3"},
+		{"prefers-venv-over-.venv", []string{"venv/bin/python", ".venv/bin/python"}, "venv/bin/python"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, rel := range tc.layout {
+				abs := filepath.Join(dir, rel)
+				if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(abs, []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := detectProjectVenvPython(dir)
+			want := filepath.Join(dir, tc.wantRel)
+			if got != want {
+				t.Errorf("detectProjectVenvPython() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestDetectProjectVenvPythonReturnsEmptyWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	// No venv layout — just a stray app.py.
+	if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("print(1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectProjectVenvPython(dir); got != "" {
+		t.Errorf("detectProjectVenvPython() = %q, want empty", got)
+	}
+}
+
+func TestDetectProjectVenvPythonRejectsDirectoryNamedPython(t *testing.T) {
+	// Edge case: a directory called `venv/bin/python/` (not a file)
+	// must NOT be treated as the python binary. Prevents false
+	// positives when a venv has been corrupted or scaffolded weirdly.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "venv", "bin", "python"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectProjectVenvPython(dir); got != "" {
+		t.Errorf("detectProjectVenvPython() = %q, want empty (directory not file)", got)
+	}
+}

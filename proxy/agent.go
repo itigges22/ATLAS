@@ -1116,6 +1116,18 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// Working directory
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", ctx.WorkingDir))
 
+	// Venv hint. The sandbox container has flask/django/requests/etc.
+	// pre-baked, but a project with its own venv usually has the right
+	// pinned versions of *its* deps — preferring the project venv
+	// avoids "works in sandbox image, breaks against user's lockfile"
+	// drift, and works for projects whose deps we didn't pre-install.
+	// Detection happens once per session in buildSystemPrompt; the
+	// container path (/workspace/venv/bin/python) is what the model
+	// should actually call. See PC-190.
+	if pyExe := detectProjectVenvPython(ctx.WorkingDir); pyExe != "" {
+		sb.WriteString(fmt.Sprintf("Project venv detected. For run_command, prefer `%s` over bare `python` so verification runs against the project's pinned dependencies. To install missing deps use `%s -m pip install <pkg>` — bare `pip install` fails because the sandbox root is read-only, but the venv has its own writable site-packages.\n\n", pyExe, pyExe))
+	}
+
 	// Show which files are in the project (names only, not full content).
 	// Full content is available via read_file if needed.
 	// This avoids consuming context window with pre-injected file dumps.
@@ -1722,6 +1734,41 @@ func classifyAgentTier(message string) Tier {
 	// T2: default. Anything that survived the T0 gate above is a real
 	// task and gets the pipeline.
 	return Tier2Medium
+}
+
+// detectProjectVenvPython returns the container-side path to the
+// project's venv python (e.g. "/workspace/venv/bin/python") if the
+// working directory has a recognisable Python virtual environment.
+// Returns "" when no venv is found.
+//
+// The agent's working_dir is the container-internal /workspace, so
+// we resolve against that. Common venv directory names: venv, .venv,
+// env, .env-py — we probe in priority order and stop at the first hit.
+// Inside each, look for bin/python, bin/python3, or Scripts/python.exe
+// (Windows-emitted venvs occasionally end up bind-mounted on Linux).
+//
+// Caller passes workingDir from ctx.WorkingDir; the returned path is
+// what the model should literally invoke via run_command — e.g.
+// "/workspace/venv/bin/python app.py" — and what gets surfaced in the
+// system prompt's venv hint. See PC-190.
+func detectProjectVenvPython(workingDir string) string {
+	if workingDir == "" {
+		return ""
+	}
+	venvDirs := []string{"venv", ".venv", "env", ".env-py"}
+	pythonRels := []string{"bin/python", "bin/python3", "Scripts/python.exe"}
+	for _, vd := range venvDirs {
+		for _, py := range pythonRels {
+			abs := filepath.Join(workingDir, vd, py)
+			if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+				// Return container-relative path (workingDir is already
+				// the container-side /workspace), so caller can paste
+				// it into a run_command argument unchanged.
+				return abs
+			}
+		}
+	}
+	return ""
 }
 
 // samplePlanContext walks ctx.WorkingDir and reads a handful of files
