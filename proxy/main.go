@@ -19,6 +19,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -48,6 +50,56 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// resolveVerifyTarget returns "host" when run_command should bypass
+// the sandbox and execute on the host, or "sandbox" otherwise. PC-192.
+//
+// Resolution order (later wins):
+//  1. ATLAS_VERIFY_IN env var ("host" or "sandbox")
+//  2. Per-project .atlas/config.toml — looks for `target = "host"` or
+//     `target = "sandbox"` under an [execution] header. Trivially
+//     parsed (no real TOML lib) so we don't take a dep just for one
+//     setting; refuse to be clever about quoting.
+//
+// Default: "sandbox" (the safer path). Per-project config is the
+// usual customization point for working codebases that need host
+// execution; the env var is for one-off sessions and CI.
+func resolveVerifyTarget(workingDir string) string {
+	target := strings.ToLower(os.Getenv("ATLAS_VERIFY_IN"))
+	if target != "host" && target != "sandbox" {
+		target = "sandbox"
+	}
+	if workingDir == "" {
+		return target
+	}
+	cfg, err := os.ReadFile(filepath.Join(workingDir, ".atlas", "config.toml"))
+	if err != nil {
+		return target
+	}
+	inExecution := false
+	for _, raw := range strings.Split(string(cfg), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inExecution = strings.EqualFold(strings.Trim(line, "[]"), "execution")
+			continue
+		}
+		if !inExecution {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) != "target" {
+			continue
+		}
+		val := strings.ToLower(strings.Trim(strings.TrimSpace(parts[1]), `"'`))
+		if val == "host" || val == "sandbox" {
+			return val
+		}
+	}
+	return target
 }
 
 // ---------------------------------------------------------------------------

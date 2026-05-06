@@ -126,15 +126,29 @@ services:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: ./sandbox
-    # /tmp/sandbox: scratch space for executor_server.
-    # /root/.local: ephemeral writable target for `pip install --user`
-    # so the model's reflex install works even though the root fs is
-    # read-only. The common verify stack is pre-baked into the image,
-    # so this is just for the long tail. Wiped on every container
-    # restart — never used as a cache. See PC-190.
+    # Writable mounts for language toolchains. The container fs is
+    # read_only=true for hardening, so every install/cache target a
+    # toolchain wants to write to needs an explicit tmpfs. One per
+    # language ecosystem; sized for "ephemeral, not a cache" — wiped
+    # on every container restart. The pattern is *universal* (PC-191):
+    # adding support for a new language is one line here, not a code
+    # change. /workspace is bind-mounted writable, so per-project
+    # install targets like node_modules/, target/, vendor/ work
+    # against the user's lockfile without any of these tmpfs at all.
     tmpfs:
-      - /tmp/sandbox:size=512M
-      - /root/.local:size=256M
+      - /tmp:size=1G                 # /tmp itself (pip download dir, mktemp targets, /tmp/sandbox lives inside)
+      - /root/.local:size=256M       # Python: pip install --user
+      - /root/.cache:size=256M       # generic cache root (pip wheel cache, ruff, mypy)
+      - /root/.npm:size=256M         # Node: npm cache
+      - /root/.cargo/registry:size=512M # Rust: crate downloads
+      - /root/go:size=512M           # Go: module cache + bin
+      - /root/.m2:size=512M          # Java: Maven local repo
+      - /root/.gradle:size=512M      # Java/Kotlin: Gradle caches
+      - /root/.bundle:size=256M      # Ruby: bundler --path
+      - /root/.gem:size=256M         # Ruby: gem install --user-install
+      - /root/.composer:size=256M    # PHP: composer global
+      - /root/.nuget:size=256M       # .NET: NuGet packages
+      - /root/.pub-cache:size=256M   # Dart: pub packages
     # The container fs stays read-only (hardening). The user's project
     # is bind-mounted at /workspace — same path the proxy sees — so the
     # /shell endpoint can run pip install, python app.py, etc. against
@@ -182,6 +196,12 @@ services:
       - ATLAS_V3_URL=http://v3-service:8070
       - ATLAS_AGENT_LOOP=1
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      # PC-192: opt-in host execution for run_command. Set to "host"
+      # to bypass the sandbox container and run verifications on the
+      # host (works when proxy runs locally, not in Docker — Docker
+      # proxy can only see its own container fs). Per-project override
+      # via /workspace/.atlas/config.toml [execution] target=host.
+      - ATLAS_VERIFY_IN=${ATLAS_VERIFY_IN:-sandbox}
       # Pins the proxy's "where to write files" target. Must match the
       # working_dir below and the right-hand side of the volume mount.
       - ATLAS_WORKSPACE_DIR=/workspace

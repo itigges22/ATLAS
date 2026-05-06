@@ -1116,16 +1116,39 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// Working directory
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", ctx.WorkingDir))
 
-	// Venv hint. The sandbox container has flask/django/requests/etc.
-	// pre-baked, but a project with its own venv usually has the right
-	// pinned versions of *its* deps — preferring the project venv
-	// avoids "works in sandbox image, breaks against user's lockfile"
-	// drift, and works for projects whose deps we didn't pre-install.
-	// Detection happens once per session in buildSystemPrompt; the
-	// container path (/workspace/venv/bin/python) is what the model
-	// should actually call. See PC-190.
-	if pyExe := detectProjectVenvPython(ctx.WorkingDir); pyExe != "" {
-		sb.WriteString(fmt.Sprintf("Project venv detected. For run_command, prefer `%s` over bare `python` so verification runs against the project's pinned dependencies. To install missing deps use `%s -m pip install <pkg>` — bare `pip install` fails because the sandbox root is read-only, but the venv has its own writable site-packages.\n\n", pyExe, pyExe))
+	// Toolchain hints. Detect every recognized language manifest in
+	// the project and surface the runners + install commands so the
+	// model picks the right tool per file edit. Polyglot projects
+	// (React + Django + deploy scripts) get one entry per ecosystem.
+	// Replaces the Python-only venv hint from PC-190 with the
+	// universal pattern from PC-191. Probe-first hints (PC-193) are
+	// added per-toolchain when present.
+	if tcs := detectProjectToolchains(ctx.WorkingDir); len(tcs) > 0 {
+		sb.WriteString("## Toolchains\n\n")
+		sb.WriteString("This project uses the following language toolchains. Use the listed runner for verification commands so they execute against the project's pinned deps:\n\n")
+		for _, tc := range tcs {
+			sb.WriteString(fmt.Sprintf("- **%s** (manifests: %s)\n", tc.Name, strings.Join(tc.Manifests, ", ")))
+			sb.WriteString(fmt.Sprintf("  - Runner: `%s`\n", tc.Runner))
+			if tc.InstallCommand != "" {
+				sb.WriteString(fmt.Sprintf("  - Install deps: `%s` (only if probe says deps are missing)\n", tc.InstallCommand))
+			}
+			if tc.TestCommand != "" {
+				sb.WriteString(fmt.Sprintf("  - Tests: `%s`\n", tc.TestCommand))
+			}
+			if probe := probeToolchainReady(ctx.WorkingDir, tc); probe != "" {
+				sb.WriteString(fmt.Sprintf("  - Status: %s\n", probe))
+			}
+		}
+		sb.WriteString("\n**Don't reinstall deps that are already working.** The probe above tells you whether the project is ready to run as-is. If yes, go straight to verification. If a needed dep is missing, install only that dep, not the world.\n\n")
+	}
+
+	// Execution target hint — surfaces whether run_command is going
+	// to the sandbox container (default, isolated) or directly to the
+	// host (PC-192, opt-in via ATLAS_VERIFY_IN=host). The model needs
+	// to know because host-mode means commands see the user's actual
+	// venv binaries, system tools, env vars, and running services.
+	if ctx.VerifyOnHost {
+		sb.WriteString("**Execution target: host machine.** `run_command` runs directly on the user's host (not the sandbox container). This means: commands see the host's installed tools, env vars, and running services (databases, etc.); paths resolve against the host filesystem; and verifications run against the same environment the user uses themselves. The shell-op safety gates (no rm/mv/cp/find -delete/bash -c) still apply.\n\n")
 	}
 
 	// Show which files are in the project (names only, not full content).
@@ -1265,6 +1288,13 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	ctx.SandboxURL = sandboxURL
 	ctx.LensURL = lensURL
 	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
+
+	// PC-192: opt-in host execution for run_command. Per-project config
+	// (.atlas/config.toml: [execution] target = "host") wins over the
+	// global env var so users can flip behaviour without touching the
+	// proxy environment. Either source can downgrade to "sandbox"
+	// explicitly. Default stays sandbox.
+	ctx.VerifyOnHost = resolveVerifyTarget(workingDir) == "host"
 
 	// Seed prior-turn transcript from the request body. The TUI ships
 	// user/assistant text rows from its local chat history so the agent
@@ -1734,6 +1764,336 @@ func classifyAgentTier(message string) Tier {
 	// T2: default. Anything that survived the T0 gate above is a real
 	// task and gets the pipeline.
 	return Tier2Medium
+}
+
+// Toolchain describes one language ecosystem detected in the project.
+// The fields are surfaced into the system prompt so the model knows
+// which runner to invoke and how to install deps if needed.
+//
+// Detection is manifest-driven: presence of pyproject.toml means
+// Python, package.json means Node, Cargo.toml means Rust, etc. A
+// polyglot project (React frontend + Django backend + deploy scripts)
+// returns multiple Toolchains so the model can pick the right one
+// per file edit. See PC-191.
+type Toolchain struct {
+	Name           string   // canonical key: "python", "node", "rust", "go", "ruby", "java-maven", "java-gradle", "php", "dotnet", "dart"
+	Manifests      []string // manifest files found relative to workingDir (e.g. ["pyproject.toml", "requirements.txt"])
+	Runner         string   // command to run the project's main entry (e.g. "/workspace/venv/bin/python", "node", "cargo run", "go run .")
+	PackageManager string   // detected pkg manager when ambiguous (npm vs pnpm vs yarn vs bun for Node)
+	InstallCommand string   // command to install deps from lockfile (e.g. "npm ci", "pip install -r requirements.txt")
+	TestCommand    string   // best-guess test runner ("pytest", "npm test", "cargo test", ...)
+}
+
+// detectProjectToolchains scans workingDir for language manifests and
+// returns one Toolchain per detected ecosystem. Polyglot projects
+// (e.g. React + Django) produce multiple entries. Empty slice means
+// no recognized manifest was found at the root.
+//
+// We deliberately only look ONE level deep at the root — most
+// monorepos have manifests in subdirs (apps/web/package.json,
+// services/api/pyproject.toml) but probing deeper here would be
+// expensive and noisy. The model can still discover deep manifests
+// via list_directory / read_file when it needs to.
+func detectProjectToolchains(workingDir string) []Toolchain {
+	if workingDir == "" {
+		return nil
+	}
+	var out []Toolchain
+
+	// Python — venv-aware so the runner points at the project's
+	// pinned interpreter when one exists.
+	pyManifests := pickExisting(workingDir, "pyproject.toml", "requirements.txt", "setup.py", "Pipfile", "poetry.lock")
+	if len(pyManifests) > 0 || detectProjectVenvPython(workingDir) != "" {
+		runner := detectProjectVenvPython(workingDir)
+		if runner == "" {
+			runner = "python"
+		}
+		install := "pip install -r requirements.txt"
+		if hasFile(workingDir, "poetry.lock") {
+			install = "poetry install"
+		} else if hasFile(workingDir, "Pipfile.lock") {
+			install = "pipenv install"
+		} else if hasFile(workingDir, "pyproject.toml") && !hasFile(workingDir, "requirements.txt") {
+			install = "pip install -e ."
+		}
+		out = append(out, Toolchain{
+			Name: "python", Manifests: pyManifests,
+			Runner: runner, InstallCommand: install,
+			TestCommand: "pytest",
+		})
+	}
+
+	// Node / TypeScript — pkg manager picked from lockfile.
+	if hasFile(workingDir, "package.json") {
+		pm, install := "npm", "npm install"
+		switch {
+		case hasFile(workingDir, "pnpm-lock.yaml"):
+			pm, install = "pnpm", "pnpm install --frozen-lockfile"
+		case hasFile(workingDir, "yarn.lock"):
+			pm, install = "yarn", "yarn install --frozen-lockfile"
+		case hasFile(workingDir, "bun.lockb"):
+			pm, install = "bun", "bun install --frozen-lockfile"
+		case hasFile(workingDir, "package-lock.json"):
+			pm, install = "npm", "npm ci"
+		}
+		runner := "node"
+		if hasFile(workingDir, "tsconfig.json") {
+			runner = "tsx" // ts/jsx-aware launcher; falls back to node for plain .js
+		}
+		out = append(out, Toolchain{
+			Name: "node", Manifests: pickExisting(workingDir, "package.json", "tsconfig.json"),
+			Runner: runner, PackageManager: pm, InstallCommand: install,
+			TestCommand: pm + " test",
+		})
+	}
+
+	// Rust
+	if hasFile(workingDir, "Cargo.toml") {
+		out = append(out, Toolchain{
+			Name: "rust", Manifests: pickExisting(workingDir, "Cargo.toml", "Cargo.lock"),
+			Runner: "cargo run", InstallCommand: "cargo fetch",
+			TestCommand: "cargo test",
+		})
+	}
+
+	// Go
+	if hasFile(workingDir, "go.mod") {
+		out = append(out, Toolchain{
+			Name: "go", Manifests: pickExisting(workingDir, "go.mod", "go.sum"),
+			Runner: "go run .", InstallCommand: "go mod download",
+			TestCommand: "go test ./...",
+		})
+	}
+
+	// Ruby
+	if hasFile(workingDir, "Gemfile") {
+		out = append(out, Toolchain{
+			Name: "ruby", Manifests: pickExisting(workingDir, "Gemfile", "Gemfile.lock"),
+			Runner: "bundle exec ruby", InstallCommand: "bundle install",
+			TestCommand: "bundle exec rspec",
+		})
+	}
+
+	// Java — Maven
+	if hasFile(workingDir, "pom.xml") {
+		out = append(out, Toolchain{
+			Name: "java-maven", Manifests: []string{"pom.xml"},
+			Runner: "mvn exec:java", InstallCommand: "mvn install -DskipTests",
+			TestCommand: "mvn test",
+		})
+	}
+
+	// Java/Kotlin — Gradle (prefer wrapper if present)
+	if hasFile(workingDir, "build.gradle") || hasFile(workingDir, "build.gradle.kts") {
+		runner := "gradle run"
+		install := "gradle build -x test"
+		test := "gradle test"
+		if hasFile(workingDir, "gradlew") {
+			runner = "./gradlew run"
+			install = "./gradlew build -x test"
+			test = "./gradlew test"
+		}
+		out = append(out, Toolchain{
+			Name: "java-gradle", Manifests: pickExisting(workingDir, "build.gradle", "build.gradle.kts", "settings.gradle", "gradlew"),
+			Runner: runner, InstallCommand: install, TestCommand: test,
+		})
+	}
+
+	// PHP / Composer
+	if hasFile(workingDir, "composer.json") {
+		out = append(out, Toolchain{
+			Name: "php", Manifests: pickExisting(workingDir, "composer.json", "composer.lock"),
+			Runner: "php", InstallCommand: "composer install",
+			TestCommand: "vendor/bin/phpunit",
+		})
+	}
+
+	// .NET — pick the first project file we find
+	if csproj := firstMatchingGlob(workingDir, "*.csproj", "*.fsproj", "*.sln"); csproj != "" {
+		out = append(out, Toolchain{
+			Name: "dotnet", Manifests: []string{csproj},
+			Runner: "dotnet run", InstallCommand: "dotnet restore",
+			TestCommand: "dotnet test",
+		})
+	}
+
+	// Dart / Flutter
+	if hasFile(workingDir, "pubspec.yaml") {
+		runner, install := "dart run", "dart pub get"
+		if hasFile(workingDir, ".flutter-plugins") || hasFile(workingDir, "flutter.yaml") {
+			runner, install = "flutter run", "flutter pub get"
+		}
+		out = append(out, Toolchain{
+			Name: "dart", Manifests: pickExisting(workingDir, "pubspec.yaml", "pubspec.lock"),
+			Runner: runner, InstallCommand: install,
+			TestCommand: "dart test",
+		})
+	}
+
+	return out
+}
+
+// probeToolchainReady returns a short status string for a Toolchain
+// that's safe to run from buildSystemPrompt — meaning: it MUST be
+// purely filesystem-based (no shelling out, no network). The model
+// uses this to decide whether to install deps or skip straight to
+// verification (PC-193).
+//
+// We can't actually invoke `python -c "import flask"` here without
+// running a subprocess in the sandbox, which is too expensive for
+// every system-prompt build. Instead we look for filesystem evidence
+// that deps are installed: venv with site-packages populated,
+// node_modules present, target/debug/ for Rust, vendor/ for Ruby/Go,
+// etc. False positives are fine ("looks installed but isn't" — the
+// model will discover that on first verify and install). False
+// negatives are bad — they push the model toward unnecessary
+// reinstalls. Bias toward "ready" when the evidence is ambiguous.
+func probeToolchainReady(workingDir string, tc Toolchain) string {
+	switch tc.Name {
+	case "python":
+		// Strong signal: a venv with at least one third-party package
+		// installed. We check for the venv's site-packages directory
+		// containing anything beyond pip/setuptools.
+		for _, vd := range []string{"venv", ".venv", "env", ".env-py"} {
+			sp := filepath.Join(workingDir, vd, "lib")
+			if entries, err := os.ReadDir(sp); err == nil {
+				for _, e := range entries {
+					if strings.HasPrefix(e.Name(), "python") && e.IsDir() {
+						pkgs := filepath.Join(sp, e.Name(), "site-packages")
+						if hasUserPackages(pkgs) {
+							return "deps appear installed in project venv — skip install, go straight to verify"
+						}
+					}
+				}
+			}
+		}
+		// No venv but a requirements.txt or pyproject.toml exists.
+		if hasFile(workingDir, "requirements.txt") || hasFile(workingDir, "pyproject.toml") {
+			return "deps NOT installed (no populated venv found) — run install before verify"
+		}
+		return "no manifest, no venv — single-file script, just run it"
+
+	case "node":
+		// node_modules present and not empty → deps installed.
+		nm := filepath.Join(workingDir, "node_modules")
+		if entries, err := os.ReadDir(nm); err == nil && len(entries) > 0 {
+			return "node_modules populated — skip install, go straight to verify"
+		}
+		return "node_modules missing — run install before verify"
+
+	case "rust":
+		// target/ exists → at least one build has happened.
+		if info, err := os.Stat(filepath.Join(workingDir, "target")); err == nil && info.IsDir() {
+			return "target/ exists — incremental build will be fast"
+		}
+		return "no target/ — first build will compile from scratch"
+
+	case "go":
+		// Hard to probe without GOPATH inspection; presence of go.sum
+		// + non-empty vendor/ is the surest filesystem signal.
+		if info, err := os.Stat(filepath.Join(workingDir, "vendor")); err == nil && info.IsDir() {
+			return "vendor/ present — deps vendored, skip install"
+		}
+		if hasFile(workingDir, "go.sum") {
+			return "go.sum present — `go run`/`go test` will fetch as needed"
+		}
+		return "no go.sum yet — run `go mod tidy` before verify"
+
+	case "ruby":
+		if info, err := os.Stat(filepath.Join(workingDir, "vendor", "bundle")); err == nil && info.IsDir() {
+			return "vendor/bundle present — skip install"
+		}
+		return "no vendor/bundle — run install before verify"
+
+	case "java-maven":
+		if info, err := os.Stat(filepath.Join(workingDir, "target")); err == nil && info.IsDir() {
+			return "target/ present — incremental build will be fast"
+		}
+		return "no target/ — first build will compile + download deps"
+
+	case "java-gradle":
+		if info, err := os.Stat(filepath.Join(workingDir, "build")); err == nil && info.IsDir() {
+			return "build/ present — incremental build will be fast"
+		}
+		return "no build/ — first build will compile + download deps"
+
+	case "php":
+		if info, err := os.Stat(filepath.Join(workingDir, "vendor")); err == nil && info.IsDir() {
+			return "vendor/ present — skip composer install"
+		}
+		return "no vendor/ — run composer install before verify"
+
+	case "dotnet":
+		if info, err := os.Stat(filepath.Join(workingDir, "bin")); err == nil && info.IsDir() {
+			return "bin/ present — `dotnet run` will use cached restore"
+		}
+		return "no bin/ — first run does an implicit restore"
+
+	case "dart":
+		if info, err := os.Stat(filepath.Join(workingDir, ".dart_tool")); err == nil && info.IsDir() {
+			return ".dart_tool/ present — pub get already run"
+		}
+		return "no .dart_tool/ — run pub get before verify"
+	}
+	return ""
+}
+
+// hasUserPackages returns true when site-packages contains anything
+// beyond pip/setuptools/wheel — i.e. the user has installed real
+// project deps. Empty / pip-only venvs return false.
+func hasUserPackages(sitePackages string) bool {
+	entries, err := os.ReadDir(sitePackages)
+	if err != nil {
+		return false
+	}
+	skip := map[string]bool{
+		"pip": true, "setuptools": true, "wheel": true,
+		"pkg_resources": true, "_distutils_hack": true,
+		"__pycache__": true,
+	}
+	for _, e := range entries {
+		name := e.Name()
+		// Strip dist-info / egg-info suffixes for the skip check.
+		if i := strings.Index(name, "-"); i > 0 {
+			name = name[:i]
+		}
+		if strings.HasSuffix(e.Name(), ".dist-info") || strings.HasSuffix(e.Name(), ".egg-info") {
+			continue
+		}
+		if !skip[name] && !strings.HasPrefix(name, "_") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFile returns true when workingDir/name exists as a file.
+func hasFile(workingDir, name string) bool {
+	info, err := os.Stat(filepath.Join(workingDir, name))
+	return err == nil && !info.IsDir()
+}
+
+// pickExisting returns the subset of names that exist as files in workingDir.
+func pickExisting(workingDir string, names ...string) []string {
+	var out []string
+	for _, n := range names {
+		if hasFile(workingDir, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// firstMatchingGlob returns the first filename matching any of the
+// glob patterns at the workingDir root, or "" if none match.
+func firstMatchingGlob(workingDir string, patterns ...string) string {
+	for _, p := range patterns {
+		matches, _ := filepath.Glob(filepath.Join(workingDir, p))
+		if len(matches) > 0 {
+			return filepath.Base(matches[0])
+		}
+	}
+	return ""
 }
 
 // detectProjectVenvPython returns the container-side path to the

@@ -308,6 +308,14 @@ type AgentContext struct {
 	// cap is hit we stop revising and let the agent run plan-free.
 	PlanRevisions int
 
+	// VerifyOnHost flips run_command from sandbox-routing to local
+	// host execution (PC-192). Set from ATLAS_VERIFY_IN=host or
+	// per-project .atlas/config.toml. The default (false) is the
+	// safer sandbox path; opt-in is for working codebases that
+	// depend on host services (DBs, env vars, system tools) the
+	// sandbox can't see. Shell-op guardrails still apply either way.
+	VerifyOnHost bool
+
 	// Streaming callback
 	StreamFn func(eventType string, data interface{})
 

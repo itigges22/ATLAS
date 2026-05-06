@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -251,5 +252,110 @@ func TestDetectProjectVenvPythonRejectsDirectoryNamedPython(t *testing.T) {
 	}
 	if got := detectProjectVenvPython(dir); got != "" {
 		t.Errorf("detectProjectVenvPython() = %q, want empty (directory not file)", got)
+	}
+}
+
+func TestDetectProjectToolchainsPython(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tcs := detectProjectToolchains(dir)
+	if len(tcs) != 1 || tcs[0].Name != "python" {
+		t.Fatalf("got %+v, want one python toolchain", tcs)
+	}
+	if tcs[0].InstallCommand != "pip install -r requirements.txt" {
+		t.Errorf("install = %q, want pip install -r", tcs[0].InstallCommand)
+	}
+}
+
+func TestDetectProjectToolchainsPolyglot(t *testing.T) {
+	// React frontend + Django backend + Rust core in one repo.
+	dir := t.TempDir()
+	for _, f := range []string{"package.json", "tsconfig.json", "pyproject.toml", "Cargo.toml", "Cargo.lock"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tcs := detectProjectToolchains(dir)
+	names := map[string]bool{}
+	for _, tc := range tcs {
+		names[tc.Name] = true
+	}
+	for _, want := range []string{"python", "node", "rust"} {
+		if !names[want] {
+			t.Errorf("missing toolchain %q in %v", want, names)
+		}
+	}
+	// Node with tsconfig.json should pick the tsx runner.
+	for _, tc := range tcs {
+		if tc.Name == "node" && tc.Runner != "tsx" {
+			t.Errorf("node runner = %q, want tsx (tsconfig present)", tc.Runner)
+		}
+	}
+}
+
+func TestDetectProjectToolchainsNodePkgManager(t *testing.T) {
+	cases := []struct {
+		lockfile string
+		wantPM   string
+	}{
+		{"pnpm-lock.yaml", "pnpm"},
+		{"yarn.lock", "yarn"},
+		{"bun.lockb", "bun"},
+		{"package-lock.json", "npm"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.lockfile, func(t *testing.T) {
+			dir := t.TempDir()
+			os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0o644)
+			os.WriteFile(filepath.Join(dir, tc.lockfile), []byte(""), 0o644)
+			tcs := detectProjectToolchains(dir)
+			if len(tcs) != 1 || tcs[0].PackageManager != tc.wantPM {
+				t.Fatalf("got pkgManager %q, want %q", tcs[0].PackageManager, tc.wantPM)
+			}
+		})
+	}
+}
+
+func TestProbeToolchainReadyPythonVenv(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644)
+	tcs := detectProjectToolchains(dir)
+	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "NOT installed") {
+		t.Errorf("no venv yet, got %q", got)
+	}
+	// Now scaffold a populated venv.
+	sp := filepath.Join(dir, "venv", "lib", "python3.11", "site-packages", "flask")
+	os.MkdirAll(sp, 0o755)
+	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "appear installed") {
+		t.Errorf("populated venv not detected: %q", got)
+	}
+}
+
+func TestProbeToolchainReadyNodeModules(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0o644)
+	tcs := detectProjectToolchains(dir)
+	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "missing") {
+		t.Errorf("no node_modules, got %q", got)
+	}
+	os.MkdirAll(filepath.Join(dir, "node_modules", "express"), 0o755)
+	if got := probeToolchainReady(dir, tcs[0]); !strings.Contains(got, "populated") {
+		t.Errorf("populated node_modules not detected: %q", got)
+	}
+}
+
+func TestHasUserPackagesIgnoresPipOnly(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{"pip", "setuptools", "wheel", "pkg_resources"} {
+		os.MkdirAll(filepath.Join(dir, p), 0o755)
+	}
+	if hasUserPackages(dir) {
+		t.Error("pip-only site-packages should not count as 'user packages'")
+	}
+	os.MkdirAll(filepath.Join(dir, "flask"), 0o755)
+	if !hasUserPackages(dir) {
+		t.Error("flask present should count as user package")
 	}
 }

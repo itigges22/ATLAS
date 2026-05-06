@@ -33,40 +33,31 @@ RUN rustc --version && cargo --version
 RUN npm install -g typescript tsx
 RUN tsc --version
 
-# Install Python dependencies.
+# Pre-baked Python deps — kept INTENTIONALLY MINIMAL after PC-191.
 #
-# Two groups, both pre-baked because the sandbox runs read_only=true
-# in production — the agent CANNOT `pip install` at verify time, and
-# the read-only fs error kills runs that would have otherwise succeeded
-# (PC-190). Compose provides a tmpfs at /root/.local for the long
-# tail, but the common verify stack lives here so the happy path
-# never needs to write to disk.
+# Two groups only:
+#   1. executor_server runtime (fastapi/uvicorn/pydantic) — the
+#      sandbox API itself depends on these.
+#   2. Universal verify helpers (pytest/requests/ruff/mypy) — these
+#      are language-agnostic enough that almost every Python project
+#      uses one of them, and they're slow to install on demand.
 #
-# Group 1: server runtime (executor_server.py and friends)
-# Group 2: common verify deps. Picked from "what does the model
-#          reach for in fix-an-app prompts": flask/django for web,
-#          requests for HTTP probes, pytest+ruff+mypy for tests/lint,
-#          numpy/pandas for data scripts, pyyaml for config files,
-#          jinja2/markupsafe transitive but pinned for completeness.
+# Application libraries (flask/django/numpy/pandas/...) are NOT
+# pre-baked. PC-190 originally baked them in to work around the
+# read-only fs issue, but that was the wrong layer — PC-191's
+# universal tmpfs mounts (see docker-compose.yml) make `pip install`
+# work fine, and the project's own venv / requirements.txt is the
+# right source of truth for application deps anyway. Keeping the
+# image lean means: smaller pull, smaller attack surface, no drift
+# between sandbox-baked-flask and user-pinned-flask, and the same
+# pattern works for Node/Rust/Go/Ruby/Java/PHP without favoring
+# Python.
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
-    pylint \
-    pytest \
     pydantic \
-    flask \
-    django \
+    pytest \
     requests \
-    httpx \
-    numpy \
-    pandas \
-    pyyaml \
-    jinja2 \
-    markupsafe \
-    werkzeug \
-    itsdangerous \
-    blinker \
-    click \
     ruff \
     mypy
 

@@ -190,6 +190,10 @@ func readFileTool() *ToolDef {
 
 			content := sb.String()
 			ctx.RecordFileRead(path, string(data))
+			// PC-194 — register the read so the pattern-matching gate
+			// on write_file knows the model has actually inspected a
+			// sibling before generating a new file in the same dir.
+			patternReadTracker.add(path)
 
 			out := ReadFileOutput{
 				Content:    content,
@@ -407,6 +411,31 @@ func writeFileTool() *ToolDef {
 				log.Printf("[write_file] sanitised markdown wrapper from %s (was %d chars, now %d)",
 					input.Path, len(input.Content), len(cleaned))
 				input.Content = cleaned
+			}
+
+			// PC-194 — pattern-matching reflex. When the model creates a
+			// NEW file in a non-empty directory of similar files (HTML
+			// alongside HTML, route handler alongside route handlers),
+			// nudge it to read a sibling first instead of generating
+			// content from scratch. Only fires for genuinely-new files
+			// to avoid breaking edits-via-write_file. Soft hint via
+			// tool result, not a hard reject — the model can ignore it
+			// if the content is clearly intentional.
+			if hint := patternMatchHint(path, input.Content); hint != "" {
+				return &ToolResult{Success: false, Error: hint}, nil
+			}
+
+			// PC-195 — stub detection. Reject "<h1>X Page</h1>" / "TODO"
+			// placeholder writes that pass syntactic gates but ship the
+			// minimum content humanly possible. The model's lazy-completion
+			// failure mode is to write 8-line stubs and call it done; this
+			// gate forces it to either commit real content or acknowledge
+			// the stub explicitly. New files only — edits to existing
+			// files might legitimately shrink to a stub via refactor.
+			if isNewWrite(path) {
+				if reason := looksLikeStub(input.Path, input.Content); reason != "" {
+					return &ToolResult{Success: false, Error: reason}, nil
+				}
 			}
 
 			// Per-file tier classification — determines V3 pipeline activation
@@ -1189,13 +1218,31 @@ func runCommandTool() *ToolDef {
 			// pre-installed AND has /workspace bind-mounted at the same
 			// path the proxy sees, so paths the agent learned via
 			// read_file / list_directory still work. validateShellCommand
-			// upstream is the gate; this is the executor. Falls back to
-			// local exec when the sandbox is unreachable so the dev /
-			// test loop still works without docker compose.
-			out, err := runViaSandbox(ctx, input.Command, cwd, timeoutSec)
-			if err != nil {
-				log.Printf("[run_command] sandbox unreachable, falling back to local exec: %v", err)
-				out = runLocally(input.Command, cwd, time.Duration(timeoutSec)*time.Second)
+			// upstream is the gate; this is the executor.
+			//
+			// PC-192: when ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host
+			// or per-project config), we BYPASS the sandbox and execute
+			// on the host directly. This is the right call for working
+			// codebases that depend on host-side state — the user's
+			// installed venv binaries, system tools, env vars,
+			// running databases, etc. — that the sandbox can't see.
+			// The shell-op safety gate (validateShellCommand) still
+			// fired upstream regardless of target. cwd is translated
+			// to the host path so the command lands in the right dir.
+			var out RunCommandOutput
+			var err error
+			if ctx.VerifyOnHost {
+				hostCwd := cwd
+				if ctx.HostWorkingDir != "" && strings.HasPrefix(cwd, ctx.WorkingDir) {
+					hostCwd = ctx.HostWorkingDir + strings.TrimPrefix(cwd, ctx.WorkingDir)
+				}
+				out = runLocally(input.Command, hostCwd, time.Duration(timeoutSec)*time.Second)
+			} else {
+				out, err = runViaSandbox(ctx, input.Command, cwd, timeoutSec)
+				if err != nil {
+					log.Printf("[run_command] sandbox unreachable, falling back to local exec: %v", err)
+					out = runLocally(input.Command, cwd, time.Duration(timeoutSec)*time.Second)
+				}
 			}
 
 			outBytes, _ := json.Marshal(out)
