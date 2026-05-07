@@ -960,6 +960,14 @@ class LensScoreTextRequest(BaseModel):
     text: str
 
 
+class LensScorePerStepRequest(BaseModel):
+    text: str
+    # Optional transformer-block index. None => last-layer (vanilla /embedding,
+    # no PC-202 patch needed). Set to use the PC-202 layers extension and score
+    # at the residual stream of a specific intermediate layer (PC-204 fusion).
+    layer: Optional[int] = None
+
+
 @app.post("/internal/lens/score-text")
 async def lens_score_text(request: LensScoreTextRequest):
     """Score a text string through the Geometric Lens. Returns raw and normalized energy."""
@@ -1103,6 +1111,40 @@ async def lens_gx_score(request: LensScoreTextRequest):
         return {
             "cx_energy": 0.0, "cx_normalized": 0.5,
             "gx_score": 0.5, "verdict": "error",
+            "error": str(e),
+        }
+
+
+@app.post("/internal/lens/score-per-step")
+async def lens_score_per_step(request: LensScorePerStepRequest):
+    """PC-207 lens-as-PRM: score every token in the text instead of pooling.
+
+    Returns C(x) and (when XGBoost is loaded) G(x) per generation step,
+    plus aggregates across the whole sequence. Used by V3 candidate
+    generation to abort off-rails candidates early instead of paying the
+    full decode cost — the lens stops being ORM-by-timing (scores
+    completed text) and becomes PRM-by-timing.
+
+    Set `layer` to use the PC-202 hidden-states extension and score the
+    residual stream at a specific intermediate layer (PC-204). Leave
+    `layer` null to use the model's last-layer hidden state via vanilla
+    /embedding (works on unpatched llama-server).
+    """
+    try:
+        from geometric_lens.service import evaluate_per_step, is_enabled
+
+        if not is_enabled():
+            return {
+                "enabled": False, "gx_available": False,
+                "per_step": [], "aggregate": {}, "n_tokens": 0,
+            }
+
+        return evaluate_per_step(request.text, layer=request.layer)
+    except Exception as e:
+        logger.error(f"Lens score-per-step failed: {e}")
+        return {
+            "enabled": True, "gx_available": False,
+            "per_step": [], "aggregate": {}, "n_tokens": 0,
             "error": str(e),
         }
 

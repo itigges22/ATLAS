@@ -494,6 +494,7 @@ These are used internally by other ATLAS services. They are stable but not part 
 | `/internal/lens/retrain` | POST | Retrain cost field model |
 | `/internal/lens/reload` | POST | Reload model weights |
 | `/internal/lens/correctability` | POST | Correctability evaluation |
+| `/internal/lens/score-per-step` | POST | PC-207 lens-as-PRM: per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires PC-202 patch on llama-server). |
 | `/internal/sandbox/analyze` | POST | Sandbox result analysis |
 
 </details>

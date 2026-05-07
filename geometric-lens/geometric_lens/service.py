@@ -469,3 +469,140 @@ def evaluate_combined(query: str) -> dict:
             "gx_score": 0.5, "verdict": "error",
             "enabled": True, "gx_available": False, "error": str(e),
         }
+
+
+def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
+    """PC-207 lens-as-PRM: score every token in `query` instead of pooling first.
+
+    For each input token, applies C(x) and (when available) G(x) to that
+    token's hidden-state vector. This turns the lens from an ORM (scores
+    completed text) into a PRM (scores each generation step), which lets
+    callers detect off-rails generation early — e.g. catch the May 6 53-min
+    repetition loop at token ~80 instead of after the full 8K-token decode.
+
+    Args:
+        query: text to score per token.
+        layer: optional transformer-block index. None (default) uses the
+            last-layer hidden state via vanilla `/embedding` (no PC-202 patch
+            required). When set, uses the PC-202 `layers` extension to score
+            the residual stream at that specific layer — useful for PC-204
+            multi-layer experiments.
+
+    Returns:
+        Dict with `per_step` (list of per-token dicts), `aggregate` (min/
+        max/mean across tokens), `n_tokens`, `hidden_dim`, `layer`, and
+        `latency_ms`. On error, `enabled=False` or `error` keys are set.
+    """
+    if not is_enabled() or not _ensure_models_loaded():
+        return {
+            "enabled": False, "gx_available": False,
+            "per_step": [], "aggregate": {}, "n_tokens": 0,
+        }
+
+    try:
+        import numpy as np
+        import torch
+        from geometric_lens.embedding_extractor import (
+            extract_per_layer_per_token,
+            extract_per_token,
+        )
+
+        start = time.monotonic()
+
+        # Pull per-token hidden states from llama-server
+        if layer is None:
+            per_token_vecs, hidden_dim = extract_per_token(query)
+            tap_label = "last"
+        else:
+            per_layer, _, hidden_dim = extract_per_layer_per_token(query, [int(layer)])
+            per_token_vecs = per_layer[int(layer)]
+            tap_label = str(layer)
+
+        n_tokens = len(per_token_vecs)
+        if n_tokens == 0:
+            return {
+                "enabled": True, "gx_available": _gx_xgboost is not None,
+                "per_step": [], "aggregate": {}, "n_tokens": 0,
+                "layer": tap_label,
+                "error": "empty token list",
+            }
+
+        # Batched C(x): one MLP forward over [n_tokens, hidden_dim]
+        x = torch.tensor(per_token_vecs, dtype=torch.float32)
+        with torch.no_grad():
+            cx_raw = _cost_field(x).squeeze(-1).cpu().numpy()  # (n_tokens,)
+        # logistic normalization, same constants used by evaluate_combined
+        cx_norm = 1.0 / (1.0 + np.exp(-(cx_raw - 19.0) / 2.0))
+        cx_norm = np.clip(cx_norm, 0.0, 1.0)
+
+        # Batched G(x) when XGBoost is loaded
+        gx_available = _gx_xgboost is not None and _gx_pca_components is not None
+        if gx_available:
+            emb_np = np.asarray(per_token_vecs, dtype=np.float32)
+            x_pca = (emb_np - _gx_pca_mean) @ _gx_pca_components.T
+            proba = _gx_xgboost.predict_proba(x_pca)
+            gx_scores = proba[:, 1].astype(float)
+        else:
+            gx_scores = np.full(n_tokens, 0.5, dtype=float)
+
+        per_step = []
+        for i in range(n_tokens):
+            score = float(gx_scores[i])
+            if gx_available:
+                if score >= 0.7:
+                    verdict = "likely_correct"
+                elif score >= 0.3:
+                    verdict = "uncertain"
+                else:
+                    verdict = "likely_incorrect"
+            else:
+                verdict = "unavailable"
+            per_step.append({
+                "token_idx":     i,
+                "cx_energy":     float(cx_raw[i]),
+                "cx_normalized": float(cx_norm[i]),
+                "gx_score":      score,
+                "gx_verdict":    verdict,
+            })
+
+        aggregate = {
+            "cx_energy_min":  float(cx_raw.min()),
+            "cx_energy_max":  float(cx_raw.max()),
+            "cx_energy_mean": float(cx_raw.mean()),
+            "cx_norm_min":    float(cx_norm.min()),
+            "cx_norm_max":    float(cx_norm.max()),
+            "cx_norm_mean":   float(cx_norm.mean()),
+            "gx_score_min":   float(gx_scores.min()),
+            "gx_score_max":   float(gx_scores.max()),
+            "gx_score_mean":  float(gx_scores.mean()),
+            # token index where the lens first sees a low-quality state —
+            # the natural "stop generating" signal for PC-207 callers.
+            "first_off_rails_idx": int(np.argmax(gx_scores < 0.3)) if gx_available and (gx_scores < 0.3).any() else -1,
+        }
+
+        elapsed_ms = (time.monotonic() - start) * 1000
+        logger.debug(
+            f"per-step lens: n={n_tokens} layer={tap_label} "
+            f"cx_norm[mean,max]=({aggregate['cx_norm_mean']:.3f},{aggregate['cx_norm_max']:.3f}) "
+            f"gx[min,mean]=({aggregate['gx_score_min']:.3f},{aggregate['gx_score_mean']:.3f}) "
+            f"latency={elapsed_ms:.1f}ms"
+        )
+
+        return {
+            "enabled":      True,
+            "gx_available": gx_available,
+            "per_step":     per_step,
+            "aggregate":    aggregate,
+            "n_tokens":     n_tokens,
+            "hidden_dim":   hidden_dim,
+            "layer":        tap_label,
+            "latency_ms":   round(elapsed_ms, 1),
+        }
+
+    except Exception as e:
+        logger.error(f"per-step evaluation failed: {e}")
+        return {
+            "enabled": True, "gx_available": False,
+            "per_step": [], "aggregate": {}, "n_tokens": 0,
+            "error": str(e),
+        }
