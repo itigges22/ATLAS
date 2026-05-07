@@ -414,6 +414,48 @@ class EmbedAdapter:
 
 # --- Lens Scorer (calls Geometric Lens) ---------------------------------------------
 
+def score_candidate_per_step(code: str) -> dict:
+    """PC-207 wiring: per-step C(x)+G(x) scoring of a candidate.
+
+    Returns the aggregate dict from `/internal/lens/score-per-step`
+    (`first_off_rails_idx`, `gx_score_min`, `gx_score_mean`, etc.)
+    plus `n_tokens`. Fail-soft: returns an empty dict on error so a
+    lens outage degrades to "no per-step signal" instead of a
+    pipeline-stopping exception.
+
+    Cost on this hardware tier: ~7-15ms per token (lens batches the
+    MLP + XGBoost calls), so a 500-token candidate adds ~3-7 seconds
+    of latency. Worth it for the off-rails detection signal — see
+    PC-207 in ISSUES.md for the empirical case (the May 6 53-min
+    repetition loop would have been visible at first_off_rails_idx<5).
+    """
+    try:
+        body = json.dumps({"text": code}).encode()
+        req = urllib.request.Request(
+            f"{LENS_URL}/internal/lens/score-per-step",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+        if not data.get("enabled"):
+            return {}
+        agg = data.get("aggregate", {}) or {}
+        return {
+            "n_tokens":            int(data.get("n_tokens", 0)),
+            "gx_available":        bool(data.get("gx_available", False)),
+            "first_off_rails_idx": int(agg.get("first_off_rails_idx", -1)),
+            "gx_score_min":        float(agg.get("gx_score_min", 0.5)),
+            "gx_score_mean":       float(agg.get("gx_score_mean", 0.5)),
+            "cx_norm_max":         float(agg.get("cx_norm_max", 0.0)),
+            "cx_norm_mean":        float(agg.get("cx_norm_mean", 0.0)),
+            "latency_ms":          float(data.get("latency_ms", 0.0)),
+        }
+    except Exception as e:
+        print(f"  [lens] score_candidate_per_step failed: {e} — degrading to no per-step signal", flush=True)
+        return {}
+
+
 def score_candidate(code: str) -> Tuple[float, float]:
     """Score code with Geometric Lens C(x). Returns (raw_energy, normalized).
 
@@ -979,11 +1021,25 @@ class V3PipelineService:
                 for i, code in enumerate(ps_result.candidates):
                     if code:
                         energy_raw, energy_norm = score_candidate(code)
+                        per_step = score_candidate_per_step(code)  # PC-207
+                        cand_index = len(candidates)
                         candidates.append({
-                            "index": len(candidates), "code": code,
+                            "index": cand_index, "code": code,
                             "energy": energy_raw, "energy_norm": energy_norm,
                             "passed": False, "stdout": "", "stderr": "",
+                            "per_step": per_step,
                         })
+                        if per_step:
+                            emit("lens_per_step",
+                                 f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
+                                 f"first_off_rails={per_step['first_off_rails_idx']}",
+                                 index=cand_index,
+                                 source="plansearch",
+                                 first_off_rails_idx=per_step["first_off_rails_idx"],
+                                 gx_score_min=per_step["gx_score_min"],
+                                 gx_score_mean=per_step["gx_score_mean"],
+                                 cx_norm_max=per_step["cx_norm_max"],
+                                 n_tokens=per_step["n_tokens"])
                 result["total_tokens"] += ps_result.total_tokens
                 emit("plansearch_done",
                      f"{len(ps_result.candidates)} candidates from PlanSearch",
@@ -1009,11 +1065,25 @@ class V3PipelineService:
                     code = extract_code(response)
                     if code:
                         energy_raw, energy_norm = score_candidate(code)
+                        per_step = score_candidate_per_step(code)  # PC-207
+                        cand_index = len(candidates)
                         candidates.append({
-                            "index": len(candidates), "code": code,
+                            "index": cand_index, "code": code,
                             "energy": energy_raw, "energy_norm": energy_norm,
                             "passed": False, "stdout": "", "stderr": "",
+                            "per_step": per_step,
                         })
+                        if per_step:
+                            emit("lens_per_step",
+                                 f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
+                                 f"first_off_rails={per_step['first_off_rails_idx']}",
+                                 index=cand_index,
+                                 source="divsampling",
+                                 first_off_rails_idx=per_step["first_off_rails_idx"],
+                                 gx_score_min=per_step["gx_score_min"],
+                                 gx_score_mean=per_step["gx_score_mean"],
+                                 cx_norm_max=per_step["cx_norm_max"],
+                                 n_tokens=per_step["n_tokens"])
                     result["total_tokens"] += tokens
                 except Exception as e:
                     emit("divsampling_error", str(e)[:200])
