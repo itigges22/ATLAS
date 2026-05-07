@@ -116,15 +116,30 @@ def _post_pattern_outcome(problem: str, result: dict):
 # --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
 
 class LLMAdapter:
-    """Calls llama-server's /v1/chat/completions, parsing ChatML prompts into messages."""
+    """Calls llama-server's /v1/chat/completions, parsing ChatML prompts into messages.
+
+    PC-206: `thinking` controls Qwen3.5's hybrid reasoning mode.
+    - False (default) — `/nothink` injected, `enable_thinking=False`.
+      Required for grammar-constrained JSON output (the agent's tool-call
+      shape) and for the tight V3 sampling loop where reasoning would 5-20×
+      output token cost. This matches the previously hardcoded behavior.
+    - True — `/nothink` NOT injected, `enable_thinking=True`. Use for
+      high-reasoning-value calls (planner, verification, claim-check) where
+      the output can absorb a preamble and the strip pattern in __call__
+      cleans up `<think>...</think>` blocks before downstream JSON parse.
+
+    The default is set per-instance; individual __call__ invocations can
+    override via the `thinking` keyword for ad-hoc switches.
+    """
 
     _lock = threading.Lock()
 
-    def __init__(self, progress_callback=None):
+    def __init__(self, progress_callback=None, thinking: bool = False):
         self.call_count = 0
         self.total_tokens = 0
         self.last_logprobs: List[float] = []
         self._progress = progress_callback
+        self.thinking = thinking
 
     def _emit(self, stage: str, detail: str = "", **data):
         if self._progress:
@@ -136,8 +151,12 @@ class LLMAdapter:
                 self._progress(stage, detail)
 
     def __call__(self, prompt: str, temperature: float,
-                 max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
+                 max_tokens: int, seed: Optional[int],
+                 thinking: Optional[bool] = None) -> Tuple[str, int, float]:
         self.call_count += 1
+
+        # Resolve per-call override against the instance default (PC-206).
+        thinking_resolved = self.thinking if thinking is None else thinking
 
         body = {
             "model": "default",
@@ -149,6 +168,7 @@ class LLMAdapter:
             "stop": ["\n\n\n\n"],
             "top_k": 20,
             "top_p": 0.95,
+            "_thinking": thinking_resolved,  # consumed by _send, popped before send
         }
         if seed is not None:
             body["seed"] = seed
@@ -194,6 +214,11 @@ class LLMAdapter:
         prompt = body.pop("prompt", "")
         model_name = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
 
+        # PC-206: thinking flag drops down from __call__. Default False so
+        # any caller that constructs a body dict directly preserves the
+        # pre-PC-206 /nothink behavior.
+        thinking = bool(body.pop("_thinking", False))
+
         # Parse ChatML into messages
         messages = []
         parts = re.split(r'<\|im_start\|>(\w+)\n', prompt)
@@ -211,13 +236,25 @@ class LLMAdapter:
         # If parsing failed, just send as user message
         if not messages:
             print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
-            messages = [{"role": "user", "content": "/nothink\n" + prompt}]
+            user_content = prompt if thinking else "/nothink\n" + prompt
+            messages = [{"role": "user", "content": user_content}]
         else:
-            print(f"  [LLM] Parsed {len(messages)} messages from ChatML", flush=True)
-            # Ensure /nothink in last user message
-            for msg in messages:
-                if msg["role"] == "user" and not msg["content"].startswith("/nothink"):
-                    msg["content"] = "/nothink\n" + msg["content"]
+            print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
+                  f" (thinking={'on' if thinking else 'off'})", flush=True)
+            if not thinking:
+                # Ensure /nothink in last user message — NOT enough on its
+                # own (Qwen3 reasoning still streams into reasoning_content
+                # without the chat_template_kwargs flip below), but cheap
+                # belt-and-braces signal to the model.
+                for msg in messages:
+                    if msg["role"] == "user" and not msg["content"].startswith("/nothink"):
+                        msg["content"] = "/nothink\n" + msg["content"]
+            else:
+                # PC-206: strip any /nothink the prompt template hardcoded.
+                # Lets a caller flip thinking on without rewriting prompts.
+                for msg in messages:
+                    if msg["role"] == "user" and msg["content"].startswith("/nothink"):
+                        msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
 
         chat_body = {
             "model": model_name,
@@ -225,11 +262,13 @@ class LLMAdapter:
             "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
             "temperature": body.get("temperature", 0.6),
             "stream": bool(body.get("stream", False)),
-            # Qwen3-style chat templates honour enable_thinking=false to
-            # skip the <think> block entirely. /nothink in the prompt is
-            # NOT enough — confirmed via logs where 2048 tok of reasoning
-            # streamed into delta.reasoning_content with empty content.
-            "chat_template_kwargs": {"enable_thinking": False},
+            # PC-206: when thinking=True, Qwen3.5's hybrid reasoning mode is
+            # allowed; the <think>...</think> blocks get stripped in __call__
+            # before downstream JSON parse. When False (the agent-loop default),
+            # enable_thinking=False is the load-bearing one — /nothink in the
+            # prompt alone is NOT enough; confirmed via logs where 2048 tok of
+            # reasoning streamed into delta.reasoning_content with empty content.
+            "chat_template_kwargs": {"enable_thinking": thinking},
         }
         if chat_body["stream"]:
             # Need usage in the final chunk so we can report token counts.
@@ -1356,8 +1395,7 @@ def _build_problem_from_request(
 # zero — even a wrong plan beats no plan, because at least the wrongness
 # is visible in one screen instead of buried in a trace.
 
-PLAN_PROMPT_TEMPLATE = """/nothink
-You are an architect. Output ONLY a JSON plan, no other text. No markdown fences. No prose preamble.
+PLAN_PROMPT_TEMPLATE = """You are an architect. Output ONLY a JSON plan, no other text. No markdown fences. No prose preamble.
 
 User goal: {user_message}
 Working directory: {working_dir}
@@ -1574,7 +1612,17 @@ def generate_plan(
 
     emit("plan_start", f"generating {n_candidates} candidate plans")
 
-    llm = LLMAdapter(progress_callback=progress_callback)
+    # PC-206: thinking-aware infrastructure shipped — planner CAN run with
+    # Qwen3.5 hybrid reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
+    # because empirically on the reference Qwen3.5-9B-Q6_K + this codebase's
+    # hardware tier, thinking pushes planner latency from ~5-30s to >4min
+    # per candidate (model spends the full token budget reasoning before
+    # emitting JSON). On faster GPU tiers the design's aspirational
+    # "reasoning > latency cost" trade may be worth it — flip the env var
+    # there. When ON, max_tokens jumps to 8192 to fit reasoning + answer.
+    plan_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
+    plan_max_tokens = 8192 if plan_thinking else 2048
+    llm = LLMAdapter(progress_callback=progress_callback, thinking=plan_thinking)
     prompt = _build_plan_prompt(user_message, working_dir, project_context)
 
     candidates: List[Tuple[Optional[dict], float, List[str]]] = []
@@ -1586,9 +1634,10 @@ def generate_plan(
         emit("plan_candidate", f"candidate {i+1}/{n_candidates} (temp={temp})",
              index=i, temperature=temp)
         try:
-            # 2048 tokens covers a 6-step plan with rationale comfortably;
-            # 1024 tripped truncation in early testing.
-            raw, tokens, t_ms = llm(prompt, temp, 2048, 42 + i)
+            # plan_max_tokens varies with thinking mode (PC-206): 2048 covers
+            # a 6-step plan + rationale when thinking is off, 8192 leaves
+            # room for ~6KB of reasoning preamble plus the JSON answer.
+            raw, tokens, t_ms = llm(prompt, temp, plan_max_tokens, 42 + i)
         except Exception as e:
             emit("plan_candidate_error", f"candidate {i+1} failed: {e}", index=i)
             candidates.append((None, 0.0, [f"llm error: {e}"]))
