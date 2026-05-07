@@ -1,0 +1,304 @@
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 4b28033..b7a7a9d 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -18,11 +18,16 @@
+ #include <algorithm>
+ #include <cstddef>
+ #include <cinttypes>
++#include <cstring>
++#include <cstdlib>
+ #include <exception>
+ #include <memory>
+ #include <filesystem>
++#include <set>
+ #include <utility>
+ 
++#include "ggml-backend.h"
++
+ // fix problem with std::min and std::max
+ #if defined(_WIN32)
+ #define WIN32_LEAN_AND_MEAN
+@@ -36,6 +41,57 @@ using json = nlohmann::ordered_json;
+ 
+ constexpr int HTTP_POLLING_SECONDS = 1;
+ 
++// ATLAS PC-202: per-layer residual stream capture for hidden-states extension.
++// Filled by update_slots() before llama_decode (from the union of hidden_states_layers
++// across active embedding slots), populated by atlas_capture_cb_eval during decode,
++// then consumed by send_embedding which slices per-slot tokens out of the captured
++// flat buffers. Cleared at the end of each update_slots iteration.
++struct atlas_hidden_states_capture {
++    std::set<int>                       layers_wanted;   // union across active slots
++    std::map<int, std::vector<float>>   captured;        // layer -> flat [hidden_dim * batch_n_tokens]
++    int32_t                             hidden_dim = 0;
++    int32_t                             batch_n_tokens = 0;
++
++    void clear() {
++        layers_wanted.clear();
++        captured.clear();
++        hidden_dim = 0;
++        batch_n_tokens = 0;
++    }
++};
++
++// cb_eval callback installed at server init. Called for each ggml node during decode.
++// Two-phase: ask=true asks whether to materialize data, ask=false delivers it.
++// Always returns true (returning false would abort graph compute).
++static bool atlas_capture_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
++    auto * cap = static_cast<atlas_hidden_states_capture *>(user_data);
++    if (cap == nullptr || cap->layers_wanted.empty()) {
++        return true;  // not capturing this batch — let compute proceed
++    }
++    // Match "l_out-{N}" (post-block residual; verified against Qwen3.5-9B GGUF
++    // — both attention and DeltaNet blocks produce this name).
++    if (std::strncmp(t->name, "l_out-", 6) != 0) {
++        return true;
++    }
++    const int layer_idx = std::atoi(t->name + 6);
++    if (cap->layers_wanted.find(layer_idx) == cap->layers_wanted.end()) {
++        return true;
++    }
++    if (ask) {
++        return true;  // yes, materialize this tensor's data
++    }
++    // ask=false: data is materialized — copy it out (tensor may be on GPU,
++    // ggml_backend_tensor_get handles the device->host copy).
++    if (t->type != GGML_TYPE_F32) {
++        return true;  // unexpected dtype; skip rather than corrupt the buffer
++    }
++    const size_t n = ggml_nelements(t);
++    auto & buf = cap->captured[layer_idx];
++    buf.resize(n);
++    ggml_backend_tensor_get(t, buf.data(), 0, n * sizeof(float));
++    return true;
++}
++
+ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, bool on_device, llama_pos pos_min = -1, llama_pos pos_max = -1) {
+     if (pos_min == -1) {
+         pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), id);
+@@ -705,6 +761,10 @@ private:
+ 
+     bool sleeping = false;
+ 
++    // ATLAS PC-202: hidden-states capture state (see top of file for struct def).
++    // Lives for the server's lifetime; cb_eval points at it via user_data.
++    atlas_hidden_states_capture hidden_states_capture;
++
+     void destroy() {
+         llama_init.reset();
+ 
+@@ -757,6 +817,12 @@ private:
+ 
+         params_base = params;
+ 
++        // ATLAS PC-202: install hidden-states capture callback BEFORE context init.
++        // The callback always runs (cheap when no layers are requested) and consults
++        // hidden_states_capture.layers_wanted to decide whether to copy out data.
++        params_base.cb_eval           = atlas_capture_cb_eval;
++        params_base.cb_eval_user_data = &hidden_states_capture;
++
+         llama_init = common_init_from_params(params_base);
+ 
+         model = llama_init->model();
+@@ -1714,6 +1780,32 @@ private:
+             res->embedding.emplace_back(embd, embd + n_embd_out);
+         }
+ 
++        // ATLAS PC-202: slice per-token hidden states for this slot from the
++        // batch-level capture buffer. Each layer's flat buffer is laid out as
++        // [hidden_dim, batch_n_tokens] (ggml convention: ne[0] is fastest dim),
++        // so token at batch position j starts at offset j * hidden_dim.
++        // We collect ALL of slot.id's tokens (not just batch.logits[i]==1), so
++        // PC-207 lens-as-PRM gets per-step states across the full prompt.
++        if (!slot.task->params.hidden_states_layers.empty()
++                && hidden_states_capture.hidden_dim > 0) {
++            const int H = hidden_states_capture.hidden_dim;
++            res->hidden_dim = H;
++            for (int layer_idx : slot.task->params.hidden_states_layers) {
++                auto it = hidden_states_capture.captured.find(layer_idx);
++                if (it == hidden_states_capture.captured.end()) {
++                    continue;  // layer was not captured (e.g. cb_eval skipped due to dtype)
++                }
++                const auto & flat = it->second;
++                auto & out_layer = res->hidden_states[layer_idx];
++                for (int j = 0; j < batch.n_tokens; ++j) {
++                    if (batch.seq_id[j][0] != slot.id) continue;
++                    const size_t off = (size_t)j * (size_t)H;
++                    if (off + (size_t)H > flat.size()) break;  // bounds guard
++                    out_layer.emplace_back(flat.begin() + off, flat.begin() + off + H);
++                }
++            }
++        }
++
+         SLT_DBG(slot, "%s", "sending embeddings\n");
+ 
+         queue_results.send(std::move(res));
+@@ -2799,6 +2891,25 @@ private:
+                 batch.logits   + i,
+             };
+ 
++            // ATLAS PC-202: populate hidden-states capture state for THIS decode pass.
++            // The cb_eval already installed at init consults this state; if no slot
++            // wants hidden states, layers_wanted stays empty and the callback is a no-op
++            // (just a name strncmp).
++            hidden_states_capture.clear();
++            for (auto & slot : slots) {
++                if (slot.is_processing()
++                        && slot.task->type == SERVER_TASK_TYPE_EMBEDDING
++                        && !slot.task->params.hidden_states_layers.empty()) {
++                    for (int l : slot.task->params.hidden_states_layers) {
++                        hidden_states_capture.layers_wanted.insert(l);
++                    }
++                }
++            }
++            if (!hidden_states_capture.layers_wanted.empty()) {
++                hidden_states_capture.batch_n_tokens = n_tokens;
++                hidden_states_capture.hidden_dim     = llama_model_n_embd(model);
++            }
++
+             const int ret = llama_decode(ctx, batch_view);
+ 
+             metrics.on_decoded(slots);
+@@ -4309,6 +4420,50 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
+         }
+     }
+ 
++    // ATLAS PC-202: optional per-layer residual capture. Available on the legacy
++    // /embedding and /embeddings paths only — OAI-compat /v1/embeddings clients
++    // don't expect the extension and would fail schema validation.
++    std::vector<int> hidden_states_layers;
++    if (body.count("layers") != 0) {
++        if (res_type == TASK_RESPONSE_TYPE_OAI_EMBD) {
++            res->error(format_error_response(
++                "\"layers\" is not supported on the OAI-compat /v1/embeddings endpoint; "
++                "use /embedding or /embeddings instead", ERROR_TYPE_INVALID_REQUEST));
++            return res;
++        }
++        const json & layers_json = body.at("layers");
++        if (!layers_json.is_array()) {
++            res->error(format_error_response(
++                "\"layers\" must be an array of non-negative integers", ERROR_TYPE_INVALID_REQUEST));
++            return res;
++        }
++        if (layers_json.size() > 8) {
++            res->error(format_error_response(
++                "\"layers\" must contain at most 8 entries (memory bound)",
++                ERROR_TYPE_INVALID_REQUEST));
++            return res;
++        }
++        const int n_layer = llama_model_n_layer(ctx_server.model);
++        std::set<int> seen;
++        for (const auto & v : layers_json) {
++            if (!v.is_number_integer()) {
++                res->error(format_error_response(
++                    "\"layers\" entries must be integers", ERROR_TYPE_INVALID_REQUEST));
++                return res;
++            }
++            const int l = v.get<int>();
++            if (l < 0 || l >= n_layer) {
++                res->error(format_error_response(
++                    "\"layers\" entries must be in [0, n_layer); n_layer = "
++                        + std::to_string(n_layer), ERROR_TYPE_INVALID_REQUEST));
++                return res;
++            }
++            if (seen.insert(l).second) {
++                hidden_states_layers.push_back(l);
++            }
++        }
++    }
++
+     // create and queue the task
+     json responses = json::array();
+     auto & rd = res->rd;
+@@ -4324,6 +4479,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
+             task.params.res_type = res_type;
+             task.params.embd_normalize = embd_normalize;
+ 
++            // ATLAS PC-202
++            task.params.hidden_states_layers = hidden_states_layers;
++
+             tasks.push_back(std::move(task));
+         }
+         rd.post_tasks(std::move(tasks));
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index 45e5168..dcf3149 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -9,6 +9,7 @@
+ #include "sampling.h"
+ #include "speculative.h"
+ #include "server-common.h"
++#include "base64.hpp"
+ 
+ using json = nlohmann::ordered_json;
+ 
+@@ -1823,10 +1824,38 @@ json server_task_result_embd::to_json() {
+ }
+ 
+ json server_task_result_embd::to_json_non_oaicompat() {
+-    return json {
++    json out = json {
+         {"index",     index},
+         {"embedding", embedding},
+     };
++
++    // ATLAS PC-202: include per-layer residual hidden states when captured.
++    // Each layer is flattened as float32 row-major [n_tokens × hidden_dim]
++    // and base64-encoded (matches the existing /embedding encoding_format=base64
++    // wire convention; saves ~5x bandwidth vs. JSON arrays of floats).
++    if (!hidden_states.empty() && hidden_dim > 0) {
++        json hs = json::object();
++        for (const auto & kv : hidden_states) {
++            const int layer_idx = kv.first;
++            const auto & per_token = kv.second;
++            // flatten [n_tokens][hidden_dim] -> contiguous float buffer
++            std::vector<float> flat;
++            flat.reserve(per_token.size() * hidden_dim);
++            for (const auto & tok_vec : per_token) {
++                flat.insert(flat.end(), tok_vec.begin(), tok_vec.end());
++            }
++            const char * data_ptr = reinterpret_cast<const char *>(flat.data());
++            const size_t data_size = flat.size() * sizeof(float);
++            hs[std::to_string(layer_idx)] = base64::encode(data_ptr, data_size);
++        }
++        out["hidden_states"]            = std::move(hs);
++        out["hidden_states_n_tokens"]   = (int32_t)(hidden_states.begin()->second.size());
++        out["hidden_states_dim"]        = hidden_dim;
++        out["hidden_states_dtype"]      = "float32";
++        out["hidden_states_encoding"]   = "base64";
++    }
++
++    return out;
+ }
+ 
+ json server_task_result_embd::to_json_oaicompat() {
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index 289e1fb..1606fd0 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -87,6 +87,11 @@ struct task_params {
+     // Embeddings
+     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+ 
++    // ATLAS PC-202: per-layer residual stream capture (post-block, "l_out-{N}")
++    // Empty = no capture (default behavior). Each entry must be in [0, n_layer).
++    // Capacity is bounded server-side (max 8 layers per request) to limit memory.
++    std::vector<int> hidden_states_layers;
++
+     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
+     json to_json(bool only_metrics = false) const;
+ };
+@@ -470,6 +475,12 @@ struct server_task_result_embd : server_task_result {
+ 
+     int32_t n_tokens;
+ 
++    // ATLAS PC-202: per-layer residual hidden states (post-block "l_out-{N}").
++    // Outer key = layer index. Inner = [n_tokens][hidden_dim] row-major.
++    // Empty when no layers were requested (preserves wire-compat).
++    std::map<int, std::vector<std::vector<float>>> hidden_states;
++    int32_t hidden_dim = 0;
++
+     // response formatting
+     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
+ 

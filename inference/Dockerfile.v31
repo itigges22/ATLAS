@@ -14,6 +14,9 @@ ARG CUDA_ARCH=120;121
 RUN dnf install -y git cmake gcc-c++ && dnf clean all
 # Use /llama.cpp/tmp for build temp to avoid /tmp space exhaustion
 ENV TMPDIR=/llama.cpp/tmp
+# Patches applied to llama.cpp before build. Keep this stage cache-friendly:
+# patches changes -> rebuild; everything else stays cached.
+COPY patches/ /patches/
 # Shallow + single-branch clone: full history is ~1GB and chokes flaky
 # connections (saw an 11-minute SSL read timeout on a full clone). The
 # build doesn't need history. http.postBuffer bump helps large packs;
@@ -31,6 +34,12 @@ RUN git -c http.postBuffer=524288000 \
     # If the patch target line doesn't exist in newer versions, the sed is a no-op.
     sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
         tools/server/server-context.cpp 2>/dev/null || true && \
+    # ATLAS PC-202: expose per-layer residual hidden states from /embedding.
+    # Adds an optional `layers: [int]` request param; response gains
+    # `hidden_states` (base64 float32 per layer) for PC-203 SAE + PC-207
+    # lens-as-PRM. No-op when `layers` is omitted. See ISSUES.md PC-202.
+    git apply --check /patches/expose-hidden-states.patch && \
+    git apply         /patches/expose-hidden-states.patch && \
     cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" && \
     cmake --build build --config Release -j5
 

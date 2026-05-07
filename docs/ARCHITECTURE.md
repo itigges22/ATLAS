@@ -44,7 +44,7 @@ The chat front-end is the **atlas-tui** (Bubbletea, PC-062): a native Go termina
 
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
-| **llama-server** | 8080 | C++ (llama.cpp) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings |
+| **llama-server** | 8080 | C++ (llama.cpp) | LLM inference with CUDA, grammar-constrained JSON, self-embeddings, per-layer residual hidden states (PC-202) |
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` passes through to llama-server unchanged. |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. PC-062. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |

@@ -679,6 +679,77 @@ Raw completion endpoint (no chat template). Used internally by the benchmark run
 
 Generate embeddings for input text. Used by Geometric Lens for C(x)/G(x) scoring.
 
+#### ATLAS extension: per-layer residual hidden states (PC-202)
+
+`/embedding` and `/embeddings` (the legacy paths — *not* `/v1/embeddings`)
+accept an optional `layers` parameter that returns the post-block residual
+stream at the requested transformer layers, in addition to the standard
+final-layer embedding. Used by the Geometric Lens (PC-207, lens-as-PRM)
+and the Qwen-Scope SAE service (PC-203).
+
+**Request:**
+
+```json
+{
+  "content": "...",
+  "layers": [8, 16, 24]
+}
+```
+
+- `layers` (optional): array of transformer block indices. Each must be
+  in `[0, n_layer)`. Maximum 8 entries per request (memory bound).
+  Omit for back-compat (response shape is unchanged).
+- Rejected on `/v1/embeddings` — the OAI-compat path doesn't expose this
+  extension. Use `/embedding` or `/embeddings` instead.
+
+**Response (when `layers` is set):**
+
+```json
+[{
+  "index": 0,
+  "embedding": [...],
+  "hidden_states": {
+    "8":  "<base64 float32, row-major n_tokens × hidden_dim>",
+    "16": "...",
+    "24": "..."
+  },
+  "hidden_states_n_tokens": 84,
+  "hidden_states_dim":      4096,
+  "hidden_states_dtype":    "float32",
+  "hidden_states_encoding": "base64"
+}]
+```
+
+The base64-decoded buffer is float32 little-endian, row-major
+`[n_tokens][hidden_dim]`. A client decodes with
+`np.frombuffer(b64decode(s), dtype='<f4').reshape(n_tokens, hidden_dim)`.
+
+**Decode example (Python):**
+
+```python
+import base64, numpy as np, requests
+r = requests.post("http://llama-server:8080/embedding", json={
+    "content": "def fib(n): return n if n<2 else fib(n-1)+fib(n-2)",
+    "layers":  [8, 16, 24],
+}).json()[0]
+n, d = r["hidden_states_n_tokens"], r["hidden_states_dim"]
+hs = {int(k): np.frombuffer(base64.b64decode(v), dtype="<f4").reshape(n, d)
+      for k, v in r["hidden_states"].items()}
+# hs[16].shape == (n_tokens, 4096)
+```
+
+**Tap point:** post-block residual stream (`l_out-{N}` in llama.cpp's
+ggml graph). Verified against Qwen3.5-9B-Q6_K (architecture `qwen35`)
+and matches the hook point Qwen-Scope SAEs are trained on. Same tensor
+name regardless of whether the block is attention-based or
+DeltaNet/SSM-based, so all 32 layers of Qwen3.5-9B are accessible.
+
+**Wire format rationale:** base64 over JSON arrays. Empirically a single
+layer of 84 tokens × 4096 dims is 1.4 MiB raw float32, 1.8 MiB as base64,
+or 7 MiB as a JSON array of floats — and PC-207 fires this every N tokens
+during generation. JSON would push 50+ MiB per multi-layer scoring call;
+base64 keeps it manageable.
+
 ### GET /health
 
 ```bash
