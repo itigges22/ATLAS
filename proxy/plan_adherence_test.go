@@ -153,21 +153,40 @@ func TestRecordPlanAdherenceUpdatesState(t *testing.T) {
 		t.Errorf("off_streak = %d, want 0 after on-plan call", ctx.PlanOffStreak)
 	}
 
-	// Off-plan list_directory → streak goes to 1.
+	// Recon tool (list_directory) is NEUTRAL — exploration doesn't
+	// violate a plan, so it must NOT increment off_streak. Verifies
+	// the isReconTool gate added with planAutoReviseThreshold 3→5.
 	revise = recordPlanAdherence(ctx, "list_directory",
 		mkArgs(t, map[string]string{"path": "."}), true)
+	if revise {
+		t.Error("recon call shouldn't trigger revise")
+	}
+	if ctx.PlanOffStreak != 0 {
+		t.Errorf("off_streak = %d after recon, want 0 (recon is neutral)", ctx.PlanOffStreak)
+	}
+
+	// Off-plan run_command (non-recon) → streak goes to 1.
+	revise = recordPlanAdherence(ctx, "run_command",
+		mkArgs(t, map[string]string{"command": "echo hi"}), true)
 	if revise {
 		t.Error("streak=1 shouldn't trigger revise")
 	}
 	if ctx.PlanOffStreak != 1 {
-		t.Errorf("off_streak = %d, want 1", ctx.PlanOffStreak)
+		t.Errorf("off_streak = %d after first off-plan run_command, want 1", ctx.PlanOffStreak)
 	}
 
-	// Two more off-plan → streak hits threshold.
-	recordPlanAdherence(ctx, "list_directory",
-		mkArgs(t, map[string]string{"path": "."}), true)
-	revise = recordPlanAdherence(ctx, "list_directory",
-		mkArgs(t, map[string]string{"path": "."}), true)
+	// Need planAutoReviseThreshold (=5) total off-plan calls to revise.
+	// Already at 1, fire 4 more.
+	for i := 0; i < 3; i++ {
+		revise = recordPlanAdherence(ctx, "run_command",
+			mkArgs(t, map[string]string{"command": "echo " + string(rune('a'+i))}), true)
+		if revise {
+			t.Errorf("revise fired early at streak=%d (threshold=%d)",
+				ctx.PlanOffStreak, planAutoReviseThreshold)
+		}
+	}
+	revise = recordPlanAdherence(ctx, "run_command",
+		mkArgs(t, map[string]string{"command": "echo final"}), true)
 	if !revise {
 		t.Errorf("streak=%d should trigger revise (threshold=%d)",
 			ctx.PlanOffStreak, planAutoReviseThreshold)
