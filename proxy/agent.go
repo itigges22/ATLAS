@@ -124,8 +124,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if idx, ok := resolveProjectSymbols(ctx, fileMap, symbols); ok && len(idx.Matched) > 0 {
 				body := formatProjectContextMessage(idx.Matched)
 				if body != "" {
+					// Role MUST be "user" with a "[system note]:" prefix —
+					// Qwen3.5's Jinja template enforces "System message
+					// must be at the beginning" and 500s on any system
+					// role appended mid-conversation. Same convention
+					// the lens-intervention path uses (commit b79b31d).
 					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role: "system", Content: body,
+						Role:    "user",
+						Content: "[system note]: " + body,
 					})
 					names := make([]string, 0, len(idx.Matched))
 					for _, m := range idx.Matched {
