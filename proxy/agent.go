@@ -1350,6 +1350,8 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("- For WHOLE-FUNCTION or WHOLE-ELEMENT rewrites, prefer `ast_edit` over `edit_file`. ast_edit takes a structural selector (`function:NAME`, `class:NAME`, `<tag>` for HTML) and replaces that single AST node — no need to copy the existing function as old_str. Selector must match exactly one node; ambiguous selectors return an error so you can be more specific. Decorators are included automatically when selecting a Python function. Available v1 only on `.py` and `.html`/`.htm` files.\n")
 	sb.WriteString("    ast_edit {\"path\":\"app.py\",\"selector\":\"function:dashboard\",\"content\":\"@app.route('/dashboard')\\ndef dashboard():\\n    return render_template('dashboard.html')\"}\n")
 	sb.WriteString("    ast_edit {\"path\":\"templates/index.html\",\"selector\":\"<body>\",\"content\":\"<body>\\n  <h1>Welcome</h1>\\n  ...\\n</body>\"}\n")
+	sb.WriteString("- WHEN write_file IS REJECTED for an existing file: if the file is `.py`, `.html`, or `.htm` and you're replacing the whole thing (e.g. swapping the entire body, replacing the dashboard function), use `ast_edit` next, not edit_file. ast_edit doesn't need `old_str` so it doesn't hit the max_tokens truncation that kills long edit_file calls. Use edit_file ONLY for surgical inline string changes (one line, one expression). This rule applies even when conversation trimming has dropped the original rejection message — re-derive the intent from the file extension and the size of your replacement.\n")
+	sb.WriteString("- JSON strings in tool args contain LITERAL characters: write `<` not `&lt;`, `>` not `&gt;`, `&` not `&amp;`. The file content goes verbatim onto disk — `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` instead of `<!DOCTYPE>`. NEVER HTML-encode angle brackets inside `content`, `old_str`, or `new_str`.\n")
 	sb.WriteString("- The `content` you put in write_file / edit_file goes verbatim onto disk. **No markdown fences. No prose preamble (\"Looking at the task...\", \"Here's the file:\"). No trailing explanation.** Just the raw file contents. The agent layer strips fenced wrappers before writing, but the right move is to never emit them in the first place.\n")
 	sb.WriteString("- **Never use shell `rm`, `mv`, `cp`, or `find -delete` to mutate workspace files.** Use the dedicated tools — `edit_file` for changes, `write_file` for new files, `delete_file` for removal. Shell mutation bypasses the safety gates and will be rejected by the agent layer. `run_command` is for build / test / run / inspection only (python, pytest, npm, go, ls, cat, curl, etc.).\n")
 	sb.WriteString("- Use run_command to verify your changes (build, test, lint, curl). For \"fix\"/\"isn't working\" prompts, verify before `done`.\n")
@@ -1728,10 +1730,20 @@ func classifyParseFailure(raw string) string {
 	// inside tool-call string args (`&lt;!DOCTYPE...&gt;`) instead of
 	// emitting them literally. JSON parses fine if the whole envelope
 	// arrives, but those entities then appear verbatim in old_str and
-	// don't match the actual file content. Catch and redirect.
+	// don't match the actual file content. Catch and redirect — works
+	// regardless of whether the response has a prose prefix (May 8
+	// dashboard.html session: model emitted "Now I can see..." then a
+	// JSON tool_call with HTML-entity-encoded old_str; the
+	// looksLikeToolCall check below missed it because the response
+	// didn't start with `{`, leaving the targeted corrective unfired).
 	htmlEntities := strings.Contains(stripped, "&lt;") ||
 		strings.Contains(stripped, "&gt;") ||
 		strings.Contains(stripped, "&amp;")
+	embeddedToolCall := strings.Contains(stripped, `"type":"tool_call"`) ||
+		strings.Contains(stripped, `"type": "tool_call"`)
+	if htmlEntities && embeddedToolCall {
+		return "Your tool call has HTML-entity-encoded angle brackets (`&lt;` / `&gt;` / `&amp;`) inside the JSON string args. JSON strings should contain literal `<` and `>` — don't HTML-escape them. The file content goes verbatim onto disk; entities like `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` into the file, not `<!DOCTYPE>`. Re-emit with literal angle brackets. For HTML rewrites, ast_edit is also a good alternative — it takes `selector: \"<body>\"` and the content body, no old_str needed. Also: respond with ONLY the JSON object — no prose preamble."
+	}
 	// Truncated tool_call detection: response starts with the tool-call
 	// preamble but doesn't have a properly closed args object. We look
 	// for the opening shape and the absence of a clean trailing `}}` —
@@ -1790,6 +1802,20 @@ func categorizeParseFailure(raw string) string {
 	if stripped == "" {
 		return "empty"
 	}
+	// HTML-entity check FIRST — wins over prose/non_json/malformed
+	// because the entity bug is a stronger signal than "this is
+	// narration." The model can prose-prefix an entity-encoded
+	// tool_call (May 8 dashboard.html session, raw_len=2056) which
+	// otherwise gets bucketed as "prose" and the targeted entity
+	// corrective never fires.
+	hasEntities := strings.Contains(stripped, "&lt;") ||
+		strings.Contains(stripped, "&gt;") ||
+		strings.Contains(stripped, "&amp;")
+	embeddedToolCall := strings.Contains(stripped, `"type":"tool_call"`) ||
+		strings.Contains(stripped, `"type": "tool_call"`)
+	if hasEntities && embeddedToolCall {
+		return "html_entities"
+	}
 	looksLikeToolCall := strings.HasPrefix(stripped, `{"type":"tool_call"`) ||
 		strings.HasPrefix(stripped, `{ "type": "tool_call"`) ||
 		strings.HasPrefix(stripped, `{"type": "tool_call"`)
@@ -1806,11 +1832,6 @@ func categorizeParseFailure(raw string) string {
 		!strings.HasSuffix(stripped, "]")
 	if truncated {
 		return "truncated_tool"
-	}
-	if strings.Contains(stripped, "&lt;") ||
-		strings.Contains(stripped, "&gt;") ||
-		strings.Contains(stripped, "&amp;") {
-		return "html_entities"
 	}
 	return "malformed_tool"
 }

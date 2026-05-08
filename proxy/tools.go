@@ -769,14 +769,38 @@ func editFileTool() *ToolDef {
 			// Find old_str with quote normalization
 			actualOldStr := findActualString(content, input.OldStr)
 			if actualOldStr == "" {
-				// GH #39: detect HTML-entity encoding in old_str that
-				// doesn't match the literal characters on disk. Qwen3.5
-				// occasionally emits `&lt;` / `&gt;` / `&amp;` inside
-				// JSON tool-call args; the disk has `<` / `>` / `&`,
-				// findActualString returns "", and the model gets the
-				// generic "not found" error and retries with the same
-				// broken encoding. Hint at the encoding mismatch and
-				// recommend ast_edit for HTML rewrites.
+				// GH #39: model occasionally HTML-entity-encodes < > &
+				// inside JSON tool-call args (Qwen3.5 quirk). When the
+				// disk has literal angle brackets, findActualString
+				// misses. Try once with entities decoded — if the
+				// decoded form matches the file, accept it
+				// transparently (also decode new_str so the
+				// replacement preserves intent). Faster than burning a
+				// turn on the corrective and matches what the model
+				// almost certainly meant. If decoded still doesn't
+				// match (or there were no entities to decode), fall
+				// through to the targeted error so the model knows
+				// what's wrong.
+				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
+					strings.Contains(input.OldStr, "&gt;") ||
+					strings.Contains(input.OldStr, "&amp;")
+				if hasEntities {
+					decoder := strings.NewReplacer(
+						"&lt;", "<",
+						"&gt;", ">",
+						"&amp;", "&",
+					)
+					decodedOld := decoder.Replace(input.OldStr)
+					if maybeMatch := findActualString(content, decodedOld); maybeMatch != "" {
+						log.Printf("[edit_file] auto-decoded HTML entities in old_str of %s — proceeding with decoded match (saved a stuck-loop turn)", input.Path)
+						input.OldStr = decodedOld
+						input.NewStr = decoder.Replace(input.NewStr)
+						actualOldStr = maybeMatch
+					}
+				}
+			}
+			if actualOldStr == "" {
+				// Mismatch persists — return targeted error.
 				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
 					strings.Contains(input.OldStr, "&gt;") ||
 					strings.Contains(input.OldStr, "&amp;")
