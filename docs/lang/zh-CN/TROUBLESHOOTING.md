@@ -1,11 +1,11 @@
 > **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
-> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+> ℹ️ **节选译本。** Aider 已于 2026-05-02 移除。代理循环在 `/v1/agent` 端点上始终启用（`ATLAS_AGENT_LOOP` 环境变量已废弃）。完整内容请参见英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md))。
 
 
 # ATLAS 故障排除指南
 
-ATLAS V3.0.1 的常见问题与解决方案，按服务分类。
+ATLAS V3.1.0 的常见问题与解决方案，按服务分类。
 
 ---
 
@@ -170,7 +170,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **现象：** 模型输出 `<think>` 标签或原始文本，而非 JSON 工具调用。
 
-**解决方法：** 当 `ATLAS_AGENT_LOOP=1` 时，代理会自动设置 `response_format: {"type": "json_object"}`。如果直接使用 llama-server，请在请求中包含该参数：
+**解决方法：** 代理在 `/v1/agent` 代理循环处理器内部自动设置 `response_format: {"type": "json_object"}`（无环境变量切换）。如果直接调用 llama-server（`/v1/chat/completions` 或 `/v1/completions`），请在请求中包含该参数：
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -205,12 +205,9 @@ ps aux | grep llama-server | grep ctx-size
 
 **现象：** 请求直接发送到 llama-server。没有工具调用、没有流式状态图标、没有 V3 Pipeline。
 
-**解决方法：** 设置 `ATLAS_AGENT_LOOP=1`。`atlas` 启动器会自动执行此操作。如果手动运行代理：
-```bash
-ATLAS_AGENT_LOOP=1 atlas-proxy-v2
-```
+**原因：** 您访问的是错误的端点。代理循环仅在 `POST /v1/agent` 上运行。`POST /v1/chat/completions`（以及 `/v1/` 下的其他路径）是到 llama-server 的透明透传，没有工具调用、V3 Pipeline 或流式聊天事件。
 
-在 Docker Compose 中，此项已在 `docker-compose.yml` 中设置，无需手动配置。
+**解决方法：** 将客户端指向 `POST http://localhost:8090/v1/agent`。Bubbletea TUI（`atlas` / `atlas tui`）和内置 `/solve` REPL 会自动执行此操作。如果您正在编写第三方客户端，请参见英文原版 [API.md](../../API.md) 的 `/v1/agent` SSE 事件协议。`ATLAS_AGENT_LOOP` 环境变量切换已废弃 — 分支基于端点，而非配置。
 
 ### V3 Pipeline 未对功能文件触发
 
@@ -403,7 +400,7 @@ docker compose up -d atlas-proxy
 
 **现象：** `cp .env.example .env` 失败并报错 "No such file or directory"。
 
-**解决方法：** 此问题已在 V3.0.1 中修复。如果你在修复前克隆的，请拉取最新代码：
+**解决方法：** 此问题已在 V3.1.0 中修复。如果你在修复前克隆的，请拉取最新代码：
 ```bash
 git pull
 cp .env.example .env

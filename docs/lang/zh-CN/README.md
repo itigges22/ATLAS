@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-Qwen3.5--9B-green" alt="Model"/>
   <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
@@ -79,22 +79,23 @@ ATLAS 需要一块 16GB+ 显存的 GPU、Docker（配合 nvidia-container-toolki
 
 ## 已知限制
 
-- **仅在 NVIDIA 上测试** - ATLAS 使用 llama.cpp 进行推理，该引擎支持多种加速后端。ROCm 支持是 V3.1 的优先事项。
-- **9B 模型尚未正式基准测试** - 命令行工具搭载 Qwen3.5-9B 和完整的 V3 Pipeline，但正式的 LiveCodeBench 分数来自 14B 模型。9B 基准测试属于 V3.1 工作。
+- **仅在 NVIDIA 上测试** - ATLAS 使用 llama.cpp 进行推理，该引擎支持多种加速后端。ROCm 支持已列入下一版本路线图。
+- **9B 模型尚未正式基准测试** - 命令行工具搭载 Qwen3.5-9B 和完整的 V3 Pipeline，但正式的 LiveCodeBench 分数来自 14B 模型。9B 基准测试是下一版本的工作项。
 - **复杂功能添加可能失败** - 向现有项目添加功能的成功率约为 67%。模型有时过度探索而非编写代码。
-- **语法约束推理速度** - 在 llama-server 上约 51 tok/s。更快的语法集成计划在 V3.1 中实现。
+- **语法约束推理速度** - 在 llama-server 上约 51 tok/s。更快的语法集成已列入下一版本路线图。
 
 ---
 
 ## 路线图
 
-**V3.0.1** - 当前版本。交互式命令行、Docker Compose 部署、V3 Pipeline 集成。
+**V3.1.0** - 当前版本。Bubbletea TUI 成为官方聊天客户端 (PC-062)、`atlas init` 首次运行向导 (PC-054)、`atlas doctor` 安装诊断 (PC-053)、`atlas tier` 硬件感知预设 (PC-055)、K3s 部署模板恢复、安装时自动构建的 ASA 操控向量 (BiasBusters #4)。
 
-**V3.1** - 开发中。
+**V3.1.x / 下一版本** - 开发中。
 - ROCm 支持 - 通过 llama.cpp ROCm 后端实现 AMD GPU 推理
 - 正式 9B 基准测试 - 在 Qwen3.5-9B 上运行 LiveCodeBench、GPQA Diamond、SciCode
 - 命令行可靠性 - 扩展测试，目标 L6 >= 90%
 - 语法速度 - C 端采样器链，实现更快的约束解码
+- 结构化代码推理 - tree-sitter + 基于求解器的调用图，用于可达性查询和范围限定的上下文注入 ([issue #39](https://github.com/itigges22/ATLAS/issues/39))
 
 ---
 

@@ -1,6 +1,6 @@
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
 
-> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+> ℹ️ **요약 번역본입니다.** Aider는 2026-05-02에 제거되었습니다. 현재 채팅 UI는 `atlas tui` (Bubbletea 기반) 입니다. 이 번역은 핵심 부분만 다루며, ASA 스티어링 벡터, `atlas init` 마법사, Plan Mode 등 새 기능의 전체 설명은 영어 원본 ([SETUP.md](../../SETUP.md))을 참조하십시오.
 
 
 # ATLAS 설정 가이드
@@ -31,7 +31,7 @@ nvidia-smi
 
 ## 방법 1: Docker Compose (권장)
 
-V3.0.1에서 테스트된 배포 방법입니다.
+V3.1.0에서 테스트된 배포 방법입니다.
 
 ### 추가 사전 요구 사항
 
@@ -212,7 +212,6 @@ ATLAS_LLAMA_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
-ATLAS_AGENT_LOOP=1 \
 ATLAS_MODEL_NAME=Qwen3.5-9B-Q6_K \
 atlas-proxy-v2
 ```
@@ -320,7 +319,7 @@ kubectl describe nodes | grep nvidia.com/gpu
 scripts/verify-install.sh
 ```
 
-> **참고:** Docker Compose는 V3.0.1에서 검증된 배포 방법입니다. K3s 매니페스트는 배포 시점에 템플릿에서 생성됩니다. K3s 배포는 V3.0 벤치마크에서 Qwen3-14B로 사용되었으며 프로덕션에서 테스트되었지만, 클러스터 설정에 따라 템플릿 파일 조정이 필요할 수 있습니다.
+> **참고:** Docker Compose는 V3.1.0에서 검증된 배포 방법입니다. K3s 매니페스트는 배포 시점에 템플릿에서 생성됩니다. K3s 배포는 V3.0 벤치마크에서 Qwen3-14B로 사용되었으며 프로덕션에서 테스트되었지만, 클러스터 설정에 따라 템플릿 파일 조정이 필요할 수 있습니다.
 
 ---
 

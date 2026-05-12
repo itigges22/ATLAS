@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-Qwen3.5--9B-green" alt="Model"/>
   <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
@@ -79,22 +79,23 @@ ATLAS には、16GB 以上の VRAM を持つ GPU、Docker (nvidia-container-tool
 
 ## 既知の制限事項
 
-- **NVIDIA のみでテスト済み** - ATLAS は推論に llama.cpp を使用しており、複数のアクセラレータバックエンドをサポートしています。ROCm サポートは V3.1 の優先事項です。
-- **9B モデルは正式にベンチマーク未実施** - CLI は完全な V3 パイプラインを備えた Qwen3.5-9B を同梱していますが、LiveCodeBench の正式スコアは 14B モデルのものです。9B ベンチマークは V3.1 の作業です。
+- **NVIDIA のみでテスト済み** - ATLAS は推論に llama.cpp を使用しており、複数のアクセラレータバックエンドをサポートしています。ROCm サポートは次期リリースのロードマップに含まれています。
+- **9B モデルは正式にベンチマーク未実施** - CLI は完全な V3 パイプラインを備えた Qwen3.5-9B を同梱していますが、LiveCodeBench の正式スコアは 14B モデルのものです。9B ベンチマークは次期リリースの作業項目です。
 - **複雑な機能追加は失敗する場合がある** - 既存プロジェクトへの機能追加は約 67% の確率で成功します。モデルがコードを書く代わりに探索しすぎることがあります。
-- **文法制約推論の速度** - llama-server で約 51 tok/s です。より高速な文法統合は V3.1 で予定されています。
+- **文法制約推論の速度** - llama-server で約 51 tok/s です。より高速な文法統合は次期リリースのロードマップに含まれています。
 
 ---
 
 ## ロードマップ
 
-**V3.0.1** - 現在のリリース。インタラクティブ CLI、Docker Compose デプロイ、V3 パイプライン統合。
+**V3.1.0** - 現在のリリース。Bubbletea TUI を公式チャットクライアントに採用 (PC-062)、`atlas init` 初回セットアップウィザード (PC-054)、`atlas doctor` 診断ツール (PC-053)、`atlas tier` ハードウェア対応プリセット (PC-055)、K3s デプロイテンプレートの復元、インストール時に自動構築される ASA ステアリングベクトル (BiasBusters #4)。
 
-**V3.1** - 開発中。
+**V3.1.x / 次期** - 開発中。
 - ROCm サポート - llama.cpp ROCm バックエンドによる AMD GPU 推論
 - 正式な 9B ベンチマーク - Qwen3.5-9B での LiveCodeBench、GPQA Diamond、SciCode
 - CLI の信頼性 - テスト拡充、L6 >= 90% を目標
 - 文法速度 - より高速な制約デコーディングのための C サイドサンプラーチェーン
+- 構造的コード推論 - tree-sitter + ソルバーベースのコールグラフによる到達可能性クエリとスコープ付きコンテキスト注入 ([issue #39](https://github.com/itigges22/ATLAS/issues/39))
 
 ---
 

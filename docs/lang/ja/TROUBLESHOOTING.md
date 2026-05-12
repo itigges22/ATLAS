@@ -1,11 +1,11 @@
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
-> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+> ℹ️ **抄訳版です。** Aider は 2026-05-02 に削除されました。エージェントループは `/v1/agent` エンドポイント上で常に有効です（`ATLAS_AGENT_LOOP` 環境変数は廃止）。完全な内容は英語版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) を参照してください。
 
 
 # ATLAS トラブルシューティングガイド
 
-ATLAS V3.0.1 のよくある問題と解決方法を、サービスごとにまとめています。
+ATLAS V3.1.0 のよくある問題と解決方法を、サービスごとにまとめています。
 
 ---
 
@@ -170,7 +170,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **症状:** モデルが JSON ツールコールの代わりに `<think>` タグや生テキストを出力する。
 
-**修正:** プロキシは `ATLAS_AGENT_LOOP=1` のとき自動的に `response_format: {"type": "json_object"}` を設定します。llama-server を直接使用する場合は、リクエストに含めてください:
+**修正:** プロキシは `/v1/agent` エージェントループハンドラ内で自動的に `response_format: {"type": "json_object"}` を設定します（環境変数による切り替えはありません）。llama-server を直接 (`/v1/chat/completions` または `/v1/completions`) 呼び出す場合は、リクエストに含めてください:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -205,12 +205,9 @@ ps aux | grep llama-server | grep ctx-size
 
 **症状:** リクエストが llama-server に直接送られる。ツールコールなし、ストリーミングステータスアイコンなし、V3 パイプラインなし。
 
-**修正:** `ATLAS_AGENT_LOOP=1` を設定してください。`atlas` ランチャーはこれを自動的に行います。プロキシを手動で実行する場合:
-```bash
-ATLAS_AGENT_LOOP=1 atlas-proxy-v2
-```
+**原因:** エンドポイントが間違っています。エージェントループは `POST /v1/agent` 上でのみ動作します。`POST /v1/chat/completions` (および `/v1/` 配下の他のパス) は llama-server への透過的なパススルーで、ツールも V3 もストリーミングチャットイベントもありません。
 
-Docker Compose では `docker-compose.yml` で設定済みのため、手動設定は不要です。
+**修正:** クライアントを `POST http://localhost:8090/v1/agent` に向けてください。Bubbletea TUI (`atlas` / `atlas tui`) と内蔵の `/solve` REPL はこれを自動で行います。サードパーティクライアントを書く場合は、英語版 [API.md](../../API.md) の `/v1/agent` SSE イベントプロトコルを参照してください。`ATLAS_AGENT_LOOP` 環境変数によるトグルは廃止されました — 分岐はエンドポイントベースで設定ベースではありません。
 
 ### 機能ファイルで V3 パイプラインが起動しない
 
@@ -403,7 +400,7 @@ docker compose up -d atlas-proxy
 
 **症状:** `cp .env.example .env` が "No such file or directory" で失敗する。
 
-**修正:** これは V3.0.1 で修正されました。修正前にクローンした場合は、最新版をプルしてください:
+**修正:** これは V3.1.0 で修正されました。修正前にクローンした場合は、最新版をプルしてください:
 ```bash
 git pull
 cp .env.example .env

@@ -1,5 +1,14 @@
 # ATLAS V3 Implementation Status
 
+> **Historical snapshot (frozen 2026-03-05)** — captures the state at V3.0
+> ship + the V3.1 planning that followed. The 74.6% LCB number on
+> 14B is still the canonical published evidence (also in
+> [V3_ABLATION_STUDY.md](V3_ABLATION_STUDY.md)). Some "Next" predictions
+> shifted during implementation — most notably G(x) was **kept**, not
+> redesigned (CHANGELOG: "Corrected G(x) XGBoost status: deployed and
+> active"). For current shipped state see [`docs/SOURCES.md`](../SOURCES.md)
+> §"Active in V3.1.0" and [`docs/MAP.md`](../MAP.md).
+
 **Last Updated**: 2026-03-05
 **Current Phase**: V3.0 Complete — Preparing V3.1
 **V3.0 Result**: **74.6% LCB pass@1** (447/599) on frozen Qwen3-14B (+33pp over V2)

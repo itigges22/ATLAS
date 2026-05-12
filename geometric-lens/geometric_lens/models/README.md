@@ -14,7 +14,7 @@
 
 **In-repo sample**: `geometric-lens/data/sample/` — 10 embeddings (5 PASS, 5 FAIL) showing the data format.
 
-**Full dataset on HuggingFace**: https://huggingface.co/datasets/itigges22/itigges22/ATLAS
+**Full dataset on HuggingFace**: https://huggingface.co/datasets/itigges22/ATLAS
 
 | Dataset | Embeddings | PASS | FAIL | Dimension | Size |
 |---------|-----------|------|------|-----------|------|

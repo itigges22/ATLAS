@@ -1,5 +1,17 @@
 # V3 Ablation Study
 
+> **This is the V3.0 ablation report on Qwen3-14B.** It remains the
+> canonical published evidence for the headline 74.6% LCB pass@1 figure
+> referenced from README.md and SOURCES.md. V3.1.0 (current release)
+> targets Qwen3.5-9B with the same V3 pipeline (PlanSearch / DivSampling
+> / Budget Forcing / PR-CoT / Refinement / Derivation), but formal 9B
+> benchmark numbers are mid-run and not yet published — see
+> [`benchmark/README.md`](../../benchmark/README.md) "V3.1 (Qwen3.5-9B) —
+> In Progress". Forward-looking V3.1 predictions in §10 below were the
+> author's plan at write time (2026-03); some shifted during
+> implementation (e.g. G(x) was kept and deployed, not redesigned from
+> scratch).
+
 ## 1. Executive Summary
 
 V3 achieves **74.6% pass@1** on LiveCodeBench (599 tasks), up from a 54.9% V3 baseline

@@ -1,6 +1,6 @@
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
 
-> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+> ℹ️ **抄訳版です。** Aider は 2026-05-02 に削除されました。現在のチャット UI は `atlas tui` (Bubbletea ベース) です。この翻訳はコア部分のみをカバーしており、ASA ステアリングベクトル、`atlas init` ウィザード、Plan Mode などの新機能の完全な説明は英語版オリジナル ([SETUP.md](../../SETUP.md)) を参照してください。
 
 
 # ATLAS セットアップガイド
@@ -31,7 +31,7 @@ nvidia-smi
 
 ## 方法 1: Docker Compose (推奨)
 
-V3.0.1 でテスト済みのデプロイ方法です。
+V3.1.0 でテスト済みのデプロイ方法です。
 
 ### 追加の前提条件
 
@@ -212,7 +212,6 @@ ATLAS_LLAMA_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
-ATLAS_AGENT_LOOP=1 \
 ATLAS_MODEL_NAME=Qwen3.5-9B-Q6_K \
 atlas-proxy-v2
 ```
@@ -320,7 +319,7 @@ kubectl describe nodes | grep nvidia.com/gpu
 scripts/verify-install.sh
 ```
 
-> **注意:** Docker Compose は V3.0.1 の検証済みデプロイ方法です。K3s マニフェストはデプロイ時にテンプレートから生成されます。K3s デプロイは Qwen3-14B での V3.0 ベンチマークに使用され本番テスト済みですが、テンプレートファイルはお使いのクラスター構成に合わせて調整が必要な場合があります。
+> **注意:** Docker Compose は V3.1.0 の検証済みデプロイ方法です。K3s マニフェストはデプロイ時にテンプレートから生成されます。K3s デプロイは Qwen3-14B での V3.0 ベンチマークに使用され本番テスト済みですが、テンプレートファイルはお使いのクラスター構成に合わせて調整が必要な場合があります。
 
 ---
 

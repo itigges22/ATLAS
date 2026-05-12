@@ -1,11 +1,11 @@
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
 
-> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+> ℹ️ **요약 번역본입니다.** Aider는 2026-05-02에 제거되었습니다. 에이전트 루프는 `/v1/agent` 엔드포인트에서 항상 활성화되어 있습니다 (`ATLAS_AGENT_LOOP` 환경 변수는 폐기됨). 전체 내용은 영어 원본 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md))을 참조하십시오.
 
 
 # ATLAS 문제 해결 가이드
 
-ATLAS V3.0.1의 일반적인 문제와 해결 방법을 서비스별로 정리했습니다.
+ATLAS V3.1.0의 일반적인 문제와 해결 방법을 서비스별로 정리했습니다.
 
 ---
 
@@ -170,7 +170,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **증상:** 모델이 JSON 도구 호출 대신 `<think>` 태그나 일반 텍스트를 출력합니다.
 
-**해결:** 프록시는 `ATLAS_AGENT_LOOP=1`일 때 자동으로 `response_format: {"type": "json_object"}`를 설정합니다. llama-server를 직접 사용하는 경우 요청에 포함하십시오:
+**해결:** 프록시는 `/v1/agent` 에이전트 루프 핸들러 내부에서 자동으로 `response_format: {"type": "json_object"}`를 설정합니다 (환경 변수 토글 없음). llama-server를 직접 (`/v1/chat/completions` 또는 `/v1/completions`) 호출하는 경우 요청에 포함하십시오:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -205,12 +205,9 @@ ps aux | grep llama-server | grep ctx-size
 
 **증상:** 요청이 llama-server로 직접 전달됩니다. 도구 호출, 스트리밍 상태 아이콘, V3 파이프라인이 없습니다.
 
-**해결:** `ATLAS_AGENT_LOOP=1`을 설정하십시오. `atlas` 런처가 자동으로 설정합니다. 프록시를 수동으로 실행하는 경우:
-```bash
-ATLAS_AGENT_LOOP=1 atlas-proxy-v2
-```
+**원인:** 잘못된 엔드포인트에 접근하고 있습니다. 에이전트 루프는 `POST /v1/agent`에서만 실행됩니다. `POST /v1/chat/completions` (및 `/v1/` 하위의 다른 경로)는 llama-server로의 투명한 패스스루이며 도구 호출, V3 파이프라인, 스트리밍 채팅 이벤트가 없습니다.
 
-Docker Compose에서는 `docker-compose.yml`에 설정되어 있으므로 수동 설정이 필요하지 않습니다.
+**해결:** 클라이언트가 `POST http://localhost:8090/v1/agent`를 가리키도록 하십시오. Bubbletea TUI (`atlas` / `atlas tui`)와 내장 `/solve` REPL은 이를 자동으로 수행합니다. 서드파티 클라이언트를 작성하는 경우 영어 원본 [API.md](../../API.md)의 `/v1/agent` SSE 이벤트 프로토콜을 참조하십시오. `ATLAS_AGENT_LOOP` 환경 변수 토글은 폐기되었습니다 — 분기는 엔드포인트 기반이며 설정 기반이 아닙니다.
 
 ### V3 파이프라인이 기능 파일에서 실행되지 않음
 
@@ -403,7 +400,7 @@ docker compose up -d atlas-proxy
 
 **증상:** `cp .env.example .env`가 "No such file or directory"로 실패합니다.
 
-**해결:** V3.0.1에서 수정되었습니다. 수정 전에 클론한 경우 최신 버전을 가져오십시오:
+**해결:** V3.1.0에서 수정되었습니다. 수정 전에 클론한 경우 최신 버전을 가져오십시오:
 ```bash
 git pull
 cp .env.example .env

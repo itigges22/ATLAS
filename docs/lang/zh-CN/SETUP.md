@@ -1,6 +1,6 @@
 > **[English](../../SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
 
-> ⚠️ **OUT OF DATE — Aider was removed in 2026-05-02.** This translation still references Aider, the old chat front-end. Until it's re-translated, see the English original linked above for the current setup/troubleshooting flow (the canonical chat UI is now `atlas tui`).
+> ℹ️ **节选译本。** Aider 已于 2026-05-02 移除。当前聊天 UI 是 `atlas tui`（基于 Bubbletea）。本翻译仅覆盖核心部分，ASA 操控向量、`atlas init` 向导、Plan Mode 等新功能的完整说明请参见英文原版 ([SETUP.md](../../SETUP.md))。
 
 
 # ATLAS 安装指南
@@ -31,7 +31,7 @@ nvidia-smi
 
 ## 方式一：Docker Compose（推荐）
 
-这是 V3.0.1 经过测试的部署方式。
+这是 V3.1.0 经过测试的部署方式。
 
 ### 额外前置要求
 
@@ -212,7 +212,6 @@ ATLAS_LLAMA_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 ATLAS_V3_URL=http://localhost:8070 \
-ATLAS_AGENT_LOOP=1 \
 ATLAS_MODEL_NAME=Qwen3.5-9B-Q6_K \
 atlas-proxy-v2
 ```
@@ -320,7 +319,7 @@ kubectl describe nodes | grep nvidia.com/gpu
 scripts/verify-install.sh
 ```
 
-> **注意：** Docker Compose 是 V3.0.1 经过验证的部署方式。K3s 清单文件在部署时从模板生成。K3s 部署曾用于在 Qwen3-14B 上运行 V3.0 基准测试，经过生产验证，但模板文件可能需要根据你的集群配置进行调整。
+> **注意：** Docker Compose 是 V3.1.0 经过验证的部署方式。K3s 清单文件在部署时从模板生成。K3s 部署曾用于在 Qwen3-14B 上运行 V3.0 基准测试，经过生产验证，但模板文件可能需要根据你的集群配置进行调整。
 
 ---
 

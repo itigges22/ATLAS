@@ -6,7 +6,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.0.1-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-Qwen3.5--9B-green" alt="Model"/>
   <img src="https://img.shields.io/badge/GPU-RTX_5060_Ti_16GB-red" alt="GPU"/>
@@ -30,8 +30,6 @@ The result is a serious coding assistant that runs on a single consumer GPU for 
 
 ## 🔥 Latest News
 
-- **2026-05-02** - **Aider removed** — the Bubbletea TUI is now the only chat front-end. `/v1/chat/completions` on the proxy is a passthrough to llama-server; structured agent turns belong on `/v1/agent`.
-- **2026-05-01** - **`atlas tui` ships** ([PC-062](ISSUES.md)) - native Bubbletea terminal UI as the canonical chat client; live V3 pipeline visibility, slash commands, in-turn cancel
 - **2026-04-13** - ["How to Run an AI Coding Assistant on a $500 GPU and Beat Claude Sonnet"](https://devtrends.ru/python/itigges22-atlas) - devtrends.ru
 - **2026-04-05** - **[V3.0.1 released](CHANGELOG.md)** - interactive CLI, Docker Compose deployment, 95.8% reliability
 - **2026-04-03** - ["$500 GPU Beats Claude: Local AI Revolution for Web Devs"](https://ownet.it/blog/500-gpu-beats-claude-local-ai-revolution-for-web-devs) - ownet.it
@@ -101,7 +99,7 @@ Full documentation - setup guides, architecture, configuration, troubleshooting,
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
-Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, pulls prebuilt service images from GHCR (no 75-min CUDA build), downloads model weights, brings the stack up, and prints a green "ready" banner. ~5–10 minutes on a fast connection.
+Detects your distro (Ubuntu/Debian/RHEL/Fedora/Rocky/Alma), installs Docker + nvidia-container-toolkit, pulls prebuilt service images from GHCR (no 75-min CUDA build), downloads model weights, builds the ASA steering vector (~5 min, BiasBusters #4), brings the stack up, and prints a green "ready" banner. Total time ~10–30 minutes on a fast connection (model download dominates).
 
 Then in any project directory: `atlas`.
 
@@ -111,18 +109,18 @@ ATLAS requires a GPU with 16GB+ VRAM, Docker (with nvidia-container-toolkit) or 
 
 ## ⚠️ Known Limitations
 
-- **Tested on NVIDIA only** - ATLAS uses llama.cpp for inference, which supports multiple accelerator backends. ROCm support is a V3.1 priority.
-- **9B model not formally benchmarked** - the CLI ships Qwen3.5-9B with the full V3 pipeline, but formal LiveCodeBench scores are from the 14B model. 9B benchmarks are V3.1 work. For the V3 (14B) benchmark results, methodology, and ablation analysis, see [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw benchmark traces are published on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+- **Tested on NVIDIA only** - ATLAS uses llama.cpp for inference, which supports multiple accelerator backends. ROCm support is on the next-release roadmap.
+- **9B model not formally benchmarked** - the CLI ships Qwen3.5-9B with the full V3 pipeline, but formal LiveCodeBench scores are from the 14B model. 9B benchmarks are next-release work. For the V3 (14B) benchmark results, methodology, and ablation analysis, see [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw benchmark traces are published on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 - **Complex feature additions can fail** - adding features to existing projects succeeds ~67% of the time. The model sometimes over-explores instead of writing code.
-- **Grammar-constrained inference speed** - ~51 tok/s on llama-server. Faster grammar integration is planned for V3.1.
+- **Grammar-constrained inference speed** - ~51 tok/s on llama-server. Faster grammar integration is on the next-release roadmap.
 
 ---
 
 ## 🗺️ Roadmap
 
-**V3.0.1** - Current release. Interactive CLI, Docker Compose deployment, V3 pipeline integration.
+**V3.1.0** - Current release. Bubbletea TUI as the canonical chat client (PC-062), `atlas init` first-run wizard (PC-054), `atlas doctor` install diagnostic (PC-053), `atlas tier` hardware-aware presets (PC-055), K3s deployment templates restored, ASA steering vectors auto-built during install (BiasBusters #4).
 
-**V3.1** - In progress.
+**V3.1.x / next** - In progress.
 - ROCm support - AMD GPU inference via llama.cpp ROCm backend.
 - Formal 9B benchmarks - LiveCodeBench, GPQA Diamond, SciCode on Qwen3.5-9B.
 - CLI reliability - expanded testing, targeting L6 ≥ 90%.
