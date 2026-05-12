@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="docs/images/herodemo.gif" alt="ATLAS TUI in action"/>
+  <img src="docs/images/herodemo.gif" alt="ATLAS TUI in action"/><br/>
+  <sub><i>The ATLAS TUI live, 10× sped up, running the V3 pipeline on a file creation.</i></sub>
 </p>
-<p align="center"><sub><i>The ATLAS TUI live, 10× sped up, running the V3 pipeline on a file creation.</i></sub></p>
 
 <h1 align="center">A.T.L.A.S.</h1>
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
