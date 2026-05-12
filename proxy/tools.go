@@ -1635,33 +1635,27 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 // compose). Same code path as the original local exec — kept verbatim
 // so dev workflows that don't bring up the sandbox still work.
 func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
-	cmd := exec.Command("bash", "-c", command)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = cwd
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Run() }()
-
+	err := cmd.Run()
 	var exitCode int
-	select {
-	case err := <-done:
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				stderr.WriteString(err.Error())
-				exitCode = 1
-			}
-		}
-	case <-time.After(timeout):
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
+	if ctx.Err() == context.DeadlineExceeded {
 		exitCode = 124
 		stderr.WriteString(fmt.Sprintf("\nCommand timed out after %s", timeout))
+	} else if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			stderr.WriteString(err.Error())
+			exitCode = 1
+		}
 	}
 
 	return RunCommandOutput{
