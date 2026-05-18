@@ -368,6 +368,7 @@ The standalone Python REPL (`pip install -e . && atlas`) reads these variables:
 | `ATLAS_LENS_MODELS` | `./geometric-lens/geometric_lens/models` | Host path that maps to the lens's weight directory. Used by `atlas doctor` so it checks the same directory Docker bind-mounts into the lens container. |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API calls |
 | `HF_TOKEN` | (unset) | HuggingFace write token used by `atlas lens publish` / `atlas asa publish` for artifact upload. Get one at https://huggingface.co/settings/tokens (scope: write). `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` are also honored. Full walkthrough: [PUBLISHING.md](PUBLISHING.md). |
+| `ATLAS_PUBLISH_BRANCH` | (unset → gh infers from checkout) | Override the `--head` branch passed to `gh pr create` during publish. Useful when you're working on a long-lived feature branch but want the registry PR to target main from a different ref. When unset, `gh` auto-detects the current branch (preferred for most contributors). |
 
 ### Generation Parameters
 

@@ -43,7 +43,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 from atlas.cli.commands import lens as lens_module  # for shared helpers
 from atlas.cli.commands import model_registry
@@ -212,7 +212,7 @@ class ASACheckVerdict:
         return {"compat": 0, "needs-build": 1, "incompatible": 2}.get(self.verdict, 2)
 
 
-def _check_asa(arg: Optional[str], atlas_root: str) -> ASACheckVerdict:
+def _check_asa(atlas_root: str) -> ASACheckVerdict:
     probe = lens_module.probe_llama()
     if not probe.reachable:
         return ASACheckVerdict(
@@ -271,7 +271,7 @@ def _check_asa(arg: Optional[str], atlas_root: str) -> ASACheckVerdict:
 
 def _emit_check(args: argparse.Namespace, color: bool) -> int:
     atlas_root = _atlas_root()
-    v = _check_asa(args.model, atlas_root)
+    v = _check_asa(atlas_root)
 
     if args.json:
         out = asdict(v)
@@ -316,8 +316,9 @@ def _docker_available() -> bool:
     return _shutil.which("docker") is not None
 
 
-def _docker_exec(args, container, cmd, capture=False, color=False):
-    """Wrap docker exec for tidy error printing."""
+def _docker_exec(container: str, cmd: List[str], capture: bool = False):
+    """Wrap docker exec with a 1h timeout — long enough for a full ASA
+    training run (~25 min on a 5060 Ti) without inviting a runaway."""
     full = ["docker", "exec", "-i", container] + cmd
     if capture:
         return subprocess.run(full, capture_output=True, text=True, timeout=3600)
@@ -416,7 +417,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     if args.limit:
         cmd += ["--limit", str(args.limit)]
     start = time.time()
-    result = _docker_exec(args, container, cmd)
+    result = _docker_exec(container, cmd)
     elapsed = time.time() - start
     if result.returncode != 0:
         _safe_print(f"  {RED if color else ''}build script exited "
@@ -594,14 +595,17 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         _safe_print(pr_body)
         return 0
     _safe_print(f"[4/4] Opening registry-PR via `gh pr create`…")
-    result = subprocess.run(
-        ["gh", "pr", "create",
-         "--repo", "itigges22/ATLAS",
-         "--title", f"Registry: add ASA vector for {model_label} "
-                    f"(via atlas asa publish)",
-         "--body", pr_body,
-         "--head", os.environ.get("ATLAS_PUBLISH_BRANCH", "")],
-        capture_output=True, text=True, timeout=30)
+    # Only pass --head when ATLAS_PUBLISH_BRANCH is explicitly set; an
+    # empty --head crashes gh outright instead of inferring the current
+    # branch. Same fix as lens.py's publish flow.
+    gh_args = ["gh", "pr", "create",
+               "--repo", "itigges22/ATLAS",
+               "--title", f"Registry: add ASA vector for {model_label} "
+                          f"(via atlas asa publish)",
+               "--body", pr_body]
+    if branch := os.environ.get("ATLAS_PUBLISH_BRANCH", "").strip():
+        gh_args += ["--head", branch]
+    result = subprocess.run(gh_args, capture_output=True, text=True, timeout=30)
     if result.returncode == 0:
         _safe_print(f"  {GREEN if color else ''}PR opened: "
                     f"{result.stdout.strip()}{RESET if color else ''}")
@@ -626,8 +630,10 @@ def main(argv=None):
 
     p_check = sub.add_parser("check",
         help="probe llama-server + configured control vector (PC-061)")
-    p_check.add_argument("model", nargs="?", default=None,
-        help="registry name (default: whatever llama-server has loaded)")
+    # NOTE: no positional `model` arg here (unlike lens check). ASA today
+    # has one global vector path (ATLAS_CONTROL_VECTOR); there's no
+    # per-model artifact-dir lookup to drive. If per-model vectors land
+    # later, re-introduce the arg and wire it through _check_asa.
     p_check.add_argument("--json", action="store_true",
         help="machine-readable output")
     p_check.add_argument("--no-color", action="store_true")

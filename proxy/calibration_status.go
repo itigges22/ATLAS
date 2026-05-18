@@ -125,8 +125,8 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 //  1. The configured path verbatim (works when proxy DOES have a /models
 //     mount — some K3s deployments do).
 //  2. <workspace>/models/<basename> (proxy's bind-mounted project root,
-//     ATLAS_PROJECT_DIR, plus the standard models/ subdir).
-//  3. The env-supplied ATLAS_LENS_MODELS or ATLAS_MODELS_DIR if set.
+//     ATLAS_WORKSPACE_DIR, plus the standard models/ subdir).
+//  3. The env-supplied ATLAS_MODELS_DIR if set.
 //
 // llama-server is the authoritative source of "is the vector actually
 // loaded" but doesn't expose that via /props (verified 2026-05-17), so

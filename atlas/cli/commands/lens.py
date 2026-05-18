@@ -701,14 +701,26 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
     hf_pkg_ok = _huggingface_hub_available()
     gh_ok = _gh_available()
 
+    # In dry-run mode the auth gates aren't enforced, so rendering a red
+    # ✗ next to "HF_TOKEN required" is alarming and confusing — users
+    # think they did something wrong when --dry-run is exactly the path
+    # for previewing without setting any of this up. Render missing
+    # items as dim ○ in dry-run, ✗/⚠ in real-run.
     def _row(label: str, ok: bool, required: bool, hint: str) -> None:
         if ok:
             mark = f"{GREEN_}✓{RESET_}"
+        elif dry_run:
+            mark = f"○"  # neutral — not enforced
         elif required:
             mark = f"{RED_}✗{RESET_}"
         else:
             mark = f"{YELL_}⚠{RESET_}"
-        suffix = "" if ok else f"  {hint}"
+        if ok or dry_run:
+            # Don't print the "required" hint when we're not enforcing it —
+            # it adds visual noise that contradicts the dry-run header.
+            suffix = "" if ok else f"  (would be needed for a real upload)"
+        else:
+            suffix = f"  {hint}"
         _safe_print(f"  {mark} {label}{suffix}")
 
     _row("HF_TOKEN env var",
@@ -727,8 +739,8 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
     _safe_print("")
 
     if dry_run:
-        _safe_print(f"  {YELL_}--dry-run{RESET_}: skipping auth gates "
-                    f"(no upload, no PR will be opened)")
+        _safe_print(f"  {YELL_}--dry-run{RESET_}: nothing will leave the host "
+                    f"(no upload, no PR opened, no auth enforced)")
         _safe_print("")
         return True
 
@@ -1019,16 +1031,20 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
 
     _safe_print(f"[4/5] Opening registry-PR via `gh pr create`…")
     import subprocess
+    # Only pass --head when ATLAS_PUBLISH_BRANCH is explicitly set; gh
+    # rejects an empty --head value outright (it won't fall back to
+    # auto-detect). Without the env var, omit the flag and let gh infer
+    # from the current checkout — that's the path most contributors hit.
+    gh_args = ["gh", "pr", "create",
+               "--repo", "itigges22/ATLAS",
+               "--title", f"Registry: add Lens artifacts for {model_label} "
+                          f"(via atlas lens publish)",
+               "--body", pr_body]
+    if branch := os.environ.get("ATLAS_PUBLISH_BRANCH", "").strip():
+        gh_args += ["--head", branch]
     try:
         result = subprocess.run(
-            ["gh", "pr", "create",
-             "--repo", "itigges22/ATLAS",
-             "--title", f"Registry: add Lens artifacts for {model_label} "
-                        f"(via atlas lens publish)",
-             "--body", pr_body,
-             "--head", os.environ.get("ATLAS_PUBLISH_BRANCH", ""),
-             ],
-            capture_output=True, text=True, timeout=30,
+            gh_args, capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0:
             _safe_print(f"  {GREEN if color else ''}PR opened: "

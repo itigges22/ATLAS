@@ -478,3 +478,123 @@ def test_preflight_gh_missing_is_optional_warning(monkeypatch, capsys):
     assert ok is True, "missing gh should not block — paste fallback is valid"
     assert "gh CLI" in out
     assert "paste" in out.lower() or "compare" in out.lower()
+
+
+def test_preflight_dry_run_doesnt_flag_missing_token_as_failure(
+    monkeypatch, capsys
+):
+    """Regression: with --dry-run, missing HF_TOKEN must NOT render with
+    a red ✗ or print the alarming 'required — get a token at ...' hint.
+    Dry-run is the path users take BEFORE setting up creds; making it
+    look like they did something wrong is the opposite of what we want."""
+    for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    ok = lens.publish_preflight("lens", dry_run=True, color=False)
+    out = capsys.readouterr().out
+    assert ok is True
+    # The red ✗ marker must not appear next to HF_TOKEN in dry-run mode.
+    # (We render the row with a neutral ○ instead.)
+    assert "✗ HF_TOKEN" not in out, (
+        "dry-run preflight should not show ✗ for missing token; "
+        "got:\n" + out
+    )
+    # The alarming "Cannot continue" footer must not fire either.
+    assert "Cannot continue" not in out
+    # The dry-run footer should still be present and tell the user
+    # nothing is being enforced.
+    assert "nothing will leave the host" in out
+
+
+def test_publish_uses_atlas_publish_branch_only_when_set(
+    monkeypatch, tmp_path, capsys
+):
+    """Regression for the `gh pr create --head ""` bug: when
+    ATLAS_PUBLISH_BRANCH is unset, we must NOT pass --head to gh
+    (gh rejects empty refs instead of inferring the current branch).
+    We assert on the subprocess args via a captured spy."""
+    if not lens._huggingface_hub_available():
+        pytest.skip("huggingface_hub not installed on this host")
+    (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
+    monkeypatch.delenv("ATLAS_PUBLISH_BRANCH", raising=False)
+    monkeypatch.setattr(
+        lens, "_inspect_cost_field",
+        lambda d: lens.ArtifactInspection(present=True, dim=4096))
+
+    # Capture subprocess.run invocations. Return success so the publish
+    # flow continues past the gh call as it would in the green path.
+    captured = []
+
+    class _FakeResult:
+        returncode = 0
+        stdout = "https://github.com/itigges22/ATLAS/pull/42"
+        stderr = ""
+
+    def _fake_run(cmd, *a, **kw):
+        captured.append(cmd)
+        return _FakeResult()
+
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    # Skip the actual HF upload — we only care about the gh args here.
+    from huggingface_hub import HfApi
+    monkeypatch.setattr(HfApi, "create_repo", lambda self, **kw: None)
+    monkeypatch.setattr(HfApi, "upload_file", lambda self, **kw: None)
+
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K",
+                    "--repo", "alice/atlas-lens-test", "--no-color"])
+    assert rc == 0
+    gh_calls = [c for c in captured if c and c[0] == "gh"]
+    assert gh_calls, "expected at least one gh invocation"
+    gh_cmd = gh_calls[0]
+    # Critical: no empty --head value.
+    if "--head" in gh_cmd:
+        idx = gh_cmd.index("--head")
+        head_val = gh_cmd[idx + 1] if idx + 1 < len(gh_cmd) else ""
+        assert head_val, (
+            "gh pr create must not be invoked with an empty --head; "
+            f"saw: {gh_cmd}"
+        )
+
+
+def test_publish_passes_atlas_publish_branch_when_set(
+    monkeypatch, tmp_path, capsys
+):
+    """Inverse of the regression test: when ATLAS_PUBLISH_BRANCH IS set,
+    we should pass --head <branch> through to gh."""
+    if not lens._huggingface_hub_available():
+        pytest.skip("huggingface_hub not installed on this host")
+    (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
+    monkeypatch.setenv("ATLAS_PUBLISH_BRANCH", "registry/qwen-9b-lens")
+    monkeypatch.setattr(
+        lens, "_inspect_cost_field",
+        lambda d: lens.ArtifactInspection(present=True, dim=4096))
+
+    captured = []
+
+    class _FakeResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, *a, **kw):
+        captured.append(cmd)
+        return _FakeResult()
+
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    from huggingface_hub import HfApi
+    monkeypatch.setattr(HfApi, "create_repo", lambda self, **kw: None)
+    monkeypatch.setattr(HfApi, "upload_file", lambda self, **kw: None)
+
+    lens.main(["publish", "Qwen3.5-9B-Q6_K",
+               "--repo", "alice/atlas-lens-test", "--no-color"])
+    gh_calls = [c for c in captured if c and c[0] == "gh"]
+    assert gh_calls, "expected a gh invocation"
+    gh_cmd = gh_calls[0]
+    assert "--head" in gh_cmd
+    idx = gh_cmd.index("--head")
+    assert gh_cmd[idx + 1] == "registry/qwen-9b-lens"

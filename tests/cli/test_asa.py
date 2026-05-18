@@ -129,7 +129,7 @@ def test_check_unreachable_is_incompatible(monkeypatch, tmp_path):
     monkeypatch.setattr(
         lens_module, "probe_llama",
         lambda *a, **kw: _probe(reachable=False, error="not reachable"))
-    v = asa._check_asa(None, str(tmp_path))
+    v = asa._check_asa(str(tmp_path))
     assert v.verdict == "incompatible"
     assert v.exit_code == 2
 
@@ -137,7 +137,7 @@ def test_check_unreachable_is_incompatible(monkeypatch, tmp_path):
 def test_check_missing_vector_is_needs_build(monkeypatch, tmp_path):
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(tmp_path / "nope.gguf"))
     monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
-    v = asa._check_asa(None, str(tmp_path))
+    v = asa._check_asa(str(tmp_path))
     assert v.verdict == "needs-build"
     assert v.exit_code == 1
 
@@ -159,7 +159,7 @@ def test_check_vector_present_dim_match_is_compat(monkeypatch, tmp_path):
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
     monkeypatch.setattr(lens_module, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
-    v = asa._check_asa(None, str(tmp_path))
+    v = asa._check_asa(str(tmp_path))
     assert v.verdict == "compat"
     assert v.exit_code == 0
     assert v.vector_dim == 4096
@@ -181,7 +181,7 @@ def test_check_dim_mismatch_is_needs_build(monkeypatch, tmp_path):
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
     monkeypatch.setattr(lens_module, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
-    v = asa._check_asa(None, str(tmp_path))
+    v = asa._check_asa(str(tmp_path))
     assert v.verdict == "needs-build"
     assert "Dim mismatch" in v.reason
     assert v.vector_dim == 2048
@@ -201,7 +201,7 @@ def test_check_unverified_when_gguf_pkg_missing(monkeypatch, tmp_path):
         "layer_count": None, "model_hint": None,
         "error": "gguf python pkg not installed; dim unverified",
     })
-    v = asa._check_asa(None, str(tmp_path))
+    v = asa._check_asa(str(tmp_path))
     assert v.verdict == "compat"
     assert v.unverified is True
     assert "gguf" in v.reason.lower() or "verification" in v.reason.lower()
