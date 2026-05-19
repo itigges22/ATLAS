@@ -311,7 +311,7 @@ def _step_select_model(profile: tier.TierProfile,
             # works on Apple Silicon (via MoltenVK), Intel Arc (Mesa
             # ANV), Snapdragon Adreno, and CPU lavapipe — covering the
             # gap left by the cuda/rocm-only matrix.
-            _safe_print(f"  {YELL if color else ''}Selected GPU vendor "
+            _safe_print(f"  {YELLOW if color else ''}Selected GPU vendor "
                         f"'{selected_gpu.vendor}' uses the {backend_name} backend, "
                         f"which is not yet packaged.{RESET if color else ''}")
             roadmap = {
