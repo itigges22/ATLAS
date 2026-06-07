@@ -327,6 +327,22 @@ REGISTRY: List[Model] = [
               "llama.cpp model only — G(x) verification will silently "
               "no-op (--no-lens to acknowledge). See PC-058 roadmap.",
     ),
+    Model(
+        name="gemma-4-12b-it-Q4_K_M",
+        tier="medium",
+        model_file="gemma-4-12b-it-Q4_K_M.gguf",
+        model_display="gemma-4-12b-it-Q4_K_M",
+        model_size_gb=6.6,
+        lens_status="supported",
+        download_url=None,
+        sha256=None,
+        license="apache-2.0",
+        lens_artifact_files=["cost_field.pt", "cost_field.safetensors", "gx_xgboost.json", "gx_weights.json"],
+        notes="Added via `atlas lens publish` — lens artifacts "
+              "(3840-dim) at https://huggingface.co/itigges22/atlas-lens-gemma4-12b. "
+              "download_url not captured at publish time; maintainers "
+              "can fill it in for `atlas model install` support.",
+    ),
 ]
 
 
