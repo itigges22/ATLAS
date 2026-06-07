@@ -342,6 +342,8 @@ REGISTRY: List[Model] = [
               "(3840-dim) at https://huggingface.co/itigges22/atlas-lens-gemma4-12b. "
               "download_url not captured at publish time; maintainers "
               "can fill it in for `atlas model install` support.",
+        # ASA vector: https://huggingface.co/itigges22/atlas-asa-gemma4-12b
+        # (promote to asa_hf_repo= once the registry schema carries it)
         asa_status="supported",
         asa_artifact_files=["ast_edit_steering.gguf"],
     ),
