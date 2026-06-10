@@ -47,12 +47,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # tests/v3/ and tests/cli/ are pure unit tests — no services
-        # needed. tests/integration/ + tests/infrastructure/ require
-        # a live llama-server / sandbox / lens, gated separately by
+        # tests/v3/, tests/v3-service/, and tests/cli/ are pure unit tests —
+        # no services needed. tests/integration/ + tests/infrastructure/
+        # require a live llama-server / sandbox / lens, gated separately by
         # the integration workflow (not yet wired up — PC-064).
         subset:
           - tests/v3
+          - tests/v3-service
           - tests/cli
     steps:
       - uses: actions/checkout@v4

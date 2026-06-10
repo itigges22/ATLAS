@@ -549,6 +549,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
 
+	// V3.2 RPG (issue #120): if this file maps to an RPG node, thread the
+	// node's planned interface (signatures, input/output edges) into the
+	// generation request. Empty for the flat planner.
+	req.Constraints = planConstraintsForTarget(ctx, path)
+
 	// Tell the user V3 is taking over so they don't think the file
 	// vanished. write_file with V3 holds the disk write until V3 picks
 	// a winner \u2014 without this message the chat goes silent for the 1\u20133
@@ -682,6 +687,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		return writeFileDirect(path, baselineContent)
 	}
 
+	// V3.2 RPG (issue #120): automatic node-local regeneration on drift. When
+	// the winning candidate missed its planned signatures, retry once with the
+	// missing signatures injected as a hard constraint before accepting it.
+	// No-op when RPG is off (req.Constraints empty) or there was no drift.
+	v3Result = regenerateOnDrift(ctx, req, v3Result)
+
 	// Write the winning candidate (or baseline if V3 didn't improve)
 	code := v3Result.Code
 	if code == "" {
@@ -723,6 +734,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	result.CandidatesTested = v3Result.CandidatesTested
 	result.WinningScore = v3Result.WinningScore
 	result.PhaseSolved = v3Result.PhaseSolved
+
+	// V3.2 RPG drift loop (issue #120): if the winning code failed to realize
+	// the node's planned signatures, surface the drift + downstream subgraph.
+	// No-op when RPG is off (the field is empty).
+	if len(v3Result.RPGSignatureMissing) > 0 {
+		reportRPGDrift(ctx, path, v3Result.RPGSignatureMissing)
+	}
 
 	return result, nil
 }
@@ -1210,6 +1228,8 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		req.Framework = ctx.Project.Framework
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
+	// V3.2 RPG (issue #120): thread RPG node constraints for this target, if any.
+	req.Constraints = planConstraintsForTarget(ctx, path)
 
 	// Same callback logic as the write_file V3 path: tokens forward to
 	// the dedicated v3_token SSE event so the TUI updates one streaming

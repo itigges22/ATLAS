@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 # Copy benchmark modules (V3 pipeline depends on them)
 COPY benchmark/ /app/benchmark/
 COPY v3-service/main.py /app/main.py
+# V3.2 RPG-style planning (issue #120): wavelet substrate + RPG construction.
+# Pure stdlib — no extra pip installs needed.
+COPY v3-service/wavelet/ /app/wavelet/
+COPY v3-service/rpg.py /app/rpg.py
 
 # Install Python deps
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu

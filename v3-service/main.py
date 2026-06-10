@@ -874,7 +874,7 @@ class V3PipelineService:
 
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
-            file_path: str = "") -> Dict[str, Any]:
+            file_path: str = "", constraints: List[str] = None) -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -885,10 +885,15 @@ class V3PipelineService:
             file_path: Target file path (used by PC-048 to detect language
                 for the smoke check — `.html` files use HTML parser, not
                 Python compile, etc.)
+            constraints: raw constraint strings from the request. When the V3.2
+                RPG planner is active (issue #120) these carry the node's planned
+                signatures, used by the RPG signature veto below. Backward
+                compatible — defaults to none, leaving existing callers unchanged.
         """
         start = time.time()
         events = []
         files = files or {}
+        constraints = constraints or []
 
         # PC-048: derive language from the target file's extension. Used
         # only by smoke_compile_check below to pick the right parser
@@ -1316,6 +1321,45 @@ class V3PipelineService:
                     flush=True,
                 )
             passing = kept
+
+        # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
+        # When the RPG planner is active, the request constraints carry the
+        # node's planned signatures. Extend the #39-pt-1 veto from "imports
+        # survive" to "the planned interface exists": reject sandbox-passing
+        # candidates that don't define the planned functions. Additive and
+        # conservative — only fires when the flag is on AND constraints carry
+        # planned signatures, and never empties the candidate set (so it can't
+        # do worse than the flat path; a fully-failing set falls through intact
+        # to phase-3 repair).
+        if passing and constraints:
+            try:
+                from wavelet import rpg_planning_enabled as _rpg_on
+                _rpg_active = _rpg_on()
+            except Exception:
+                _rpg_active = False
+            if _rpg_active:
+                try:
+                    import rpg as _rpgmod
+                    planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
+                except Exception:
+                    planned_sigs = []
+                if planned_sigs:
+                    sig_kept = []
+                    for c in passing:
+                        missing = _rpgmod.missing_planned_signatures(
+                            c.get("code", ""), planned_sigs, file_path)
+                        if missing:
+                            emit("rpg_signature_veto",
+                                 f"Candidate {c['index']} sandbox-passed but missing "
+                                 f"planned signature(s): {', '.join(missing[:3])}",
+                                 index=c["index"], missing=missing[:5])
+                            print(f"  [rpg] vetoed cand {c['index']} — missing: {missing[:5]}",
+                                  flush=True)
+                            continue
+                        sig_kept.append(c)
+                    # Only prune when at least one candidate realizes the plan.
+                    if sig_kept:
+                        passing = sig_kept
 
         # ===== CANDIDATE SELECTION =====
         if passing:
@@ -1938,6 +1982,57 @@ def generate_plan(
                 progress_callback(stage, detail)
 
     emit("plan_start", f"generating {n_candidates} candidate plans")
+
+    # V3.2 RPG-style architecture-first planning (issue #120), flag-gated by
+    # ATLAS_RPG_PLANNING. Strictly additive: on any failure (flag off, modules
+    # missing, model output unusable) we fall through to the flat planner below.
+    try:
+        from wavelet import rpg_planning_enabled, decompose_project
+        import rpg as _rpg_mod
+        _rpg_on = rpg_planning_enabled()
+    except Exception:
+        _rpg_on = False
+    if _rpg_on:
+        try:
+            coarse_map = None
+            if working_dir and os.path.isdir(working_dir):
+                try:
+                    coarse_map = [
+                        {"label": p.label, "filename": p.filename}
+                        for p in decompose_project(working_dir, limit=30)
+                    ]
+                except Exception as ce:
+                    emit("rpg_coarse_error", f"coarse decomposition failed: {ce}")
+            rpg_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
+            rpg_llm = LLMAdapter(progress_callback=progress_callback, thinking=rpg_thinking)
+
+            def _complete(prompt, temperature, mt, seed):
+                raw, _, _ = rpg_llm(prompt, temperature, mt, seed)
+                return raw
+
+            result = _rpg_mod.construct_rpg(
+                user_message=user_message,
+                complete_fn=_complete,
+                project_context=project_context,
+                coarse_map=coarse_map,
+                max_tokens=(8192 if rpg_thinking else 2048),
+                emit=emit,
+            )
+            if result.ok and result.plan and result.plan.get("steps"):
+                plan = dict(result.plan)
+                plan["candidates_tested"] = 1
+                plan["winning_score"] = result.score
+                plan["winning_index"] = 0
+                plan["reasons"] = ["RPG two-stage plan"] + result.issues
+                plan["rpg"] = result.rpg.to_dict()
+                emit("plan_selected",
+                     f"RPG plan ({len(plan['steps'])} steps, score={result.score:.2f})",
+                     index=0, score=result.score, steps=len(plan["steps"]))
+                return plan
+            emit("rpg_fallback",
+                 f"RPG not usable (stage={result.stage_reached}); using flat planner")
+        except Exception as re_:
+            emit("rpg_error", f"RPG planning failed: {re_}; using flat planner")
 
     # PC-206: thinking-aware infrastructure shipped — planner CAN run with
     # Qwen3.5 hybrid reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
@@ -2928,6 +3023,7 @@ class V3Handler(BaseHTTPRequestHandler):
             progress_callback=emit_progress,
             files=files,
             file_path=file_path,  # PC-048: language-aware smoke check
+            constraints=constraints,  # V3.2: RPG signature veto (issue #120)
         )
         _post_pattern_outcome(problem, result)
 
@@ -2947,6 +3043,30 @@ class V3Handler(BaseHTTPRequestHandler):
             "total_tokens": result.get("total_tokens", 0),
             "total_time_ms": result.get("total_time_ms", 0.0),
         }
+
+        # V3.2 RPG (issue #120): report which planned signatures the WINNING
+        # code failed to realize, so the proxy's re-plan loop can react (the
+        # signature veto rejects failing candidates mid-pipeline, but the
+        # winner can still drift when every candidate fell short and one was
+        # kept anyway). Flag-gated and conservative — empty unless RPG is on,
+        # constraints carry signatures, and a planned function is genuinely
+        # absent from parseable code.
+        try:
+            from wavelet import rpg_planning_enabled as _rpg_on
+            _rpg_active = _rpg_on()
+        except Exception:
+            _rpg_active = False
+        if _rpg_active and response["code"] and constraints:
+            try:
+                import rpg as _rpgmod
+                planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
+                missing = _rpgmod.missing_planned_signatures(
+                    response["code"], planned_sigs, file_path)
+                if missing:
+                    response["rpg_signature_missing"] = missing
+            except Exception as _e:
+                print(f"  [rpg] drift check skipped: {_e}", flush=True)
+
         final = json.dumps(response)
         try:
             self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
