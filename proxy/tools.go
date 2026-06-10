@@ -1283,6 +1283,14 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		return "", V3EditMetadata{}, err
 	}
 
+	// V3.2 RPG (issue #120): same drift handling as the write_file path. If the
+	// edited result missed its planned signatures, retry once, then surface any
+	// surviving drift. No-op when RPG is off (req.Constraints empty).
+	v3Result = regenerateOnDrift(ctx, req, v3Result)
+	if len(v3Result.RPGSignatureMissing) > 0 {
+		reportRPGDrift(ctx, path, v3Result.RPGSignatureMissing)
+	}
+
 	if ctx.StreamFn != nil {
 		ctx.StreamFn("v3_progress", map[string]string{
 			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),

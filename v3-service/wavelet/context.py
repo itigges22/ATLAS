@@ -309,10 +309,10 @@ class FileContext:
         if self.language.name == "python":
             if ws_tokens[0] == "class":
                 name = _name_after_ws(1).replace(":", "")
-                return "class " + name
+                return ("class " + name).rstrip()
             if ws_tokens[0] == "def":
                 name = _name_after_ws(1).split("(")[0]
-                return "def " + name
+                return ("def " + name).rstrip()
             if ws_tokens[0] == "import":
                 return "import " + " ".join(ws_tokens[1:])
             if ws_tokens[0] == "from":

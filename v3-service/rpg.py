@@ -226,6 +226,10 @@ def _topo_order(file_ids: List[str], edges: List[Edge]) -> Tuple[List[str], bool
     """Kahn topological sort over file ids (producer -> consumer). Returns
     (order, acyclic). On a cycle, returns the original declaration order and
     acyclic=False."""
+    # Dedup while preserving first-seen order: a duplicate id would otherwise be
+    # emitted twice, inflating `order` so len(order)==len(file_ids) holds and the
+    # graph is falsely reported acyclic (and flatten_to_plan would drop a file).
+    file_ids = list(dict.fromkeys(file_ids))
     idset = set(file_ids)
     adj: Dict[str, List[str]] = {fid: [] for fid in file_ids}
     indeg: Dict[str, int] = {fid: 0 for fid in file_ids}
@@ -416,19 +420,35 @@ def flatten_to_plan(rpg: RPG) -> dict:
 
 # ─── Graph-guided verification, drift & localization (Phase 3) ───
 
+_DECL_KEYWORDS = frozenset({
+    "def", "func", "function", "fn", "fun", "class", "struct",
+    "interface", "trait", "type", "async", "impl", "object",
+})
+
+
 def _function_name_from_signature(sig: str) -> str:
     """Pull the declared name out of a signature string. Handles
-    `def load(...)`, `async def load(...)`, `func Load(...)`, `fn run(...)`,
-    `function go(...)`, `class Foo`, or a bare name."""
+    `def load(...)`, `async def load(...)`, `func Load(...)`, a Go receiver
+    method `func (r *T) Load(...)`, `fn run(...)`, `function go(...)`,
+    `class Foo`, or a bare name. Returns "" when the only token is a bare
+    declaration keyword (e.g. signature is just `func`), so callers treat it
+    as unknown rather than checking for a function literally named `func`."""
     import re
 
     s = sig.strip()
-    m = re.search(r"\b(?:async\s+)?(?:def|func|function|fn|fun|class|struct|interface|trait|type)\s+([A-Za-z_][\w]*)", s)
+    # Go-style receiver method: `func (r *T) Name(...)` — the name follows the
+    # receiver parens, so the plain `keyword name` pattern would miss it.
+    m = re.search(r"\bfunc\s*\([^)]*\)\s*([A-Za-z_]\w*)", s)
     if m:
         return m.group(1)
-    # Bare "name" or "name(args)".
-    m = re.match(r"\s*([A-Za-z_][\w]*)", s)
-    return m.group(1) if m else ""
+    m = re.search(r"\b(?:async\s+)?(?:def|func|function|fn|fun|class|struct|interface|trait|type)\s+([A-Za-z_]\w*)", s)
+    if m:
+        return m.group(1)
+    # Bare "name" / "name(args)", but never a lone declaration keyword.
+    m = re.match(r"\s*([A-Za-z_]\w*)", s)
+    if m and m.group(1) not in _DECL_KEYWORDS:
+        return m.group(1)
+    return ""
 
 
 def defined_names(code: str, filename: str) -> set:
@@ -456,6 +476,9 @@ def defined_names(code: str, filename: str) -> set:
         r"\b(?:def|func|function|fn|fun|class|struct|interface|trait|type)\s+([A-Za-z_][\w]*)",
         code,
     ):
+        names.add(m.group(1))
+    # Go-style receiver methods: `func (r *T) Name(...)`.
+    for m in re.finditer(r"\bfunc\s*\([^)]*\)\s*([A-Za-z_]\w*)", code):
         names.add(m.group(1))
     return names
 
@@ -525,10 +548,15 @@ class DriftReport:
     should_replan: bool     # True when structure drifted from the plan
 
 
-def node_drift(rpg: RPG, file_id: str, code: str, filename: str) -> DriftReport:
+def node_drift(rpg: RPG, file_id: str, code: str, filename: str,
+               replan_threshold: float = 0.0) -> DriftReport:
     """Compare a node's planned structure against generated `code`. A planned
     function that didn't get realized is structural drift away from the RPG —
-    the signal to re-plan the affected subgraph (Phase 3 drift loop)."""
+    the signal to re-plan the affected subgraph (Phase 3 drift loop).
+
+    `should_replan` fires when the drift fraction exceeds `replan_threshold`.
+    The default of 0.0 means any unrealized planned function triggers a re-plan;
+    callers that tolerate small gaps (e.g. an omitted helper) can raise it."""
     by_id = {f.id: f for f in rpg.files}
     f = by_id.get(file_id)
     planned_names = [fn.name for fn in f.functions if fn.name] if f else []
@@ -540,7 +568,8 @@ def node_drift(rpg: RPG, file_id: str, code: str, filename: str) -> DriftReport:
         return DriftReport(file_id=file_id, missing=[], drift_score=0.0, should_replan=False)
     missing = [n for n in planned_names if n not in defined]
     drift = len(missing) / len(planned_names)
-    return DriftReport(file_id=file_id, missing=missing, drift_score=drift, should_replan=bool(missing))
+    return DriftReport(file_id=file_id, missing=missing, drift_score=drift,
+                       should_replan=drift > replan_threshold)
 
 
 def _tokenize_query(text: str) -> set:

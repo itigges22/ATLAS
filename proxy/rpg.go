@@ -27,22 +27,29 @@ func planConstraintsForTarget(ctx *AgentContext, path string) []string {
 	if ctx == nil || ctx.Plan == nil {
 		return nil
 	}
+	// Pick the most specific overlapping step rather than the first. With
+	// suffix-based matching a bare-basename step (e.g. target "user.py") would
+	// otherwise shadow the deeper "models/user.py" step it isn't really for, so
+	// prefer the longest matching Target.
+	best := -1
+	bestLen := -1
 	for i := range ctx.Plan.Steps {
 		step := &ctx.Plan.Steps[i]
-		if len(step.Constraints) == 0 {
+		if len(step.Constraints) == 0 || !isFileProducingAction(step.Action) {
 			continue
 		}
-		if !isFileProducingAction(step.Action) {
-			continue
-		}
-		if targetsOverlap(step.Target, path) {
-			// Copy so callers can append without mutating the plan.
-			out := make([]string, len(step.Constraints))
-			copy(out, step.Constraints)
-			return out
+		if targetsOverlap(step.Target, path) && len(step.Target) > bestLen {
+			best = i
+			bestLen = len(step.Target)
 		}
 	}
-	return nil
+	if best < 0 {
+		return nil
+	}
+	// Copy so callers can append without mutating the plan.
+	out := make([]string, len(ctx.Plan.Steps[best].Constraints))
+	copy(out, ctx.Plan.Steps[best].Constraints)
+	return out
 }
 
 func isFileProducingAction(action string) bool {
@@ -148,10 +155,34 @@ func regenerateOnDrift(ctx *AgentContext, req V3GenerateRequest, prev *V3Generat
 	if err != nil || retried == nil || retried.Code == "" {
 		return prev
 	}
+	// Accept the retry when it resolves at least one of the signatures we were
+	// correcting for, even if it traded in a different miss (so the count is
+	// unchanged). A plain count comparison would discard a retry that fixed the
+	// targeted gap but reshaped the code elsewhere. Falling back to total count
+	// covers the case where the targeted set is somehow unchanged.
+	stillMissingTargeted := countOverlap(retried.RPGSignatureMissing, prev.RPGSignatureMissing)
+	if stillMissingTargeted < len(prev.RPGSignatureMissing) {
+		return retried
+	}
 	if len(retried.RPGSignatureMissing) < len(prev.RPGSignatureMissing) {
 		return retried
 	}
 	return prev
+}
+
+// countOverlap returns how many elements of `subset` appear in `of`.
+func countOverlap(subset, of []string) int {
+	set := make(map[string]struct{}, len(of))
+	for _, s := range of {
+		set[s] = struct{}{}
+	}
+	n := 0
+	for _, s := range subset {
+		if _, ok := set[s]; ok {
+			n++
+		}
+	}
+	return n
 }
 
 // reportRPGDrift surfaces structural drift after a V3 write: the winning code

@@ -34,7 +34,7 @@ from .context import (
     BandResult,
     WaveletContextResult,
 )
-from .project import decompose_project, ProjectIndex
+from .project import decompose_project, decompose_file_map, ProjectIndex
 from .diff import diff_peaks, diff_contents, FileDiffResult, PeakChange, PeakDiff
 from .flags import rpg_planning_enabled, ENV_VAR as RPG_PLANNING_ENV_VAR
 
@@ -54,6 +54,7 @@ __all__ = [
     "BandResult",
     "WaveletContextResult",
     "decompose_project",
+    "decompose_file_map",
     "ProjectIndex",
     "diff_peaks",
     "diff_contents",

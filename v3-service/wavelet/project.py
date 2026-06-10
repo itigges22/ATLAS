@@ -280,3 +280,34 @@ def decompose_project(
     """Convenience entry point: load the project and return its top structural
     positions (the coarse "which files / regions matter" map for planning)."""
     return ProjectIndex.load(root).get_important_positions(min_coefficient, limit)
+
+
+def decompose_file_map(
+    file_map: Dict[str, str], min_coefficient: float = 0.3, limit: int = 20
+) -> List[ImportantPosition]:
+    """Like decompose_project but over in-memory {rel_path: content} rather than
+    the filesystem. Used when the caller already has the project files in hand
+    (e.g. the proxy sends them to v3-service, which has no project volume mount),
+    so the coarse band can be computed without disk access. Mirrors
+    ProjectIndex.get_important_positions: top `limit` positions by |coefficient|,
+    labels suffixed with the relative path."""
+    top: List[ImportantPosition] = []
+    for rel, content in file_map.items():
+        if not content:
+            continue
+        ctx = FileContext(os.path.basename(rel), content)
+        peaks = ctx.get_important_positions(min_coefficient, max(limit, 30))
+        for p in peaks:
+            top.append(
+                ImportantPosition(
+                    position=p.position,
+                    coefficient=p.coefficient,
+                    scale=p.scale,
+                    label=f"{p.label} ({rel})",
+                    filename=rel,
+                )
+            )
+        top.sort(key=lambda x: abs(x.coefficient), reverse=True)
+        if len(top) > limit:
+            del top[limit:]
+    return top

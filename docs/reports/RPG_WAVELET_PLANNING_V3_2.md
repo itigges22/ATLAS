@@ -3,6 +3,21 @@
 Tracks **[#120](https://github.com/itigges22/ATLAS/issues/120)**. Builds on the wavelet
 decomposition angle from **[#39](https://github.com/itigges22/ATLAS/issues/39)**.
 
+### Post-review hardening
+
+A review pass found two deployment problems and several correctness gaps, all
+fixed. The flag is now forwarded to the v3-service container in
+`docker-compose.yml` (it was unreachable before, making the feature dead in the
+default deployment), and the proposal-stage coarse band is built from the
+in-memory `project_context` via `decompose_file_map` rather than a disk scan,
+because the v3-service container has no project volume mount. The `/v3/plan`
+SSE reader buffer was raised so the larger RPG payload cannot silently drop a
+plan, signature parsing now handles Go-style receiver methods and never treats
+a bare declaration keyword as a function name, the edit path now runs the same
+drift retry and reporting as the write path, `planConstraintsForTarget` prefers
+the most-specific matching step, the corrective regeneration accepts a retry
+that resolves the targeted signatures, and the topological sort dedups file ids.
+
 ## 1. What we're building
 
 Replace ATLAS's flat, free-form planning artifact with a **structured, two-stage,

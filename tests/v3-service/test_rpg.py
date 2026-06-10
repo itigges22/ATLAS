@@ -206,6 +206,24 @@ class TestFlatten:
         assert plan["verify_step"] is None
         assert all(s["action"] == "write_file" for s in plan["steps"])
 
+    def test_duplicate_file_ids_dont_duplicate_or_drop_steps(self):
+        # Duplicate ids must not inflate the topological order (which would
+        # fake acyclicity and drop a file). Each unique id yields one step.
+        g = RPG(
+            capabilities=[Capability("c1", "Cap")],
+            files=[
+                FileSpec("f1", "a.py", "c1", [FunctionSpec("a")]),
+                FileSpec("f1", "b.py", "c1", [FunctionSpec("b")]),
+                FileSpec("f2", "c.py", "c1", [FunctionSpec("c")]),
+            ],
+            edges=[Edge("f1", "f2")],
+        )
+        plan = flatten_to_plan(g)
+        write_targets = [s["target"] for s in plan["steps"] if s["action"] == "write_file"]
+        assert len(write_targets) == 2  # f1 (once) + f2, not 3
+        node_ids = [s["node_id"] for s in plan["steps"] if s.get("node_id")]
+        assert len(node_ids) == len(set(node_ids))  # no duplicate node steps
+
     def test_steps_carry_node_id_and_constraints(self):
         g = parse_rpg(IMPL_JSON)
         plan = flatten_to_plan(g)
@@ -309,8 +327,41 @@ class TestDefinedNames:
         code = "package main\nfunc Load() {}\nfunc Run() {}\n"
         assert defined_names(code, "m.go") == {"Load", "Run"}
 
+    def test_go_receiver_method(self):
+        code = "package main\nfunc (s *Store) Load() error { return nil }\nfunc Top() {}\n"
+        assert defined_names(code, "m.go") == {"Load", "Top"}
+
     def test_opaque_code_empty(self):
         assert defined_names("x = 1\ny = 2\n", "m.py") == set()
+
+
+class TestFunctionNameParsing:
+    def test_go_receiver_method_name(self):
+        from rpg import _function_name_from_signature as fn
+        assert fn("func (s *Store) Load() error") == "Load"
+
+    def test_plain_keyword_forms(self):
+        from rpg import _function_name_from_signature as fn
+        assert fn("def load(p): ...") == "load"
+        assert fn("async def go()") == "go"
+        assert fn("func Run()") == "Run"
+        assert fn("class Foo(Base)") == "Foo"
+        assert fn("bare_name(x)") == "bare_name"
+
+    def test_lone_keyword_returns_empty(self):
+        # A signature that is just a keyword must not parse as a function named
+        # after the keyword (which would cause a false "missing" veto).
+        from rpg import _function_name_from_signature as fn
+        assert fn("func") == ""
+        assert fn("def") == ""
+        assert fn("class") == ""
+
+    def test_go_method_not_falsely_missing(self):
+        # Regression: a planned Go receiver method that IS defined must not be
+        # reported missing (previously parsed as the keyword "func").
+        code = "func (s *Store) Load() error { return nil }\n"
+        planned = ["func (s *Store) Load() error"]
+        assert missing_planned_signatures(code, planned, "store.go") == []
 
 
 class TestPlannedSignatureExtraction:
@@ -371,6 +422,18 @@ class TestNodeDrift:
         g = parse_rpg(IMPL_JSON)
         d = node_drift(g, "f2", "rows = []", "src/process.py")
         assert d.should_replan is False
+
+    def test_threshold_tolerates_small_drift(self):
+        # Two planned functions, one realized: drift_score 0.5. A threshold of
+        # 0.5 should tolerate it (0.5 > 0.5 is false); 0.0 should not.
+        g = RPG(
+            capabilities=[Capability("c1", "Cap")],
+            files=[FileSpec("f1", "a.py", "c1",
+                            [FunctionSpec("keep"), FunctionSpec("drop")])],
+        )
+        code = "def keep():\n    return 1\n"
+        assert node_drift(g, "f1", code, "a.py").should_replan is True
+        assert node_drift(g, "f1", code, "a.py", replan_threshold=0.5).should_replan is False
 
 
 class TestLocalize:

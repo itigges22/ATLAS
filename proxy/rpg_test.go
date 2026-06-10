@@ -92,6 +92,19 @@ func TestPlanConstraintsForTarget(t *testing.T) {
 	}
 }
 
+func TestPlanConstraintsForTargetPrefersMostSpecific(t *testing.T) {
+	// A bare-basename step must not shadow the deeper path it isn't for.
+	plan := &Plan{Steps: []PlanStep{
+		{ID: "s1", Action: "write_file", Target: "user.py", Constraints: []string{"BARE"}},
+		{ID: "s2", Action: "write_file", Target: "models/user.py", Constraints: []string{"DEEP"}},
+	}}
+	ctx := &AgentContext{Plan: plan}
+	got := planConstraintsForTarget(ctx, "/workspace/models/user.py")
+	if !reflect.DeepEqual(got, []string{"DEEP"}) {
+		t.Errorf("expected the most-specific (models/user.py) step, got %v", got)
+	}
+}
+
 func TestPlanConstraintsForTargetNilPlan(t *testing.T) {
 	if got := planConstraintsForTarget(&AgentContext{}, "x.py"); got != nil {
 		t.Errorf("nil plan should yield nil, got %v", got)
@@ -243,6 +256,37 @@ func TestRegenerateOnDriftNoopWithoutDriftOrConstraints(t *testing.T) {
 	drift := &V3GenerateResponse{RPGSignatureMissing: []string{"def f()"}}
 	if got := regenerateOnDrift(ctx, V3GenerateRequest{}, drift); got != drift {
 		t.Error("no-constraints drift should be returned unchanged")
+	}
+}
+
+func TestRegenerateOnDriftAcceptsRetryThatResolvesTargeted(t *testing.T) {
+	// prev missed [A]; the retry realizes A but drops B, so the total count is
+	// still 1. The retry must still be accepted because it resolved the
+	// signature it was correcting for (count-only logic would wrongly keep prev).
+	srv := generateServer(t,
+		`{"code": "def A(): pass", "rpg_signature_missing": ["def B()"]}`, nil)
+	defer srv.Close()
+	ctx := &AgentContext{V3URL: srv.URL}
+	req := V3GenerateRequest{FilePath: "m.py", Constraints: []string{"Implement `def A()`"}}
+	prev := &V3GenerateResponse{Code: "old", RPGSignatureMissing: []string{"def A()"}}
+	got := regenerateOnDrift(ctx, req, prev)
+	if got == prev {
+		t.Error("retry that resolved the targeted signature should be accepted")
+	}
+	if !strings.Contains(got.Code, "def A") {
+		t.Errorf("expected retried code, got %q", got.Code)
+	}
+}
+
+func TestCountOverlap(t *testing.T) {
+	if got := countOverlap([]string{"a", "b", "c"}, []string{"b", "c", "d"}); got != 2 {
+		t.Errorf("countOverlap = %d, want 2", got)
+	}
+	if got := countOverlap([]string{"x"}, []string{"y"}); got != 0 {
+		t.Errorf("countOverlap = %d, want 0", got)
+	}
+	if got := countOverlap(nil, []string{"a"}); got != 0 {
+		t.Errorf("countOverlap(nil) = %d, want 0", got)
 	}
 }
 

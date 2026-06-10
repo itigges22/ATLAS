@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-from wavelet.project import decompose_project, ProjectIndex  # noqa: E402
+from wavelet.project import decompose_project, decompose_file_map, ProjectIndex  # noqa: E402
 
 PY_A = """class Alpha:
     def run(self):
@@ -121,3 +121,29 @@ class TestProjectImportantPositions:
 
     def test_empty_project(self, tmp_path):
         assert decompose_project(str(tmp_path)) == []
+
+
+class TestDecomposeFileMap:
+    def test_in_memory_matches_disk(self, tmp_path):
+        # The in-memory entry point (used when v3-service has no project mount)
+        # should produce the same labels/filenames as a disk scan of the same
+        # files.
+        _write(tmp_path, "a.py", PY_A)
+        _write(tmp_path, "b.py", PY_B)
+        disk = decompose_project(str(tmp_path), limit=20)
+        mem = decompose_file_map({"a.py": PY_A, "b.py": PY_B}, limit=20)
+        assert {(p.filename, p.label) for p in mem} == {(p.filename, p.label) for p in disk}
+
+    def test_labels_carry_path_and_sorted(self):
+        positions = decompose_file_map({"a.py": PY_A, "b.py": PY_B}, limit=20)
+        assert positions
+        assert all(p.filename in ("a.py", "b.py") for p in positions)
+        for i in range(1, len(positions)):
+            assert abs(positions[i - 1].coefficient) >= abs(positions[i].coefficient)
+
+    def test_empty_and_blank(self):
+        assert decompose_file_map({}) == []
+        assert decompose_file_map({"a.py": ""}) == []
+
+    def test_limit_caps(self):
+        assert len(decompose_file_map({"a.py": PY_A, "b.py": PY_B}, limit=2)) <= 2

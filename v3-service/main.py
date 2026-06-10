@@ -1987,22 +1987,32 @@ def generate_plan(
     # ATLAS_RPG_PLANNING. Strictly additive: on any failure (flag off, modules
     # missing, model output unusable) we fall through to the flat planner below.
     try:
-        from wavelet import rpg_planning_enabled, decompose_project
+        from wavelet import rpg_planning_enabled, decompose_project, decompose_file_map
         import rpg as _rpg_mod
         _rpg_on = rpg_planning_enabled()
     except Exception:
         _rpg_on = False
     if _rpg_on:
         try:
+            # Build the coarse structural band that seeds the proposal stage.
+            # Prefer the in-memory project_context the proxy already sent — the
+            # v3-service container has no project volume mount, so reading
+            # working_dir off disk only works in non-container / dev setups.
+            # Fall back to a disk scan when no context was passed.
             coarse_map = None
-            if working_dir and os.path.isdir(working_dir):
-                try:
+            try:
+                if project_context:
+                    coarse_map = [
+                        {"label": p.label, "filename": p.filename}
+                        for p in decompose_file_map(project_context, limit=30)
+                    ]
+                elif working_dir and os.path.isdir(working_dir):
                     coarse_map = [
                         {"label": p.label, "filename": p.filename}
                         for p in decompose_project(working_dir, limit=30)
                     ]
-                except Exception as ce:
-                    emit("rpg_coarse_error", f"coarse decomposition failed: {ce}")
+            except Exception as ce:
+                emit("rpg_coarse_error", f"coarse decomposition failed: {ce}")
             rpg_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
             rpg_llm = LLMAdapter(progress_callback=progress_callback, thinking=rpg_thinking)
 

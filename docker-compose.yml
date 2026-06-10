@@ -106,6 +106,12 @@ services:
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      # V3.2 RPG-style planning (#120, experimental, default off) and the
+      # planner thinking toggle. These are read by rpg_planning_enabled() and
+      # the planner inside this process, so they must be forwarded to this
+      # container, not only to the proxy.
+      - ATLAS_RPG_PLANNING=${ATLAS_RPG_PLANNING:-0}
+      - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-0}
     ports:
       - "${ATLAS_V3_PORT:-8070}:8070"
     depends_on:

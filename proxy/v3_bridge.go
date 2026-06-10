@@ -138,7 +138,12 @@ func callV3PlanStreaming(v3URL string, req V3PlanRequest, onProgress V3ProgressF
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+	// The plan result is one SSE `data:` line. With V3.2 RPG planning it now
+	// carries the whole graph (files + signatures + edges) plus per-step
+	// constraints, so the line is far larger than a flat plan. Allow up to 16MB
+	// so a big graph degrades gracefully instead of tripping ErrTooLong and
+	// silently dropping the plan (#120 review).
+	scanner.Buffer(make([]byte, 0, 1<<20), 16<<20)
 
 	var plan *Plan
 
@@ -174,6 +179,12 @@ func callV3PlanStreaming(v3URL string, req V3PlanRequest, onProgress V3ProgressF
 				onProgress(event.Stage, event.Detail, event.Data)
 			}
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		// Most likely bufio.ErrTooLong on an oversized result line. Surface it
+		// so the cause is diagnosable instead of a misleading "no result".
+		return nil, fmt.Errorf("reading plan stream: %w", err)
 	}
 
 	if plan == nil {
