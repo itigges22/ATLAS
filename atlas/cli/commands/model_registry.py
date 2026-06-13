@@ -327,6 +327,28 @@ REGISTRY: List[Model] = [
               "llama.cpp model only — G(x) verification will silently "
               "no-op (--no-lens to acknowledge). See PC-058 roadmap.",
     ),
+    Model(
+        name="Qwen3.6-27B-MTP-UD-Q4_K_XL",
+        tier="xlarge",
+        model_file="Qwen3.6-27B-UD-Q4_K_XL.gguf",
+        model_display="Qwen3.6 27B MTP (UD-Q4_K_XL)",
+        model_size_gb=19.0,
+        lens_status="no-artifacts",
+        download_url=None,
+        sha256=None,
+        license="Apache-2.0",
+        requires_hf_token=False,
+        notes="Qwen3.6-27B with Multi-Token Prediction. Gated DeltaNet + "
+              "Gated Attention hybrid architecture, 5120-dim hidden. "
+              "MTP supported in llama.cpp since PR #22673. Requires "
+              "--spec-type draft-mtp --spec-draft-n-max 2 flags. "
+              "Lens artifacts are Qwen3.5-4096-dim specific and will "
+              "silently no-op on this model — Lens retraining (PC-058) "
+              "needed. No ASA control vector trained for Qwen3.6 "
+              "residuals. macOS Metal: MTP tested but may have throughput "
+              "issues (see llama.cpp #23011). Use --no-lens to acknowledge."
+              " No HF download URL — use `hf download` manually.",
+    ),
 ]
 
 

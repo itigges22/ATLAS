@@ -124,6 +124,14 @@ EOF
 SLOT_SAVE_PATH="${TMPDIR:-/tmp}/atlas-slots"
 mkdir -p "$SLOT_SAVE_PATH"
 
+# MTP (Multi-Token Prediction) flags — enabled via ATLAS_ENABLE_MTP=1 in .env
+MTP_FLAGS=""
+if [ "${ATLAS_ENABLE_MTP:-0}" = "1" ]; then
+  MTP_DRAFT_MAX="${ATLAS_MTP_DRAFT_N_MAX:-2}"
+  MTP_FLAGS="--spec-type draft-mtp --spec-draft-n-max $MTP_DRAFT_MAX"
+  echo "  MTP: ENABLED (spec-type draft-mtp, draft-n-max=$MTP_DRAFT_MAX)"
+fi
+
 exec "$LLAMA_SERVER" \
   -m "$MODEL_FILE" \
   -c "$CTX_LENGTH" \
@@ -141,4 +149,5 @@ exec "$LLAMA_SERVER" \
   --no-cache-prompt \
   --embeddings \
   --jinja \
+  $MTP_FLAGS \
   $CVECTOR_FLAGS

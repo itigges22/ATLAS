@@ -20,14 +20,15 @@ from atlas.cli.commands import model_registry, model_recommendations
 
 def test_registry_has_known_qwen_entries():
     """PC-056 shipped with 4 tier presets; PC-056.1 added Q4_K_M and
-    Q8_0 variants of the 9B for a total of 6. Adding more is a
-    deliberate scope change and should be a separate ticket — flag
-    it loudly here."""
-    assert len(model_registry.REGISTRY) == 6
+    Q8_0 variants of the 9B for a total of 6. Qwen3.6-27B-MTP added
+    as experimental entry (7 total). Adding more is a deliberate scope
+    change and should be a separate ticket — flag it loudly here."""
+    assert len(model_registry.REGISTRY) == 7
     names = {m.name for m in model_registry.REGISTRY}
     assert names == {"Qwen3.5-7B-Q4_K_M",
                      "Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K", "Qwen3.5-9B-Q8_0",
-                     "Qwen3.5-14B-Q5_K_M", "Qwen3.5-32B-Q5_K_M"}
+                     "Qwen3.5-14B-Q5_K_M", "Qwen3.5-32B-Q5_K_M",
+                     "Qwen3.6-27B-MTP-UD-Q4_K_XL"}
 
 
 def test_only_9b_is_supported_today():
@@ -171,10 +172,66 @@ def test_by_name_unknown_returns_none():
 
 
 def test_models_for_tier_returns_only_matches():
-    """PC-056.1: medium tier now has 3 entries (Q4_K_M, Q6_K, Q8_0)."""
+    """PC-056.1: medium tier now has 3 entries (Q4_K_M, Q6_K, Q8_0).
+    xlarge tier now has 2 (32B-Q5_K_M + Qwen3.6-27B-MTP)."""
     medium = model_registry.models_for_tier("medium")
     assert all(m.tier == "medium" for m in medium)
     assert len(medium) == 3
+    xlarge = model_registry.models_for_tier("xlarge")
+    assert all(m.tier == "xlarge" for m in xlarge)
+    assert len(xlarge) == 2
+
+
+# ---------------------------------------------------------------------------
+# Qwen3.6-27B-MTP — experimental entry
+# ---------------------------------------------------------------------------
+
+def test_qwen36_entry_basics():
+    """Qwen3.6-27B-MTP is an experimental xlarge entry with no Lens/ASA
+    support, no download URL, and the correct 19GB estimated size."""
+    m = model_registry.by_name("Qwen3.6-27B-MTP-UD-Q4_K_XL")
+    assert m is not None
+    assert m.tier == "xlarge"
+    assert m.model_file == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+    assert m.model_size_gb == 19.0
+    assert m.lens_status == "no-artifacts"
+    assert m.asa_status == "no-artifacts"
+    assert m.requires_hf_token is False
+    assert m.download_url is None
+    assert m.sha256 is None
+
+
+def test_qwen36_entry_has_mtp_notes():
+    """The Qwen3.6 notes must mention MTP, the architecture (DeltaNet+Attention),
+    and that Lens artifacts silently no-op. The existing
+    test_no_artifacts_models_have_explanatory_notes already gates on
+    'silently no-op' in notes.lower() — this test adds model-specific
+    assertions."""
+    m = model_registry.by_name("Qwen3.6-27B-MTP-UD-Q4_K_XL")
+    assert m is not None
+    n = m.notes.lower()
+    assert "mtp" in n
+    assert "draft-mtp" in n
+    assert "silently no-op" in n
+    assert "delta net" in n or "deltanet" in n
+    assert "lens" in n
+    assert "5120" in n
+
+
+def test_qwen36_not_in_publicly_installable():
+    """Qwen3.6 has download_url=None so it should NOT appear in the
+    can_install set."""
+    m = model_registry.by_name("Qwen3.6-27B-MTP-UD-Q4_K_XL")
+    assert m is not None
+    assert m.can_install is False
+
+
+def test_qwen36_not_in_supported_models():
+    """Qwen3.6 has no Lens artifacts — supported_models() should still
+    return only the 9B Q6_K."""
+    supported_names = {m.name for m in model_registry.supported_models()}
+    assert "Qwen3.6-27B-MTP-UD-Q4_K_XL" not in supported_names
+    assert supported_names == {"Qwen3.5-9B-Q6_K"}
 
 
 # ---------------------------------------------------------------------------
@@ -261,10 +318,11 @@ def test_shim_callers_can_access_old_field_names():
 # PC-056.1 schema additions: 9B variants, commit-pinned URLs, requires_hf_token
 # ---------------------------------------------------------------------------
 
-def test_pc0561_registry_now_has_six_entries():
-    """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B. Adding more is
+def test_pc0561_registry_now_has_seven_entries():
+    """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B (6 total).
+    Qwen3.6-27B-MTP added as experimental (7 total). Adding more is
     a deliberate scope change — flag it loudly here."""
-    assert len(model_registry.REGISTRY) == 6
+    assert len(model_registry.REGISTRY) == 7
 
 
 def test_pc0561_three_quants_for_9b():
