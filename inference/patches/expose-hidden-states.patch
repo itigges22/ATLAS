@@ -235,3 +235,42 @@ index 64bdecd..f0d4721 100644
      // response formatting
      task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
  
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index 0000000..0000000 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -1,5 +1,6 @@
+ #include "server-task.h"
+ 
++#include "base64.hpp"
+ #include "build-info.h"
+ #include "server-chat.h"
+ #include "chat.h"
+@@ -1824,10 +1825,26 @@ json server_task_result_embd::to_json() {
+ }
+ 
+ json server_task_result_embd::to_json_non_oaicompat() {
+-    return json {
++    json result = {
+         {"index",     index},
+         {"embedding", embedding},
+     };
++    if (!hidden_states.empty()) {
++        json hs_obj = json::object();
++        for (const auto & [layer, tokens] : hidden_states) {
++            std::vector<float> flat;
++            for (const auto & row : tokens) {
++                flat.insert(flat.end(), row.begin(), row.end());
++            }
++            const char * bytes = reinterpret_cast<const char *>(flat.data());
++            size_t byte_len = flat.size() * sizeof(float);
++            hs_obj[std::to_string(layer)] = base64::encode(bytes, byte_len);
++        }
++        result["hidden_states"] = hs_obj;
++        result["hidden_states_n_tokens"] = n_tokens;
++        result["hidden_states_dim"] = hidden_dim;
++    }
++    return result;
+ }
+ 
+ json server_task_result_embd::to_json_oaicompat() {

@@ -164,6 +164,13 @@ def _unsloth_qwen35_url(repo: str, file: str) -> str:
             f"{_UNSLOTH_QWEN35_COMMIT}/{file}")
 
 
+_UNSLOTH_QWEN36_COMMIT = "5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace"
+
+def _unsloth_qwen36_url(file: str) -> str:
+    return (f"https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF/resolve/"
+            f"{_UNSLOTH_QWEN36_COMMIT}/{file}")
+
+
 # Single source of truth. Order: by tier (cpu → xlarge), then by quant.
 #
 # Truthful state today:
@@ -332,22 +339,22 @@ REGISTRY: List[Model] = [
         tier="xlarge",
         model_file="Qwen3.6-27B-UD-Q4_K_XL.gguf",
         model_display="Qwen3.6 27B MTP (UD-Q4_K_XL)",
-        model_size_gb=19.0,
+        model_size_gb=16.7,
         lens_status="no-artifacts",
-        download_url=None,
-        sha256=None,
+        download_url=_unsloth_qwen36_url("Qwen3.6-27B-UD-Q4_K_XL.gguf"),
+        sha256="4085665ee36d82a672a238a43f0e5643f2f0e39f2d7bd5d373f0ef10ecf53095",
         license="Apache-2.0",
         requires_hf_token=False,
         notes="Qwen3.6-27B with Multi-Token Prediction. Gated DeltaNet + "
               "Gated Attention hybrid architecture, 5120-dim hidden. "
               "MTP supported in llama.cpp since PR #22673. Requires "
               "--spec-type draft-mtp --spec-draft-n-max 2 flags. "
-              "Lens artifacts are Qwen3.5-4096-dim specific and will "
-              "silently no-op on this model — Lens retraining (PC-058) "
-              "needed. No ASA control vector trained for Qwen3.6 "
-              "residuals. macOS Metal: MTP tested but may have throughput "
-              "issues (see llama.cpp #23011). Use --no-lens to acknowledge."
-              " No HF download URL — use `hf download` manually.",
+              "Lens C(x) cost_field.pt trained locally (5120-dim, "
+              "200-epoch contrastive) but no lens artifacts published "
+              "on HF yet — G(x) will silently no-op. "
+              "No ASA control vector trained for Qwen3.6 "
+              "residuals. macOS Metal: MTP disabled by default "
+              "(ATLAS_ENABLE_MTP=0); see llama.cpp #23011/#23752.",
     ),
 ]
 
