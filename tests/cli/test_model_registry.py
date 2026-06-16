@@ -190,16 +190,20 @@ def test_models_for_tier_returns_only_matches():
 # ---------------------------------------------------------------------------
 
 def test_qwen36_entry_basics():
-    """Qwen3.6-27B-MTP is an experimental xlarge entry with trained Lens
-    artifact (not yet published to HF), public download URL from unsloth,
-    and correct size."""
+    """Qwen3.6-27B-MTP is an experimental xlarge entry: lens C(x) trained
+    but unpublished (G(x) half untrained, so lens_status no-artifacts),
+    ASA vector published to HF, public download URL from unsloth, correct
+    size."""
     m = model_registry.by_name("Qwen3.6-27B-MTP-UD-Q4_K_XL")
     assert m is not None
     assert m.tier == "xlarge"
     assert m.model_file == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
     assert m.model_size_gb == 16.7
     assert m.lens_status == "no-artifacts"
-    assert m.asa_status == "no-artifacts"
+    # ASA vector published to HF (lens G(x) half still untrained).
+    assert m.asa_status == "supported"
+    assert m.asa_artifact_files == ["ast_edit_steering.gguf"]
+    assert m.asa_hf_repo == "yogthos/atlas-asa-qwen3.6-27b-mtp-ud-q4_k_xl"
     assert m.requires_hf_token is False
     assert m.download_url is not None
     assert "/Qwen3.6-27B-MTP-GGUF/" in m.download_url

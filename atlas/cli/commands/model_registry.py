@@ -351,19 +351,22 @@ REGISTRY: List[Model] = [
         sha256="4085665ee36d82a672a238a43f0e5643f2f0e39f2d7bd5d373f0ef10ecf53095",
         license="Apache-2.0",
         requires_hf_token=False,
+        asa_status="supported",
+        asa_artifact_files=["ast_edit_steering.gguf"],
+        asa_hf_repo="yogthos/atlas-asa-qwen3.6-27b-mtp-ud-q4_k_xl",
         notes="Qwen3.6-27B with Multi-Token Prediction. Gated DeltaNet + "
               "Gated Attention hybrid architecture, 5120-dim hidden. "
               "MTP supported in llama.cpp since PR #22673. Requires "
               "--spec-type draft-mtp --spec-draft-n-max 2 flags. "
+              "ASA control vector (ast_edit_steering.gguf, layer 27, "
+              "5120-dim) published at "
+              "https://huggingface.co/yogthos/atlas-asa-qwen3.6-27b-mtp-ud-q4_k_xl. "
               "Lens C(x) cost_field.pt trained locally (5120-dim, "
               "200-epoch contrastive) but not yet published on HF, and "
               "the G(x) classifier half (gx_*.json) is untrained — G(x) "
-              "will silently no-op until both halves ship. "
-              "ASA control vector (ast_edit_steering.gguf, layer 27) "
-              "trained locally but unpublished. Both await `atlas publish` "
-              "from a host with huggingface_hub before lens_status/"
-              "asa_status can flip to supported. macOS Metal: MTP disabled "
-              "by default (ATLAS_ENABLE_MTP=0); see llama.cpp #23011/#23752.",
+              "will silently no-op until both lens halves ship via "
+              "`atlas lens publish`. macOS Metal: MTP disabled by default "
+              "(ATLAS_ENABLE_MTP=0); see llama.cpp #23011/#23752.",
     ),
     Model(
         name="gemma-4-12b-it-Q4_K_M",
