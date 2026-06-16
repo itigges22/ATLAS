@@ -51,12 +51,18 @@ def train_cost_field(
     weight_decay: float = 1e-4,
     test_fraction: float = 0.3,
     seed: int = 42,
+    patience: int = 40,
 ) -> dict:
     """Train C(x) with contrastive ranking loss.
 
     Loss = max(0, C(x_pass) - C(x_fail) + margin)
 
     We want C(x_fail) > C(x_pass) + margin.
+
+    Test AUC is evaluated every epoch and the best-scoring weights are kept;
+    training stops early once `patience` epochs pass without a new best
+    (small sample sets reach their peak within the first few epochs and only
+    memorize afterward).
 
     Returns dict with model, metrics, train/test AUC.
     """
@@ -100,6 +106,7 @@ def train_cost_field(
     # Training loop
     loss_history = []
     best_test_auc = 0.0
+    best_epoch = 0
     best_state = None
 
     for epoch in range(epochs):
@@ -131,23 +138,36 @@ def train_cost_field(
         avg_loss = total_loss / n_batches
         loss_history.append(avg_loss)
 
-        # Report every 20 epochs
-        if (epoch + 1) % 20 == 0 or epoch == 0:
-            model.eval()  # Note: model.eval() is the PyTorch eval mode toggle, not code evaluation
-            with torch.no_grad():
-                # Compute AUC on test set
-                test_auc = compute_energy_auc(model, test_embs, test_labels, device)
-                train_auc = compute_energy_auc(model, train_embs, train_labels, device)
+        # Evaluate every epoch: with small sample sets the test-AUC peak
+        # arrives (and passes) within the first few epochs, so sparser
+        # checkpoints miss it. AUC over a few hundred embeddings is cheap
+        # next to the epoch's own batches. Print every 20 to keep the log
+        # readable.
+        model.eval()  # Note: model.eval() is the PyTorch eval mode toggle, not code evaluation
+        with torch.no_grad():
+            test_auc = compute_energy_auc(model, test_embs, test_labels, device)
 
+        if test_auc > best_test_auc:
+            best_test_auc = test_auc
+            best_epoch = epoch + 1
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+
+        if (epoch + 1) % 20 == 0 or epoch == 0:
+            with torch.no_grad():
+                train_auc = compute_energy_auc(model, train_embs, train_labels, device)
             print(f"Epoch {epoch+1:4d} | Loss: {avg_loss:.4f} | Train AUC: {train_auc:.4f} | Test AUC: {test_auc:.4f}")
 
-            if test_auc > best_test_auc:
-                best_test_auc = test_auc
-                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+        if patience and (epoch + 1) - best_epoch >= patience:
+            print(f"Early stop at epoch {epoch+1}: no test-AUC improvement "
+                  f"in {patience} epochs (best {best_test_auc:.4f} @ epoch "
+                  f"{best_epoch})")
+            break
 
     # Restore best model
     if best_state:
         model.load_state_dict(best_state)
+        print(f"Keeping best checkpoint: epoch {best_epoch} "
+              f"(test AUC {best_test_auc:.4f})")
 
     # Final assessment
     model.eval()  # Note: model.eval() is the PyTorch eval mode toggle, not code evaluation
@@ -211,7 +231,13 @@ def compute_energy_auc(model, embeddings, labels, device):
 
 
 def save_cost_field(cost_field, save_dir=None):
-    """Save trained C(x) model weights."""
+    """Save trained C(x) model weights.
+
+    Writes both cost_field.pt (what the service loads) and
+    cost_field.safetensors (pickle-free twin for publishing — HF flags
+    .pt files as unsafe-pickle). Keeping them written together prevents
+    a stale safetensors from a previous model shadowing a fresh .pt.
+    """
     if save_dir is None:
         save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
     os.makedirs(save_dir, exist_ok=True)
@@ -219,14 +245,154 @@ def save_cost_field(cost_field, save_dir=None):
     cost_path = os.path.join(save_dir, "cost_field.pt")
     torch.save(cost_field.state_dict(), cost_path)
     print(f"C(x) model saved to {cost_path}")
+    try:
+        from safetensors.torch import save_file
+        st_path = os.path.join(save_dir, "cost_field.safetensors")
+        save_file(cost_field.state_dict(), st_path)
+        print(f"C(x) safetensors twin saved to {st_path}")
+    except ImportError:
+        print("safetensors not installed — skipping the pickle-free twin "
+              "(pip install safetensors)")
     return cost_path
+
+
+def train_gx(
+    data: dict,
+    pca_dim: int = 128,
+    max_depth: int = 4,
+    learning_rate: float = 0.1,
+    max_rounds: int = 300,
+    n_folds: int = 5,
+    seed: int = 42,
+) -> dict:
+    """Train the G(x) correctness classifier on pooled embeddings.
+
+    Same `data` dict as train_cost_field ({"embeddings", "labels"},
+    label 1 = PASS). PCA-projects the embeddings to `pca_dim` features and
+    fits an XGBoost binary classifier (gx_score = P(pass), matching
+    service.py's `proba[1]` consumption). Stratified k-fold CV provides the
+    reported AUC; the saved model is refit on the full set using the median
+    early-stopped round count from the folds.
+
+    Returns a dict for save_gx: booster + the gx_weights.json payload
+    (pca_components/pca_mean in the exact shape service.py loads).
+    """
+    import numpy as np
+    import xgboost as xgb
+    from sklearn.decomposition import PCA
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import StratifiedKFold
+
+    X = np.array(data["embeddings"], dtype=np.float32)
+    y = np.array(data["labels"], dtype=np.int32)
+    n, dim = X.shape
+    n_pass, n_fail = int((y == 1).sum()), int((y == 0).sum())
+    if min(n_pass, n_fail) < 5:
+        raise ValueError(
+            f"G(x) needs at least 5 samples of each class "
+            f"(got PASS={n_pass}, FAIL={n_fail})")
+
+    k = min(pca_dim, n, dim)
+    pca = PCA(n_components=k, random_state=seed)
+    Xp = pca.fit_transform(X).astype(np.float32)
+
+    params = {
+        "objective": "binary:logistic",
+        "max_depth": max_depth,
+        "eta": learning_rate,
+        "eval_metric": "auc",
+        "seed": seed,
+    }
+
+    folds = min(n_folds, n_pass, n_fail)
+    aucs, accs, best_rounds = [], [], []
+    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+    for fold, (tr, te) in enumerate(skf.split(Xp, y)):
+        dtr = xgb.DMatrix(Xp[tr], label=y[tr])
+        dte = xgb.DMatrix(Xp[te], label=y[te])
+        bst = xgb.train(params, dtr, num_boost_round=max_rounds,
+                        evals=[(dte, "val")], early_stopping_rounds=30,
+                        verbose_eval=False)
+        pred = bst.predict(dte, iteration_range=(0, bst.best_iteration + 1))
+        aucs.append(roc_auc_score(y[te], pred))
+        accs.append(float(((pred >= 0.5).astype(int) == y[te]).mean()))
+        best_rounds.append(bst.best_iteration + 1)
+        print(f"Fold {fold + 1}/{folds} | AUC: {aucs[-1]:.4f} | "
+              f"rounds: {best_rounds[-1]}")
+
+    # Final model on the full set, sized by the folds' early stopping.
+    rounds = int(np.median(best_rounds))
+    dall = xgb.DMatrix(Xp, label=y)
+    booster = xgb.train(params, dall, num_boost_round=rounds)
+
+    scores = booster.predict(dall)
+    importance = booster.get_score(importance_type="gain")
+    feat_imp = np.zeros(k, dtype=np.float64)
+    for name, gain in importance.items():
+        feat_imp[int(name[1:])] = gain
+    top_dims = np.argsort(feat_imp)[::-1][:30]
+
+    cv_auc = float(np.mean(aucs))
+    print(f"\n--- G(x) Results ---")
+    print(f"CV AUC: {cv_auc:.4f} +/- {np.std(aucs):.4f} ({folds} folds)")
+    print(f"PASS score: {scores[y == 1].mean():.4f} | "
+          f"FAIL score: {scores[y == 0].mean():.4f}")
+
+    return {
+        "booster": booster,
+        "cv_auc_mean": cv_auc,
+        "weights": {
+            "architecture": "xgboost_pca",
+            "pca_dim": k,
+            "original_dim": dim,
+            "n_training_samples": n,
+            "cv_auc_mean": cv_auc,
+            "cv_auc_std": float(np.std(aucs)),
+            "cv_acc_mean": float(np.mean(accs)),
+            "feature_importances": feat_imp.tolist(),
+            "top_dims": top_dims.tolist(),
+            "pass_score_mean": float(scores[y == 1].mean()),
+            "fail_score_mean": float(scores[y == 0].mean()),
+            "pca_components": pca.components_.astype(np.float64).tolist(),
+            "pca_mean": pca.mean_.astype(np.float64).tolist(),
+        },
+    }
+
+
+def save_gx(gx_result: dict, save_dir=None):
+    """Save trained G(x) artifacts in the layout service.py loads.
+
+    Writes gx_xgboost.json (native booster dump) + gx_weights.json (PCA
+    projection + stats). Removes a stale gx_xgboost.pkl if present — the
+    pickle is the legacy load fallback, and one left behind from a previous
+    model would silently serve the wrong PCA dimensions if the JSON were
+    ever deleted.
+    """
+    if save_dir is None:
+        save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    os.makedirs(save_dir, exist_ok=True)
+
+    xgb_path = os.path.join(save_dir, "gx_xgboost.json")
+    gx_result["booster"].save_model(xgb_path)
+    weights_path = os.path.join(save_dir, "gx_weights.json")
+    with open(weights_path, "w") as f:
+        json.dump(gx_result["weights"], f)
+    print(f"G(x) model saved to {xgb_path}")
+
+    stale_pkl = os.path.join(save_dir, "gx_xgboost.pkl")
+    if os.path.exists(stale_pkl):
+        os.remove(stale_pkl)
+        print(f"Removed stale legacy artifact {stale_pkl} "
+              f"(superseded by the JSON dump)")
+    return xgb_path
 
 
 def load_cost_field(save_dir=None, dim=None):
     """Load trained C(x) model weights.
 
     If dim is None, infers from saved weights. Falls back to EMBEDDING_DIM
-    env var (code default 768, but Qwen3.5-9B uses 4096).
+    env var (code default 768; the real dim is model-dependent —
+    e.g. 4096 for Qwen3.5-9B, 3840 for Gemma 4 12B).
     """
     if save_dir is None:
         save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -286,7 +452,8 @@ def retrain_cost_field_bce(
     - epoch_num: Training epoch number for replay buffer tracking.
 
     Args:
-        embeddings: List of float lists, each 4096-dim (Qwen3.5-9B).
+        embeddings: List of float lists, one per sample (the model's
+            hidden dim — e.g. 4096 for Qwen3.5-9B, 3840 for Gemma 4 12B).
         labels: List of "PASS" or "FAIL" strings.
         epochs: Maximum training epochs.
         lr: Learning rate. If None, selected adaptively based on dataset size.
@@ -493,6 +660,17 @@ def retrain_cost_field_bce(
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
+        # Keep the pickle-free twin in lockstep — save_cost_field's
+        # contract: a stale safetensors from a previous model must never
+        # shadow a fresh .pt (atlas publish ships whichever is newer).
+        if save_path.endswith(".pt"):
+            try:
+                from safetensors.torch import save_file
+                st_path = save_path[: -len(".pt")] + ".safetensors"
+                save_file(model.state_dict(), st_path)
+                print(f"Safetensors twin saved to {st_path}")
+            except ImportError:
+                print("safetensors not installed — twin not refreshed")
 
     # Compute energy statistics for Lens Feedback recalibration
     # Note: model.eval() is the PyTorch eval mode toggle, not code evaluation

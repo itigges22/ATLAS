@@ -1,5 +1,22 @@
 # ATLAS V3.1 Implementation Status
 
+> **Historical snapshot (frozen 2026-03-07)** — this file captured the
+> mid-implementation state of the V3.1 rebase to Qwen3.5-9B. Several
+> entries below were *true at the time of writing* but have since
+> been reversed by later work:
+>
+> - **Step 1.3 "Remove G(x) metric tensor"** — reverted. `metric_tensor.py`
+>   and `correction.py` still exist; G(x) (XGBoost variant) is deployed
+>   and active in V3.1.0 (CHANGELOG: "Corrected G(x) XGBoost status:
+>   deployed and active").
+> - Module file counts (e.g. "854/854 V3 tests passing") reflect the
+>   2026-03 codebase, not the V3.1.0 release.
+>
+> For current shipped state, see [`docs/SOURCES.md`](../SOURCES.md)
+> §"Active in V3.1.0" and [`docs/MAP.md`](../MAP.md). The snapshot
+> below is preserved unedited for historical reference (release-prep
+> diary).
+
 **Last Updated**: 2026-03-07 (morning)
 **Current Phase**: READY FOR FULL BENCHMARK — PlanSearch + ReASC fixed for 9B, all ablation conditions verified
 **Goal**: Publication-ready ablation on Qwen3.5-9B, target 80-90% LCB pass@1

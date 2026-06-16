@@ -106,12 +106,11 @@ validate_config() {
 
     # Check port conflicts (NodePorts must be unique)
     local ports=(
-        "$ATLAS_API_PORTAL_NODEPORT"
-        "$ATLAS_LLM_PROXY_NODEPORT"
-        "$ATLAS_RAG_API_NODEPORT"
-        "$ATLAS_DASHBOARD_NODEPORT"
+        "$ATLAS_PROXY_NODEPORT"
+        "$ATLAS_LENS_NODEPORT"
         "$ATLAS_LLAMA_NODEPORT"
         "$ATLAS_SANDBOX_NODEPORT"
+        "$ATLAS_V3_NODEPORT"
     )
 
     local seen=()
@@ -151,3 +150,8 @@ get_config() {
 
 # Auto-load config when sourced
 load_config
+
+# GHCR namespace for the service images (templates/*.yaml.tmpl render
+# ghcr.io/${ATLAS_GHCR_OWNER}/...). Default: upstream-published images.
+ATLAS_GHCR_OWNER="${ATLAS_GHCR_OWNER:-itigges22}"
+export ATLAS_GHCR_OWNER

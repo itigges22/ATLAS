@@ -25,7 +25,32 @@ RESULTS_DIR = os.environ.get(
     "RESULTS_DIR",
     "" + ATLAS_DIR + "/benchmark/results/v3_lcb/per_task",
 )
-LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
+def _default_llama_url() -> str:
+    """Docker .env host port (ATLAS_LLAMA_PORT) if present, else K3s NodePort."""
+    try:
+        envp = os.path.join(ATLAS_DIR, ".env")
+        if os.path.exists(envp):
+            with open(envp, encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export "):
+                        line = line[len("export "):].lstrip()
+                    if line.startswith("ATLAS_LLAMA_PORT="):
+                        port = line.split("=", 1)[1]
+                        # Drop a whitespace-preceded inline comment.
+                        port = port.lstrip()
+                        head, hash_sep, _ = port.partition("#")
+                        if hash_sep and head and head[-1] in " \t":
+                            port = head
+                        port = port.strip().strip('"').strip("'")
+                        if port:
+                            return f"http://localhost:{port}"
+    except Exception:
+        pass
+    return "http://localhost:32735"
+
+
+LLAMA_URL = os.environ.get("LLAMA_URL", _default_llama_url())
 SAVE_PATH = os.environ.get(
     "SAVE_PATH",
     "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models/cost_field.pt",

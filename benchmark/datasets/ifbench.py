@@ -17,6 +17,7 @@ from typing import List, Optional
 
 from .base import BaseDataset
 from ..models import BenchmarkTask
+from ..llm_client import strip_reasoning_leak
 
 
 def evaluate_ifbench_loose(response: str, instruction_id: str, kwargs: dict) -> bool:
@@ -37,8 +38,8 @@ def evaluate_ifbench_loose(response: str, instruction_id: str, kwargs: dict) -> 
     Returns:
         True if the response satisfies the instruction in any variation.
     """
-    # Strip thinking blocks
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    # Strip thinking blocks (generic, single source of truth)
+    response = strip_reasoning_leak(response).strip()
 
     # Generate response variations for loose evaluation
     variations = _get_response_variations(response)

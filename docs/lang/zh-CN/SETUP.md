@@ -291,18 +291,19 @@ scripts/verify-install.sh
 
 ### K3s 专属配置
 
-K3s 使用 `atlas.conf`（而非 `.env`）进行配置。与 Docker Compose 的主要区别：
+K3s 使用 `atlas.conf`（而非 `.env`）进行配置。HTTP 契约与流水线行为和 Docker Compose 完全一致，仅部署方式不同：
 
 | 配置项 | Docker Compose | K3s |
 |--------|---------------|-----|
 | 配置文件 | `.env` | `atlas.conf` |
-| 上下文大小 | 32K | 每 slot 40K（x 4 slots = 总计 160K） |
-| 并行 slot 数 | 1（隐式） | 4 |
-| Flash Attention | 关闭 | 开启 |
-| KV 缓存量化 | 无 | q8_0（keys）+ q4_0（values） |
-| 内存锁定 | 否 | 启用 mlock |
-| 嵌入端点 | 未暴露 | `--embeddings` 标志 |
-| 服务暴露方式 | 主机端口 | NodePort |
+| 服务暴露方式 | 主机端口（`8090`、`8080`、`8099`、`8070`、`30820`） | NodePort（`30080`、`32735`、`31144`、`30070`、`30820`） |
+| 项目工作区 | 绑定挂载（`ATLAS_PROJECT_DIR` → `/workspace`） | `hostPath`（`ATLAS_PROJECTS_DIR` → 每个需要的 Pod 的 `/workspace`） |
+| 模型文件 | 绑定挂载（`ATLAS_MODELS_DIR` → `/models:ro`） | GPU 节点上的 `hostPath`（`ATLAS_MODELS_DIR`，`Directory`，只读） |
+| 有状态存储 | 命名卷（`redis-data`、`lens-data`） | PVC（`redis-data` 由 `ATLAS_PVC_REDIS_SIZE` 指定大小，`lens-projects` 由 `ATLAS_PVC_PROJECTS_SIZE` 指定） |
+| GPU 分配 | `deploy.resources.reservations.devices`（nvidia） | `resources.limits.nvidia.com/gpu: 1`（需要 GPU Operator 或设备插件） |
+| 沙箱工具链缓存 | 按语言的 `tmpfs` 挂载 | 按语言、带 `sizeLimit` 的 `emptyDir`（PC-191 通用模式，集合相同） |
+
+模型与运行时参数（`ATLAS_MAIN_MODEL`、`ATLAS_CONTEXT_LENGTH`、`ATLAS_PARALLEL_SLOTS`、`ATLAS_FLASH_ATTENTION`、KV 缓存量化、用于 Lens 评分的 `--embeddings`）在两种模式下读取相同的环境变量 — 参见 `atlas.conf.example` 与 `.env.example`。
 
 完整的 `atlas.conf` 参考请参见 [CONFIGURATION.md](../../CONFIGURATION.md)。
 

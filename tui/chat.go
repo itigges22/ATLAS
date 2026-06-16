@@ -44,11 +44,14 @@ type historyMessage struct {
 // agentRequest is the POST body for /v1/agent. Field tags MUST match
 // the anonymous struct in proxy/agent.go's handleAgent.
 type agentRequest struct {
-	Message    string           `json:"message"`
-	WorkingDir string           `json:"working_dir"`
-	Mode       string           `json:"mode"`       // "default" | "accept-edits" | "yolo"
-	SessionID  string           `json:"session_id"` // PC-062: required so /cancel can target this turn
-	History    []historyMessage `json:"history,omitempty"`
+	Message           string           `json:"message"`
+	WorkingDir        string           `json:"working_dir"`
+	Mode              string           `json:"mode"`       // "default" | "accept-edits" | "yolo"
+	SessionID         string           `json:"session_id"` // PC-062: required so /cancel can target this turn
+	History           []historyMessage `json:"history,omitempty"`
+	BypassV3          bool             `json:"bypass_v3,omitempty"`          // /demo raw-pane flag — proxy short-circuits V3 calls
+	DisableFreshSlot  bool             `json:"disable_fresh_slot,omitempty"` // /demo flag — skip PC-045 so pre-warm survives
+	SandboxSubdir     string           `json:"sandbox_subdir,omitempty"`     // /demo flag — write files into this subdir of the workspace
 }
 
 // cancelTurn POSTs /cancel for a session_id. Best-effort: returns
@@ -86,13 +89,38 @@ func cancelTurn(proxyURL, sessionID string) error {
 // answer follow-ups. Pass nil for the first turn of a session.
 func sendChat(ctx context.Context, proxyURL, message, workingDir, mode,
 	sessionID string, history []historyMessage, out chan<- chatEvent) error {
+	return sendChatOpts(ctx, proxyURL, message, workingDir, mode,
+		sessionID, history, demoOpts{}, out)
+}
+
+// demoOpts bundles the per-request flags the /demo split-pane needs.
+// Held in a struct rather than added as positional args to keep
+// sendChatOpts readable as the demo grows.
+type demoOpts struct {
+	bypassV3         bool
+	disableFreshSlot bool
+	sandboxSubdir    string
+}
+
+// sendChatOpts is sendChat with the demo flags exposed; used by the
+// /demo split-pane to drive a raw-9B session next to the V3 one
+// against the same proxy (bypassV3), keep PC-045 from wiping the
+// pre-warmed prefix cache (disableFreshSlot), and write files into
+// per-side sandbox subdirs so the two panes never clobber each other
+// (sandboxSubdir).
+func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
+	sessionID string, history []historyMessage,
+	opts demoOpts, out chan<- chatEvent) error {
 
 	body, err := json.Marshal(agentRequest{
-		Message:    message,
-		WorkingDir: workingDir,
-		Mode:       mode,
-		SessionID:  sessionID,
-		History:    history,
+		Message:          message,
+		WorkingDir:       workingDir,
+		Mode:             mode,
+		SessionID:        sessionID,
+		History:          history,
+		BypassV3:         opts.bypassV3,
+		DisableFreshSlot: opts.disableFreshSlot,
+		SandboxSubdir:    opts.sandboxSubdir,
 	})
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)

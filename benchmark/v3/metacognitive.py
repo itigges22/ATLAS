@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from benchmark.llm_client import strip_reasoning_leak
+
 
 # Type alias for LLM callable
 LLMCallable = Callable[[str, float, int, Optional[int]], Tuple[str, int, float]]
@@ -121,6 +123,9 @@ class MetacognitiveEvent:
 def parse_patterns(response: str) -> List[FailurePattern]:
     """Parse failure patterns from LLM analysis response."""
     import re
+    # Safety net: remove any leaked <think> reasoning before structured parsing
+    # (model-agnostic, single source of truth in benchmark.llm_client).
+    response = strip_reasoning_leak(response)
     patterns: List[FailurePattern] = []
 
     # Look for PATTERN N: blocks

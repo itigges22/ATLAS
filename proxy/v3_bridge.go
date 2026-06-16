@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,23 +24,31 @@ type V3ProgressFn func(stage, detail string, data map[string]interface{})
 // callV3GenerateStreaming sends a file generation request to the V3 Python
 // service and streams progress events back via the callback. Returns the
 // final result when the pipeline completes.
-func callV3GenerateStreaming(v3URL string, req V3GenerateRequest, onProgress V3ProgressFn) (*V3GenerateResponse, error) {
+func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3GenerateRequest, onProgress V3ProgressFn) (*V3GenerateResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal V3 request: %w", err)
 	}
 
 	endpoint := v3URL + "/v3/generate"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	// Bind the agent's request context so a user Ctrl-C (which cancels
+	// ctx.Ctx via /cancel) actually aborts an in-flight V3 run. The
+	// May-10 comment claimed cancellation "still works", but http.NewRequest
+	// carried no context, so Ctrl-C could not stop a multi-minute
+	// PlanSearch — exactly the "ctrl-c does not stop it" report. nil falls
+	// back to Background for any non-agent caller.
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create V3 request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// May 10 2026: timeout removed. V3 pipelines can run >15 min when
-	// they hit Phase 3 repair on a difficult edit; capping the call
-	// killed otherwise-working runs. Cancellation via request context
-	// still works for user-initiated aborts.
+	// No call timeout by design (May 10 2026): V3 pipelines can run >15 min
+	// on Phase 3 repair and a hard cap killed working runs. Abort is
+	// user-driven via the bound request context above.
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
 	if err != nil {

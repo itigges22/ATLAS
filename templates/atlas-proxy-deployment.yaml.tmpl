@@ -1,0 +1,84 @@
+# atlas-proxy — agent loop entry point. Renamed from "llm-proxy" in the
+# May 2 2026 repo restructure (commit 297c3cf); references to llm-proxy
+# in older configs/scripts should be updated.
+#
+# The proxy needs the project workspace bind-mounted at /workspace so
+# read_file/write_file/edit_file/ast_edit can see the user's actual files.
+# That path MUST match the sandbox Pod's /workspace (same hostPath), or
+# the agent's verify commands (run_command) won't see the files it just
+# wrote.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-proxy
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-proxy}
+  template:
+    metadata:
+      labels: {app: atlas-proxy}
+    spec:
+      containers:
+      - name: proxy
+        image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-proxy:${ATLAS_IMAGE_TAG}
+        workingDir: /workspace
+        ports:
+        - containerPort: ${ATLAS_PROXY_PORT}
+          name: http
+        env:
+        - {name: ATLAS_PROXY_PORT,     value: "${ATLAS_PROXY_PORT}"}
+        - {name: ATLAS_INFERENCE_URL,  value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
+        - {name: ATLAS_LLAMA_URL,      value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
+        - {name: ATLAS_LENS_URL,       value: "http://geometric-lens:${ATLAS_LENS_PORT}"}
+        - {name: ATLAS_SANDBOX_URL,    value: "http://sandbox:${ATLAS_SANDBOX_PORT}"}
+        - {name: ATLAS_V3_URL,         value: "http://v3-service:${ATLAS_V3_PORT}"}
+        - {name: ATLAS_MODEL_NAME,     value: "Qwen3.5-9B-Q6_K"}
+        - {name: ATLAS_VERIFY_IN,      value: "sandbox"}
+        - {name: ATLAS_WORKSPACE_DIR,  value: "/workspace"}
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        readinessProbe:
+          httpGet:
+            path: /ready          # /ready is the strict probe (lens scoring degraded → 503).
+            port: ${ATLAS_PROXY_PORT}
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_PROXY_PORT}
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      # MUST match the sandbox Pod's /workspace mount — same node hostPath.
+      - name: workspace
+        hostPath:
+          path: ${ATLAS_PROJECTS_DIR}
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-proxy
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  type: NodePort
+  selector: {app: atlas-proxy}
+  ports:
+  - port: ${ATLAS_PROXY_PORT}
+    targetPort: ${ATLAS_PROXY_PORT}
+    nodePort: ${ATLAS_PROXY_NODEPORT}
+    name: http

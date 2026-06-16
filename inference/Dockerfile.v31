@@ -126,6 +126,10 @@ FROM ${RUNTIME_IMAGE}
 ARG RUNTIME_IMAGE
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
+# Ship cvector-generator alongside llama-server so the bootstrap can run
+# the ASA steering-vector build (BiasBusters #4) as a one-shot container
+# without needing a separate llama.cpp install on the host.
+COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
 RUN mkdir -p /models /templates
 COPY templates/ /templates/
 COPY entrypoint-v3.1-9b.sh /entrypoint.sh

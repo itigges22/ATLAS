@@ -503,31 +503,26 @@ def test_preflight_dry_run_doesnt_flag_missing_token_as_failure(
     assert "nothing will leave the host" in out
 
 
-def test_publish_uses_atlas_publish_branch_only_when_set(
-    monkeypatch, tmp_path, capsys
-):
-    """Regression for the `gh pr create --head ""` bug: when
-    ATLAS_PUBLISH_BRANCH is unset, we must NOT pass --head to gh
-    (gh rejects empty refs instead of inferring the current branch).
-    We assert on the subprocess args via a captured spy."""
+def test_publish_opens_pr_via_github_api(monkeypatch, tmp_path, capsys):
+    """The registry PR is built through `gh api` (branch + commit + PR) —
+    never `gh pr create`, which needs a local git checkout most installs
+    don't have (PC-214). A failing API call falls back to printing the
+    PR body rather than failing the publish."""
     if not lens._huggingface_hub_available():
         pytest.skip("huggingface_hub not installed on this host")
     (tmp_path / "cost_field.pt").write_bytes(b"fake")
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
-    monkeypatch.delenv("ATLAS_PUBLISH_BRANCH", raising=False)
     monkeypatch.setattr(
         lens, "_inspect_cost_field",
         lambda d: lens.ArtifactInspection(present=True, dim=4096))
 
-    # Capture subprocess.run invocations. Return success so the publish
-    # flow continues past the gh call as it would in the green path.
     captured = []
 
     class _FakeResult:
-        returncode = 0
-        stdout = "https://github.com/itigges22/ATLAS/pull/42"
-        stderr = ""
+        returncode = 1   # every gh api call "fails" -> body fallback
+        stdout = ""
+        stderr = "simulated offline"
 
     def _fake_run(cmd, *a, **kw):
         captured.append(cmd)
@@ -535,7 +530,6 @@ def test_publish_uses_atlas_publish_branch_only_when_set(
 
     import subprocess as _sp
     monkeypatch.setattr(_sp, "run", _fake_run)
-    # Skip the actual HF upload — we only care about the gh args here.
     from huggingface_hub import HfApi
     monkeypatch.setattr(HfApi, "create_repo", lambda self, **kw: None)
     monkeypatch.setattr(HfApi, "upload_file", lambda self, **kw: None)
@@ -544,55 +538,9 @@ def test_publish_uses_atlas_publish_branch_only_when_set(
                     "--repo", "alice/atlas-lens-test", "--no-color"])
     assert rc == 0
     gh_calls = [c for c in captured if c and c[0] == "gh"]
-    assert gh_calls, "expected at least one gh invocation"
-    gh_cmd = gh_calls[0]
-    # Critical: no empty --head value.
-    if "--head" in gh_cmd:
-        idx = gh_cmd.index("--head")
-        head_val = gh_cmd[idx + 1] if idx + 1 < len(gh_cmd) else ""
-        assert head_val, (
-            "gh pr create must not be invoked with an empty --head; "
-            f"saw: {gh_cmd}"
-        )
-
-
-def test_publish_passes_atlas_publish_branch_when_set(
-    monkeypatch, tmp_path, capsys
-):
-    """Inverse of the regression test: when ATLAS_PUBLISH_BRANCH IS set,
-    we should pass --head <branch> through to gh."""
-    if not lens._huggingface_hub_available():
-        pytest.skip("huggingface_hub not installed on this host")
-    (tmp_path / "cost_field.pt").write_bytes(b"fake")
-    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
-    monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
-    monkeypatch.setenv("ATLAS_PUBLISH_BRANCH", "registry/qwen-9b-lens")
-    monkeypatch.setattr(
-        lens, "_inspect_cost_field",
-        lambda d: lens.ArtifactInspection(present=True, dim=4096))
-
-    captured = []
-
-    class _FakeResult:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def _fake_run(cmd, *a, **kw):
-        captured.append(cmd)
-        return _FakeResult()
-
-    import subprocess as _sp
-    monkeypatch.setattr(_sp, "run", _fake_run)
-    from huggingface_hub import HfApi
-    monkeypatch.setattr(HfApi, "create_repo", lambda self, **kw: None)
-    monkeypatch.setattr(HfApi, "upload_file", lambda self, **kw: None)
-
-    lens.main(["publish", "Qwen3.5-9B-Q6_K",
-               "--repo", "alice/atlas-lens-test", "--no-color"])
-    gh_calls = [c for c in captured if c and c[0] == "gh"]
-    assert gh_calls, "expected a gh invocation"
-    gh_cmd = gh_calls[0]
-    assert "--head" in gh_cmd
-    idx = gh_cmd.index("--head")
-    assert gh_cmd[idx + 1] == "registry/qwen-9b-lens"
+    assert gh_calls, "expected gh api invocations"
+    assert all(c[1] == "api" for c in gh_calls), \
+        f"publish must use `gh api`, not gh pr create: {gh_calls}"
+    out = capsys.readouterr().out
+    # API path failed -> the PR body is printed for manual paste.
+    assert "Add Lens artifacts" in out

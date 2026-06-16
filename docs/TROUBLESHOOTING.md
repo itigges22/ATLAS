@@ -282,6 +282,63 @@ fatal: fetch-pack: invalid index-pack output
    ```
 3. Long term: prebuilt llama-server images on GHCR will skip this step entirely (Phase 0 roadmap item).
 
+### Rebuilding llama.cpp for a new model architecture
+
+**Symptom:** A freshly dropped-in model fails to load with:
+
+```
+error loading model: unknown (model) architecture 'gemma4'
+```
+
+**Cause:** The `atlas-llama` image bundles a llama.cpp built at a fixed point in
+time. A model whose architecture was added to llama.cpp *after* your image was
+built won't load until you rebuild the inference image against newer llama.cpp.
+
+**Fix:** rebuild just the llama-server image (this is the one legitimate reason
+to do a long rebuild — `atlas onboard` will tell you when it's needed; it will
+**not** rebuild for you):
+
+```bash
+# The image pins llama.cpp via LLAMA_CPP_REV (see Dockerfile.v31) so a
+# plain rebuild reuses the SAME revision and won't learn new architectures.
+# Point the pin at a llama.cpp commit that includes your model's arch:
+docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server   # ~70 min on CUDA
+docker compose up -d llama-server --no-deps
+```
+
+> ⚠️ **Preserve ATLAS's custom llama.cpp patches — do not strip them.** The build
+> re-applies `inference/patches/expose-hidden-states.patch` (PC-202: the
+> per-layer `hidden_states` extension the Geometric Lens depends on for SAE /
+> lens-as-PRM) to the freshly-cloned source, via the `git apply` step in
+> `inference/Dockerfile.v31` (shared by `Dockerfile.rocm` / `Dockerfile.vulkan`).
+> When upstream has drifted, that step fails and the build aborts:
+>
+> ```
+> error: patch failed: tools/server/server-context.cpp:NN
+> error: tools/server/server-context.cpp: patch does not apply
+> ```
+>
+> **The fix is to rebase the patch, NOT to delete it or remove the `git apply`
+> line.** Removing it builds a working server that has silently lost the lens
+> plumbing (`/embedding` will ignore the `layers:` parameter). To rebase:
+>
+> 1. Shallow-fetch the SHA you're bumping to (see the bump runbook in
+>    "llama.cpp patch drift" below for the fetch recipe).
+> 2. `cd /tmp/llcpp && git apply --reject inference/patches/expose-hidden-states.patch`
+>    — clean hunks apply; failures land in `*.rej`.
+> 3. Re-insert each rejected hunk at its (moved) anchor. These are additive, so
+>    watch for upstream **renames** in the surrounding code — e.g. the server
+>    context member `model` → `model_tgt` — and update the patch's added lines to
+>    match.
+> 4. Regenerate: `git diff > expose-hidden-states.patch`, validate with
+>    `git apply --check` on a clean checkout, and (recommended) compile just the
+>    touched file CPU-only to catch member/type errors before the 70-min CUDA
+>    build: `cmake -B build-cpu -DGGML_CUDA=OFF && make -C build-cpu server-context`.
+> 5. Replace `inference/patches/expose-hidden-states.patch` and rebuild.
+
+After the rebuild loads the model, the Geometric Lens still needs retraining for
+the new model — see [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
+
 ### llama.cpp patch drift (when the publish workflow fails at "patch does not apply")
 
 **Symptom:** The `Build & publish container images` workflow fails in the `llama` job with:
@@ -307,10 +364,12 @@ The CI smoke test (`tests` workflow, `llama.cpp patches apply to pinned SHA` job
    git fetch --depth 1 origin <NEW_SHA>
    git checkout -q FETCH_HEAD
    git apply --check $REPO/inference/patches/expose-hidden-states.patch
-   git apply --check $REPO/inference/patches/fix-embeddings-spec-decode.patch
    ```
+   (Only this patch is `git apply`-ed by the build. The spec-decode
+   embeddings fix is applied as a `sed` inside the Dockerfiles and is a
+   no-op when its target line is absent — don't `git apply` it.)
 
-3. **If both apply cleanly:** great, just bump `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) to the new SHA. The CI smoke test will verify all four agree.
+3. **If it applies cleanly:** great, just bump `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) to the new SHA. The CI smoke test will verify all four agree.
 
 4. **If a patch fails:** regenerate it against the new SHA.
    ```bash
@@ -377,6 +436,71 @@ ps aux | grep llama-server | grep 'n-gpu-layers'
 
 If using Docker, ensure the NVIDIA container runtime is configured (see GPU section above).
 
+### Model + KV cache don't fit on the GPU (startup fails, or generation is 5× slow)
+
+**Symptom (current entrypoint):** llama-server exits at startup with a CUDA
+allocation error right after "fitting params to device memory".
+
+**Symptom (older entrypoints without `--fit off`):** the server *starts* and
+`nvidia-smi` shows the model loaded, but generation runs at a fraction of the
+expected speed, the llama-server process burns several CPU cores
+(`top` shows 400–800%), and its host RSS holds gigabytes of model weights —
+llama.cpp's memory auto-fitter silently moved layers to the CPU.
+
+**Cause:** the model's weights plus the KV cache (`ATLAS_CTX_SIZE` ×
+`PARALLEL` slots × per-layer KV dims) plus the compute buffer
+(~`ATLAS_UBATCH` × hidden-dim × 280 bytes) exceed VRAM. These budgets are
+per-model — a config tuned for one model can overflow on another with
+different KV geometry.
+
+**Fix:** size the runtime for this model + GPU and recreate the container:
+```bash
+atlas tier fit --write
+docker compose up -d llama-server --no-deps --force-recreate
+```
+`atlas tier fit` reads the GGUF header and your GPU's VRAM and solves for the
+largest fully-on-GPU configuration (see [CLI.md § atlas tier fit](CLI.md#atlas-tier-fit-pc-208)).
+ATLAS runs llama-server with `--fit off` so a config that doesn't fit fails
+loudly at startup instead of silently running partly on the CPU.
+
+If `atlas tier fit` reports **DOES NOT FIT**, the model itself is too large
+for the card — the output names the largest quant file size that *would* fit.
+In order of preference:
+
+1. **Use a smaller quant of the same model** (e.g. Q4_K_M instead of Q6_K —
+   usually the best quality-per-GiB trade below 16 GB VRAM).
+2. **Reduce parallel slots**: `atlas tier fit --slots 1 --write` frees the
+   per-slot KV minimum (drops `/demo` split-pane and V3 parallel candidates,
+   single-stream use still works).
+3. **Pick a smaller model.** See the sizing table below.
+
+### What fits on my GPU?
+
+Approximate rule before you download anything: on the default 4 slots, a GGUF
+fits comfortably when
+
+```
+file size  ≤  VRAM − ~4.5 GiB
+```
+
+(the ~4.5 GiB covers the minimum KV cache at 4 × 8k context, compute buffers,
+and the ~1.9 GiB fixed CUDA overhead). With `--slots 1` the margin shrinks to
+roughly `VRAM − 3 GiB`. Sliding-window models (Gemma-style) need less than
+this; the rule is sized for full-attention models.
+
+| VRAM | GGUF file size (4 slots) | GGUF file size (1 slot) | Typical models |
+|------|--------------------------|--------------------------|----------------|
+| 8 GB | ≤ ~3 GiB | ≤ ~4.5 GiB | 3–4B Q4–Q6, 7–8B Q2–Q3 |
+| 12 GB | ≤ ~7 GiB | ≤ ~8.5 GiB | 7–9B Q4–Q6, 12B Q3–Q4 |
+| 16 GB | ≤ ~11 GiB | ≤ ~12.5 GiB | 9B Q6–Q8, 12–14B Q4–Q6 |
+| 24 GB | ≤ ~19 GiB | ≤ ~20.5 GiB | 14B Q8, 27–32B Q4 |
+
+HuggingFace model pages list the file size per quant — check it against this
+table before downloading. The table is a pre-download estimate only; once the
+file is on disk, `atlas tier fit /path/to/model.gguf` is authoritative (it
+reads the model's real KV geometry, which can swing the budget by gigabytes
+in either direction), and `atlas onboard` prints the same fit automatically.
+
 ### Model File Not Found
 
 **Symptom:** llama-server exits immediately with "failed to load model" or similar.
@@ -396,10 +520,10 @@ The filename must match `ATLAS_MODEL_FILE` in `.env` (default: `Qwen3.5-9B-Q6_K.
 
 **Symptom:** llama-server crashes or gets OOMKilled shortly after starting. `nvidia-smi` shows VRAM near 100%.
 
-**Fix:** The 9B Q6_K model needs ~8.2 GB VRAM (model + KV cache). Ensure:
+**Fix:** Ensure:
 1. No other GPU processes are running (`nvidia-smi` — check for other CUDA processes)
 2. You have 16GB+ VRAM
-3. Context size isn't set too high (default 32K is fine, don't increase without checking VRAM)
+3. The runtime is sized for your model + GPU: `atlas tier fit --write` (don't raise `ATLAS_CTX_SIZE` past what it recommends)
 
 ```bash
 # Kill other GPU processes if needed
@@ -428,7 +552,7 @@ If this returns raw text instead of JSON, your llama.cpp build doesn't support `
 
 **Symptom:** Tool call arguments get truncated. `write_file` fails with "unexpected end of JSON" or proxy logs show "truncation detected".
 
-**Fix:** Context size should be 32768 (default in Docker Compose). Check:
+**Fix:** Per-slot context (`ATLAS_CTX_SIZE` ÷ `ATLAS_PARALLEL_SLOTS`; compose default 131072 ÷ 4 = 32k per slot) may be too small for the task. `atlas tier fit` shows the largest budget your GPU supports. Check:
 ```bash
 # Docker Compose
 grep CTX_SIZE .env
@@ -957,6 +1081,32 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 ```
 
 ---
+
+## Benchmark Issues
+
+### Bench runs fewer tasks than requested (`LIMITED MODE: running N tasks` with N below `--tasks`)
+
+**Symptom:** `atlas bench --tasks 200` reports `LIMITED MODE: running 100
+tasks` (or any count below what you asked for), or a resumed run prints
+`Resuming: N/N complete, 0 remaining` and exits immediately.
+
+**Cause:** the LiveCodeBench dataset cache
+(`benchmark/datasets/.cache/livecodebench_v5.jsonl`) holds a partial
+download. The HuggingFace rows API can fail mid-pagination; older versions
+cached whatever they had and trusted the file forever. The full release_v5
+set is ~880 tasks.
+
+**Fix:** flag the cache as partial and re-run — the loader retries the full
+fetch (falling back to the existing copy only if every source fails):
+```bash
+touch benchmark/datasets/.cache/livecodebench_v5.jsonl.partial
+atlas bench --run-id <your-run-id> --tasks 200
+```
+Completed tasks are never lost: results live one-JSON-per-task under
+`benchmark/results/<run-id>/v3_lcb/per_task/` and the runner resumes by
+skipping any task whose result file exists. A run interrupted for any
+reason (OOM, reboot, closed session) resumes the same way — just re-run
+the identical `atlas bench` command.
 
 ## Performance
 

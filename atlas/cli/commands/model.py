@@ -95,15 +95,21 @@ def _safe_print(s: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 def _find_atlas_root() -> str:
-    """Walk up from CWD looking for docker-compose.yml. Falls back to CWD."""
-    cur = os.path.abspath(os.getcwd())
-    while True:
-        if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return os.path.abspath(os.getcwd())
-        cur = parent
+    """The repo root (the directory holding docker-compose.yml). Resolved from
+    this file first so commands work from any cwd, then by walking up from the
+    cwd; falls back to the cwd."""
+    starts = (os.path.dirname(os.path.abspath(__file__)),
+              os.path.abspath(os.getcwd()))
+    for start in starts:
+        cur = start
+        while True:
+            if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    return os.path.abspath(os.getcwd())
 
 
 def _resolve_models_dir(arg_models_dir: Optional[str]) -> str:
@@ -295,32 +301,80 @@ def _human_bytes(n: float) -> str:
     return f"{n:.1f} PB"
 
 
+def _remote_size_gb(url: str, token: Optional[str]) -> float:
+    """Best-effort HEAD to read Content-Length (GB); 0.0 if unknown. Follows
+    redirects (HF resolve → CDN). Used to disk-check --url installs that carry
+    no registry size."""
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            cl = resp.headers.get("Content-Length")
+            return int(cl) / (1024 ** 3) if cl else 0.0
+    except Exception:
+        return 0.0
+
+
 def _emit_install(args: argparse.Namespace, color: bool) -> int:
-    m = model_registry.by_name(args.name)
-    if m is None:
-        _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
-                    f"{RESET if color else ''}")
-        _safe_print("  Run `atlas model list` to see available names.")
-        return 1
-
-    models_dir = _resolve_models_dir(args.models_dir)
-
-    # Lens-status gate: refuse no-artifacts unless --no-lens.
-    if m.lens_status != "supported" and not args.no_lens:
-        _safe_print(f"  {YELL if color else ''}Refusing to install `{m.name}`: "
-                    f"Lens status `{m.lens_status}`.{RESET if color else ''}")
+    if getattr(args, "url", None):
+        # --url: install an UNREGISTERED model (drop-in / BYO). Synthesize a
+        # registry entry with no SHA pin and no lens artifacts; the lens-status
+        # gate and registry lookup below are bypassed. The download path handles
+        # sha256=None (skips verification) and model_size_gb=0.0 (uses the
+        # Content-Length header for progress). See docs/CONFIGURATION.md
+        # "Adding your own model".
+        from urllib.parse import urlparse, unquote
+        fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
+        if not fname or not fname.lower().endswith(".gguf"):
+            _safe_print(f"  {RED if color else ''}Could not infer a .gguf "
+                        f"filename from the URL.{RESET if color else ''}")
+            _safe_print("  Pass --file <name.gguf> to set the on-disk filename.")
+            return 1
+        m = Model(name=fname.rsplit(".", 1)[0], tier="unknown", model_file=fname,
+                  model_display=fname, model_size_gb=0.0,
+                  lens_status="no-artifacts", download_url=args.url, sha256=None,
+                  notes="unregistered (installed via --url)")
+        models_dir = _resolve_models_dir(args.models_dir)
+        _safe_print(f"  {YELL if color else ''}Unregistered model (--url): no "
+                    f"SHA pin, no bundled Lens artifacts.{RESET if color else ''}")
+        _safe_print("  After download: set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
+                    "in .env, then run `atlas onboard` to finish (rebuild check "
+                    "+ Lens retrain). See docs/CONFIGURATION.md \"Adding your "
+                    "own model\".")
         _safe_print()
-        _safe_print("  This model has no trained Lens artifacts. ATLAS "
-                    "will run llama-server on it, but G(x) verification "
-                    "will silently no-op (gx_score: 0.5 on every "
-                    "generation). Half of what makes ATLAS *ATLAS* will "
-                    "be missing.")
-        _safe_print()
-        _safe_print("  To proceed anyway: rerun with `--no-lens` to "
-                    "acknowledge.")
-        _safe_print("  See PC-058 roadmap for the Lens training pipeline "
-                    "that will fix this.")
-        return 1
+    else:
+        if not args.name:
+            _safe_print(f"  {RED if color else ''}Provide a registry model name "
+                        f"or --url.{RESET if color else ''}")
+            _safe_print("  `atlas model list` for names, or "
+                        "`atlas model install --url <hf-url>` for your own model.")
+            return 1
+        m = model_registry.by_name(args.name)
+        if m is None:
+            _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
+                        f"{RESET if color else ''}")
+            _safe_print("  Run `atlas model list` to see available names.")
+            return 1
+
+        models_dir = _resolve_models_dir(args.models_dir)
+
+        # Lens-status gate: refuse no-artifacts unless --no-lens.
+        if m.lens_status != "supported" and not args.no_lens:
+            _safe_print(f"  {YELL if color else ''}Refusing to install `{m.name}`: "
+                        f"Lens status `{m.lens_status}`.{RESET if color else ''}")
+            _safe_print()
+            _safe_print("  This model has no trained Lens artifacts. ATLAS "
+                        "will run llama-server on it, but G(x) verification "
+                        "will silently no-op (gx_score: 0.5 on every "
+                        "generation). Half of what makes ATLAS *ATLAS* will "
+                        "be missing.")
+            _safe_print()
+            _safe_print("  To proceed anyway: rerun with `--no-lens` to "
+                        "acknowledge.")
+            _safe_print("  See PC-058 roadmap for the Lens training pipeline "
+                        "that will fix this.")
+            return 1
 
     if not m.can_install:
         _safe_print(f"  {RED if color else ''}Cannot install `{m.name}`: "
@@ -380,6 +434,18 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:
     except OSError:
         free_gb = 0.0
     needed = m.model_size_gb * 1.2
+    if needed == 0:
+        # Unregistered (--url) models carry no registry size. Probe the remote
+        # Content-Length so the disk check still fails fast; if the server
+        # won't report it, proceed (the mid-download OSError path keeps the
+        # .part for retry) rather than refuse with an arbitrary floor.
+        remote_gb = _remote_size_gb(m.download_url, _hf_token())
+        if remote_gb > 0:
+            needed = remote_gb * 1.2
+            _safe_print(f"  Remote size ~{remote_gb:.1f} GB (from Content-Length)")
+        else:
+            _safe_print("  (remote size unknown — skipping disk pre-check; "
+                        "ensure the partition has room)")
     if free_gb < needed:
         _safe_print(f"  {RED if color else ''}Insufficient disk: "
                     f"{free_gb:.1f} GB free, need ~{needed:.1f} GB "
@@ -1089,7 +1155,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_rec.add_argument("--no-color", action="store_true")
 
     p_inst = sub.add_parser("install", help="download a model into ATLAS_MODELS_DIR")
-    p_inst.add_argument("name", help="model name (see `atlas model list`)")
+    p_inst.add_argument("name", nargs="?", default=None,
+        help="registry model name (see `atlas model list`); omit when using --url")
+    p_inst.add_argument("--url", default=None,
+        help="direct download URL for an UNREGISTERED model (e.g. a HuggingFace "
+             "resolve/main/*.gguf link). Skips the registry + SHA pin; pair with "
+             "--file to set the on-disk name. See docs/CONFIGURATION.md "
+             "\"Adding your own model\".")
+    p_inst.add_argument("--file", default=None,
+        help="on-disk filename for --url installs (default: basename of the URL)")
     p_inst.add_argument("--dry-run", action="store_true",
         help="print what would happen, no network or disk writes")
     p_inst.add_argument("--no-lens", action="store_true",

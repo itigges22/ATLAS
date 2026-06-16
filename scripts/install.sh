@@ -202,7 +202,8 @@ check_images_exist() {
     local required_images=(
         "llama-server"
         "geometric-lens"
-        "llm-proxy"
+        "atlas-proxy"
+        "v3-service"
         "sandbox"
     )
 
@@ -440,6 +441,35 @@ deploy_manifests() {
     # Process templates first to substitute config values
     process_templates
 
+    # Preflight: refuse to proceed silently when the K3s deployment artifacts
+    # aren't present in this checkout. process_templates is a for-loop over
+    # *.yaml.tmpl that succeeds with zero output when the template dir is
+    # empty; without this check we'd then go straight to `kubectl apply -f
+    # missing.yaml` and crash mid-deploy. Better to fail clearly up front.
+    local required_manifests=(
+        "redis-deployment.yaml"
+        "llama-deployment.yaml"
+        "geometric-lens-deployment.yaml"
+        "atlas-proxy-deployment.yaml"
+        "sandbox-deployment.yaml"
+    )
+    local missing=()
+    for m in "${required_manifests[@]}"; do
+        [[ -f "$K8S_DIR/manifests/$m" ]] || missing+=("$m")
+    done
+    if (( ${#missing[@]} > 0 )); then
+        echo "" >&2
+        echo "ERROR: K3s manifest files are missing under $K8S_DIR/manifests/:" >&2
+        for m in "${missing[@]}"; do
+            echo "  - $m" >&2
+        done
+        echo "" >&2
+        echo "process_templates renders these from \$K8S_DIR/templates/*.yaml.tmpl." >&2
+        echo "Templates should be present at \$K8S_DIR/templates/ — confirm the" >&2
+        echo "checkout includes that directory (\`ls \$K8S_DIR/templates/\`)." >&2
+        echo "" >&2
+        exit 1
+    fi
 
     # Deploy infrastructure first (Redis is dependency)
     log_info "Deploying infrastructure..."
@@ -453,17 +483,21 @@ deploy_manifests() {
     log_info "Deploying main services..."
     kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/llama-deployment.yaml"
     kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/geometric-lens-deployment.yaml"
-    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/llm-proxy-deployment.yaml"
+    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/atlas-proxy-deployment.yaml"
+
+    # Optional: v3-service is rendered if its template is present.
+    if [[ -f "$K8S_DIR/manifests/v3-service-deployment.yaml" ]]; then
+        kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/v3-service-deployment.yaml"
+    fi
 
     # Deploy Atlas services
     log_info "Deploying Atlas services..."
     kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/sandbox-deployment.yaml"
 
     # Apply training CronJob if enabled
-    if [[ "$ATLAS_ENABLE_TRAINING" == "true" ]]; then
-        kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/training-cronjob.yaml" || true
-    fi
-
+    # Nightly lens-retrain CronJob removed: /internal/lens/retrain requires a
+    # training_data payload a scheduled curl cannot supply. Re-add a template
+    # once the service exposes a self-contained retrain trigger.
     log_info "Manifests deployed"
 }
 
@@ -545,10 +579,10 @@ main() {
     echo "  2. Verify installation: ./scripts/verify-install.sh"
     echo ""
     echo "Service endpoints:"
-    echo "  API Portal:  http://${ATLAS_NODE_IP}:${ATLAS_API_PORTAL_NODEPORT}"
-    echo "  LLM Proxy:   http://${ATLAS_NODE_IP}:${ATLAS_LLM_PROXY_NODEPORT}"
-    echo "  Geometric Lens: http://${ATLAS_NODE_IP}:${ATLAS_RAG_API_NODEPORT}"
-    echo "  Dashboard:   http://${ATLAS_NODE_IP}:${ATLAS_DASHBOARD_NODEPORT}"
+    echo "  atlas-proxy:    http://${ATLAS_NODE_IP}:${ATLAS_PROXY_NODEPORT}"
+    echo "  llama-server:   http://${ATLAS_NODE_IP}:${ATLAS_LLAMA_NODEPORT}"
+    echo "  geometric-lens: http://${ATLAS_NODE_IP}:${ATLAS_LENS_NODEPORT}"
+    echo "  sandbox:        http://${ATLAS_NODE_IP}:${ATLAS_SANDBOX_NODEPORT}"
     echo ""
 }
 

@@ -42,6 +42,12 @@ services:
               capabilities: [gpu]
     volumes:
       - ${ATLAS_MODELS_DIR:-./models}:/models:ro
+      # Volume-mount the entrypoint so we can iterate on llama-server
+      # flags without rebuilding the 75-min CUDA image. The image still
+      # bakes in the same script at /entrypoint.sh — this just shadows
+      # it during dev. Production GHCR pulls work fine without this
+      # mount (the COPY'd entrypoint stands on its own).
+      - ./inference/entrypoint-v3.1-9b.sh:/entrypoint.sh:ro
     ports:
       - "${ATLAS_LLAMA_PORT:-8080}:8080"
     ulimits:
@@ -58,8 +64,21 @@ services:
     environment:
       - MODEL_PATH=/models/${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}
       - PORT=8080
-      - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-32768}
-      - PARALLEL_SLOTS=1
+      # Context length is TOTAL across all slots. llama-server divides it
+      # by PARALLEL_SLOTS for per-slot n_ctx_seq. The compose default of
+      # 131072 / 4 slots = 32k per slot matches ATLAS's pre-/demo
+      # behavior; the entrypoint comments confirm --parallel 4 at 40k
+      # per slot fits within budget on a 16 GB card.
+      - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-131072}
+      - PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-4}
+      # Model-aware runtime sizing (PC-208). `atlas tier fit --write`
+      # derives these from the GGUF header + GPU VRAM; the defaults
+      # match a 16 GB card. The entrypoint runs with --fit off, so a
+      # config that doesn't fit fails fast instead of spilling to CPU.
+      - KV_CACHE_TYPE_K=${ATLAS_KV_TYPE_K:-f16}
+      - KV_CACHE_TYPE_V=${ATLAS_KV_TYPE_V:-f16}
+      - UBATCH_SIZE=${ATLAS_UBATCH:-1024}
+      - BATCH_SIZE=${ATLAS_BATCH:-2048}
 
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
@@ -188,14 +207,26 @@ services:
     build:
       context: ./proxy
     environment:
+      - ATLAS_GRAMMAR_MODE=${ATLAS_GRAMMAR_MODE:-strict}
       - ATLAS_PROXY_PORT=8090
       - ATLAS_INFERENCE_URL=http://llama-server:8080
       - ATLAS_LLAMA_URL=http://llama-server:8080
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_V3_URL=http://v3-service:8070
-      - ATLAS_AGENT_LOOP=1
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      # Context budget for conversation trimming (PC-216). Same
+      # values the llama-server gets; the proxy trims history to a
+      # token budget derived from per-slot context instead of a
+      # blind message count, so a just-read file isn't dropped.
+      - ATLAS_CTX_SIZE=${ATLAS_CTX_SIZE:-131072}
+      - ATLAS_PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-4}
+      # Redundant-read short-circuit: when "1" (default), a re-read of an
+      # unchanged file already in context returns a compact pointer instead
+      # of re-injecting the file. Set "0" to always serve the full re-read
+      # (useful for weak models that lean on re-reads as extra reasoning
+      # passes).
+      - ATLAS_DEDUP_READS=${ATLAS_DEDUP_READS:-1}
       # PC-192: opt-in host execution for run_command. Set to "host"
       # to bypass the sandbox container and run verifications on the
       # host (works when proxy runs locally, not in Docker — Docker
@@ -211,6 +242,7 @@ services:
       # working_dir below and the right-hand side of the volume mount.
       - ATLAS_WORKSPACE_DIR=/workspace
     volumes:
+      - ${ATLAS_MODELS_DIR:-./models}:/models:ro
       - ${ATLAS_PROJECT_DIR:-.}:/workspace
     working_dir: /workspace
     ports:

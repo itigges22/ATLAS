@@ -64,6 +64,10 @@ type tuiModel struct {
 	proxyURL string
 	events   chan Envelope
 
+	// /demo handoff: set by the slash command just before quitting; main.go
+	// relaunches into the split-pane demo with this length (short|medium|long).
+	launchDemoLength string
+
 	// Visible state
 	width  int
 	height int
@@ -554,6 +558,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sid := m.turnSessionID
 				proxyURL := m.proxyURL
 				m.turnActive = false
+				// Stop the encoding/decoding tick from repainting after
+				// cancel — otherwise the "encoding prompt … Ns" timer keeps
+				// ticking forever because promptEvalStart/streamingLLM were
+				// never cleared.
+				m.promptEvalStart = time.Time{}
+				m.streamingLLM = false
 				m.chat = append(m.chat, chatMessage{
 					Role: roleSystem, Meta: "cancelled",
 					Body: "turn cancelled",
@@ -1045,6 +1055,17 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		// is always set; processed/total/pct are present only when
 		// llama-server's /slots endpoint exposes them. We render a bar
 		// when we have %, a spinner+timer otherwise.
+		//
+		// Guard: the poller runs on a fixed cadence and can emit one more
+		// progress event AFTER llm_first_token has flipped the row to
+		// "decoding…" and tokens are streaming. Without this check that
+		// stale event overwrites the live token row, the next token
+		// overwrites it back, and the row flickers between "encoding" and
+		// the stream every frame. Once promptEvalStart is zeroed (decoding
+		// has begun) we're past prompt eval — drop late progress events.
+		if m.promptEvalStart.IsZero() {
+			break
+		}
 		var p struct {
 			Processed int     `json:"processed"`
 			Total     int     `json:"total"`

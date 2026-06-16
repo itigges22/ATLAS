@@ -170,7 +170,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`Dockerfile.v31`](#inference) — V3.1 9B model build (used by docker-compose)
   - [`Dockerfile`](#inference) — Base llama.cpp build
   - [`Dockerfile.mtp`](#inference) — Multi-Token Prediction experimental build
-  - [`entrypoint-v3.1-9b.sh`](#inference) — K3s 9B entrypoint (flash-attn, mlock, 4 slots)
+  - [`entrypoint-v3.1-9b.sh`](#inference) — shared Docker/K3s entrypoint (flash-attn, mlock, --fit off, env-driven sizing)
   - [`entrypoint-v3-specdec.sh`](#inference) — K3s 14B + spec decode entrypoint
   - [`entrypoint.sh`](#inference) — Default entrypoint
   - [`entrypoint-embed.sh`](#inference) — Dedicated embedding server entrypoint
@@ -488,7 +488,7 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`Dockerfile.v31`](../inference/Dockerfile.v31) | V3.1 9B model Docker build. Used by docker-compose. Builds llama.cpp from source with CUDA. |
 | [`Dockerfile`](../inference/Dockerfile) | Base llama.cpp build with CUDA support. |
 | [`Dockerfile.mtp`](../inference/Dockerfile.mtp) | Multi-Token Prediction experimental build. |
-| [`entrypoint-v3.1-9b.sh`](../inference/entrypoint-v3.1-9b.sh) | K3s 9B production entrypoint: flash-attn, mlock, --parallel 4, KV quant (q8_0/q4_0), embeddings, 160K context. |
+| [`entrypoint-v3.1-9b.sh`](../inference/entrypoint-v3.1-9b.sh) | Shared Docker/K3s entrypoint: flash-attn, mlock, --fit off, embeddings; context/KV-type/batch sizes come from env (`atlas tier fit --write`, defaults f16 KV, -b 2048/-ub 1024). |
 | [`entrypoint-v3-specdec.sh`](../inference/entrypoint-v3-specdec.sh) | K3s 14B + spec decode entrypoint: Qwen3-14B main + Qwen3-0.6B draft, embeddings patch. |
 | [`entrypoint.sh`](../inference/entrypoint.sh) | Default entrypoint: basic llama-server launch with configurable flags. |
 | [`entrypoint-embed.sh`](../inference/entrypoint-embed.sh) | Dedicated embedding server entrypoint (nomic-embed-text-v1.5). |

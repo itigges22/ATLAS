@@ -42,10 +42,19 @@ if IN_CLUSTER:
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://atlas-dashboard:3001")
 else:
-    # Running locally - use NodePort or port-forward
+    # Running locally — resolve from the deployment's config the same way
+    # the benchmark suite does (.env on Docker, K3s NodePorts as fallback),
+    # so the live-stack tests hit whichever deploy is actually running.
+    try:
+        from benchmark.config import config as _atlas_config
+        _llama_default = _atlas_config.llama_url
+        _rag_default = _atlas_config.rag_url
+    except Exception:
+        _llama_default = "http://localhost:32735"
+        _rag_default = "http://localhost:31144"
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://localhost:30000")
-    RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
-    LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
+    RAG_API_URL = os.environ.get("RAG_API_URL", _rag_default)
+    LLAMA_URL = os.environ.get("LLAMA_URL", _llama_default)
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://localhost:30080")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://localhost:30820")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:30001")

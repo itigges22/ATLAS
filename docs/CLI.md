@@ -22,10 +22,13 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | Subcommand | Purpose |
 |---|---|
 | `atlas init` | First-run wizard: probes hardware, picks a model, writes `.env` + `secrets/api-keys.json`. |
-| `atlas tier` | Hardware probe + tier classification (NVIDIA / AMD / Apple Silicon detection). |
+| `atlas tier` | Hardware probe + tier classification (NVIDIA / AMD / Apple Silicon detection). `atlas tier fit` sizes the runtime (context / KV type / ubatch) for the configured model + GPU (see below). |
 | `atlas doctor` | Install diagnostic. GPU runtime, container health, endpoint reachability. |
-| `atlas model list \| install \| verify \| remove` | Model registry operations. |
+| `atlas model list \| install \| verify \| remove` | Model registry operations. `install --url <hf>` fetches an **unregistered** model (drop-in / BYO). |
+| `atlas onboard` | Guided drop-in for a new model: arch check, rebuild gate, lens-retrain guidance (see below). |
+| `atlas bench` | Generate + self-label candidates for the loaded model (baseline benchmark). Feeds `atlas lens build --from-results` (see below). |
 | `atlas lens check \| build` | Geometric Lens compat probe + per-model training (PC-057 / PC-058 — see below). |
+| `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both (PC-215). `--lens-only` / `--asa-only` delegate to the per-component flows. |
 
 `atlas` does the right thing automatically:
 
@@ -364,6 +367,140 @@ the other services internally.
 
 ---
 
+## atlas tier fit (PC-208)
+
+Sizes the llama-server runtime for a specific model on *your* GPU. Reads the
+GGUF header (layer count, per-layer KV-head geometry, sliding-window layout)
+and the GPU's VRAM, then solves for the largest context that keeps inference
+**fully on-GPU**:
+
+```bash
+atlas tier fit                          # fit the model configured in .env
+atlas tier fit models/other.gguf        # fit a specific GGUF
+atlas tier fit --write                  # apply the result to .env
+atlas tier fit --slots 2                # size for 2 parallel slots instead of 4
+atlas tier fit --json                   # machine-readable (meta + budget + env)
+```
+
+Example:
+
+```
+atlas tier fit — gemma-4-12b-it-Q4_K_M.gguf
+  arch gemma4 | 48 layers | 3840-dim | head_dim 512 | window 1024, per-layer mask (40/48 sliding)
+  GPU: NVIDIA GeForce RTX 5060 Ti (15.9 GiB)
+  budget: weights 6.77 + KV 3.88 + compute 2.05 + reserve 1.9 GiB of 15.93 GiB
+  fit: ctx 131072 (32768/slot × 4), KV f16, ubatch 2048
+```
+
+The VRAM budget it solves under:
+
+```
+weights (file size × 1.02)
++ KV: global-attention layers × total ctx              (per-layer KV-head dims
+      + sliding-window layers × (slots × window         and per-group head
+                                 + ubatch)              widths from the GGUF)
++ compute buffer (~ubatch × n_embd × 280 bytes)  ← the term that OOMs first
++ 1.9 GiB reserve (CUDA context, graphs, fragmentation)
+≤ VRAM
+```
+
+It prefers f16 KV and a large micro-batch, trading down (q8_0 KV, smaller
+ubatch) only when that buys context, and caps at 32k per slot. With `--write`
+it updates `ATLAS_CTX_SIZE`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_KV_TYPE_K/V`,
+`ATLAS_UBATCH`, and `ATLAS_BATCH` in `.env`; apply with
+`docker compose up -d llama-server --no-deps --force-recreate`.
+
+`--write` always targets the **ATLAS install's** `.env` (the path is printed
+as `wrote …`), regardless of your current directory — same root resolution as
+`atlas doctor` and `atlas bench`. If you run it from inside a *different*
+compose project, it warns that the cwd's `.env` was not the one written.
+
+If the model can't fit at even the minimum acceptable context (8k per slot,
+q8_0), it says so, names the largest quant file size of this model's geometry
+that *would* fit (at the current slot count and at `--slots 1`), and exits 1.
+Pre-download sizing guidance lives in
+[TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu).
+The server itself runs with `--fit off`, so an oversized config **refuses to
+start** instead of silently demoting layers to CPU (the 5×-slower failure
+mode this command exists to prevent).
+
+Run it whenever `ATLAS_MODEL_FILE` or the GPU changes. `atlas onboard` prints
+the fit recommendation automatically and flags a stale `.env`.
+
+---
+
+## atlas onboard
+
+Guided drop-in for a new (often unregistered) model. Automates the *safe* parts
+of bringing up a model and stops at the one step only the operator can do — the
+inference-image rebuild — because a careless rebuild can drop ATLAS's custom
+llama.cpp patches.
+
+```bash
+atlas onboard                       # onboard the model already pointed at in .env
+atlas onboard --url <hf-gguf-url>   # download an unregistered model first
+atlas onboard --no-start            # inspect current state; don't (re)start llama-server
+```
+
+What it does:
+
+1. **Resolve** the model from `.env` (`ATLAS_MODEL_FILE`). With `--url`, fetches
+   it first via `atlas model install --url`, then asks you to set `.env`. Also
+   prints the runtime-fit recommendation for this model + GPU (`atlas tier fit`)
+   and flags when `.env` sizing differs.
+2. **Arch gate** — reads the GGUF architecture and confirms llama-server actually
+   loaded it (starts it if needed). If the bundled llama.cpp doesn't know the
+   architecture, it prints the rebuild command **and stops** — it never rebuilds
+   for you. The message links to the TROUBLESHOOTING.md procedure that ensures
+   you don't strip the `expose-hidden-states` (PC-202) patch when rebuilding.
+3. **Lens check** — reports the model's embedding dim and whether `C(x)` needs
+   retraining.
+4. **Next steps** — prints the operator-driven `bench → retrain → asa build`
+   sequence (bench is hours on a large model, so onboard guides rather than runs it).
+
+| Exit | Meaning |
+|---|---|
+| 0 | Engine ready (model loads). Lens retrain is the remaining manual step. |
+| 1 | Model file missing / not configured — wire `.env` or use `--url`. |
+| 2 | **Rebuild required** — the image can't load this architecture; rebuild yourself, then re-run. |
+
+Full walkthrough: [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
+
+---
+
+## atlas bench
+
+Runs the baseline benchmark against whatever model llama-server has loaded:
+generates a candidate per task, executes it, and writes per-task results with
+`code` + `passed` labels. This is the candidate-build step of model onboarding —
+its output feeds `atlas lens build --from-results`. Connectivity (llama/lens
+URLs) resolves from the deployment's config (`.env` on Docker, `atlas.conf` on
+K3s); explicit `LLAMA_URL`/`RAG_API_URL` env vars override.
+
+```bash
+atlas bench --tasks 15                       # quick sanity subset
+atlas bench --run-id mymodel_lens --tasks 200   # named run for the lens retrain
+atlas bench                                  # full dataset (hours on a 12B)
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--tasks N` | `0` (all) | how many tasks to run |
+| `--run-id NAME` | `bench_livecodebench_<ts>` | names the run; results land in `benchmark/results/<run-id>/` |
+| `--strategy` | `random` | candidate selection (`lens`/`random`/`logprob`/`oracle`) |
+
+On completion it prints the matching `atlas lens build --force --from-results …` command.
+(Also available as `/bench` inside the TUI.)
+
+**Interrupted runs resume.** Each task's result is written atomically as it
+completes; re-running the same `atlas bench` command skips finished tasks
+(`Resuming: N/total complete, M remaining`). Nothing is lost to an OOM kill,
+reboot, or closed session. If the run reports fewer tasks than `--tasks`
+requested, the dataset cache is a partial download — see
+[TROUBLESHOOTING.md § Benchmark Issues](TROUBLESHOOTING.md#benchmark-issues).
+
+---
+
 ## atlas lens (PC-057 / PC-058)
 
 Geometric Lens compat probe + per-model training. Lets you bring a non-default GGUF and either verify it'll score with the existing C(x) artifacts or train fresh ones for it.
@@ -391,23 +528,56 @@ Reports the model's embedding dim, layer count, PC-202 hidden-states-patch statu
 
 ### `atlas lens build`
 
-Trains a fresh `cost_field.pt` for whichever model llama-server has loaded. Wraps `geometric-lens/geometric_lens/training.py:train_cost_field` (contrastive ranking loss, ~200 epochs, ~30 s on CPU for a few-hundred-sample set).
+Trains fresh lens artifacts — **both halves** — for whichever model llama-server has loaded:
+
+1. `cost_field.pt` — C(x), contrastive ranking loss (`train_cost_field`). Test AUC is evaluated every epoch; the best checkpoint is kept and training stops early once it plateaus.
+2. `gx_xgboost.json` + `gx_weights.json` — G(x), a PCA(→128) + XGBoost correctness classifier (`train_gx`), fit on the same embeddings with stratified-CV AUC reporting. G(x)'s PCA is dimension-coupled to the model just like C(x), so both retrain together.
 
 ```bash
-atlas lens build --samples path/to/labeled.json    # required: labeled training data
+atlas lens build --from-results benchmark/results/<run-id>/v3_lcb/per_task
+                                                   # train on THIS model's own candidates
+                                                   # (the per-task output of `atlas bench`)
+atlas lens build --samples path/to/labeled.json    # or: a hand-labeled training file
 atlas lens build --samples ... --epochs 400        # tune training
 atlas lens build --samples ... --force             # retrain even if compat artifact exists
 atlas lens build --samples ... --dry-run           # extract embeddings, skip training + save
 ```
 
-**Sample format** — JSON array (or JSONL) of `{"text": "...", "label": 0|1}` where `label=1` means the snippet represents *passing* / correct code and `label=0` means *failing*. Pull the canonical training set (V3 ablation traces with pass/fail labels) from `huggingface.co/datasets/itigges22/ATLAS`.
+**`--from-results`** points at a benchmark results directory (the `per_task/` dir written by `atlas bench`); each task's `code` + `passed` becomes a training sample. This is the recommended path when onboarding a new model — C(x) learns the model's *own* pass/fail geometry. Tasks without generated code are skipped.
+
+When the run directory also holds `telemetry/embeddings.emb`, the build
+merges it in automatically: v3_runner banks every sandbox-tested
+candidate's embedding + PASS/FAIL label as the bench runs, so a V3-mode
+run contributes several labeled samples per task (probe + PlanSearch
+fan-out + repair iterations) — the cheapest way to grow the training set.
+Banked copies of the already-extracted samples are deduped numerically;
+`--no-telemetry` trains on the results dir alone. (A baseline-mode bench
+banks one candidate per task, so the merge adds little there.)
+
+**`--samples` format** — JSON array (or JSONL) of `{"text": "...", "label": 0|1}` where `label=1` means the snippet represents *passing* / correct code and `label=0` means *failing*. Pull the canonical training set (V3 ablation traces with pass/fail labels) from `huggingface.co/datasets/itigges22/ATLAS`.
 
 Minimums: at least 50 samples with both classes present (build refuses below this — a too-small C(x) actively mis-ranks). Test AUC below 0.70 emits a warning suggesting more samples or epochs.
 
+Training runs host-side and needs PyTorch plus XGBoost/scikit-learn
+(`pip install torch --index-url https://download.pytorch.org/whl/cpu`,
+`pip install xgboost scikit-learn` — CPU builds are enough). Samples
+longer than the server's micro-batch (e.g. runaway candidates that hit the
+generation cap) are embedded in line-boundary chunks and mean-pooled rather
+than dropped; the build log notes each chunked sample.
+
+Extracted embeddings are cached (keyed by text hash and dim), so re-running
+a build — after growing the results dir, or to finish G(x) after installing
+a missing dependency — only embeds the new samples. For `--from-results
+<run>/v3_lcb/per_task` the cache lives at `<run>/v3_lcb/embeddings_cache.jsonl`
+(beside the `per_task/` dir); for `--samples file.json` it's
+`file.json.embcache.jsonl`. A model switch changes the embedding dim and
+invalidates the cache automatically.
+
 After a successful build:
-1. `cost_field.pt` lands in the artifact dir (default `geometric-lens/geometric_lens/models/`, override with `--artifact-dir`).
-2. Re-run `atlas lens check` — should now report `compat`.
-3. Run `atlas lens publish` (PC-059, below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/cli/commands/model_registry.py` to set `lens_status="supported"`.
+1. `cost_field.pt` + `gx_xgboost.json` + `gx_weights.json` land in the artifact dir (default `geometric-lens/geometric_lens/models/`, override with `--artifact-dir`).
+2. Restart the lens service so it loads them: `docker compose restart geometric-lens`.
+3. Re-run `atlas lens check` — should now report `compat`.
+4. Run `atlas lens publish` (PC-059, below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/cli/commands/model_registry.py` to set `lens_status="supported"`.
 
 ### `atlas lens publish`
 
@@ -479,7 +649,7 @@ Full 1000-pair training run takes ~25 min on the canonical RTX 5060 Ti. Smoke-te
 
 After build:
 1. The `.gguf` lands at `<artifact-dir>/ast_edit_steering.gguf` (default: dirname of `ATLAS_CONTROL_VECTOR`).
-2. Restart llama-server so it picks up the new vector: `docker compose up -d --build llama-server --no-deps`.
+2. Restart llama-server so it picks up the new vector: `docker compose restart llama-server` (the vector lives on the bind-mounted models dir — no image rebuild involved).
 3. Verify with `atlas asa check`.
 
 ### `atlas asa publish`

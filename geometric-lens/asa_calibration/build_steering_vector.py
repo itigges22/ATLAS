@@ -72,7 +72,9 @@ def extract_mean_residual(prompt: str, layer: int) -> np.ndarray:
     return arr.mean(axis=0)
 
 
-def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray, n_pairs: int) -> None:
+def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray,
+                              n_pairs: int, model_hint: str = "unknown",
+                              layer_count: int = 0) -> None:
     """Write the steering vector in llama.cpp's control-vector GGUF format.
 
     Format expected by llama-server --control-vector-scaled:
@@ -85,8 +87,9 @@ def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray, n_
     import gguf
 
     writer = gguf.GGUFWriter(str(out_path), arch="controlvector")
-    writer.add_string("controlvector.model_hint", "qwen3")
-    writer.add_uint32("controlvector.layer_count", 36)
+    writer.add_string("controlvector.model_hint", model_hint)
+    writer.add_uint32("controlvector.layer_count",
+                      layer_count if layer_count > 0 else layer + 1)
     writer.add_string(
         "general.description",
         f"ATLAS BiasBusters #4 ASA — ast_edit vs edit_file (n={n_pairs} pairs, layer {layer})",
@@ -109,6 +112,12 @@ def main() -> int:
                     help="layer to extract residuals from (default 27 = ~75%% of Qwen3.5-9B's 36 layers)")
     ap.add_argument("--limit", type=int, default=0,
                     help="cap pairs processed (0 = all). Useful for smoke tests.")
+    ap.add_argument("--model-hint", default="unknown",
+                    help="architecture name stamped into the vector's "
+                         "controlvector.model_hint metadata")
+    ap.add_argument("--layer-count", type=int, default=0,
+                    help="total layer count stamped into the vector "
+                         "metadata (0 = use --layer + 1)")
     args = ap.parse_args()
 
     pairs = []
@@ -167,7 +176,9 @@ def main() -> int:
     print(f"v_global = v_pos - v_neg, ||v_global||={norm:.4f}")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    write_gguf_control_vector(args.out, args.layer, v_global, len(pos_means))
+    write_gguf_control_vector(args.out, args.layer, v_global, len(pos_means),
+                              model_hint=args.model_hint,
+                              layer_count=args.layer_count)
     size = os.path.getsize(args.out)
     print(f"wrote {args.out} ({size} bytes, layer {args.layer}, hidden_dim {len(v_global)})")
     return 0

@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from benchmark.llm_client import strip_reasoning_leak
+
 from .failure_analysis import (
     FailingCandidate,
     FailureAnalyzer,
@@ -366,7 +368,9 @@ class RefinementLoop:
     def _extract_code(self, response: str) -> str:
         """Extract code from LLM response."""
         import re
-        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+        # Safety net: client returns clean content, but strip any leaked
+        # reasoning block model-agnostically before code extraction.
+        response = strip_reasoning_leak(response)
         py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)
         if py_blocks:
             return py_blocks[-1].strip()

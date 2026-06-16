@@ -61,15 +61,51 @@ def _supports_unicode() -> bool:
 UNICODE_OK = _supports_unicode()
 DASH       = "—" if UNICODE_OK else "--"
 
-# Defaults — overridable by env (matches docker-compose.yml interpolations)
+def _read_dotenv() -> Dict[str, str]:
+    """Parse the compose .env (the Docker deployment's source of truth) by
+    walking up from this file. Lets the model/dir checks reflect what's actually
+    configured instead of falling back to the bundled Qwen defaults when the
+    shell env doesn't export ATLAS_MODEL_FILE."""
+    cur = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(8):
+        envp = os.path.join(cur, ".env")
+        if os.path.exists(envp):
+            out: Dict[str, str] = {}
+            try:
+                with open(envp, encoding="utf-8-sig") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("export "):
+                            line = line[len("export "):].lstrip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            # Drop a whitespace-preceded inline comment.
+                            v = v.lstrip()
+                            head, hash_sep, _ = v.partition("#")
+                            if hash_sep and head and head[-1] in " \t":
+                                v = head
+                            out[k.strip()] = v.strip().strip('"').strip("'")
+            except OSError:
+                pass
+            return out
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return {}
+
+
+_ENV = _read_dotenv()
+
+# Defaults — shell env first, then the compose .env, then a bundled fallback.
 PROXY_URL    = os.environ.get("ATLAS_PROXY_URL",     "http://localhost:8090")
 LLAMA_URL    = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
 LENS_URL     = os.environ.get("ATLAS_LENS_URL",      "http://localhost:8099")
 SANDBOX_URL  = os.environ.get("ATLAS_SANDBOX_URL",   "http://localhost:30820")
 V3_URL       = os.environ.get("ATLAS_V3_URL",        "http://localhost:8070")
-MODEL_DIR    = os.environ.get("ATLAS_MODELS_DIR",    "./models")
-MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE",    "Qwen3.5-9B-Q6_K.gguf")
-MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME",    "Qwen3.5-9B-Q6_K")
+MODEL_DIR    = os.environ.get("ATLAS_MODELS_DIR")  or _ENV.get("ATLAS_MODELS_DIR", "./models")
+MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE")  or _ENV.get("ATLAS_MODEL_FILE", "Qwen3.5-9B-Q6_K.gguf")
+MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME")  or _ENV.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
 # Match docker-compose.yml's `${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}`
 # host-side bind-mount source so doctor checks the same directory the
 # container will actually receive.
@@ -530,8 +566,17 @@ def check_health_endpoints() -> List[CheckResult]:
     for name, url in endpoints:
         ok, body = _http_get(url)
         if not ok:
+            detail = body[:200]
+            if name == "llama":
+                # The most common cause: the model + KV + compute budget
+                # doesn't fit in VRAM, so llama-server (--fit off) refuses
+                # to start and the container crash-loops.
+                detail += ("\nIf `docker compose logs llama-server` shows a "
+                           "CUDA out-of-memory allocation error, the runtime "
+                           "budget doesn't fit this GPU — run `atlas tier "
+                           "fit --write`, then recreate the container.")
             results.append(CheckResult(f"health/{name}", "fail",
-                "endpoint unreachable", body[:200]))
+                "endpoint unreachable", detail))
             continue
         try:
             data = json.loads(body)
@@ -550,12 +595,18 @@ def check_model_file(atlas_root: str) -> CheckResult:
     if not os.path.exists(path):
         return CheckResult("model_file", "fail",
             f"missing: {path}",
-            "run scripts/download-models.sh")
+            "Default model? run scripts/download-models.sh. "
+            "Your own model? place the .gguf in ATLAS_MODELS_DIR "
+            f"({MODEL_DIR}) and set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in "
+            ".env — see docs/CONFIGURATION.md \"Adding your own model\", "
+            "or run `atlas model install --url <hf-url>` / `atlas onboard`.")
     size = os.path.getsize(path)
     if size < 100 * 1024 * 1024:  # < 100 MB
         return CheckResult("model_file", "warn",
             f"{path} exists but only {size} bytes — likely truncated",
-            "expected > 1 GB for a typical GGUF; re-run download-models.sh")
+            "expected > 1 GB for a typical GGUF; re-download "
+            "(scripts/download-models.sh for the default model, or re-fetch "
+            f"your own .gguf into {MODEL_DIR}).")
     gb = size / (1024 * 1024 * 1024)
     return CheckResult("model_file", "pass", f"{MODEL_FILE} ({gb:.1f} GB)")
 
@@ -953,7 +1004,10 @@ def _print_result(r: CheckResult, verbose: bool, color: bool) -> None:
     name = f"{BOLD}{r.name}{RESET}" if color else r.name
     pad = " " * max(0, 32 - len(r.name))
     _safe_print(f"  {_icon(r.status, color)} {name}{pad}  {r.message}")
-    if verbose and r.detail:
+    # Show the remediation/detail by default for actionable problems (fail/warn)
+    # — a failure with no visible fix-it hint is a dead end. `pass` details stay
+    # behind --verbose to keep a healthy run terse.
+    if (verbose or r.status in ("fail", "warn")) and r.detail:
         for line in r.detail.splitlines():
             _safe_print(f"      {DIM if color else ''}{line}{RESET if color else ''}")
 

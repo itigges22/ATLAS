@@ -26,6 +26,7 @@ var toolRegistry = map[string]*ToolDef{}
 
 func init() {
 	registerTool(readFileTool())
+	registerTool(outlineFileTool())
 	registerTool(writeFileTool())
 	registerTool(editFileTool())
 	registerTool(astEditTool())
@@ -211,6 +212,140 @@ func readFileTool() *ToolDef {
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// outline_file — cheap structural index of a file (names + line ranges, no
+// bodies). The surgical-read entry point: outline to see what's in a file
+// for a few hundred bytes, then read_file with offset/limit to pull just
+// the one function you need. Saves the model from dumping a whole file into
+// context (and re-reading it) just to find one bug. GH #39.
+// ---------------------------------------------------------------------------
+
+func outlineFileTool() *ToolDef {
+	return &ToolDef{
+		Name: "outline_file",
+		Description: "List a file's top-level functions and classes with their " +
+			"line ranges — NO bodies, so it costs almost no context. Use this " +
+			"FIRST to navigate an existing file instead of reading the whole " +
+			"thing: outline_file to find the function you care about, then " +
+			"read_file with offset/limit to read just its lines, then ast_edit " +
+			"(selector function:NAME / class:NAME) or edit_file to change it. " +
+			"Python is parsed precisely (tree-sitter, decorator-aware); other " +
+			"languages get a best-effort definition scan.",
+		InputSchema: OutlineInput{},
+		ReadOnly:    true,
+		Destructive: false,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input OutlineInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(input.Path) == "" {
+				return &ToolResult{Success: false,
+					Error: "outline_file: path cannot be empty. Pass {\"path\":\"<file>\"}."}, nil
+			}
+			path := resolveAgentPath(ctx, input.Path)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
+			}
+			src := string(data)
+			totalLines := strings.Count(src, "\n") + 1
+
+			// Prefer the v3 tree-sitter outline for .py (accurate, matches
+			// ast_edit selectors). Fall back to a language-agnostic regex
+			// scan for everything else and whenever v3 is unavailable.
+			var syms []OutlineSymbol
+			if strings.HasSuffix(input.Path, ".py") {
+				if v3, ok := outlineViaV3(ctx, input.Path, src); ok {
+					syms = v3
+				}
+			}
+			engine := "tree-sitter"
+			if syms == nil {
+				syms = outlineByRegex(input.Path, src)
+				engine = "scan"
+			}
+
+			ctx.RecordFileRead(path, src)
+			patternReadTracker.add(path)
+
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "%s — %d lines, %d symbols (%s)\n",
+				input.Path, totalLines, len(syms), engine)
+			if len(syms) == 0 {
+				sb.WriteString("(no top-level functions/classes found — read_file to view it directly)\n")
+			}
+			for _, s := range syms {
+				fmt.Fprintf(&sb, "L%d-%d\t%s %s\n", s.StartLine, s.EndLine, s.Kind, s.Name)
+			}
+			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0}
+			_ = out
+			return &ToolResult{Success: true, Data: []byte(fmt.Sprintf("%q", sb.String()))}, nil
+		},
+	}
+}
+
+// outlineViaV3 asks v3-service for a tree-sitter outline. Returns (nil,false)
+// on any failure so the caller can fall back to the regex scan.
+func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool) {
+	if ctx.V3URL == "" {
+		return nil, false
+	}
+	body, _ := json.Marshal(map[string]string{"path": path, "source": source})
+	req, err := http.NewRequestWithContext(ctx.Ctx, "POST",
+		ctx.V3URL+"/internal/outline", bytes.NewReader(body))
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, false
+	}
+	var out OutlineOutput
+	if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.Supported {
+		return nil, false
+	}
+	return out.Symbols, true
+}
+
+// outlineByRegex is the language-agnostic fallback: any line starting (at
+// column 0, allowing common keywords) with a definition. Good enough to give
+// the model line anchors to read from; not as precise as tree-sitter.
+func outlineByRegex(path, source string) []OutlineSymbol {
+	type pat struct {
+		re   *regexp.Regexp
+		kind string
+	}
+	// Ordered, language-agnostic-ish. Name is capture group 1.
+	pats := []pat{
+		{regexp.MustCompile(`^(?:async\s+)?def\s+([A-Za-z_]\w*)`), "function"},
+		{regexp.MustCompile(`^class\s+([A-Za-z_]\w*)`), "class"},
+		{regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)`), "function"},
+		{regexp.MustCompile(`^type\s+([A-Za-z_]\w*)`), "type"},
+		{regexp.MustCompile(`^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)`), "function"},
+		{regexp.MustCompile(`^(?:export\s+)?class\s+([A-Za-z_$][\w$]*)`), "class"},
+	}
+	lines := strings.Split(source, "\n")
+	var out []OutlineSymbol
+	for i, ln := range lines {
+		for _, p := range pats {
+			if m := p.re.FindStringSubmatch(ln); m != nil {
+				out = append(out, OutlineSymbol{
+					Name: m[1], Kind: p.kind,
+					StartLine: i + 1, EndLine: i + 1, // single-line anchor; body follows
+				})
+				break
+			}
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -464,13 +599,16 @@ func writeFileTool() *ToolDef {
 			// V3 takes the model's content as baseline candidate, generates diverse
 			// alternatives via PlanSearch/DivSampling, build-verifies each, and
 			// selects the best. This is the intelligence layer.
-			if fileTier >= Tier2Medium && ctx.V3URL != "" {
+			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 {
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
 				res, err := writeFileWithV3(path, input.Content, ctx)
 				if err == nil && res != nil && res.Success {
 					ctx.SessionWrites[input.Path] = true
 				}
 				return res, err
+			}
+			if ctx.BypassV3 {
+				log.Printf("[write_file] V3 bypassed (demo raw pane) — direct write %s", input.Path)
 			}
 
 			// T1: Direct write — config, data, boilerplate
@@ -571,7 +709,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	//   llm_end     \u2014 V3's LLM call finished (with token/timing summary)
 	//   <other>     \u2014 pipeline stage marker (probe, plansearch, sandbox\u2026)
 	currentV3Stage := ""
-	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		// Token deltas: forward to the TUI on a separate SSE event so
 		// it can render them as a streaming dim row, mirroring how the
 		// agent's own LLM tokens are shown. No envelope (would bloat
@@ -579,6 +717,19 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if stage == "token" {
 			if ctx.StreamFn != nil {
 				ctx.StreamFn("v3_token", map[string]string{"text": detail})
+			}
+			return
+		}
+		// Reasoning deltas during V3 LLM calls (Qwen3.5's <think>
+		// stream). Forwarded as v3_reasoning_token (NOT plain
+		// reasoning_token) because the agent-loop's reasoning_token
+		// handler in the TUI targets the agent's LLM row — V3 calls
+		// run in a different lifecycle and need their own pipe into
+		// the V3 streaming row. Gives the /demo viewer something to
+		// watch during long PlanSearch / repair phases.
+		if stage == "reasoning_token" {
+			if ctx.StreamFn != nil {
+				ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
 			}
 			return
 		}
@@ -813,6 +964,23 @@ func editFileTool() *ToolDef {
 				}
 			}
 			if actualOldStr == "" {
+				// Last resort before failing: whitespace-tolerant line match.
+				// Small models can't reproduce a code block byte-for-byte —
+				// indentation width, tabs-vs-spaces, and trailing spaces drift
+				// constantly — so exact old_str matching is the #1 reason
+				// edit_file fails for them, which strands the whole V3/lens
+				// stack (it only engages after a successful edit). This
+				// matches old_str against the file ignoring per-line leading/
+				// trailing whitespace, and ONLY accepts a UNIQUE match — an
+				// ambiguous or content-different old_str still fails, so it
+				// can never silently edit the wrong place. Exact-matching
+				// (frontier) models never reach this path. See GH #39.
+				if fuzzy, ok := findFuzzyLineMatch(content, input.OldStr); ok {
+					log.Printf("[edit_file] exact old_str missed on %s; unique whitespace-tolerant match found — proceeding (small-model indentation drift)", input.Path)
+					actualOldStr = fuzzy
+				}
+			}
+			if actualOldStr == "" {
 				// Mismatch persists — return targeted error.
 				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
 					strings.Contains(input.OldStr, "&gt;") ||
@@ -827,7 +995,29 @@ func editFileTool() *ToolDef {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
 						alt, truncateStr(input.OldStr, 200))
 				}
-				return nil, fmt.Errorf("string to replace not found in file.\nSearched for: %s", truncateStr(input.OldStr, 200))
+				// Generic mismatch — the model's old_str doesn't byte-match
+				// the file (whitespace, quotes, or paraphrase drift, which
+				// smaller models do constantly). For structured files,
+				// ast_edit sidesteps the whole problem: it selects the node
+				// by name, no old_str to reproduce exactly. Steer there.
+				ext := strings.ToLower(filepath.Ext(input.Path))
+				astAlt := ""
+				if ext == ".py" || ext == ".html" || ext == ".htm" {
+					astAlt = " To replace a whole function/class/element without " +
+						"matching exact text, use ast_edit with a selector " +
+						"(e.g. `function:NAME`, `class:NAME`, `<body>`) and the " +
+						"new content — no old_str needed, so a near-miss can't fail it."
+				}
+				// Ground the retry in the file's REAL content. A small model
+				// frequently writes old_str from its memory of the file
+				// rather than the file itself (observed: old_str
+				// `item = items[id + 1]` for a file whose actual line is
+				// `return jsonify(items[item_id + 1])`). Without an anchor it
+				// gives up on the surgical edit and rewrites the whole node
+				// from the same faulty memory. Quoting the closest actual
+				// line gives it real bytes to copy into the next attempt.
+				hint := closestLineHint(content, input.OldStr)
+				return nil, fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200))
 			}
 
 			// Check uniqueness
@@ -870,6 +1060,31 @@ func editFileTool() *ToolDef {
 				return &ToolResult{Success: false, Error: rejection}, nil
 			}
 
+			// No-op guard — same rationale as ast_edit's. new_str identical
+			// to old_str (or a replacement that leaves the file unchanged)
+			// must not report success: the model believes the fix landed
+			// and moves on while the bug is still on disk.
+			if newContent == content {
+				log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
+				return &ToolResult{Success: false, Error: "edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
+					"Look at the current code again and emit a new_str that actually differs from the existing code."}, nil
+			}
+
+			// Syntax gate — the edit_file counterpart of ast_edit's
+			// post-splice compile check. A garbage-quoted new_str (doubled
+			// quotes, stray escapes) otherwise lands on disk and turns a
+			// runnable .py file into a SyntaxError. Best-effort: when the
+			// v3-service is unreachable or busy the check is skipped rather
+			// than blocking the edit.
+			if strings.ToLower(filepath.Ext(input.Path)) == ".py" {
+				if ok, perr := pycheckViaV3(ctx, input.Path, newContent); !ok {
+					log.Printf("[edit_file] syntax gate rejected edit to %s: %s", input.Path, perr)
+					return &ToolResult{Success: false, Error: fmt.Sprintf(
+						"edit_file: this edit would make %s invalid Python — %s. The file was NOT modified. "+
+							"Check your quoting in new_str and try again.", input.Path, perr)}, nil
+				}
+			}
+
 			// Route through V3 pipeline when the file warrants it. The
 			// gate now mirrors write_file (file-tier only, no request-tier
 			// AND-gate) — having two separate tier checks meant V3 only
@@ -891,7 +1106,8 @@ func editFileTool() *ToolDef {
 				fileTier = newTier
 			}
 			// GH #39 point 2: CC enrichment — same as write_file's path.
-			if cc, ok := cyclomaticComplexity(ctx, input.Path, newContent); ok {
+			cc, ccOK := cyclomaticComplexity(ctx, input.Path, newContent)
+			if ccOK {
 				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
 					log.Printf("[edit_file] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
 					fileTier = refined
@@ -900,7 +1116,7 @@ func editFileTool() *ToolDef {
 				}
 			}
 			v3Out := V3EditMetadata{}
-			if fileTier >= Tier2Medium && ctx.V3URL != "" {
+			if fileTier >= Tier2Medium && editWarrantsV3(newContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 {
 				log.Printf("[edit_file] V3 pipeline activating for %s (file_tier=%d, req_tier=%d)", input.Path, fileTier, ctx.Tier)
 				improved, meta, err := improveContentWithV3(path, newContent, ctx)
 				if err != nil {
@@ -1002,6 +1218,46 @@ func astEditTool() *ToolDef {
 			}
 			source := string(data)
 
+			// Empty-content guard. Replacing a node with nothing is a
+			// deletion, not an edit — observed live: Qwen called ast_edit
+			// with the `content` field omitted entirely, which spliced an
+			// empty string over `function:add` and silently deleted it
+			// (calc.py lost both functions while __main__ still called
+			// them). It passes the syntax gate (the file still parses) and
+			// the no-op guard (the content did change), so nothing else
+			// catches it. Refuse it and steer: an edit needs a replacement
+			// body; an intentional removal is delete_file's job.
+			if strings.TrimSpace(input.Content) == "" {
+				log.Printf("[ast_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"ast_edit: content is empty — that would DELETE `%s`, not fix it. "+
+						"Provide the full replacement body of the node (e.g. the corrected function definition). "+
+						"If you truly mean to remove code, use delete_file on the whole file instead.",
+					input.Selector)}, nil
+			}
+
+			// Runaway-content guard. ast_edit replaces ONE node, so the
+			// replacement should be roughly node-sized. A reasoning-heavy
+			// model sometimes leaks its entire chain-of-thought into the
+			// content field instead of emitting just the new body — observed
+			// live: a 69KB "content" for a 3-line function, full of
+			// "# Wait, the user said..." commentary. That blob then ships to
+			// disk and, being huge, trips downstream size heuristics (it once
+			// re-triggered a 23-min V3 PlanSearch). Reject when the
+			// replacement is implausibly larger than the whole file: >4× the
+			// file and over an 8KB floor (so legit edits that grow a small
+			// file stay clear, and large-function edits in large files aren't
+			// touched). Steer the model to emit only the replacement node.
+			if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
+				log.Printf("[ast_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
+					input.Path, input.Selector, len(input.Content), len(source))
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"ast_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
+						"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
+						"not the whole file and not your reasoning. Re-emit ast_edit with content set to ONLY the replacement node.",
+					len(input.Content), len(source), input.Selector)}, nil
+			}
+
 			ctx.mu.Lock()
 			lastRead := ctx.FileReadTimes[path]
 			ctx.mu.Unlock()
@@ -1090,26 +1346,46 @@ func astEditTool() *ToolDef {
 				return &ToolResult{Success: false, Error: rejection}, nil
 			}
 
-			// V3 quality-gate routing. Two May 10 2026 corrections to the
-			// May 9 v1:
-			//   (a) Tier classification used post-edit content only. When
-			//       ast_edit produced a destructive stub (32B), tier
-			//       classified as T1 and V3 skipped the very edits that
-			//       most needed quality-checking. Switched to
-			//       max(oldTier, newTier) so destructive edits to T2+
-			//       originals always trigger V3.
-			//   (b) Even with the max-tier fix, the Tier2Medium floor
-			//       made V3 too rare. Lead requested V3 fire on
-			//       essentially every ast_edit emit — drop the floor
-			//       entirely for ast_edit when V3URL is configured.
-			//       T1 ast_edits run V3 too; only when V3URL is empty
-			//       does ast_edit ship its result without quality gating.
+			// V3 quality-gate routing. History:
+			//   (a) May 10: tier classified on post-edit content only, so a
+			//       destructive ast_edit that shrank a T2+ file into a stub
+			//       classified T1 and skipped V3 — the edits that most need
+			//       checking. Fixed by classifying on max(oldTier, newTier).
+			//   (b) May 10: floor dropped entirely so V3 fired on every
+			//       ast_edit.
+			//   (c) Jun 8: floor restored to Tier2Medium. With (b), every
+			//       one-line ast_edit ran the full PlanSearch pipeline —
+			//       minutes per edit on a reasoning-heavy model, blocking the
+			//       single-threaded v3-service and looking like a hang. But
+			//       ast_edit is ALREADY surgical: the model named the exact
+			//       node and the replacement is its own tree-sitter
+			//       transform. PlanSearch-improving a precise node swap is
+			//       mostly cost. Gate it to T2+ files (same as edit_file /
+			//       write_file): trivial edits apply instantly, V3 still
+			//       engages where the file is genuinely complex. max-tier
+			//       from (a) is preserved, so a destructive edit to a T2+
+			//       original still triggers V3.
 			//
 			// Baseline candidate is the AST-edited full file. V3's
 			// alternatives compete against it; if one build-verifies
 			// better, V3 wins; otherwise the AST-edited content passes
 			// through unchanged. Either way the answer is build-verified.
 			finalContent := astResp.NewContent
+
+			// No-op guard. A weak model frequently "fixes" a bug by
+			// re-emitting the node's existing (broken) code verbatim —
+			// observed live: ast_edit function:add with content identical
+			// to the buggy body, twice in one batch. Reporting success on
+			// a no-op tells the model the fix landed when nothing changed;
+			// it then moves on to verification, fails, and can't work out
+			// why. Fail loudly instead so the model re-derives the edit.
+			if finalContent == source {
+				log.Printf("[ast_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"ast_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
+						"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
+					input.Selector)}, nil
+			}
 			v3Out := V3EditMetadata{}
 			oldTier := classifyFileTier(input.Path, source) // pre-edit content
 			newTier := classifyFileTier(input.Path, finalContent)
@@ -1117,14 +1393,15 @@ func astEditTool() *ToolDef {
 			if newTier > fileTier {
 				fileTier = newTier
 			}
-			if cc, ok := cyclomaticComplexity(ctx, input.Path, finalContent); ok {
+			cc, ccOK := cyclomaticComplexity(ctx, input.Path, finalContent)
+			if ccOK {
 				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
 					log.Printf("[ast_edit] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
 					fileTier = refined
 				}
 			}
-			if ctx.V3URL != "" {
-				log.Printf("[ast_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d) post-AST-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier)
+			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 {
+				log.Printf("[ast_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-AST-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
 				improved, meta, err := improveContentWithV3(path, finalContent, ctx)
 				if err != nil {
 					log.Printf("[ast_edit] V3 failed: %v — falling back to AST-edited content", err)
@@ -1219,12 +1496,20 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// unknown stages fall back to the v3_progress text line. Without
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
-	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		if ctx.StreamFn == nil {
 			return
 		}
 		if stage == "token" {
 			ctx.StreamFn("v3_token", map[string]string{"text": detail})
+			return
+		}
+		// Reasoning deltas from V3's LLM calls (see write_file path's
+		// matching branch). Same purpose: visible thinking stream
+		// during long PlanSearch / repair phases. v3_reasoning_token,
+		// not reasoning_token, so it targets the V3 row not the agent row.
+		if stage == "reasoning_token" {
+			ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
 			return
 		}
 		if stage == "llm_start" {
@@ -1283,6 +1568,129 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 
 // findActualString searches for oldStr in content, handling quote normalization.
 // Returns the actual string found in content (may differ in quote style).
+// findFuzzyLineMatch rescues an old_str whose only error is per-line
+// whitespace drift (indentation width, tabs vs spaces, trailing spaces) —
+// the dominant edit_file failure mode for small models. It compares old_str
+// against the file line-by-line with each line whitespace-stripped, and
+// returns the EXACT span from the file (original indentation preserved) so
+// the caller's existing uniqueness-count + replace logic works unchanged.
+//
+// Safety: it requires exactly ONE matching window. Zero or multiple matches
+// return ("", false) so the caller fails cleanly rather than editing a
+// guessed location. It also refuses to match when old_str has no
+// non-whitespace content (would match any blank run). Content differences
+// beyond whitespace (renamed tokens, changed quotes) do NOT match — those
+// are semantic and must fail.
+// closestLineHint finds the file line most similar to the first
+// non-blank line of a missed old_str and formats it (with its line
+// number) for inclusion in the edit_file mismatch error. Similarity is
+// shared-token count — crude, but enough to map a from-memory paraphrase
+// like `item = items[id + 1]` onto the real
+// `return jsonify(items[item_id + 1])`. Returns "" when nothing clears a
+// minimal overlap bar (so unrelated guesses don't get a misleading
+// anchor).
+func closestLineHint(content, oldStr string) string {
+	var probe string
+	for _, l := range strings.Split(oldStr, "\n") {
+		if strings.TrimSpace(l) != "" {
+			probe = l
+			break
+		}
+	}
+	if probe == "" {
+		return ""
+	}
+	tokenize := func(s string) map[string]bool {
+		out := map[string]bool{}
+		for _, t := range strings.FieldsFunc(s, func(r rune) bool {
+			return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+		}) {
+			out[t] = true
+		}
+		return out
+	}
+	probeToks := tokenize(probe)
+	if len(probeToks) == 0 {
+		return ""
+	}
+	bestScore, bestIdx := 0, -1
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		score := 0
+		for t := range tokenize(l) {
+			if probeToks[t] {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore, bestIdx = score, i
+		}
+	}
+	// Require at least 2 shared identifiers and half the probe's tokens —
+	// below that the "closest" line is likely unrelated.
+	if bestIdx < 0 || bestScore < 2 || bestScore*2 < len(probeToks) {
+		return ""
+	}
+	return fmt.Sprintf("\nClosest actual line in the file (line %d): %s\nCopy real lines from the file into old_str — do not write them from memory.",
+		bestIdx+1, truncateStr(strings.TrimSpace(lines[bestIdx]), 160))
+}
+
+func findFuzzyLineMatch(content, oldStr string) (string, bool) {
+	fileLines := strings.Split(content, "\n")
+	oldLines := strings.Split(oldStr, "\n")
+	// Drop a single trailing empty line from a trailing newline in old_str.
+	if len(oldLines) > 1 && strings.TrimSpace(oldLines[len(oldLines)-1]) == "" {
+		oldLines = oldLines[:len(oldLines)-1]
+	}
+	if len(oldLines) == 0 {
+		return "", false
+	}
+	strip := func(ls []string) []string {
+		out := make([]string, len(ls))
+		nonEmpty := false
+		for i, l := range ls {
+			out[i] = strings.TrimSpace(l)
+			if out[i] != "" {
+				nonEmpty = true
+			}
+		}
+		if !nonEmpty {
+			return nil // all-whitespace target: refuse
+		}
+		return out
+	}
+	want := strip(oldLines)
+	if want == nil {
+		return "", false
+	}
+	n := len(want)
+	matchStart := -1
+	matches := 0
+	for i := 0; i+n <= len(fileLines); i++ {
+		ok := true
+		for j := 0; j < n; j++ {
+			if strings.TrimSpace(fileLines[i+j]) != want[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			matches++
+			matchStart = i
+			if matches > 1 {
+				return "", false // ambiguous — fail safe
+			}
+		}
+	}
+	if matches != 1 {
+		return "", false
+	}
+	return strings.Join(fileLines[matchStart:matchStart+n], "\n"), true
+}
+
 func findActualString(content, oldStr string) string {
 	// Direct match first
 	if strings.Contains(content, oldStr) {
@@ -1871,6 +2279,31 @@ func refineTierWithCC(base Tier, cc int) Tier {
 	return base
 }
 
+// editWarrantsV3 decides whether a successful, surgical edit should be run
+// back through the V3 whole-file pipeline. edit_file and ast_edit both
+// produce content the model specified precisely — an exact old→new string
+// swap, or a named tree-sitter node replacement — so the result is already
+// what was asked for. V3's PlanSearch generates and build-verifies whole-
+// file alternatives: worthwhile when a file is large or genuinely complex,
+// but on a small, low-complexity file it spends minutes (single-threaded
+// v3-service, reasoning-heavy models) only to reproduce the same edit. The
+// file tier alone can't distinguish these — a 9-line calc.py classifies
+// Tier2 like a 400-line module — so gate additionally on the resulting
+// file's complexity and size. Trivial edits then apply instantly while V3
+// still engages where a file is substantial enough to benefit. Keys off
+// the code, not the model, so it stays model-agnostic.
+//
+// ccOK is false when complexity couldn't be measured (non-code or parser
+// miss); fall back to a line-count bar so we neither always-run nor
+// never-run on unmeasurable files.
+func editWarrantsV3(content string, cc int, ccOK bool) bool {
+	if ccOK && cc >= 8 {
+		return true
+	}
+	lines := strings.Count(content, "\n") + 1
+	return lines >= 80
+}
+
 // hasLogicIndicators checks if content contains signs of real application logic
 // that would benefit from V3 pipeline's diverse candidate generation.
 func hasLogicIndicators(content string) bool {
@@ -1951,6 +2384,99 @@ func resolvePath(path, workingDir string) string {
 // user pastes "/home/isaac/snake/app.py" into a prompt — the model
 // copies the absolute path, the proxy rewrites it to /workspace/app.py,
 // and read_file actually finds the file.
+// pycheckViaV3 asks the v3-service whether Python source parses. Returns
+// (true, "") when it parses, when the check can't run (service down, busy,
+// timeout), or when V3 is bypassed — fail-open by design: the gate exists
+// to catch garbage-quoted edits, not to make edits depend on v3-service
+// availability. Returns (false, error) only on a definitive SyntaxError.
+func pycheckViaV3(ctx *AgentContext, path, source string) (bool, string) {
+	if ctx.V3URL == "" || ctx.BypassV3 {
+		return true, ""
+	}
+	body, err := json.Marshal(map[string]string{"path": path, "source": source})
+	if err != nil {
+		return true, ""
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post(ctx.V3URL+"/internal/pycheck", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return true, ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return true, ""
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return true, ""
+	}
+	if out.OK {
+		return true, ""
+	}
+	return false, out.Error
+}
+
+// redundantReadShortCircuit returns a compact synthetic result when the
+// model asks to read a file it has ALREADY read this session and the
+// content on disk is unchanged. A weak model frequently re-reads the same
+// file several times before acting; each re-read re-injects the full file
+// into the conversation and — on sliding-window-attention models that
+// can't reuse llama.cpp's KV cache — forces a full re-encode of the whole
+// prompt, costing tens of seconds for zero new information. Serving a
+// short "already in context, act now" pointer keeps the working set small
+// and steers toward the edit.
+//
+// Only whole-file reads short-circuit (a paged read with offset/limit is
+// the model deliberately fetching a different span, so let it through),
+// and only when the on-disk content byte-matches what was already shown
+// (so a re-read after an edit still returns the new content). Returns nil
+// to mean "no short-circuit — execute the read normally." Model-agnostic:
+// keys off whether this exact content was already served, not the model.
+func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
+	if name != "read_file" {
+		return nil
+	}
+	if envOr("ATLAS_DEDUP_READS", "1") == "0" {
+		return nil
+	}
+	var input ReadFileInput
+	if err := json.Unmarshal(args, &input); err != nil {
+		return nil
+	}
+	if input.Offset != nil || input.Limit != nil || strings.TrimSpace(input.Path) == "" {
+		return nil
+	}
+	path := resolveAgentPath(ctx, input.Path)
+	prev, ok := ctx.FilesRead[path]
+	if !ok {
+		// Diagnostic: a re-read that SHOULD have been cached but wasn't.
+		// Logged only when some other entry exists (first read of a file
+		// is the normal case and not worth a line).
+		if len(ctx.FilesRead) > 0 {
+			log.Printf("[read-dedup] no cache entry for %s (have %d entries) — serving real read", path, len(ctx.FilesRead))
+		}
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != prev {
+		if err == nil {
+			log.Printf("[read-dedup] %s changed on disk since last read (%dB -> %dB) — serving real read", path, len(prev), len(data))
+		}
+		return nil // changed or unreadable — let the real read run
+	}
+	out := ReadFileOutput{
+		Content: fmt.Sprintf("(You already read %s earlier in this session and it has not changed — its full content is above in the conversation. Do not read it again. Make your edit now with ast_edit or edit_file.)", input.Path),
+		TotalLines: strings.Count(prev, "\n") + 1,
+		StartLine:  1,
+		EndLine:    strings.Count(prev, "\n") + 1,
+	}
+	b, _ := json.Marshal(out)
+	return &ToolResult{Success: true, Data: b}
+}
+
 func resolveAgentPath(ctx *AgentContext, path string) string {
 	// PC-198 — defensive prefix strip. The local model frequently
 	// emits `workspace/app.py` (no leading slash) when it means the

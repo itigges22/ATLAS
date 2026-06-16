@@ -20,24 +20,27 @@ from atlas.cli.commands import model_registry, model_recommendations
 
 def test_registry_has_known_qwen_entries():
     """PC-056 shipped with 4 tier presets; PC-056.1 added Q4_K_M and
-    Q8_0 variants of the 9B for a total of 6. Qwen3.6-27B-MTP added
-    as experimental entry (7 total). Adding more is a deliberate scope
-    change and should be a separate ticket — flag it loudly here."""
-    assert len(model_registry.REGISTRY) == 7
+    Q8_0 variants of the 9B for a total of 6. Qwen3.6-27B-MTP added as
+    experimental entry; PC-215 added gemma-4-12b via the publish flow
+    (8 total). Adding more is a deliberate scope change and should be a
+    separate ticket — flag it loudly here."""
+    assert len(model_registry.REGISTRY) == 8
     names = {m.name for m in model_registry.REGISTRY}
     assert names == {"Qwen3.5-7B-Q4_K_M",
                      "Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K", "Qwen3.5-9B-Q8_0",
                      "Qwen3.5-14B-Q5_K_M", "Qwen3.5-32B-Q5_K_M",
-                     "Qwen3.6-27B-MTP-UD-Q4_K_XL"}
+                     "Qwen3.6-27B-MTP-UD-Q4_K_XL",
+                     "gemma-4-12b-it-Q4_K_M"}
 
 
 def test_only_9b_is_supported_today():
     """The PC-056 architectural conversation surfaced that only the 9B
-    has Lens artifacts. If this changes (e.g., PC-058 adds 14B back),
-    update here AND the doctor's tier_match check + the docs."""
+    has Lens artifacts. Gemma 4 12B joined via `atlas lens publish`
+    (PC-215). If this changes again, update here AND the doctor's
+    tier_match check + the docs."""
     supported = model_registry.supported_models()
-    assert len(supported) == 1
-    assert supported[0].name == "Qwen3.5-9B-Q6_K"
+    names = {m.name for m in supported}
+    assert names == {"Qwen3.5-9B-Q6_K", "gemma-4-12b-it-Q4_K_M"}
 
 
 def test_only_9b_quants_are_publicly_installable():
@@ -172,11 +175,11 @@ def test_by_name_unknown_returns_none():
 
 
 def test_models_for_tier_returns_only_matches():
-    """PC-056.1: medium tier now has 3 entries (Q4_K_M, Q6_K, Q8_0).
-    xlarge tier now has 2 (32B-Q5_K_M + Qwen3.6-27B-MTP)."""
+    """Medium tier: the three 9B quants plus gemma-4-12b (PC-215) = 4.
+    xlarge tier: 32B-Q5_K_M + Qwen3.6-27B-MTP = 2."""
     medium = model_registry.models_for_tier("medium")
     assert all(m.tier == "medium" for m in medium)
-    assert len(medium) == 3
+    assert len(medium) == 4
     xlarge = model_registry.models_for_tier("xlarge")
     assert all(m.tier == "xlarge" for m in xlarge)
     assert len(xlarge) == 2
@@ -226,11 +229,11 @@ def test_qwen36_now_publicly_installable():
 
 
 def test_qwen36_not_in_supported_models():
-    """Qwen3.6 has no Lens artifacts — supported_models() should still
-    return only the 9B Q6_K."""
+    """Qwen3.6 has no Lens artifacts — supported_models() returns the
+    9B Q6_K and gemma-4-12b (PC-215), not Qwen3.6."""
     supported_names = {m.name for m in model_registry.supported_models()}
     assert "Qwen3.6-27B-MTP-UD-Q4_K_XL" not in supported_names
-    assert supported_names == {"Qwen3.5-9B-Q6_K"}
+    assert supported_names == {"Qwen3.5-9B-Q6_K", "gemma-4-12b-it-Q4_K_M"}
 
 
 # ---------------------------------------------------------------------------
@@ -317,18 +320,19 @@ def test_shim_callers_can_access_old_field_names():
 # PC-056.1 schema additions: 9B variants, commit-pinned URLs, requires_hf_token
 # ---------------------------------------------------------------------------
 
-def test_pc0561_registry_now_has_seven_entries():
+def test_pc0561_registry_now_has_eight_entries():
     """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B (6 total).
-    Qwen3.6-27B-MTP added as experimental (7 total). Adding more is
-    a deliberate scope change — flag it loudly here."""
-    assert len(model_registry.REGISTRY) == 7
+    Qwen3.6-27B-MTP added as experimental; PC-215 added gemma-4-12b via
+    the publish flow (8 total). Adding more is a deliberate scope change
+    — flag it loudly here."""
+    assert len(model_registry.REGISTRY) == 8
 
 
 def test_pc0561_three_quants_for_9b():
     """All three 9B quants present — Q4_K_M (smaller), Q6_K (default
     supported), Q8_0 (higher quality)."""
     nine_quants = {m.name for m in model_registry.REGISTRY
-                    if m.tier == "medium"}
+                    if m.tier == "medium" and m.name.startswith("Qwen3.5-9B")}
     assert nine_quants == {"Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K",
                             "Qwen3.5-9B-Q8_0"}
 

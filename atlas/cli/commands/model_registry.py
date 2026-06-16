@@ -98,6 +98,10 @@ class Model:
     # `supported` claim to be honest. doctor.check_tier_match
     # cross-checks this — registered "supported" + missing files = warn.
     lens_artifact_files: List[str] = field(default_factory=list)
+    # PC-214: HuggingFace repo holding this model's published lens
+    # artifacts (`atlas lens publish` destination). None = unpublished;
+    # consumers download per the HF repo's model card.
+    lens_hf_repo: Optional[str] = None
     # Base URL where the lens_artifact_files live for download. The
     # installer appends each filename to this base. None = no auto-
     # download path; user has to train locally via `atlas lens build`
@@ -121,6 +125,8 @@ class Model:
     # open for multi-vector setups (per-layer banks) without a schema
     # change. doctor cross-checks alongside lens_artifact_files.
     asa_artifact_files: List[str] = field(default_factory=list)
+    # PC-214: HuggingFace repo holding this model's published ASA vector.
+    asa_hf_repo: Optional[str] = None
     # Base URL where the asa_artifact_files live for download. Same
     # contract as lens_artifact_url_base — installer appends each
     # filename and downloads to models_dir (NOT lens dir; ASA vectors
@@ -355,6 +361,26 @@ REGISTRY: List[Model] = [
               "No ASA control vector trained for Qwen3.6 "
               "residuals. macOS Metal: MTP disabled by default "
               "(ATLAS_ENABLE_MTP=0); see llama.cpp #23011/#23752.",
+    ),
+    Model(
+        name="gemma-4-12b-it-Q4_K_M",
+        tier="medium",
+        model_file="gemma-4-12b-it-Q4_K_M.gguf",
+        model_display="gemma-4-12b-it-Q4_K_M",
+        model_size_gb=6.6,
+        lens_status="supported",
+        download_url=None,
+        sha256=None,
+        license="apache-2.0",
+        lens_artifact_files=["cost_field.pt", "cost_field.safetensors", "gx_xgboost.json", "gx_weights.json"],
+        lens_hf_repo="itigges22/atlas-lens-gemma4-12b",
+        notes="Added via `atlas lens publish` — lens artifacts "
+              "(3840-dim) at https://huggingface.co/itigges22/atlas-lens-gemma4-12b. "
+              "download_url not captured at publish time; maintainers "
+              "can fill it in for `atlas model install` support.",
+        asa_status="supported",
+        asa_artifact_files=["ast_edit_steering.gguf"],
+        asa_hf_repo="itigges22/atlas-asa-gemma4-12b",
     ),
 ]
 

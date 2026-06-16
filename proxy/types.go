@@ -141,6 +141,24 @@ type ReadFileOutput struct {
 	EndLine    int    `json:"end_line"`
 }
 
+// -- outline_file --
+
+type OutlineInput struct {
+	Path string `json:"path"`
+}
+
+type OutlineSymbol struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+}
+
+type OutlineOutput struct {
+	Symbols   []OutlineSymbol `json:"symbols"`
+	Supported bool            `json:"supported"`
+}
+
 // -- write_file --
 
 type WriteFileInput struct {
@@ -380,6 +398,23 @@ type AgentContext struct {
 	LensURL     string
 	V3URL      string
 
+	// BypassV3 short-circuits every V3 pipeline call in this request's
+	// lifecycle (writeFileWithV3 / improveContentWithV3). The agent loop,
+	// tool surface, grammar, and guardrails still run; only the V3
+	// orchestration layer is skipped, so the model's first-pass output is
+	// what hits disk. Used by `/demo` split-pane to render a raw 9B
+	// session next to a V3-orchestrated session against the same proxy.
+	BypassV3 bool
+
+	// DisableFreshSlot skips the PC-045 slot-erase at the start of the
+	// agent loop so the demo's pre-warm pass actually survives into the
+	// real run. Without this, the prefix cache the warmup builds is
+	// wiped on the next /v1/agent call and the demo pays the 25-second
+	// cold-start cost twice. Only set this from controlled flows
+	// (`/demo`, tests) — production sessions want PC-045's per-session
+	// isolation.
+	DisableFreshSlot bool
+
 	// Project info (populated by project detection)
 	Project *ProjectInfo
 
@@ -402,9 +437,9 @@ type AgentContext struct {
 	// lines (BiasBusters #3 — protects the user's code from clobbering).
 	// But a file the agent itself wrote in this session is NOT the
 	// user's code; it's the agent's own working output, and the agent
-	// must be allowed to iterate on it. Without this, the model can't
-	// realize mid-loop that an early file needs rewriting once later
-	// files exist (May 12 2026 multi-file Flask run — the wiring bug
+	// must be allowed to iterate on it. Without this, the model can
+	// realize mid-loop that app.py was a stub and needs rewriting
+	// (May 12 2026 /demo multi-file flask run — the entire wiring bug
 	// stemmed from the guard refusing the model's self-correction).
 	SessionWrites map[string]bool
 

@@ -1,32 +1,30 @@
 #!/bin/bash
-# V3.1: Qwen3.5-9B — Generation + Self-Embeddings (no spec decode)
+# ATLAS llama-server entrypoint — generation + self-embeddings.
 #
-# Qwen3.5-9B uses hybrid DeltaNet+Attention architecture.
-# Speculative decoding is NOT supported for Qwen3.5 in llama.cpp yet
-# (see: github.com/ggml-org/llama.cpp/issues/20039).
+# Model-agnostic: the model comes from MODEL_PATH and every memory-bound
+# runtime knob (context, KV cache types, batch sizes, parallel slots) is
+# env-driven, sized per model + GPU by `atlas tier fit --write` (PC-208).
+# Self-embeddings are always on — the Geometric Lens C(x)/G(x) scores
+# against the loaded model's own hidden-state dimension.
 #
-# Without draft model, VRAM budget is much more relaxed:
-#   Main model Q6_K: ~7.5GB
-#   KV caches: ~1.4GB (DeltaNet hybrid — minimal KV, mostly recurrent state)
-#   Compute: ~4GB
-#   Total: ~12GB / 16.3GB (headroom: ~3.7GB)
-#
-# DeltaNet KV cache is tiny (~144MB for 2 slots at 16K). This allows
-# --parallel 4 with 40K context per slot while staying well within VRAM.
-#
-# Self-embeddings: 4096-dim (Qwen3.5 hidden_size), not 5120-dim.
-# Lens C(x) must be retrained on 4096-dim embeddings.
-#
-# Expected throughput: ~40-60 tok/s (no spec decode, but smaller model)
+# Runs with --fit off: the model, KV cache, and compute buffers must fit
+# entirely in VRAM, or llama-server refuses to start. This is deliberate —
+# the silent alternative (llama.cpp demoting layers to CPU) generates at a
+# fraction of GPU speed while burning host cores.
 
 SLOT_SAVE_PATH="${SLOT_SAVE_PATH:-/tmp/slots}"
 mkdir -p "$SLOT_SAVE_PATH"
 
 CTX_LENGTH="${CONTEXT_LENGTH:-163840}"
-KV_CACHE_K="${KV_CACHE_TYPE_K:-q8_0}"
-KV_CACHE_V="${KV_CACHE_TYPE_V:-q4_0}"
+KV_CACHE_K="${KV_CACHE_TYPE_K:-f16}"
+KV_CACHE_V="${KV_CACHE_TYPE_V:-f16}"
 KV_FLAGS="-ctk $KV_CACHE_K -ctv $KV_CACHE_V"
 PARALLEL="${PARALLEL_SLOTS:-4}"
+# Batch sizes (PC-208): ubatch drives the compute-buffer size
+# (~ubatch × n_embd × 280 bytes), which is what OOMs first on tight
+# VRAM. `atlas tier fit --write` sizes these per model + GPU.
+UBATCH_SIZE="${UBATCH_SIZE:-1024}"
+BATCH_SIZE="${BATCH_SIZE:-2048}"
 MODEL_FILE="${MODEL_PATH:-/models/Qwen3.5-9B-Q6_K.gguf}"
 PORT="${PORT:-8080}"
 
@@ -127,14 +125,19 @@ if [ -f "$ATLAS_CONTROL_VECTOR" ]; then
   CVECTOR_STATUS="$ATLAS_CONTROL_VECTOR (scale=$CVECTOR_SCALE${ATLAS_CONTROL_VECTOR_LAYER_RANGE:+, layers=$ATLAS_CONTROL_VECTOR_LAYER_RANGE})"
 fi
 
-echo "=== V3.1: Qwen3.5-9B — Generation + Self-Embeddings ==="
+MODEL_BASENAME="$(basename "$MODEL_FILE")"
+echo "=== ATLAS llama-server — $MODEL_BASENAME ==="
 echo "  Backend: $ATLAS_BACKEND${ATLAS_GPU_INDEX:+ (GPU index=$ATLAS_GPU_INDEX)}"
 echo "  Model: $MODEL_FILE"
-echo "  Context: $CTX_LENGTH | KV: K=$KV_CACHE_K V=$KV_CACHE_V | Parallel: $PARALLEL"
-echo "  Embeddings: ENABLED (4096-dim Qwen3.5 self-embeddings)"
-echo "  Speculative decoding: DISABLED (not supported for Qwen3.5)"
+echo "  Context: $CTX_LENGTH | KV: K=$KV_CACHE_K V=$KV_CACHE_V | Parallel: $PARALLEL | Batch: $BATCH_SIZE/$UBATCH_SIZE"
+echo "  Embeddings: ENABLED (model self-embeddings for the Geometric Lens)"
 echo "  Slot save path: $SLOT_SAVE_PATH"
 echo "  ASA steering: $CVECTOR_STATUS"
+echo "  GPU fit: --fit off — the model, KV cache, and compute buffers must"
+echo "  fit entirely in VRAM. If startup fails below with a CUDA out-of-memory"
+echo "  allocation error, the budget above is too large for this GPU: run"
+echo "  'atlas tier fit --write' on the host to size it, then recreate this"
+echo "  container. See docs/TROUBLESHOOTING.md 'Model + KV cache don't fit'."
 
 exec /usr/local/bin/llama-server \
   -m "$MODEL_FILE" \
@@ -143,15 +146,20 @@ exec /usr/local/bin/llama-server \
   --parallel $PARALLEL \
   --cont-batching \
   -ngl 99 \
+  --fit off \
   --host 0.0.0.0 \
   --port $PORT \
   --flash-attn on \
   --mlock \
-  -b 4096 \
-  -ub 4096 \
+  -b $BATCH_SIZE \
+  -ub $UBATCH_SIZE \
   --slot-save-path "$SLOT_SAVE_PATH" \
   --ctx-checkpoints 0 \
-  --no-cache-prompt \
+  `# Prompt caching is ON: each agent-loop turn reuses the prior turn's` \
+  `# encoded prefix instead of re-encoding the whole conversation, which` \
+  `# is what keeps multi-turn sessions fast. Cross-session isolation is` \
+  `# handled by the proxy erasing the KV slot at session start (PC-045),` \
+  `# not by disabling the cache.` \
   --embeddings \
   --jinja \
   $CVECTOR_FLAGS

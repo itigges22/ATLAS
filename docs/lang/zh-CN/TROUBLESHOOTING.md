@@ -137,6 +137,46 @@ ps aux | grep llama-server | grep 'n-gpu-layers'
 
 如果使用 Docker，请确保已配置 NVIDIA 容器运行时（参见上方 GPU 章节）。
 
+### 模型 + KV 缓存放不进 GPU（启动失败，或生成速度慢 5 倍）
+
+**现象（当前 entrypoint）：** llama-server 在启动时于 "fitting params to device memory" 之后立即因 CUDA 分配错误退出。
+
+**现象（没有 `--fit off` 的旧 entrypoint）：** 服务器*能启动*，`nvidia-smi` 也显示模型已加载，但生成速度只有预期的几分之一，llama-server 进程占用多个 CPU 核心（`top` 显示 400–800%），其主机 RSS 持有数 GB 的模型权重 — llama.cpp 的内存自动适配器悄悄把部分层移到了 CPU。
+
+**原因：** 模型权重 + KV 缓存（`ATLAS_CTX_SIZE` × `PARALLEL` slot 数 × 每层 KV 维度）+ 计算缓冲区（约 `ATLAS_UBATCH` × 隐藏维度 × 280 字节）超过了显存。该预算因模型而异 — 为一个模型调好的配置，换到 KV 几何结构不同的另一个模型上可能溢出。
+
+**解决方法：** 按此模型 + GPU 调整运行时大小并重建容器：
+```bash
+atlas tier fit --write
+docker compose up -d llama-server --no-deps --force-recreate
+```
+`atlas tier fit` 读取 GGUF 头和 GPU 显存，求解出完全在 GPU 上运行的最大配置（参见 [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit-pc-208)）。ATLAS 以 `--fit off` 运行 llama-server，因此放不下的配置会在启动时明确失败，而不是部分悄悄跑在 CPU 上。
+
+如果 `atlas tier fit` 报告 **DOES NOT FIT**，说明模型本身对这张卡太大了 — 输出会给出能放下的最大量化文件大小。按优先级：
+
+1. **改用同一模型更小的量化**（例如用 Q4_K_M 代替 Q6_K — 在 16 GB 显存以下通常是质量/GiB 的最佳取舍）。
+2. **减少并行 slot**：`atlas tier fit --slots 1 --write` 可以释放每 slot 的 KV 最小占用（会失去 `/demo` 分屏和 V3 并行候选，单流使用不受影响）。
+3. **选择更小的模型。** 见下方尺寸表。
+
+### 我的 GPU 能放下什么？
+
+下载前的粗略规则：在默认的 4 slot 下，满足以下条件的 GGUF 可以从容放下
+
+```
+文件大小  ≤  显存 − 约 4.5 GiB
+```
+
+（这约 4.5 GiB 覆盖 4 × 8k 上下文的最小 KV 缓存、计算缓冲区，以及约 1.9 GiB 的 CUDA 固定开销）。使用 `--slots 1` 时，余量缩小到大约 `显存 − 3 GiB`。滑动窗口模型（Gemma 类）需要的比这少；该规则按全注意力模型估算。
+
+| 显存 | GGUF 文件大小（4 slot） | GGUF 文件大小（1 slot） | 典型模型 |
+|------|--------------------------|--------------------------|----------------|
+| 8 GB | ≤ 约 3 GiB | ≤ 约 4.5 GiB | 3–4B Q4–Q6, 7–8B Q2–Q3 |
+| 12 GB | ≤ 约 7 GiB | ≤ 约 8.5 GiB | 7–9B Q4–Q6, 12B Q3–Q4 |
+| 16 GB | ≤ 约 11 GiB | ≤ 约 12.5 GiB | 9B Q6–Q8, 12–14B Q4–Q6 |
+| 24 GB | ≤ 约 19 GiB | ≤ 约 20.5 GiB | 14B Q8, 27–32B Q4 |
+
+HuggingFace 模型页面会列出每个量化的文件大小 — 下载前请对照此表。该表只是下载前的估算；文件落盘后，`atlas tier fit /path/to/model.gguf` 才是权威答案（它读取模型真实的 KV 几何结构，预算可能向任一方向相差数 GB）。`atlas onboard` 也会自动打印同样的适配结果。
+
 ### 模型文件未找到
 
 **现象：** llama-server 立即退出，报错 "failed to load model" 或类似信息。
@@ -156,10 +196,10 @@ ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
 
 **现象：** llama-server 启动后不久崩溃或被 OOMKill。`nvidia-smi` 显示显存接近 100%。
 
-**解决方法：** 9B Q6_K 模型需要约 8.2 GB 显存（模型 + KV 缓存）。请确保：
+**解决方法：** 请确保：
 1. 没有其他 GPU 进程在运行（`nvidia-smi` - 检查其他 CUDA 进程）
 2. 你有 16GB+ 显存
-3. 上下文大小未设置过高（默认 32K 即可，增大前请检查显存）
+3. 运行时已按你的模型 + GPU 调整大小：`atlas tier fit --write`（不要把 `ATLAS_CTX_SIZE` 提高到它推荐的值之上）
 
 ```bash
 # 如有需要，终止其他 GPU 进程
@@ -188,7 +228,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 **现象：** 工具调用参数被截断。`write_file` 因 "unexpected end of JSON" 失败，或代理日志显示 "truncation detected"。
 
-**解决方法：** 上下文大小应为 32768（Docker Compose 中的默认值）。请检查：
+**解决方法：** 每 slot 的上下文（`ATLAS_CTX_SIZE` ÷ `ATLAS_PARALLEL_SLOTS`，compose 默认 131072 ÷ 4 = 每 slot 32k）可能对当前任务太小。`atlas tier fit` 会显示你的 GPU 支持的最大预算。请检查：
 ```bash
 # Docker Compose
 grep CTX_SIZE .env
@@ -445,6 +485,21 @@ ls -la .aider.model.settings.yml .aider.model.metadata.json
 这些文件包含在仓库中。如果缺失，请重新克隆或从备份恢复。它们告诉 Aider 使用指向代理的 `openai/atlas` 模型。
 
 ---
+
+## 基准测试问题
+
+### bench 运行的任务数少于请求数（`LIMITED MODE: running N tasks` 的 N 小于 `--tasks`）
+
+**现象：** `atlas bench --tasks 200` 显示 `LIMITED MODE: running 100 tasks`（或任何低于请求的数量），或恢复的运行打印 `Resuming: N/N complete, 0 remaining` 后立即退出。
+
+**原因：** LiveCodeBench 数据集缓存（`benchmark/datasets/.cache/livecodebench_v5.jsonl`）是一次部分下载。HuggingFace rows API 可能在分页中途失败；旧版本会缓存已获取的部分并永久信任该文件。release_v5 完整集约有 880 个任务。
+
+**解决方法：** 将缓存标记为 partial 后重新运行 — 加载器会重试完整下载（仅当所有源都失败时才回退到现有副本）：
+```bash
+touch benchmark/datasets/.cache/livecodebench_v5.jsonl.partial
+atlas bench --run-id <your-run-id> --tasks 200
+```
+已完成的任务绝不会丢失：结果以每任务一个 JSON 的形式保存在 `benchmark/results/<run-id>/v3_lcb/per_task/` 下，运行器恢复时会跳过已有结果文件的任务。无论因何中断（OOM、重启、会话关闭），重新运行相同的 `atlas bench` 命令即可恢复。
 
 ## 性能问题
 

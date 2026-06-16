@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from benchmark.llm_client import strip_reasoning_leak
+
 from .budget_forcing import BudgetForcing, get_system_prompt
 
 
@@ -298,10 +300,9 @@ def extract_code_from_response(response: str) -> str:
 
     Handles: ```python blocks, ``` blocks, <think> blocks, raw code.
     """
-    # Strip thinking blocks
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-    if '<think>' in response and '</think>' not in response:
-        response = response[:response.index('<think>')].strip()
+    # Strip any reasoning leak via the shared, model-agnostic helper (handles
+    # both closed <think>...</think> blocks and orphaned closing tags).
+    response = strip_reasoning_leak(response)
 
     # Try ```python blocks
     py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)

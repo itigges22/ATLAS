@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -187,7 +188,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// llama.cpp re-encodes the system prompt from scratch (~1-2s on a
 	// warm GPU); the per-turn cache benefit within the session is preserved.
 	// Disable with ATLAS_FRESH_SLOT_PER_SESSION=0.
-	if envOr("ATLAS_FRESH_SLOT_PER_SESSION", "1") != "0" {
+	if envOr("ATLAS_FRESH_SLOT_PER_SESSION", "1") != "0" && !ctx.DisableFreshSlot {
 		eraseLlamaSlot(ctx)
 	}
 
@@ -196,6 +197,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 	consecutiveReads := 0       // Track consecutive read-only calls
 	consecutiveErrors := 0      // Track consecutive tool failures to break error loops
+	// edit_file old_str-mismatch failures per path. A successful read_file
+	// between attempts resets consecutiveErrors/RecentFailurePaths, which
+	// masks the classic read→edit-miss→read loop (smaller models can't
+	// reproduce old_str byte-for-byte). This counter survives interleaved
+	// reads so we can force the ast_edit steer after the second miss.
+	editMissByPath := map[string]int{}
+	repeatDetections := 0       // hard-stop after the 2nd repeated-identical-call detection
 	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
 	// Used to soften the consecutiveErrors exit: post-write run_command failures
 	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
@@ -253,11 +261,18 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// Hardcoding ctx.Messages[1] as the user msg used to work, but
 		// PriorHistory makes that index a prior-turn message instead — so
 		// scan backwards for the actual current-turn user role.
+		// Trim by TOKEN BUDGET, not a blind message count (PC-216). The
+		// old `> 12 messages → keep 8` rule dropped a just-read file after
+		// a couple of turns even when the prompt was a fraction of the
+		// context window — the model would then re-read in a loop, saying
+		// "I don't see the output in the history". keepLast is now derived
+		// from how many recent messages actually fit the per-slot budget,
+		// floored at 8 so we never trim more aggressively than before.
 		trimmed := false
-		if len(ctx.Messages) > 12 {
-			ctx.Messages = trimMessages(ctx.Messages, 8)
+		if keep := budgetedKeepLast(ctx.Messages); keep < len(ctx.Messages)-1 {
+			ctx.Messages = trimMessages(ctx.Messages, keep)
 			trimmed = true
-			log.Printf("[agent] trimmed conversation to %d messages", len(ctx.Messages))
+			log.Printf("[agent] trimmed conversation to %d messages (token-budget)", len(ctx.Messages))
 		}
 
 		// Per-turn streaming visibility: announce the start of the turn,
@@ -719,6 +734,25 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				})
 				pendingRepeatCorrective = msg
 				ctx.RecentToolCalls = nil // reset so we don't re-fire
+				repeatDetections++
+				// The soft corrective is frequently ignored — a small model
+				// re-emits the identical failing call regardless (observed:
+				// the same `python -c "...)))"` typo run 4× after the actual
+				// edit had already landed). Hard-stop instead of nudging
+				// when EITHER the work is already done (productive change +
+				// the model is now spinning on verification) OR the same
+				// call has been detected as repeating twice (genuinely
+				// stuck, no progress to protect).
+				if madeProductiveChange {
+					log.Printf("[agent] repetition after a productive change — stopping (work landed; model looping on verification)")
+					ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
+					return nil
+				}
+				if repeatDetections >= 2 {
+					log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
+					ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
+					return nil
+				}
 			}
 
 			// Reasoning-repetition detector (BiasBusters #30). The
@@ -787,9 +821,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
-			// Execute tool
+			// Execute tool. A re-read of an unchanged file already in
+			// context is served from a compact pointer instead of
+			// re-injecting + re-encoding the whole file (see
+			// redundantReadShortCircuit).
 			startTime := time.Now()
-			result := executeToolCall(parsed.Name, parsed.Args, ctx)
+			result := redundantReadShortCircuit(parsed.Name, parsed.Args, ctx)
+			if result == nil {
+				result = executeToolCall(parsed.Name, parsed.Args, ctx)
+			} else {
+				log.Printf("[agent] turn=%d short-circuited redundant read (already in context, unchanged)", turn)
+			}
 			elapsed := time.Since(startTime)
 
 			// On failure, log the error so it shows up in `docker compose
@@ -871,6 +913,33 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// TTY for curses, missing toolchain, etc.), a different exit
 			// message is appropriate so the user isn't told "the file may
 			// be too large to modify" when their file is, in fact, on disk.
+			// edit_file old_str miss: count per path independently of the
+			// consecutiveErrors reset an interleaved read causes. On the
+			// second miss for the same structured file, force the ast_edit
+			// steer as a [system note] (the inline tool-error hint alone
+			// doesn't reliably move a small model off edit_file).
+			if !result.Success && parsed.Name == "edit_file" &&
+				strings.Contains(result.Error, "string to replace not found") {
+				mp := extractFailurePath(parsed.Name, parsed.Args)
+				editMissByPath[mp]++
+				ext := strings.ToLower(filepath.Ext(mp))
+				// Force the ast_edit steer on the FIRST miss for structured
+				// files — small models bail to run_command after a single
+				// edit_file miss rather than retrying, so waiting for a
+				// second miss never fires (observed: 1 edit_file all session,
+				// then 9 run_command re-runs).
+				if editMissByPath[mp] >= 1 && (ext == ".py" || ext == ".html" || ext == ".htm") {
+					pendingRepeatCorrective = "edit_file's old_str did not match " +
+						mp + " (small drift in whitespace/quotes is enough to miss). " +
+						"Do NOT re-read or run the file — switch to ast_edit, which " +
+						"needs no old_str: {\"type\":\"tool_call\",\"name\":\"ast_edit\"," +
+						"\"args\":{\"path\":\"" + mp + "\",\"selector\":\"function:NAME\" " +
+						"(or class:NAME, or <tag> for HTML),\"content\":\"<the full " +
+						"replacement function/class/element>\"}}."
+					log.Printf("[agent] edit_file miss on %q — forcing ast_edit steer", mp)
+				}
+			}
+
 			if !result.Success {
 				consecutiveErrors++
 				// May 10 2026: path-aware breaker. Track which file each
@@ -913,8 +982,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				ctx.RecentFailurePaths = nil
 			}
 
-			// Track consecutive read-only calls to detect exploration loops
-			isReadOnly := parsed.Name == "read_file" || parsed.Name == "list_directory" || parsed.Name == "search_files"
+			// Track consecutive read-only calls to detect exploration loops.
+			// outline_file/find_file MUST be here too — otherwise an
+			// interleaved outline resets the counter and the model
+			// read→outline→read→outline forever without the breaker firing
+			// (observed live with Gemma). Every navigation-only tool counts.
+			isReadOnly := parsed.Name == "read_file" ||
+				parsed.Name == "outline_file" ||
+				parsed.Name == "list_directory" ||
+				parsed.Name == "search_files" ||
+				parsed.Name == "find_file"
 			if isReadOnly {
 				consecutiveReads++
 			} else {
@@ -1189,35 +1266,47 @@ func stepExclusions(ctx *AgentContext) ([]string, string) {
 	return nil, ""
 }
 
-// eraseLlamaSlot clears llama.cpp's KV slot 0 to give the next chat
+// eraseLlamaSlot clears llama.cpp's KV slots to give the next chat
 // completion a fresh prefix. See PC-045. Errors are logged and
 // swallowed — slot erase is a best-effort isolation step, not a
 // correctness requirement.
+//
+// All slots are erased, not just slot 0. With --parallel > 1 and prompt
+// caching on, llama-server picks a slot per request by prefix match /
+// LRU, so a new session can land on slot 1..N-1. If only slot 0 were
+// cleared, those other slots would still hold a prior session's KV and
+// reuse it — the exact cross-session bleed PC-045 set out to prevent.
 func eraseLlamaSlot(ctx *AgentContext) {
 	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
-	endpoint := llamaURL + "/slots/0?action=erase"
 
 	reqCtx := ctx.Ctx
 	if reqCtx == nil {
 		reqCtx = context.Background()
 	}
-	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, nil)
-	if err != nil {
-		log.Printf("[PC-045] erase slot: build request failed: %v", err)
-		return
-	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[PC-045] erase slot: request failed: %v (this is fine — slot is now stale, will be re-encoded on next call)", err)
-		return
+
+	erased := 0
+	slots := parallelSlots()
+	for id := 0; id < slots; id++ {
+		endpoint := fmt.Sprintf("%s/slots/%d?action=erase", llamaURL, id)
+		req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, nil)
+		if err != nil {
+			log.Printf("[PC-045] erase slot %d: build request failed: %v", id, err)
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[PC-045] erase slot %d: request failed: %v (continuing — slot is stale, will re-encode)", id, err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("[PC-045] erase slot %d: status %d (continuing — first turn re-encodes prefix)", id, resp.StatusCode)
+			continue
+		}
+		erased++
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[PC-045] erase slot: status %d (continuing — first turn will re-encode prefix from scratch)", resp.StatusCode)
-		return
-	}
-	log.Printf("[PC-045] erased llama slot 0 — fresh KV cache for this session")
+	log.Printf("[PC-045] erased %d/%d llama slots — fresh KV cache for this session", erased, slots)
 }
 
 // pollPromptProgress emits llm_prompt_progress events at 250ms cadence
@@ -1505,7 +1594,26 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		reasoningBuf   strings.Builder
 		totalTokens    int
 		firstTokenSent bool
+		reasoningCut   bool
 	)
+
+	// Per-turn reasoning budget. A reasoning-heavy model can spiral for
+	// tens of thousands of tokens inside ONE generation (observed: a
+	// 14-minute, ~17K-token deliberation over a 24-line file that ended
+	// with no tool call) — max_tokens (32768) is the only bound and it
+	// allows ~25 minutes of silence. When accumulated reasoning passes
+	// the budget we stop reading; closing the response body cancels the
+	// slot server-side. The post-loop recovery path then either extracts
+	// a tool_call already present in the reasoning, or returns empty so
+	// the caller's standard re-prompt ("emit your tool call now") fires.
+	// Token-estimate at 4 chars/token; ATLAS_REASONING_BUDGET (tokens)
+	// overrides, 0 disables. Keyed off stream state, not model identity.
+	reasoningBudgetChars := 6144 * 4
+	if v := envOr("ATLAS_REASONING_BUDGET", ""); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			reasoningBudgetChars = n * 4
+		}
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	// Default scanner buffer is 64KB which is fine per line, but bump
@@ -1540,20 +1648,35 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		}
 		for _, c := range chunk.Choices {
 			if c.Delta.ReasoningContent != "" {
+				// First output of ANY kind means prompt eval is done — for
+				// reasoning models (Gemma streams its whole chain as
+				// reasoning_content, often with no content tokens until the
+				// final JSON) the first delta is reasoning, not content.
+				// Stop the prompt-eval poller and fire llm_first_token here
+				// too; otherwise the poller keeps emitting prompt_progress
+				// for the entire generation, the TUI keeps painting
+				// "encoding", and it fights the streaming reasoning for the
+				// row — the encode timer never stops and the screen flickers.
+				if !firstTokenSent {
+					stopProgressFn()
+					ctx.Stream("llm_first_token", map[string]interface{}{
+						"prompt_ms": time.Since(sentAt).Milliseconds(),
+					})
+					firstTokenSent = true
+				}
 				// Accumulate for the empty-content fallback below AND
-				// stream to the TUI as a separate `reasoning_token`
-				// event so users can see the model's thought process.
-				// May 10 2026 reversal of the original "don't stream
-				// reasoning" rule — operator feedback that the TUI
-				// surfacing only tool calls left the model's reasoning
-				// invisible. The TUI subscribes to reasoning_token
-				// distinctly from llm_token so it can render thinking
-				// in a dimmed/italic pane without mixing it into the
-				// content stream destined for parse.
+				// stream to the TUI as a separate `reasoning_token` event
+				// so users can see the model's thought process. The TUI
+				// subscribes to reasoning_token distinctly from llm_token
+				// so it can render thinking dimmed without mixing it into
+				// the content stream destined for parse.
 				reasoningBuf.WriteString(c.Delta.ReasoningContent)
 				ctx.Stream("reasoning_token", map[string]interface{}{
 					"text": c.Delta.ReasoningContent,
 				})
+				if reasoningBudgetChars > 0 && reasoningBuf.Len() > reasoningBudgetChars && contentBuf.Len() == 0 {
+					reasoningCut = true
+				}
 			}
 			if c.Delta.Content == "" {
 				continue
@@ -1572,6 +1695,14 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		}
 		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
 			totalTokens = chunk.Usage.TotalTokens
+		}
+		if reasoningCut {
+			log.Printf("[agent] reasoning budget exceeded (%d chars, ~%d tokens) with no content emitted — cutting the stream and re-prompting",
+				reasoningBuf.Len(), reasoningBuf.Len()/4)
+			ctx.Stream("reasoning_budget_cut", map[string]interface{}{
+				"reasoning_chars": reasoningBuf.Len(),
+			})
+			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -1696,7 +1827,8 @@ func buildSystemPrompt(ctx *AgentContext) string {
 
 	// Rules
 	sb.WriteString("## Rules\n\n")
-	sb.WriteString("- Always read a file before editing it (use read_file then edit_file)\n")
+	sb.WriteString("- To work on an EXISTING file, navigate it cheaply first: call `outline_file` to list its functions/classes with line ranges, then `read_file` with `offset`/`limit` to read just the part you need (e.g. the buggy function). Don't dump a whole large file into context — and never re-read the same file in a loop; if a read's content is already in the conversation, act on it.\n")
+	sb.WriteString("- Always read the relevant code before editing it (outline_file → read_file, then edit_file/ast_edit).\n")
 	sb.WriteString("- MANDATORY: Use `edit_file` (targeted old_str/new_str) for any change to a file that already exists, no matter how small. `write_file` is ONLY for creating brand-new files. The agent layer rejects every `write_file` call against an existing file >5 lines — your call won't execute and you'll get a tool error directing you to edit_file. Don't re-emit a whole file to change a few lines.\n")
 	sb.WriteString("  Example — to add a None check to one branch, use:\n")
 	sb.WriteString("    edit_file {\"path\":\"src/foo.py\",\"old_str\":\"if x == 0:\\n        return None\",\"new_str\":\"if x is None or x == 0:\\n        return None\"}\n")
@@ -1809,6 +1941,93 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	return sb.String()
 }
 
+// estTokens is a cheap, model-agnostic token estimate: ~4 chars/token plus
+// a small per-message framing overhead. Good enough for budgeting; we leave
+// generous headroom so the estimate never has to be exact.
+func estTokens(content string) int {
+	return len(content)/4 + 8
+}
+
+// conversationTokenBudget is how many prompt tokens the agent loop will let
+// the conversation grow to before trimming. Derived from the deployment's
+// per-slot context (ATLAS_CTX_SIZE / ATLAS_PARALLEL_SLOTS), reserving ~35%
+// for the response. Model-agnostic: keys off the context the deploy gives,
+// not the model identity. Falls back to a safe default when env is absent.
+func conversationTokenBudget() int {
+	ctxSize := 131072
+	if v := envOr("ATLAS_CTX_SIZE", ""); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			ctxSize = n
+		}
+	}
+	perSlot := ctxSize / parallelSlots()
+	budget := perSlot * 65 / 100 // leave ~35% of the slot for the response
+	if budget < 4000 {
+		budget = 4000 // floor: tiny-context deploys still keep a usable window
+	}
+	// Absolute ceiling. A coding agent's working set — the task, the file
+	// under edit, and the last few tool results — fits comfortably in this.
+	// Past it the conversation is accumulating stale tool output (repeated
+	// failed run_commands, superseded reads) that doesn't help the model and
+	// actively hurts: it re-feeds the model its own flailing, and on
+	// sliding-window-attention models (e.g. Gemma) llama.cpp can't reuse the
+	// KV cache, so every turn re-encodes the *entire* prompt — a big history
+	// is paid in full on every single turn. Keying off the working-set size,
+	// not the model, keeps this model-agnostic. Override with
+	// ATLAS_AGENT_HISTORY_BUDGET for deployments that genuinely need more.
+	ceiling := 14000
+	if v := envOr("ATLAS_AGENT_HISTORY_BUDGET", ""); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			ceiling = n
+		}
+	}
+	if budget > ceiling {
+		budget = ceiling
+	}
+	return budget
+}
+
+// parallelSlots returns the llama-server --parallel slot count for this
+// deployment (ATLAS_PARALLEL_SLOTS), defaulting to 4 to match the
+// entrypoint. Used both for KV-slot isolation and per-slot context math.
+func parallelSlots() int {
+	slots := 4
+	if v := envOr("ATLAS_PARALLEL_SLOTS", ""); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			slots = n
+		}
+	}
+	return slots
+}
+
+// budgetedKeepLast returns how many trailing messages trimMessages should
+// keep so the kept set (system + pinned user + tail) fits the token budget.
+// Floored at 8 (never trim more aggressively than the old fixed rule); when
+// the whole conversation fits, returns len(msgs) so nothing is trimmed.
+func budgetedKeepLast(msgs []AgentMessage) int {
+	if len(msgs) == 0 {
+		return 0
+	}
+	budget := conversationTokenBudget()
+	used := 0
+	if len(msgs) > 0 {
+		used += estTokens(msgs[0].Content) // system prompt is always kept
+	}
+	keep := 0
+	for i := len(msgs) - 1; i >= 1; i-- {
+		t := estTokens(msgs[i].Content)
+		if used+t > budget && keep >= 8 {
+			break
+		}
+		used += t
+		keep++
+	}
+	if keep > len(msgs)-1 {
+		keep = len(msgs) - 1
+	}
+	return keep
+}
+
 // trimMessages caps a conversation at roughly 1 (system) + 1 (pinned user) +
 // keepLast tail messages, dropping the middle. The pin is the most recent
 // role=="user" message — the user's current task. Without the pin, long agent
@@ -1862,6 +2081,10 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		Mode       string       `json:"mode"`       // "default", "accept-edits", "yolo"
 		SessionID  string       `json:"session_id"` // optional — required for /cancel
 		History    []historyMsg `json:"history,omitempty"`
+		// /demo split-pane flags — tags match tui/chat.go's agentRequest.
+		BypassV3         bool   `json:"bypass_v3,omitempty"`          // raw pane: short-circuit V3 calls
+		DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
+		SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -1887,11 +2110,26 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	workingDir := envOr("ATLAS_WORKSPACE_DIR", hostDir)
 
+	// /demo: each pane works inside its own workspace subdir so the two
+	// concurrent sessions can't clobber each other's files and the TUI's
+	// post-run review finds each side's output where it expects it. The
+	// subdir is a bare name (no separators, no traversal) or it's ignored.
+	if sub := filepath.Clean(req.SandboxSubdir); req.SandboxSubdir != "" &&
+		sub != "." && sub != ".." &&
+		!strings.ContainsAny(sub, "/\\") {
+		workingDir = filepath.Join(workingDir, sub)
+		if hostDir != "" && hostDir != "." {
+			hostDir = filepath.Join(hostDir, sub)
+		}
+	}
+
 	// Classify tier from message
 	tier := classifyAgentTier(req.Message)
 
 	// Create agent context
 	ctx := NewAgentContext(workingDir, tier)
+	ctx.BypassV3 = req.BypassV3
+	ctx.DisableFreshSlot = req.DisableFreshSlot
 	// Stash the host path so resolveAgentPath can translate absolute
 	// host paths the model receives in user prompts (e.g. "fix
 	// /home/isaac/snake/app.py") into the container path. Without this

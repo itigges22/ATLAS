@@ -301,9 +301,11 @@ class TestPlanSearchPipeline:
         ps_enabled.generate(
             SAMPLE_PROBLEM, "test", mock_llm, budget_tier="hard"
         )
-        # Steps 1 and 2 always use nothink (thinking wastes tokens on structured output)
-        assert "/nothink" in mock_llm.calls[0]["prompt"]
-        assert "/nothink" in mock_llm.calls[1]["prompt"]
+        # Steps 1 and 2 always use nothink (thinking wastes tokens on
+        # structured output) — visible as the plain concise system prompt
+        # (thinking itself is toggled by the shared client, not the prompt).
+        assert "directly and concisely" in mock_llm.calls[0]["prompt"]
+        assert "directly and concisely" in mock_llm.calls[1]["prompt"]
 
     def test_pipeline_nothink_mode(self, ps_enabled):
         llm = MockLLM(responses=[
@@ -316,9 +318,10 @@ class TestPlanSearchPipeline:
             SAMPLE_CODE_RESPONSE,
         ])
         ps_enabled.generate(SAMPLE_PROBLEM, "test", llm, budget_tier="nothink")
-        # All calls should have /nothink
+        # All calls carry the plain concise (nothink) system prompt.
         for call in llm.calls:
-            assert "/nothink" in call["prompt"]
+            assert "directly and concisely" in call["prompt"]
+            assert "/nothink" not in call["prompt"]
 
     def test_custom_num_plans(self, ps_enabled, bf_enabled, tmp_telemetry):
         """Override num_plans at call time."""
@@ -367,7 +370,7 @@ class TestBudgetForcingIntegration:
             SAMPLE_PROBLEM, "test", mock_llm, budget_tier="extreme"
         )
         # Steps 1-2 use nothink (structured output, thinking wastes tokens)
-        assert "/nothink" in mock_llm.calls[0]["prompt"]
+        assert "directly and concisely" in mock_llm.calls[0]["prompt"]
 
     def test_without_budget_forcing(self, tmp_telemetry):
         """PlanSearch should work without BudgetForcing (fallback prompts)."""
@@ -501,10 +504,11 @@ class TestAC1A4TimeBudget:
         # Step 3 calls (index 4, 5, 6) should use nothink or light
         for i in [4, 5, 6]:
             prompt = mock_llm.calls[i]["prompt"]
-            # light has "step by step" but NOT the extreme/hard budget
-            # nothink has /nothink
-            # Either is acceptable for code gen efficiency
-            assert "/nothink" in prompt or "step by step" in prompt.lower()
+            # nothink shows as the plain concise prompt; light keeps the
+            # step-by-step prompt with a smaller budget. Either is an
+            # acceptable efficiency tier for code gen.
+            assert ("directly and concisely" in prompt
+                    or "step by step" in prompt.lower())
 
 
 # ---------------------------------------------------------------------------

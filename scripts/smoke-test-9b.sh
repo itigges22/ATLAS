@@ -7,7 +7,7 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 POD_IP=$(kubectl get pods -n atlas -l app=llama-server -o jsonpath='{.items[0].status.podIP}')
 LLAMA_URL="http://${POD_IP}:8000"
 RAG_IP=$(kubectl get pods -n atlas -l app=geometric-lens -o jsonpath='{.items[0].status.podIP}')
-RAG_URL="http://${RAG_IP}:8001"
+RAG_URL="http://${RAG_IP}:8099"
 
 echo "=== Qwen3.5-9B Smoke Test ==="
 echo "  llama-server: $LLAMA_URL"

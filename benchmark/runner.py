@@ -31,6 +31,7 @@ except ImportError:
 
 from .config import config
 from .models import BenchmarkTask, AttemptResult, TaskResult
+from .llm_client import chat_completion
 
 
 class CodeExecutionError(Exception):
@@ -372,20 +373,9 @@ class BenchmarkRunner:
         if self.client is not None:
             self.client.close()
 
-    # System prompt baked into ChatML for the /completion endpoint.
-    _SYSTEM_PROMPT = "You are an expert programmer. Respond directly and concisely. /nothink"
-
-    def _format_chatml(self, user_content: str) -> str:
-        """Format a user message as a ChatML prompt for the /completion endpoint.
-
-        Uses the /completion endpoint instead of /v1/chat/completions for
-        direct control over prompt formatting and thinking mode (/nothink).
-        """
-        return (
-            f"<|im_start|>system\n{self._SYSTEM_PROMPT}<|im_end|>\n"
-            f"<|im_start|>user\n{user_content}<|im_end|>\n"
-            f"<|im_start|>assistant\n"
-        )
+    # Plain-English system prompt — no model-specific directive. Thinking is
+    # disabled via enable_thinking:false in the shared client.
+    _SYSTEM_PROMPT = "You are an expert programmer. Respond directly and concisely."
 
     def _call_llm(
         self,
@@ -412,7 +402,7 @@ class BenchmarkRunner:
         Returns:
             Tuple of (response_text, tokens_generated, inference_time_ms)
         """
-        # Build the full prompt with error context if provided
+        # Build the full user message (with error context if provided)
         if error_context:
             user_content = (
                 f"{prompt}\n\n"
@@ -422,69 +412,27 @@ class BenchmarkRunner:
         else:
             user_content = prompt
 
-        # Format as ChatML for the raw /completion endpoint
-        formatted_prompt = self._format_chatml(user_content)
-
-        request_body = {
-            "prompt": formatted_prompt,
-            "temperature": temperature,
-            "n_predict": max_tokens,
-            "stream": False,
-            "cache_prompt": cache_prompt,
-            "stop": ["<|im_end|>", "<|im_start|>"],
-        }
-        if seed is not None:
-            request_body["seed"] = seed
-
+        # Generate via the chat-completions endpoint so the model's own chat
+        # template formats the prompt and reasoning is disabled.
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                start_time = time.time()
-
-                if HAS_HTTPX and self.client is not None:
-                    response = self.client.post(
-                        f"{self.llm_url}/completion",
-                        json=request_body
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                else:
-                    # Fall back to urllib
-                    req = urllib.request.Request(
-                        f"{self.llm_url}/completion",
-                        data=json.dumps(request_body).encode('utf-8'),
-                        headers={'Content-Type': 'application/json'}
-                    )
-                    with urllib.request.urlopen(req, timeout=600) as resp:
-                        data = json.loads(resp.read().decode('utf-8'))
-
-                inference_time_ms = (time.time() - start_time) * 1000
-
-                content = data.get("content", "")
-                tokens = data.get("tokens_predicted", 0)
-
-                # Strip empty think blocks that Qwen3.5 may emit despite /nothink
-                # (e.g. "<think>\n\n</think>\n\n" - 4 tokens, harmless)
-                content = re.sub(r'^<think>\s*</think>\s*', '', content)
-
-                return content, tokens, inference_time_ms
-
-            except urllib.error.HTTPError as e:
-                last_error = f"HTTP {e.code}: {e.reason}"
-            except urllib.error.URLError as e:
-                last_error = f"URL error: {str(e)}"
+                r = chat_completion(
+                    self.llm_url, user=user_content, system=self._SYSTEM_PROMPT,
+                    temperature=temperature, max_tokens=max_tokens, seed=seed,
+                )
+                return r["content"], r["tokens"], r["time_ms"]
             except Exception as e:
+                last_error = str(e)
                 if HAS_HTTPX:
-                    import httpx as httpx_module
-                    if isinstance(e, httpx_module.HTTPStatusError):
-                        last_error = f"HTTP {e.response.status_code}: {e.response.text}"
-                    elif isinstance(e, httpx_module.RequestError):
-                        last_error = f"Request error: {str(e)}"
-                    else:
-                        last_error = str(e)
-                else:
-                    last_error = str(e)
-
+                    try:
+                        import httpx as _hx
+                        if isinstance(e, _hx.HTTPStatusError):
+                            last_error = f"HTTP {e.response.status_code}: {e.response.text}"
+                        elif isinstance(e, _hx.RequestError):
+                            last_error = f"Request error: {e}"
+                    except Exception:
+                        pass
             if attempt < self.max_retries - 1:
                 time.sleep(self.retry_delay * (attempt + 1))
 

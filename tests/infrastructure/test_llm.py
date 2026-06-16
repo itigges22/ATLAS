@@ -30,14 +30,26 @@ class TestLlamaModels:
         assert "data" in data, "Response should have 'data' field"
         assert len(data["data"]) > 0, "Should have at least one model"
 
-    def test_model_name_contains_qwen(self, llama_client: httpx.Client):
-        """Model name should contain 'Qwen' based on configuration."""
+    def test_model_name_matches_configured(self, llama_client: httpx.Client):
+        """The served model should match the deployment's configured model
+        (ATLAS_MODEL_NAME from .env), whatever that model is."""
+        import os
+        expected = None
+        try:
+            from benchmark.config import config as _cfg
+            expected = (_cfg.model_name or "").lower()
+        except Exception:
+            expected = None
+        expected = (os.environ.get("ATLAS_MODEL_NAME") or expected or "").lower()
+        if not expected:
+            pytest.skip("no configured model name to compare against")
         response = llama_client.get("/v1/models")
         assert response.status_code == 200
         data = response.json()
         models = data["data"]
         model_ids = [m.get("id", "") for m in models]
-        qwen_model = any("qwen" in mid.lower() for mid in model_ids)
+        qwen_model = any(expected.split("-")[0] in mid.lower()
+                         for mid in model_ids)
         assert qwen_model, f"Expected a Qwen model, found: {model_ids}"
 
     def test_context_length_is_configured(self, llama_client: httpx.Client):

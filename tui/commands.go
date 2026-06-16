@@ -130,6 +130,7 @@ const slashCommandHelp = `Slash commands
   /show <pane>            Show a pane (or all).
   /mouse [on|off]         Toggle mouse capture (off lets you select text). No arg = off.
   /copy [N]               Copy last N chat messages to system clipboard (default 1).
+  /demo [len]             Split-pane demo: raw model vs V3 (short|medium|long).
   /quit                   Exit.
 
 Copying text  (TL;DR: just drag-highlight in chat — auto-copies on release)
@@ -191,6 +192,25 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		return true, nil, false
 
 	case "/quit", "/exit":
+		return true, tea.Quit, true
+
+	case "/demo":
+		// Quit the main TUI and hand off to the split-pane recording demo
+		// (raw model vs V3, same proxy). Length filters the prompt bank.
+		length := "medium"
+		if len(args) > 0 {
+			switch args[0] {
+			case "short", "medium", "long":
+				length = args[0]
+			default:
+				m.chat = append(m.chat, chatMessage{
+					Role: roleSystem, Meta: "error",
+					Body: "usage: /demo [short|medium|long]",
+				})
+				return true, nil, false
+			}
+		}
+		m.launchDemoLength = length
 		return true, tea.Quit, true
 
 	case "/add":

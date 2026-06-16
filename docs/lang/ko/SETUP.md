@@ -291,18 +291,19 @@ scripts/verify-install.sh
 
 ### K3s 전용 설정
 
-K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. Docker Compose와의 주요 차이점:
+K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. HTTP 계약과 파이프라인 동작은 Docker Compose와 동일하며, 배포 방식만 다릅니다:
 
 | 설정 항목 | Docker Compose | K3s |
 |-----------|---------------|-----|
 | 설정 파일 | `.env` | `atlas.conf` |
-| 컨텍스트 크기 | 32K | 슬롯당 40K (x 4 슬롯 = 총 160K) |
-| 병렬 슬롯 | 1 (암묵적) | 4 |
-| Flash attention | 꺼짐 | 켜짐 |
-| KV 캐시 양자화 | 없음 | q8_0 (키) + q4_0 (값) |
-| 메모리 잠금 | 아니오 | mlock 활성화 |
-| 임베딩 엔드포인트 | 미노출 | `--embeddings` 플래그 |
-| 서비스 노출 | 호스트 포트 | NodePorts |
+| 서비스 노출 | 호스트 포트 (`8090`, `8080`, `8099`, `8070`, `30820`) | NodePorts (`30080`, `32735`, `31144`, `30070`, `30820`) |
+| 프로젝트 워크스페이스 | 바인드 마운트 (`ATLAS_PROJECT_DIR` → `/workspace`) | `hostPath` (`ATLAS_PROJECTS_DIR` → 필요한 각 Pod의 `/workspace`) |
+| 모델 파일 | 바인드 마운트 (`ATLAS_MODELS_DIR` → `/models:ro`) | GPU 노드의 `hostPath` (`ATLAS_MODELS_DIR`, `Directory`, 읽기 전용) |
+| 상태 저장 스토리지 | 명명된 볼륨 (`redis-data`, `lens-data`) | PVC (`redis-data`는 `ATLAS_PVC_REDIS_SIZE`, `lens-projects`는 `ATLAS_PVC_PROJECTS_SIZE`로 크기 지정) |
+| GPU 할당 | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1` (GPU Operator 또는 디바이스 플러그인 필요) |
+| 샌드박스 툴체인 캐시 | 언어별 `tmpfs` 마운트 | 언어별 `sizeLimit` 지정 `emptyDir` (PC-191 공통 패턴, 동일 세트) |
+
+모델·런타임 파라미터 (`ATLAS_MAIN_MODEL`, `ATLAS_CONTEXT_LENGTH`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_FLASH_ATTENTION`, KV 캐시 양자화, 렌즈 스코어링용 `--embeddings`)는 두 모드 모두 동일한 환경 변수에서 읽습니다 — `atlas.conf.example`과 `.env.example`을 참조하십시오.
 
 전체 `atlas.conf` 레퍼런스는 [CONFIGURATION.md](../../CONFIGURATION.md)를 참조하십시오.
 

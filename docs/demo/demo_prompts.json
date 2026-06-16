@@ -1,0 +1,44 @@
+[
+  {
+    "prompt": "Build a single-file terminal snake game in Python. Save it to snake.py. Use the curses module from the standard library — no external dependencies. Requirements: arrow keys (or WASD) for direction, snake grows by one when it eats food, game ends on wall OR self collision, food never spawns on the snake body, the direction cannot immediately reverse (pressing left while moving right is ignored), display the current score in a status line, press q to quit cleanly. The terminal must be restored to a usable state on exit.",
+    "difficulty": "short",
+    "expected_raw_failure": "raw 9B reliably trips at least one of: (a) the direction-reversal bug — pressing right while moving left causes instant self-collision, (b) food spawns on the snake body so 'eating' your own segment, (c) snake doesn't actually grow on food (head moves but tail doesn't extend), (d) curses.wrapper is missing so the terminal stays broken on crash, (e) input() blocks instead of using getch with nodelay",
+    "expected_v3_repair": "V3's sandbox can verify the file imports cleanly (`python -c 'import snake'`) and that the curses setup compiles. PR-CoT catches the direction-reversal bug because raw 9B's standard implementation is well-known. Probable fixes: add `if (new_dir, old_dir) not in opposite_pairs` check; resample food while it intersects the body; growth handled by skipping the tail-pop on the food-eaten frame",
+    "notes": "Canonical 9B failure case. Single file, fast feedback. Notable because the user can ACTUALLY PLAY both versions side-by-side after the demo — strongest visceral comparison."
+  },
+  {
+    "prompt": "Write a Python CLI that takes a directory and outputs a tree view to stdout, similar to the `tree` command. Save to tree.py. Requirements: argparse with a positional directory argument and a `--max-depth N` flag (default 10), uses ├── and └── for branching, sorts entries alphabetically with directories first, gracefully skips files it can't read (permission errors), exits 0 on success and 1 on error.",
+    "difficulty": "short",
+    "expected_raw_failure": "raw 9B (a) doesn't sort directories before files, (b) crashes on permission errors instead of skipping, (c) uses fixed depth instead of honoring --max-depth, (d) gets the box-drawing characters wrong on the last entry of each level",
+    "expected_v3_repair": "V3 generates a permission-denied test, catches the crash, wraps the os.listdir/scandir in try/except; the box-drawing fix usually comes from PR-CoT with the well-known correct unicode pattern",
+    "notes": "Fast (single file, ~80 lines), visible failure on the tree output."
+  },
+  {
+    "prompt": "Build a Python CLI for managing a TODO list backed by a local JSON file (~/.todos.json). Save to todo.py. Subcommands via argparse: `add <task>`, `list` (numbered with status mark [x] / [ ]), `done <id>`, `rm <id>`, `clear` (with confirmation). The JSON file format is a list of {\"id\": int, \"text\": str, \"done\": bool}. IDs are 1-indexed and stable across operations.",
+    "difficulty": "short",
+    "expected_raw_failure": "raw 9B (a) re-numbers IDs after rm so 'done 3' now points at a different task, (b) doesn't create the file if missing (FileNotFoundError on first run), (c) clear has no confirmation, (d) writes the file non-atomically so a SIGINT mid-write corrupts it",
+    "expected_v3_repair": "V3 catches the file-missing case via verification; ID stability bug shows up if the prompt's test sequence is run; repair uses max(id)+1 instead of len(list)+1",
+    "notes": "Realistic small project shape. Fast iteration, file-I/O semantics are where 9B trips."
+  },
+  {
+    "prompt": "Build a Flask TODO list web app. Files: app.py (Flask routes), models.py (SQLAlchemy Todo model with id/title/done columns), schema.sql (CREATE TABLE statement matching the model). Routes: GET /todos returns JSON list, POST /todos with JSON {title} creates and returns the new todo, DELETE /todos/<int:id> removes one. Initialize the DB on startup. Run on port 5000.",
+    "difficulty": "long",
+    "expected_raw_failure": "raw 9B usually (a) forgets db.create_all() so first request 500s on missing table, (b) returns SQLAlchemy objects without serializing them, (c) writes schema.sql with column types that don't match the model (TEXT vs VARCHAR, no PRIMARY KEY)",
+    "expected_v3_repair": "V3's verification step catches the missing init or the serialization TypeError; PR-CoT adds db.create_all() inside a with app.app_context() and writes a to_dict() helper",
+    "notes": "Real-world Flask + SQLAlchemy. Three files = cross-file consistency check is meaningful. Long because V3 per-file overhead × 3 ≈ 30-60 min."
+  },
+  {
+    "prompt": "Build a FastAPI URL shortener. Files: main.py (FastAPI app), db.py (sqlite3 wrapper with init_db, create_short, resolve), models.py (Pydantic ShortenRequest with `url: HttpUrl` and ShortenResponse with `short_code: str`). Endpoints: POST /shorten returns a 6-char alphanumeric code, GET /{code} returns 302 redirect to the original URL or 404 if not found. Generate codes with secrets.token_urlsafe trimmed to 6 chars.",
+    "difficulty": "long",
+    "expected_raw_failure": "raw 9B (a) uses random.choice instead of secrets (insecure), (b) doesn't handle collision on duplicate codes, (c) returns 200 with JSON instead of 302 on GET /{code}, (d) forgets to await the sqlite connection in async context",
+    "expected_v3_repair": "V3 generates collision and redirect tests; repair adds the retry loop and switches to RedirectResponse(status_code=302)",
+    "notes": "Three files, async, two endpoints with distinct semantics."
+  },
+  {
+    "prompt": "Build a Flask markdown blog. Files: app.py (Flask routes), render.py (read posts/*.md from disk, parse front-matter `--- title: X date: Y ---`, render body with the `markdown` library), templates/index.html (Jinja list of post titles linking to /post/<slug>), templates/post.html (renders one post's title + HTML body). The slug is the .md filename without extension. Sort the index by date desc.",
+    "difficulty": "long",
+    "expected_raw_failure": "raw 9B (a) writes templates without {% extends %}, (b) hardcodes /post/foo instead of url_for, (c) reads files inside a route handler with no caching, (d) crashes on a post with no front-matter",
+    "expected_v3_repair": "V3 catches the no-frontmatter crash via a generated empty-post test; repair guards the parse with a default {}",
+    "notes": "Templates + cross-file routing. Real Jinja patterns."
+  }
+]

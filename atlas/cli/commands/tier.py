@@ -1030,8 +1030,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="atlas tier",
         description="Hardware tier classification (PC-055)")
     parser.add_argument("subcommand", nargs="?", default="classify",
-        choices=["classify", "list"],
-        help="`classify` (default) probes this host. `list` shows all tiers.")
+        choices=["classify", "list", "fit"],
+        help="`classify` (default) probes this host. `list` shows all tiers. "
+             "`fit` sizes llama-server runtime knobs for the configured model "
+             "on this GPU (PC-208).")
+    parser.add_argument("model", nargs="?", default=None,
+        help="for `fit`: GGUF path (default: the model configured in .env)")
+    parser.add_argument("--write", action="store_true",
+        help="for `fit`: write the result into .env")
+    parser.add_argument("--slots", type=int, default=None,
+        help="for `fit`: parallel slot count (default: 4)")
     parser.add_argument("--json", action="store_true",
         help="emit JSON output (for PC-054 wizard, PC-056 model registry)")
     parser.add_argument("--raw", action="store_true",
@@ -1046,6 +1054,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.subcommand == "list":
         return _emit_list(args, color)
+
+    if args.subcommand == "fit":
+        from atlas.cli.commands import fit as fit_module
+        return fit_module.emit_fit(args, color)
 
     p = probe(install_dir=args.install_dir)
     t = classify(p)

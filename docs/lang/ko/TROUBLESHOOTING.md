@@ -137,6 +137,46 @@ ps aux | grep llama-server | grep 'n-gpu-layers'
 
 Docker를 사용하는 경우 NVIDIA 컨테이너 런타임이 설정되어 있는지 확인하십시오 (위의 GPU 섹션 참조).
 
+### 모델 + KV 캐시가 GPU에 들어가지 않음 (시작 실패 또는 생성이 5배 느림)
+
+**증상 (현행 엔트리포인트):** llama-server가 시작 시 "fitting params to device memory" 직후의 CUDA 할당 오류로 종료됩니다.
+
+**증상 (`--fit off`가 없는 구형 엔트리포인트):** 서버는 *시작*되고 `nvidia-smi`에는 모델이 로드된 것으로 보이지만, 생성 속도가 기대치의 몇 분의 일로 떨어지고, llama-server 프로세스가 여러 CPU 코어를 소모하며 (`top`에서 400–800%), 호스트 RSS가 모델 가중치 수 기가바이트를 점유합니다 — llama.cpp의 메모리 자동 피팅이 레이어를 조용히 CPU로 옮긴 것입니다.
+
+**원인:** 모델 가중치 + KV 캐시 (`ATLAS_CTX_SIZE` × `PARALLEL` 슬롯 × 레이어별 KV 차원) + 컴퓨트 버퍼 (약 `ATLAS_UBATCH` × 은닉 차원 × 280바이트)가 VRAM을 초과합니다. 이 버짓은 모델마다 다릅니다 — 한 모델에 맞춘 설정이 KV 기하 구조가 다른 모델에서는 넘칠 수 있습니다.
+
+**해결:** 이 모델과 GPU에 맞게 런타임 크기를 조정하고 컨테이너를 재생성하십시오:
+```bash
+atlas tier fit --write
+docker compose up -d llama-server --no-deps --force-recreate
+```
+`atlas tier fit`은 GGUF 헤더와 GPU의 VRAM을 읽어 완전히 GPU에서 동작하는 최대 구성을 계산합니다 ([CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit-pc-208) 참조). ATLAS는 llama-server를 `--fit off`로 실행하므로, 들어가지 않는 구성은 CPU에서 일부가 조용히 도는 대신 시작 시 명확하게 실패합니다.
+
+`atlas tier fit`이 **DOES NOT FIT**을 보고하면 모델 자체가 이 카드에 너무 큽니다 — 출력에 들어갈 수 있는 최대 양자화 파일 크기가 표시됩니다. 우선순위 순서:
+
+1. **같은 모델의 더 작은 양자화 사용** (예: Q6_K 대신 Q4_K_M — 16 GB VRAM 미만에서는 보통 품질/GiB 면에서 최선의 선택).
+2. **병렬 슬롯 줄이기**: `atlas tier fit --slots 1 --write`로 슬롯당 KV 최소값이 확보됩니다 (`/demo` 분할 창과 V3 병렬 후보는 사용할 수 없지만 단일 스트림 사용은 가능).
+3. **더 작은 모델 선택.** 아래 크기 표를 참조하십시오.
+
+### 내 GPU에는 무엇이 들어가는가?
+
+다운로드 전 대략적인 규칙: 기본 4 슬롯에서는 GGUF가 다음 조건이면 여유 있게 들어갑니다
+
+```
+파일 크기  ≤  VRAM − 약 4.5 GiB
+```
+
+(약 4.5 GiB는 4 × 8k 컨텍스트의 최소 KV 캐시, 컴퓨트 버퍼, 약 1.9 GiB의 CUDA 고정 오버헤드를 포함합니다). `--slots 1`에서는 여유가 대략 `VRAM − 3 GiB`까지 줄어듭니다. 슬라이딩 윈도우 모델(Gemma 계열)은 이보다 덜 필요합니다; 이 규칙은 풀 어텐션 모델 기준입니다.
+
+| VRAM | GGUF 파일 크기 (4 슬롯) | GGUF 파일 크기 (1 슬롯) | 대표 모델 |
+|------|--------------------------|--------------------------|----------------|
+| 8 GB | ≤ 약 3 GiB | ≤ 약 4.5 GiB | 3–4B Q4–Q6, 7–8B Q2–Q3 |
+| 12 GB | ≤ 약 7 GiB | ≤ 약 8.5 GiB | 7–9B Q4–Q6, 12B Q3–Q4 |
+| 16 GB | ≤ 약 11 GiB | ≤ 약 12.5 GiB | 9B Q6–Q8, 12–14B Q4–Q6 |
+| 24 GB | ≤ 약 19 GiB | ≤ 약 20.5 GiB | 14B Q8, 27–32B Q4 |
+
+HuggingFace 모델 페이지에는 양자화별 파일 크기가 표시됩니다 — 다운로드 전에 이 표와 대조하십시오. 이 표는 다운로드 전 추정치일 뿐입니다; 파일이 디스크에 있으면 `atlas tier fit /path/to/model.gguf`가 정확한 답입니다 (모델의 실제 KV 기하 구조를 읽으므로 버짓이 어느 방향으로든 수 기가바이트 달라질 수 있습니다). `atlas onboard`도 같은 핏을 자동으로 표시합니다.
+
 ### 모델 파일을 찾을 수 없음
 
 **증상:** llama-server가 "failed to load model" 또는 유사한 메시지와 함께 즉시 종료됩니다.
@@ -156,10 +196,10 @@ ls -la ~/models/Qwen3.5-9B-Q6_K.gguf
 
 **증상:** llama-server가 시작 직후 충돌하거나 OOMKilled됩니다. `nvidia-smi`에서 VRAM 사용량이 거의 100%로 표시됩니다.
 
-**해결:** 9B Q6_K 모델은 약 8.2 GB VRAM이 필요합니다 (모델 + KV 캐시). 다음을 확인하십시오:
+**해결:** 다음을 확인하십시오:
 1. 다른 GPU 프로세스가 실행 중이지 않은지 (`nvidia-smi` - 다른 CUDA 프로세스 확인)
 2. 16GB 이상의 VRAM이 있는지
-3. 컨텍스트 크기가 너무 크게 설정되지 않았는지 (기본값 32K가 적절하며, VRAM 확인 없이 늘리지 마십시오)
+3. 런타임이 모델과 GPU에 맞게 크기 조정되었는지: `atlas tier fit --write` (권장값을 넘어 `ATLAS_CTX_SIZE`를 올리지 마십시오)
 
 ```bash
 # 필요한 경우 다른 GPU 프로세스 종료
@@ -188,7 +228,7 @@ JSON 대신 일반 텍스트가 반환되면 llama.cpp 빌드가 `response_forma
 
 **증상:** 도구 호출 인수가 잘립니다. `write_file`이 "unexpected end of JSON"으로 실패하거나 프록시 로그에 "truncation detected"가 표시됩니다.
 
-**해결:** 컨텍스트 크기는 32768이어야 합니다 (Docker Compose의 기본값). 확인:
+**해결:** 슬롯당 컨텍스트 (`ATLAS_CTX_SIZE` ÷ `ATLAS_PARALLEL_SLOTS`, compose 기본값은 131072 ÷ 4 = 슬롯당 32k)가 작업에 비해 너무 작을 수 있습니다. `atlas tier fit`으로 GPU가 지원하는 최대 버짓을 확인할 수 있습니다. 확인:
 ```bash
 # Docker Compose
 grep CTX_SIZE .env
@@ -445,6 +485,21 @@ ls -la .aider.model.settings.yml .aider.model.metadata.json
 이 파일들은 저장소에 포함되어 있습니다. 누락된 경우 다시 클론하거나 백업에서 복원하십시오. Aider에게 프록시를 가리키는 `openai/atlas` 모델을 사용하도록 지시하는 파일입니다.
 
 ---
+
+## 벤치마크 문제
+
+### bench가 요청보다 적은 태스크만 실행함 (`LIMITED MODE: running N tasks`의 N이 `--tasks`보다 작음)
+
+**증상:** `atlas bench --tasks 200`이 `LIMITED MODE: running 100 tasks` (또는 요청보다 적은 수)를 표시합니다. 또는 재개한 실행이 `Resuming: N/N complete, 0 remaining`을 출력하고 즉시 종료됩니다.
+
+**원인:** LiveCodeBench 데이터셋 캐시 (`benchmark/datasets/.cache/livecodebench_v5.jsonl`)가 부분 다운로드 상태입니다. HuggingFace rows API는 페이지네이션 도중 실패할 수 있으며, 이전 버전은 받은 만큼만 캐시하고 그 파일을 영구히 신뢰했습니다. release_v5의 전체 세트는 약 880개 태스크입니다.
+
+**해결:** 캐시를 partial로 표시하고 다시 실행하십시오 — 로더가 전체 재다운로드를 시도합니다 (모든 소스가 실패한 경우에만 기존 사본으로 폴백):
+```bash
+touch benchmark/datasets/.cache/livecodebench_v5.jsonl.partial
+atlas bench --run-id <your-run-id> --tasks 200
+```
+완료된 태스크는 절대 손실되지 않습니다: 결과는 `benchmark/results/<run-id>/v3_lcb/per_task/`에 태스크별 JSON으로 저장되며, 러너는 결과 파일이 존재하는 태스크를 건너뛰고 재개합니다. 어떤 이유로든 (OOM, 재부팅, 세션 종료) 중단된 실행도 같은 방식으로 재개됩니다 — 동일한 `atlas bench` 명령을 다시 실행하기만 하면 됩니다.
 
 ## 성능
 

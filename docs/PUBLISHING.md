@@ -42,6 +42,24 @@ The CLI also reads `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` if you'v
 
 ---
 
+## Publishing everything at once (recommended)
+
+After onboarding a model you have both lens halves and the ASA vector —
+publish them as one action:
+
+```bash
+atlas publish --lens-repo your-username/atlas-lens-<model> \
+              --asa-repo  your-username/atlas-asa-<model>
+```
+
+This uploads both artifact sets to their HF repos and opens a **single
+registry PR** whose entry carries `lens_status="supported"` and
+`asa_status="supported"` together — no sequencing between two PRs to
+manage. `--dry-run` previews, `--skip-pr` uploads without the PR,
+`--lens-only` / `--asa-only` delegate to the per-component commands
+below (which handle the publish-while-the-other-PR-is-open case via
+stacked PRs).
+
 ## Publishing a Lens artifact
 
 Assumes you've already run `atlas lens build --samples your-data.json` and have a `cost_field.pt` in the artifact dir. If not, see the `atlas lens build` section in [CLI.md](CLI.md).
@@ -65,7 +83,9 @@ The `--repo` flag is the HuggingFace destination (created if it doesn't exist). 
 2. **Hash** — SHA-256s the artifact so the PR has a tamper-detectable fingerprint.
 3. **Upload to HF** — creates the repo (idempotent), uploads `cost_field.pt`, uploads `metric_tensor.pt` if you have one, generates a model card README with license + base-model badge.
 4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested Python diff for `atlas/cli/commands/model_registry.py`.
-5. **Open the PR** — if `gh` is installed and authed, runs `gh pr create --repo itigges22/ATLAS` automatically. Otherwise prints the body for you to paste into https://github.com/itigges22/ATLAS/compare manually.
+5. **Open the PR** — if `gh` is installed and authed, the PR is built through the GitHub API: a branch is created (on your automatic fork if you can't push upstream), a real registry edit is committed — a complete `Model(...)` entry with `lens_status="supported"` and your HF repo recorded — and the PR opens against the `dev` branch. No local git checkout is needed; this works from any install. If the model is already registered upstream, or `gh` is unavailable, the body is printed for manual paste into https://github.com/itigges22/ATLAS/compare instead.
+
+   Publishing the ASA vector right after the lens (before the lens PR merges) is handled: when the model's entry is pending in an open publish PR, the ASA change becomes a **separate PR stacked on it** (diff shows only the ASA edit; merging the first PR with branch deletion makes GitHub retarget the second to `dev` automatically). Fork-based publishes commit onto the pending PR's branch instead — GitHub can't base a PR on a fork's branch — so one PR carries both changes there.
 
 ### Common flags
 
@@ -127,7 +147,7 @@ Run `pip install huggingface_hub`. The lens container has it baked in, but the h
 
 ### `gh: command not found`
 
-Either install `gh` from https://cli.github.com, or use `--skip-pr` — the CLI will print the PR body and you paste it into github.com/itigges22/ATLAS/compare manually. Both paths produce the same review outcome.
+Either install `gh` from https://cli.github.com, or use `--skip-pr` — the CLI will print the PR body and you paste it into github.com/itigges22/ATLAS/compare manually. Both paths produce the same review outcome. (With `gh` present, no git checkout is required — the PR is created entirely through the GitHub API, including the fork for non-maintainers.)
 
 ### `Artifact input dim (0)` in the PR body
 

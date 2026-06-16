@@ -32,7 +32,20 @@ func main() {
 	mouseFlag := flag.String("mouse", envOr("ATLAS_TUI_MOUSE", "on"),
 		"mouse capture: 'on' (wheel scrolls chat) or 'off' (lets you select/copy text). "+
 			"Mid-session toggle: /mouse on|off")
+	demoMode := flag.String("demo", "",
+		"launch the split-pane recording demo directly (short|medium|long). "+
+			"Skips the main TUI; same as typing /demo from inside it.")
 	flag.Parse()
+
+	// Cold-start --demo bypasses the main TUI entirely.
+	if *demoMode != "" {
+		cwd, _ := os.Getwd()
+		if err := runDemo(*proxyURL, cwd, *demoMode); err != nil {
+			fmt.Fprintf(os.Stderr, "atlas-tui demo: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if closer, err := initDebugLog(*logPath); err != nil {
 		fmt.Fprintf(os.Stderr, "atlas-tui: %v\n", err)
@@ -76,9 +89,20 @@ func main() {
 	}
 	prog := tea.NewProgram(model, opts...)
 
-	if _, err := prog.Run(); err != nil {
+	finalModel, err := prog.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "atlas-tui: %v\n", err)
 		os.Exit(1)
+	}
+
+	// /demo handoff: the slash command sets launchDemoLength on the
+	// model and quits; we now relaunch in the same terminal.
+	if fm, ok := finalModel.(tuiModel); ok && fm.launchDemoLength != "" {
+		cwd, _ := os.Getwd()
+		if err := runDemo(*proxyURL, cwd, fm.launchDemoLength); err != nil {
+			fmt.Fprintf(os.Stderr, "atlas-tui demo: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 

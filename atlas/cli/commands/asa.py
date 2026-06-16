@@ -133,7 +133,8 @@ def _read_cvector_meta(path: str) -> dict:
     """
     out = {
         "present": False, "size_bytes": 0, "dim": None,
-        "layer_count": None, "model_hint": None, "error": "",
+        "layer_count": None, "model_hint": None, "steered_layer": None,
+        "error": "",
     }
     if not os.path.isfile(path):
         out["error"] = "file not found"
@@ -178,14 +179,21 @@ def _read_cvector_meta(path: str) -> dict:
                     pass
         # Each "direction.<layer>" tensor has shape (hidden_dim,) — its
         # length IS the residual stream dim we need to match against the
-        # model's embedding dim.
+        # model's embedding dim, and its name suffix is the layer the
+        # vector actually steers.
         for tensor in reader.tensors:
             if tensor.name.startswith("direction."):
                 shape = list(tensor.shape)
                 if shape:
                     # First (and typically only) dim
                     out["dim"] = int(shape[0])
-                    break
+                try:
+                    out["steered_layer"] = int(
+                        tensor.name.split(".", 1)[1])
+                except (IndexError, ValueError):
+                    # best-effort: swallow on failure (caller continues)
+                    pass
+                break
     except Exception as e:  # tolerate broken GGUFs
         out["error"] = f"gguf parse failed: {e}"
     return out
@@ -432,6 +440,21 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             "--layer", str(args.layer)]
     if args.limit:
         cmd += ["--limit", str(args.limit)]
+    # Stamp the vector's metadata with the real model's architecture and
+    # layer count (read from the configured GGUF) instead of placeholders.
+    try:
+        from atlas.cli.commands import fit as fit_module
+        model_path = fit_module._default_model_path()
+        if model_path:
+            meta = fit_module.read_gguf_meta(model_path)
+            if meta.architecture:
+                cmd += ["--model-hint", meta.architecture]
+            if meta.n_layers:
+                cmd += ["--layer-count", str(meta.n_layers)]
+    except Exception:
+        pass   # metadata stamps are informational — never block the build
+    built_ok = False     # training produced a vector in the container
+    copied_out = False   # the built vector survives in the container until True
     try:
         start = time.time()
         result = _docker_exec(container, cmd)
@@ -442,10 +465,24 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                         f"docker logs {container}{RESET if color else ''}")
             return 1
         _safe_print(f"  build completed in {elapsed:.1f}s")
+        built_ok = True
 
-        # 5. Copy result back + save to artifact dir
-        artifact_dir = args.artifact_dir or os.path.dirname(
-            _configured_vector_path())
+        # 5. Copy result back + save to artifact dir. The configured vector
+        # path is the CONTAINER view (/models/...); the host-side build must
+        # write to the bind-mounted models dir, not literally /models.
+        artifact_dir = args.artifact_dir
+        if not artifact_dir:
+            configured = _configured_vector_path()
+            resolved = _host_resolve_vector_path(configured, atlas_root)
+            if resolved.startswith("/models/"):
+                # No existing host file to anchor the translation (first
+                # build for this model) — target the bind-mount source.
+                env_dir = os.environ.get("ATLAS_MODELS_DIR", "models")
+                artifact_dir = (env_dir if os.path.isabs(env_dir)
+                                else os.path.normpath(
+                                    os.path.join(atlas_root, env_dir)))
+            else:
+                artifact_dir = os.path.dirname(resolved)
         os.makedirs(artifact_dir, exist_ok=True)
         out_path = args.out or os.path.join(artifact_dir, DEFAULT_VECTOR_NAME)
         _safe_print(f"[4/5] Copying built vector to {out_path}…")
@@ -478,21 +515,29 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             return 1
         _safe_print(f"  saved: {out_path} ({size} bytes)")
 
+        copied_out = True
         _safe_print("")
         _safe_print(f"  {GREEN if color else ''}Build complete.{RESET if color else ''}")
         _safe_print(f"  Next: restart llama-server so it picks up the new vector:")
-        _safe_print(f"    docker compose up -d --build llama-server --no-deps")
+        _safe_print(f"    docker compose restart llama-server")
         _safe_print(f"  Then verify: atlas asa check")
         _safe_print(f"  Or share it: atlas asa publish --repo USER/REPO")
         return 0
     finally:
-        # Clean up staged inputs + output in the container's /tmp.
-        # Leaving them would (1) waste space across repeated runs and
-        # (2) re-enable the stale-output bug for the NEXT run, since
-        # the pre-flight rm above only catches one prior failure.
-        for f in ("/tmp/build_steering_vector.py",
-                  "/tmp/contrast_pairs.jsonl",
-                  "/tmp/ast_edit_steering.gguf"):
+        # Clean up staged inputs in the container's /tmp. The built OUTPUT
+        # is only removed once it has been copied to the host — a failure
+        # between training and copy-out must leave the vector recoverable
+        # (`docker cp <container>:/tmp/ast_edit_steering.gguf .`), not
+        # destroy ~15 min of training. Staleness across runs is handled by
+        # the pre-flight rm above.
+        cleanup = ["/tmp/build_steering_vector.py",
+                   "/tmp/contrast_pairs.jsonl"]
+        if copied_out or not built_ok:
+            cleanup.append("/tmp/ast_edit_steering.gguf")
+        else:
+            _safe_print(f"  Built vector left in the container for recovery: "
+                        f"docker cp {container}:/tmp/ast_edit_steering.gguf .")
+        for f in cleanup:
             _docker_exec(container, ["rm", "-f", f])
 
 
@@ -581,9 +626,21 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  Hint:   {meta['model_hint']}")
 
     matched = lens_module._resolve_model_arg(args.model)
-    model_label = matched.name if matched else (args.model or "<unknown-model>")
-    base_model = (matched.model_display if matched
-                  else "<unknown base model>")
+    model_label = matched.name if matched else (args.model or "")
+    if not model_label:
+        # No model argument — fall back to the configured model, the same
+        # resolution every other subcommand uses.
+        try:
+            from atlas.cli.commands import fit as fit_module
+            mp = fit_module._default_model_path()
+            if mp:
+                model_label = os.path.splitext(os.path.basename(mp))[0]
+        except Exception:
+            pass
+    model_label = model_label or "<unknown-model>"
+    base_model = (matched.model_display if matched else
+                  (model_label if model_label != "<unknown-model>"
+                   else "<unknown base model>"))
     license_id = args.license or "apache-2.0"
 
     hf_repo = args.repo or f"<your-hf-username>/atlas-asa-{model_label.lower()}"
@@ -618,8 +675,11 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
             return 1
 
     _safe_print(f"[3/4] Rendering registry-PR body…")
+    # The vector file knows which layer it steers (direction.<N> tensor) —
+    # trust it over the --layer flag's default.
+    layer = meta.get("steered_layer") or args.layer
     pr_body = _render_asa_pr_body(model_label, hf_repo, base_model,
-                                    dim, args.layer, sha, license_id)
+                                    dim, layer, sha, license_id)
     if args.skip_pr or args.dry_run:
         _safe_print(f"[4/4] (skipping PR open — printing body for paste)")
         _safe_print("")
@@ -638,25 +698,29 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         _safe_print("")
         _safe_print(pr_body)
         return 0
-    _safe_print(f"[4/4] Opening registry-PR via `gh pr create`…")
-    # Only pass --head when ATLAS_PUBLISH_BRANCH is explicitly set; an
-    # empty --head crashes gh outright instead of inferring the current
-    # branch. Same fix as lens.py's publish flow.
-    gh_args = ["gh", "pr", "create",
-               "--repo", "itigges22/ATLAS",
-               "--title", f"Registry: add ASA vector for {model_label} "
-                          f"(via atlas asa publish)",
-               "--body", pr_body]
-    if branch := os.environ.get("ATLAS_PUBLISH_BRANCH", "").strip():
-        gh_args += ["--head", branch]
-    result = subprocess.run(gh_args, capture_output=True, text=True, timeout=30)
-    if result.returncode == 0:
+    # GitHub-API PR (shared with lens publish): commits a real registry
+    # edit — flips the model's asa_status to supported and records the
+    # vector's HF repo — no local git checkout required. The model must
+    # already have a registry entry (the lens publish PR adds it); when
+    # it doesn't, fall back to the printed body.
+    _safe_print(f"[4/4] Opening registry-PR via the GitHub API…")
+    title = (f"Registry: add ASA vector for {model_label} "
+             f"(via atlas asa publish)")
+    vector_name = os.path.basename(
+        _configured_vector_path()) or "ast_edit_steering.gguf"
+    pr_url = lens_module.open_registry_pr_via_api(
+        model_label, title, pr_body,
+        lambda content: lens_module._registry_set_asa(
+            content, model_label, hf_repo, [vector_name]),
+        color)
+    if pr_url:
         _safe_print(f"  {GREEN if color else ''}PR opened: "
-                    f"{result.stdout.strip()}{RESET if color else ''}")
+                    f"{pr_url}{RESET if color else ''}")
     else:
-        _safe_print(f"  {YELL if color else ''}gh pr create returned "
-                    f"{result.returncode} — printing body for paste"
-                    f"{RESET if color else ''}")
+        _safe_print(f"  {YELL if color else ''}Could not open the PR "
+                    f"automatically (is the model in the registry yet? the "
+                    f"lens publish PR adds the entry) — body below for "
+                    f"manual paste{RESET if color else ''}")
         _safe_print("")
         _safe_print(pr_body)
     return 0

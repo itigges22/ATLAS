@@ -300,15 +300,21 @@ class CheckVerdict:
 
 
 def _atlas_root() -> str:
-    """Best-effort: walk up from CWD looking for docker-compose.yml, fall back to CWD."""
-    cur = os.path.abspath(os.getcwd())
-    while True:
-        if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return os.path.abspath(os.getcwd())
-        cur = parent
+    """The repo root (the directory holding docker-compose.yml). Resolved from
+    this file first so commands work from any cwd, then by walking up from the
+    cwd; falls back to the cwd."""
+    starts = (os.path.dirname(os.path.abspath(__file__)),
+              os.path.abspath(os.getcwd()))
+    for start in starts:
+        cur = start
+        while True:
+            if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    return os.path.abspath(os.getcwd())
 
 
 def _check_model(arg: Optional[str], atlas_root: str) -> CheckVerdict:
@@ -451,45 +457,161 @@ def _emit_check(args: argparse.Namespace, color: bool) -> int:
 # atlas lens build  (PC-058)
 # ---------------------------------------------------------------------------
 
-def _extract_training_embeddings(samples: List[Dict],
-                                  llama_url: str,
-                                  color: bool) -> Dict:
-    """For each sample {text, label}, POST /embedding and collect.
+def _embed_text(llama_url: str, text: str,
+                _depth: int = 0) -> "tuple[Optional[List[float]], int]":
+    """Embed one text via /embedding. Returns (vector, pieces_used).
 
-    Returns a dict compatible with training.train_cost_field's `data` arg:
-        {"embeddings": [List[float], ...], "labels": [0|1, ...]}
+    llama-server rejects pooled-embedding inputs longer than its micro-batch
+    (`-ub`) with an "input is too large" error — common for runaway FAIL
+    candidates that hit the generation cap. On failure, split at a line
+    boundary and length-weighted-average the halves' embeddings (the lens
+    mean-pools per-token states anyway, so chunk-averaging is the same
+    operation at coarser granularity). Depth-capped at 4 (16 chunks).
     """
-    embeddings: List[List[float]] = []
-    labels: List[int] = []
-    n = len(samples)
-    for i, s in enumerate(samples):
-        text = s.get("text") or s.get("content") or ""
-        label = int(s.get("label", 0))
-        if not text:
-            continue
-        resp = _http_post_json(f"{llama_url}/embedding",
-                               {"content": text}, timeout=60.0)
-        if not isinstance(resp, list) or not resp:
-            _safe_print(f"  WARN: sample {i+1}/{n} returned empty response")
-            continue
+    resp = _http_post_json(f"{llama_url}/embedding",
+                           {"content": text}, timeout=60.0)
+    vec = None
+    if isinstance(resp, list) and resp and isinstance(resp[0], dict):
         raw = resp[0].get("embedding")
         if isinstance(raw, list) and raw:
             if isinstance(raw[0], list):
                 # per-token: mean-pool
                 n_tok = len(raw)
                 dim = len(raw[0])
-                pooled = [0.0] * dim
-                for tok in raw:
-                    for j, v in enumerate(tok):
-                        pooled[j] += v
-                pooled = [v / n_tok for v in pooled]
-                embeddings.append(pooled)
+                vec = [sum(tok[j] for tok in raw) / n_tok
+                       for j in range(dim)]
             else:
-                embeddings.append(raw)
+                vec = raw
+    if vec is not None:
+        return vec, 1
+    if _depth >= 4 or len(text) < 2:
+        return None, 0
+    mid = text.rfind("\n", 0, len(text) // 2 + 1)
+    if mid <= 0:
+        mid = len(text) // 2
+    left, right = text[:mid], text[mid:]
+    if not left.strip() or not right.strip():
+        left, right = text[:len(text) // 2], text[len(text) // 2:]
+    va, pa = _embed_text(llama_url, left, _depth + 1)
+    vb, pb = _embed_text(llama_url, right, _depth + 1)
+    if va is None and vb is None:
+        return None, 0
+    if va is None or vb is None:
+        # Salvage the half that embedded — for the runaway/repetitive texts
+        # that hit this path, any chunk is representative.
+        return (va or vb), (pa or pb)
+    wa, wb = len(left), len(right)
+    return ([(a * wa + b * wb) / (wa + wb) for a, b in zip(va, vb)],
+            pa + pb)
+
+
+def _extract_training_embeddings(samples: List[Dict],
+                                  llama_url: str,
+                                  color: bool,
+                                  cache_path: Optional[str] = None,
+                                  expect_dim: int = 0) -> Dict:
+    """For each sample {text, label}, POST /embedding and collect.
+
+    Embeddings are cached on disk keyed by text hash (extraction dominates
+    build wall-clock — ~15 min per few hundred samples — and retrains on a
+    grown results dir re-embed mostly the same texts). Entries whose dim
+    doesn't match the probed model are ignored, so a model switch
+    invalidates the cache naturally.
+
+    Returns a dict compatible with training.train_cost_field's `data` arg:
+        {"embeddings": [List[float], ...], "labels": [0|1, ...]}
+    """
+    import hashlib
+
+    cache: Dict[str, List[float]] = {}
+    if cache_path and os.path.isfile(cache_path):
+        try:
+            with open(cache_path, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        entry = jsonlib.loads(line)
+                        if not expect_dim or entry.get("dim") == expect_dim:
+                            cache[entry["h"]] = entry["v"]
+                    except (jsonlib.JSONDecodeError, KeyError, TypeError):
+                        continue
+        except OSError:
+            pass
+
+    cache_fh = None
+    if cache_path:
+        try:
+            cache_fh = open(cache_path, "a", encoding="utf-8")
+        except OSError:
+            cache_fh = None
+
+    embeddings: List[List[float]] = []
+    labels: List[int] = []
+    n = len(samples)
+    hits = 0
+    try:
+        for i, s in enumerate(samples):
+            text = s.get("text") or s.get("content") or ""
+            label = int(s.get("label", 0))
+            if not text:
+                continue
+            h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            vec = cache.get(h)
+            if vec is not None:
+                hits += 1
+            else:
+                vec, pieces = _embed_text(llama_url, text)
+                if vec is None:
+                    _safe_print(f"  WARN: sample {i+1}/{n}: embedding failed "
+                                f"even after chunking — skipped")
+                    continue
+                if pieces > 1:
+                    _safe_print(f"  sample {i+1}/{n}: longer than the "
+                                f"server's micro-batch — embedded as "
+                                f"{pieces} chunks, mean-pooled")
+                cache[h] = vec   # duplicate texts later in this run hit
+                if cache_fh:
+                    cache_fh.write(jsonlib.dumps(
+                        {"h": h, "dim": len(vec), "v": vec}) + "\n")
+                    cache_fh.flush()
+            embeddings.append(vec)
             labels.append(label)
-        if (i + 1) % 25 == 0 or (i + 1) == n:
-            _safe_print(f"  extracted {i+1}/{n} embeddings")
+            if (i + 1) % 25 == 0 or (i + 1) == n:
+                _safe_print(f"  extracted {i+1}/{n} embeddings")
+    finally:
+        if cache_fh:
+            cache_fh.close()
+    if hits:
+        _safe_print(f"  ({hits} from cache, {len(embeddings) - hits} embedded "
+                    f"fresh)")
     return {"embeddings": embeddings, "labels": labels}
+
+
+def _load_telemetry_embeddings(emb_path: str,
+                                expect_dim: int) -> "tuple[List[Dict], int]":
+    """Load labeled embeddings banked by v3_runner during a bench run.
+
+    Every sandbox-tested candidate (probe + PlanSearch fan-out + repair
+    iterations) gets its embedding + PASS/FAIL label appended to
+    telemetry/embeddings.emb as the bench runs — in V3 mode that is several
+    labeled samples per task, not one. Returns ({"embedding", "label"}
+    dicts, n_skipped) with UNKNOWN labels and dim mismatches dropped.
+    """
+    root = _atlas_root()
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from benchmark.v3.embedding_store import EmbeddingReader
+
+    out: List[Dict] = []
+    skipped = 0
+    for rec in EmbeddingReader(emb_path).read_all():
+        label = {"PASS": 1, "FAIL": 0}.get(rec.get("label"))
+        emb = rec.get("embedding")
+        if label is None or not emb or (expect_dim
+                                        and len(emb) != expect_dim):
+            skipped += 1
+            continue
+        out.append({"embedding": emb, "label": label})
+    return out, skipped
 
 
 def _load_training_samples(path: Optional[str]) -> List[Dict]:
@@ -524,6 +646,28 @@ def _load_training_samples(path: Optional[str]) -> List[Dict]:
     return []
 
 
+def _load_results_samples(results_dir: str) -> List[Dict]:
+    """Load training samples from a benchmark results directory — the per-task
+    JSONs written by `atlas bench` (each has `code` + `passed`). Maps to the
+    same {text, label} shape `_extract_training_embeddings` consumes, so the
+    model trains C(x) on its own pass/fail candidates."""
+    import glob
+    samples: List[Dict] = []
+    for fp in sorted(glob.glob(os.path.join(results_dir, "*.json"))):
+        try:
+            with open(fp) as fh:
+                d = jsonlib.load(fh)
+        except (OSError, jsonlib.JSONDecodeError):
+            continue
+        if not isinstance(d, dict):
+            continue  # stray non-result JSON (array/scalar) in the dir
+        code = d.get("code")
+        if not code:
+            continue
+        samples.append({"text": code, "label": 1 if d.get("passed") else 0})
+    return samples
+
+
 def _emit_build(args: argparse.Namespace, color: bool) -> int:
     """Train fresh Lens artifacts for the model llama-server has loaded.
 
@@ -537,7 +681,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
 
     # 1. Pre-flight: confirm we can probe the model. Reuses the check path
     # so build's UX agrees with check's "this is/isn't compat" verdict.
-    _safe_print("[1/4] Probing llama-server…")
+    _safe_print("[1/5] Probing llama-server…")
     verdict = _check_model(args.model, atlas_root)
     if verdict.verdict == "incompatible":
         _safe_print(f"  {RED if color else ''}Cannot proceed: "
@@ -552,15 +696,55 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         return 0
 
     # 2. Load training data
-    _safe_print("[2/4] Loading training samples…")
-    if not args.samples:
-        _safe_print(f"  {RED if color else ''}--samples PATH is required. "
-                    f"Point it at a labeled JSON/JSONL file.{RESET if color else ''}")
-        _safe_print("  Format: [{\"text\": str, \"label\": 0|1}, ...]")
-        _safe_print("  Pull the canonical training set from:")
-        _safe_print("    huggingface.co/datasets/itigges22/ATLAS")
+    _safe_print("[2/5] Loading training samples…")
+    if getattr(args, "from_results", None) and args.samples:
+        _safe_print(f"  {RED if color else ''}--from-results and --samples are "
+                    f"mutually exclusive — pass one.{RESET if color else ''}")
         return 1
-    samples = _load_training_samples(args.samples)
+    if getattr(args, "from_results", None):
+        results_dir = args.from_results
+        # A relative path that doesn't exist under the cwd is resolved against
+        # the repo root, so the command works from any directory.
+        if not os.path.isdir(results_dir):
+            rooted = os.path.join(atlas_root, results_dir)
+            if os.path.isdir(rooted):
+                results_dir = rooted
+        samples = _load_results_samples(results_dir)
+        if not samples:
+            _safe_print(f"  {RED if color else ''}No usable samples in "
+                        f"{results_dir} — expected per-task JSONs with "
+                        f"`code` + `passed` (from `atlas bench`)."
+                        f"{RESET if color else ''}")
+            # Common slip: pointing at the run root instead of the per-task dir.
+            for sub in ("v3_lcb/per_task", "per_task"):
+                cand = os.path.join(results_dir, sub)
+                if os.path.isdir(cand):
+                    _safe_print(f"  Did you mean: --from-results {cand}")
+                    break
+            return 1
+    elif args.samples:
+        samples = _load_training_samples(args.samples)
+    else:
+        _safe_print(f"  {RED if color else ''}Provide --from-results <dir> or "
+                    f"--samples <file>.{RESET if color else ''}")
+        _safe_print("  --from-results: a benchmark/results/<run>/v3_lcb/per_task "
+                    "dir (this model's own candidates, via `atlas bench`)")
+        _safe_print("  --samples: a labeled [{\"text\": str, \"label\": 0|1}, ...] "
+                    "file (e.g. huggingface.co/datasets/itigges22/ATLAS)")
+        return 1
+    # Coerce labels to int once, here; rows with malformed labels are dropped
+    # so the counting and embedding-extraction below can rely on clean ints.
+    cleaned = []
+    n_bad = 0
+    for s in samples:
+        try:
+            s["label"] = int(s.get("label", 0))
+            cleaned.append(s)
+        except (TypeError, ValueError):
+            n_bad += 1
+    if n_bad:
+        _safe_print(f"  WARN: skipped {n_bad} sample(s) with non-integer labels")
+    samples = cleaned
     if len(samples) < 50:
         _safe_print(f"  {RED if color else ''}Only {len(samples)} samples "
                     f"loaded. Need >=50 for meaningful training (>=200 "
@@ -575,9 +759,18 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         return 1
 
     # 3. Extract embeddings via /embedding
-    _safe_print(f"[3/4] Extracting embeddings via {verdict.probe.url}…")
+    _safe_print(f"[3/5] Extracting embeddings via {verdict.probe.url}…")
+    if getattr(args, "from_results", None):
+        cache_path = os.path.normpath(
+            os.path.join(results_dir, os.pardir, "embeddings_cache.jsonl"))
+    elif args.samples:
+        cache_path = args.samples + ".embcache.jsonl"
+    else:
+        cache_path = None
     start = time.time()
-    data = _extract_training_embeddings(samples, verdict.probe.url, color)
+    data = _extract_training_embeddings(
+        samples, verdict.probe.url, color, cache_path=cache_path,
+        expect_dim=verdict.probe.embedding_dim or 0)
     elapsed = time.time() - start
     if not data["embeddings"]:
         _safe_print(f"  {RED if color else ''}No embeddings extracted. "
@@ -586,20 +779,75 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     _safe_print(f"  Extracted {len(data['embeddings'])} embeddings "
                 f"in {elapsed:.1f}s")
 
+    # Merge the bench run's banked per-candidate embeddings (PASS/FAIL
+    # labeled by the sandbox). A V3-mode bench tests several candidates per
+    # task and banks each one, so this multiplies the training set without
+    # any extra labeling or embedding work. Near-identical vectors (the
+    # selected candidate appears in both sources) are deduped.
+    if getattr(args, "from_results", None) and not getattr(
+            args, "no_telemetry", False):
+        emb_path = os.path.normpath(os.path.join(
+            results_dir, os.pardir, os.pardir, "telemetry", "embeddings.emb"))
+        if os.path.isfile(emb_path):
+            try:
+                import numpy as np
+                dim = len(data["embeddings"][0])
+                tele, skipped = _load_telemetry_embeddings(emb_path, dim)
+                # The selected candidate appears in both sources, but the
+                # banked copy was embedded mid-bench under concurrent
+                # batching — same text, FP noise up to ~5e-5 per element.
+                # Dedup numerically: a telemetry vector within 1e-3 (L-inf)
+                # of any kept vector is the same sample; genuinely
+                # different candidates differ by orders of magnitude more.
+                kept = np.array(data["embeddings"], dtype=np.float32)
+                merged = dups = 0
+                for rec in tele:
+                    v = np.array(rec["embedding"], dtype=np.float32)
+                    if np.abs(kept - v).max(axis=1).min() < 1e-3:
+                        dups += 1
+                        continue
+                    kept = np.vstack([kept, v])
+                    data["embeddings"].append(rec["embedding"])
+                    data["labels"].append(rec["label"])
+                    merged += 1
+                _safe_print(f"  Merged {merged} banked candidate embeddings "
+                            f"from {os.path.basename(emb_path)} "
+                            f"({dups} duplicates of extracted samples"
+                            + (f", {skipped} skipped" if skipped else "")
+                            + ") — pass --no-telemetry to train on the "
+                            "results dir alone")
+                n_p = sum(data["labels"])
+                _safe_print(f"  Training set: {len(data['labels'])} samples "
+                            f"(PASS={n_p}, FAIL={len(data['labels']) - n_p})")
+            except Exception as e:
+                _safe_print(f"  (telemetry merge unavailable: {e})")
+
     if args.dry_run:
         _safe_print("  (dry-run) skipping training + save")
         return 0
 
     # 4. Train + save
-    _safe_print(f"[4/4] Training CostField "
+    _safe_print(f"[4/5] Training CostField "
                 f"({args.epochs} epochs, lr={args.lr})…")
     try:
+        # The training module lives in the repo, not on the host's default
+        # path — resolve it from the install root so this works from any cwd.
+        gl_dir = os.path.join(atlas_root, "geometric-lens")
+        if gl_dir not in sys.path:
+            sys.path.insert(0, gl_dir)
         from geometric_lens.training import train_cost_field, save_cost_field
     except ImportError as e:
         _safe_print(f"  {RED if color else ''}Could not import training "
                     f"module: {e}.{RESET if color else ''}")
-        _safe_print("  Make sure you're running from an ATLAS checkout "
-                    "(geometric-lens/ must be on PYTHONPATH).")
+        if "torch" in str(e):
+            _safe_print("  Training runs on the host and needs PyTorch "
+                        "(the CPU build is enough for this small model):")
+            _safe_print("    pip install torch --index-url "
+                        "https://download.pytorch.org/whl/cpu")
+        else:
+            _safe_print("  The atlas CLI must point at an ATLAS checkout "
+                        "containing geometric-lens/ (check `pip show atlas` "
+                        "→ Editable project location).")
         return 1
     result = train_cost_field(data, epochs=args.epochs, lr=args.lr,
                               margin=args.margin)
@@ -612,16 +860,62 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     _safe_print(f"  Train AUC: {train_auc:.4f}  |  Test AUC: {test_auc:.4f} "
                 f"(best across epochs)")
     if test_auc < 0.7:
-        _safe_print(f"  {YELL if color else ''}Test AUC < 0.70 — model is "
-                    f"undertrained. Consider more samples or more "
-                    f"epochs.{RESET if color else ''}")
+        if train_auc >= 0.95:
+            # Memorized the train fold but doesn't generalize: the sample
+            # set is too small for the capacity. Epochs won't help.
+            _safe_print(f"  {YELL if color else ''}Test AUC < 0.70 with "
+                        f"train AUC {train_auc:.2f} — overfit on too few "
+                        f"samples. More training data is the fix (e.g. a "
+                        f"larger `atlas bench --tasks N` run); more epochs "
+                        f"won't help.{RESET if color else ''}")
+        else:
+            _safe_print(f"  {YELL if color else ''}Test AUC < 0.70 with "
+                        f"train AUC {train_auc:.2f} — undertrained. Try "
+                        f"more epochs (--epochs 400) or a higher learning "
+                        f"rate.{RESET if color else ''}")
 
     artifact_dir = args.artifact_dir or verdict.artifact_dir
     os.makedirs(artifact_dir, exist_ok=True)
     cost_path = save_cost_field(result["model"], save_dir=artifact_dir)
     _safe_print(f"  Saved: {cost_path}")
+
+    # 5. Train + save G(x) on the same embeddings. The lens scores with
+    # both halves — C(x) energy and the G(x) correctness classifier — and
+    # G(x)'s PCA projection is dimension-coupled to the model just like
+    # C(x), so a build that stopped here would leave G(x) serving the
+    # previous model's geometry (or erroring on the dim mismatch).
+    _safe_print(f"[5/5] Training G(x) XGBoost…")
+    try:
+        from geometric_lens.training import train_gx, save_gx
+        gx_result = train_gx(data)
+    except ImportError as e:
+        _safe_print(f"  {RED if color else ''}Could not import the G(x) "
+                    f"trainer: {e}.{RESET if color else ''}")
+        _safe_print("  G(x) training needs XGBoost + scikit-learn on the "
+                    "host:")
+        _safe_print("    pip install xgboost scikit-learn")
+        _safe_print("  C(x) is saved; embeddings are cached, so re-running "
+                    "this command after installing completes the build in "
+                    "seconds.")
+        return 1
+    except ValueError as e:
+        _safe_print(f"  {RED if color else ''}G(x) training skipped: "
+                    f"{e}{RESET if color else ''}")
+        _safe_print("  C(x) is saved. Add more bench samples and re-run "
+                    "(embeddings are cached).")
+        return 1
+    gx_path = save_gx(gx_result, save_dir=artifact_dir)
+    _safe_print(f"  Saved: {gx_path}")
+    _safe_print(f"  G(x) CV AUC: {gx_result['cv_auc_mean']:.4f}")
+
     _safe_print("")
-    _safe_print(f"  {GREEN if color else ''}Build complete.{RESET if color else ''}")
+    _safe_print(f"  {GREEN if color else ''}Build complete "
+                f"(C(x) + G(x)).{RESET if color else ''}")
+    _safe_print("  The lens service loads artifacts at startup — restart it "
+                "to pick these up:")
+    _safe_print(f"    {BOLD if color else ''}docker compose restart "
+                f"geometric-lens{RESET if color else ''}")
+    _safe_print("  then `atlas lens check` should report compat.")
     _safe_print(f"  Next: `atlas lens publish` to share these artifacts and "
                 f"generate a registry-PR (PC-059), or manually update the "
                 f"registry entry for "
@@ -649,6 +943,297 @@ def _hf_token() -> Optional[str]:
     return (os.environ.get("HF_TOKEN")
             or os.environ.get("HUGGINGFACE_HUB_TOKEN")
             or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
+
+
+_UPSTREAM_REPO = "itigges22/ATLAS"
+_REGISTRY_PATH = "atlas/cli/commands/model_registry.py"
+
+
+def _gh_api(api_args: List[str], payload: Optional[dict] = None):
+    """Run `gh api …`, return (ok, parsed-json-or-text, stderr)."""
+    import subprocess
+    cmd = ["gh", "api"] + api_args
+    stdin = None
+    if payload is not None:
+        cmd += ["--input", "-"]
+        stdin = jsonlib.dumps(payload)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           input=stdin, timeout=60)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return False, None, str(e)
+    if r.returncode != 0:
+        return False, None, r.stderr.strip()[:300]
+    try:
+        return True, jsonlib.loads(r.stdout), ""
+    except jsonlib.JSONDecodeError:
+        return True, r.stdout.strip(), ""
+
+
+def _render_registry_entry(model_label: str, model_file: str,
+                           size_gb: float, tier: str, dim: int,
+                           hf_repo: str, license_id: str,
+                           artifact_files: List[str]) -> str:
+    """A complete, committable Model(...) entry for an unregistered model."""
+    files = ", ".join(f'"{f}"' for f in artifact_files)
+    dim_label = str(dim) if dim else "unknown"
+    return f'''    Model(
+        name="{model_label}",
+        tier="{tier}",
+        model_file="{model_file}",
+        model_display="{model_label}",
+        model_size_gb={size_gb},
+        lens_status="supported",
+        download_url=None,
+        sha256=None,
+        license="{license_id}",
+        lens_artifact_files=[{files}],
+        lens_hf_repo="{hf_repo}",
+        notes="Added via `atlas lens publish` — lens artifacts "
+              "({dim_label}-dim) at https://huggingface.co/{hf_repo}. "
+              "download_url not captured at publish time; maintainers "
+              "can fill it in for `atlas model install` support.",
+    ),
+'''
+
+
+def _registry_insert_entry(content: str, model_label: str,
+                           entry: str) -> Optional[str]:
+    """Insert a Model entry before the REGISTRY list's closing bracket.
+    Returns the new content, or None when insertion isn't safe (model
+    already present, or the anchor isn't found).
+
+    The upstream registry can be older than the publisher's install —
+    kwargs the upstream Model dataclass doesn't declare yet are stripped
+    from the entry so the committed file stays importable.
+    """
+    if f'name="{model_label}"' in content:
+        return None
+    anchor = "REGISTRY: List[Model] = ["
+    start = content.find(anchor)
+    if start < 0:
+        return None
+    close = content.find("\n]", start)
+    if close < 0:
+        return None
+    schema = content[:start]   # the Model dataclass definition lives above
+    for field_name in ("lens_hf_repo", "asa_hf_repo"):
+        if f"{field_name}:" not in schema:
+            entry = "\n".join(l for l in entry.splitlines()
+                              if not l.strip().startswith(f"{field_name}="))
+            if not entry.endswith("\n"):
+                entry += "\n"
+    return content[:close + 1] + entry + content[close + 1:]
+
+
+def _registry_set_asa(content: str, model_label: str, hf_repo: str,
+                      artifact_files: List[str]) -> Optional[str]:
+    """Within the named entry's block, set asa_status to supported and
+    record the vector's HF repo + files. Returns new content or None when
+    the entry (or a safe edit point) can't be found."""
+    import re
+    m = re.search(rf'(    Model\(\s*\n\s*name="{re.escape(model_label)}".*?'
+                  rf'\n    \),)', content, re.DOTALL)
+    if not m:
+        return None
+    block = m.group(1)
+    files = ", ".join(f'"{f}"' for f in artifact_files)
+    asa_lines = (f'        asa_status="supported",\n'
+                 f'        asa_artifact_files=[{files}],\n')
+    # Only set fields the upstream dataclass declares (it can be older
+    # than the publisher's install) — but never drop the download
+    # location: without `asa_hf_repo` in the schema, record the vector's
+    # HF repo as a comment so the entry still points at it (promotable
+    # to the field once the newer schema lands).
+    if "asa_hf_repo:" in content[:m.start()]:
+        asa_lines += f'        asa_hf_repo="{hf_repo}",\n'
+    else:
+        asa_lines = (f'        # ASA vector: https://huggingface.co/'
+                     f'{hf_repo}\n'
+                     f'        # (promote to asa_hf_repo= once the '
+                     f'registry schema carries it)\n') + asa_lines
+    new_block = re.sub(r'\n\s*asa_status="[^"]*",', "", block)
+    new_block = re.sub(r'\n\s*asa_artifact_files=\[[^\]]*\],', "", new_block)
+    new_block = re.sub(r'\n\s*asa_hf_repo="[^"]*",', "", new_block)
+    new_block = new_block.replace("\n    ),", "\n" + asa_lines + "    ),")
+    return content.replace(block, new_block)
+
+
+def open_registry_pr_via_api(model_label: str, title: str, body: str,
+                             edit_fn, color: bool) -> Optional[str]:
+    """Open a registry PR through the GitHub API — no local git checkout.
+
+    edit_fn(content) -> new content or None. Flow: resolve user + base
+    branch (prefers `dev`), fork if the user can't push upstream, branch,
+    commit the edited registry file, open the PR against the upstream.
+    Returns the PR URL, or None on any failure (caller falls back to
+    printing the body).
+    """
+    import base64
+
+    upstream = os.environ.get("ATLAS_UPSTREAM_REPO", _UPSTREAM_REPO)
+    owner = upstream.split("/")[0]
+
+    ok, login, err = _gh_api(["user", "-q", ".login"])
+    if not ok:
+        _safe_print(f"  gh api user failed: {err}")
+        return None
+    login = str(login).strip()
+
+    ok, _, _ = _gh_api([f"repos/{upstream}/branches/dev"])
+    base = "dev" if ok else None
+    if base is None:
+        ok, repo_info, err = _gh_api([f"repos/{upstream}"])
+        if not ok:
+            _safe_print(f"  gh api repos/{upstream} failed: {err}")
+            return None
+        base = repo_info.get("default_branch", "main")
+
+    if login == owner:
+        target = upstream
+    else:
+        ok, fork, err = _gh_api([f"repos/{upstream}/forks", "-X", "POST"])
+        if not ok:
+            _safe_print(f"  fork failed: {err}")
+            return None
+        target = fork.get("full_name", f"{login}/{upstream.split('/')[1]}")
+        # Best-effort: bring the fork's base branch up to date.
+        _gh_api([f"repos/{target}/merge-upstream", "-X", "POST"],
+                payload={"branch": base})
+
+    ok, br, err = _gh_api([f"repos/{target}/branches/{base}"])
+    if not ok:
+        _safe_print(f"  branch {base} not found on {target}: {err}")
+        return None
+    head_sha = br["commit"]["sha"]
+
+    ok, blob, err = _gh_api(
+        [f"repos/{target}/contents/{_REGISTRY_PATH}?ref={base}"])
+    if not ok:
+        _safe_print(f"  fetch registry file failed: {err}")
+        return None
+    content = base64.b64decode(blob["content"]).decode("utf-8")
+
+    new_content = edit_fn(content)
+    if new_content is None:
+        # The edit doesn't apply to the base branch. Common cause: a prior
+        # `atlas * publish` PR holding this model's entry is still open —
+        # stack this edit onto that PR's branch instead of failing.
+        slug = "".join(c if c.isalnum() else "-" for c in model_label.lower())
+        ok, prs, _ = _gh_api(
+            [f"repos/{upstream}/pulls?state=open&base={base}"])
+        for pr in (prs if ok and isinstance(prs, list) else []):
+            head_ref = pr.get("head", {}).get("ref", "")
+            if not (head_ref.startswith("atlas-publish/")
+                    and slug in head_ref):
+                continue
+            head_repo = pr.get("head", {}).get("repo", {}).get("full_name")
+            if not head_repo:
+                continue
+            ok, pr_blob, err = _gh_api(
+                [f"repos/{head_repo}/contents/{_REGISTRY_PATH}"
+                 f"?ref={head_ref}"])
+            if not ok:
+                continue
+            pr_content = base64.b64decode(pr_blob["content"]).decode("utf-8")
+            stacked = edit_fn(pr_content)
+            if stacked is None:
+                continue
+            pr_num = pr.get("number")
+            if head_repo == upstream:
+                # The pending branch lives upstream — open a SEPARATE PR
+                # based on it. Its diff shows only this edit; when the
+                # earlier PR merges (delete its branch), GitHub retargets
+                # this one to the base branch automatically.
+                ok, head_br, err = _gh_api(
+                    [f"repos/{upstream}/branches/{head_ref}"])
+                if not ok:
+                    continue
+                new_branch = f"{head_ref}-next-{int(time.time())}"
+                ok, _, err = _gh_api(
+                    [f"repos/{upstream}/git/refs", "-X", "POST"],
+                    payload={"ref": f"refs/heads/{new_branch}",
+                             "sha": head_br["commit"]["sha"]})
+                if not ok:
+                    _safe_print(f"  branch off PR #{pr_num} failed: {err}")
+                    continue
+                ok, _, err = _gh_api(
+                    [f"repos/{upstream}/contents/{_REGISTRY_PATH}",
+                     "-X", "PUT"],
+                    payload={"message": title,
+                             "content": base64.b64encode(
+                                 stacked.encode("utf-8")).decode("ascii"),
+                             "sha": pr_blob["sha"],
+                             "branch": new_branch})
+                if not ok:
+                    _safe_print(f"  commit failed: {err}")
+                    continue
+                note = (f"\n\n---\n*Stacked on #{pr_num} (this model's "
+                        f"entry lands there). Merge #{pr_num} with branch "
+                        f"deletion and GitHub retargets this PR to `{base}` "
+                        f"automatically — its diff shows only this change.*")
+                ok, pr2, err = _gh_api(
+                    [f"repos/{upstream}/pulls", "-X", "POST"],
+                    payload={"title": title, "body": body + note,
+                             "head": new_branch, "base": head_ref})
+                if not ok:
+                    _safe_print(f"  open stacked PR failed: {err}")
+                    continue
+                _safe_print(f"  Entry is pending in open PR #{pr_num} — "
+                            f"opened a separate PR stacked on it (diff "
+                            f"shows only this change).")
+                return pr2.get("html_url")
+            # Fork case: a PR's base must be an upstream branch, so a
+            # separate stacked PR isn't expressible — commit onto the
+            # pending PR's branch instead (one PR, both changes).
+            ok, _, err = _gh_api(
+                [f"repos/{head_repo}/contents/{_REGISTRY_PATH}", "-X", "PUT"],
+                payload={"message": title,
+                         "content": base64.b64encode(
+                             stacked.encode("utf-8")).decode("ascii"),
+                         "sha": pr_blob["sha"],
+                         "branch": head_ref})
+            if not ok:
+                _safe_print(f"  stacking onto PR #{pr_num} failed: {err}")
+                continue
+            _safe_print(f"  Entry is pending in open PR #{pr_num} — this "
+                        f"edit was committed onto its branch (forks can't "
+                        f"host a separate stacked PR; one PR, both "
+                        f"changes).")
+            return pr.get("html_url")
+        _safe_print("  registry edit not applicable (entry state differs "
+                    "upstream, and no open publish PR holds it) — falling "
+                    "back to the printed body.")
+        return None
+
+    slug = "".join(c if c.isalnum() else "-" for c in model_label.lower())
+    branch = f"atlas-publish/{slug}-{int(time.time())}"
+    ok, _, err = _gh_api([f"repos/{target}/git/refs", "-X", "POST"],
+                         payload={"ref": f"refs/heads/{branch}",
+                                  "sha": head_sha})
+    if not ok:
+        _safe_print(f"  create branch failed: {err}")
+        return None
+
+    ok, _, err = _gh_api(
+        [f"repos/{target}/contents/{_REGISTRY_PATH}", "-X", "PUT"],
+        payload={"message": title,
+                 "content": base64.b64encode(
+                     new_content.encode("utf-8")).decode("ascii"),
+                 "sha": blob["sha"],
+                 "branch": branch})
+    if not ok:
+        _safe_print(f"  commit failed: {err}")
+        return None
+
+    head = branch if target == upstream else f"{login}:{branch}"
+    ok, pr, err = _gh_api([f"repos/{upstream}/pulls", "-X", "POST"],
+                          payload={"title": title, "body": body,
+                                   "head": head, "base": base})
+    if not ok:
+        _safe_print(f"  open PR failed: {err}")
+        return None
+    return pr.get("html_url")
 
 
 def _gh_available() -> bool:
@@ -829,7 +1414,8 @@ flow; PC-060 (#102) tracks the eventual auto-merge pipeline.
 
 def _render_registry_pr_body(model_name: str, hf_repo: str,
                               base_model: str, dim: int, sha256: str,
-                              license_id: str) -> str:
+                              license_id: str,
+                              artifact_files: Optional[List[str]] = None) -> str:
     """Markdown body for the registry-add PR.
 
     Includes the suggested Python diff so the maintainer can paste it
@@ -865,7 +1451,7 @@ Model(
     # ... existing tier / model_file / model_size_gb / download_url ...
     lens_status="supported",
     lens_artifact_dir=None,  # uses ATLAS_LENS_MODELS dir; per-model layout TBD by PC-058 follow-on
-    lens_artifact_files=["cost_field.pt"],
+    lens_artifact_files={(artifact_files or ["cost_field.pt"])!r},
     license="{license_id}",
 ),
 ```
@@ -915,10 +1501,30 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                     f"{RESET if color else ''}")
         return 1
 
-    metric_path = os.path.join(artifact_dir, "metric_tensor.pt")
     files_to_upload = ["cost_field.pt"]
-    if os.path.isfile(metric_path):
-        files_to_upload.append("metric_tensor.pt")
+    # Pickle-free twin: include only when at least as fresh as the .pt —
+    # an older safetensors is a previous model's weights.
+    st_path = os.path.join(artifact_dir, "cost_field.safetensors")
+    if (os.path.isfile(st_path)
+            and os.path.getmtime(st_path) >= os.path.getmtime(cost_path)):
+        files_to_upload.append("cost_field.safetensors")
+    # G(x) artifacts ship with C(x) — the build trains both halves, and a
+    # registry consumer who only gets cost_field.pt would run with a
+    # dormant (or wrong-dimension) G(x). (G(x) itself is XGBoost trees in
+    # native JSON — already pickle-free; safetensors doesn't apply.)
+    for opt in ("gx_xgboost.json", "gx_weights.json"):
+        if os.path.isfile(os.path.join(artifact_dir, opt)):
+            files_to_upload.append(opt)
+    if "gx_xgboost.json" not in files_to_upload:
+        _safe_print(f"  {YELL if color else ''}No gx_xgboost.json in "
+                    f"{artifact_dir} — publishing C(x) only. Re-run "
+                    f"`atlas lens build` to train both halves."
+                    f"{RESET if color else ''}")
+        # Legacy G(x) carrier — only relevant when the JSON pair is absent.
+        # `lens build` doesn't refresh this file, so on a retrained dir it
+        # is a previous model's artifact and must not ship.
+        if os.path.isfile(os.path.join(artifact_dir, "metric_tensor.pt")):
+            files_to_upload.append("metric_tensor.pt")
 
     # 2. Compute SHA + inspect
     _safe_print(f"[1/5] Hashing {cost_path}…")
@@ -937,6 +1543,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     _safe_print(f"  Files:  {', '.join(files_to_upload)}")
 
     base_model = (matched.model_display if matched else
+                  args.model or
                   os.path.basename(cost_path).replace(".pt", ""))
     license_id = args.license or "apache-2.0"
 
@@ -1002,7 +1609,8 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     # 4. Render registry-PR body
     _safe_print(f"[3/5] Rendering registry-PR body…")
     pr_body = _render_registry_pr_body(model_label, hf_repo, base_model,
-                                         dim, sha, license_id)
+                                         dim, sha, license_id,
+                                         artifact_files=files_to_upload)
 
     # 5. Open PR (or print body for paste)
     if args.skip_pr or args.dry_run:
@@ -1029,37 +1637,48 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                     "into https://github.com/itigges22/ATLAS/compare manually.")
         return 0
 
-    _safe_print(f"[4/5] Opening registry-PR via `gh pr create`…")
-    import subprocess
-    # Only pass --head when ATLAS_PUBLISH_BRANCH is explicitly set; gh
-    # rejects an empty --head value outright (it won't fall back to
-    # auto-detect). Without the env var, omit the flag and let gh infer
-    # from the current checkout — that's the path most contributors hit.
-    gh_args = ["gh", "pr", "create",
-               "--repo", "itigges22/ATLAS",
-               "--title", f"Registry: add Lens artifacts for {model_label} "
-                          f"(via atlas lens publish)",
-               "--body", pr_body]
-    if branch := os.environ.get("ATLAS_PUBLISH_BRANCH", "").strip():
-        gh_args += ["--head", branch]
+    # The PR is built through the GitHub API (branch + commit + PR) so it
+    # works from any install — no local git checkout required. The commit
+    # is a real registry edit, not a paste-me suggestion.
+    _safe_print(f"[4/5] Opening registry-PR via the GitHub API…")
+    title = (f"Registry: add Lens artifacts for {model_label} "
+             f"(via atlas lens publish)")
+
+    # Tier for the new entry: classify the publisher's host (the hardware
+    # the artifacts were validated on); fall back to medium.
+    entry_tier = "medium"
     try:
-        result = subprocess.run(
-            gh_args, capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            _safe_print(f"  {GREEN if color else ''}PR opened: "
-                        f"{result.stdout.strip()}{RESET if color else ''}")
-        else:
-            _safe_print(f"  {YELL if color else ''}`gh pr create` exited "
-                        f"{result.returncode}. Falling back to printing the "
-                        f"body for manual paste.{RESET if color else ''}")
-            if result.stderr.strip():
-                _safe_print(f"    gh stderr: {result.stderr.strip()[:200]}")
-            _safe_print("")
-            _safe_print(pr_body)
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        _safe_print(f"  {YELL if color else ''}`gh` invocation failed: {e}. "
-                    f"PR body printed below for manual paste.{RESET if color else ''}")
+        from atlas.cli.commands.tier import classify, probe
+        entry_tier = classify(probe()).tier
+    except Exception:
+        pass
+    model_file = ""
+    size_gb = 0.0
+    try:
+        from atlas.cli.commands import doctor
+        model_file = doctor.MODEL_FILE
+        base = (doctor.MODEL_DIR if os.path.isabs(doctor.MODEL_DIR)
+                else os.path.join(atlas_root, doctor.MODEL_DIR))
+        size_gb = round(os.path.getsize(
+            os.path.join(base, model_file)) / (1024 ** 3), 1)
+    except Exception:
+        pass
+
+    entry = _render_registry_entry(model_label, model_file or model_label,
+                                   size_gb, entry_tier, dim, hf_repo,
+                                   license_id, files_to_upload)
+    pr_url = open_registry_pr_via_api(
+        model_label, title, pr_body,
+        lambda content: _registry_insert_entry(content, model_label, entry),
+        color)
+    if pr_url:
+        _safe_print(f"  {GREEN if color else ''}PR opened: "
+                    f"{pr_url}{RESET if color else ''}")
+    else:
+        _safe_print(f"  {YELL if color else ''}Could not open the PR "
+                    f"automatically — body below for manual paste at "
+                    f"https://github.com/{_UPSTREAM_REPO}/compare"
+                    f"{RESET if color else ''}")
         _safe_print("")
         _safe_print(pr_body)
 
@@ -1085,12 +1704,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_check.add_argument("--no-color", action="store_true")
 
     p_build = sub.add_parser("build",
-        help="train fresh C(x) artifacts for the loaded model (PC-058)")
+        help="train fresh lens artifacts — C(x) + G(x) — for the loaded "
+             "model (PC-058/PC-211)")
     p_build.add_argument("model", nargs="?", default=None,
         help="registry name or path (default: whatever llama-server has loaded)")
     p_build.add_argument("--samples", default=None,
         help="path to a labeled JSON/JSONL training file "
              "(format: [{text, label}, ...]; label is 0 or 1)")
+    p_build.add_argument("--from-results", default=None,
+        help="train from a benchmark results dir (per_task/) produced by "
+             "`atlas bench` — uses this model's own code + pass/fail labels")
     p_build.add_argument("--epochs", type=int, default=200,
         help="training epochs (default: 200)")
     p_build.add_argument("--lr", type=float, default=1e-3,
@@ -1098,11 +1721,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_build.add_argument("--margin", type=float, default=1.0,
         help="contrastive ranking margin (default: 1.0)")
     p_build.add_argument("--artifact-dir", default=None,
-        help="where to save cost_field.pt (default: registry-resolved path)")
+        help="where to save the artifacts (cost_field.pt, gx_xgboost.json, "
+             "gx_weights.json; default: registry-resolved path)")
     p_build.add_argument("--force", action="store_true",
         help="retrain even if compatible artifacts already exist")
     p_build.add_argument("--dry-run", action="store_true",
         help="extract embeddings but skip training + save")
+    p_build.add_argument("--no-telemetry", action="store_true",
+        help="with --from-results: don't merge the run's banked "
+             "per-candidate embeddings (telemetry/embeddings.emb)")
     p_build.add_argument("--no-color", action="store_true")
 
     p_pub = sub.add_parser("publish",

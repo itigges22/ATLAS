@@ -566,22 +566,21 @@ def handle_command(line: str):
         import shlex
         bench_args = shlex.split(args) if args else []
         tasks = 0
-        dataset = "livecodebench"
         strategy = "random"
         i = 0
         while i < len(bench_args):
             if bench_args[i] == "--tasks" and i + 1 < len(bench_args):
                 tasks = int(bench_args[i + 1])
                 i += 2
-            elif bench_args[i] == "--dataset" and i + 1 < len(bench_args):
-                dataset = bench_args[i + 1]
-                i += 2
             elif bench_args[i] == "--strategy" and i + 1 < len(bench_args):
                 strategy = bench_args[i + 1]
                 i += 2
             else:
                 i += 1
-        bench.bench(dataset=dataset, max_tasks=tasks, selection_strategy=strategy)
+        if tasks < 0:
+            display.error("--tasks must be >= 0 (0 runs the full dataset)")
+            return
+        bench.bench(max_tasks=tasks, selection_strategy=strategy)
 
     elif cmd == "/ablation":
         display.warn("Ablation mode coming soon")
@@ -603,6 +602,9 @@ def run():
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
         from atlas.cli.commands import doctor
         sys.exit(doctor.main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "publish":
+        from atlas.cli.commands import publish
+        sys.exit(publish.main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         from atlas.cli.commands import init
         sys.exit(init.main(sys.argv[2:]))
@@ -621,6 +623,12 @@ def run():
     if len(sys.argv) > 1 and sys.argv[1] == "asa":
         from atlas.cli.commands import asa
         sys.exit(asa.main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "onboard":
+        from atlas.cli.commands import onboard
+        sys.exit(onboard.main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "bench":
+        from atlas.cli.commands import bench as bench_cmd
+        sys.exit(bench_cmd.main(sys.argv[2:]))
 
     # Interactive default → TUI. Pipe mode (e.g. `echo "..." | atlas`) skips
     # the TUI and runs the built-in /solve flow so scripts and CI usage

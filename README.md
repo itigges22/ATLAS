@@ -110,7 +110,7 @@ Then in any project directory, run `atlas`.
 
 | | |
 |---|---|
-| GPU | 16 GB+ VRAM. NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (Metal, macOS hybrid); Vulkan covers most other GPUs. See [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). |
+| GPU | 16 GB+ VRAM. NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (Metal, macOS hybrid); Vulkan covers most other GPUs. See [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
 | Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) or Podman |
 | Python | 3.9+ |
 | Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |

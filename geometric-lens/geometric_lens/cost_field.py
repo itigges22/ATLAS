@@ -1,6 +1,8 @@
 """Lyapunov cost field C(x): maps embeddings to scalar energy values.
 
-Architecture: ℝ^4096 → ℝ^512 → ℝ^128 → ℝ^1
+Architecture: ℝ^d → ℝ^512 → ℝ^128 → ℝ^1  (d = the model's hidden dim,
+read from the artifacts/server at load — e.g. 4096 for Qwen3.5-9B,
+3840 for Gemma 4 12B)
 Activations: SiLU, SiLU, Softplus (ensures positive output)
 Total params: ~2.16M (8.3MB FP32)
 """
@@ -8,7 +10,8 @@ Total params: ~2.16M (8.3MB FP32)
 import torch
 import torch.nn as nn
 
-EMBEDDING_DIM = 4096  # Qwen3.5-9B hidden dimension
+EMBEDDING_DIM = 4096  # constructor fallback only — real loads pass the
+                      # dim read from the artifact/server (model-dependent)
 
 
 class CostField(nn.Module):

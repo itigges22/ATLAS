@@ -262,6 +262,8 @@ func generateInputExample(toolName string) string {
 	switch toolName {
 	case "read_file":
 		return `{"path": "src/main.py", "offset": 0, "limit": 100}`
+	case "outline_file":
+		return `{"path": "src/main.py"}`
 	case "write_file":
 		return `{"path": "src/main.py", "content": "#!/usr/bin/env python3\n..."}`
 	case "edit_file":

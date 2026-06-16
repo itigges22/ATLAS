@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from benchmark.llm_client import strip_reasoning_leak
+
 from .failure_analysis import FailureAnalysis
 
 
@@ -171,6 +173,9 @@ def parse_hypotheses(response: str,
 
     Looks for "HYPOTHESIS N:" headers with APPROACH, RATIONALE, CONSTRAINTS.
     """
+    # Safety net: remove any leaked <think> reasoning before structured parsing
+    # (model-agnostic, single source of truth in benchmark.llm_client).
+    response = strip_reasoning_leak(response)
     hypotheses: List[RefinedHypothesis] = []
 
     # Split by HYPOTHESIS N:

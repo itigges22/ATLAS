@@ -174,9 +174,13 @@ class TestSelectTier:
 
 class TestGetSystemPrompt:
 
-    def test_nothink_has_nothink_tag(self):
+    def test_nothink_prompt_is_plain_directive(self):
+        # Thinking is disabled via the shared client's enable_thinking
+        # kwarg, not an in-prompt token — the nothink prompt is plain
+        # English with no model-specific directives.
         prompt = get_system_prompt("nothink")
-        assert "/nothink" in prompt
+        assert "/nothink" not in prompt
+        assert "directly and concisely" in prompt
 
     def test_thinking_tiers_lack_nothink(self):
         for tier in ["light", "standard", "hard", "extreme"]:
@@ -325,12 +329,13 @@ class TestBudgetForcingClass:
 
     def test_format_chatml_nothink(self, bf_enabled):
         prompt = bf_enabled.format_chatml("Solve this", "nothink")
-        assert "/nothink" in prompt
+        # No in-prompt directive and no Qwen-specific think prefill —
+        # the shared client handles thinking via enable_thinking.
+        assert "/nothink" not in prompt
+        assert "<think>" not in prompt
         assert "<|im_start|>system" in prompt
         assert "<|im_start|>user" in prompt
         assert "Solve this" in prompt
-        # V3.1: pre-fill closed think block to force-skip thinking
-        assert "<think>\n\n</think>" in prompt
 
     def test_format_chatml_thinking(self, bf_enabled):
         prompt = bf_enabled.format_chatml("Solve this", "hard")
@@ -610,17 +615,19 @@ class TestAC1C5NothinkNoRegression:
     """AC-1C-5: /nothink mode matches V2 behavior exactly."""
 
     def test_nothink_system_prompt_matches_v2(self):
-        """The nothink system prompt should match V2's exactly."""
+        """The nothink prompt keeps V2's wording minus the Qwen-specific
+        /nothink token (thinking is disabled by the shared client)."""
         prompt = get_system_prompt("nothink")
-        assert prompt == "You are an expert programmer. Respond directly and concisely. /nothink"
+        assert prompt == "You are an expert programmer. Respond directly and concisely."
 
-    def test_nothink_chatml_has_prefill(self, bf_enabled):
-        """V3.1: ChatML for nothink tier pre-fills closed think block."""
+    def test_nothink_chatml_has_no_prefill(self, bf_enabled):
+        """The closed-think-block prefill was Qwen-specific and breaks
+        other templates; nothink ChatML ends with a clean assistant cue."""
         user_content = "Write a function to sort a list"
         chatml = bf_enabled.format_chatml(user_content, "nothink")
-        assert "/nothink" in chatml
-        assert "<think>\n\n</think>\n\n" in chatml
-        assert chatml.endswith("<think>\n\n</think>\n\n")
+        assert "/nothink" not in chatml
+        assert "<think>" not in chatml
+        assert chatml.endswith("<|im_start|>assistant\n")
 
     def test_nothink_max_tokens_v31(self, bf_enabled):
         """V3.1: Nothink max tokens reduced to 4096 (code-only)."""

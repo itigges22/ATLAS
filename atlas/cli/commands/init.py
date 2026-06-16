@@ -803,16 +803,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             _safe_print("")
             _safe_print("  See docs/SETUP_MACOS.md for the full walkthrough.")
         else:
+            _safe_print("  1. atlas tier fit --write     # size the runtime for "
+                        "this model + GPU (tier presets are VRAM-band defaults)")
             if backend_id == "rocm":
-                _safe_print("  1. docker compose -f docker-compose.yml "
+                _safe_print("  2. docker compose -f docker-compose.yml "
                             "-f docker-compose.rocm.yml up -d   # bring up the ROCm stack")
             elif backend_id == "vulkan":
-                _safe_print("  1. docker compose -f docker-compose.yml "
+                _safe_print("  2. docker compose -f docker-compose.yml "
                             "-f docker-compose.vulkan.yml up -d   # bring up the Vulkan stack")
             else:
-                _safe_print("  1. docker compose up -d        # bring up the stack")
-            _safe_print("  2. atlas doctor               # verify install health")
-            _safe_print("  3. atlas                      # start using ATLAS")
+                _safe_print("  2. docker compose up -d        # bring up the stack")
+            _safe_print("  3. atlas doctor               # verify install health")
+            _safe_print("  4. atlas                      # start using ATLAS")
 
     if args.json:
         out = {

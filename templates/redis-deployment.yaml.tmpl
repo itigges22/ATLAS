@@ -1,0 +1,71 @@
+# Redis — pattern cache, co-occurrence graph, task queue, router posteriors.
+# Lens + sandbox both connect via the cluster-internal `redis:${ATLAS_REDIS_PORT}` Service.
+# Persistence is PVC-backed; size from ATLAS_PVC_REDIS_SIZE.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_PVC_REDIS_SIZE}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate                # Single-writer; rolling update would race on the PVC.
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        args: ["redis-server", "--appendonly", "yes"]
+        ports:
+        - containerPort: ${ATLAS_REDIS_PORT}
+          name: redis
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        readinessProbe:
+          exec:
+            command: [redis-cli, ping]
+          periodSeconds: 10
+        livenessProbe:
+          exec:
+            command: [redis-cli, ping]
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis                     # geometric-lens + sandbox resolve `redis:6379` via this.
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  selector: {app: redis}
+  ports:
+  - port: ${ATLAS_REDIS_PORT}
+    targetPort: ${ATLAS_REDIS_PORT}
+    name: redis

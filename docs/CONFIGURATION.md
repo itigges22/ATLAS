@@ -25,7 +25,15 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_MODELS_DIR` | `./models` | Host path to directory containing GGUF model weights |
 | `ATLAS_MODEL_FILE` | `Qwen3.5-9B-Q6_K.gguf` | Model filename (must exist in ATLAS_MODELS_DIR) |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model identifier used in API responses |
-| `ATLAS_CTX_SIZE` | `32768` | Context window size in tokens (mapped to `CONTEXT_LENGTH` inside the llama container) |
+| `ATLAS_CTX_SIZE` | `131072` | Context window size in tokens, TOTAL across all parallel slots (mapped to `CONTEXT_LENGTH` inside the llama container). Sized per model + GPU by `atlas tier fit --write`. |
+| `ATLAS_PARALLEL_SLOTS` | `4` | Concurrent request slots. llama-server divides `ATLAS_CTX_SIZE` by this for per-slot context. |
+| `ATLAS_AGENT_HISTORY_BUDGET` | `14000` | Ceiling (tokens) on the agent loop's kept conversation history. The effective budget is `min(65% of per-slot context, this ceiling)`. The default bounds per-turn re-encode cost on sliding-window-attention models, where llama.cpp re-encodes the whole history every turn. |
+| `ATLAS_DEDUP_READS` | `1` | When `1`, a whole-file re-read of an unchanged file already in context returns a compact pointer instead of the full content. Set `0` to always serve the full re-read. |
+| `ATLAS_REASONING_BUDGET` | `6144` | Per-turn reasoning-token budget (estimated at 4 chars/token). When a generation accumulates this much `reasoning_content` without emitting any content tokens, the proxy cuts the stream and re-prompts ("emit your tool call now"). Bounds reasoning spirals — without it, `max_tokens` (32768) is the only cap and allows ~25 minutes of silent deliberation per turn. `0` disables. |
+| `ATLAS_KV_TYPE_K` | `f16` | KV-cache K quantization (`f16`, `q8_0`, `q4_0`). Set by `atlas tier fit --write`. |
+| `ATLAS_KV_TYPE_V` | `f16` | KV-cache V quantization. Set by `atlas tier fit --write`. |
+| `ATLAS_UBATCH` | `1024` | llama-server micro-batch size (`-ub`). Drives the compute-buffer VRAM cost (~ubatch × n_embd × 280 bytes) — the term that OOMs first on tight cards. Set by `atlas tier fit --write`. |
+| `ATLAS_BATCH` | `2048` | llama-server logical batch size (`-b`). Set by `atlas tier fit --write`. |
 | `ATLAS_PROJECT_DIR` | (cwd at `compose up`) | Host directory bind-mounted to `/workspace` inside the atlas-proxy container. Switch projects by re-creating the proxy container with this var set. |
 | `ATLAS_GHCR_OWNER` | `itigges22` | GHCR namespace to pull images from. Set to your own GitHub username if you've published forked images. |
 | `ATLAS_IMAGE_TAG` | `latest` | Image tag to pull (`latest` for main, `dev` for the dev branch, `vX.Y.Z` or `sha-...` for pinned releases). |
@@ -54,6 +62,101 @@ Docker Compose also sets inter-service URLs using Docker networking (e.g., `http
 | `sycl` | Not yet packaged — Intel Arc users should use `vulkan` for now (see [#27](https://github.com/itigges22/ATLAS/issues/27)) |
 
 `atlas init` prints the right invocation as part of its "Next steps" summary. `atlas-bootstrap.sh` picks it automatically based on `tier.detect_gpu()`.
+
+### Adding your own model (drop-in / unregistered)
+
+`atlas init` and `atlas model install <name>` only know models in the built-in
+registry. To run a model that *isn't* registered (a brand-new release, a custom
+quant), wire it up by hand. `atlas onboard` automates the safe parts of this and
+stops at the one step only you can do (the rebuild); the manual flow is:
+
+1. **Place the GGUF in `ATLAS_MODELS_DIR`** (default `./models`). Either drop the
+   file in yourself, or fetch it with `atlas model install --url <hf-url>`
+   (downloads into the models dir; no SHA pin since it's unregistered).
+
+2. **Point `.env` at it** — set both keys, and leave a revert breadcrumb:
+   ```dotenv
+   # Was: Qwen3.5-9B-Q6_K.gguf  (revert here to switch back)
+   ATLAS_MODEL_FILE=your-model-Q4_K_M.gguf
+   ATLAS_MODEL_NAME=your-model-Q4_K_M
+   ```
+
+3. **Size the runtime for this model + your GPU**:
+   ```bash
+   atlas tier fit          # preview: ctx / KV type / ubatch + the VRAM budget
+   atlas tier fit --write  # apply to .env
+   ```
+   This reads the GGUF header (layer count, KV-head geometry, sliding-window
+   layout) and your GPU's VRAM, and solves for the largest context that keeps
+   inference **fully on-GPU**. Different models have wildly different KV
+   footprints — a budget tuned for one model can OOM or silently spill to CPU
+   (5× slower) on another. The server runs with `--fit off`, so an oversized
+   config refuses to start rather than spilling. If it reports the model
+   doesn't fit, it names the largest quant file size that would — see
+   [TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu)
+   for pre-download sizing guidance.
+
+4. **Restart inference only** (don't tear the stack down — that triggers a long
+   CUDA rebuild): `docker compose up -d llama-server --no-deps --force-recreate`.
+
+5. **Confirm the engine recognizes the architecture.**
+   `docker compose logs -f llama-server` — a healthy load ends in
+   `server is listening`. If you instead see `error loading model: unknown
+   (model) architecture '<arch>'`, your `atlas-llama` image's bundled llama.cpp
+   predates that architecture and **you must rebuild the inference image**:
+   ```bash
+   # The image pins llama.cpp (LLAMA_CPP_REV in inference/Dockerfile.v31) so
+   # the PC-202 patch applies cleanly — a plain rebuild reuses that same
+   # pinned revision and will NOT pick up newer architectures. Override the
+   # pin with a llama.cpp commit that knows your model's architecture:
+   docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server   # ~70 min on CUDA
+   ```
+   > ⚠️ **Do not strip ATLAS's custom llama.cpp features when rebuilding.** The
+   > build re-applies `inference/patches/expose-hidden-states.patch` (PC-202 —
+   > the per-layer `hidden_states` extension the Geometric Lens relies on) to the
+   > freshly-cloned source. If upstream has drifted, the `git apply` step can fail
+   > and the build aborts — **rebase the patch, don't delete it or remove the
+   > `git apply` line from `inference/Dockerfile.v31`**, or you'll silently lose
+   > the lens plumbing. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) "Rebuilding
+   > llama.cpp for a new model architecture".
+
+6. **Retrain the Geometric Lens for the new model.** The lens `C(x)` is
+   dimension-coupled to the model's hidden size, so the bundled (Qwen) weights
+   won't load against a different model. `atlas lens check` reports the mismatch.
+   Build the new model's *own* candidates and retrain — all through the CLI.
+   Connectivity (ports, model file) resolves automatically from your
+   deployment's config (`.env` on Docker, `atlas.conf` on K3s):
+   ```bash
+   # 1. Generate + self-label this model's solutions (hours on a large model).
+   #    Results land in benchmark/results/<run-id>/v3_lcb/per_task/ (code + passed).
+   atlas bench --run-id mymodel_lens --tasks 200
+
+   # 2. Retrain C(x) on those candidates. --force replaces the previous
+   #    model's artifacts (writes geometric-lens/geometric_lens/models/cost_field.pt)
+   atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
+
+   # 3. ASA control vector; N ≈ 75% of the model's layer count (48 → 36 for Gemma)
+   atlas asa build --layer N
+   ```
+   (The candidate sandbox executes locally via a `python3` subprocess — only
+   llama-server + geometric-lens are network dependencies. For scripted use,
+   `scripts/retrain_lens_from_results.py --results-dir <dir>` remains available
+   and resolves its ports the same way.)
+   Do **not** reuse another model's solution set — both lens halves are
+   dimension-coupled to the model: `C(x)` must learn *this* model's cost
+   geometry, and `G(x)`'s PCA projection is shaped to the embedding width.
+   `atlas lens build` trains both from the same samples in one run.
+   After the build, restart the lens service so it loads the new artifacts:
+   `docker compose restart geometric-lens`.
+
+7. **Verify:** `atlas doctor` should come back green (lens dim now matches, model
+   loads, e2e smoke passes).
+
+> **Templating is not a per-model chore.** The chat template ships *inside* the
+> GGUF and is rendered via llama-server's `--jinja` — you never hand-write one.
+> For reasoning models, ATLAS sends `enable_thinking: false` and falls back to
+> `reasoning_content` if a model emits its answer there, so most models work
+> without any template work.
 
 ---
 
@@ -318,10 +421,12 @@ Both Docker Compose and K3s use the same image with the same entrypoint (`infere
 |---------|----------------|-------------|-------------|
 | `MODEL_PATH` | `/models/${ATLAS_MODEL_FILE}` | `/models/${ATLAS_MAIN_MODEL}` | GGUF path inside the container |
 | `PORT` | `8080` | `${ATLAS_LLAMA_PORT}` (defaults to `8080`) | Listen port |
-| `CONTEXT_LENGTH` | `${ATLAS_CTX_SIZE:-32768}` | `${ATLAS_CONTEXT_LENGTH}` (atlas.conf default `16384`) | Context window in tokens |
-| `PARALLEL_SLOTS` | `${ATLAS_PARALLEL_SLOTS:-4}` (compose default `4`) | `${ATLAS_PARALLEL_SLOTS}` (atlas.conf default `1`) | Concurrent request slots. Compose defaults to `4` because the `/demo` split-pane runs V3 (which fans out into 3 parallel PlanSearch candidates) alongside a raw-9B session — 4 total concurrent inferences. DeltaNet KV is ~144 MB per slot, well within budget on a 16 GB card. |
-| `KV_CACHE_TYPE_K` | `q8_0` | `q8_0` | KV cache key quantization |
-| `KV_CACHE_TYPE_V` | `q4_0` | `q4_0` | KV cache value quantization |
+| `CONTEXT_LENGTH` | `${ATLAS_CTX_SIZE:-131072}` | `${ATLAS_CONTEXT_LENGTH}` (atlas.conf default `16384`) | Context window in tokens, TOTAL across all slots. Size per model + GPU with `atlas tier fit --write`. |
+| `PARALLEL_SLOTS` | `${ATLAS_PARALLEL_SLOTS:-4}` (compose default `4`) | `${ATLAS_PARALLEL_SLOTS}` (atlas.conf default `1`) | Concurrent request slots. Compose defaults to `4` because the `/demo` split-pane runs V3 (which fans out into 3 parallel PlanSearch candidates) alongside a raw-9B session — 4 total concurrent inferences. |
+| `KV_CACHE_TYPE_K` | `${ATLAS_KV_TYPE_K:-f16}` | `f16` (entrypoint default) | KV cache key quantization (`f16`, `q8_0`, `q4_0`). Set by `atlas tier fit --write`. |
+| `KV_CACHE_TYPE_V` | `${ATLAS_KV_TYPE_V:-f16}` | `f16` (entrypoint default) | KV cache value quantization. Set by `atlas tier fit --write`. |
+| `UBATCH_SIZE` | `${ATLAS_UBATCH:-1024}` | `1024` (entrypoint default) | Micro-batch size (`-ub`). Drives the compute-buffer VRAM cost (~ubatch × n_embd × 280 bytes). Set by `atlas tier fit --write`. |
+| `BATCH_SIZE` | `${ATLAS_BATCH:-2048}` | `2048` (entrypoint default) | Logical batch size (`-b`). Set by `atlas tier fit --write`. |
 | `SLOT_SAVE_PATH` | `/tmp/slots` | `/tmp/slots` | Slot-save directory used by `/slots/0?action=save` |
 | `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | same | ASA control-vector path (auto-loaded if present) |
 | `ATLAS_CONTROL_VECTOR_SCALE` | `0.5` | same | Scale applied to the control vector |
@@ -335,15 +440,16 @@ The entrypoint always launches with this flag set (regardless of deployment mode
 |------|-------|-------------|
 | `-m` | `$MODEL_PATH` | Model path |
 | `-c` | `$CONTEXT_LENGTH` | Context window |
-| `-ctk` / `-ctv` | `$KV_CACHE_TYPE_K` / `_V` | KV cache quantization (default `q8_0` / `q4_0`) |
+| `-ctk` / `-ctv` | `$KV_CACHE_TYPE_K` / `_V` | KV cache quantization (default `f16` / `f16`) |
 | `--parallel` | `$PARALLEL_SLOTS` | Concurrent request slots |
 | `--cont-batching` | — | Continuous batching |
 | `-ngl` | `99` | Offload all GPU layers |
+| `--fit off` | — | Refuse to start if the model + KV + compute buffers don't fit in VRAM (instead of silently demoting layers to CPU at 5× slower generation). Size the budget with `atlas tier fit --write`. |
 | `--host` | `0.0.0.0` | Listen on all interfaces |
 | `--port` | `$PORT` | Listen port |
 | `--flash-attn` | `on` | Flash attention |
 | `--mlock` | — | Lock model in RAM (prevents swapping) |
-| `-b` / `-ub` | `4096` / `4096` | Batch / micro-batch size |
+| `-b` / `-ub` | `$BATCH_SIZE` / `$UBATCH_SIZE` | Batch / micro-batch size (defaults `2048` / `1024`) |
 | `--slot-save-path` | `$SLOT_SAVE_PATH` | Where llama-server persists slot state |
 | `--ctx-checkpoints` | `0` | Disable context checkpoints |
 | `--no-cache-prompt` | — | Disable prompt caching (PC-045: prevents cross-session leakage) |
@@ -351,7 +457,7 @@ The entrypoint always launches with this flag set (regardless of deployment mode
 | `--jinja` | — | Jinja chat-template support |
 | `--control-vector-scaled` | `$ATLAS_CONTROL_VECTOR:$ATLAS_CONTROL_VECTOR_SCALE` | Added only when the control-vector file exists |
 
-> **Note:** The Docker entrypoint and the K3s entrypoint are the same script. The only practical knobs that diverge are `CONTEXT_LENGTH` (Docker defaults `32768` via `ATLAS_CTX_SIZE`; K3s defaults `16384` via `ATLAS_CONTEXT_LENGTH`) and `PARALLEL_SLOTS` (Docker compose defaults `4` via `ATLAS_PARALLEL_SLOTS` to support `/demo` split-pane plus V3 plan-search fanout; K3s defaults `1` via `atlas.conf`).
+> **Note:** The Docker entrypoint and the K3s entrypoint are the same script. The only practical knobs that diverge are `CONTEXT_LENGTH` (Docker defaults `131072` via `ATLAS_CTX_SIZE`; K3s defaults `16384` via `ATLAS_CONTEXT_LENGTH`) and `PARALLEL_SLOTS` (Docker compose defaults `4` via `ATLAS_PARALLEL_SLOTS` to support `/demo` split-pane plus V3 plan-search fanout; K3s defaults `1` via `atlas.conf`). The runtime-sizing keys (`ATLAS_KV_TYPE_K/V`, `ATLAS_UBATCH`, `ATLAS_BATCH`) are compose-only; on K3s the entrypoint defaults apply unless set in the deployment manifest.
 
 ---
 
@@ -371,7 +477,6 @@ The standalone Python REPL (`pip install -e . && atlas`) reads these variables:
 | `ATLAS_LENS_MODELS` | `./geometric-lens/geometric_lens/models` | Host path that maps to the lens's weight directory. Used by `atlas doctor` so it checks the same directory Docker bind-mounts into the lens container. |
 | `ATLAS_MODEL_NAME` | `Qwen3.5-9B-Q6_K` | Model name for API calls |
 | `HF_TOKEN` | (unset) | HuggingFace write token used by `atlas lens publish` / `atlas asa publish` for artifact upload. Get one at https://huggingface.co/settings/tokens (scope: write). `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` are also honored. Full walkthrough: [PUBLISHING.md](PUBLISHING.md). |
-| `ATLAS_PUBLISH_BRANCH` | (unset → gh infers from checkout) | Override the `--head` branch passed to `gh pr create` during publish. Useful when you're working on a long-lived feature branch but want the registry PR to target main from a different ref. When unset, `gh` auto-detects the current branch (preferred for most contributors). |
 | `ATLAS_BACKEND` | `cuda` (default) / `rocm` / `vulkan` | Which llama-server build dispatch path is active. Written by `atlas init` based on GPU vendor (or `--backend vulkan` override). The entrypoint reads this to pick vendor-specific runtime flags. `vulkan` is the universal fallback (PC-114) — ~20–40% slower than tuned native backends but covers AMD/Intel/Snapdragon/Apple-via-MoltenVK/CPU with one image. See [SETUP.md § Vulkan](SETUP.md). |
 | `ATLAS_VK_DEVICE_SELECT` | (unset → first Vulkan ICD enumerated) | Vulkan-only: forwarded to `MESA_VK_DEVICE_SELECT` to pin a specific physical device when multiple ICDs are visible (e.g., dGPU + iGPU, two Intel Arc cards). Format: `"vendorID:deviceID"` (hex) or a device-name substring. Use `GGML_VK_VISIBLE_DEVICES` (numeric index) instead when the Mesa selector isn't granular enough. |
 
@@ -466,7 +571,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_ENABLE_SPECULATIVE` | `true` | Gates draft-model download in `scripts/download-models.sh`. Inference-time behavior is currently fixed by the entrypoint (llama.cpp can't speculate hybrid DeltaNet+Attention models yet — see comment in `inference/entrypoint-v3.1-9b.sh`), so this flag only affects whether the draft GGUF is downloaded. |
-| `ATLAS_ENABLE_TRAINING` | `true` | When `true`, `install.sh` applies `templates/training-cronjob.yaml.tmpl` (the nightly cost-field retrain). When `false`, the cronjob is skipped. |
+| `ATLAS_ENABLE_TRAINING` | `false` | Reserved. The nightly retrain CronJob template was removed — `/internal/lens/retrain` requires a `training_data` payload a scheduled trigger cannot supply. Keep `false` until the service exposes a self-contained trigger. |
 
 ### 8.8 Timeouts (seconds)
 
@@ -474,16 +579,6 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 |----------|---------|---------|
 | `ATLAS_LLM_TIMEOUT` | `120` | `scripts/verify-install.sh` for the smoke-test `curl` against llama-server |
 | `ATLAS_HEALTH_CHECK_TIMEOUT` | `10` | `scripts/verify-install.sh` `--max-time` for `curl` against each `/health` endpoint during post-install verification. (The healthchecks defined inside the K3s templates use hardcoded timeouts, not this var.) |
-
-### 8.9 Training cronjob (only when `ATLAS_ENABLE_TRAINING=true`)
-
-Consumed by `templates/training-cronjob.yaml.tmpl`. The job hits `geometric-lens /internal/lens/retrain`, which retrains the C(x) cost-field MLP — not the model itself.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ATLAS_TRAINING_SCHEDULE` | `"0 2 * * *"` | Cron expression for the nightly retrain |
-| `ATLAS_TRAINING_MIN_RATING` | `4` | Minimum user-feedback rating to include in the retrain set |
-| `ATLAS_TRAINING_VALIDATION_THRESHOLD` | `66` | Percentage of held-out validation that must pass for the new C(x) weights to be promoted |
 
 ### 8.10 V3 ablation knobs (benchmark-only)
 

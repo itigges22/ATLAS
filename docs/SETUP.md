@@ -658,9 +658,19 @@ which tier your hardware lands in and the exact `.env` values to use.
 ```bash
 atlas tier              # classify this host + show recommendations
 atlas tier list         # show all 5 tier definitions
+atlas tier fit          # size the runtime for the CONFIGURED model + GPU
 atlas tier --json       # machine output (for scripts)
 atlas tier --raw        # just the probe (no classification)
 ```
+
+The tier table gives per-VRAM-band starting points; **`atlas tier fit`**
+refines them for the *specific* model you run — it reads the GGUF's KV
+geometry plus your GPU's VRAM and solves for the largest context that
+stays fully on-GPU (`atlas tier fit --write` applies the result to
+`.env`). Run it whenever you change `ATLAS_MODEL_FILE` or the GPU. See
+[CLI.md § atlas tier fit](CLI.md#atlas-tier-fit-pc-208), and
+[TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu)
+for pre-download sizing guidance.
 
 The medium tier is the ATLAS development target — `atlas-bootstrap.sh`
 defaults to its model+context settings. For other tiers, run
@@ -668,7 +678,8 @@ defaults to its model+context settings. For other tiers, run
 completes. It probes hardware via `atlas tier`, picks the right model
 from the registry, downloads it with SHA verification, and rewrites
 `.env`. Re-run with `atlas init --reconfigure` whenever your hardware
-or model registry default changes.
+or model registry default changes; after a wizard run, `atlas tier fit
+--write` tightens the wizard's tier-level defaults to the chosen model.
 
 | Resource | Minimum | Recommended | Notes |
 |----------|---------|-------------|-------|
