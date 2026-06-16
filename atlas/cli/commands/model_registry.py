@@ -356,11 +356,14 @@ REGISTRY: List[Model] = [
               "MTP supported in llama.cpp since PR #22673. Requires "
               "--spec-type draft-mtp --spec-draft-n-max 2 flags. "
               "Lens C(x) cost_field.pt trained locally (5120-dim, "
-              "200-epoch contrastive) but no lens artifacts published "
-              "on HF yet — G(x) will silently no-op. "
-              "No ASA control vector trained for Qwen3.6 "
-              "residuals. macOS Metal: MTP disabled by default "
-              "(ATLAS_ENABLE_MTP=0); see llama.cpp #23011/#23752.",
+              "200-epoch contrastive) but not yet published on HF, and "
+              "the G(x) classifier half (gx_*.json) is untrained — G(x) "
+              "will silently no-op until both halves ship. "
+              "ASA control vector (ast_edit_steering.gguf, layer 27) "
+              "trained locally but unpublished. Both await `atlas publish` "
+              "from a host with huggingface_hub before lens_status/"
+              "asa_status can flip to supported. macOS Metal: MTP disabled "
+              "by default (ATLAS_ENABLE_MTP=0); see llama.cpp #23011/#23752.",
     ),
     Model(
         name="gemma-4-12b-it-Q4_K_M",
