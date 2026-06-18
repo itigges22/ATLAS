@@ -170,6 +170,13 @@ def _unsloth_qwen35_url(repo: str, file: str) -> str:
             f"{_UNSLOTH_QWEN35_COMMIT}/{file}")
 
 
+_UNSLOTH_QWEN36_COMMIT = "5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace"
+
+def _unsloth_qwen36_url(file: str) -> str:
+    return (f"https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF/resolve/"
+            f"{_UNSLOTH_QWEN36_COMMIT}/{file}")
+
+
 # Single source of truth. Order: by tier (cpu → xlarge), then by quant.
 #
 # Truthful state today:
@@ -332,6 +339,34 @@ REGISTRY: List[Model] = [
               "for this model. Even with auth, will install as raw "
               "llama.cpp model only — G(x) verification will silently "
               "no-op (--no-lens to acknowledge). See PC-058 roadmap.",
+    ),
+    Model(
+        name="Qwen3.6-27B-MTP-UD-Q4_K_XL",
+        tier="xlarge",
+        model_file="Qwen3.6-27B-UD-Q4_K_XL.gguf",
+        model_display="Qwen3.6 27B MTP (UD-Q4_K_XL)",
+        model_size_gb=16.7,
+        lens_status="no-artifacts",
+        download_url=_unsloth_qwen36_url("Qwen3.6-27B-UD-Q4_K_XL.gguf"),
+        sha256="4085665ee36d82a672a238a43f0e5643f2f0e39f2d7bd5d373f0ef10ecf53095",
+        license="Apache-2.0",
+        requires_hf_token=False,
+        asa_status="supported",
+        asa_artifact_files=["ast_edit_steering.gguf"],
+        asa_hf_repo="yogthos/atlas-asa-qwen3.6-27b-mtp-ud-q4_k_xl",
+        notes="Qwen3.6-27B with Multi-Token Prediction. Gated DeltaNet + "
+              "Gated Attention hybrid architecture, 5120-dim hidden. "
+              "MTP supported in llama.cpp since PR #22673. Requires "
+              "--spec-type draft-mtp --spec-draft-n-max 2 flags. "
+              "ASA control vector (ast_edit_steering.gguf, layer 27, "
+              "5120-dim) published at "
+              "https://huggingface.co/yogthos/atlas-asa-qwen3.6-27b-mtp-ud-q4_k_xl. "
+              "Lens C(x) cost_field.pt trained locally (5120-dim, "
+              "200-epoch contrastive) but not yet published on HF, and "
+              "the G(x) classifier half (gx_*.json) is untrained — G(x) "
+              "will silently no-op until both lens halves ship via "
+              "`atlas lens publish`. macOS Metal: MTP disabled by default "
+              "(ATLAS_ENABLE_MTP=0); see llama.cpp #23011/#23752.",
     ),
     Model(
         name="gemma-4-12b-it-Q4_K_M",

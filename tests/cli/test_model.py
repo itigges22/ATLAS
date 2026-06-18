@@ -80,8 +80,8 @@ def test_list_json_structure(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["models_dir"] == str(tmp_path)
     assert isinstance(payload["models"], list)
-    # PC-056.1: three 9B quants; PC-215 added gemma-4-12b.
-    assert len(payload["models"]) == 7
+    # PC-056.1: 6 base entries + Qwen3.6-27B-MTP + gemma-4-12b (PC-215) = 8.
+    assert len(payload["models"]) == 8
     nine = next(m for m in payload["models"] if m["name"] == "Qwen3.5-9B-Q6_K")
     assert nine["lens_status"] == "supported"
     assert nine["installed"] is False

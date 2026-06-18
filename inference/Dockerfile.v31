@@ -62,7 +62,7 @@ COPY patches/ /patches/
 #   1. There's a llama.cpp release with a feature/fix we want
 #   2. The PC-202 patch has been regenerated against the new upstream
 # Override at build time: --build-arg LLAMA_CPP_REV=<sha>
-ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
+ARG LLAMA_CPP_REV=255582687b8dd211fdbc582e43ab842491554e94
 # #117: Split fetch -> patch -> build into three RUN layers so a
 # LLAMA_CPP_REV bump or a patches/ change invalidates only the affected
 # layer + everything below, not the whole giant step. The build is the

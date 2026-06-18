@@ -20,14 +20,16 @@ from atlas.cli.commands import model_registry, model_recommendations
 
 def test_registry_has_known_qwen_entries():
     """PC-056 shipped with 4 tier presets; PC-056.1 added Q4_K_M and
-    Q8_0 variants of the 9B for a total of 6. Adding more is a
-    deliberate scope change and should be a separate ticket — flag
-    it loudly here."""
-    assert len(model_registry.REGISTRY) == 7
+    Q8_0 variants of the 9B for a total of 6. Qwen3.6-27B-MTP added as
+    experimental entry; PC-215 added gemma-4-12b via the publish flow
+    (8 total). Adding more is a deliberate scope change and should be a
+    separate ticket — flag it loudly here."""
+    assert len(model_registry.REGISTRY) == 8
     names = {m.name for m in model_registry.REGISTRY}
     assert names == {"Qwen3.5-7B-Q4_K_M",
                      "Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K", "Qwen3.5-9B-Q8_0",
                      "Qwen3.5-14B-Q5_K_M", "Qwen3.5-32B-Q5_K_M",
+                     "Qwen3.6-27B-MTP-UD-Q4_K_XL",
                      "gemma-4-12b-it-Q4_K_M"}
 
 
@@ -45,12 +47,12 @@ def test_only_9b_quants_are_publicly_installable():
     """PC-056.1: gated entries got download_urls populated (so
     HF_TOKEN-authenticated users CAN install them) but they're flagged
     requires_hf_token. The "publicly installable without auth" set is
-    just the three 9B quants."""
+    the three 9B quants plus Qwen3.6-27B."""
     public = [m for m in model_registry.REGISTRY
                if m.can_install and not m.requires_hf_token]
     public_names = {m.name for m in public}
     assert public_names == {"Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K",
-                              "Qwen3.5-9B-Q8_0"}
+                              "Qwen3.5-9B-Q8_0", "Qwen3.6-27B-MTP-UD-Q4_K_XL"}
 
 
 def test_9b_has_verified_download_metadata():
@@ -173,10 +175,69 @@ def test_by_name_unknown_returns_none():
 
 
 def test_models_for_tier_returns_only_matches():
-    """Medium tier: the three 9B quants plus gemma-4-12b (PC-215)."""
+    """Medium tier: the three 9B quants plus gemma-4-12b (PC-215) = 4.
+    xlarge tier: 32B-Q5_K_M + Qwen3.6-27B-MTP = 2."""
     medium = model_registry.models_for_tier("medium")
     assert all(m.tier == "medium" for m in medium)
     assert len(medium) == 4
+    xlarge = model_registry.models_for_tier("xlarge")
+    assert all(m.tier == "xlarge" for m in xlarge)
+    assert len(xlarge) == 2
+
+
+# ---------------------------------------------------------------------------
+# Qwen3.6-27B-MTP — experimental entry
+# ---------------------------------------------------------------------------
+
+def test_qwen36_entry_basics():
+    """Qwen3.6-27B-MTP is an experimental xlarge entry: lens C(x) trained
+    but unpublished (G(x) half untrained, so lens_status no-artifacts),
+    ASA vector published to HF, public download URL from unsloth, correct
+    size."""
+    m = model_registry.by_name("Qwen3.6-27B-MTP-UD-Q4_K_XL")
+    assert m is not None
+    assert m.tier == "xlarge"
+    assert m.model_file == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+    assert m.model_size_gb == 16.7
+    assert m.lens_status == "no-artifacts"
+    # ASA vector published to HF (lens G(x) half still untrained).
+    assert m.asa_status == "supported"
+    assert m.asa_artifact_files == ["ast_edit_steering.gguf"]
+    assert m.asa_hf_repo == "yogthos/atlas-asa-qwen3.6-27b-mtp-ud-q4_k_xl"
+    assert m.requires_hf_token is False
+    assert m.download_url is not None
+    assert "/Qwen3.6-27B-MTP-GGUF/" in m.download_url
+    assert m.sha256 is not None
+    assert len(m.sha256) == 64
+
+
+def test_qwen36_entry_has_mtp_notes():
+    """The Qwen3.6 notes must mention MTP, the architecture (DeltaNet+Attention),
+    and Lens training status."""
+    m = model_registry.by_name("Qwen3.6-27B-MTP-UD-Q4_K_XL")
+    assert m is not None
+    n = m.notes.lower()
+    assert "mtp" in n
+    assert "draft-mtp" in n
+    assert "delta net" in n or "deltanet" in n
+    assert "lens" in n
+    assert "5120" in n
+    assert "cost_field.pt" in n or "trained locally" in n
+
+
+def test_qwen36_now_publicly_installable():
+    """Qwen3.6 has download_url from unsloth so it IS in the can_install set."""
+    m = model_registry.by_name("Qwen3.6-27B-MTP-UD-Q4_K_XL")
+    assert m is not None
+    assert m.can_install is True
+
+
+def test_qwen36_not_in_supported_models():
+    """Qwen3.6 has no Lens artifacts — supported_models() returns the
+    9B Q6_K and gemma-4-12b (PC-215), not Qwen3.6."""
+    supported_names = {m.name for m in model_registry.supported_models()}
+    assert "Qwen3.6-27B-MTP-UD-Q4_K_XL" not in supported_names
+    assert supported_names == {"Qwen3.5-9B-Q6_K", "gemma-4-12b-it-Q4_K_M"}
 
 
 # ---------------------------------------------------------------------------
@@ -263,11 +324,12 @@ def test_shim_callers_can_access_old_field_names():
 # PC-056.1 schema additions: 9B variants, commit-pinned URLs, requires_hf_token
 # ---------------------------------------------------------------------------
 
-def test_pc0561_registry_now_has_six_entries():
-    """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B; PC-215 added
-    gemma-4-12b via the publish flow. Adding more is a deliberate scope
-    change — flag it loudly here."""
-    assert len(model_registry.REGISTRY) == 7
+def test_pc0561_registry_now_has_eight_entries():
+    """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B (6 total).
+    Qwen3.6-27B-MTP added as experimental; PC-215 added gemma-4-12b via
+    the publish flow (8 total). Adding more is a deliberate scope change
+    — flag it loudly here."""
+    assert len(model_registry.REGISTRY) == 8
 
 
 def test_pc0561_three_quants_for_9b():
@@ -304,8 +366,9 @@ def test_pc0561_urls_pinned_to_commit_hash():
             continue
         assert "/main/" not in m.download_url, (
             f"{m.name} URL not commit-pinned: {m.download_url}")
-        # Should contain the unsloth Qwen3.5 commit hash
-        assert "/3885219b" in m.download_url, (
+        # Qwen3.5 models share one commit; Qwen3.6 has its own
+        assert "/3885219b" in m.download_url or \
+               "/5cb35eb3" in m.download_url, (
             f"{m.name} not pinned to expected commit: {m.download_url}")
 
 
