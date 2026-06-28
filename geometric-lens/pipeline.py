@@ -31,16 +31,7 @@ def is_routing_enabled() -> bool:
     return os.environ.get("ROUTING_ENABLED", "true").lower() in ("true", "1", "yes")
 
 
-def _get_router_redis():
-    """Get Redis client for the router (reuses existing connection)."""
-    try:
-        import redis
-        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-        r = redis.from_url(redis_url, decode_responses=True)
-        r.ping()
-        return r
-    except Exception:
-        return None
+
 
 
 def build_context_prompt(chunks: List[Dict[str, Any]], max_tokens: int = 8000) -> str:
@@ -504,20 +495,17 @@ async def rag_enhanced_completion(
             )
 
             # Select route via Thompson Sampling
-            r = _get_router_redis()
-            if r:
-                route_decision = thompson_select(
-                    r=r,
-                    signals=signals,
-                    difficulty=difficulty,
-                    cache_hit_available=cache_hit_available,
-                )
-                logger.info(
-                    f"Router decision: route={route_decision.route.value} "
-                    f"D(x)={route_decision.difficulty_score:.3f} "
-                    f"bin={route_decision.difficulty_bin.value} "
-                    f"k={route_decision.retry_budget}"
-                )
+            route_decision = thompson_select(
+                signals=signals,
+                difficulty=difficulty,
+                cache_hit_available=cache_hit_available,
+            )
+            logger.info(
+                f"Router decision: route={route_decision.route.value} "
+                f"D(x)={route_decision.difficulty_score:.3f} "
+                f"bin={route_decision.difficulty_bin.value} "
+                f"k={route_decision.retry_budget}"
+            )
         except Exception as e:
             logger.error(f"Confidence Router failed, defaulting to STANDARD: {e}")
             route_decision = None
@@ -661,13 +649,9 @@ def record_route_feedback(
         from router.feedback_recorder import record_outcome
         from models.route import Route, DifficultyBin
 
-        r = _get_router_redis()
-        if not r:
-            return
-
         route = Route(route_value)
         d_bin = DifficultyBin(difficulty_bin_value)
-        record_outcome(r, d_bin, route, success)
+        record_outcome(d_bin, route, success)
     except Exception as e:
         logger.error(f"Failed to record route feedback: {e}")
 
