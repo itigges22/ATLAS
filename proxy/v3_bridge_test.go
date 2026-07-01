@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,7 @@ func TestCallV3PlanStreamingParsesResult(t *testing.T) {
 		mu.Unlock()
 	}
 
-	plan, err := callV3PlanStreaming(srv.URL, V3PlanRequest{
+	plan, err := callV3PlanStreaming(context.Background(), srv.URL, V3PlanRequest{
 		UserMessage: "add a hello endpoint",
 		WorkingDir:  "/workspace",
 	}, cb)
@@ -103,7 +104,7 @@ func TestCallV3PlanStreamingMissingResult(t *testing.T) {
 	srv := fakePlanServer(t, sse)
 	defer srv.Close()
 
-	_, err := callV3PlanStreaming(srv.URL, V3PlanRequest{UserMessage: "x"}, nil)
+	_, err := callV3PlanStreaming(context.Background(), srv.URL, V3PlanRequest{UserMessage: "x"}, nil)
 	if err == nil {
 		t.Fatal("expected error for missing result event")
 	}

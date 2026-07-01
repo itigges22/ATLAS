@@ -2,6 +2,56 @@
 
 > This changelog is maintained as a best-effort summary; for line-level detail and any gaps, see the commit history (`git log`) or the GitHub PR list.
 
+## [Unreleased]
+
+### Installer / bootstrap
+- Bootstrap writes the registry's default recommended model into `.env` when none is selected (logged), so the one-shot `curl | bash` flow completes without the wizard; an existing selection is respected.
+- No detected GPU selects the Vulkan overlay automatically, plus the new `docker-compose.cpu.yml` when `/dev/dri` is absent — GPU-less hosts boot via the lavapipe CPU ICD (slow but functional).
+- firewalld changes are opt-in via `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1`; services bind loopback, so local installs leave the firewall alone.
+- ASA steering-vector build dispatches per GPU vendor (CUDA/ROCm image + device flags), loads `.env` keys first, and skips cleanly on CPU-only hosts; re-runs pull the existing checkout as its owner (no dubious-ownership failure under sudo); service health wait raised to 450s to cover llama-server warmup.
+- `install.sh` (K3s) fails early with guidance when `bc` is missing; `download-models.sh` downloads via curl and writes a relative `default.gguf` symlink; the macOS native launcher's fallback defaults match the Docker path (ctx 131072, f16/f16 KV, 4 slots).
+
+### Proxy
+- `/ready` also gates on v3-service health.
+- Cancellation aborts in-flight V3 plan/write calls and sandbox calls; a cancelled `write_file`/`edit_file`/`ast_edit` no longer falls back to writing content to disk; per-turn cancel handles so overlapping turns on one session id can't remove each other's registration.
+- The verification, done-without-action, and claim-check gates share a 3-bounce cap, so a persistently bounced `done` is eventually accepted instead of looping.
+- The markdown-fence sanitizer only strips a true whole-file wrapper — interior fences (e.g. docstring examples) pass through unchanged.
+- The safety deny-list (`.env`/`*.pem`/`*credentials*` writes, destructive shell patterns) is enforced centrally at tool dispatch in every permission mode.
+- `outline_file` returns structured JSON including the rendered outline; `delete_file` reports removal errors and refuses non-empty directories; exploration budget escalates its nudge instead of skipping the read; session read-cache access is lock-guarded.
+
+### TUI
+- `/demo` raw lane runs with no sandbox or file tools; in review mode the raw pane keeps the model response while the V3 pane shows written files; stream events can no longer be overtaken by the done marker; prompt animation is multi-byte-safe; markdown re-wraps on terminal resize.
+- Feedback flow: staged per-file verdicts survive a failed submit; `/deny` validates the path against the files the last pass actually wrote; non-200 `/feedback` responses surface as errors; input echoes never replay into agent history.
+- Bearer-token loader reads the `atlas init` api-keys.json shape; `/events` reconnect backoff resets after a healthy connection; renderers added for reasoning-repetition interventions, stream cuts, and symbol-index injection.
+
+### CLI
+- `atlas compose <args...>` passthrough subcommand (base file + backend overlay); `atlas --help` lists subcommands; unknown subcommands print usage and exit 2.
+- Service URLs resolve from the Docker `.env` port keys when no explicit URL env var is set (repl, client, doctor, lens check).
+- `atlas onboard --url` offers to write `ATLAS_MODEL_FILE`/`ATLAS_MODEL_NAME` into `.env` (interactive prompt; `--apply` for non-interactive).
+- `atlas doctor` prints each result as it completes (JSON mode still buffers).
+- `atlas model`: models dir resolves from the compose `.env`; a resumed download that the server reports complete (HTTP 416) is verified and finalized in place; `install-artifacts` exits 3 when no artifacts are registered for direct download and points at the published repos; Gemma-family registry entries carry the `gemma` license identifier.
+- `atlas init` reports failure when `api-keys.json` is not written and asks before tightening a loose `secrets/` dir; `atlas asa build` resolves the lens container via compose (non-default project names) and survives docker-exec timeouts with recovery guidance; `atlas solve` uses `/v1/chat/completions` so the GGUF's own chat template applies; the startup status block drops the hardcoded speed figure; version reports 3.1.2.
+
+### Lens service + retrain tooling
+- `/internal/lens/retrain` refuses with a structured 503 when the models dir is mounted read-only, pointing at host-side `atlas lens retrain`; retrain/reload are serialized and refresh the readiness state on success.
+- Artifact identity is verified against the model llama-server actually serves (`/v1/models` probe, `ATLAS_MODEL_NAME` fallback) and against the checkpoint's input dimension.
+- G(x) loading is shared between boot and per-directory reloads, so a reload yields the complete lens; G(x) operating thresholds derive from out-of-fold CV scores instead of the final booster's in-sample scores.
+- `retrain_lens_from_results.py` mean-pools per-token embedding responses (matching serve-time extraction) and hot-reloads the service; `retrain_cx.py` resolves ports from `.env` with a K3s NodePort fallback; benchmark lens-feedback keeps its sample buffer when a retrain is refused or fails.
+- The lens image ships the `gguf` package (ASA vector writer), and the ASA build fails fast when it is missing.
+
+### v3-service / sandbox
+- v3-service serves requests on a threading HTTP server with a thread-safe graph cache; client disconnects abort the pipeline at phase boundaries; selection winners are matched by original candidate index (was positional against a sorted list); self-test harness executes candidates from a string literal so multiline strings survive; sandbox client timeout raised to 45s.
+- Sandbox executor: per-call cap set to 300s in the Compose stack (`ATLAS_SANDBOX_MAX_EXECUTION_TIME`); process-group kill on timeout; optional `stdin` on `/execute`; project-context file writes routed through the O_NOFOLLOW containment helper; background jobs abandoned for 2h are reaped.
+
+### Compose / K3s
+- All services run with `restart: unless-stopped`; runtime-tuning keys (`ATLAS_V3_TIMEOUT`, `ATLAS_MAX_TOKENS`, `ATLAS_AGENT_HISTORY_BUDGET`, `ATLAS_LENS_RETRAIN_MIN`, `ATLAS_KEEP_LLAMA_WARM`, `ATLAS_FRESH_SLOT_PER_SESSION`) pass through to the proxy; `ATLAS_GPU_INDEX` reaches the llama container; `.env.example` documents the runtime-tuning section.
+- Inference Dockerfiles EXPOSE 8080 (matching the entrypoint); ROCm/Vulkan images install curl for the compose healthcheck.
+- K3s templates pin container-side ports so moving a Service port can't break probes; the proxy pod mounts models read-only and the lens-training corpus hostPath (`ATLAS_LENS_TRAINING_DIR`), and receives ctx/slot sizing; `deploy-9b.sh` uses the shared entrypoint and split KV-cache type keys.
+- `production-readiness.py` and CI validate every shipped compose overlay combination; the installer CI job asserts a non-empty model selection lands in `.env`.
+
+### Docs
+- Documentation refreshed against the current code: MAP regenerated; API (feedback/training-status endpoints, readiness gate, tool table, workspace containment); CLI, CONFIGURATION, SETUP, SOURCES, PLAN_MODE, TROUBLESHOOTING updated.
+
 ## [3.1.2] - 2026-06-17 — Maia
 
 ### Hardware reach

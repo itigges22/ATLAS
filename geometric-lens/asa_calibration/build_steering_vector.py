@@ -37,6 +37,9 @@ import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+# Imported at module load so a missing gguf package fails in seconds, not
+# after the ~25-minute extraction pass right before the write step.
+import gguf
 import numpy as np
 
 sys.path.insert(0, "/app")
@@ -113,8 +116,6 @@ def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray,
       - One tensor per layer named "direction.<layer>", shape (hidden_dim,),
         dtype f32. Layers without a direction tensor are not steered.
     """
-    import gguf
-
     writer = gguf.GGUFWriter(str(out_path), arch="controlvector")
     writer.add_string("controlvector.model_hint", model_hint)
     writer.add_uint32("controlvector.layer_count",

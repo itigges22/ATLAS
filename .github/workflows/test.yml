@@ -127,9 +127,16 @@ jobs:
 
       - name: validate compose YAML
         # The runner has docker compose v2 pre-installed. `config -q`
-        # parses + validates docker-compose.yml without pulling images.
-        # Set dummy env so vars don't fail the parse.
-        run: python scripts/production-readiness.py --only compose
+        # parses + validates the base file plus every overlay combination
+        # real installs run (ROCm, Vulkan, Vulkan+CPU, macOS) without
+        # pulling images. Dummy env is supplied by the gate itself.
+        run: |
+          python scripts/production-readiness.py \
+            --only compose \
+            --only compose-rocm \
+            --only compose-vulkan \
+            --only compose-cpu \
+            --only compose-macos
 
   yamllint:
     name: yamllint (workflows)

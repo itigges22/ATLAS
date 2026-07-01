@@ -479,10 +479,22 @@ def test_release_install_lock_handles_missing_file(tmp_path):
 # PC-056.2 — oversized .part detection (item B)
 # ---------------------------------------------------------------------------
 
-def test_install_oversized_part_refused(tmp_path, capsys):
+def _stub_ample_disk(monkeypatch):
+    """Pretend the models partition has plenty of room so the disk
+    pre-check never short-circuits tests that target later gates —
+    hosts running this suite may have less free disk than a 9B model."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(
+        model.shutil, "disk_usage",
+        lambda _path: SimpleNamespace(total=2 * 1024 ** 4,
+                                      used=0, free=2 * 1024 ** 4))
+
+
+def test_install_oversized_part_refused(tmp_path, monkeypatch, capsys):
     """If existing .part is wildly larger than the registered model
     size, install must refuse rather than send Range: bytes=N- with
     N > total."""
+    _stub_ample_disk(monkeypatch)
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
     # Registered size is 6.94 GB. Make a sparse .part of 20 GB —
     # well over the 5% slack threshold.
@@ -507,6 +519,7 @@ def test_install_oversized_part_within_slack_does_not_refuse(tmp_path,
     # Disable network — we just want to reach the oversized check, not
     # actually download. Use --dry-run-style by failing before download
     # via a stubbed urlopen that immediately raises.
+    _stub_ample_disk(monkeypatch)
     p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
     # ~7.0 GB — within 5% of the registered 6.94 GB
     with open(p, "wb") as f:
@@ -793,6 +806,7 @@ def test_download_401_keeps_part_for_retry(tmp_path, monkeypatch, capsys):
     HF_TOKEN and retry. Helpful message should fire."""
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    _stub_ample_disk(monkeypatch)
 
     err = urllib.error.HTTPError(
         url="https://example/x", code=401, msg="Unauthorized",
@@ -960,3 +974,188 @@ def test_install_artifacts_unknown_model_returns_error(tmp_path, capsys):
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 1
     assert "Unknown model" in capsys.readouterr().out
+
+
+def test_install_artifacts_nothing_registered_is_distinct_failure(tmp_path,
+                                                                    capsys):
+    """A model with no artifact URL bases has nothing to download —
+    install-artifacts must say so and exit with a distinct nonzero code,
+    not report success."""
+    m = model_registry.by_name("gemma-4-12b-it-Q4_K_M")
+    assert m is not None
+    assert m.lens_artifact_url_base is None
+    assert m.asa_artifact_url_base is None
+    rc = model.main(["install-artifacts", "gemma-4-12b-it-Q4_K_M",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 3
+    out = capsys.readouterr().out
+    assert "No artifacts are registered for direct download" in out
+    # The published HF repos are surfaced as the manual path.
+    assert m.lens_hf_repo in out
+    assert m.asa_hf_repo in out
+    assert "installed" not in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Resume finalization on HTTP 416 (range already satisfied)
+# ---------------------------------------------------------------------------
+
+def _patched_9b(monkeypatch, sha):
+    import atlas.cli.commands.model_registry as reg
+    original = reg.by_name("Qwen3.5-9B-Q6_K")
+    patched = type(original)(
+        name=original.name, tier=original.tier,
+        model_file=original.model_file, model_display=original.model_display,
+        model_size_gb=0.11,
+        lens_status=original.lens_status,
+        download_url=original.download_url, sha256=sha,
+        license=original.license, requires_hf_token=False,
+        lens_artifact_dir=original.lens_artifact_dir,
+        lens_artifact_files=original.lens_artifact_files,
+        notes=original.notes,
+    )
+    monkeypatch.setattr(reg, "by_name",
+                         lambda n: patched if n == original.name else None)
+    monkeypatch.setattr(reg, "for_tier",
+                         lambda t: patched if t == "medium" else None)
+    return patched
+
+
+def test_resume_416_with_verified_part_finalizes(tmp_path, monkeypatch,
+                                                   capsys):
+    """HTTP 416 on resume + .part hash matches the registry: promote the
+    .part into place instead of erroring."""
+    body = b"z" * (101 * 1024 * 1024)
+    _patched_9b(monkeypatch, hashlib.sha256(body).hexdigest())
+
+    p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    with open(p, "wb") as f:
+        f.write(body)
+
+    err = urllib.error.HTTPError(
+        url="https://example/x", code=416, msg="Range Not Satisfiable",
+        hdrs={"Content-Range": f"bytes */{len(body)}"}, fp=None)
+    _install_with_fake_urlopen(monkeypatch, body=b"", raise_for=err)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color",
+                     "--no-artifacts"])
+    assert rc == 0, capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "already complete" in out
+    assert (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
+    assert not p.exists()
+
+
+def test_resume_416_with_corrupt_part_deletes_and_reports(tmp_path,
+                                                            monkeypatch,
+                                                            capsys):
+    """HTTP 416 on resume + .part hash does NOT match: delete the .part
+    and tell the user to retry from scratch."""
+    body = b"z" * (101 * 1024 * 1024)
+    _patched_9b(monkeypatch, "f" * 64)  # never matches
+
+    p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    with open(p, "wb") as f:
+        f.write(body)
+
+    err = urllib.error.HTTPError(
+        url="https://example/x", code=416, msg="Range Not Satisfiable",
+        hdrs={"Content-Range": f"bytes */{len(body)}"}, fp=None)
+    _install_with_fake_urlopen(monkeypatch, body=b"", raise_for=err)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color",
+                     "--no-artifacts"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "could not be verified" in out
+    assert not p.exists()
+    assert not (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
+    assert "Re-run the install" in out
+
+
+def test_resume_416_no_sha_no_content_range_deletes(tmp_path, monkeypatch,
+                                                     capsys):
+    """HTTP 416 on resume with NO registered sha256 AND NO Content-Range
+    header: the .part can't be verified, so it must be deleted (not promoted
+    blindly) with fresh-download guidance. Guards against finalizing a
+    corrupt/mismatched part left by a different --url/--file."""
+    _stub_ample_disk(monkeypatch)
+    body = b"z" * (101 * 1024 * 1024)
+    _patched_9b(monkeypatch, None)  # registry has no expected sha256
+
+    p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    with open(p, "wb") as f:
+        f.write(body)
+
+    # 416 response carries no Content-Range header.
+    err = urllib.error.HTTPError(
+        url="https://example/x", code=416, msg="Range Not Satisfiable",
+        hdrs={}, fp=None)
+    _install_with_fake_urlopen(monkeypatch, body=b"", raise_for=err)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color",
+                     "--no-artifacts"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "could not be verified" in out
+    assert not p.exists()
+    assert not (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
+    assert "fresh copy" in out
+
+
+def test_resume_416_verified_small_part_finalizes(tmp_path, monkeypatch,
+                                                   capsys):
+    """A SHA256-verified .part is promoted regardless of size — the old
+    `range_start < 100MB` guard wrongly deleted small-but-valid parts."""
+    _stub_ample_disk(monkeypatch)
+    body = b"z" * (1 * 1024 * 1024)  # 1 MB — under the old 100 MB floor
+    _patched_9b(monkeypatch, hashlib.sha256(body).hexdigest())
+
+    p = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    with open(p, "wb") as f:
+        f.write(body)
+
+    err = urllib.error.HTTPError(
+        url="https://example/x", code=416, msg="Range Not Satisfiable",
+        hdrs={"Content-Range": f"bytes */{len(body)}"}, fp=None)
+    _install_with_fake_urlopen(monkeypatch, body=b"", raise_for=err)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color",
+                     "--no-artifacts"])
+    assert rc == 0, capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "already complete" in out
+    assert (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
+    assert not p.exists()
+
+
+# ---------------------------------------------------------------------------
+# ATLAS_MODELS_DIR resolution (.env fallback, atlas-root-relative)
+# ---------------------------------------------------------------------------
+
+def test_resolve_models_dir_reads_dotenv_relative_to_atlas_root(tmp_path,
+                                                                  monkeypatch):
+    """Without the shell env var, ATLAS_MODELS_DIR comes from the compose
+    .env, and relative values resolve against the atlas root — not the
+    caller's cwd."""
+    import os
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    (tmp_path / ".env").write_text("ATLAS_MODELS_DIR=./custom-models\n")
+    monkeypatch.delenv("ATLAS_MODELS_DIR", raising=False)
+    monkeypatch.setattr(model, "_find_atlas_root", lambda: str(tmp_path))
+    monkeypatch.chdir(tmp_path.parent)  # cwd differs from atlas root
+
+    resolved = model._resolve_models_dir(None)
+    assert resolved == os.path.normpath(str(tmp_path / "custom-models"))
+
+
+def test_resolve_models_dir_shell_env_relative_to_atlas_root(tmp_path,
+                                                               monkeypatch):
+    import os
+    monkeypatch.setenv("ATLAS_MODELS_DIR", "./env-models")
+    monkeypatch.setattr(model, "_find_atlas_root", lambda: str(tmp_path))
+    monkeypatch.chdir(tmp_path.parent if tmp_path.parent != tmp_path
+                      else tmp_path)
+
+    resolved = model._resolve_models_dir(None)
+    assert resolved == os.path.normpath(str(tmp_path / "env-models"))

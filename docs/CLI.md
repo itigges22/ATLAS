@@ -22,13 +22,17 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | Subcommand | Purpose |
 |---|---|
 | `atlas init` | First-run wizard: probes hardware, picks a model, writes `.env` + `secrets/api-keys.json`. |
-| `atlas tier` | Hardware probe + tier classification (NVIDIA / AMD / Apple Silicon detection). `atlas tier fit` sizes the runtime (context / KV type / ubatch) for the configured model + GPU (see below). |
-| `atlas doctor` | Install diagnostic. GPU runtime, container health, endpoint reachability. |
-| `atlas model list \| install \| verify \| remove` | Model registry operations. `install --url <hf>` fetches an **unregistered** model (drop-in / BYO). |
+| `atlas tier` | Hardware probe + tier classification (NVIDIA / AMD / Apple Silicon detection). `atlas tier list` shows the full tier table; `atlas tier fit` sizes the runtime (context / KV type / ubatch) for the configured model + GPU (see below). |
+| `atlas doctor` | Install diagnostic. GPU runtime, container health, endpoint reachability. Prints each result as it completes; `--json` buffers into one machine-readable document. |
+| `atlas model list \| recommend \| install \| install-artifacts \| verify \| remove` | Model registry operations. `recommend` names the best registry model for this hardware; `install --url <hf>` fetches an **unregistered** model (drop-in / BYO); `install-artifacts <name>` fetches a registered model's published lens + ASA artifacts. |
 | `atlas onboard` | Guided drop-in for a new model: arch check, rebuild gate, lens-retrain guidance (see below). |
 | `atlas bench` | Generate + self-label candidates for the loaded model (baseline benchmark). Feeds `atlas lens build --from-results` (see below). |
-| `atlas lens check \| build` | Geometric Lens compat probe + per-model training (PC-057 / PC-058 — see below). |
+| `atlas lens check \| build \| publish` | Geometric Lens compat probe + per-model training (PC-057 / PC-058 — see below). |
+| `atlas asa check \| build \| publish` | ASA control-vector compat probe + per-model training + publish (PC-061 — see below). |
 | `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both (PC-215). `--lens-only` / `--asa-only` delegate to the per-component flows. |
+| `atlas compose <args...>` | `docker compose` passthrough with ATLAS's compose file set (base file + the backend overlay resolved from `ATLAS_BACKEND`). E.g. `atlas compose ps`, `atlas compose logs -f atlas-proxy`. |
+
+`atlas --help` (or `-h`) prints the subcommand list. An unknown subcommand prints the same usage to stderr and exits 2.
 
 `atlas` does the right thing automatically:
 
@@ -384,6 +388,28 @@ the other services internally.
 
 ---
 
+## atlas model
+
+Registry-aware model management.
+
+```bash
+atlas model list                        # known models + install/lens/asa status
+atlas model recommend                   # best registry model for this hardware (tier probe + registry)
+atlas model install <name>              # download a registry model (SHA-256 verified)
+atlas model install --url <hf-gguf-url> # download an unregistered GGUF (drop-in / BYO)
+atlas model install-artifacts <name>    # fetch a registered model's published lens + ASA artifacts
+atlas model verify <name>               # re-hash an installed model against the registry
+atlas model remove <name>               # delete a model file from the models dir
+```
+
+Notes:
+
+- **Models dir resolution:** `--models-dir` flag → `ATLAS_MODELS_DIR` shell env → `ATLAS_MODELS_DIR` in the checkout's Docker `.env` → `<atlas_root>/models`. Relative values resolve against the ATLAS root (the compose deployment's frame of reference), not your cwd.
+- **Interrupted downloads resume.** A partial `.part` file continues from where it stopped (HTTP Range). If the server reports the range is already complete (HTTP 416), the `.part` is verified (SHA-256 when registered, size otherwise) and promoted in place; a `.part` that fails verification is deleted with retry guidance.
+- **`install-artifacts` exit codes:** `0` success, `1` error, `3` when the registry has no artifacts registered for direct download for that model — the command prints where they are published (HF repo) or how to train them locally (`atlas lens build` / `atlas asa build`).
+
+---
+
 ## atlas tier fit (PC-208)
 
 Sizes the llama-server runtime for a specific model on *your* GPU. Reads the
@@ -396,7 +422,7 @@ atlas tier fit                          # fit the model configured in .env
 atlas tier fit models/other.gguf        # fit a specific GGUF
 atlas tier fit --write                  # apply the result to .env
 atlas tier fit --slots 2                # size for 2 parallel slots instead of 4
-atlas tier fit --json                   # machine-readable (meta + budget + env)
+atlas tier fit --json                   # machine-readable ({model, meta, fit, env})
 ```
 
 Example:
@@ -456,13 +482,17 @@ llama.cpp patches.
 ```bash
 atlas onboard                       # onboard the model already pointed at in .env
 atlas onboard --url <hf-gguf-url>   # download an unregistered model first
+atlas onboard --url <url> --apply   # ...and write ATLAS_MODEL_FILE/NAME into .env without prompting
 atlas onboard --no-start            # inspect current state; don't (re)start llama-server
 ```
 
 What it does:
 
 1. **Resolve** the model from `.env` (`ATLAS_MODEL_FILE`). With `--url`, fetches
-   it first via `atlas model install --url`, then asks you to set `.env`. Also
+   it first via `atlas model install --url`, then offers to write
+   `ATLAS_MODEL_FILE` + `ATLAS_MODEL_NAME` into `.env` (interactive prompt;
+   `--apply` writes without asking) — re-run `atlas onboard` afterwards to
+   continue with the arch and lens checks. Also
    prints the runtime-fit recommendation for this model + GPU (`atlas tier fit`)
    and flags when `.env` sizing differs.
 2. **Arch gate** — reads the GGUF architecture and confirms llama-server actually
@@ -645,7 +675,7 @@ Verdict + exit code:
 | `needs-build` | 1 | No vector, or dim mismatched (vector was trained for a different model). |
 | `incompatible` | 2 | llama-server unreachable. |
 
-Reports the vector's dim, layer count (from GGUF metadata), and the `model_hint` baked in by `build_steering_vector.py`. Resolves container-relative paths (`/models/x.gguf` on llama-server) to host-visible paths by trying `<atlas_root>/models/` and `$ATLAS_MODELS_DIR` in turn — so running `atlas asa check` on the host Just Works without manually translating paths.
+Reports the vector's dim, layer count (from GGUF metadata), and the `model_hint` baked in by `build_steering_vector.py`. Resolves container-relative paths (`/models/x.gguf` on llama-server) to host-visible paths by trying `<atlas_root>/models/` and `$ATLAS_MODELS_DIR` in turn — running `atlas asa check` on the host needs no manual path translation.
 
 Requires the `gguf` Python pkg on the host (`pip install gguf`) for the dim probe. Without it the verdict falls back to `compat: unverified` rather than failing — llama-server will refuse to load an incompatible vector at boot anyway, so the worst case is a clear error in container logs.
 

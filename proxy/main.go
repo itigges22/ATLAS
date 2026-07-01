@@ -34,18 +34,19 @@ var (
 	inferenceURL = envOr("ATLAS_INFERENCE_URL", "http://localhost:8080")
 	lensURL      = envOr("ATLAS_LENS_URL", "http://localhost:8099")
 	sandboxURL   = envOr("ATLAS_SANDBOX_URL", "http://localhost:30820")
+	v3URL        = envOr("ATLAS_V3_URL", "http://localhost:8070")
 	proxyPort    = envOr("ATLAS_PROXY_PORT", "8090")
 	modelName    = envOr("ATLAS_MODEL_NAME", "local-model")
 	healthClient = &http.Client{Timeout: 3 * time.Second}
+	// v3-service can take longer to answer when a pipeline run is in
+	// flight; keep its readiness probe on a shorter leash so /ready
+	// stays snappy.
+	v3HealthClient = &http.Client{Timeout: 2 * time.Second}
 )
 
 const (
 	demoRawCapability   = "demo_raw_completion_v1"
 	maxRepairAttempts   = 3
-	gxLowThreshold      = 0.5 // below this → trigger best-of-K
-	gxHighThreshold     = 0.9 // above this → early exit from best-of-K
-	sandboxTimeout      = 8   // seconds
-	interactiveTimeout  = 3   // seconds for interactive programs
 	maxRequestBodyBytes = 16 << 20
 )
 
@@ -234,8 +235,18 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 		sandboxOK = resp.StatusCode == 200
 	}
+	// T2/T3 writes route through v3-service, so readiness includes it
+	// whenever a V3 URL is configured.
+	v3OK := true
+	if v3URL != "" {
+		v3OK = false
+		if resp, err := v3HealthClient.Get(v3URL + "/health"); err == nil {
+			resp.Body.Close()
+			v3OK = resp.StatusCode == 200
+		}
+	}
 
-	ready := llmOK && lensReady && sandboxOK
+	ready := llmOK && lensReady && sandboxOK && v3OK
 	w.Header().Set("Content-Type", "application/json")
 	if !ready {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -245,6 +256,7 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 		"inference":  llmOK,
 		"lens_ready": lensReady,
 		"sandbox":    sandboxOK,
+		"v3":         v3OK,
 	})
 }
 

@@ -89,6 +89,11 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
 		return &ToolResult{Success: false, Error: reason}
 	}
+	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
+	// destructive shell patterns) are refused in every permission mode.
+	if denied, reason := shouldDenyToolCall(name, args); denied {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason)}
+	}
 
 	result, err := tool.Execute(args, ctx)
 	if err != nil {
@@ -317,9 +322,9 @@ func outlineFileTool() *ToolDef {
 				// function it calls, not from the function itself.
 				sb.WriteString("\nNote: if a function returns a wrong value, the bug may be in a function it `calls`, not in the function itself — follow the call edges to the root cause before editing.\n")
 			}
-			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0}
-			_ = out
-			return &ToolResult{Success: true, Data: []byte(fmt.Sprintf("%q", sb.String()))}, nil
+			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0, Outline: sb.String()}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -745,9 +750,9 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	}
 
 	// Add project context from files read during this session
-	if len(ctx.FilesRead) > 0 {
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
-		for p, content := range ctx.FilesRead {
+		for p, content := range filesRead {
 			relPath, _ := filepath.Rel(ctx.WorkingDir, p)
 			if relPath == "" {
 				relPath = p
@@ -906,6 +911,15 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		},
 	})
 	if err != nil {
+		// User cancellation is not a fallback case — the turn was aborted,
+		// so nothing should land on disk.
+		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+			log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
+			return &ToolResult{
+				Success: false,
+				Error:   "write_file cancelled — no content was written",
+			}, nil
+		}
 		// Fallback to direct write if V3 service unavailable
 		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
@@ -1205,6 +1219,15 @@ func editFileTool() *ToolDef {
 				log.Printf("[edit_file] V3 pipeline activating for %s (file_tier=%d, req_tier=%d)", input.Path, fileTier, ctx.Tier)
 				improved, meta, err := improveContentWithV3(path, newContent, ctx)
 				if err != nil {
+					// User cancellation is not a fallback case — the turn
+					// was aborted, so nothing should land on disk.
+					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+						log.Printf("[edit_file] V3 aborted by cancellation — not writing %s", input.Path)
+						return &ToolResult{
+							Success: false,
+							Error:   "edit_file cancelled — no content was written",
+						}, nil
+					}
 					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
 				} else if improved != "" {
 					// V3 sometimes returns code wrapped in markdown
@@ -1490,6 +1513,15 @@ func astEditTool() *ToolDef {
 				log.Printf("[ast_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-AST-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
 				improved, meta, err := improveContentWithV3(path, finalContent, ctx)
 				if err != nil {
+					// User cancellation is not a fallback case — the turn
+					// was aborted, so nothing should land on disk.
+					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+						log.Printf("[ast_edit] V3 aborted by cancellation — not writing %s", input.Path)
+						return &ToolResult{
+							Success: false,
+							Error:   "ast_edit cancelled — no content was written",
+						}, nil
+					}
 					log.Printf("[ast_edit] V3 failed: %v — falling back to AST-edited content", err)
 				} else if improved != "" {
 					if cleanedImproved, sanitized := sanitizeFileContent(input.Path, improved); sanitized {
@@ -1558,9 +1590,9 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		Tier:         int(ctx.Tier),
 		WorkingDir:   ctx.WorkingDir,
 	}
-	if len(ctx.FilesRead) > 0 {
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
-		for p, c := range ctx.FilesRead {
+		for p, c := range filesRead {
 			rel, _ := filepath.Rel(ctx.WorkingDir, p)
 			if rel == "" {
 				rel = p
@@ -1882,17 +1914,54 @@ func deleteFileTool() *ToolDef {
 							return nil, fmt.Errorf("directory not empty: %s (%d entries)", input.Path, len(entries))
 						}
 					}
-					os.Remove(realPath)
+					if rmErr := os.Remove(realPath); rmErr != nil {
+						return &ToolResult{
+							Success: false,
+							Error:   fmt.Sprintf("delete_file: %v", rmErr),
+						}, nil
+					}
 					deleted = true
 					log.Printf("[delete_file] %s deleted from project dir %s", input.Path, ctx.RealProjectDir)
 				}
 			}
 
-			// Also delete from temp/working dir if it exists there
+			// Also delete from temp/working dir if it exists there. If the
+			// project-dir removal already succeeded, a failure on this mirror
+			// copy is not reported as an overall failure — the user-visible
+			// file is already gone, and reporting failure would make the model
+			// retry against a path it can never clear.
 			path := resolveAgentPath(ctx, input.Path)
-			if _, err := os.Stat(path); err == nil {
-				os.Remove(path)
-				deleted = true
+			if info, err := os.Stat(path); err == nil {
+				if info.IsDir() {
+					entries, _ := os.ReadDir(path)
+					if len(entries) > 0 {
+						if deleted {
+							log.Printf("[delete_file] %s removed from project dir; working-dir copy is a non-empty directory, left in place", input.Path)
+						} else {
+							return &ToolResult{
+								Success: false,
+								Error:   fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries)),
+							}, nil
+						}
+					} else if rmErr := os.Remove(path); rmErr != nil && !deleted {
+						return &ToolResult{
+							Success: false,
+							Error:   fmt.Sprintf("delete_file: %v", rmErr),
+						}, nil
+					} else if rmErr == nil {
+						deleted = true
+					}
+				} else if rmErr := os.Remove(path); rmErr != nil {
+					if !deleted {
+						return &ToolResult{
+							Success: false,
+							Error:   fmt.Sprintf("delete_file: %v", rmErr),
+						}, nil
+					}
+					log.Printf("[delete_file] %s removed from project dir; working-dir copy removal failed: %v", input.Path, rmErr)
+				} else {
+					deleted = true
+				}
 			}
 
 			if !deleted {
@@ -2006,9 +2075,9 @@ func moveFileTool() *ToolDef {
 			// now lives at the new path. Re-point the recorded read and the
 			// session-write set so a follow-up edit isn't bounced as blind and
 			// dedup logic tracks the right path.
-			if content, ok := ctx.FilesRead[src]; ok {
+			if content, ok := ctx.GetFileRead(src); ok {
 				ctx.RecordFileRead(dst, content)
-				delete(ctx.FilesRead, src)
+				ctx.ForgetFileRead(src)
 			}
 			if ctx.SessionWrites != nil {
 				if ctx.SessionWrites[input.Source] {
@@ -2210,7 +2279,13 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 		"timeout": timeoutSec,
 	})
 	endpoint := ctx.SandboxURL + "/shell"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	// Bind the agent's request context so a user cancel aborts the
+	// in-flight sandbox call instead of waiting out the client timeout.
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return RunCommandOutput{}, err
 	}
@@ -2657,13 +2732,16 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 	if err != nil {
 		return &ToolResult{Success: false, Error: "read_file: " + err.Error()}
 	}
+	ctx.mu.Lock()
 	prev, ok := ctx.FilesRead[path]
+	cacheEntries := len(ctx.FilesRead)
+	ctx.mu.Unlock()
 	if !ok {
 		// Diagnostic: a re-read that SHOULD have been cached but wasn't.
 		// Logged only when some other entry exists (first read of a file
 		// is the normal case and not worth a line).
-		if len(ctx.FilesRead) > 0 {
-			log.Printf("[read-dedup] no cache entry for %s (have %d entries) — serving real read", safeLogField(path, 240), len(ctx.FilesRead))
+		if cacheEntries > 0 {
+			log.Printf("[read-dedup] no cache entry for %s (have %d entries) — serving real read", safeLogField(path, 240), cacheEntries)
 		}
 		return nil
 	}
@@ -2999,7 +3077,11 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 		return "", 0, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	body, _ := json.Marshal(map[string]interface{}{"command": command, "cwd": cwd})
-	req, err := http.NewRequest("POST", ctx.SandboxURL+"/jobs/start", bytes.NewReader(body))
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "POST", ctx.SandboxURL+"/jobs/start", bytes.NewReader(body))
 	if err != nil {
 		return "", 0, err
 	}
@@ -3034,7 +3116,15 @@ func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (TailBack
 		return TailBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	url := fmt.Sprintf("%s/jobs/%s/output?lines=%d", ctx.SandboxURL, jobID, lines)
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(url)
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+	if err != nil {
+		return TailBackgroundOutput{}, err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return TailBackgroundOutput{}, err
 	}
@@ -3057,7 +3147,16 @@ func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutpu
 		return StopBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	url := fmt.Sprintf("%s/jobs/%s/stop", ctx.SandboxURL, jobID)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Post(url, "application/json", nil)
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "POST", url, nil)
+	if err != nil {
+		return StopBackgroundOutput{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return StopBackgroundOutput{}, err
 	}

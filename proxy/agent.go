@@ -83,14 +83,26 @@ func recoverStructuredReasoning(s string) (string, bool) {
 }
 
 // activeSessions tracks in-flight /v1/agent turns by session_id so
-// /cancel can abort them. Map value is the context.CancelFunc returned
-// from the per-request context.WithCancel wrapper. PC-062 step 5.
+// /cancel can abort them. Map value is a *sessionCancel wrapping the
+// context.CancelFunc from the per-request context.WithCancel wrapper.
+// PC-062 step 5.
+//
+// The pointer doubles as a per-turn identity token: cleanup uses
+// CompareAndDelete so a finishing turn only removes its own entry. If a
+// second /v1/agent request reuses the same session_id, the first turn's
+// deferred cleanup no longer deletes the second turn's cancel func.
 //
 // Defense-in-depth: cancellation also flows naturally through TCP
 // disconnect (handleAgent already binds ctx to r.Context()), but a
 // reverse proxy may buffer the disconnect. /cancel gives the TUI a
 // reliable, explicit kill switch.
 var activeSessions sync.Map
+
+// sessionCancel is the activeSessions map value — a comparable wrapper
+// around the per-turn cancel func.
+type sessionCancel struct {
+	cancel context.CancelFunc
+}
 
 // ---------------------------------------------------------------------------
 // Agent loop — iterative tool-calling loop between model and executors
@@ -248,6 +260,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// Whether the user prompt is a repair/fix request. Computed once because
 	// the user message doesn't change mid-loop. Drives the verification gate.
 	userWantsVerification := isFixIntentMessage(userMessage)
+
+	// Shared cap across the verification, done-without-action, and
+	// claim-check gates. Mirrors the parse-error cap: three bounces of a
+	// `done` is a stuck loop, so the fourth done is accepted rather than
+	// bounced forever.
+	gateBounces := 0
+	const maxGateBounces = 3
 
 	// PC-200 — flag whether we've already injected the
 	// approaching-budget hint, so we don't fire it every turn after
@@ -445,10 +464,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// require a structured verification field, just evidence in the
 			// loop that the agent ran something that exits non-zero on
 			// failure.
-			if userWantsVerification && !verifiedThisLoop && !ctx.YoloMode {
+			if userWantsVerification && !verifiedThisLoop && !ctx.YoloMode && gateBounces < maxGateBounces {
+				gateBounces++
 				rejection := verificationRejectionMessage(userMessage)
-				log.Printf("[agent] verification gate: bouncing done at turn %d (user prompt %q has fix-intent, no successful verification command this loop)",
-					turn, truncateStr(userMessage, 60))
+				log.Printf("[agent] verification gate: bouncing done at turn %d (user prompt %q has fix-intent, no successful verification command this loop, bounce %d/%d)",
+					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "assistant",
 					Content: response,
@@ -473,10 +493,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// - verification gate: fix prompt + no run_command verify → bounce
 			// - this gate: action prompt + no successful edit tool → bounce
 			// Both can fire on the same prompt (e.g. "rewrite X and verify").
-			if isActionIntentMessage(userMessage) && !madeProductiveChange && !ctx.YoloMode {
+			if isActionIntentMessage(userMessage) && !madeProductiveChange && !ctx.YoloMode && gateBounces < maxGateBounces {
+				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
-				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop)",
-					turn, truncateStr(userMessage, 60))
+				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop, bounce %d/%d)",
+					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "assistant",
 					Content: response,
@@ -513,10 +534,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// we catch "fixed 1 of N" cases regardless of how the
 			// model worded the summary. Structural check is the same.
 			shouldCheck := claimsUniversal(parsed.Summary) || promptIsMultiIssue(userMessage)
-			if !ctx.YoloMode && shouldCheck {
+			if !ctx.YoloMode && shouldCheck && gateBounces < maxGateBounces {
 				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Summary); gap != "" {
-					log.Printf("[agent] claim-check gate: bouncing done at turn %d — %q",
-						turn, truncateStr(gap, 200))
+					gateBounces++
+					log.Printf("[agent] claim-check gate: bouncing done at turn %d (bounce %d/%d) — %q",
+						turn, gateBounces, maxGateBounces, truncateStr(gap, 200))
 					ctx.Messages = append(ctx.Messages, AgentMessage{
 						Role:    "assistant",
 						Content: response,
@@ -901,6 +923,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					safeLogField(parsed.Name, 64), safeLogField(result.Error, 240))
 			}
 
+			// Force-stop after destructive operations that shouldn't have
+			// follow-up. The sentinel is internal control flow — strip it
+			// before any event is emitted so it never reaches the client.
+			forceDone := result.Error == "__FORCE_DONE__"
+			if forceDone {
+				result.Error = ""
+			}
+
 			ctx.Stream("tool_result", map[string]interface{}{
 				"tool":    parsed.Name,
 				"success": result.Success,
@@ -921,9 +951,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				},
 			})
 
-			// Force-stop after destructive operations that shouldn't have follow-up
-			if result.Error == "__FORCE_DONE__" {
-				result.Error = ""
+			if forceDone {
 				// Don't stream a follow-up message — the file deletion already
 				// happened on disk and any trailing text would just be noise
 				// for the TUI to render after a destructive op.
@@ -1166,7 +1194,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			}
 
 			// Exploration budget: after 4 consecutive read-only calls,
-			// inject nudge. After 5, skip reads.
+			// inject nudge. After 5, escalate the nudge. The read above
+			// already executed and its result is in context — the nudge
+			// steers the NEXT turn toward a write.
 			// FUTURE (L6 reliability): Compact models can over-explore when adding
 			// features to existing projects (~67% pass rate). Better prompting,
 			// larger model, or V3-guided exploration would improve this.
@@ -1177,13 +1207,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				})
 				log.Printf("[agent] exploration budget: warning at turn %d", turn)
 			} else if consecutiveReads >= 5 {
-				// Skip the read and return synthetic result
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "user",
-					Content: "Skipped — you already have this information in context. Write your changes now. Use write_file or edit_file.",
+					Content: "You already have this information in context — reading more files will not help. Write your changes now. Use write_file or edit_file.",
 				})
 				consecutiveReads = 2 // Keep at warning level, don't reset
-				log.Printf("[agent] exploration budget: skipped read at turn %d", turn)
+				log.Printf("[agent] exploration budget: escalated nudge at turn %d", turn)
 			}
 
 		default:
@@ -2086,9 +2115,9 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// Show which files are in the project (names only, not full content).
 	// Full content is available via read_file if needed.
 	// This avoids consuming context window with pre-injected file dumps.
-	if len(ctx.FilesRead) > 0 {
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		sb.WriteString("## Project Files Available\n")
-		for path := range ctx.FilesRead {
+		for path := range filesRead {
 			sb.WriteString(fmt.Sprintf("- %s\n", path))
 		}
 		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")
@@ -2426,8 +2455,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	ctx.Ctx = reqCtx
 	ctx.PassID = req.SessionID
 	if req.SessionID != "" {
-		activeSessions.Store(req.SessionID, cancel)
-		defer activeSessions.Delete(req.SessionID)
+		entry := &sessionCancel{cancel: cancel}
+		activeSessions.Store(req.SessionID, entry)
+		defer activeSessions.CompareAndDelete(req.SessionID, entry)
 	}
 
 	// Set permission mode
@@ -2549,13 +2579,13 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": false})
 		return
 	}
-	cancel, ok := v.(context.CancelFunc)
+	entry, ok := v.(*sessionCancel)
 	if !ok {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "bad session entry"})
 		return
 	}
-	cancel()
+	entry.cancel()
 	log.Printf("[agent] cancelled session %q via /cancel", req.SessionID)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
 }
@@ -3682,7 +3712,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		"candidates": req.NCandidates,
 	}))
 
-	plan, err := callV3PlanStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		// Filter out per-token events — the LLM emits ~150 token deltas
 		// per candidate × 3 candidates = ~450 streamed events. Forwarding
 		// every one to the TUI as a separate v3_plan row clogs the

@@ -165,6 +165,16 @@ check_prerequisites() {
         exit 1
     fi
 
+    # detect_hardware sizes CPU/memory shares with bc, which minimal
+    # installs often lack. Fail with guidance instead of a bc: command
+    # not found cascade mid-detection.
+    if ! command -v bc &> /dev/null; then
+        log_error "'bc' is required for hardware sizing but is not installed."
+        log_error "  Install it first:  dnf install -y bc   (RHEL-family)"
+        log_error "                     apt-get install -y bc   (Debian/Ubuntu)"
+        exit 1
+    fi
+
     # Detect and display hardware
     detect_hardware
 

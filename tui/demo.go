@@ -31,6 +31,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -91,8 +92,7 @@ type demoModel struct {
 	// The V3 side writes into an isolated sandbox under workingDir. The raw
 	// side has no filesystem tools; its one model response is retained in the
 	// left pane during output review.
-	rawSandbox string // empty workspace retained for backward-compatible review state
-	v3Sandbox  string
+	v3Sandbox string
 
 	width, height int
 
@@ -129,16 +129,15 @@ type demoModel struct {
 	// dead to a viewer who can't see the proxy logs.
 	spinnerFrame int
 
-	// Output review mode: when both sides finish, each pane switches
+	// Output review mode: when both sides finish, the V3 pane switches
 	// from streaming chat to a file-tree + selected-file-contents view
-	// of its sandbox. Tab/space cycles files within a pane; 1-9 jumps.
+	// of its sandbox, while the raw pane keeps showing its one model
+	// response. Tab/space cycles files within the V3 pane; 1-9 jumps.
 	// outputMode is set once both rawDone and v3Done are true.
-	outputMode     bool
-	rawFiles       []string // relative paths inside rawSandbox, sorted
-	v3Files        []string
-	rawSelectedIdx int
-	v3SelectedIdx  int
-	activePane     string // "raw" | "v3" — which side's file cycler responds to keys
+	outputMode    bool
+	v3Files       []string // relative paths inside v3Sandbox, sorted
+	v3SelectedIdx int
+	activePane    string // "raw" | "v3" — which side keys apply to
 
 	events chan demoEvent
 
@@ -234,18 +233,16 @@ func newDemoModel(proxyURL, workingDir, length string) (*demoModel, error) {
 	rawChild := newTUIModel(proxyURL)
 	v3Child := newTUIModel(proxyURL)
 
-	// Per-run sandbox subdirs. Timestamps make recordings reproducible
-	// (you know which dir came from which take) and stop collisions
-	// between rapid re-runs. Created here so the demo can show "files
-	// written:" view from the host side after both sides finish.
-	ts := time.Now().Unix()
-	rawSandbox := fmt.Sprintf(".demo-raw-%d", ts)
-	v3Sandbox := fmt.Sprintf(".demo-v3-%d", ts)
-	for _, sub := range []string{rawSandbox, v3Sandbox} {
-		if err := os.MkdirAll(filepath.Join(workingDir, sub), 0o755); err != nil {
-			cancel()
-			return nil, fmt.Errorf("create sandbox %s: %w", sub, err)
-		}
+	// Per-run V3 sandbox subdir. The timestamp makes recordings
+	// reproducible (you know which dir came from which take) and stops
+	// collisions between rapid re-runs. Created here so the demo can
+	// show the "files written" view after both sides finish. The raw
+	// side is a direct completion with no filesystem tools, so it gets
+	// no sandbox.
+	v3Sandbox := fmt.Sprintf(".demo-v3-%d", time.Now().Unix())
+	if err := os.MkdirAll(filepath.Join(workingDir, v3Sandbox), 0o755); err != nil {
+		cancel()
+		return nil, fmt.Errorf("create sandbox %s: %w", v3Sandbox, err)
 	}
 
 	modelID, modelLabel := fetchDemoModelIdentity(proxyURL)
@@ -261,7 +258,6 @@ func newDemoModel(proxyURL, workingDir, length string) (*demoModel, error) {
 		cancel:     cancel,
 		rawChild:   &rawChild,
 		v3Child:    &v3Child,
-		rawSandbox: rawSandbox,
 		v3Sandbox:  v3Sandbox,
 		activePane: "v3",
 	}, nil
@@ -270,7 +266,7 @@ func newDemoModel(proxyURL, workingDir, length string) (*demoModel, error) {
 const demoModelFallback = "MODEL"
 const demoRawCapability = "demo_raw_completion_v1"
 
-// fetchDemoModelLabel resolves the model actually configured in the proxy.
+// fetchDemoModelIdentity resolves the model actually configured in the proxy.
 // Metadata is presentation-only: if the endpoint is unavailable or malformed,
 // the demo still launches with a neutral label instead of guessing a family or
 // parameter count.
@@ -301,11 +297,6 @@ func fetchDemoModelIdentity(proxyURL string) (string, string) {
 	}
 	id := strings.TrimSpace(payload.Data[0].ID)
 	return id, formatDemoModelLabel(id)
-}
-
-func fetchDemoModelLabel(proxyURL string) string {
-	_, label := fetchDemoModelIdentity(proxyURL)
-	return label
 }
 
 // proxySupportsRawDemo prevents a new TUI from silently talking to a proxy
@@ -428,28 +419,29 @@ func (m *demoModel) startStreams() tea.Cmd {
 
 func (m *demoModel) runStream(side string) {
 	out := make(chan chatEvent, 128)
+	errCh := make(chan error, 1)
 	go func() {
-		for evt := range out {
-			m.events <- demoEvent{stream: demoStreamMsg{side: side, evt: evt}}
+		var err error
+		if side == "raw" {
+			err = sendRawChat(m.ctx, m.proxyURL, m.modelID, m.prompt.Prompt, out)
+		} else {
+			sid := fmt.Sprintf("demo-%s-%d", side, time.Now().UnixNano())
+			err = sendChatOpts(m.ctx, m.proxyURL, m.prompt.Prompt, m.workingDir,
+				"yolo", sid, nil, demoOpts{
+					disableFreshSlot: true,
+					sandboxSubdir:    m.v3Sandbox,
+				}, out)
 		}
+		errCh <- err
+		close(out)
 	}()
-	sid := fmt.Sprintf("demo-%s-%d", side, time.Now().UnixNano())
-	sandbox := m.rawSandbox
-	if side == "v3" {
-		sandbox = m.v3Sandbox
+	// Forward every stream event, then the done marker — ranging over
+	// the closed channel drains the buffer first, so done can never
+	// overtake events still queued on `out`.
+	for evt := range out {
+		m.events <- demoEvent{stream: demoStreamMsg{side: side, evt: evt}}
 	}
-	var err error
-	if side == "raw" {
-		err = sendRawChat(m.ctx, m.proxyURL, m.modelID, m.prompt.Prompt, out)
-	} else {
-		err = sendChatOpts(m.ctx, m.proxyURL, m.prompt.Prompt, m.workingDir,
-			"yolo", sid, nil, demoOpts{
-				disableFreshSlot: true,
-				sandboxSubdir:    sandbox,
-			}, out)
-	}
-	close(out)
-	m.events <- demoEvent{done: &demoStreamDone{side: side, err: err}}
+	m.events <- demoEvent{done: &demoStreamDone{side: side, err: <-errCh}}
 }
 
 // drainEvents pulls events from the shared channel and batches every
@@ -503,6 +495,7 @@ func demoTick(d time.Duration) tea.Cmd {
 func (m *demoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		widthChanged := msg.Width != m.width
 		m.width = msg.Width
 		m.height = msg.Height
 		// Forward a half-width sizing to each child so glamour wraps to
@@ -513,6 +506,27 @@ func (m *demoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rawChild.height = msg.Height - 4
 		m.v3Child.width = colW
 		m.v3Child.height = msg.Height - 4
+		if widthChanged {
+			// Rebuild each child's glamour renderer at the pane's inner
+			// content width (renderChatPane is called with colW-4) so
+			// markdown wraps to the actual column, not the default.
+			style := os.Getenv("GLAMOUR_STYLE")
+			if style == "" {
+				style = "dark"
+			}
+			wrap := colW - 4
+			if wrap < 20 {
+				wrap = 20
+			}
+			for _, child := range []*tuiModel{m.rawChild, m.v3Child} {
+				if r, err := glamour.NewTermRenderer(
+					glamour.WithStandardStyle(style),
+					glamour.WithWordWrap(wrap),
+				); err == nil {
+					child.chatRenderer = r
+				}
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -576,15 +590,19 @@ func (m *demoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case demoTickMsg:
 		m.spinnerFrame++
-		if !m.outputMode && m.promptShown < len(m.prompt.Prompt) {
+		// promptShown counts runes, not bytes, so a multi-byte character
+		// (em dash, box drawing) is revealed whole instead of split
+		// mid-sequence.
+		promptLen := len([]rune(m.prompt.Prompt))
+		if !m.outputMode && m.promptShown < promptLen {
 			m.promptShown++
 		}
 		// Fire the streams exactly once, the tick after the prompt
-		// animation finishes. The trailing tick on len() == promptShown
+		// animation finishes. The trailing tick on promptLen == promptShown
 		// gives one frame of "complete prompt with no caret" before the
 		// status flips to processing-prompt — small thing but reads
 		// noticeably cleaner on camera.
-		if !m.streamsFired && !m.outputMode && m.promptShown >= len(m.prompt.Prompt) {
+		if !m.streamsFired && !m.outputMode && m.promptShown >= promptLen {
 			m.streamsFired = true
 			return m, tea.Batch(
 				m.startStreams(),
@@ -635,12 +653,17 @@ func (m *demoModel) View() string {
 		return "loading demo…"
 	}
 
-	// Top row: typed prompt animation. Caret blinks via promptShown.
-	// In output mode the prompt header becomes a compact reminder of
-	// what was asked so the file diff has context.
+	// Top row: typed prompt animation. Caret blinks via promptShown
+	// (a rune count — slicing by rune keeps multi-byte characters
+	// intact). In output mode the prompt header becomes a compact
+	// reminder of what was asked so the file diff has context.
 	prompt := m.prompt.Prompt
-	if !m.outputMode && m.promptShown < len(prompt) {
-		prompt = prompt[:m.promptShown] + "▌"
+	if promptRunes := []rune(prompt); !m.outputMode && m.promptShown < len(promptRunes) {
+		shown := m.promptShown
+		if shown < 0 {
+			shown = 0
+		}
+		prompt = string(promptRunes[:shown]) + "▌"
 	}
 	// Wrap to terminal width — the real-world prompts in the bank are
 	// 200+ chars and would otherwise overflow off the right edge.
@@ -767,14 +790,14 @@ func thinkingRow(done bool, spinnerFrame int) string {
 	return runStyle.Render(fmt.Sprintf("  %s %s…", mark, verb))
 }
 
-// enterOutputMode scans both sandbox directories for files and flips
-// the demo into review mode so the recorder can pan across the two
-// outputs after generation finishes. We walk the tree once (caching the
-// list) and read file contents lazily on selection so a large sandbox
-// doesn't stall the transition.
+// enterOutputMode scans the V3 sandbox for files and flips the demo
+// into review mode so the recorder can pan across the two outputs
+// after generation finishes. We walk the tree once (caching the list)
+// and read file contents lazily on selection so a large sandbox
+// doesn't stall the transition. The raw side never writes files —
+// its pane keeps showing the model response.
 func (m *demoModel) enterOutputMode() {
 	m.outputMode = true
-	m.rawFiles = scanSandbox(filepath.Join(m.workingDir, m.rawSandbox))
 	m.v3Files = scanSandbox(filepath.Join(m.workingDir, m.v3Sandbox))
 }
 
@@ -826,7 +849,7 @@ func (m *demoModel) handleOutputKey(key string) {
 
 func (m *demoModel) activeFiles() []string {
 	if m.activePane == "raw" {
-		return m.rawFiles
+		return nil // raw lane is a direct completion — no files written
 	}
 	return m.v3Files
 }
@@ -836,54 +859,33 @@ func (m *demoModel) cycleActiveFile(delta int) {
 	if len(files) == 0 {
 		return
 	}
-	var idx *int
-	if m.activePane == "raw" {
-		idx = &m.rawSelectedIdx
-	} else {
-		idx = &m.v3SelectedIdx
-	}
-	*idx = (*idx + delta + len(files)) % len(files)
+	m.v3SelectedIdx = (m.v3SelectedIdx + delta + len(files)) % len(files)
 }
 
 func (m *demoModel) setActiveIdx(i int) {
-	if m.activePane == "raw" {
-		m.rawSelectedIdx = i
-	} else {
+	if m.activePane == "v3" {
 		m.v3SelectedIdx = i
 	}
 }
 
-// renderOutputPane builds the post-generation file-tree + selected-file
-// contents view for one side. The active pane gets a brighter border
-// so the viewer knows which side keys apply to.
+// renderOutputPane builds the post-generation review view for one side.
+// The raw lane has no filesystem tools, so its pane shows the model
+// response; the V3 pane shows the sandbox file tree + selected-file
+// contents. The active pane gets a brighter border so the viewer knows
+// which side keys apply to.
 func (m *demoModel) renderOutputPane(side string, w, h int) string {
-	var (
-		sandbox    string
-		files      []string
-		selected   int
-		title      string
-		titleStyle lipgloss.Style
-	)
 	if side == "raw" {
-		sandbox = m.rawSandbox
-		files = m.rawFiles
-		selected = m.rawSelectedIdx
-		title = m.rawTitle() + "  ·  " + sandbox
-		titleStyle = demoRawTitleStyle
-	} else {
-		sandbox = m.v3Sandbox
-		files = m.v3Files
-		selected = m.v3SelectedIdx
-		title = m.atlasTitle() + "  ·  " + sandbox
-		titleStyle = demoV3TitleStyle
-	}
-	if side == "raw" && len(files) == 0 {
 		chat, _, _, _, _, _ := renderChatPane(
 			m.rawChild.chat, m.rawChild.chatRenderer, h-3, w-4, 0,
 		)
-		body := titleStyle.Render(m.rawTitle()+"  ·  RESPONSE") + "\n\n" + chat
+		body := demoRawTitleStyle.Render(m.rawTitle()+"  ·  RESPONSE") + "\n\n" + chat
 		return demoPaneStyle.Width(w).Height(h).Render(body)
 	}
+	sandbox := m.v3Sandbox
+	files := m.v3Files
+	selected := m.v3SelectedIdx
+	title := m.atlasTitle() + "  ·  " + sandbox
+	titleStyle := demoV3TitleStyle
 
 	// File list. Trim if too tall — the body needs space too.
 	treeHeight := h / 3

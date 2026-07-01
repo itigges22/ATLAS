@@ -49,6 +49,7 @@ import urllib.error
 import urllib.request
 from typing import List, Optional, Tuple
 
+from atlas.cli import compose as compose_config
 from atlas.cli.commands import model_registry, tier
 from atlas.cli.commands.model_registry import Model
 
@@ -114,13 +115,18 @@ def _find_atlas_root() -> str:
 
 def _resolve_models_dir(arg_models_dir: Optional[str]) -> str:
     """Resolution order: --models-dir flag > ATLAS_MODELS_DIR env >
-    ./models/ relative to atlas_root."""
+    ATLAS_MODELS_DIR in the compose .env > ./models/ relative to
+    atlas_root. Relative values resolve against the atlas root (the
+    compose deployment's frame of reference), not the cwd."""
     if arg_models_dir:
         return os.path.abspath(arg_models_dir)
-    env = os.environ.get("ATLAS_MODELS_DIR")
+    atlas_root = _find_atlas_root()
+    env = (os.environ.get("ATLAS_MODELS_DIR")
+           or compose_config.read_env_file(atlas_root).get("ATLAS_MODELS_DIR"))
     if env:
-        return os.path.abspath(env)
-    return os.path.join(_find_atlas_root(), "models")
+        return env if os.path.isabs(env) else \
+            os.path.normpath(os.path.join(atlas_root, env))
+    return os.path.join(atlas_root, "models")
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +518,28 @@ def _emit_install_artifacts(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
                     f"{RESET if color else ''}")
         return 1
+    # Distinguish "nothing registered for direct download" from a real
+    # install: without a URL base there is nothing this command can fetch,
+    # and reporting success would be misleading.
+    has_lens_urls = (m.lens_status in ("supported", "unverified")
+                     and m.lens_artifact_url_base and m.lens_artifact_files)
+    has_asa_urls = (m.asa_status in ("supported", "unverified")
+                    and m.asa_artifact_url_base and m.asa_artifact_files)
+    if not has_lens_urls and not has_asa_urls:
+        _safe_print(f"  {YELL if color else ''}No artifacts are registered "
+                    f"for direct download for `{m.name}`."
+                    f"{RESET if color else ''}")
+        if m.lens_hf_repo:
+            _safe_print(f"  Lens artifacts are published at "
+                        f"https://huggingface.co/{m.lens_hf_repo} "
+                        f"(fetch manually or via ATLAS_LENS_MODELS).")
+        if m.asa_hf_repo:
+            _safe_print(f"  ASA vector is published at "
+                        f"https://huggingface.co/{m.asa_hf_repo}.")
+        if not m.lens_hf_repo and not m.asa_hf_repo:
+            _safe_print("  Train locally with `atlas lens build` / "
+                        "`atlas asa build`.")
+        return 3
     models_dir = _resolve_models_dir(args.models_dir)
     try:
         os.makedirs(models_dir, exist_ok=True)
@@ -549,14 +577,23 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
     if (m.lens_status in ("supported", "unverified")
             and m.lens_artifact_url_base
             and m.lens_artifact_files):
-        # Target dir: lens_artifact_dir override OR the global
-        # ATLAS_LENS_MODELS dir. Default matches the rest of the lens
-        # code's expectations (geometric-lens/geometric_lens/models/).
-        lens_dir = (m.lens_artifact_dir or
-                    os.environ.get("ATLAS_LENS_MODELS",
-                                    os.path.join(os.path.dirname(models_dir),
-                                                  "geometric-lens",
-                                                  "geometric_lens", "models")))
+        # Target dir: the registry's per-model resolution (model override
+        # > ATLAS_LENS_MODELS > <atlas_root>/geometric-lens/geometric_lens/
+        # models/) so downloads land where the lens service reads them.
+        atlas_root = _find_atlas_root()
+        lens_dir = model_registry.lens_artifact_dir_for(m, atlas_root)
+        if not lens_dir:
+            # `unverified` entries with a URL base resolve like the
+            # global default lens_artifact_dir_for uses.
+            env_dir = (os.environ.get("ATLAS_LENS_MODELS")
+                       or compose_config.read_env_file(atlas_root).get(
+                           "ATLAS_LENS_MODELS"))
+            if env_dir:
+                lens_dir = env_dir if os.path.isabs(env_dir) else \
+                    os.path.normpath(os.path.join(atlas_root, env_dir))
+            else:
+                lens_dir = os.path.normpath(os.path.join(
+                    atlas_root, "geometric-lens", "geometric_lens", "models"))
         try:
             os.makedirs(lens_dir, exist_ok=True)
         except OSError as e:
@@ -933,6 +970,14 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
         return 130
     except urllib.error.HTTPError as e:
         _safe_print()
+        if e.code == 416 and range_start > 0:
+            # Requested range starts at/after the end of the file — the
+            # .part usually already holds the complete download. Verify
+            # it (hash when the registry has one, size otherwise) and
+            # finalize; on verification failure delete the .part so the
+            # next attempt starts clean.
+            return _finalize_complete_part(m, tmp, target, range_start,
+                                            h, e, color)
         if e.code == 401:
             if token:
                 _safe_print(f"  {RED if color else ''}HTTP 401 even with "
@@ -1019,6 +1064,78 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
     _safe_print(f"  {GREEN if color else ''}Done.{RESET if color else ''} "
                 f"{_human_bytes(actual)} in {elapsed:.0f}s "
                 f"({_human_bytes(rate)}/s of new bytes)")
+    return 0
+
+
+def _finalize_complete_part(m: Model, tmp: str, target: str,
+                             range_start: int, h: "hashlib._Hash",
+                             e: "urllib.error.HTTPError", color: bool) -> int:
+    """HTTP 416 on resume: the .part already spans the whole file. Verify
+    it (SHA256 when the registry pins one, otherwise the total from the
+    416's Content-Range header) and promote it via os.replace. A .part that
+    can't be verified — failing SHA256, or with neither a SHA256 pin nor a
+    Content-Range to check against — is deleted with retry guidance rather
+    than promoted, so a corrupt or mismatched part is never finalized."""
+    # Total size, when the server reports it ("Content-Range: bytes */N").
+    total = None
+    content_range = ""
+    try:
+        content_range = (e.headers.get("Content-Range") or "") if e.headers else ""
+    except AttributeError:
+        content_range = ""
+    if content_range.startswith("bytes */"):
+        try:
+            total = int(content_range.split("/", 1)[1])
+        except ValueError:
+            total = None
+
+    # Decide whether the on-disk .part is trustworthy enough to promote.
+    # Two accepted proofs, in priority order:
+    #   1. SHA256 match, when the registry pins one. Authoritative — if a
+    #      hash is registered it ALONE decides, and a mismatch deletes the
+    #      .part rather than falling back to a weaker size check (otherwise a
+    #      corrupt part whose size happens to line up would be promoted).
+    #   2. A Content-Range total from the 416 response that the .part size
+    #      matches within the existing tolerance. Used only when no SHA256 is
+    #      registered (BYO / --url models).
+    # When NEITHER proof is available (no SHA256 and no Content-Range), we
+    # cannot tell a complete download from a corrupt or mismatched .part —
+    # e.g. the user re-ran with a different --url or a smaller file under the
+    # same --file — so we refuse to finalize and delete the .part instead of
+    # promoting it blindly.
+    verified = False
+    how = ""
+    if m.sha256:
+        verified = h.hexdigest() == m.sha256
+        how = "SHA256"
+    elif total is not None:
+        verified = abs(range_start - total) <= int(total * 0.05)
+        how = "size (Content-Range)"
+
+    if not verified:
+        detail = how or "no SHA256 pin or Content-Range header to verify against"
+        _safe_print(f"  {RED if color else ''}Server reports the download "
+                    f"is complete (HTTP 416), but the existing .part could "
+                    f"not be verified ({detail})."
+                    f"{RESET if color else ''}")
+        try:
+            os.unlink(tmp)
+        except OSError:
+            # best-effort: swallow on failure (caller continues)
+            pass
+        _safe_print("  Removed the .part file. Re-run the install to "
+                    "download a fresh copy from scratch.")
+        return 1
+
+    try:
+        os.replace(tmp, target)
+    except OSError as replace_err:
+        _safe_print(f"  {RED if color else ''}Failed to move into place: "
+                    f"{replace_err}{RESET if color else ''}")
+        return 1
+    _safe_print(f"  {GREEN if color else ''}Download was already complete "
+                f"(verified via {how}).{RESET if color else ''} "
+                f"{_human_bytes(range_start)} moved into place.")
     return 0
 
 

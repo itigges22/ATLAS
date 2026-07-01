@@ -1,6 +1,8 @@
 import logging
 import json
 import os
+import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -75,12 +77,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Boot-time self-test cache. Populated in lifespan(); read by /health and /ready.
+# Boot-time self-test cache. Populated in lifespan() and re-populated after a
+# successful reload/retrain; read by /health and /ready.
 # Keys: lens_enabled, lens_cost_field_loaded, lens_cost_field_dim, lens_gx_loaded,
 #       lens_gx_type, lens_cx_calibrated, lens_gx_calibrated, lens_artifact_model,
 #       embed_dim,
 #       self_test_pass, self_test_error.
-_BOOT_STATE: Dict[str, Any] = {
+_BOOT_STATE_DEFAULTS: Dict[str, Any] = {
     "lens_enabled": False,
     "lens_cost_field_loaded": False,
     "lens_cost_field_dim": None,
@@ -93,10 +96,16 @@ _BOOT_STATE: Dict[str, Any] = {
     "self_test_pass": False,
     "self_test_error": None,
 }
+_BOOT_STATE: Dict[str, Any] = dict(_BOOT_STATE_DEFAULTS)
+
+# Serializes /internal/lens/retrain and /internal/lens/reload against each
+# other — both mutate the geometric_lens.service module globals and (for
+# retrain) the on-disk artifacts.
+_lens_weights_lock = threading.Lock()
 
 
 def _run_lens_self_test() -> None:
-    """Boot-time C(x)/G(x) self-test.
+    """C(x)/G(x) self-test — run at boot and after a successful reload/retrain.
 
     Loads weights, fetches a dummy embedding from llama-server, checks the
     cost-field input dim matches the embedding dim (the silent killer
@@ -105,6 +114,8 @@ def _run_lens_self_test() -> None:
     Never raises — failures are recorded and surfaced via /ready 503.
     """
     from geometric_lens import service as lens_service
+
+    _BOOT_STATE.update(_BOOT_STATE_DEFAULTS)
 
     _BOOT_STATE["lens_enabled"] = lens_service.is_enabled()
     if not lens_service.is_enabled():
@@ -294,8 +305,12 @@ class ChatRequest(BaseModel):
 
 
 # Endpoints
+# Note: probe/scoring endpoints below are deliberately plain `def` — they do
+# synchronous work (redis ping, httpx sync client, urlopen to llama-server,
+# torch), so FastAPI runs them in its threadpool instead of blocking the
+# event loop.
 @app.get("/health")
-async def health():
+def health():
     """Structured per-subsystem health.
 
     Always returns 200 — this endpoint is for *information*, not gating.
@@ -335,7 +350,7 @@ async def health():
 
 
 @app.get("/ready")
-async def ready():
+def ready():
     """Readiness gate. 200 only when scoring is functional, 503 otherwise.
 
     Use this for orchestrator probes that should pull traffic away when
@@ -784,18 +799,31 @@ class PatternWriteRequest(BaseModel):
     success: bool = True
 
 
-def _dispatch_pattern_write(request: PatternWriteRequest) -> dict:
-    """Schedule pattern-write + outcome recording. Shared by /v1 and /internal handlers."""
+# Strong references to in-flight pattern-write tasks. asyncio only keeps a
+# weak reference to tasks, so without this a pattern write could be
+# garbage-collected mid-flight. Tasks discard themselves on completion.
+_pattern_write_tasks: set = set()
+
+
+def _spawn_pattern_task(coro) -> None:
+    """create_task with a strong reference held until the task completes."""
     import asyncio
 
+    task = asyncio.create_task(coro)
+    _pattern_write_tasks.add(task)
+    task.add_done_callback(_pattern_write_tasks.discard)
+
+
+def _dispatch_pattern_write(request: PatternWriteRequest) -> dict:
+    """Schedule pattern-write + outcome recording. Shared by /v1 and /internal handlers."""
     if not request.success:
         if request.active_pattern_ids:
-            asyncio.create_task(
+            _spawn_pattern_task(
                 record_pattern_outcome(request.active_pattern_ids, success=False)
             )
         return {"status": "recorded_failure"}
 
-    asyncio.create_task(
+    _spawn_pattern_task(
         write_pattern_async(
             query=request.query,
             solution=request.solution,
@@ -808,7 +836,7 @@ def _dispatch_pattern_write(request: PatternWriteRequest) -> dict:
     )
 
     if request.active_pattern_ids:
-        asyncio.create_task(
+        _spawn_pattern_task(
             record_pattern_outcome(request.active_pattern_ids, success=True)
         )
 
@@ -973,15 +1001,22 @@ async def lens_stats():
         }
 
 
+class LensEvaluateBody(BaseModel):
+    query: Optional[str] = None
+    text: Optional[str] = None
+
+
 @app.api_route("/internal/lens/evaluate", methods=["GET", "POST"])
-async def lens_evaluate(request: Request, query: str = None):
+def lens_evaluate(request: Request, query: str = None,
+                  body: Optional[LensEvaluateBody] = None):
     """Evaluate a query through the Geometric Lens (for testing).
 
     Accepts GET with ?query= param or POST with JSON {"query": "..."}.
+    Malformed POST bodies fail pydantic validation and return a structured
+    422 instead of an unhandled 500.
     """
-    if request.method == "POST":
-        body = await request.json()
-        query = body.get("query", body.get("text", ""))
+    if request.method == "POST" and body is not None:
+        query = body.query if body.query is not None else (body.text or "")
     if not query:
         raise HTTPException(status_code=422, detail="Missing 'query' parameter")
     try:
@@ -1013,7 +1048,7 @@ class LensScorePerStepRequest(BaseModel):
 
 
 @app.post("/internal/lens/score-text")
-async def lens_score_text(request: LensScoreTextRequest):
+def lens_score_text(request: LensScoreTextRequest):
     """Score a text string through the Geometric Lens. Returns raw and normalized energy."""
     try:
         import geometric_lens.service as lens_service
@@ -1058,94 +1093,132 @@ class LensRetrainRequest(BaseModel):
     lambda_ewc: float = 1000.0
 
 
-@app.post("/internal/lens/retrain")
-async def lens_retrain(request: LensRetrainRequest):
-    """Retrain C(x) on accumulated pass/fail embeddings from benchmark execution."""
+def _models_dir_writable(models_dir: str) -> bool:
+    """Probe whether the models dir accepts writes.
+
+    docker-compose mounts the models dir read-only (:ro); os.access alone
+    can misreport on such mounts, so back it with a tempfile probe.
+    """
+    if not os.access(models_dir, os.W_OK):
+        return False
     try:
-        from geometric_lens.training import retrain_cost_field_bce
-        from geometric_lens.service import reload_weights
-        import os
+        fd, probe = tempfile.mkstemp(dir=models_dir, prefix=".write_probe_")
+        os.close(fd)
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
 
-        embeddings = [d["embedding"] for d in request.training_data]
-        labels = [d["label"] for d in request.training_data]
 
-        models_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "geometric_lens", "models"
-        )
-        save_path = os.path.join(models_dir, "cost_field.pt")
-
-        # Phase 4: Load replay buffer if enabled (4A-CL)
-        replay_buffer = None
-        if request.use_replay:
-            from geometric_lens.replay_buffer import ReplayBuffer
-            replay_buffer = ReplayBuffer(max_size=5000)
-            replay_path = os.path.join(models_dir, "replay_buffer.json")
-            replay_buffer.load(replay_path)  # OK if file doesn't exist yet
-
-        # Phase 4: Load EWC state if enabled (4A-EWC)
-        ewc = None
-        if request.use_ewc:
-            from geometric_lens.ewc import ElasticWeightConsolidation
-            ewc = ElasticWeightConsolidation(lambda_ewc=request.lambda_ewc)
-            ewc_path = os.path.join(models_dir, "ewc_state.pt")
-            ewc.load(ewc_path)  # OK if file doesn't exist yet
-
-        metrics = retrain_cost_field_bce(
-            embeddings=embeddings,
-            labels=labels,
-            epochs=request.epochs,
-            save_path=save_path,
-            replay_buffer=replay_buffer,
-            ewc=ewc,
-            domain=request.domain,
+@app.post("/internal/lens/retrain")
+def lens_retrain(request: LensRetrainRequest):
+    """Retrain C(x) on accumulated pass/fail embeddings from benchmark execution."""
+    models_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "geometric_lens", "models"
+    )
+    # Fail before burning a training run: in the standard compose deployment
+    # the models dir is mounted read-only into this container.
+    if not _models_dir_writable(models_dir):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "error",
+                "reason": ("models directory is mounted read-only; "
+                           "run host-side retrain via `atlas lens retrain`"),
+            },
         )
 
-        if not metrics.get("skipped", False):
-            from geometric_lens.calibration import (
-                derive_cx_normalization, save_cx_normalization,
-            )
-            calibration = derive_cx_normalization(
-                metrics["pass_energy_mean"], metrics["fail_energy_mean"])
-            save_cx_normalization(models_dir, calibration)
+    with _lens_weights_lock:
+        try:
+            from geometric_lens.training import retrain_cost_field_bce
+            from geometric_lens.service import reload_weights
 
-        # Remove non-serializable 'model' key from metrics
-        metrics.pop("model", None)
+            embeddings = [d["embedding"] for d in request.training_data]
+            labels = [d["label"] for d in request.training_data]
 
-        # Hot-reload if retrain succeeded and wasn't skipped
-        if not metrics.get("skipped", False):
-            reload_result = reload_weights()
-            metrics["reload_status"] = reload_result.get("status", "unknown")
+            save_path = os.path.join(models_dir, "cost_field.pt")
 
-            # Phase 4: Save replay buffer and EWC state
-            if replay_buffer is not None:
+            # Phase 4: Load replay buffer if enabled (4A-CL)
+            replay_buffer = None
+            if request.use_replay:
+                from geometric_lens.replay_buffer import ReplayBuffer
+                replay_buffer = ReplayBuffer(max_size=5000)
                 replay_path = os.path.join(models_dir, "replay_buffer.json")
-                replay_buffer.save(replay_path)
-                metrics["replay_buffer_size"] = len(replay_buffer)
+                replay_buffer.load(replay_path)  # OK if file doesn't exist yet
 
-            if ewc is not None:
+            # Phase 4: Load EWC state if enabled (4A-EWC)
+            ewc = None
+            if request.use_ewc:
+                from geometric_lens.ewc import ElasticWeightConsolidation
+                ewc = ElasticWeightConsolidation(lambda_ewc=request.lambda_ewc)
                 ewc_path = os.path.join(models_dir, "ewc_state.pt")
-                ewc.save(ewc_path)
-                metrics["ewc_initialized"] = ewc.is_initialized
+                ewc.load(ewc_path)  # OK if file doesn't exist yet
 
-        return {"status": "ok", "metrics": metrics}
-    except Exception as e:
-        return {"status": "error", "error": _safe_detail(e, "lens retrain")}
+            metrics = retrain_cost_field_bce(
+                embeddings=embeddings,
+                labels=labels,
+                epochs=request.epochs,
+                save_path=save_path,
+                replay_buffer=replay_buffer,
+                ewc=ewc,
+                domain=request.domain,
+            )
+
+            if not metrics.get("skipped", False):
+                from geometric_lens.calibration import (
+                    derive_cx_normalization, save_cx_normalization,
+                )
+                calibration = derive_cx_normalization(
+                    metrics["pass_energy_mean"], metrics["fail_energy_mean"])
+                save_cx_normalization(models_dir, calibration)
+
+            # Remove non-serializable 'model' key from metrics
+            metrics.pop("model", None)
+
+            # Hot-reload if retrain succeeded and wasn't skipped
+            if not metrics.get("skipped", False):
+                reload_result = reload_weights()
+                metrics["reload_status"] = reload_result.get("status", "unknown")
+
+                # Phase 4: Save replay buffer and EWC state
+                if replay_buffer is not None:
+                    replay_path = os.path.join(models_dir, "replay_buffer.json")
+                    replay_buffer.save(replay_path)
+                    metrics["replay_buffer_size"] = len(replay_buffer)
+
+                if ewc is not None:
+                    ewc_path = os.path.join(models_dir, "ewc_state.pt")
+                    ewc.save(ewc_path)
+                    metrics["ewc_initialized"] = ewc.is_initialized
+
+                # Refresh the boot-state cache so /ready reflects the
+                # freshly-retrained weights instead of the boot snapshot.
+                if reload_result.get("status") == "reloaded":
+                    _run_lens_self_test()
+
+            return {"status": "ok", "metrics": metrics}
+        except Exception as e:
+            return {"status": "error", "error": _safe_detail(e, "lens retrain")}
 
 
 @app.post("/internal/lens/reload")
-async def lens_reload():
+def lens_reload():
     """Reload Geometric Lens weights from disk after retraining."""
     try:
         from geometric_lens.service import reload_weights
-        result = reload_weights()
+        with _lens_weights_lock:
+            result = reload_weights()
+            # Refresh the boot-state cache so /ready reflects the new state.
+            if result.get("status") == "reloaded":
+                _run_lens_self_test()
         return {"status": result.get("status", "unknown"), **result}
     except Exception as e:
         return {"status": "error", "error": _safe_detail(e, "lens reload")}
 
 
 @app.post("/internal/lens/gx-score")
-async def lens_gx_score(request: LensScoreTextRequest):
+def lens_gx_score(request: LensScoreTextRequest):
     """Combined C(x) + G(x) scoring in a single call.
 
     Returns C(x) energy, normalized energy, G(x) XGBoost quality prediction,
@@ -1173,7 +1246,7 @@ async def lens_gx_score(request: LensScoreTextRequest):
 
 
 @app.post("/internal/lens/score-per-step")
-async def lens_score_per_step(request: LensScorePerStepRequest):
+def lens_score_per_step(request: LensScorePerStepRequest):
     """PC-207 lens-as-PRM: score every token in the text instead of pooling.
 
     Returns C(x) and (when XGBoost is loaded) G(x) per generation step,
@@ -1221,7 +1294,7 @@ async def lens_score_per_step(request: LensScorePerStepRequest):
 
 
 @app.post("/internal/lens/correctability")
-async def lens_correctability(request: LensScoreTextRequest):
+def lens_correctability(request: LensScoreTextRequest):
     """Compute correctability + energy for a text string.
 
     Correctability measures how traversable the cost landscape is at this
@@ -1267,7 +1340,7 @@ class SandboxAnalyzeRequest(BaseModel):
 
 
 @app.post("/internal/sandbox/analyze")
-async def sandbox_analyze(request: SandboxAnalyzeRequest):
+def sandbox_analyze(request: SandboxAnalyzeRequest):
     """Analyze sandbox output with structured error classification and G(x) scoring.
 
     Combines sandbox error parsing with G(x) quality prediction

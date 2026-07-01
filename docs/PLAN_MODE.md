@@ -23,7 +23,7 @@ flowchart TD
     Tool --> Adhere{"matches\nunsatisfied step?"}
     Adhere -->|Yes| Tick["satisfied[i]=true\nreset off_streak"] --> Loop
     Adhere -->|No| Streak["off_streak++"]
-    Streak --> Cap{streak ≥ 3?}
+    Streak --> Cap{streak ≥ 5?}
     Cap -->|No| Loop
     Cap -->|Yes| Revise["revisePlan()\n(carry forward FilesRead\nas extra context)"] --> Loop
 
@@ -80,7 +80,7 @@ Defined in `proxy/plan_adherence.go`:
 
 | Constant | Default | Rationale |
 |---|---|---|
-| `planAutoReviseThreshold` | 3 | Off-plan tool calls before auto-revise fires. Tight enough to catch a wrong plan within ~30s; loose enough that one or two exploratory off-plan calls don't trigger thrashing. |
+| `planAutoReviseThreshold` | 5 | Off-plan tool calls before auto-revise fires. Tight enough to catch a wrong plan early; loose enough that a few exploratory off-plan calls don't trigger thrashing. |
 | `planMaxRevisions` | 2 | Cap on auto-revisions per loop. Past this, the loop runs plan-free for the remainder. Prevents pathological off-plan inputs from looping `/v3/plan` forever. |
 
 `v3-service/main.py` constants:

@@ -15,6 +15,9 @@ tiktoken==0.5.2
 redis>=5.0.0
 tree-sitter>=0.23.0
 tree-sitter-python>=0.23.0
+# gguf: writes ASA steering vectors in llama.cpp's control-vector format
+# (asa_calibration/build_steering_vector.py runs inside this container).
+gguf>=0.10
 # Dockerfile installs this pinned version from PyTorch's CPU-only index before
 # resolving the rest of this file. Keeping the requirement here documents the
 # runtime contract and lets pip verify the preinstalled wheel satisfies it.

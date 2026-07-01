@@ -98,7 +98,15 @@ jobs:
               for key in ATLAS_MODELS_DIR ATLAS_MODEL_FILE ATLAS_MODEL_NAME ATLAS_CTX_SIZE; do
                 grep -q "^${key}=" .env || { echo "::error::.env missing $key"; exit 1; }
               done
-              echo "✓ .env has all required keys"
+              # Model selection must be NON-EMPTY after bootstrap — an empty
+              # ATLAS_MODEL_FILE kills download-models.sh and composes
+              # ${ATLAS_MODEL_FILE:?} guard. The bootstrap defaults it to the
+              # registry recommendation when .env.example ships it blank.
+              for key in ATLAS_MODEL_FILE ATLAS_MODEL_NAME; do
+                grep -Eq "^${key}=..*" .env \
+                  || { echo "::error::.env has empty $key after bootstrap"; exit 1; }
+              done
+              echo "✓ .env has all required keys (model selection non-empty)"
 
               # 2. Python CLI is installed and importable
               python3 -m atlas.cli.commands.doctor --help >/dev/null \

@@ -23,7 +23,11 @@ spec:
       - name: sandbox
         image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-sandbox:${ATLAS_IMAGE_TAG}
         ports:
-        - containerPort: ${ATLAS_SANDBOX_PORT}
+        # executor_server.py listens on a fixed 8020 (uvicorn hardcodes
+        # it); ATLAS_SANDBOX_PORT only moves the Service port. Pinning the
+        # container-side ports means changing the external var can't break
+        # the probes.
+        - containerPort: 8020
           name: http
         securityContext:
           readOnlyRootFilesystem: true
@@ -48,13 +52,13 @@ spec:
         readinessProbe:
           httpGet:
             path: /health
-            port: ${ATLAS_SANDBOX_PORT}
+            port: 8020
           initialDelaySeconds: 5
           periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /health
-            port: ${ATLAS_SANDBOX_PORT}
+            port: 8020
           initialDelaySeconds: 20
           periodSeconds: 30
         resources:
@@ -93,6 +97,6 @@ spec:
   selector: {app: sandbox}
   ports:
   - port: ${ATLAS_SANDBOX_PORT}
-    targetPort: ${ATLAS_SANDBOX_PORT}
+    targetPort: 8020            # fixed container port (see Deployment note)
     nodePort: ${ATLAS_SANDBOX_NODEPORT}
     name: http

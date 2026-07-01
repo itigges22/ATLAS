@@ -22,9 +22,9 @@ func buildV3Request(filePath, baselineContent string, ctx *AgentContext) V3Gener
 	}
 
 	// Add project context from files read during this session
-	if len(ctx.FilesRead) > 0 {
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
-		for p, content := range ctx.FilesRead {
+		for p, content := range filesRead {
 			relPath, err := filepath.Rel(ctx.WorkingDir, p)
 			if err != nil {
 				relPath = p
@@ -102,9 +102,9 @@ func extractConstraints(filePath, content string, ctx *AgentContext) []string {
 	}
 
 	// Import constraints from project context
-	if ctx.FilesRead != nil {
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		// If we've read other files, ensure new file imports are consistent
-		for readPath := range ctx.FilesRead {
+		for readPath := range filesRead {
 			relRead, _ := filepath.Rel(ctx.WorkingDir, readPath)
 			relFile, _ := filepath.Rel(ctx.WorkingDir, filePath)
 			if relRead != "" && relFile != "" {

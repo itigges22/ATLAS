@@ -45,16 +45,21 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_SANDBOX_PORT` | `30820` | Sandbox host port (container listens on 8020) |
 | `ATLAS_SANDBOX_MEM` | host-sized (`0` = unlimited) | Memory cap on the sandbox container (`docker` `mem_limit`). The sandbox runs untrusted model-authored shell, so this caps RAM to stop a runaway from OOMing the host. `atlas init` detects total host RAM and writes ~75% here; the compose fallback is `0` (no cap) so a raw `docker compose up` without the wizard still works. Accepts `docker` size strings (`8g`, `512m`) or bytes. |
 | `ATLAS_SANDBOX_PIDS` | `1024` | PID cap on the sandbox container (`docker` `pids_limit`) — a kernel-level fork-bomb stop, far above any normal build and far below a bomb. Constant across hosts, so it defaults inline in compose; override only if a legitimate build needs more concurrent processes. |
+| `ATLAS_SANDBOX_MAX_EXECUTION_TIME` | `300` | Per-call execution ceiling (seconds) inside the sandbox executor. Compose maps this onto the executor's `MAX_EXECUTION_TIME`; the 300s default matches the proxy's `run_command` cap so long builds/tests aren't cut off by the executor's internal 60s default. |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (TUI and OpenAI-compat clients connect here) |
 | `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1, x86_64 only), `vulkan` (universal fallback, PC-114), `metal` (Apple Silicon hybrid: native llama-server + Docker for the rest, #32 — see [SETUP_MACOS.md](SETUP_MACOS.md)), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm + Vulkan + Metal also require bringing up the stack with `-f docker-compose.rocm.yml`, `-f docker-compose.vulkan.yml`, or `-f docker-compose.macos.yml` respectively (the wizard prints the right command). On aarch64 hosts (DGX Spark, Snapdragon X Elite, Jetson, Pi 5) `atlas init` filters out `rocm` since AMD has no arm64 release — see [SETUP.md § arm64](SETUP.md#arm64) and [#115](https://github.com/itigges22/ATLAS/issues/115). |
 | `ATLAS_MACOS_PREFIX` | `~/.atlas/macos` | macOS Metal only. Native llama.cpp install root shared by setup, launcher, and doctor. Set this when setup used `--prefix`. |
 | `ATLAS_GPU_VENDOR` | (auto-detected) | Vendor of the GPU ATLAS should use: `nvidia`, `amd`, `apple`, `intel`. Only meaningful on multi-vendor hosts; auto-detect picks the largest-VRAM GPU. |
-| `ATLAS_GPU_INDEX` | `0` | Vendor-local index of the GPU ATLAS should use. The entrypoint sets `CUDA_VISIBLE_DEVICES` (NVIDIA) or `HIP_VISIBLE_DEVICES` + `ROCR_VISIBLE_DEVICES` (AMD) from this value. Multi-GPU hosts pick a specific card with this. |
+| `ATLAS_GPU_INDEX` | (unset — all GPUs visible) | Vendor-local index of the GPU ATLAS should use on multi-GPU hosts. Compose passes it into the llama-server container; the entrypoint maps it to `CUDA_VISIBLE_DEVICES` (NVIDIA) or the HIP/Vulkan equivalent, and skips the export when empty. |
 | `ATLAS_GFX_TARGET` | `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a` | **ROCm only.** AMD compute target(s), semicolon-separated. Forwarded to `Dockerfile.rocm` as `AMDGPU_TARGETS` at build time. Trim to your GPU for a smaller image — see [SETUP.md § AMD GPU Targets](SETUP.md#amd-gpu-targets-dockerfilerocm-v311). |
 | `ATLAS_ROCM_TAG` | `6.2-complete` | **ROCm only.** Base image tag for `rocm/dev-ubuntu-22.04`. Bump when you want to test a newer ROCm release. |
 | `ATLAS_HSA_OVERRIDE_GFX_VERSION` | (unset) | **ROCm only.** Force a specific HSA gfx version at runtime — workaround for "officially unsupported" GPUs (e.g., older Vega) that still work with a compatible target. Example: `10.3.0` makes RDNA1 cards masquerade as RDNA2 for HIP kernel selection. |
 
 Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are fixed inside the Docker network and usually do not need to be configured by users. On macOS Metal, `docker-compose.macos.yml` keeps the container-side URL at `llama-server:8080` but forwards it to the native host-side `${ATLAS_LLAMA_PORT:-8080}`, so the port can move when 8080 is already occupied.
+
+**Runtime-tuning passthrough.** `.env.example` carries a commented "Runtime tuning" section, and compose passes each key through to the owning container as an empty-default env var — so setting any of `ATLAS_V3_TIMEOUT`, `ATLAS_MAX_TOKENS`, `ATLAS_AGENT_HISTORY_BUDGET`, `ATLAS_LENS_RETRAIN_MIN`, `ATLAS_KEEP_LLAMA_WARM`, `ATLAS_FRESH_SLOT_PER_SESSION` (proxy, § 2), `ATLAS_SANDBOX_MAX_EXECUTION_TIME` (sandbox, § 5), or `ATLAS_GPU_INDEX` / `ATLAS_BACKEND` / `ATLAS_GRAMMAR_MODE` in `.env` reaches the container without a compose edit. An empty/unset key means the in-code default applies.
+
+**Restart policy.** Every service in `docker-compose.yml` runs with `restart: unless-stopped`, so the stack comes back up after a host reboot or a container crash without a manual `docker compose up`.
 
 Older `.env` files may still use `PARALLEL_SLOTS` and `KV_CACHE_TYPE_K/V`.
 They remain supported as compatibility fallbacks, but the canonical `ATLAS_*`
@@ -233,10 +238,8 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | `ATLAS_FRESH_SLOT_PER_SESSION` | `1` | Set to `0` to disable per-session llama.cpp KV-slot erase. With it enabled (default), the proxy POSTs `/slots/0?action=erase` at the start of each agent loop invocation, giving each turn a clean cache. Adds ~1-2s to the first turn but prevents cross-session token-state leakage (e.g. filenames hallucinated from prior sessions). See ISSUES.md PC-045. |
 | `ATLAS_MAX_TURNS` | (unset) | Operator override for the agent-loop turn cap. Any positive int caps all tiers; unset / `0` / invalid falls through to tier defaults (T0=5, T1/T2/T3=uncapped). See `proxy/types.go:envOverrideMaxTurns`. |
 | `ATLAS_GRAMMAR_MODE` | `strict` | Schema-constrained JSON sampling (#33). Default `strict` ships the full tool-call schema in `response_format` so llama-server's C-side sampler converts it to internal GBNF and the token decoder can ONLY emit our `tool_call/text/done` union. Previously the model could emit any valid JSON and we'd reject + retry post-hoc, burning tokens. Set to `loose` to revert to the old `{"type":"json_object"}` payload — escape hatch for models that handle schema-to-GBNF poorly. |
-| `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | Path to the ASA control-vector GGUF. Loaded only when `<path>.model` matches the selected model. |
-| `ATLAS_CONTROL_VECTOR_SCALE` | `0.5` | Strength multiplier applied to the control vector via `--control-vector-scaled`. |
-| `ATLAS_CONTROL_VECTOR_LAYER_RANGE` | (unset) | Restrict the control vector to a layer band. Format is two space-separated integers (e.g. `"24 30"`) — passed straight to llama-server's `--control-vector-layer-range start end`. Unset applies it to all layers. |
-| `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED` | `0` | Emergency opt-out of the model-marker gate. Setting `1` can apply an incompatible vector and is not recommended. |
+| `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | Path to the ASA control-vector GGUF. The proxy reads this only for the `/v1/calibration/status` presence/marker probe; the vector itself is loaded by the llama-server entrypoint (see § 6 for `ATLAS_CONTROL_VECTOR_SCALE`, `_LAYER_RANGE`, `_ALLOW_UNVERIFIED` — those are entrypoint-consumed, not proxy). |
+| `ATLAS_CALL_GRAPH` | `0` | Structural call-graph reasoning (#39). When enabled (`1`/`true`/`yes`/`on`), the proxy attaches intra-file call edges to `read_file`/`outline_file` output and symbol-index snippets; v3-service reads the same flag for its graph-based veto and repair context. Default off. |
 | `ATLAS_WORKSPACE_DIR` | (proxy's container `/workspace`) | Working-dir override that the proxy substitutes for the TUI-supplied `working_dir` field. Set inside the container so file tools always resolve under `/workspace` regardless of what the client sends. |
 | `ATLAS_VERIFY_IN` | `sandbox` | Where `run_command` and the V3 verify path execute: `sandbox` (default) routes through the sandbox container; `host` runs commands directly on the proxy host (only safe when the proxy itself is local, not containerized). Per-project override: `[execution] target = "host"` in `.atlas/config.toml`. (PC-192) |
 
@@ -259,7 +262,7 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | Command stderr limit | 4,000 chars | Prevents context flooding |
 | Search results limit | 200 matches | Prevents context flooding |
 | File search skip | Files > 1 MB | Performance |
-| max_tokens | 32,768 | Sent to llama-server |
+| max_tokens | 8,192 (override via `ATLAS_MAX_TOKENS`) | Per-turn generation ceiling sent to llama-server |
 | temperature | 0.3 default; 0.7 on retry after a stuck-loop nudge | Sent to llama-server |
 
 ### Stuck-pattern detectors
@@ -432,9 +435,12 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAX_EXECUTION_TIME` | `60` | Maximum execution time in seconds |
+| `MAX_EXECUTION_TIME` | `60` (in-code); `300` in the Compose stack | Maximum execution time in seconds. Compose sets it from `ATLAS_SANDBOX_MAX_EXECUTION_TIME` (default 300) so per-call limits match the proxy's `run_command` cap. |
 | `MAX_MEMORY_MB` | `512` | Maximum memory per execution in MB |
 | `WORKSPACE_BASE` | `/tmp/sandbox` | Base directory for execution workspaces |
+| `ATLAS_SHELL_SNAPSHOT_MAX_FILES` | `20000` | File-count cap when `/shell` copies a bounded workspace snapshot into tmpfs for overlay-file runs (V3 candidate testing without touching real files). Exceeding the cap fails the snapshot with a structured error. |
+| `ATLAS_SHELL_SNAPSHOT_MAX_BYTES` | `268435456` (256 MB) | Total-bytes cap on the same workspace snapshot. |
+| `ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES` | `16777216` (16 MB) | Per-file size cap — larger files are skipped (logged), not fatal. |
 
 ### Internal Limits
 
@@ -456,6 +462,7 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 | `BG_MAX_LINES` | `500` | Ring-buffer size per stream (stdout / stderr) per job |
 | `BG_MAX_JOBS` | `32` | Hard cap on concurrent background jobs |
 | `BG_RETENTION_SEC` | `600` | How long finished jobs stay queryable via `tail_background` before reaping (10 min) |
+| `BG_MAX_AGE_SEC` | `7200` | Still-running jobs abandoned this long (2 h) are killed (whole process group) so leaked servers can't exhaust the container's PID limit |
 
 ### Workspace paths
 
@@ -478,7 +485,7 @@ Both Docker Compose and K3s use the same image with the same entrypoint (`infere
 |---------|----------------|-------------|-------------|
 | `MODEL_PATH` | `/models/${ATLAS_MODEL_FILE}` | `/models/${ATLAS_MAIN_MODEL}` | GGUF path inside the container |
 | `PORT` | `8080` | `${ATLAS_LLAMA_PORT}` (defaults to `8080`) | Listen port |
-| `CONTEXT_LENGTH` | `${ATLAS_CTX_SIZE:-131072}` | `${ATLAS_CONTEXT_LENGTH}` (atlas.conf default `16384`) | Context window in tokens, TOTAL across all slots. Size per model + GPU with `atlas tier fit --write`. |
+| `CONTEXT_LENGTH` | `${ATLAS_CTX_SIZE:-131072}` | `${ATLAS_CONTEXT_LENGTH}` (atlas.conf default `16384`) | Context window in tokens, TOTAL across all slots. Size per model + GPU with `atlas tier fit --write`. When the env var is entirely absent (running the entrypoint outside compose/K3s), the script's own fallback is `163840`. |
 | `PARALLEL_SLOTS` | `${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}` (compose default `4`) | `${ATLAS_PARALLEL_SLOTS}` (atlas.conf default `1`) | Concurrent request slots. Compose defaults to `4` because the `/demo` split-pane runs V3 (which fans out into 3 parallel PlanSearch candidates) alongside a base-agent session — 4 total concurrent inferences. The nested name is a legacy `.env` fallback. |
 | `KV_CACHE_TYPE_K` | `${ATLAS_KV_TYPE_K:-${KV_CACHE_TYPE_K:-f16}}` | `f16` (entrypoint default) | KV cache key quantization (`f16`, `q8_0`, `q4_0`). Set by `atlas tier fit --write`; the nested name is a legacy fallback. |
 | `KV_CACHE_TYPE_V` | `${ATLAS_KV_TYPE_V:-${KV_CACHE_TYPE_V:-f16}}` | `f16` (entrypoint default) | KV cache value quantization. Set by `atlas tier fit --write`; the nested name is a legacy fallback. |
@@ -487,7 +494,9 @@ Both Docker Compose and K3s use the same image with the same entrypoint (`infere
 | `SLOT_SAVE_PATH` | `/tmp/slots` | `/tmp/slots` | Slot-save directory used by `/slots/0?action=save` |
 | `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | same | ASA control-vector path (requires matching `.model` marker) |
 | `ATLAS_CONTROL_VECTOR_SCALE` | `0.5` | same | Scale applied to the control vector |
-| `ATLAS_CONTROL_VECTOR_LAYER_RANGE` | (unset → all layers) | same | Optional layer restriction — two space-separated integers, e.g. `"24 30"` |
+| `ATLAS_CONTROL_VECTOR_LAYER_RANGE` | (unset → all layers) | same | Optional layer restriction — two space-separated integers, e.g. `"24 30"`, passed to `--control-vector-layer-range` |
+| `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED` | `0` | same | Emergency opt-out of the `.model` marker gate. Setting `1` can apply an incompatible vector and is not recommended. |
+| `ATLAS_GPU_INDEX` | (unset → all GPUs visible) | — | GPU selection on multi-GPU hosts. Mapped to `CUDA_VISIBLE_DEVICES` (or the HIP/Vulkan equivalent); the export is skipped when empty. |
 
 ### Effective llama-server flags
 
@@ -520,15 +529,17 @@ The entrypoint always launches with this flag set (regardless of deployment mode
 
 ## 7. Python CLI
 
-The standalone Python REPL (`pip install -e . && atlas`) reads these variables:
+The standalone Python CLI (`pip install -e . && atlas`) reads these variables. Service URLs resolve in order: explicit URL env var → the corresponding `ATLAS_*_PORT` key (shell env, then the checkout's Docker `.env`) → built-in default — so on a Docker install with non-default ports, bare `atlas` commands work without any `ATLAS_*_URL` exports.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_INFERENCE_URL` | `http://localhost:8080` | llama-server endpoint |
-| `ATLAS_LENS_URL` | `http://localhost:8099` | Geometric Lens endpoint (used by `doctor`, `repl`, and the TUI launcher) |
-| `ATLAS_RAG_URL` | `http://localhost:8099` | Legacy alias for the lens URL; still read by `atlas/cli/client.py`. New code should use `ATLAS_LENS_URL`. |
-| `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox endpoint |
-| `ATLAS_V3_URL` | `http://localhost:8070` | V3 pipeline endpoint (used by `atlas doctor` for reachability checks) |
+| `ATLAS_PROXY_URL` | `http://localhost:${ATLAS_PROXY_PORT:-8090}` | atlas-proxy endpoint (used by `atlas doctor`, the REPL, and honored by the TUI as its `--proxy` default) |
+| `ATLAS_INFERENCE_URL` | `http://localhost:${ATLAS_LLAMA_PORT:-8080}` | llama-server endpoint |
+| `ATLAS_LENS_URL` | `http://localhost:${ATLAS_LENS_PORT:-8099}` | Geometric Lens endpoint (used by `doctor`, `repl`, and the TUI launcher) |
+| `ATLAS_RAG_URL` | (falls back to the lens URL) | Alias for the lens URL still read by `atlas/cli/client.py`. New code should use `ATLAS_LENS_URL`. |
+| `ATLAS_SANDBOX_URL` | `http://localhost:${ATLAS_SANDBOX_PORT:-30820}` | Sandbox endpoint |
+| `ATLAS_V3_URL` | `http://localhost:${ATLAS_V3_PORT:-8070}` | V3 pipeline endpoint (used by `atlas doctor` for reachability checks) |
+| `ATLAS_AUTO_WORKSPACE` | `1` | On TUI launch, the CLI checks whether the Docker proxy/sandbox `/workspace` binds cover your cwd and recreates those containers pointed at your project when they don't (PC-038). Set `0` to keep whatever bind the containers already have. |
 | `ATLAS_MODELS_DIR` | `./models` | Host directory holding GGUF model files (used by `atlas doctor` and `atlas model`). |
 | `ATLAS_MODEL_FILE` | **required** | Selected model filename inside `ATLAS_MODELS_DIR`. |
 | `ATLAS_LENS_MODELS` | `./geometric-lens/geometric_lens/models` | Host path that maps to the lens's weight directory. Used by `atlas doctor` so it checks the same directory Docker bind-mounts into the lens container. |
@@ -582,6 +593,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 |----------|---------|-------------|
 | `ATLAS_MODELS_DIR` | `/opt/atlas/models` | GGUF model files. Mounted into llama-server at `/models` (read-only) via `hostPath` in `templates/llama-deployment.yaml.tmpl`. |
 | `ATLAS_PROJECTS_DIR` | `/opt/atlas/data/projects` | User project workspace. Bind-mounted at `/workspace` in BOTH atlas-proxy and sandbox pods (`hostPath` with `DirectoryOrCreate`) so the agent sees the same files in both. |
+| `ATLAS_LENS_TRAINING_DIR` | `/opt/atlas/data/lens_training` | Lens training-data corpus. Mounted at `/data/lens_training` in the atlas-proxy pod (`hostPath`, `DirectoryOrCreate`) so `atlas lens retrain` on the node reads the corpus the proxy writes. |
 | `ATLAS_DATA_DIR` | `/opt/atlas/data` | Housekeeping path. Printed at install time; `uninstall.sh` does `rm -rf "$ATLAS_DATA_DIR"` when `--remove-data` is set. Not mounted as a volume. |
 | `ATLAS_TRAINING_DIR` | `/opt/atlas/data/training` | Housekeeping path. Referenced by `uninstall.sh` cleanup; not mounted by any deployment template. |
 | `ATLAS_LORA_DIR` | `/opt/atlas/models/lora` | Housekeeping path. Created by `install.sh` and `download-models.sh`; populated by the training pipeline; not currently mounted into any pod. |

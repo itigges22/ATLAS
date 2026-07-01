@@ -5,6 +5,7 @@ services:
   # under memory pressure. See ISSUES.md PC-011.
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -30,6 +31,7 @@ services:
     # locally for dev, run: docker compose build llama-server
     # Tag is overridable via ATLAS_IMAGE_TAG (default: latest from main).
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-llama:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./inference
       dockerfile: Dockerfile.v31
@@ -82,10 +84,15 @@ services:
       - KV_CACHE_TYPE_V=${ATLAS_KV_TYPE_V:-${KV_CACHE_TYPE_V:-f16}}
       - UBATCH_SIZE=${ATLAS_UBATCH:-1024}
       - BATCH_SIZE=${ATLAS_BATCH:-1024}
+      # GPU selection on multi-GPU hosts. The entrypoint maps this to
+      # CUDA_VISIBLE_DEVICES (or the HIP/Vulkan equivalent) and skips
+      # the export when empty, so the default is "all GPUs visible".
+      - ATLAS_GPU_INDEX=${ATLAS_GPU_INDEX:-}
 
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./geometric-lens
     environment:
@@ -121,6 +128,7 @@ services:
   # --- V3 Pipeline Service ---
   v3-service:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: .
       dockerfile: v3-service/Dockerfile
@@ -150,8 +158,15 @@ services:
   # --- Sandbox (isolated code execution) ---
   sandbox:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./sandbox
+    environment:
+      # Per-call execution ceiling inside the executor (executor_server.py
+      # clamps request timeouts to MAX_EXECUTION_TIME). Default matches the
+      # proxy's 300s run_command cap so long builds/tests aren't cut off
+      # by the executor's internal 60s default.
+      - MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}
     # Writable mounts for language toolchains. The container fs is
     # read_only=true for hardening, so every install/cache target a
     # toolchain wants to write to needs an explicit tmpfs. One per
@@ -223,6 +238,7 @@ services:
   # the stack up — the bind mount is fixed for the container's lifetime.
   atlas-proxy:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./proxy
     environment:
@@ -261,6 +277,21 @@ services:
       # the absolute hard wall (200). Useful for "fix the entire app"
       # prompts that legitimately need more turns.
       - ATLAS_MAX_TURNS=${ATLAS_MAX_TURNS:-}
+      # Documented tuning knobs (docs/CONFIGURATION.md). Empty passthrough =
+      # the in-code default applies; setting the key in .env reaches the
+      # container without a compose edit.
+      # V3 bridge call timeout in seconds (0 disables the cap).
+      - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
+      # Per-turn generation ceiling (tokens).
+      - ATLAS_MAX_TOKENS=${ATLAS_MAX_TOKENS:-}
+      # Conversation-history token budget override.
+      - ATLAS_AGENT_HISTORY_BUDGET=${ATLAS_AGENT_HISTORY_BUDGET:-}
+      # Labeled-sample count at which the "retrain available" prompt fires.
+      - ATLAS_LENS_RETRAIN_MIN=${ATLAS_LENS_RETRAIN_MIN:-}
+      # Set 0 to disable the 45s llama-server keep-warm ping (PC-035).
+      - ATLAS_KEEP_LLAMA_WARM=${ATLAS_KEEP_LLAMA_WARM:-}
+      # Set 0 to reuse KV slots across sessions instead of erasing (PC-045).
+      - ATLAS_FRESH_SLOT_PER_SESSION=${ATLAS_FRESH_SLOT_PER_SESSION:-}
       # Pins the proxy's "where to write files" target. Must match the
       # working_dir below and the right-hand side of the volume mount.
       - ATLAS_WORKSPACE_DIR=/workspace

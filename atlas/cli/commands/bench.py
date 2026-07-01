@@ -71,6 +71,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     results_dir = root / "benchmark" / "results" / run_id / "v3_lcb" / "per_task"
     pass_count = 0
     task_count = 0
+    dataset_total = 0  # parsed from the runner's "[done/total]" prefix
     saw_complete = False  # runner printed its BENCHMARK COMPLETE summary
 
     try:
@@ -83,7 +84,15 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
                 task_count += 1
                 if "PASS" in line:
                     pass_count += 1
-                total = max_tasks if max_tasks > 0 else 599
+                # The runner emits "[done/total] <task>: ..." — take the
+                # dataset size from the line rather than pinning it.
+                try:
+                    dataset_total = int(
+                        line[1:].split("]", 1)[0].split("/", 1)[1].strip())
+                except (IndexError, ValueError):
+                    pass
+                total = max_tasks if max_tasks > 0 else \
+                    (dataset_total or task_count)
                 display.progress_bar(task_count, total, pass_count, line.split("]")[-1].strip()[:40])
             elif "BENCHMARK COMPLETE" in line:
                 saw_complete = True

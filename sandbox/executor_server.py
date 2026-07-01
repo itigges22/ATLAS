@@ -105,6 +105,9 @@ class ExecuteRequest(BaseModel):
     # smoke_compile_check to ship the rest of the project so e.g.
     # `import game_logic` resolves to the user's actual game_logic.py.
     files: Optional[Dict[str, str]] = None
+    # Optional standard input piped to the run step. None (the default)
+    # keeps existing behavior — the process inherits the server's stdin.
+    stdin: Optional[str] = None
 
 
 class ExecuteResponse(BaseModel):
@@ -441,6 +444,7 @@ def _translate_workspace_command(command: str, root: Path) -> str:
 BG_MAX_LINES = 500          # ring buffer per stream
 BG_MAX_JOBS = 32            # hard cap so a misbehaving model can't OOM us
 BG_RETENTION_SEC = 600      # keep finished jobs around for 10 min
+BG_MAX_AGE_SEC = 7200       # kill still-running jobs abandoned this long
 
 _bg_jobs: Dict[str, dict] = {}
 _bg_lock = threading.Lock()
@@ -464,15 +468,35 @@ def _bg_drain_stream(job_id: str, stream_name: str, fh):
 
 
 def _bg_janitor():
-    """Sweep finished jobs older than retention. Daemon thread."""
+    """Sweep the job table every 30s. Daemon thread. Two responsibilities:
+
+    * Finished jobs: stamp ended_at when the janitor first observes the
+      process done (a job the caller never polls would otherwise carry no
+      ended_at and be reaped on the first sweep, losing its output before
+      the retention window), then drop the entry BG_RETENTION_SEC later.
+    * Abandoned running jobs: kill the process group once a job passes
+      BG_MAX_AGE_SEC so leaked servers can't exhaust pids_limit; the entry
+      is then reaped through the normal finished-job path.
+    """
     while True:
         time.sleep(30)
-        cutoff = time.time() - BG_RETENTION_SEC
+        now = time.time()
         with _bg_lock:
             for jid in list(_bg_jobs.keys()):
                 job = _bg_jobs[jid]
-                if job["proc"].poll() is not None and job.get("ended_at", 0) < cutoff:
-                    del _bg_jobs[jid]
+                proc = job["proc"]
+                if proc.poll() is not None:
+                    ended = job.get("ended_at")
+                    if not ended:
+                        job["ended_at"] = now
+                    elif ended < now - BG_RETENTION_SEC:
+                        del _bg_jobs[jid]
+                elif job["started_at"] < now - BG_MAX_AGE_SEC:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        # best-effort: swallow on failure (caller continues)
+                        pass
 
 
 threading.Thread(target=_bg_janitor, daemon=True).start()
@@ -683,24 +707,17 @@ def execute_code(request: ExecuteRequest):
 
     # PC-046: Drop project-context files into the workspace BEFORE the
     # language handler runs so any `import other_module` in the candidate
-    # resolves against the rest of the user's project. Validate each
-    # path to keep the sandbox isolated — no absolute paths, no `..`
-    # traversal, no symlinks. Bad entries are silently skipped (we don't
-    # want a malformed name to block legitimate verification).
+    # resolves against the rest of the user's project. Routed through the
+    # same O_NOFOLLOW/dir_fd walking helper as the /shell overlay writer so
+    # both write paths enforce identical containment (no absolute paths, no
+    # `..` traversal, no symlink components). Bad entries are skipped per
+    # file (we don't want a malformed name to block legitimate verification).
     if request.files:
         for name, content in request.files.items():
-            if not isinstance(name, str) or not name:
-                continue
-            # Reject absolute paths and traversal
-            if name.startswith("/") or name.startswith("\\") or ".." in Path(name).parts:
-                logger.warning(f"PC-046: rejected unsafe file path in sandbox request: {name!r}")
-                continue
-            target = Path(workspace) / name
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content if isinstance(content, str) else "")
-            except OSError as e:
-                logger.warning(f"PC-046: failed to write {name!r} to sandbox: {e}")
+                _write_overlay_files(Path(workspace), {name: content})
+            except HTTPException as e:
+                logger.warning(f"PC-046: rejected sandbox file {name!r}: {e.detail}")
 
     try:
         handler = LANGUAGE_HANDLERS[lang]
@@ -710,6 +727,7 @@ def execute_code(request: ExecuteRequest):
             workspace=Path(workspace),
             timeout=timeout,
             requirements=request.requirements,
+            stdin=request.stdin,
         )
         return result
     except Exception as e:
@@ -901,27 +919,54 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 # Language handlers
 # ---------------------------------------------------------------------------
 
-def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None) -> Dict:
-    """Run a command with timeout and return structured result."""
+def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
+             stdin: Optional[str] = None) -> Dict:
+    """Run a command with timeout and return structured result.
+
+    start_new_session + killpg mirrors the /jobs path: on timeout the whole
+    process group dies, so children the command spawned can't outlive it and
+    leak against the container's pids_limit. `stdin` (when not None) is piped
+    to the process as its standard input.
+    """
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdin=subprocess.PIPE if stdin is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=str(cwd) if cwd else None,
             env=run_env,
+            start_new_session=True,
         )
+    except Exception as e:
         return {
-            "success": result.returncode == 0,
-            "stdout": result.stdout[-4000:],
-            "stderr": result.stderr[-2000:],
-            "returncode": result.returncode,
+            "success": False,
+            "stdout": "",
+            "stderr": str(e),
+            "returncode": -1,
+        }
+    try:
+        stdout, stderr = proc.communicate(input=stdin, timeout=timeout)
+        return {
+            "success": proc.returncode == 0,
+            "stdout": stdout[-4000:],
+            "stderr": stderr[-2000:],
+            "returncode": proc.returncode,
         }
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            # best-effort: swallow on failure (caller continues)
+            pass
+        try:
+            proc.communicate(timeout=5)  # reap + close pipes
+        except Exception:
+            proc.kill()
         return {
             "success": False,
             "stdout": "",
@@ -929,6 +974,11 @@ def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None) -
             "returncode": -1,
         }
     except Exception as e:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            # best-effort: swallow on failure (caller continues)
+            pass
         return {
             "success": False,
             "stdout": "",
@@ -965,7 +1015,7 @@ def _classify_error(stderr: str) -> Optional[str]:
 
 # --- Python ---
 
-def execute_python(code, test_code, workspace, timeout, requirements, **_):
+def execute_python(code, test_code, workspace, timeout, requirements, stdin=None, **_):
     start = time.time()
     main_file = workspace / "solution.py"
     main_file.write_text(code)
@@ -1011,14 +1061,15 @@ def execute_python(code, test_code, workspace, timeout, requirements, **_):
     # Run
     if test_code:
         (workspace / "test_solution.py").write_text(test_code)
-        r = _run_cmd(["python", "-m", "pytest", "-v", "--tb=short", str(workspace)], timeout, cwd=workspace)
+        r = _run_cmd(["python", "-m", "pytest", "-v", "--tb=short", str(workspace)], timeout, cwd=workspace,
+                     stdin=stdin)
         passed = int(m.group(1)) if (m := re.search(r"(\d+) passed", r["stdout"])) else 0
         failed = int(m.group(1)) if (m := re.search(r"(\d+) failed", r["stdout"])) else 0
         total = passed + failed or 1
     else:
         r = _run_cmd(
             ["python", "-c", f"import sys; sys.path.insert(0,'{workspace}'); import solution"],
-            timeout
+            timeout, stdin=stdin
         )
         passed = 1 if r["success"] else 0
         total = 1
@@ -1036,7 +1087,7 @@ def execute_python(code, test_code, workspace, timeout, requirements, **_):
 
 # --- JavaScript ---
 
-def execute_javascript(code, test_code, workspace, timeout, **_):
+def execute_javascript(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
     main_file = workspace / "solution.js"
     main_file.write_text(code)
@@ -1053,7 +1104,7 @@ def execute_javascript(code, test_code, workspace, timeout, **_):
         )
 
     # Run
-    r = _run_cmd(["node", str(main_file)], timeout, cwd=workspace)
+    r = _run_cmd(["node", str(main_file)], timeout, cwd=workspace, stdin=stdin)
 
     return ExecuteResponse(
         success=r["success"], compile_success=True,
@@ -1067,7 +1118,7 @@ def execute_javascript(code, test_code, workspace, timeout, **_):
 
 # --- TypeScript ---
 
-def execute_typescript(code, test_code, workspace, timeout, **_):
+def execute_typescript(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
     main_file = workspace / "solution.ts"
     main_file.write_text(code)
@@ -1080,7 +1131,7 @@ def execute_typescript(code, test_code, workspace, timeout, **_):
         logger.info(f"TypeScript type errors: {r['stderr'][:200]}")
 
     # Run via tsx (faster than ts-node, handles ESM)
-    r = _run_cmd(["tsx", str(main_file)], timeout, cwd=workspace)
+    r = _run_cmd(["tsx", str(main_file)], timeout, cwd=workspace, stdin=stdin)
 
     return ExecuteResponse(
         success=r["success"], compile_success=compile_success,
@@ -1094,7 +1145,7 @@ def execute_typescript(code, test_code, workspace, timeout, **_):
 
 # --- Go ---
 
-def execute_go(code, test_code, workspace, timeout, **_):
+def execute_go(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
     main_file = workspace / "main.go"
     main_file.write_text(code)
@@ -1114,7 +1165,7 @@ def execute_go(code, test_code, workspace, timeout, **_):
         )
 
     # Run
-    r = _run_cmd([str(workspace / "program")], timeout, cwd=workspace)
+    r = _run_cmd([str(workspace / "program")], timeout, cwd=workspace, stdin=stdin)
 
     return ExecuteResponse(
         success=r["success"], compile_success=True,
@@ -1128,7 +1179,7 @@ def execute_go(code, test_code, workspace, timeout, **_):
 
 # --- Rust ---
 
-def execute_rust(code, test_code, workspace, timeout, **_):
+def execute_rust(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
     main_file = workspace / "main.rs"
     main_file.write_text(code)
@@ -1146,7 +1197,7 @@ def execute_rust(code, test_code, workspace, timeout, **_):
         )
 
     # Run
-    r = _run_cmd([str(binary)], timeout, cwd=workspace)
+    r = _run_cmd([str(binary)], timeout, cwd=workspace, stdin=stdin)
 
     return ExecuteResponse(
         success=r["success"], compile_success=True,
@@ -1160,7 +1211,7 @@ def execute_rust(code, test_code, workspace, timeout, **_):
 
 # --- C ---
 
-def execute_c(code, test_code, workspace, timeout, **_):
+def execute_c(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
     main_file = workspace / "solution.c"
     main_file.write_text(code)
@@ -1176,7 +1227,7 @@ def execute_c(code, test_code, workspace, timeout, **_):
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
-    r = _run_cmd([str(binary)], timeout, cwd=workspace)
+    r = _run_cmd([str(binary)], timeout, cwd=workspace, stdin=stdin)
 
     return ExecuteResponse(
         success=r["success"], compile_success=True,
@@ -1190,7 +1241,7 @@ def execute_c(code, test_code, workspace, timeout, **_):
 
 # --- C++ ---
 
-def execute_cpp(code, test_code, workspace, timeout, **_):
+def execute_cpp(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
     main_file = workspace / "solution.cpp"
     main_file.write_text(code)
@@ -1206,7 +1257,7 @@ def execute_cpp(code, test_code, workspace, timeout, **_):
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
-    r = _run_cmd([str(binary)], timeout, cwd=workspace)
+    r = _run_cmd([str(binary)], timeout, cwd=workspace, stdin=stdin)
 
     return ExecuteResponse(
         success=r["success"], compile_success=True,
@@ -1220,7 +1271,7 @@ def execute_cpp(code, test_code, workspace, timeout, **_):
 
 # --- Bash ---
 
-def execute_bash(code, test_code, workspace, timeout, **_):
+def execute_bash(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
     script = workspace / "solution.sh"
     script.write_text(code)
@@ -1238,7 +1289,7 @@ def execute_bash(code, test_code, workspace, timeout, **_):
         )
 
     # Run
-    r = _run_cmd(["bash", str(script)], timeout, cwd=workspace)
+    r = _run_cmd(["bash", str(script)], timeout, cwd=workspace, stdin=stdin)
 
     return ExecuteResponse(
         success=r["success"], compile_success=True,

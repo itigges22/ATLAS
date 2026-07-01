@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,120 @@ func TestSanitizeFileContentHandlesUnmatchedFence(t *testing.T) {
 	}
 	if strings.Contains(got, "Here's the code") {
 		t.Errorf("kept the prose preamble: %q", got)
+	}
+}
+
+func TestSanitizeFileContentLeavesInteriorFenceAlone(t *testing.T) {
+	// A fenced usage example inside a docstring partway through a real
+	// module. The fence is legitimate content — stripping to the fence
+	// body would discard the code before and after it.
+	var b strings.Builder
+	for i := 0; i < 38; i++ {
+		fmt.Fprintf(&b, "def fn_%d():\n", i)
+	}
+	b.WriteString("def frobnicate(x):\n")
+	b.WriteString("    \"\"\"Frobnicate x.\n\n")
+	b.WriteString("    Example:\n\n")
+	b.WriteString("    ```python\n")
+	b.WriteString("    frobnicate(1)\n")
+	b.WriteString("    ```\n")
+	b.WriteString("    \"\"\"\n")
+	b.WriteString("    return x + 1\n")
+	for i := 0; i < 70; i++ {
+		fmt.Fprintf(&b, "def tail_%d():\n", i)
+	}
+	in := b.String()
+	got, sanitized := sanitizeFileContent("frob.py", in)
+	if sanitized {
+		t.Error("sanitized=true for interior docstring fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed for interior fence:\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentLeavesTopDocstringFenceAlone(t *testing.T) {
+	// Fence near the top of the file, but inside a module docstring —
+	// the docstring marker before the fence disqualifies the wrapper
+	// interpretation, and the code after the closing fence must survive.
+	in := strings.Join([]string{
+		`"""Frobnicate.`,
+		"",
+		"```python",
+		"frob()",
+		"```",
+		`"""`,
+		"def frob():",
+		"    return 1",
+	}, "\n")
+	got, sanitized := sanitizeFileContent("frob.py", in)
+	if sanitized {
+		t.Error("sanitized=true for docstring-wrapped fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed:\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentLeavesInlineDocstringFenceAlone(t *testing.T) {
+	// The opening docstring line has code before the delimiter
+	// (DOC = """...), so the fence inside it is legitimate content and the
+	// assignment, closing delimiter, and trailing function must all survive.
+	in := strings.Join([]string{
+		`DOC = """Usage example:`,
+		"```python",
+		"x = 1",
+		"```",
+		`end"""`,
+		"",
+		"def f():",
+		"    return 1",
+	}, "\n")
+	got, sanitized := sanitizeFileContent("example.py", in)
+	if sanitized {
+		t.Error("sanitized=true for inline-docstring-wrapped fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed (data loss):\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentStripsWrapperWithProseCommentMention(t *testing.T) {
+	// A genuine whole-file wrapper whose intro prose merely mentions a
+	// comment marker must still be stripped (the marker is not at line start).
+	in := strings.Join([]string{
+		"Here's app.js with the /* config */ block rewritten:",
+		"```javascript",
+		"const x = 1;",
+		"export default x;",
+		"```",
+	}, "\n")
+	got, sanitized := sanitizeFileContent("app.js", in)
+	if !sanitized {
+		t.Fatal("sanitized=false; the wrapper should have been stripped")
+	}
+	if strings.Contains(got, "```") || strings.Contains(got, "Here's app.js") {
+		t.Errorf("wrapper not fully stripped:\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentLeavesFenceFollowedByCodeAlone(t *testing.T) {
+	// Opening fence at the top, but substantial content after the last
+	// bare fence — not a whole-file wrapper.
+	var b strings.Builder
+	b.WriteString("```\n")
+	b.WriteString("example()\n")
+	b.WriteString("```\n")
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, "line_%d = %d\n", i, i)
+	}
+	in := b.String()
+	got, sanitized := sanitizeFileContent("data.py", in)
+	if sanitized {
+		t.Error("sanitized=true with 20 content lines after the fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed:\n%q", got)
 	}
 }
 

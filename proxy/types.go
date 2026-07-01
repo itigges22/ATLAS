@@ -165,6 +165,10 @@ type OutlineSymbol struct {
 type OutlineOutput struct {
 	Symbols   []OutlineSymbol `json:"symbols"`
 	Supported bool            `json:"supported"`
+	// Outline is the rendered human-readable listing (header, L<start>-<end>
+	// lines, call edges). The model reads this; Symbols carries the same
+	// data structurally.
+	Outline string `json:"outline,omitempty"`
 }
 
 // -- write_file --
@@ -609,6 +613,34 @@ func (c *AgentContext) WasFileRead(path string) bool {
 	defer c.mu.Unlock()
 	_, ok := c.FileReadTimes[path]
 	return ok
+}
+
+// GetFileRead returns the cached content for path under the context lock.
+func (c *AgentContext) GetFileRead(path string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	content, ok := c.FilesRead[path]
+	return content, ok
+}
+
+// ForgetFileRead drops the read-cache entry for path under the context
+// lock. Used when a file is moved away from path.
+func (c *AgentContext) ForgetFileRead(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.FilesRead, path)
+}
+
+// SnapshotFilesRead returns a copy of the session read-cache under the
+// context lock, for callers that iterate over it.
+func (c *AgentContext) SnapshotFilesRead() map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]string, len(c.FilesRead))
+	for k, v := range c.FilesRead {
+		out[k] = v
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

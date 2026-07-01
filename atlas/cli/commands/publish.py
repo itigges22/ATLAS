@@ -61,10 +61,16 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
 
     # Pre-flight both artifact sets BEFORE uploading anything: a combined
     # publish should not half-succeed on a missing vector.
-    artifact_dir = lens_module._check_model(args.model, atlas_root).artifact_dir
+    check = lens_module._check_model(args.model, atlas_root)
+    if check.verdict == "incompatible" or not check.artifact_dir:
+        _safe_print(f"  {RED if color else ''}Lens pre-flight failed: "
+                    f"{check.reason}{RESET if color else ''}")
+        return 1
+    artifact_dir = check.artifact_dir
     missing = [f for f in ("cost_field.pt", "gx_xgboost.json")
                if not os.path.isfile(os.path.join(artifact_dir, f))]
-    vpath = _host_resolve_vector_path(_configured_vector_path(), atlas_root)
+    vpath = _host_resolve_vector_path(_configured_vector_path(atlas_root),
+                                      atlas_root)
     if not os.path.isfile(vpath):
         missing.append(os.path.basename(vpath))
     if missing:

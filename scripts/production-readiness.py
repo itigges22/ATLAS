@@ -71,6 +71,52 @@ def _docker_compose_available() -> bool:
     return completed.returncode == 0
 
 
+def _compose_gates() -> dict[str, Gate]:
+    """One validation gate per compose file combination we ship.
+
+    The overlays (`-f base -f overlay`) are what real installs run —
+    validating only the base file lets an overlay-only regression (bad
+    `!reset`, dangling service key) through. Combinations whose files
+    don't exist in this checkout are skipped.
+    """
+    combos: dict[str, tuple[str, ...]] = {
+        "compose": ("docker-compose.yml",),
+        "compose-rocm": ("docker-compose.yml", "docker-compose.rocm.yml"),
+        "compose-vulkan": ("docker-compose.yml", "docker-compose.vulkan.yml"),
+        "compose-cpu": (
+            "docker-compose.yml",
+            "docker-compose.vulkan.yml",
+            "docker-compose.cpu.yml",
+        ),
+        "compose-macos": ("docker-compose.yml", "docker-compose.macos.yml"),
+    }
+    gates: dict[str, Gate] = {}
+    for name, files in combos.items():
+        if not all((ROOT / f).exists() for f in files):
+            continue
+        command: list[str] = ["docker", "compose"]
+        for f in files:
+            command += ["-f", f]
+        command += ["config", "-q"]
+        gates[name] = Gate(
+            name,
+            tuple(command),
+            required=False,
+            available=_docker_compose_available,
+            unavailable_reason="Docker Compose v2 is not available",
+            # These gates only validate YAML structure, not runtime config,
+            # so they run with no .env present. Supply placeholders for the
+            # required (:?) interpolation vars so parsing succeeds — real
+            # users still get the :? error from `atlas init` / compose up
+            # if unset.
+            env={
+                "ATLAS_MODEL_FILE": "placeholder.gguf",
+                "ATLAS_MODEL_NAME": "placeholder",
+            },
+        )
+    return gates
+
+
 def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
     python = sys.executable
     go_env = {"GOCACHE": os.environ.get("GOCACHE", "/tmp/atlas-go-cache")}
@@ -150,21 +196,7 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             available=lambda: _command_available("shellcheck"),
             unavailable_reason="shellcheck is not installed",
         ),
-        "compose": Gate(
-            "compose",
-            ("docker", "compose", "config", "-q"),
-            required=False,
-            available=_docker_compose_available,
-            unavailable_reason="Docker Compose v2 is not available",
-            # This gate only validates YAML structure, not runtime config, so
-            # it runs with no .env present. Supply placeholders for the
-            # required (:?) interpolation vars so parsing succeeds — real users
-            # still get the :? error from `atlas init` / compose up if unset.
-            env={
-                "ATLAS_MODEL_FILE": "placeholder.gguf",
-                "ATLAS_MODEL_NAME": "placeholder",
-            },
-        ),
+        **_compose_gates(),
         "workflow-yaml": Gate(
             "workflow-yaml",
             (

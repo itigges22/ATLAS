@@ -13,7 +13,8 @@
 #        AMD    -> verifies /dev/kfd + adds user to render/video groups
 #        (Apple Silicon / Intel Arc not yet supported — V3.1.2 roadmap)
 #   4. Sets vm.overcommit_memory=1 (PC-011 — Redis silent-write killer).
-#   5. RHEL-family: enables EPEL, opens firewalld ports, blacklists nouveau.
+#   5. RHEL-family: enables EPEL, warns about nouveau. (Firewalld ports are
+#      opt-in via ATLAS_BOOTSTRAP_OPEN_FIREWALL=1 — services bind loopback.)
 #   6. Copies .env.example to .env if missing.
 #   7. Downloads model GGUFs and Lens weights from HuggingFace.
 #   8. `docker compose up -d` and waits for all services healthy.
@@ -35,6 +36,9 @@
 #   ATLAS_BOOTSTRAP_SKIP_COMPOSE=1    skip `docker compose up`
 #   ATLAS_BOOTSTRAP_SKIP_SYSCTL=1     skip vm.overcommit_memory write (CI / unpriv. containers)
 #   ATLAS_BOOTSTRAP_SKIP_ASA=1        skip ASA steering-vector build (BiasBusters #4 — optional, ~5 min)
+#   ATLAS_BOOTSTRAP_OPEN_FIREWALL=1   open service ports in firewalld (default: off —
+#                                     compose publishes on 127.0.0.1 only, so no
+#                                     firewall change is needed for local use)
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
@@ -676,18 +680,30 @@ install_gpu_runtime() {
 }
 
 # Returns the docker-compose -f flags appropriate for the detected GPU
-# vendor. NVIDIA (or no GPU) uses the base file alone; AMD layers the
-# ROCm override on top. Echo result so callers can splice into command
-# lines as `$(compose_files_args)`.
+# vendor. NVIDIA uses the base file alone (CUDA image + nvidia device
+# reservation); AMD layers the ROCm override on top; no detected vendor
+# gets the Vulkan overlay (which drops the NVIDIA device reservation the
+# base file makes) so the stack can boot on GPU-less hosts via the
+# lavapipe CPU ICD — and, when /dev/dri is absent too, the CPU override
+# strips the device passthrough that would otherwise fail container
+# creation. Echo result so callers can splice into command lines as
+# `$(compose_files_args)`.
 compose_files_args() {
     case "$GPU_VENDOR" in
         amd)
             echo "-f docker-compose.yml -f docker-compose.rocm.yml"
             ;;
-        *)
+        nvidia)
             # Empty = compose uses its default discovery, which is the
             # base docker-compose.yml in the CWD.
             echo ""
+            ;;
+        *)
+            if [[ -e /dev/dri ]]; then
+                echo "-f docker-compose.yml -f docker-compose.vulkan.yml"
+            else
+                echo "-f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml"
+            fi
             ;;
     esac
 }
@@ -741,8 +757,12 @@ configure_rhel_extras() {
         log_ok "EPEL already installed"
     fi
 
-    # firewalld — open compose ports if firewalld is running
-    if systemctl is-active --quiet firewalld 2>/dev/null; then
+    # firewalld — compose publishes every service on 127.0.0.1 only, so
+    # local use needs no firewall change. Opening the ports is opt-in for
+    # deployments that also rebind the services to a routable interface.
+    if [[ "${ATLAS_BOOTSTRAP_OPEN_FIREWALL:-0}" != "1" ]]; then
+        log_skip "firewall unchanged (services bind 127.0.0.1; set ATLAS_BOOTSTRAP_OPEN_FIREWALL=1 to open ports)"
+    elif systemctl is-active --quiet firewalld 2>/dev/null; then
         log_info "firewalld is active — opening ATLAS ports (8090, 8099, 8070, 30820)…"
         for port in 8090 8099 8070 30820; do
             $SUDO firewall-cmd --permanent --add-port=${port}/tcp >/dev/null 2>&1 || true
@@ -778,7 +798,11 @@ ensure_repo_and_env() {
         log_info "Not in a checkout. Cloning $repo_url to $install_dir…"
         if [[ -d "$install_dir/.git" ]]; then
             log_info "Existing checkout at $install_dir — pulling latest"
-            (cd "$install_dir" && git pull --ff-only) || die "git pull failed in $install_dir"
+            # Pull as the checkout's owner, mirroring the clone below.
+            # Running git as root in a user-owned checkout trips git's
+            # "dubious ownership" safety check and fails the re-run.
+            run_as_target git -C "$install_dir" pull --ff-only \
+                || die "git pull failed in $install_dir"
         else
             $SUDO mkdir -p "$install_dir"
             # Pre-chown the dir so the clone goes in user-owned, then
@@ -845,9 +869,104 @@ ensure_repo_and_env() {
         log_ok "Created .env from .env.example (edit ATLAS_MODELS_DIR if needed)"
     fi
 
+    ensure_default_model_selected
+    persist_backend_selection
+
     install_atlas_cli || die "ATLAS CLI installation failed."
     install_go || die "Go installation failed; atlas-tui cannot be built."
     build_atlas_tui || die "atlas-tui build failed."
+}
+
+# Read a key's value from ./.env (first match, raw text after `=`).
+env_file_value() {
+    grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+# Set (or append) key=value in ./.env.
+set_env_file_value() {
+    local key="$1" value="$2"
+    if grep -qE "^${key}=" .env 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${value}|" .env
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+}
+
+ensure_default_model_selected() {
+    # .env.example ships ATLAS_MODEL_FILE / ATLAS_MODEL_NAME empty (model
+    # selection normally happens in `atlas init`). A one-shot `curl | bash`
+    # install never runs the wizard, so an empty selection would kill the
+    # model-download step — and even with ATLAS_BOOTSTRAP_SKIP_MODELS=1,
+    # compose's ${ATLAS_MODEL_FILE:?} guard. Default to the registry's
+    # recommended model (atlas/cli/commands/model_registry.py — the
+    # lens-supported development target) so the advertised fully-automatic
+    # flow actually completes. An existing non-empty selection is respected.
+    local default_model_file="Qwen3.5-9B-Q6_K.gguf"
+    local default_model_name="Qwen3.5-9B-Q6_K"
+    local default_model_display="Qwen3.5 9B (Q6_K)"
+
+    local model_file model_name
+    model_file=$(env_file_value ATLAS_MODEL_FILE)
+    model_name=$(env_file_value ATLAS_MODEL_NAME)
+
+    if [[ -z "$model_file" ]]; then
+        log_info "No model selected — defaulting to ${default_model_display}; edit .env or run \`atlas init\` to change"
+        set_env_file_value ATLAS_MODEL_FILE "$default_model_file"
+        set_env_file_value ATLAS_MODEL_NAME "$default_model_name"
+        model_file="$default_model_file"
+        model_name="$default_model_name"
+    elif [[ -z "$model_name" ]]; then
+        # Model file chosen but no identifier — derive the conventional
+        # name (filename without .gguf) rather than failing downstream.
+        model_name="${model_file%.gguf}"
+        log_info "ATLAS_MODEL_NAME empty — deriving '$model_name' from ATLAS_MODEL_FILE"
+        set_env_file_value ATLAS_MODEL_NAME "$model_name"
+    fi
+
+    # Fail early with guidance if the selection is still unusable —
+    # compose's ${ATLAS_MODEL_FILE:?} would otherwise fail much later
+    # with a terser message.
+    model_file=$(env_file_value ATLAS_MODEL_FILE)
+    if [[ -z "$model_file" ]]; then
+        die "ATLAS_MODEL_FILE is empty in .env — set it (or run \`atlas init\`) and re-run."
+    fi
+    log_ok "Model selection: $model_file (ATLAS_MODEL_NAME=$(env_file_value ATLAS_MODEL_NAME))"
+}
+
+persist_backend_selection() {
+    # Record which inference backend matches the detected hardware into .env
+    # so every post-install lifecycle command selects the SAME docker-compose
+    # overlays the bootstrap used. atlas compose, atlas doctor's start hint,
+    # the REPL's proxy recreation, and the compose resolver in atlas/cli/
+    # compose.py all read ATLAS_BACKEND; without it they fall back to the base
+    # CUDA file and fail on GPU-less hosts with "could not select device
+    # driver nvidia". Keys mirror compose_files_args + _OVERLAY_BY_BACKEND:
+    #   amd    -> rocm   (docker-compose.rocm.yml)
+    #   nvidia -> cuda   (base file only)
+    #   none + /dev/dri  -> vulkan (docker-compose.vulkan.yml)
+    #   none, no /dev/dri -> cpu   (vulkan + cpu overlays, lavapipe)
+    # An explicit ATLAS_BACKEND already present in .env is respected.
+    local existing
+    existing=$(env_file_value ATLAS_BACKEND)
+    if [[ -n "$existing" ]]; then
+        log_ok "Backend already set in .env: ATLAS_BACKEND=$existing"
+        return
+    fi
+
+    local backend
+    case "$GPU_VENDOR" in
+        amd)    backend="rocm" ;;
+        nvidia) backend="cuda" ;;
+        *)
+            if [[ -e /dev/dri ]]; then
+                backend="vulkan"
+            else
+                backend="cpu"
+            fi
+            ;;
+    esac
+    set_env_file_value ATLAS_BACKEND "$backend"
+    log_ok "Recorded ATLAS_BACKEND=$backend so later lifecycle commands pick the matching compose overlays"
 }
 
 install_atlas_cli() {
@@ -1103,6 +1222,13 @@ start_compose() {
     fi
     if [[ "$GPU_VENDOR" == "amd" ]]; then
         log_info "Using ROCm compose override (docker-compose.rocm.yml)"
+    elif [[ -z "$GPU_VENDOR" ]]; then
+        if [[ -e /dev/dri ]]; then
+            log_info "No GPU vendor detected — using Vulkan overlay (docker-compose.vulkan.yml)"
+        else
+            log_warn "No GPU and no /dev/dri — using the CPU override (docker-compose.cpu.yml, lavapipe)."
+            log_warn "Inference will be very slow."
+        fi
     fi
 
     # Pull images first as a separate step so the user can see the layer-by-
@@ -1152,7 +1278,11 @@ wait_for_healthy() {
     local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
 
     local services=(redis llama-server geometric-lens v3-service sandbox atlas-proxy)
-    local timeout=300  # 5 min — first start can be slow while llama-server warms
+    # 450s: must exceed the llama-server healthcheck budget in
+    # docker-compose.yml (start_period 120s + 10 retries × 30s ≈ 420s),
+    # otherwise the wait can give up while the container is still
+    # legitimately warming up.
+    local timeout=450
     local elapsed=0
     local interval=5
 
@@ -1228,6 +1358,47 @@ build_asa_steering_vector() {
         return
     fi
 
+    # This step reads ATLAS_* keys (models dir, model file/name, ports,
+    # image tag) that live in the install's .env, not this process's
+    # environment. Load them the same way scripts/download-models.sh
+    # does: values already set in the environment win, .env fills gaps.
+    local env_file="$ATLAS_INSTALL_DIR/.env"
+    if [[ -f "$env_file" ]]; then
+        local key value
+        while IFS='=' read -r key value; do
+            [[ "$key" =~ ^ATLAS_[A-Z0-9_]+$ ]] || continue
+            # Strip surrounding quotes from value
+            value="${value%\"}"; value="${value#\"}"
+            value="${value%\'}"; value="${value#\'}"
+            if [[ -z "${!key:-}" ]]; then
+                export "$key=$value"
+            fi
+        done < <(grep -E '^[A-Z][A-Z0-9_]+=' "$env_file")
+    fi
+
+    # ASA extraction runs the model through llama-cvector-generator — a
+    # GPU job. Dispatch per detected vendor; skip cleanly when there is
+    # no GPU to run it on (CPU-only Vulkan hosts).
+    local -a gpu_run_args=()
+    local image_tag="${ATLAS_IMAGE_TAG:-latest}"
+    local ghcr_owner="${ATLAS_GHCR_OWNER:-itigges22}"
+    local image=""
+    case "$GPU_VENDOR" in
+        nvidia)
+            image="ghcr.io/${ghcr_owner}/atlas-llama:${image_tag}"
+            gpu_run_args=(--gpus all)
+            ;;
+        amd)
+            image="ghcr.io/${ghcr_owner}/atlas-llama-rocm:${image_tag}"
+            gpu_run_args=(--device=/dev/kfd --device=/dev/dri
+                          --group-add video --group-add render)
+            ;;
+        *)
+            log_skip "ASA build requires a GPU — skipping (build later with \`atlas asa build\`)"
+            return
+            ;;
+    esac
+
     local models_dir_raw="${ATLAS_MODELS_DIR:-./models}"
     local models_dir
     if [[ "$models_dir_raw" = /* ]]; then
@@ -1246,7 +1417,7 @@ build_asa_steering_vector() {
         return
     fi
 
-    local DC="$DOCKER_PREFIX docker compose"
+    local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
     local model_file="${ATLAS_MODEL_FILE:-}"
     if [[ -z "$model_file" ]]; then
         log_warn "ATLAS_MODEL_FILE is unset — skipping ASA build until a model is selected"
@@ -1264,9 +1435,6 @@ build_asa_steering_vector() {
         mv -f "$vector_path" "$quarantined_vector"
         log_warn "Preserved the prior vector at $quarantined_vector (not auto-loaded)"
     fi
-    local image_tag="${ATLAS_IMAGE_TAG:-latest}"
-    local ghcr_owner="${ATLAS_GHCR_OWNER:-itigges22}"
-    local image="ghcr.io/${ghcr_owner}/atlas-llama:${image_tag}"
     # 1. Generate the ignored contrast-pair corpus on demand, then render it
     # with the loaded model's own chat template.
     if [[ ! -s "$asa_dir/contrast_pairs.jsonl" ]]; then
@@ -1303,7 +1471,7 @@ build_asa_steering_vector() {
     log_info "Running llama-cvector-generator — this is the slow part (~5 min)…"
     echo
     set +e
-    $DOCKER_PREFIX docker run --rm --gpus all \
+    $DOCKER_PREFIX docker run --rm "${gpu_run_args[@]}" \
         -v "$models_dir:/models:rw" \
         --entrypoint llama-cvector-generator \
         "$image" \

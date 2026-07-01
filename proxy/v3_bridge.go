@@ -150,14 +150,20 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 // Plans are cheap-but-not-free: 3 candidate samples × ~5s each = ~15s
 // wall time, mostly dominated by the LLM. Timeout is 5 min — well above
 // expected (15s) and below the agent loop's overall request timeout.
-func callV3PlanStreaming(v3URL string, req V3PlanRequest, onProgress V3ProgressFn) (*Plan, error) {
+func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest, onProgress V3ProgressFn) (*Plan, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal plan request: %w", err)
 	}
 
 	endpoint := v3URL + "/v3/plan"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	// Bind the agent's request context so a user Ctrl-C (via /cancel)
+	// aborts an in-flight plan run, mirroring callV3GenerateStreaming.
+	// nil falls back to Background for any non-agent caller.
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create plan request: %w", err)
 	}
@@ -165,8 +171,8 @@ func callV3PlanStreaming(v3URL string, req V3PlanRequest, onProgress V3ProgressF
 
 	// May 10 2026: timeout removed (was 5 min). Plan generation can run
 	// long on multi-candidate scoring; bounding it via the client
-	// timeout killed slow-but-progressing calls. Request context
-	// cancellation still works.
+	// timeout killed slow-but-progressing calls. Abort is user-driven
+	// via the bound request context.
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -222,27 +228,4 @@ func callV3PlanStreaming(v3URL string, req V3PlanRequest, onProgress V3ProgressF
 	}
 
 	return plan, nil
-}
-
-// callV3Score sends code to the Geometric Lens for C(x)/G(x) scoring.
-func callV3Score(lensURL, code string) (*LensScore, error) {
-	body, _ := json.Marshal(map[string]string{"text": code})
-
-	endpoint := lensURL + "/score"
-	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("score request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("score returned %d", resp.StatusCode)
-	}
-
-	var score LensScore
-	if err := json.NewDecoder(resp.Body).Decode(&score); err != nil {
-		return nil, fmt.Errorf("decode score: %w", err)
-	}
-
-	return &score, nil
 }

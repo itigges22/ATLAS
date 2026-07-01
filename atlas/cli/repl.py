@@ -21,13 +21,16 @@ from atlas.cli.commands import solve, status, bench
 from atlas.cli.runtime_artifacts import go_binary_is_current
 
 
-PROXY_PORT = os.environ.get("ATLAS_PROXY_PORT", "8090")
+# Shell env wins; otherwise the Docker .env's port keys drive the URLs.
+_ENV_VALUES = compose_config.read_env_file(compose_config.find_atlas_root())
+PROXY_PORT = compose_config.service_port("proxy", values=_ENV_VALUES)
 PROXY_URL = os.environ.get("ATLAS_PROXY_URL", f"http://localhost:{PROXY_PORT}")
-INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
-SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
-V3_URL = os.environ.get("ATLAS_V3_URL", "http://localhost:8070")
-MODEL_NAME = os.environ.get("ATLAS_MODEL_NAME", "local-model")
+INFERENCE_URL = compose_config.service_url("llama", values=_ENV_VALUES)
+LENS_URL = compose_config.service_url("lens", values=_ENV_VALUES)
+SANDBOX_URL = compose_config.service_url("sandbox", values=_ENV_VALUES)
+V3_URL = compose_config.service_url("v3", values=_ENV_VALUES)
+MODEL_NAME = (os.environ.get("ATLAS_MODEL_NAME")
+              or _ENV_VALUES.get("ATLAS_MODEL_NAME", "local-model"))
 DEMO_RAW_CAPABILITY = "demo_raw_completion_v1"
 
 _proxy_process = None
@@ -359,12 +362,22 @@ def _docker_workspace_for(container: str) -> Optional[str]:
         return None
 
 
+def _compose_container(service: str, fallback: str) -> str:
+    """Resolve a compose service's container via `docker compose ps -q`
+    so non-default project names (COMPOSE_PROJECT_NAME, renamed checkout
+    dirs) still work; fall back to the conventional name."""
+    root = compose_config.find_atlas_root()
+    return compose_config.container_id(root, service, fallback=fallback) or fallback
+
+
 def _docker_proxy_workspace() -> Optional[str]:
-    return _docker_workspace_for("atlas-atlas-proxy-1")
+    return _docker_workspace_for(
+        _compose_container("atlas-proxy", "atlas-atlas-proxy-1"))
 
 
 def _docker_sandbox_workspace() -> Optional[str]:
-    return _docker_workspace_for("atlas-sandbox-1")
+    return _docker_workspace_for(
+        _compose_container("sandbox", "atlas-sandbox-1"))
 
 
 def _recreate_docker_proxy(atlas_dir: str, project_dir: str) -> bool:
@@ -616,7 +629,6 @@ def startup_checks() -> bool:
     if llm_ok:
         display.status_block(
             model=llm_model,
-            speed="~51 tok/s",
             lens="connected" if rag_ok else "unavailable",
             sandbox="ready" if sandbox_ok else "unavailable",
         )
@@ -661,13 +673,24 @@ def handle_command(line: str):
 
     elif cmd == "/bench":
         import shlex
-        bench_args = shlex.split(args) if args else []
+        try:
+            bench_args = shlex.split(args) if args else []
+        except ValueError as e:
+            display.error(f"/bench: {e}")
+            display.info("Usage: /bench [--tasks N] [--strategy NAME]")
+            return
         tasks = 0
         strategy = "random"
         i = 0
         while i < len(bench_args):
             if bench_args[i] == "--tasks" and i + 1 < len(bench_args):
-                tasks = int(bench_args[i + 1])
+                try:
+                    tasks = int(bench_args[i + 1])
+                except ValueError:
+                    display.error(f"--tasks expects an integer, got "
+                                  f"{bench_args[i + 1]!r}")
+                    display.info("Usage: /bench [--tasks N] [--strategy NAME]")
+                    return
                 i += 2
             elif bench_args[i] == "--strategy" and i + 1 < len(bench_args):
                 strategy = bench_args[i + 1]
@@ -687,45 +710,79 @@ def handle_command(line: str):
         display.info("Type /help for commands")
 
 
+_SUBCOMMAND_HELP = [
+    ("init",    "first-run install wizard"),
+    ("doctor",  "install health diagnostic"),
+    ("tier",    "hardware tier probe + runtime fit"),
+    ("model",   "model registry: list/install/verify/remove"),
+    ("onboard", "guided drop-in for a new model"),
+    ("lens",    "Geometric Lens check/build/publish"),
+    ("asa",     "ASA control-vector check/build/publish"),
+    ("publish", "publish lens + ASA artifacts in one step"),
+    ("bench",   "run benchmarks with live progress"),
+    ("compose", "docker compose with ATLAS's compose files"),
+    ("tui",     "launch the terminal UI"),
+]
+
+
+def _print_usage(stream=None) -> None:
+    out = stream or sys.stdout
+    out.write("usage: atlas [subcommand] [args...]\n\n")
+    out.write("Run `atlas` with no arguments for the interactive UI.\n\n")
+    out.write("subcommands:\n")
+    for name, desc in _SUBCOMMAND_HELP:
+        out.write(f"  {name:<8} {desc}\n")
+
+
+def _dispatch_subcommand(name: str, argv: List[str]) -> int:
+    if name == "compose":
+        return _run_compose(argv)
+    import importlib
+    module = importlib.import_module(f"atlas.cli.commands.{name}")
+    return module.main(argv)
+
+
+def _run_compose(argv: List[str]) -> int:
+    """`atlas compose ...` — thin passthrough to `docker compose` with the
+    project's compose file set (backend overlays included)."""
+    atlas_dir = compose_config.find_atlas_root()
+    if not os.path.isfile(os.path.join(atlas_dir, "docker-compose.yml")):
+        print("atlas compose: no docker-compose.yml found — run from an "
+              "ATLAS checkout.", file=sys.stderr)
+        return 1
+    try:
+        cmd = compose_config.command(atlas_dir, argv)
+    except FileNotFoundError as e:
+        print(f"atlas compose: {e}", file=sys.stderr)
+        return 1
+    try:
+        return subprocess.call(cmd, cwd=atlas_dir)
+    except FileNotFoundError:
+        print("atlas compose: docker not found on PATH.", file=sys.stderr)
+        return 1
+
+
 def run():
     """Main entry point.
 
     Launch strategy:
-    1. `atlas doctor [...]` → run install diagnostic and exit (PC-053)
-    2. `atlas init`/`atlas tier`/`atlas tui`/`atlas model` → subcommand dispatch
+    1. `atlas <subcommand> [...]` → subcommand dispatch (see _SUBCOMMAND_HELP)
+    2. `atlas --help` / unknown subcommand → usage
     3. Default (interactive tty) → launch the Bubbletea TUI
     4. Pipe mode (no tty) → built-in REPL with /solve, /bench
     """
-    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
-        from atlas.cli.commands import doctor
-        sys.exit(doctor.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "publish":
-        from atlas.cli.commands import publish
-        sys.exit(publish.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        from atlas.cli.commands import init
-        sys.exit(init.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "tier":
-        from atlas.cli.commands import tier
-        sys.exit(tier.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "tui":
-        from atlas.cli.commands import tui
-        sys.exit(tui.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "model":
-        from atlas.cli.commands import model
-        sys.exit(model.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "lens":
-        from atlas.cli.commands import lens
-        sys.exit(lens.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "asa":
-        from atlas.cli.commands import asa
-        sys.exit(asa.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "onboard":
-        from atlas.cli.commands import onboard
-        sys.exit(onboard.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "bench":
-        from atlas.cli.commands import bench as bench_cmd
-        sys.exit(bench_cmd.main(sys.argv[2:]))
+    if len(sys.argv) > 1:
+        first = sys.argv[1]
+        known = {name for name, _ in _SUBCOMMAND_HELP}
+        if first in ("--help", "-h"):
+            _print_usage()
+            sys.exit(0)
+        if first in known:
+            sys.exit(_dispatch_subcommand(first, sys.argv[2:]))
+        if not first.startswith("-"):
+            print(f"atlas: unknown subcommand {first!r}\n", file=sys.stderr)
+            _print_usage(sys.stderr)
+            sys.exit(2)
 
     # Interactive default → TUI. Pipe mode (e.g. `echo "..." | atlas`) skips
     # the TUI and runs the built-in /solve flow so scripts and CI usage

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -234,6 +235,11 @@ func submitFeedback(proxyURL, sessionID, thumbs string, files []fileVerdict) (in
 		return 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return 0, fmt.Errorf("feedback returned %d: %s", resp.StatusCode,
+			strings.TrimSpace(string(b)))
+	}
 	var r struct {
 		Recorded int `json:"recorded"`
 	}
@@ -444,8 +450,9 @@ func loadBearerToken() string {
 	if err != nil {
 		return ""
 	}
-	// File shape (per `atlas init`): {"api_key": "..."} or
-	// {"keys": {"tui": "..."}}. Try both.
+	// File shapes: {"api_key": "..."}, {"keys": {"tui": "..."}}, or the
+	// `atlas init` shape {"sk-…": {"user": "local", …}} where each top-
+	// level key IS a token mapping to a metadata object. Try in order.
 	var single struct {
 		APIKey string `json:"api_key"`
 	}
@@ -458,6 +465,26 @@ func loadBearerToken() string {
 	if err := json.Unmarshal(data, &grouped); err == nil {
 		if v, ok := grouped.Keys["tui"]; ok && v != "" {
 			return v
+		}
+	}
+	// Token-keyed shape ({"sk-…": {"user": "local", …}}): accept only
+	// entries whose key looks like a token or whose value carries key
+	// metadata, so an unrelated object-of-objects (e.g. {"keys": {...}})
+	// is not mistaken for a token map. Use the lexicographically first
+	// qualifying token so repeated loads pick the same one.
+	var keyed map[string]map[string]interface{}
+	if err := json.Unmarshal(data, &keyed); err == nil && len(keyed) > 0 {
+		tokens := make([]string, 0, len(keyed))
+		for k, meta := range keyed {
+			_, hasUser := meta["user"]
+			_, hasCreatedBy := meta["created_by"]
+			if strings.HasPrefix(k, "sk-") || hasUser || hasCreatedBy {
+				tokens = append(tokens, k)
+			}
+		}
+		if len(tokens) > 0 {
+			sort.Strings(tokens)
+			return tokens[0]
 		}
 	}
 	return ""

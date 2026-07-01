@@ -36,11 +36,28 @@ spec:
         - {name: ATLAS_SANDBOX_URL,    value: "http://sandbox:${ATLAS_SANDBOX_PORT}"}
         - {name: ATLAS_V3_URL,         value: "http://v3-service:${ATLAS_V3_PORT}"}
         - {name: ATLAS_MODEL_NAME,     value: "${ATLAS_MAIN_MODEL}"}
+        # Context budget for conversation trimming (PC-216). Must match
+        # what llama-server actually runs with (llama-deployment.yaml.tmpl
+        # passes the same two values as CONTEXT_LENGTH / PARALLEL_SLOTS),
+        # or the proxy's per-slot token budget drifts from reality.
+        - {name: ATLAS_CTX_SIZE,       value: "${ATLAS_CONTEXT_LENGTH}"}
+        - {name: ATLAS_PARALLEL_SLOTS, value: "${ATLAS_PARALLEL_SLOTS}"}
         - {name: ATLAS_VERIFY_IN,      value: "sandbox"}
         - {name: ATLAS_WORKSPACE_DIR,  value: "/workspace"}
         volumeMounts:
         - name: workspace
           mountPath: /workspace
+        # Model files (read-only) — matches the compose mount; the proxy
+        # inspects GGUF metadata for model-aware behavior.
+        - name: models
+          mountPath: /models
+          readOnly: true
+        # Lens training-data corpus (per-file accept/deny + pass thumbs).
+        # Host path so `atlas lens retrain` on the node reads the same
+        # corpus the proxy writes. Matches the compose /data/lens_training
+        # mount.
+        - name: lens-training
+          mountPath: /data/lens_training
         readinessProbe:
           httpGet:
             path: /ready          # /ready is the strict probe (lens scoring degraded → 503).
@@ -67,6 +84,15 @@ spec:
       - name: workspace
         hostPath:
           path: ${ATLAS_PROJECTS_DIR}
+          type: DirectoryOrCreate
+      # Same node hostPath llama-server mounts (llama-deployment.yaml.tmpl).
+      - name: models
+        hostPath:
+          path: ${ATLAS_MODELS_DIR}
+          type: Directory
+      - name: lens-training
+        hostPath:
+          path: ${ATLAS_LENS_TRAINING_DIR}
           type: DirectoryOrCreate
 ---
 apiVersion: v1

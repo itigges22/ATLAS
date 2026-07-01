@@ -80,15 +80,14 @@ def _llama_url() -> str:
     """Resolve where llama-server is listening.
 
     Mirrors geometric-lens/embedding_extractor.py's resolution order so
-    `atlas lens check` agrees with what the lens service itself sees.
+    `atlas lens check` agrees with what the lens service itself sees,
+    then falls back to the Docker .env's port keys via compose config.
     """
-    return os.environ.get(
-        "ATLAS_LLAMA_URL",
-        os.environ.get(
-            "LLAMA_EMBED_URL",
-            os.environ.get("LLAMA_URL", "http://localhost:8080"),
-        ),
-    )
+    for key in ("ATLAS_LLAMA_URL", "LLAMA_EMBED_URL", "LLAMA_URL"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return compose_config.service_url("llama")
 
 
 @dataclass

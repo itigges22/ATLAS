@@ -51,7 +51,13 @@ Or, from a checkout:
 
 Other distros with `ID_LIKE` matching one of the above (e.g. Linux Mint, Pop!_OS) are accepted with a warning. Distros not in this list — Arch, openSUSE, Alpine, NixOS — aren't tested and the script will refuse to run on them.
 
-The bootstrap works around EPEL, firewalld, `vm.overcommit_memory` (PC-011), nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
+The bootstrap works around EPEL, `vm.overcommit_memory` (PC-011), nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
+
+**Model selection:** `.env.example` ships with no model selected. When the bootstrap creates `.env` and `ATLAS_MODEL_FILE` is empty, it writes the registry's default recommended model into `.env` (logged as it happens) so the one-shot flow completes without a wizard. Change the selection any time by editing `.env` or running `atlas init`. An existing non-empty selection is respected.
+
+**CPU-only / no-GPU hosts:** when no GPU vendor is detected, the bootstrap layers `docker-compose.vulkan.yml` on the base file so the stack boots via the Vulkan lavapipe CPU fallback. When `/dev/dri` is absent too (headless VMs, pure CPU boxes), it also layers `docker-compose.cpu.yml`, which strips the `/dev/dri` device requirement entirely. Inference works but is very slow.
+
+**Firewall:** the Compose stack publishes every service on `127.0.0.1` only, so local use needs no firewall change and the bootstrap leaves firewalld alone by default. Set `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` to open the service ports (8090, 8099, 8070, 30820) for deployments that rebind services to a routable interface.
 
 **Run modes — both work:**
 
@@ -72,11 +78,12 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 | Flag | Effect |
 |---|---|
 | `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | Don't install Docker (already managed) |
-| `ATLAS_BOOTSTRAP_SKIP_NVIDIA=1` | CPU-only install (no GPU steps) |
+| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | Skip the GPU runtime install (NVIDIA toolkit or ROCm setup). `ATLAS_BOOTSTRAP_SKIP_NVIDIA=1` is accepted as an alias. |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
 | `ATLAS_BOOTSTRAP_SKIP_SYSCTL=1` | Don't write `vm.overcommit_memory=1` (CI / unprivileged containers) |
-| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built ~5 min after services come up) |
+| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built ~5 min after services come up; skipped automatically when no GPU is available) |
+| `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` | Open the service ports in firewalld (default: off — services bind loopback) |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
@@ -101,7 +108,7 @@ If you'd rather do each step manually, use Method 1 below.
 | **GPU** | 16 GB+ VRAM. NVIDIA (CUDA) is the canonical path; AMD (ROCm) and Apple Silicon (Metal, macOS hybrid — see [SETUP_MACOS.md](SETUP_MACOS.md)) are both supported; Vulkan is the universal fallback; Intel Arc (SYCL) is roadmap. See [§ Supported GPUs](#supported-gpus). |
 | **GPU drivers** | NVIDIA: proprietary drivers (`nvidia-smi` should show your GPU). AMD: `amdgpu-dkms` kernel driver (`/dev/kfd` must exist; `rocm-smi` should show your GPU). |
 | **Python 3.9+** | With pip |
-| **wget** | For downloading model weights |
+| **curl** | For downloading model weights |
 | **Model weights** | A registry or BYO GGUF that fits the host. `atlas init` recommends one and writes the selection to `.env`. |
 
 ### Verify GPU
@@ -306,7 +313,7 @@ For Jetson, swap to `nvcr.io/nvidia/l4t-jetpack:r36.3.0` in both build args (l4t
 **Known gaps (#115 tracks these):**
 
 - No prebuilt arm64 images on GHCR yet — arm64 users must build locally with the recipes above. Prebuilt multi-arch images will land once at least one arm64 device has been validated end-to-end.
-- Bootstrap installer (`scripts/atlas-install.sh`) hasn't been audited for arm64 paths.
+- Bootstrap installer (`scripts/atlas-bootstrap.sh`) hasn't been audited for arm64 paths.
 - Hardware testing matrix is empty for all five target devices — early adopters with any of these please drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/itigges22/ATLAS/issues/115).
 
 ### What Happens on First Run
@@ -373,28 +380,31 @@ Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/
 
 ### Verify Installation
 
-The fastest way is **`atlas doctor`** — runs 22 checks across the host
-environment, the docker stack, and a live model inference, and returns
-exit 0 (healthy) / 1 (failures). This is also what `atlas-bootstrap.sh`
-runs at the end of install.
+The fastest way is **`atlas doctor`** — runs 23 checks across the host
+environment, the docker stack, and a live model inference, printing each
+result as it completes and returning exit 0 (healthy) / 1 (failures).
+This is also what `atlas-bootstrap.sh` runs at the end of install.
 
 ```bash
 atlas doctor              # full check (~5–10s)
 atlas doctor --quick      # skip the e2e model inference (~2s)
-atlas doctor --json       # machine output, for scripts/CI
+atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON document)
 atlas doctor -v           # verbose: show detail for each check
 ```
 
-The 22 checks (PC-053 base + later additions):
+The 23 checks (PC-053 base + later additions):
 
 | Group | Check | What it confirms |
 |---|---|---|
 | Host | docker | daemon reachable |
 | Host | compose | docker compose v2 installed |
-| Host | nvidia | nvidia-container-toolkit can run nvidia-smi inside Docker |
+| Host | arch | CPU architecture (`x86_64` / `aarch64`) and which backends are available on it (#115) — always runs, before the GPU check |
+| Host | gpu | vendor-aware GPU runtime: NVIDIA (nvidia-container-toolkit runs nvidia-smi inside Docker) or AMD (`/dev/kfd` passthrough); warns when no GPU is detected |
+| Host | vulkan | Vulkan ICDs visible inside Docker — only when `ATLAS_BACKEND=vulkan` |
+| Host | metal-native | native llama-server binary present and executable — only when `ATLAS_BACKEND=metal` (macOS hybrid) |
 | Host | vm.overcommit_memory | set to 1 (PC-011 — Redis AOF) |
 | Host | model_file | The `ATLAS_MODEL_FILE` selected in `.env` exists and is > 100 MB |
-| Host | lens_weights | `cost_field.pt` + `metric_tensor.pt` present |
+| Host | lens_weights | `cost_field.pt` + G(x) artifacts present |
 | Host | asa_steering | `ast_edit_steering.gguf` present (BiasBusters #4 — warn-not-fail; ATLAS works without it, just unsteered ast_edit-vs-edit_file bias) |
 | Host | tier_match | `.env` model selection matches host hardware (PC-055; warn on overshoot — OOM risk — pass on match or undershoot) |
 | Host | tier_constraints | host CPU/RAM/disk meets the recommended tier minimums (PC-055.1 — catches "16 GB GPU but 8 GB RAM" mismatches) |
@@ -402,6 +412,8 @@ The 22 checks (PC-053 base + later additions):
 | Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag (PC-052) |
 | End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
+
+The `vulkan` and `metal-native` rows are conditional on the configured backend; the 23-count is the always-run set (docker, compose, arch, gpu, 6 containers, 5 health endpoints, model_file, lens_weights, asa_steering, vm.overcommit_memory, image_skew, tier_match, tier_constraints, e2e_smoke).
 
 If you'd rather check by hand:
 

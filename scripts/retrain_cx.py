@@ -27,6 +27,41 @@ MODELS_DIR = os.path.join(ATLAS_DIR, "geometric-lens", "geometric_lens", "models
 DATA_DIR = os.path.join(ATLAS_DIR, "docs", "reports", "ablation", "condition_a")
 
 
+def _read_env_var(name: str) -> str:
+    """Read one variable from the repo Docker .env ("" when unavailable)."""
+    try:
+        envp = os.path.join(ATLAS_DIR, ".env")
+        if os.path.exists(envp):
+            with open(envp, encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export "):
+                        line = line[len("export "):].lstrip()
+                    if line.startswith(name + "="):
+                        value = line.split("=", 1)[1].lstrip()
+                        # Drop a whitespace-preceded inline comment.
+                        head, hash_sep, _ = value.partition("#")
+                        if hash_sep and head and head[-1] in " \t":
+                            value = head
+                        value = value.strip().strip('"').strip("'")
+                        if value:
+                            return value
+    except Exception:
+        # The compose .env is optional for this standalone helper.
+        pass
+    return ""
+
+
+def _lens_base_urls() -> list:
+    """Candidate lens-service base URLs: Docker .env port (default 8099)
+    first, then the K3s NodePort fallback."""
+    port = _read_env_var("ATLAS_LENS_PORT") or "8099"
+    urls = [f"http://localhost:{port}"]
+    if port != "31144":
+        urls.append("http://localhost:31144")
+    return urls
+
+
 def get_loaded_model_name() -> str:
     """Return llama-server's loaded model id for artifact provenance."""
     try:
@@ -332,6 +367,10 @@ def main():
     start = time.time()
     embeddings, labels = embed_samples(samples)
     elapsed = time.time() - start
+    if not embeddings:
+        print(f"  ERROR: no embeddings were harvested — is llama-server "
+              f"reachable at {LLAMA_BASE_URL} with /embedding enabled?")
+        sys.exit(1)
     print(f"  Embedded {len(embeddings)} samples in {elapsed:.1f}s ({elapsed/len(embeddings):.2f}s/sample)")
     print(f"  Embedding dim: {len(embeddings[0])}")
 
@@ -393,16 +432,20 @@ def main():
         json.dump(stats, f, indent=2)
     print(f"  Saved stats to {stats_path}")
 
-    # Hot reload
+    # Hot reload — Docker .env port first (default 8099), K3s NodePort fallback
     print("\n  Attempting hot reload via Geometric Lens...")
-    try:
-        req = Request("http://localhost:31144/internal/lens/reload",
-                       method="POST",
-                       headers={"Content-Type": "application/json"})
-        with urlopen(req, timeout=5) as resp:
-            print(f"  Reload response: {resp.read().decode()}")
-    except Exception as e:
-        print(f"  Hot reload failed (manual restart needed): {e}")
+    for base in _lens_base_urls():
+        try:
+            req = Request(f"{base}/internal/lens/reload",
+                           method="POST",
+                           headers={"Content-Type": "application/json"})
+            with urlopen(req, timeout=10) as resp:
+                print(f"  Reload response ({base}): {resp.read().decode()}")
+            break
+        except Exception as e:
+            print(f"  Hot reload failed at {base}: {e}")
+    else:
+        print("  Hot reload not applied (manual restart needed)")
 
     print(f"\n{'=' * 60}")
     print(f"DONE! C(x) retrained: val_AUC={val_auc:.4f}")

@@ -14,7 +14,7 @@ import (
 func TestCancelEndpointAbortsSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	activeSessions.Store("sess-abc", context.CancelFunc(cancel))
+	activeSessions.Store("sess-abc", &sessionCancel{cancel: cancel})
 
 	body, _ := json.Marshal(map[string]string{"session_id": "sess-abc"})
 	req := httptest.NewRequest("POST", "/cancel", bytes.NewReader(body))
@@ -41,6 +41,33 @@ func TestCancelEndpointAbortsSession(t *testing.T) {
 		// good
 	default:
 		t.Errorf("context not cancelled")
+	}
+}
+
+func TestSessionCleanupOnlyRemovesOwnEntry(t *testing.T) {
+	// Two turns racing on the same session_id: the second Store overwrites
+	// the first entry, so the first turn's CompareAndDelete must be a no-op
+	// and leave the second turn's cancel func registered.
+	first := &sessionCancel{cancel: func() {}}
+	second := &sessionCancel{cancel: func() {}}
+	activeSessions.Store("sess-dup", first)
+	activeSessions.Store("sess-dup", second)
+	defer activeSessions.Delete("sess-dup")
+
+	activeSessions.CompareAndDelete("sess-dup", first)
+
+	v, ok := activeSessions.Load("sess-dup")
+	if !ok {
+		t.Fatalf("second turn's entry was removed by the first turn's cleanup")
+	}
+	if v.(*sessionCancel) != second {
+		t.Errorf("registry holds wrong entry after first turn's cleanup")
+	}
+
+	// The owning turn's cleanup still removes its own entry.
+	activeSessions.CompareAndDelete("sess-dup", second)
+	if _, ok := activeSessions.Load("sess-dup"); ok {
+		t.Errorf("second turn's cleanup did not remove its own entry")
 	}
 }
 

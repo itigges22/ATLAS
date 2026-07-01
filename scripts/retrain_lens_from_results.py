@@ -25,8 +25,8 @@ RESULTS_DIR = os.environ.get(
     "RESULTS_DIR",
     "" + ATLAS_DIR + "/benchmark/results/v3_lcb/per_task",
 )
-def _default_llama_url() -> str:
-    """Docker .env host port (ATLAS_LLAMA_PORT) if present, else K3s NodePort."""
+def _read_env_var(name: str) -> str:
+    """Read one variable from the repo Docker .env ("" when unavailable)."""
     try:
         envp = os.path.join(ATLAS_DIR, ".env")
         if os.path.exists(envp):
@@ -35,21 +35,39 @@ def _default_llama_url() -> str:
                     line = line.strip()
                     if line.startswith("export "):
                         line = line[len("export "):].lstrip()
-                    if line.startswith("ATLAS_LLAMA_PORT="):
-                        port = line.split("=", 1)[1]
+                    if line.startswith(name + "="):
+                        value = line.split("=", 1)[1]
                         # Drop a whitespace-preceded inline comment.
-                        port = port.lstrip()
-                        head, hash_sep, _ = port.partition("#")
+                        value = value.lstrip()
+                        head, hash_sep, _ = value.partition("#")
                         if hash_sep and head and head[-1] in " \t":
-                            port = head
-                        port = port.strip().strip('"').strip("'")
-                        if port:
-                            return f"http://localhost:{port}"
+                            value = head
+                        value = value.strip().strip('"').strip("'")
+                        if value:
+                            return value
     except Exception:
-        # The compose .env is optional for this standalone helper; retain the
-        # historical localhost fallback when it cannot be read.
+        # The compose .env is optional for this standalone helper; callers
+        # fall back to their historical defaults when it cannot be read.
         pass
+    return ""
+
+
+def _default_llama_url() -> str:
+    """Docker .env host port (ATLAS_LLAMA_PORT) if present, else K3s NodePort."""
+    port = _read_env_var("ATLAS_LLAMA_PORT")
+    if port:
+        return f"http://localhost:{port}"
     return "http://localhost:32735"
+
+
+def _lens_base_urls() -> list:
+    """Candidate lens-service base URLs: Docker .env port (default 8099)
+    first, then the K3s NodePort fallback."""
+    port = _read_env_var("ATLAS_LENS_PORT") or "8099"
+    urls = [f"http://localhost:{port}"]
+    if port != "31144":
+        urls.append("http://localhost:31144")
+    return urls
 
 
 LLAMA_URL = os.environ.get("LLAMA_URL", _default_llama_url())
@@ -63,8 +81,9 @@ MAX_TASKS = int(os.environ.get("MAX_TASKS", "0"))  # 0 = all
 def get_embedding(text: str, url: str) -> list:
     """Get embedding vector from llama-server /embedding endpoint.
 
-    Response format: [{"index": 0, "embedding": [[d0, d1, ...]]}]
-    May also be: {"embedding": [d0, d1, ...]} depending on server version.
+    Response format: [{"index": 0, "embedding": [[t0], [t1], ...]}]
+    (per-token) or {"embedding": [d0, d1, ...]} (pooled) depending on
+    server pooling mode/version.
     """
     body = json.dumps({"content": text}).encode("utf-8")
     req = urllib.request.Request(
@@ -83,9 +102,21 @@ def get_embedding(text: str, url: str) -> list:
     else:
         return []
 
-    # Unwrap nested list: [[d0, d1, ...]] -> [d0, d1, ...]
+    # Per-token response: mean-pool across token rows, matching what
+    # geometric_lens.embedding_extractor.extract_embedding feeds the lens
+    # at serve time. (Taking only the first token's row would train C(x)
+    # on a different representation than it scores.)
     if emb and isinstance(emb[0], list):
-        emb = emb[0]
+        per_token = emb
+        dim = len(per_token[0])
+        pooled = [0.0] * dim
+        for tok_emb in per_token:
+            for i, v in enumerate(tok_emb):
+                pooled[i] += v
+        n_tokens = len(per_token)
+        for i in range(dim):
+            pooled[i] /= n_tokens
+        emb = pooled
     return emb
 
 
@@ -130,6 +161,26 @@ def harvest_embeddings(codes: list, url: str) -> tuple:
         if (i + 1) % 50 == 0 or i == total - 1:
             print(f"  [{i+1}/{total}] dim={len(emb) if emb else '?'}")
     return embeddings, kept_indices
+
+
+def request_lens_reload() -> bool:
+    """POST /internal/lens/reload so the running service picks up new weights."""
+    for base in _lens_base_urls():
+        try:
+            req = urllib.request.Request(
+                f"{base}/internal/lens/reload",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                print(f"   Lens reload via {base}: "
+                      f"{resp.read().decode('utf-8')[:200]}")
+            return True
+        except Exception as e:
+            print(f"   Lens reload failed at {base}: {e}")
+    print("   Lens reload not applied — POST /internal/lens/reload manually "
+          "or restart the geometric-lens service")
+    return False
 
 
 def main():
@@ -218,6 +269,29 @@ def main():
     print(f"   Pass energy:  {result.get('pass_energy_mean', 0):.4f}")
     print(f"   Fail energy:  {result.get('fail_energy_mean', 0):.4f}")
     print(f"   Model saved:  {args.save_path}")
+
+    if result.get("skipped", False):
+        print("   Retrain was skipped (not enough per-class samples) — "
+              "calibration and reload skipped too")
+        print("=" * 60)
+        return
+
+    # Refresh the per-model C(x) calibration beside the new weights so
+    # normalized scores track the retrained energy distribution.
+    print(f"\n6. Refreshing C(x) calibration + hot-reloading the lens service")
+    from geometric_lens.calibration import (
+        derive_cx_normalization, save_cx_normalization,
+    )
+    try:
+        calibration = derive_cx_normalization(
+            result["pass_energy_mean"], result["fail_energy_mean"])
+        calib_path = save_cx_normalization(
+            os.path.dirname(args.save_path) or ".", calibration)
+        print(f"   Calibration saved: {calib_path}")
+    except ValueError as e:
+        print(f"   WARNING: calibration not refreshed: {e}")
+
+    request_lens_reload()
     print("=" * 60)
 
 

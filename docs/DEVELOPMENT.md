@@ -91,7 +91,7 @@ ports (the defaults work because each upstream service publishes its
 port to localhost):
 
 ```bash
-cd atlas-proxy
+cd proxy
 ATLAS_PROXY_PORT=8090 \
 ATLAS_INFERENCE_URL=http://localhost:8080 \
 ATLAS_LLAMA_URL=http://localhost:8080 \

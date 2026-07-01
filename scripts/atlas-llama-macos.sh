@@ -94,8 +94,14 @@ if [[ ! -x "$LLAMA_SERVER" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Resolve the runtime knobs. Mirrors inference/entrypoint-v3.1.sh
-# defaults so behavior matches the Docker path.
+# Resolve the runtime knobs. These fallback defaults are deliberately
+# SMALLER than the Linux/Docker path (ctx 32768 vs 131072, quantized
+# q8_0/q4_0 KV cache vs f16/f16, 1 parallel slot vs 4) to stay within the
+# unified-memory budget of a typical Mac — the f16/131072/4 Docker defaults
+# roughly 10x the KV-cache footprint and can fail to allocate on smaller
+# machines. A real install never hits these fallbacks: `atlas init` / `atlas
+# tier fit --write` write the model- and hardware-sized values into .env,
+# which the loader above imports and which take precedence here.
 # ---------------------------------------------------------------------------
 
 CTX_LENGTH="${ATLAS_CTX_SIZE:-${CONTEXT_LENGTH:-32768}}"

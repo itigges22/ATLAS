@@ -1,6 +1,9 @@
 """Compose lifecycle tests for the interactive CLI."""
 
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from atlas.cli import repl
 
@@ -137,3 +140,56 @@ def test_compose_proxy_rebuild_uses_checkout_source_and_overlay(monkeypatch, tmp
     assert "--build" in command
     assert command[-1] == "atlas-proxy"
     assert kwargs["env"]["ATLAS_PROJECT_DIR"] == str(tmp_path / "project")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand dispatch: unknown names, --help, and `atlas compose`
+# ---------------------------------------------------------------------------
+
+def test_unknown_subcommand_prints_usage_and_exits_2(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["atlas", "bogus-subcommand"])
+    with pytest.raises(SystemExit) as exc:
+        repl.run()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "unknown subcommand" in err
+    assert "doctor" in err and "compose" in err  # usage list
+
+
+def test_help_flag_prints_usage_and_exits_0(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["atlas", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        repl.run()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "usage: atlas" in out
+    for name in ("init", "doctor", "model", "onboard", "compose"):
+        assert name in out
+
+
+def test_compose_subcommand_passes_through_to_docker_compose(
+        monkeypatch, tmp_path):
+    root = _metal_root(tmp_path)
+    calls = []
+
+    monkeypatch.setattr(repl.compose_config, "find_atlas_root", lambda: root)
+    monkeypatch.setattr(repl.subprocess, "call",
+                        lambda cmd, **kwargs: calls.append(cmd) or 0)
+    monkeypatch.setattr(sys, "argv", ["atlas", "compose", "ps"])
+    with pytest.raises(SystemExit) as exc:
+        repl.run()
+    assert exc.value.code == 0
+    assert calls[0][:2] == ["docker", "compose"]
+    # The metal backend's overlay set is honored, args pass through.
+    assert "docker-compose.macos.yml" in calls[0]
+    assert calls[0][-1] == "ps"
+
+
+def test_compose_subcommand_requires_checkout(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(repl.compose_config, "find_atlas_root",
+                        lambda: str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["atlas", "compose", "ps"])
+    with pytest.raises(SystemExit) as exc:
+        repl.run()
+    assert exc.value.code == 1
+    assert "docker-compose.yml" in capsys.readouterr().err

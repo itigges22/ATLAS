@@ -995,8 +995,7 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
         return 1
     _safe_print("  Apply these settings: edit .env to set the values "
                 "shown above.")
-    _safe_print(f"  Or run: {CYAN if color else ''}atlas wizard{RESET if color else ''}"
-                f"  (when PC-054 lands).")
+    _safe_print(f"  Or run: {CYAN if color else ''}atlas init{RESET if color else ''}.")
     # Exit non-zero on constraint failure so scripts (bootstrap, CI) can
     # gate on it. Warnings stay exit 0 — they're actionable, not fatal.
     overall = overall_status(evaluate_constraints(p, t))

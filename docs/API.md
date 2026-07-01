@@ -30,15 +30,17 @@ There are three primary endpoints for building a client:
 | `/cancel` | POST | Abort an in-flight `/v1/agent` turn by `session_id` |
 | `/events` | GET | Subscribe to a global typed-envelope event broker (PC-061) — same events the TUI's pipeline pane uses |
 | `/v1/calibration/status` | GET | Lens + ASA compat verdict for the loaded model — what the TUI's Pipeline pane badge reads on startup (PC-059) |
+| `/feedback` | POST | Record a pass's human verdict (per-file accept/deny and/or pass-level thumbs) as weighted lens training samples |
+| `/v1/lens/training-status` | GET | Collected lens-sample counts for the loaded model plus a retrain-available flag |
 
-Plus three legacy / utility endpoints:
+Plus the OpenAI-compat and utility endpoints:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/v1/chat/completions` | POST | OpenAI-compatible chat completions (legacy, kept for SDK compatibility) |
+| `/v1/chat/completions` | POST | OpenAI-compatible chat completions — a direct passthrough to llama-server for SDK compatibility |
 | `/v1/models` | GET | List available models (OpenAI-compatible) |
-| `/health` | GET | Liveness + counters |
-| `/ready` | GET | Readiness probe — flips to 503 when lens scoring is degraded (lens weights missing, embedding-dim mismatch, etc — see PC-019). Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
+| `/health` | GET | Liveness + counters — always 200, `status` reports `"ok"` or `"degraded"` |
+| `/ready` | GET | Readiness probe — 200 only when inference, lens scoring (`lens/ready`), the sandbox, and v3-service are all healthy; 503 otherwise. Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
 
 ---
 
@@ -61,7 +63,8 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 | `message` | string | (required) | The user's request |
 | `working_dir` | string | `"."` | Host-side working directory. Inside the proxy container this is overridden to `ATLAS_WORKSPACE_DIR` (the bind-mount target — `/workspace` by default). The startup wrapper aligns the bind mount to the user's cwd, so writes land in the right place. |
 | `mode` | string | `"default"` | Permission mode: `"default"` (prompt for destructive ops), `"accept-edits"` (auto-approve write/edit, prompt for delete/run), `"yolo"` (auto-approve everything) |
-| `session_id` | string | `""` | Optional. Required if the client wants to be able to call `/cancel`. The proxy stores a `context.CancelFunc` keyed by this id while the turn is running. |
+| `session_id` | string | `""` | Optional. Required if the client wants to be able to call `/cancel`. The proxy stores a cancel handle keyed by this id while the turn is running. |
+| `history` | array | `[]` | Optional. Prior-turn `{role, content}` messages (`"user"` / `"assistant"`) the client wants replayed into the conversation before the new message. Capped at the most recent 40 entries. Omit for a single-turn request. |
 
 **Response:** `text/event-stream` of `data: {...}\n\n` lines. The proxy flushes a `: connected\n\n` SSE comment on connect so clients see HTTP/200 immediately, then emits typed events for the duration of the turn, terminated by `data: [DONE]\n\n`.
 
@@ -105,7 +108,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_plan` | Plan-pipeline progress (`plan_start`, `plan_candidate`, `plan_candidate_scored`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_selected`, `plan_failed`). Per-token `token`/`llm_start`/`llm_end` events are filtered out at the proxy. | `stage`, `detail`, `index` (int, per-candidate), `score` (float, on `_scored`/`_selected`), `revision` (int, set when fired during a revise) |
 | `plan_loaded` | A winning plan has been generated. Fires once after initial generation and again after each revision. Carries the full step list. | `steps` (array of `{id, action, target, why}`), `verify_step` (string id), `rationale` (string), `winning_score` (float), `revision` (int — 0 for initial plan, 1+ for revisions) |
 | `plan_adherence` | Emitted after each tool call, indicating whether the call satisfied an outstanding plan step. Off-plan calls (`matched=false`) accumulate into the off-streak counter that drives auto-revise. | On match: `matched=true`, `step_index`, `step_id`, `step_action`, `satisfied` (steps satisfied so far), `total`. On miss: `matched=false`, `tool`, `off_streak` (consecutive off-plan calls), `satisfied`, `total`. |
-| `plan_revise` | The off-streak crossed `planAutoReviseThreshold` (3) — a fresh plan is being generated. The next `plan_loaded` (with `revision>0`) supersedes the prior plan; `Satisfied` flags reset. | `reason` (string), `revision` (int, 1-indexed) |
+| `plan_revise` | The off-streak crossed `planAutoReviseThreshold` (5) — a fresh plan is being generated. The next `plan_loaded` (with `revision>0`) supersedes the prior plan; `Satisfied` flags reset. | `reason` (string), `revision` (int, 1-indexed) |
 | `done` | Agent loop ended cleanly | `summary` (string — empty for a `text`-shaped turn) |
 | `error` | LLM/parse/turn-cap error | `error` (string) |
 
@@ -216,6 +219,8 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
     "cost_field_dim": 4096,
     "embed_dim": 4096,
     "gx_loaded": true,
+    "cx_calibrated": true,
+    "gx_calibrated": true,
     "hint": "ready"
   },
   "asa": {
@@ -227,10 +232,12 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
 }
 ```
 
+`cost_field_dim` / `embed_dim` reflect the loaded model's hidden dimension — the values differ per model.
+
 **Verdict values:**
 
-- **Lens:** `supported` | `no-artifacts` | `dim-mismatch` | `unreachable`
-- **ASA:** `supported` | `missing` | `unverified` (V3.1.2 will add `dim-mismatch` once PC-061 deepens the probe)
+- **Lens:** `supported` | `no-artifacts` | `incomplete-artifacts` | `uncalibrated` | `dim-mismatch` | `unreachable`. `incomplete-artifacts` means C(x) loaded but G(x) artifacts are missing; `uncalibrated` means weights loaded without the model's calibration files (`cx_normalization.json` / `gx_thresholds.json`) — both point at `atlas lens build`.
+- **ASA:** `supported` | `missing` | `unverified` | `incompatible`. `incompatible` means the control vector on disk is marked for a different model than the one selected.
 
 **Use:**
 
@@ -242,11 +249,66 @@ curl http://localhost:8090/v1/calibration/status | jq .
 
 ---
 
+### POST /feedback
+
+Records a human verdict on the most recent pass for a session as weighted lens training samples (`proxy/lens_samples.go`). The TUI's `/good`, `/bad`, and per-file accept/deny review flow post here. Per-file verdicts take precedence; when a file carries no verdict, the pass-level thumbs labels it coarsely (with lower weight). A denial is recorded as a confident negative regardless of the pass thumbs.
+
+**Request:**
+```json
+{
+  "session_id": "tui-7f3a2c1b",
+  "thumbs": "up",
+  "files": [
+    {"path": "app.py", "verdict": "accept"},
+    {"path": "utils.py", "verdict": "deny"}
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | string | The session whose pending pass is being rated. One pending pass per session — rating consumes it. |
+| `thumbs` | string | `"up"` \| `"down"` \| `""` — pass-level verdict, applied to files without a per-file verdict |
+| `files[].verdict` | string | `"accept"` \| `"deny"` — per-file verdict (review mode) |
+
+**Response (200):**
+```json
+{"recorded": 2, "good": 143, "bad": 27}
+```
+
+When there is no pending pass for the session, the response is `{"recorded": 0, "note": "no pending pass for that session"}`. Samples land in the per-model training corpus that `atlas lens retrain` consumes.
+
+---
+
+### GET /v1/lens/training-status
+
+Reports the collected-sample counts for the loaded model and whether a retrain is worth offering. The TUI polls this to show the "retrain available" banner.
+
+```bash
+curl http://localhost:8090/v1/lens/training-status
+```
+
+```json
+{
+  "model": "local-model",
+  "good": 1650,
+  "bad": 420,
+  "total": 2070,
+  "threshold": 2000,
+  "retrain_available": true,
+  "command": "atlas lens retrain"
+}
+```
+
+`retrain_available` is true when `total >= threshold` **and** the minority class holds at least 25% of the threshold (so the corpus isn't all-positive or all-negative). The threshold defaults to 2000 and is overridable via `ATLAS_LENS_RETRAIN_MIN`.
+
+---
+
 ### POST /v1/chat/completions (passthrough)
 
-OpenAI-compatible chat completions. Predates `/v1/agent` and is kept for SDK compatibility. The proxy passes these requests through to llama-server unchanged — **no agent loop, no tool calls, no V3 pipeline runs on this endpoint**. The response shape and streaming format is whatever llama-server returns natively.
+OpenAI-compatible chat completions, kept for SDK compatibility. The proxy passes these requests through to llama-server unchanged — **no agent loop, no tool calls, no V3 pipeline runs on this endpoint**. The response shape and streaming format is whatever llama-server returns natively.
 
-**For agent turns and tool calls, use `/v1/agent`.** It exposes the full structured event stream (tool calls, V3 progress, permission requests) — all features that used to live on `/v1/chat/completions` were moved there when the legacy Aider-format wrapping was retired.
+**For agent turns and tool calls, use `/v1/agent`.** It carries the full structured event stream (tool calls, V3 progress, permission requests).
 
 **Request:**
 ```json
@@ -255,38 +317,15 @@ OpenAI-compatible chat completions. Predates `/v1/agent` and is kept for SDK com
   "messages": [
     {"role": "user", "content": "Create a Python hello world script"}
   ],
-  "max_tokens": 32768,
+  "max_tokens": 4096,
   "temperature": 0.3,
   "stream": true
 }
 ```
 
-**Response (SSE stream when `stream: true`):**
-```
-data: {"id":"atlas-verify","object":"chat.completion.chunk","choices":[{"delta":{"content":"[Turn 1/30] writing hello.py..."}}]}
-data: {"id":"atlas-verify","object":"chat.completion.chunk","choices":[{"delta":{"content":"hello.py\n```python\nprint('hello world')\n```"}}]}
-data: [DONE]
-```
+**Response:** llama-server's native OpenAI-compatible shape — `chat.completion.chunk` SSE deltas when `stream: true`, a single `chat.completion` object otherwise. The proxy adds nothing to the payload.
 
-**Response (non-streaming when `stream: false`):**
-```json
-{
-  "id": "atlas-verify",
-  "object": "chat.completion",
-  "model": "local-model",
-  "choices": [{"index": 0, "message": {"role": "assistant", "content": "..."}, "finish_reason": "stop"}],
-  "usage": {"prompt_tokens": 150, "completion_tokens": 200, "total_tokens": 350},
-  "atlas_route": "standard",
-  "atlas_gx_score": 0.85,
-  "atlas_verdict": "likely_correct",
-  "atlas_sandbox_passed": true,
-  "atlas_repair_attempt": 0
-}
-```
-
-The `atlas_*` fields are ATLAS-specific metadata attached to non-streaming responses, omitted when empty.
-
-> **Note:** `/chat/completions` and `/models` (no `/v1/` prefix) are aliases. Any unmatched path is proxied directly to llama-server.
+> **Note:** `/models` (no `/v1/` prefix) is an alias for `/v1/models`. Any unmatched path is proxied directly to llama-server.
 
 ---
 
@@ -297,10 +336,12 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | Tool | Purpose |
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
+| `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Cheaper than `read_file` for orienting in a large file. |
 | `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go:557-568`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). PC-201 exempts corrupted-looking files (prose preamble, stray markdown fences) so a self-heal full-replace is allowed there. |
 | `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. The wrong tool for >10 lines of change — switch to `ast_edit`. |
 | `ast_edit` | GH #39 — surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. |
-| `delete_file` | Remove a file from the workspace |
+| `delete_file` | Remove a file (or an empty directory) from the workspace |
+| `move_file` | Rename/move a file within the workspace (`source` → `destination`) |
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
 | `find_file` | Regex search by file **name** or relative path. Use to check whether a file exists. (PC-028) |
 | `list_directory` | List files and subdirectories at a given path |
@@ -309,6 +350,10 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `tail_background` | PC-196 — fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
 | `stop_background` | PC-196 — terminate a backgrounded job by `job_id`. |
 | `plan_tasks` | Decompose work into parallel tasks with dependencies |
+
+**Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`proxy/workspace.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
+
+**Write deny-list.** A safety deny-list applies in every permission mode, including `yolo` (`proxy/permissions.go`): `write_file`/`edit_file` targets matching `.env`, `*.pem`, `*.key`, or `*credentials*` are refused, as are `run_command` invocations matching destructive patterns (`rm -rf /`, `mkfs*`, `dd if=... of=/dev/...`).
 
 ---
 
@@ -331,11 +376,33 @@ curl http://localhost:8090/health
   "status": "ok",
   "inference": true,
   "lens": true,
+  "lens_ready": true,
   "sandbox": true,
   "port": "8090",
+  "capabilities": ["demo_raw_completion_v1"],
   "stats": {"requests": 42, "repairs": 3, "sandbox_passes": 38, "sandbox_fails": 4}
 }
 ```
+
+Always returns 200. `status` is `"ok"` when inference, the lens (`/health` and `/ready`), and the sandbox all respond healthy, `"degraded"` otherwise. `lens` reflects the lens service's informational `/health`; `lens_ready` reflects its pass/fail `/ready` gate. `capabilities` advertises optional proxy features clients can probe for.
+
+### GET /ready
+
+```bash
+curl http://localhost:8090/ready
+```
+
+```json
+{
+  "ready": true,
+  "inference": true,
+  "lens_ready": true,
+  "sandbox": true,
+  "v3": true
+}
+```
+
+Returns 200 only when **all** gates pass: llama-server `/health`, geometric-lens `/ready` (503s when scoring is degraded — lens weights missing, embedding-dim mismatch, see PC-019), sandbox `/health`, and v3-service `/health` (checked whenever a V3 URL is configured). 503 with the same body otherwise.
 
 ---
 
@@ -616,8 +683,10 @@ curl http://localhost:8099/internal/lens/gx-score \
 
 ```bash
 curl http://localhost:8099/health
-# {"status": "healthy", "service": "geometric-lens"}
+# {"service": "geometric-lens", "status": "healthy", "subsystems": {"redis": {...}, "llama_server": {...}, "lens": {...}}}
 ```
+
+Always returns 200 — the endpoint is informational. `status` is `"healthy"` or `"degraded"`; the `subsystems.lens` block carries `cost_field_loaded`, `cost_field_dim`, `embed_dim`, `gx_loaded`, `cx_calibrated`, `gx_calibrated`, and the self-test result the proxy's `/v1/calibration/status` verdict is derived from.
 
 ### GET /ready
 
@@ -653,8 +722,8 @@ These are used internally by other ATLAS services. They are stable but not part 
 | `/internal/lens/stats` | GET | Lens model statistics |
 | `/internal/lens/evaluate` | GET/POST | Evaluate text through Lens |
 | `/internal/lens/score-text` | POST | Score text (C(x) only) |
-| `/internal/lens/retrain` | POST | Retrain cost field model |
-| `/internal/lens/reload` | POST | Reload model weights |
+| `/internal/lens/retrain` | POST | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
+| `/internal/lens/reload` | POST | Reload model weights (refreshes the `/ready` state) |
 | `/internal/lens/correctability` | POST | Correctability evaluation |
 | `/internal/lens/score-per-step` | POST | PC-207 lens-as-PRM: per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires PC-202 patch on llama-server). |
 | `/internal/sandbox/analyze` | POST | Sandbox result analysis |
@@ -728,7 +797,7 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
 |-------|------|---------|-------------|
 | `command` | string | (required) | Shell command run via `bash -c`. |
 | `cwd` | string | `/workspace` | Absolute path inside the container. **Must be under `/workspace`** — `/etc`, `/`, etc. are rejected with HTTP 400. The path must already exist (no auto-mkdir). |
-| `timeout` | int | 30 | Max execution time in seconds. Capped at `MAX_EXECUTION_TIME` (60s default, env-overridable). |
+| `timeout` | int | 30 | Max execution time in seconds. Capped at `MAX_EXECUTION_TIME` (60s in-code default; the Compose stack sets it to 300 via `ATLAS_SANDBOX_MAX_EXECUTION_TIME`, matching the proxy's `run_command` cap). |
 | `env` | object | null | Extra env vars merged on top of the container's environment. |
 
 **Response:**
@@ -768,8 +837,9 @@ Execute code in an isolated environment.
 | `language` | string | `"python"` | Target language (see supported list below) |
 | `test_code` | string | null | Optional test code (e.g. pytest assertions) |
 | `requirements` | string[] | null | Python packages to pip install before execution |
-| `timeout` | int | 30 | Max execution time in seconds (capped at 60) |
-| `files` | object | null | Map of `relative-path → file-content` written into the workspace before execution. Use to ship multi-file project context (e.g. modules the candidate imports). Path traversal (`..`, absolute paths) is rejected. See PC-046. |
+| `timeout` | int | 30 | Max execution time in seconds (capped at `MAX_EXECUTION_TIME`) |
+| `files` | object | null | Map of `relative-path → file-content` written into the workspace before execution. Use to ship multi-file project context (e.g. modules the candidate imports). Path traversal (`..`, absolute paths, symlink components) is rejected. See PC-046. |
+| `stdin` | string | null | Optional standard input piped to the run step. When null the process inherits the server's stdin. |
 
 **Response:**
 ```json

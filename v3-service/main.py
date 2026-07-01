@@ -23,7 +23,7 @@ import uuid
 import urllib.error
 from pathlib import Path, PurePath
 from typing import Any, Dict, List, Optional, Tuple
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 # Force line-buffered stdout
 sys.stdout.reconfigure(line_buffering=True)
@@ -438,6 +438,12 @@ class LLMAdapter:
         raise RuntimeError("unreachable: _send loop must return or raise")
 
 
+class ClientDisconnected(Exception):
+    """SSE client went away mid-pipeline. Raised at phase boundaries in
+    V3PipelineService.run so a dead client doesn't keep burning GPU minutes;
+    the HTTP handlers catch it and stop without writing a response."""
+
+
 # --- Sandbox Adapter (calls sandbox /execute) ---------------------------------
 
 class SandboxAdapter:
@@ -467,7 +473,11 @@ class SandboxAdapter:
                 data=json.dumps(body).encode(),
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            # 45s client timeout: the sandbox's server-side budgets (syntax
+            # check + optional pip install + lint + the 15s run cap) can sum
+            # past 30s, and the old 20s read timeout gave up on executions
+            # the sandbox would still have completed.
+            with urllib.request.urlopen(req, timeout=45) as resp:
                 data = json.loads(resp.read())
                 return data.get("success", False), data.get("stdout", ""), data.get("stderr", "")
         except Exception as e:
@@ -1053,6 +1063,49 @@ def interactive_lint(code: str) -> Tuple[bool, str]:
 
 # --- V3 Pipeline Orchestrator ------------------------------------------------
 
+def _candidate_by_index(candidates: List[Dict[str, Any]], index: int) -> Optional[Dict[str, Any]]:
+    """Return the candidate dict whose original ``index`` field matches.
+
+    Selection modules (S*, lens) report winners by the candidate's original
+    index, but the ``passing`` list has been sorted and filtered — positional
+    indexing would pick the wrong candidate (or IndexError). Returns None
+    when no candidate carries that index.
+    """
+    return next((c for c in candidates if c.get("index") == index), None)
+
+
+def _make_self_test(code: str, tc) -> str:
+    """Build executable assertion code for a single test case.
+
+    Uses ast.literal_eval (safe — only parses Python literals) to convert
+    I/O string representations to actual values for comparison.
+    All code runs inside the sandboxed container.
+    """
+    inp = tc.input_str.strip()
+    exp = tc.expected_output.strip()
+    fn = re.search(r'^def (\w+)\(', code, re.MULTILINE)
+    if fn and 'input()' not in code:
+        name = fn.group(1)
+        return (code + "\nimport ast as _a\n"
+            + f"_i={repr(inp)}\n_e={repr(exp)}\n"
+            + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
+            + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
+            + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
+            + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n")
+    # exec the candidate from a string literal instead of splicing its lines
+    # under `try:` — per-line indenting corrupts multiline string literals
+    # inside the candidate. exec(..., globals()) keeps the namespace (and
+    # __name__) identical to the previous inline form.
+    return (
+        "import sys as _s,io as _o\n"
+        f"_s.stdin=_o.StringIO({repr(inp)})\n"
+        "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
+        f"_src={repr(code)}\n"
+        "try:\n    exec(compile(_src,'solution.py','exec'),globals())\nfinally:\n _s.stdout=_old\n"
+        f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
+        "print('SELF_TEST_PASS')\n")
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -1132,12 +1185,23 @@ class V3PipelineService:
             ev = {"stage": stage, "detail": detail, "t": time.time() - start}
             if data:
                 ev["data"] = data
-            events.append(ev)
+            # Token deltas stream live through the callback but are not
+            # stored: one dict per token would make the final `event: result`
+            # frame multi-MB on long generations.
+            if stage != "token":
+                events.append(ev)
             if progress_callback:
                 try:
                     progress_callback(stage, detail, **data)
                 except TypeError:
                     progress_callback(stage, detail)
+
+        def check_client():
+            """Abort at phase boundaries once the SSE client disconnects.
+            The handler sets `disconnected` on the callback when a write
+            hits BrokenPipeError; a dead client must not keep burning GPU."""
+            if getattr(progress_callback, "disconnected", False):
+                raise ClientDisconnected(f"client disconnected during task {task_id}")
 
         llm = LLMAdapter(progress_callback=emit)
         # PC-046: ship the user's other project files into the sandbox so
@@ -1211,33 +1275,6 @@ class V3PipelineService:
         else:
             emit("self_test_skip", "Interactive task — using compile smoke-test")
 
-        def _make_test(code, tc):
-            """Build executable assertion code for a single test case.
-
-            Uses ast.literal_eval (safe — only parses Python literals) to convert
-            I/O string representations to actual values for comparison.
-            All code runs inside the sandboxed container.
-            """
-            inp = tc.input_str.strip()
-            exp = tc.expected_output.strip()
-            fn = re.search(r'^def (\w+)\(', code, re.MULTILINE)
-            if fn and 'input()' not in code:
-                name = fn.group(1)
-                return (code + "\nimport ast as _a\n"
-                    + f"_i={repr(inp)}\n_e={repr(exp)}\n"
-                    + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
-                    + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
-                    + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
-                    + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n")
-            return (
-                "import sys as _s,io as _o\n"
-                f"_s.stdin=_o.StringIO({repr(inp)})\n"
-                "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
-                "try:\n" + "\n".join("    "+l for l in code.split("\n"))
-                + "\nfinally:\n _s.stdout=_old\n"
-                f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
-                "print('SELF_TEST_PASS')\n")
-
         def verified_sandbox(code, extra_test=""):
             """Sandbox + verification. Algorithmic tasks: I/O self-tests; interactive: compile smoke."""
             verification_evidence: List[Dict[str, Any]] = []
@@ -1300,7 +1337,7 @@ class V3PipelineService:
                 p, fails = 0, []
                 for i, tc in enumerate(self_tests.test_cases):
                     try:
-                        tc_code = _make_test(code, tc)
+                        tc_code = _make_self_test(code, tc)
                         tp, to, te = sandbox(tc_code)
                         if tp and "SELF_TEST_PASS" in to:
                             p += 1
@@ -1334,10 +1371,12 @@ class V3PipelineService:
             result["candidates_generated"] = 1
             result["total_time_ms"] = (time.time() - start) * 1000
             result["verification_evidence"] = probe_evidence
+            result["winning_score"] = probe_energy_norm
             result["events"] = events
             return result
 
         # ===== PHASE 2: ADAPTIVE K ALLOCATION =====
+        check_client()
         emit("phase2", "Allocating compute budget...")
         if probe_cx_calibrated:
             k, budget_tier = self.blend_asc.allocate(
@@ -1409,6 +1448,7 @@ class V3PipelineService:
             emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...",
                  slots=remaining_k)
             for idx in range(remaining_k):
+                check_client()
                 try:
                     perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
                     chatml = self.budget_forcing.format_chatml(perturbed, bf_tier)
@@ -1456,6 +1496,7 @@ class V3PipelineService:
 
         passing = []
         for c in candidates:
+            check_client()
             if c.get("passed"):
                 passing.append(c)
                 continue
@@ -1617,16 +1658,22 @@ class V3PipelineService:
                         task_id=task_id,
                     )
                     if tb_result.triggered and tb_result.winner_index >= 0:
-                        winner = passing[tb_result.winner_index]
-                        emit("s_star_winner", f"Winner: candidate {winner['index']}",
-                             index=winner["index"], energy=winner.get("energy_norm", 0.0))
-                        result["passed"] = True
-                        result["code"] = winner["code"]
-                        result["phase_solved"] = "phase1_sstar"
-                        result["total_time_ms"] = (time.time() - start) * 1000
-                        result["verification_evidence"] = winner.get("verification_evidence", [])
-                        result["events"] = events
-                        return result
+                        # winner_index is the candidate's ORIGINAL index, not a
+                        # position in the sorted/filtered `passing` list — match
+                        # by field like the lens path below. No match falls
+                        # through to lens selection.
+                        winner = _candidate_by_index(passing, tb_result.winner_index)
+                        if winner is not None:
+                            emit("s_star_winner", f"Winner: candidate {winner['index']}",
+                                 index=winner["index"], energy=winner.get("energy_norm", 0.0))
+                            result["passed"] = True
+                            result["code"] = winner["code"]
+                            result["phase_solved"] = "phase1_sstar"
+                            result["total_time_ms"] = (time.time() - start) * 1000
+                            result["verification_evidence"] = winner.get("verification_evidence", [])
+                            result["winning_score"] = winner.get("energy_norm", 0.0)
+                            result["events"] = events
+                            return result
                 except Exception as e:
                     emit("s_star_error", str(e)[:200])
 
@@ -1643,12 +1690,14 @@ class V3PipelineService:
                 result["code"] = selected.code
                 result["phase_solved"] = "phase1"
                 result["total_time_ms"] = (time.time() - start) * 1000
-                winner = next((c for c in passing if c.get("index") == selected.index), None)
+                winner = _candidate_by_index(passing, selected.index)
                 result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
+                result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
                 result["events"] = events
                 return result
 
         # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
+        check_client()
         emit("phase3", "All candidates failed — entering repair phase...",
              failing=len([c for c in candidates if not c.get("passed")]))
 
@@ -1745,6 +1794,7 @@ class V3PipelineService:
 
         # Strategy 2: Refinement Loop
         if failing:
+            check_client()
             emit("refinement", "Starting refinement loop...",
                  strategy="refinement", failing=len(failing))
             constraints = []  # from PlanSearch
@@ -1796,6 +1846,7 @@ class V3PipelineService:
 
         # Strategy 3: Derivation Chains
         if failing:
+            check_client()
             emit("derivation", "Attempting derivation chains...",
                  strategy="derivation", failing=len(failing))
             failure_context = "; ".join(
@@ -3062,7 +3113,11 @@ class V3Handler(BaseHTTPRequestHandler):
 
     def _handle_run(self):
         content_len = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_len))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid JSON body: {e}"})
+            return
 
         problem = body.get("problem", "")
         task_id = body.get("task_id", "cli")
@@ -3088,11 +3143,19 @@ class V3Handler(BaseHTTPRequestHandler):
                 try:
                     self.wfile.write(f"data: {event}\n\n".encode())
                     self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    # Client gone — flag it so pipeline.run aborts at the
+                    # next phase boundary instead of grinding on.
+                    emit_sse.disconnected = True
                 except Exception:
                     # best-effort: swallow on failure (caller continues)
                     pass
 
-            result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
+            try:
+                result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
+            except ClientDisconnected as e:
+                print(f"[run] pipeline aborted: {e}", flush=True)
+                return
             _post_pattern_outcome(problem, result)
 
             # Final result event
@@ -3128,7 +3191,11 @@ class V3Handler(BaseHTTPRequestHandler):
             total_time_ms: float
         """
         content_len = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_len))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid JSON body: {e}"})
+            return
 
         file_path = body.get("file_path", "")
         baseline_code = body.get("baseline_code", "")
@@ -3174,22 +3241,27 @@ class V3Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 # Also log for debugging
                 print(f"  [SSE] {stage}: {detail[:80]}", flush=True)
-            except BrokenPipeError:
-                # best-effort: swallow on failure (caller continues)
-                pass
+            except (BrokenPipeError, ConnectionResetError):
+                # Client gone — flag it so pipeline.run aborts at the
+                # next phase boundary instead of grinding on.
+                emit_progress.disconnected = True
             except Exception as e:
                 print(f"  [SSE ERROR] {e}", flush=True)
 
         # Run V3 pipeline with streaming progress
-        result = pipeline.run(
-            problem=problem,
-            task_id=f"gen-{Path(file_path).stem}",
-            progress_callback=emit_progress,
-            files=files,
-            file_path=file_path,  # PC-048: language-aware smoke check
-            build_command=build_command,
-            working_dir=working_dir or "/workspace",
-        )
+        try:
+            result = pipeline.run(
+                problem=problem,
+                task_id=f"gen-{Path(file_path).stem}",
+                progress_callback=emit_progress,
+                files=files,
+                file_path=file_path,  # PC-048: language-aware smoke check
+                build_command=build_command,
+                working_dir=working_dir or "/workspace",
+            )
+        except ClientDisconnected as e:
+            print(f"[generate] pipeline aborted: {e}", flush=True)
+            return
         _post_pattern_outcome(problem, result)
 
         # If baseline code was provided and pipeline didn't produce anything better,
@@ -3204,7 +3276,7 @@ class V3Handler(BaseHTTPRequestHandler):
             "passed": result.get("passed", False),
             "phase_solved": result.get("phase_solved", "none"),
             "candidates_tested": result.get("candidates_generated", 0),
-            "winning_score": 0.0,
+            "winning_score": result.get("winning_score", 0.0),
             "total_tokens": result.get("total_tokens", 0),
             "total_time_ms": result.get("total_time_ms", 0.0),
             "verification_evidence": result.get("verification_evidence", []),
@@ -3243,7 +3315,11 @@ class V3Handler(BaseHTTPRequestHandler):
             reasons: list[str]
         """
         content_len = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_len))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid JSON body: {e}"})
+            return
 
         user_message = body.get("user_message", "")
         working_dir = body.get("working_dir", "")
@@ -3628,7 +3704,13 @@ if __name__ == "__main__":
     print(f"  Geometric Lens: {LENS_URL}")
     print(f"  Sandbox: {SANDBOX_URL}")
 
-    server = HTTPServer(("0.0.0.0", PORT), V3Handler)
+    # ThreadingHTTPServer: a long pipeline call must not starve /health and
+    # the /internal/* endpoints. Shared state is thread-safe by construction:
+    # LLMAdapter._lock serializes the llama.cpp backend, pipeline components
+    # are read-only after __init__ (telemetry_dir=None so nothing appends),
+    # per-run state (events, candidates, adapters) is local to each request,
+    # and the graph package's FileGraphCache carries its own lock.
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), V3Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

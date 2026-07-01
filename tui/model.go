@@ -23,6 +23,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type envelopeMsg struct {
@@ -60,6 +61,10 @@ type chatMessage struct {
 	Meta string
 	// Success — only meaningful for tool rows. Drives the icon color.
 	Success bool
+	// Echo — the row mirrors raw slash/bash input for display only.
+	// buildChatHistory skips echo rows so they never reach /v1/agent
+	// as fake user turns.
+	Echo bool
 }
 
 type tuiModel struct {
@@ -496,6 +501,9 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 		if row.Body == "" {
 			continue
 		}
+		if row.Echo {
+			continue // slash/bash input echoes are display-only
+		}
 		var role, content string
 		switch row.Role {
 		case roleUser:
@@ -669,64 +677,68 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Enter sends; Shift+Enter (or Alt+Enter) inserts newline.
 			// textarea handles Shift+Enter as KeyShiftEnter ("shift+enter").
-			if !m.turnActive {
-				text := strings.TrimSpace(m.input.Value())
-				if text == "" {
+			if m.turnActive {
+				// Mid-turn Enter can't send — surface why instead of
+				// silently inserting a newline into the pending input.
+				m.showToast("turn in progress — Ctrl+C to cancel")
+				return m, nil
+			}
+			text := strings.TrimSpace(m.input.Value())
+			if text == "" {
+				return m, nil
+			}
+			m.input.Reset()
+			dlog("user", "input", map[string]interface{}{"text": text})
+			// Bash mode: leading "!" runs as a shell command in the
+			// working dir, output appears as a system row. Same path
+			// as /run but with the conversational shorthand devs
+			// expect from Claude Code.
+			if strings.HasPrefix(text, "!") {
+				cmdStr := strings.TrimSpace(text[1:])
+				if cmdStr == "" {
+					m.chat = append(m.chat, chatMessage{
+						Role: roleSystem, Meta: "error",
+						Body: "Bash mode: type ! followed by a command.",
+					})
 					return m, nil
 				}
-				m.input.Reset()
-				dlog("user", "input", map[string]interface{}{"text": text})
-				// Bash mode: leading "!" runs as a shell command in the
-				// working dir, output appears as a system row. Same path
-				// as /run but with the conversational shorthand devs
-				// expect from Claude Code.
-				if strings.HasPrefix(text, "!") {
-					cmdStr := strings.TrimSpace(text[1:])
-					if cmdStr == "" {
-						m.chat = append(m.chat, chatMessage{
-							Role: roleSystem, Meta: "error",
-							Body: "Bash mode: type ! followed by a command.",
-						})
-						return m, nil
-					}
-					m.chat = append(m.chat, chatMessage{
-						Role: roleUser, Body: "! " + cmdStr,
-					})
-					return m, runShellCmd(m.workingDir, "!"+cmdStr,
-						[]string{"bash", "-lc", cmdStr})
-				}
-				// "?" alone (or with trailing whitespace) is a shorthand
-				// for /help — same convention as Claude Code so users
-				// don't have to remember the slash form.
-				if text == "?" {
-					text = "/help"
-				}
-				// Slash commands intercepted before agent send.
-				if consumed, slashCmd, quit := m.handleSlash(text); consumed {
-					dlog("slash", "dispatched", map[string]interface{}{
-						"input": text, "quit": quit,
-					})
-					if quit {
-						m.quitting = true
-					}
-					if slashCmd != nil {
-						cmds = append(cmds, slashCmd)
-					}
-					return m, tea.Batch(cmds...)
-				}
-				// Plain message → send to agent. Append context-files
-				// hint so the agent knows the user's chosen scope.
 				m.chat = append(m.chat, chatMessage{
-					Role: roleUser, Body: text,
+					Role: roleUser, Body: "! " + cmdStr, Echo: true,
 				})
-				m.lastUserMsg = text
-				dlog("turn", "started", map[string]interface{}{
-					"session_id": "(set in sendChatCmd)",
-					"len":        len(text),
+				return m, runShellCmd(m.workingDir, "!"+cmdStr,
+					[]string{"bash", "-lc", cmdStr})
+			}
+			// "?" alone (or with trailing whitespace) is a shorthand
+			// for /help — same convention as Claude Code so users
+			// don't have to remember the slash form.
+			if text == "?" {
+				text = "/help"
+			}
+			// Slash commands intercepted before agent send.
+			if consumed, slashCmd, quit := m.handleSlash(text); consumed {
+				dlog("slash", "dispatched", map[string]interface{}{
+					"input": text, "quit": quit,
 				})
-				cmds = append(cmds, m.sendChatCmd(text+m.contextSuffix()))
+				if quit {
+					m.quitting = true
+				}
+				if slashCmd != nil {
+					cmds = append(cmds, slashCmd)
+				}
 				return m, tea.Batch(cmds...)
 			}
+			// Plain message → send to agent. Append context-files
+			// hint so the agent knows the user's chosen scope.
+			m.chat = append(m.chat, chatMessage{
+				Role: roleUser, Body: text,
+			})
+			m.lastUserMsg = text
+			dlog("turn", "started", map[string]interface{}{
+				"session_id": "(set in sendChatCmd)",
+				"len":        len(text),
+			})
+			cmds = append(cmds, m.sendChatCmd(text+m.contextSuffix()))
+			return m, tea.Batch(cmds...)
 		}
 
 	case tea.MouseMsg:
@@ -937,6 +949,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForChatEvent(m.chatEvents)
 
 	case slashResultMsg:
+		// Per-file verdicts are cleared only once /good or /bad actually
+		// landed — a failed submit keeps them staged for a retry.
+		if (msg.command == "/good" || msg.command == "/bad") && msg.err == nil {
+			m.passVerdicts = map[string]string{}
+			m.passReasons = map[string]string{}
+		}
 		body := msg.output
 		if msg.err != nil {
 			if body == "" {
@@ -1573,6 +1591,54 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// Reasoning repetition detector: the proxy saw the model open its
+	// reasoning stream with the same prefix on consecutive turns and
+	// queued a corrective for the next LLM call. Third member of the
+	// "model is stuck" family alongside the lens and tool-repeat
+	// interventions.
+	case "agent_reasoning_intervention":
+		body := formatAgentReasoningIntervention(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "repeat!", Body: body,
+			})
+		}
+
+	// Stream cut: the proxy detected the model's content repeating
+	// itself mid-stream and stopped the call rather than letting it
+	// spin to the token limit.
+	case "content_loop_cut":
+		var p struct {
+			Chars int `json:"chars"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "cut",
+			Body: fmt.Sprintf("content loop detected — stream cut after %d chars", p.Chars),
+		})
+
+	// Stream cut: the model burned its reasoning budget without ever
+	// emitting content, so the proxy stopped the call and re-prompts.
+	case "reasoning_budget_cut":
+		var p struct {
+			ReasoningChars int `json:"reasoning_chars"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "cut",
+			Body: fmt.Sprintf("reasoning budget exceeded (%d chars, no content) — stream cut, re-prompting", p.ReasoningChars),
+		})
+
+	// Symbol-index context: the proxy matched project symbols against
+	// the user's request and injected their snippets as a system note.
+	case "symbol_index_injected":
+		body := formatSymbolIndexInjected(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "symbols", Body: body,
+			})
+		}
+
 	// Plan pipeline progress (planner candidate generation, scoring,
 	// selection). Lots of these fire during a 3-candidate sweep but
 	// we already drop per-token noise in the proxy callback — what
@@ -1767,6 +1833,59 @@ func formatAgentRepeatIntervention(data json.RawMessage) string {
 	return fmt.Sprintf("REPEAT at turn %d on %s — %s", p.Turn, p.Tool, reasonPreview)
 }
 
+// formatAgentReasoningIntervention renders the agent_reasoning_intervention
+// event, which fires when the proxy saw the model's reasoning stream open
+// with the same normalized prefix on consecutive turns and queued a
+// corrective for the next LLM call. Reason is the verbose corrective;
+// trimmed for display like its sibling interventions.
+func formatAgentReasoningIntervention(data json.RawMessage) string {
+	var p struct {
+		Turn        int    `json:"turn"`
+		Consecutive int    `json:"consecutive"`
+		Reason      string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	reasonPreview := p.Reason
+	if len(reasonPreview) > 200 {
+		if cut := strings.Index(reasonPreview, ". "); cut > 0 && cut < 200 {
+			reasonPreview = reasonPreview[:cut+1]
+		} else {
+			reasonPreview = reasonPreview[:197] + "..."
+		}
+	}
+	return fmt.Sprintf("REASONING REPEAT at turn %d (×%d) — %s",
+		p.Turn, p.Consecutive, reasonPreview)
+}
+
+// formatSymbolIndexInjected renders the symbol_index_injected event —
+// the proxy matched project symbols against the request and prepended
+// their snippets as a system note before the first LLM call.
+func formatSymbolIndexInjected(data json.RawMessage) string {
+	var p struct {
+		Matched []string `json:"matched"`
+		NFiles  int      `json:"n_files"`
+		Skipped int      `json:"skipped"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	names := strings.Join(p.Matched, ", ")
+	if len(names) > 100 {
+		names = names[:97] + "..."
+	}
+	body := fmt.Sprintf("injected %d symbol snippet(s) from %d project file(s)",
+		len(p.Matched), p.NFiles)
+	if names != "" {
+		body += " — " + names
+	}
+	if p.Skipped > 0 {
+		body += fmt.Sprintf(" (%d skipped)", p.Skipped)
+	}
+	return body
+}
+
 // formatLensVeto renders a v3_lens_veto event as a single chat row.
 // Fires when V3 rejected a sandbox-passing candidate because gx_min sat
 // in the unambiguously-bad band — i.e. sandbox said "this code runs"
@@ -1899,9 +2018,9 @@ func extractPaneSelection(paneName string, startY, endY, startX, endX int) strin
 	// when there's less content than the pane height. The rendered pane
 	// has `padTop` blank rows BEFORE the real content, but `pane.lines`
 	// holds only the real content. So a click at screen Y maps to flat
-	// index `viewStart + (Y - paneTopY) - padTop`. Without the padTop
-	// subtraction, copies were offset by the number of pad rows — which
-	// is why the user saw "wrong text" copied for short panes.
+	// index `viewStart + (Y - paneTopY) - padTop`. The files pane pads
+	// at the BOTTOM instead (content top-anchored), so its padTop is 0
+	// and rows in the trailing padding clamp past the last line.
 	paneH := pane.bottomY - pane.topY + 1
 	visible := len(pane.lines) - pane.viewStart
 	if visible > paneH {
@@ -1911,6 +2030,9 @@ func extractPaneSelection(paneName string, startY, endY, startX, endX int) strin
 		visible = 0
 	}
 	padTop := paneH - visible
+	if pane.padBottom {
+		padTop = 0
+	}
 	rowStart := (startY - pane.topY) - padTop
 	rowEnd := (endY - pane.topY) - padTop
 	if rowStart < 0 {
@@ -2359,11 +2481,15 @@ var lastChatTotalRendered int
 //	            at screen Y maps to lines[viewStart + (Y - topY)].
 //	lines     — the full flattened pane content, pre-window. Already
 //	            ANSI-styled; consumers strip ANSI before clipboard.
+//	padBottom — content is top-anchored: blank pad rows render BELOW
+//	            it (files pane). All other panes pad above so the
+//	            newest entry stays anchored at the bottom.
 type paneSnapshot struct {
 	name                         string
 	topY, bottomY, leftX, rightX int
 	viewStart                    int
 	lines                        []string
+	padBottom                    bool
 }
 
 // paneSnaps holds the most recent layout's pane bounds. Single TUI
@@ -2433,7 +2559,7 @@ func formatEventLine(ev Envelope, width int) string {
 	line := fmt.Sprintf("%s  %s %s %s", ts, typeCell, stageCell, detail)
 	line = strings.ReplaceAll(line, "\n", " ")
 	if lipgloss.Width(line) > width {
-		line = line[:width]
+		line = ansi.Truncate(line, width, "")
 	}
 	return line
 }

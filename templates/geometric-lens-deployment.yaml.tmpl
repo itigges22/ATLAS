@@ -30,7 +30,10 @@ spec:
       - name: lens
         image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-lens:${ATLAS_IMAGE_TAG}
         ports:
-        - containerPort: ${ATLAS_LENS_PORT}
+        # The lens image's CMD pins uvicorn to 8099; ATLAS_LENS_PORT only
+        # moves the Service port. Pinning the container-side ports means
+        # changing the external var can't break the probes.
+        - containerPort: 8099
           name: http
         env:
         - {name: LLAMA_URL,              value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
@@ -45,7 +48,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /ready          # /ready is strict (PC-019); /health is informational.
-            port: ${ATLAS_LENS_PORT}
+            port: 8099
           initialDelaySeconds: 20
           periodSeconds: 10
           timeoutSeconds: 5
@@ -53,7 +56,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: ${ATLAS_LENS_PORT}
+            port: 8099
           initialDelaySeconds: 60
           periodSeconds: 30
         resources:
@@ -78,6 +81,6 @@ spec:
   selector: {app: geometric-lens}
   ports:
   - port: ${ATLAS_LENS_PORT}
-    targetPort: ${ATLAS_LENS_PORT}
+    targetPort: 8099            # fixed container port (see Deployment note)
     nodePort: ${ATLAS_LENS_NODEPORT}
     name: http

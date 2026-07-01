@@ -80,10 +80,16 @@ def _read_dotenv() -> Dict[str, str]:
                         if line and not line.startswith("#") and "=" in line:
                             k, v = line.split("=", 1)
                             # Drop a whitespace-preceded inline comment.
-                            v = v.lstrip()
-                            head, hash_sep, _ = v.partition("#")
-                            if hash_sep and head and head[-1] in " \t":
-                                v = head
+                            stripped = v.lstrip()
+                            if stripped.startswith("#") and stripped != v:
+                                # Empty value followed by an inline comment
+                                # ("KEY= # note") parses as empty.
+                                v = ""
+                            else:
+                                v = stripped
+                                head, hash_sep, _ = v.partition("#")
+                                if hash_sep and head and head[-1] in " \t":
+                                    v = head
                             out[k.strip()] = v.strip().strip('"').strip("'")
             except OSError:
                 # An unreadable optional .env is treated as absent; doctor
@@ -109,13 +115,14 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
 
-# Defaults — shell env first, then the compose .env. Model selection has no
-# vendor fallback: the installer must choose a concrete model explicitly.
-PROXY_URL    = os.environ.get("ATLAS_PROXY_URL",     "http://localhost:8090")
-LLAMA_URL    = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-LENS_URL     = os.environ.get("ATLAS_LENS_URL",      "http://localhost:8099")
-SANDBOX_URL  = os.environ.get("ATLAS_SANDBOX_URL",   "http://localhost:30820")
-V3_URL       = os.environ.get("ATLAS_V3_URL",        "http://localhost:8070")
+# Defaults — shell env first, then the compose .env's port keys. Model
+# selection has no vendor fallback: the installer must choose a concrete
+# model explicitly.
+PROXY_URL    = compose_config.service_url("proxy",   values=_ENV)
+LLAMA_URL    = compose_config.service_url("llama",   values=_ENV)
+LENS_URL     = compose_config.service_url("lens",    values=_ENV)
+SANDBOX_URL  = compose_config.service_url("sandbox", values=_ENV)
+V3_URL       = compose_config.service_url("v3",      values=_ENV)
 MODEL_DIR    = os.environ.get("ATLAS_MODELS_DIR")  or _ENV.get("ATLAS_MODELS_DIR", "./models")
 MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE")  or _ENV.get("ATLAS_MODEL_FILE", "")
 MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME")  or _ENV.get("ATLAS_MODEL_NAME", "local-model")
@@ -1054,7 +1061,8 @@ def _print_result(r: CheckResult, verbose: bool, color: bool) -> None:
             _safe_print(f"      {DIM if color else ''}{line}{RESET if color else ''}")
 
 
-def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool) -> int:
+def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool,
+          already_printed: bool = False) -> int:
     n_pass = sum(1 for r in results if r.status == "pass")
     n_warn = sum(1 for r in results if r.status == "warn")
     n_fail = sum(1 for r in results if r.status == "fail")
@@ -1077,8 +1085,9 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool) -> 
             sys.stdout.buffer.write(b"\n")
         return 1 if n_fail else 0
 
-    for r in results:
-        _print_result(r, args.verbose, color)
+    if not already_printed:
+        for r in results:
+            _print_result(r, args.verbose, color)
     _safe_print()
     parts = [f"{n_pass} passed"]
     if n_warn:
@@ -1133,28 +1142,36 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     results: List[CheckResult] = []
 
+    def _add(r: CheckResult) -> None:
+        """Record a result and, in human mode, print it immediately so a
+        long run (GPU image pulls, e2e smoke) shows progress as it goes.
+        JSON mode keeps buffering for one machine-readable document."""
+        results.append(r)
+        if not args.json:
+            _print_result(r, args.verbose, color)
+
     # 1. Docker
     docker = check_docker()
-    results.append(docker)
+    _add(docker)
     if docker.status == "fail":
         # Without docker, every subsequent check is meaningless.
-        results.append(CheckResult("compose", "skip",
+        _add(CheckResult("compose", "skip",
             "skipped (docker unreachable)"))
-        return _emit(results, args, color)
+        return _emit(results, args, color, already_printed=not args.json)
 
     # 2. Docker compose v2
-    results.append(check_compose())
+    _add(check_compose())
 
     # 2.5. CPU architecture (#115) — surface aarch64 + the backend
     # availability matrix for arm64 hosts before the GPU check, so
     # users see why rocm gets steered to vulkan on DGX Spark / Snapdragon
     # X Elite / Apple Silicon / Jetson / Pi 5.
-    results.append(check_arch())
+    _add(check_arch())
 
     # 3. GPU runtime — vendor-aware (NVIDIA: nvidia-container-toolkit;
     # AMD: /dev/kfd passthrough). Slow on first run since each vendor
     # branch pulls a small base image (~500 MB CUDA, ~2 GB ROCm).
-    results.append(check_gpu())
+    _add(check_gpu())
 
     # Resolve which backend the user has configured. Reads shell env
     # first, then .env in atlas_root. Without the .env fallback, the
@@ -1169,7 +1186,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # vulkan-tools step inside the check container would add ~30s for
     # no signal.
     if backend == "vulkan":
-        results.append(_check_vulkan_via_docker())
+        _add(_check_vulkan_via_docker())
 
     # 3.6. macOS hybrid path (#32) — verify native llama-server binary
     # exists at the setup-script's install prefix, is executable, and
@@ -1178,7 +1195,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Only fires when backend == metal so it's noise-free on
     # cuda/rocm/vulkan hosts.
     if backend == "metal":
-        results.append(_check_metal_native(atlas_root))
+        _add(_check_metal_native(atlas_root))
 
     # 4. Compose stack — pass atlas_root as cwd so compose finds
     # docker-compose.yml even when doctor is invoked from elsewhere
@@ -1189,51 +1206,53 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         start_hint = compose_config.format_command(atlas_root, ["up", "-d"])
     except FileNotFoundError as exc:
-        results.append(CheckResult("compose/backend", "fail", str(exc)))
+        _add(CheckResult("compose/backend", "fail", str(exc)))
         start_hint = "docker compose up -d"
     container_results = check_containers(services, start_hint=start_hint)
-    results.extend(container_results)
+    for item in container_results:
+        _add(item)
 
     # 6. Endpoint health (only if at least one container is running)
     if any(r.status == "pass" for r in container_results):
-        results.extend(check_health_endpoints())
+        for item in check_health_endpoints():
+            _add(item)
 
     # 7. Model file (host-side)
-    results.append(check_model_file(atlas_root))
+    _add(check_model_file(atlas_root))
 
     # 8. Lens weights (host-side)
-    results.append(check_lens_weights(atlas_root))
+    _add(check_lens_weights(atlas_root))
 
     # 8.5. ASA steering vector (BiasBusters #4 — warn-not-fail). Optional
     # but on by default when present; sits next to lens_weights since both
     # are host-side artifact checks.
-    results.append(check_asa_steering(atlas_root))
+    _add(check_asa_steering(atlas_root))
 
     # 9. vm.overcommit_memory (PC-011)
-    results.append(check_overcommit())
+    _add(check_overcommit())
 
     # 10. Image-tag skew (PC-052)
-    results.append(check_image_skew(services))
+    _add(check_image_skew(services))
 
     # 10.5. Tier match (PC-055) — soft cross-check that .env model
     # matches host hardware. Warn on overshoot (OOM risk), pass on
     # match or undershoot.
-    results.append(check_tier_match())
+    _add(check_tier_match())
 
     # 10.6. Tier constraints (PC-055.1) — does the host meet the
     # recommended tier's CPU/RAM/disk minimums? Catches "16 GB GPU
     # but 8 GB RAM" cases where llama fits but host OOMs under V3.
     # Pass atlas_root so disk check measures the right partition.
-    results.append(check_tier_constraints(atlas_root))
+    _add(check_tier_constraints(atlas_root))
 
     # 11. End-to-end smoke
     if args.quick:
-        results.append(CheckResult("e2e_smoke", "skip",
+        _add(CheckResult("e2e_smoke", "skip",
             "skipped (--quick)"))
     else:
-        results.append(check_e2e_smoke())
+        _add(check_e2e_smoke())
 
-    return _emit(results, args, color)
+    return _emit(results, args, color, already_printed=not args.json)
 
 
 if __name__ == "__main__":

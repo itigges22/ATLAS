@@ -64,7 +64,7 @@ podman save "$IMAGE_TAG" | sudo k3s ctr images import -
 echo "2. Updating ConfigMap with V3.1 entrypoint..."
 kubectl delete configmap llama-entrypoint -n atlas 2>/dev/null || true
 kubectl create configmap llama-entrypoint \
-    --from-file=entrypoint.sh=${ATLAS_DIR:-$(pwd)}/llama-server/entrypoint-v3.1-9b.sh \
+    --from-file=entrypoint.sh=${ATLAS_DIR:-$(pwd)}/inference/entrypoint-v3.1.sh \
     -n atlas
 
 echo "3. Building env list for backend=$ATLAS_BACKEND..."
@@ -72,9 +72,9 @@ echo "3. Building env list for backend=$ATLAS_BACKEND..."
 ENV_JSON='[
     {"name": "MODEL_PATH", "value": "/models/Qwen3.5-9B-Q6_K.gguf"},
     {"name": "CONTEXT_LENGTH", "value": "32768"},
-    {"name": "GPU_LAYERS", "value": "99"},
     {"name": "PARALLEL_SLOTS", "value": "2"},
-    {"name": "KV_CACHE_TYPE", "value": "q4_0"},
+    {"name": "KV_CACHE_TYPE_K", "value": "q4_0"},
+    {"name": "KV_CACHE_TYPE_V", "value": "q4_0"},
     {"name": "ATLAS_BACKEND", "value": "'"$ATLAS_BACKEND"'"}'
 
 # Backend-specific env vars. CUDA needs the 3 GGML/CUDA tuning knobs;

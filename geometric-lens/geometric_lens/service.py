@@ -9,10 +9,20 @@ Provides:
 
 import logging
 import os
+import threading
 import time
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Guards the mutable model globals below. reload_weights()/_ensure_models_loaded
+# mutate them as a set; scoring paths read them as a set. Both run concurrently
+# in FastAPI's threadpool (and the v3 ThreadingHTTPServer), so a hot reload can
+# otherwise null a global mid-scoring. Reentrant because the load path nests
+# (_ensure_models_loaded → reload_weights → _ensure_models_loaded). Held only
+# for the global read/swap — never across the torch/xgboost forward passes or
+# the embedding HTTP call.
+_weights_lock = threading.RLock()
 
 # Lazy-loaded models (CPU only)
 _cost_field = None
@@ -25,6 +35,12 @@ _models_loaded = False
 _load_attempted = False
 _artifact_model_identity = None
 _model_identity_error = ""
+
+# Cached llama-server /v1/models probe. The lens artifact must match the
+# model the server is actually serving, not just whatever ATLAS_MODEL_NAME
+# was exported at container start. Reset by reload_weights().
+_served_model_id = None
+_served_model_probed = False
 
 # C(x) energy scales are learned, not universal. The selected model's Lens
 # artifact must provide its own sigmoid calibration. Without one, raw energy is
@@ -42,14 +58,49 @@ _cx_normalization = None
 _gx_thresholds = None
 
 
-def _verify_model_identity(models_dir: str) -> bool:
-    """Require Lens artifacts to identify the selected runtime model."""
+def _probe_served_model() -> str:
+    """Return the model id llama-server is actually serving ("" if unknown).
+
+    Cheap by design: short timeout, one probe per load cycle (the result is
+    cached until reload_weights() resets it).
+    """
+    global _served_model_id, _served_model_probed
+    if _served_model_probed:
+        return _served_model_id or ""
+    _served_model_probed = True
+    _served_model_id = ""
+    base = os.environ.get("LLAMA_URL", "http://llama-server:8080").rstrip("/")
+    try:
+        import json as _json
+        from urllib.request import urlopen
+        with urlopen(f"{base}/v1/models", timeout=2.0) as resp:
+            data = _json.loads(resp.read())
+        models = data.get("data", []) if isinstance(data, dict) else []
+        if models and models[0].get("id"):
+            _served_model_id = str(models[0]["id"])
+    except Exception as exc:
+        logger.warning(
+            "Served-model probe (%s/v1/models) failed: %s — "
+            "falling back to ATLAS_MODEL_NAME", base, exc)
+    return _served_model_id or ""
+
+
+def _verify_model_identity(models_dir: str, embedding_dim: int = 0) -> bool:
+    """Require Lens artifacts to identify the actually-served runtime model.
+
+    The reference identity is the model id llama-server reports on
+    /v1/models; ATLAS_MODEL_NAME is the fallback when the probe fails.
+    When embedding_dim is provided (the cost field's input dim), it must
+    match the artifact's declared embedding_dim as well.
+    """
     global _artifact_model_identity, _model_identity_error
     _artifact_model_identity = None
     _model_identity_error = ""
-    selected_model = os.environ.get("ATLAS_MODEL_NAME", "").strip()
+    selected_model = _probe_served_model() or os.environ.get(
+        "ATLAS_MODEL_NAME", "").strip()
     if not selected_model:
-        _model_identity_error = "ATLAS_MODEL_NAME is unset"
+        _model_identity_error = ("served-model probe failed and "
+                                 "ATLAS_MODEL_NAME is unset")
         logger.error("Lens artifact identity check failed: %s",
                      _model_identity_error)
         return False
@@ -63,6 +114,11 @@ def _verify_model_identity(models_dir: str) -> bool:
             raise ValueError(
                 f"artifacts are for {identity['model']!r}, selected model is "
                 f"{selected_model!r}"
+            )
+        if embedding_dim and identity["embedding_dim"] != int(embedding_dim):
+            raise ValueError(
+                f"cost_field.pt input dim is {int(embedding_dim)}, artifact "
+                f"identity declares embedding_dim {identity['embedding_dim']}"
             )
         _artifact_model_identity = identity
         return True
@@ -92,18 +148,39 @@ def _load_cx_normalization(models_dir: str) -> None:
         logger.warning("cx_normalization.json load failed (%s) — C(x) normalized scores are neutral", e)
 
 
-def _normalize_cx_energy(energy: float) -> float:
+def _normalize_cx_energy(energy: float, cx_cfg=None) -> float:
     from geometric_lens.calibration import normalize_cx_energy
-    return normalize_cx_energy(energy, _cx_normalization)
+    cfg = _cx_normalization if cx_cfg is None else cx_cfg
+    return normalize_cx_energy(energy, cfg)
 
 
-def _gx_verdict(score: float) -> str:
-    """Classify a G(x) score only when this model has calibration."""
-    if _gx_thresholds is None:
+def _snapshot_weights():
+    """Read the mutable model globals into locals as one consistent set.
+
+    Scoring paths call this once, then compute against the returned
+    references so a concurrent reload_weights() cannot null a global (or
+    mix generations) mid-forward-pass. Returns a tuple in a fixed order.
+    """
+    with _weights_lock:
+        return (
+            _cost_field, _metric_tensor, _gx_xgboost,
+            _gx_pca_components, _gx_pca_mean, _gx_top_dims,
+            _cx_normalization, _gx_thresholds,
+        )
+
+
+def _gx_verdict(score: float, thresholds=None) -> str:
+    """Classify a G(x) score only when this model has calibration.
+
+    thresholds defaults to the module global; scoring paths pass a snapshot
+    taken under _weights_lock so a concurrent reload can't swap it mid-call.
+    """
+    t = _gx_thresholds if thresholds is None else thresholds
+    if t is None:
         return "uncalibrated"
-    if score < _gx_thresholds["severe"]:
+    if score < t["severe"]:
         return "likely_incorrect"
-    if score < _gx_thresholds["low"]:
+    if score < t["low"]:
         return "uncertain"
     return "likely_correct"
 
@@ -161,43 +238,69 @@ class _BoosterClassifier:
         return np.column_stack([1.0 - pos, pos])
 
 
-def _ensure_models_loaded():
-    """Lazy-load C(x) cost field and G(x) models (XGBoost preferred, metric tensor legacy) on first use."""
-    global _cost_field, _metric_tensor, _models_loaded, _load_attempted
-    global _gx_xgboost, _gx_pca_components, _gx_pca_mean, _gx_top_dims
+def _load_gx_models(models_dir: str) -> None:
+    """Load G(x) models from `models_dir` (XGBoost preferred, metric tensor legacy).
 
-    if _models_loaded or _load_attempted:
-        return _models_loaded
+    Shared by _ensure_models_loaded and the reload_weights(model_dir=...)
+    path so per-directory reloads yield a complete lens. Non-fatal: any
+    failure leaves the corresponding G(x) slot None and scoring degrades
+    gracefully.
+    """
+    global _metric_tensor, _gx_xgboost, _gx_pca_components, _gx_pca_mean, _gx_top_dims
 
-    _load_attempted = True
+    _metric_tensor = None
+    _gx_xgboost = None
+    _gx_pca_components = None
+    _gx_pca_mean = None
+    _gx_top_dims = None
 
-    try:
-        import torch
-        from geometric_lens.cost_field import CostField
+    # G(x) XGBoost model (preferred). Prefer the native JSON dump
+    # (gx_xgboost.json) — version-stable, no pickle-compat warning, no
+    # sklearn dep. Fall back to gx_xgboost.pkl for users who haven't
+    # refreshed their model dir yet. See ISSUES.md PC-031.
+    xgb_json = os.path.join(models_dir, "gx_xgboost.json")
+    xgb_pkl = os.path.join(models_dir, "gx_xgboost.pkl")
+    weights_path = os.path.join(models_dir, "gx_weights.json")
+    if os.path.exists(weights_path) and (os.path.exists(xgb_json) or os.path.exists(xgb_pkl)):
+        try:
+            import json as json_mod
+            import numpy as np
+            import xgboost as xgb
 
-        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-        cost_path = os.path.join(models_dir, "cost_field.pt")
+            if os.path.exists(xgb_json):
+                booster = xgb.Booster()
+                booster.load_model(xgb_json)
+                _gx_xgboost = _BoosterClassifier(booster)
+                load_path = "json"
+            else:
+                # Legacy pickle fallback. Emits the forward-compat
+                # warning the JSON path was added to silence; keep
+                # this branch for one release while users migrate.
+                import pickle
+                with open(xgb_pkl, 'rb') as f:
+                    _gx_xgboost = pickle.load(f)
+                load_path = "pickle (deprecated — re-export to gx_xgboost.json)"
 
-        if not os.path.exists(cost_path):
-            logger.warning(f"Geometric Lens model files not found in {models_dir}")
-            return False
+            with open(weights_path, 'r') as f:
+                weights = json_mod.load(f)
 
-        if not _verify_model_identity(models_dir):
-            return False
+            _gx_pca_components = np.array(weights['pca_components'], dtype=np.float32)
+            _gx_pca_mean = np.array(weights['pca_mean'], dtype=np.float32)
+            _gx_top_dims = weights.get('top_dims', [])
 
-        # Per-model calibration ships alongside the lens artifact.
-        _load_cx_normalization(models_dir)
-        _load_gx_thresholds(models_dir)
+            logger.info(
+                f"G(x) XGBoost loaded ({load_path}, AUC={weights.get('cv_auc_mean', 0):.4f}, "
+                f"PCA {weights.get('original_dim', '?')}→{weights.get('pca_dim', '?')})"
+            )
+        except ImportError:
+            logger.warning("G(x) XGBoost model found but xgboost package not installed")
+            _gx_xgboost = None
+        except Exception as e:
+            logger.warning(f"G(x) XGBoost load failed (non-fatal): {e}")
+            _gx_xgboost = None
 
-        sd = torch.load(cost_path, map_location="cpu", weights_only=True)
-        dim = sd["net.0.weight"].shape[1]
-        _cost_field = CostField(input_dim=dim)
-        _cost_field.load_state_dict(sd)
-        _cost_field.set_eval_mode()
-
-        logger.info(f"Geometric Lens C(x) model loaded successfully (CPU, dim={dim})")
-
-        # Load G(x) metric tensor (optional — service works without it)
+    # G(x) metric tensor fallback (legacy — only when XGBoost is unavailable)
+    if _gx_xgboost is None:
         gx_path = os.path.join(models_dir, "metric_tensor.pt")
         if os.path.exists(gx_path):
             try:
@@ -213,52 +316,59 @@ def _ensure_models_loaded():
         else:
             logger.info("No G(x) model found — correctability unavailable")
 
-        # Load G(x) XGBoost model (preferred over metric tensor when available).
-        # Prefer the native JSON dump (gx_xgboost.json) — version-stable, no
-        # pickle-compat warning, no sklearn dep. Fall back to gx_xgboost.pkl
-        # for users who haven't refreshed their model dir yet. See
-        # ISSUES.md PC-031.
-        if _metric_tensor is None:
-            xgb_json = os.path.join(models_dir, "gx_xgboost.json")
-            xgb_pkl = os.path.join(models_dir, "gx_xgboost.pkl")
-            weights_path = os.path.join(models_dir, "gx_weights.json")
-            if os.path.exists(weights_path) and (os.path.exists(xgb_json) or os.path.exists(xgb_pkl)):
-                try:
-                    import json as json_mod
-                    import numpy as np
-                    import xgboost as xgb
 
-                    if os.path.exists(xgb_json):
-                        booster = xgb.Booster()
-                        booster.load_model(xgb_json)
-                        _gx_xgboost = _BoosterClassifier(booster)
-                        load_path = "json"
-                    else:
-                        # Legacy pickle fallback. Emits the forward-compat
-                        # warning the JSON path was added to silence; keep
-                        # this branch for one release while users migrate.
-                        import pickle
-                        with open(xgb_pkl, 'rb') as f:
-                            _gx_xgboost = pickle.load(f)
-                        load_path = "pickle (deprecated — re-export to gx_xgboost.json)"
+def _ensure_models_loaded():
+    """Lazy-load C(x) cost field and G(x) models (XGBoost preferred, metric tensor legacy) on first use."""
+    global _cost_field, _models_loaded, _load_attempted
 
-                    with open(weights_path, 'r') as f:
-                        weights = json_mod.load(f)
+    if _models_loaded or _load_attempted:
+        return _models_loaded
 
-                    _gx_pca_components = np.array(weights['pca_components'], dtype=np.float32)
-                    _gx_pca_mean = np.array(weights['pca_mean'], dtype=np.float32)
-                    _gx_top_dims = weights.get('top_dims', [])
+    # Serialize the one-time load so two concurrent first-requests can't both
+    # run it (duplicate load / half-populated globals). Re-check under the lock.
+    with _weights_lock:
+        if _models_loaded or _load_attempted:
+            return _models_loaded
 
-                    logger.info(
-                        f"G(x) XGBoost loaded ({load_path}, AUC={weights.get('cv_auc_mean', 0):.4f}, "
-                        f"PCA {weights.get('original_dim', '?')}→{weights.get('pca_dim', '?')})"
-                    )
-                except ImportError:
-                    logger.warning("G(x) XGBoost model found but xgboost package not installed")
-                    _gx_xgboost = None
-                except Exception as e:
-                    logger.warning(f"G(x) XGBoost load failed (non-fatal): {e}")
-                    _gx_xgboost = None
+        _load_attempted = True
+
+        return _do_load_models()
+
+
+def _do_load_models() -> bool:
+    """Load C(x)/G(x) artifacts. Callers hold _weights_lock."""
+    global _cost_field, _models_loaded
+
+    try:
+        import torch
+        from geometric_lens.cost_field import CostField
+
+        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        cost_path = os.path.join(models_dir, "cost_field.pt")
+
+        if not os.path.exists(cost_path):
+            logger.warning(f"Geometric Lens model files not found in {models_dir}")
+            return False
+
+        sd = torch.load(cost_path, map_location="cpu", weights_only=True)
+        dim = sd["net.0.weight"].shape[1]
+
+        # Identity check includes the checkpoint's input dim so a wrong-dim
+        # artifact disables cleanly instead of failing per-request in torch.
+        if not _verify_model_identity(models_dir, embedding_dim=dim):
+            return False
+
+        # Per-model calibration ships alongside the lens artifact.
+        _load_cx_normalization(models_dir)
+        _load_gx_thresholds(models_dir)
+
+        _cost_field = CostField(input_dim=dim)
+        _cost_field.load_state_dict(sd)
+        _cost_field.set_eval_mode()
+
+        logger.info(f"Geometric Lens C(x) model loaded successfully (CPU, dim={dim})")
+
+        _load_gx_models(models_dir)
 
         _models_loaded = True
         return True
@@ -277,6 +387,22 @@ def reload_weights(model_dir: str = None) -> dict:
     global _gx_pca_mean, _gx_top_dims, _models_loaded, _load_attempted
     global _cx_normalization, _gx_thresholds
     global _artifact_model_identity, _model_identity_error
+    global _served_model_id, _served_model_probed
+
+    # Hold the lock across the whole reset+load so scoring never observes the
+    # nulled-then-repopulated globals of an in-progress swap. This is the write
+    # critical section; the artifact loads here are not scoring forward passes.
+    with _weights_lock:
+        return _reload_weights_locked(model_dir)
+
+
+def _reload_weights_locked(model_dir: str = None) -> dict:
+    """Body of reload_weights(); callers hold _weights_lock."""
+    global _cost_field, _metric_tensor, _gx_xgboost, _gx_pca_components
+    global _gx_pca_mean, _gx_top_dims, _models_loaded, _load_attempted
+    global _cx_normalization, _gx_thresholds
+    global _artifact_model_identity, _model_identity_error
+    global _served_model_id, _served_model_probed
 
     _models_loaded = False
     _load_attempted = False
@@ -290,19 +416,29 @@ def reload_weights(model_dir: str = None) -> dict:
     _gx_thresholds = None
     _artifact_model_identity = None
     _model_identity_error = ""
+    # Re-probe llama-server on reload — the served model may have changed.
+    _served_model_id = None
+    _served_model_probed = False
 
     if model_dir:
         try:
             from geometric_lens.training import load_cost_field
-            if not _verify_model_identity(model_dir):
+            cost_field = load_cost_field(model_dir)
+            dim = next(cost_field.parameters()).shape[1]
+            if not _verify_model_identity(model_dir, embedding_dim=int(dim)):
                 raise ValueError(_model_identity_error)
-            _cost_field = load_cost_field(model_dir)
+            _cost_field = cost_field
             _load_cx_normalization(model_dir)
             _load_gx_thresholds(model_dir)
+            _load_gx_models(model_dir)
             _models_loaded = True
             _load_attempted = True
             logger.info(f"Geometric Lens C(x) reloaded from {model_dir}")
-            return {"status": "reloaded", "model_dir": model_dir}
+            return {
+                "status": "reloaded",
+                "model_dir": model_dir,
+                "gx_loaded": _metric_tensor is not None or _gx_xgboost is not None,
+            }
         except Exception as e:
             logger.error(f"Failed to reload models from {model_dir}: {e}")
             _load_attempted = True
@@ -311,7 +447,7 @@ def reload_weights(model_dir: str = None) -> dict:
         success = _ensure_models_loaded()
         return {
             "status": "reloaded" if success else "error",
-            "gx_loaded": _metric_tensor is not None,
+            "gx_loaded": _metric_tensor is not None or _gx_xgboost is not None,
         }
 
 
@@ -335,6 +471,8 @@ def get_geometric_energy(query: str) -> float:
         import torch
         from geometric_lens.embedding_extractor import extract_embedding
 
+        cost_field, _, _, _, _, _, cx_cfg, _ = _snapshot_weights()
+
         start = time.monotonic()
 
         # Extract embedding
@@ -343,11 +481,11 @@ def get_geometric_energy(query: str) -> float:
 
         # Evaluate C(x)
         with torch.no_grad():
-            energy = _cost_field(x).item()
+            energy = cost_field(x).item()
 
         elapsed_ms = (time.monotonic() - start) * 1000
 
-        normalized = _normalize_cx_energy(energy)
+        normalized = _normalize_cx_energy(energy, cx_cfg)
 
         logger.debug(
             f"Geometric energy: raw={energy:.2f} normalized={normalized:.3f} "
@@ -374,13 +512,15 @@ def evaluate_energy(query: str) -> Tuple[float, float]:
         import torch
         from geometric_lens.embedding_extractor import extract_embedding
 
+        cost_field, _, _, _, _, _, cx_cfg, _ = _snapshot_weights()
+
         emb = extract_embedding(query)
         x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
 
         with torch.no_grad():
-            energy = _cost_field(x).item()
+            energy = cost_field(x).item()
 
-        normalized = _normalize_cx_energy(energy)
+        normalized = _normalize_cx_energy(energy, cx_cfg)
 
         return (energy, normalized)
 
@@ -441,7 +581,9 @@ def evaluate_correctability(query: str) -> Tuple[float, float, float]:
     if not is_enabled() or not _ensure_models_loaded():
         return (0.0, 0.0, 0.0)
 
-    if _metric_tensor is None:
+    cost_field, metric_tensor, _, _, _, _, cx_cfg, _ = _snapshot_weights()
+
+    if metric_tensor is None:
         # G(x) not available — return energy only
         raw, norm = evaluate_energy(query)
         return (0.0, raw, norm)
@@ -458,11 +600,11 @@ def evaluate_correctability(query: str) -> Tuple[float, float, float]:
 
         # C(x) energy
         with torch.no_grad():
-            energy = _cost_field(x).item()
-        normalized = _normalize_cx_energy(energy)
+            energy = cost_field(x).item()
+        normalized = _normalize_cx_energy(energy, cx_cfg)
 
         # G(x) correctability
-        corr = compute_correctability(x, _cost_field, _metric_tensor)
+        corr = compute_correctability(x, cost_field, metric_tensor)
 
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.debug(
@@ -486,7 +628,10 @@ def evaluate_gx(query: str) -> dict:
     if not is_enabled() or not _ensure_models_loaded():
         return {"gx_score": 0.5, "verdict": "unavailable", "gx_available": False}
 
-    if _gx_xgboost is None:
+    (_, _, gx_xgboost, gx_pca_components, gx_pca_mean,
+     gx_top_dims, _, gx_thresholds) = _snapshot_weights()
+
+    if gx_xgboost is None:
         return {"gx_score": 0.5, "verdict": "unavailable", "gx_available": False}
 
     try:
@@ -499,13 +644,13 @@ def evaluate_gx(query: str) -> dict:
         emb_np = np.array(emb, dtype=np.float32).reshape(1, -1)
 
         # PCA transform
-        x_pca = (emb_np - _gx_pca_mean) @ _gx_pca_components.T
+        x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
 
         # XGBoost prediction
-        proba = _gx_xgboost.predict_proba(x_pca)[0]
+        proba = gx_xgboost.predict_proba(x_pca)[0]
         gx_score = float(proba[1])  # probability of PASS class
 
-        verdict = _gx_verdict(gx_score)
+        verdict = _gx_verdict(gx_score, gx_thresholds)
 
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.debug(f"G(x) score: {gx_score:.4f} ({verdict}), latency={elapsed_ms:.1f}ms")
@@ -513,7 +658,7 @@ def evaluate_gx(query: str) -> dict:
         return {
             "gx_score": gx_score,
             "verdict": verdict,
-            "top_dims": _gx_top_dims[:10] if _gx_top_dims else [],
+            "top_dims": gx_top_dims[:10] if gx_top_dims else [],
             "gx_available": True,
             "latency_ms": round(elapsed_ms, 1),
         }
@@ -542,6 +687,9 @@ def evaluate_combined(query: str) -> dict:
         import numpy as np
         from geometric_lens.embedding_extractor import extract_embedding
 
+        (cost_field, _, gx_xgboost, gx_pca_components, gx_pca_mean,
+         _, cx_cfg, gx_thresholds) = _snapshot_weights()
+
         start = time.monotonic()
 
         # Single embedding extraction (shared between C(x) and G(x))
@@ -550,22 +698,22 @@ def evaluate_combined(query: str) -> dict:
         # C(x) evaluation
         x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
-            energy = _cost_field(x).item()
-        normalized = _normalize_cx_energy(energy)
+            energy = cost_field(x).item()
+        normalized = _normalize_cx_energy(energy, cx_cfg)
 
         # G(x) evaluation (if available)
         gx_score = 0.5
         verdict = "unavailable"
         gx_available = False
 
-        if _gx_xgboost is not None:
+        if gx_xgboost is not None:
             emb_np = np.array(emb, dtype=np.float32).reshape(1, -1)
-            x_pca = (emb_np - _gx_pca_mean) @ _gx_pca_components.T
-            proba = _gx_xgboost.predict_proba(x_pca)[0]
+            x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
+            proba = gx_xgboost.predict_proba(x_pca)[0]
             gx_score = float(proba[1])
             gx_available = True
 
-            verdict = _gx_verdict(gx_score)
+            verdict = _gx_verdict(gx_score, gx_thresholds)
 
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.debug(
@@ -576,7 +724,7 @@ def evaluate_combined(query: str) -> dict:
         return {
             "cx_energy": energy,
             "cx_normalized": normalized,
-            "cx_calibrated": _cx_normalization is not None,
+            "cx_calibrated": cx_cfg is not None,
             "gx_score": gx_score,
             "verdict": verdict,
             "gx_available": gx_available,
@@ -630,6 +778,9 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             extract_per_token,
         )
 
+        (cost_field, _, gx_xgboost, gx_pca_components, gx_pca_mean,
+         gx_top_dims, cx_cfg, gx_thresholds) = _snapshot_weights()
+
         start = time.monotonic()
 
         # Pull per-token hidden states from llama-server
@@ -644,7 +795,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         n_tokens = len(per_token_vecs)
         if n_tokens == 0:
             return {
-                "enabled": True, "gx_available": _gx_xgboost is not None,
+                "enabled": True, "gx_available": gx_xgboost is not None,
                 "per_step": [], "aggregate": {}, "n_tokens": 0,
                 "layer": tap_label,
                 "error": "empty token list",
@@ -653,21 +804,21 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         # Batched C(x): one MLP forward over [n_tokens, hidden_dim]
         x = torch.tensor(per_token_vecs, dtype=torch.float32)
         with torch.no_grad():
-            cx_raw = _cost_field(x).squeeze(-1).cpu().numpy()  # (n_tokens,)
-        if _cx_normalization is None:
+            cx_raw = cost_field(x).squeeze(-1).cpu().numpy()  # (n_tokens,)
+        if cx_cfg is None:
             cx_norm = np.full(n_tokens, 0.5, dtype=float)
         else:
-            midpoint = _cx_normalization["midpoint"]
-            steepness = _cx_normalization["steepness"]
+            midpoint = cx_cfg["midpoint"]
+            steepness = cx_cfg["steepness"]
             z = np.clip(steepness * (cx_raw - midpoint), -709.0, 709.0)
             cx_norm = 1.0 / (1.0 + np.exp(-z))
 
         # Batched G(x) when XGBoost is loaded
-        gx_available = _gx_xgboost is not None and _gx_pca_components is not None
+        gx_available = gx_xgboost is not None and gx_pca_components is not None
         if gx_available:
             emb_np = np.asarray(per_token_vecs, dtype=np.float32)
-            x_pca = (emb_np - _gx_pca_mean) @ _gx_pca_components.T
-            proba = _gx_xgboost.predict_proba(x_pca)
+            x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
+            proba = gx_xgboost.predict_proba(x_pca)
             gx_scores = proba[:, 1].astype(float)
         else:
             gx_scores = np.full(n_tokens, 0.5, dtype=float)
@@ -675,10 +826,10 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         per_step = []
         for i in range(n_tokens):
             score = float(gx_scores[i])
-            if gx_available and _gx_thresholds is not None:
-                if score < _gx_thresholds["severe"]:
+            if gx_available and gx_thresholds is not None:
+                if score < gx_thresholds["severe"]:
                     verdict = "likely_incorrect"
-                elif score < _gx_thresholds["low"]:
+                elif score < gx_thresholds["low"]:
                     verdict = "uncertain"
                 else:
                     verdict = "likely_correct"
@@ -706,7 +857,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             "gx_score_mean":  float(gx_scores.mean()),
             # token index where the lens first sees a low-quality state —
             # the natural "stop generating" signal for PC-207 callers.
-            "first_off_rails_idx": int(np.argmax(gx_scores < _gx_thresholds["off_rails"])) if gx_available and _gx_thresholds is not None and (gx_scores < _gx_thresholds["off_rails"]).any() else -1,
+            "first_off_rails_idx": int(np.argmax(gx_scores < gx_thresholds["off_rails"])) if gx_available and gx_thresholds is not None and (gx_scores < gx_thresholds["off_rails"]).any() else -1,
         }
 
         elapsed_ms = (time.monotonic() - start) * 1000
@@ -722,7 +873,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         return {
             "enabled":      True,
             "gx_available": gx_available,
-            "cx_calibrated": _cx_normalization is not None,
+            "cx_calibrated": cx_cfg is not None,
             "per_step":     per_step,
             "aggregate":    aggregate,
             "n_tokens":     n_tokens,
@@ -733,7 +884,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             # uses these for its run-of-N / severe regression checks instead of
             # its own hardcoded constants, so the whole intervention chain is
             # calibrated to the loaded model's score scale.
-            "thresholds":   dict(_gx_thresholds) if _gx_thresholds is not None else None,
+            "thresholds":   dict(gx_thresholds) if gx_thresholds is not None else None,
         }
 
     except Exception as e:

@@ -178,15 +178,6 @@ main() {
         exit 0
     fi
 
-    # Check for huggingface-cli (optional, for faster downloads)
-    if command -v huggingface-cli &> /dev/null; then
-        log_info "HuggingFace CLI found, using for downloads"
-        HF_CLI=true
-    else
-        log_info "Using curl for downloads (install huggingface-cli for faster downloads)"
-        HF_CLI=false
-    fi
-
     # Pick the explicitly selected model file. Registry/tier recommendation
     # belongs to `atlas init`; this low-level downloader never guesses.
     if [[ -n "${ATLAS_MODEL_FILE:-}" ]]; then
@@ -252,8 +243,11 @@ main() {
         fi
     fi
 
-    # Create symlink for default model
-    ln -sf "$ATLAS_MODELS_DIR/$MAIN_MODEL_FILE" "$ATLAS_MODELS_DIR/default.gguf"
+    # Create symlink for default model. Relative target (both live in
+    # ATLAS_MODELS_DIR) so the link survives the directory being reached
+    # via a different path — e.g. a container mount at /models, or a
+    # relative ATLAS_MODELS_DIR resolved from another CWD.
+    ln -sf "$MAIN_MODEL_FILE" "$ATLAS_MODELS_DIR/default.gguf"
 
     # Create LoRA adapter directory
     mkdir -p "$ATLAS_LORA_DIR"

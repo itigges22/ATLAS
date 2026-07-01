@@ -17,18 +17,6 @@ type PermissionConfig struct {
 	DenyRules  []PermissionRule
 }
 
-// DefaultDenyPatterns are always blocked regardless of mode.
-var DefaultDenyPatterns = []PermissionRule{
-	{Tool: "run_command", Pattern: "rm -rf /", Action: "deny"},
-	{Tool: "run_command", Pattern: "rm -rf /*", Action: "deny"},
-	{Tool: "run_command", Pattern: "mkfs*", Action: "deny"},
-	{Tool: "run_command", Pattern: "dd if=*of=/dev/*", Action: "deny"},
-	{Tool: "write_file", Pattern: ".env", Action: "deny"},
-	{Tool: "write_file", Pattern: "*.pem", Action: "deny"},
-	{Tool: "write_file", Pattern: "*.key", Action: "deny"},
-	{Tool: "write_file", Pattern: "*credentials*", Action: "deny"},
-}
-
 // checkPermissionRules evaluates rules against a tool call.
 // Returns "allow", "deny", or "" (no matching rule).
 func checkPermissionRules(rules []PermissionRule, toolName string, args json.RawMessage) string {
@@ -69,6 +57,11 @@ func extractMatchValue(toolName string, args json.RawMessage) string {
 		if err := json.Unmarshal(args, &input); err == nil {
 			return input.Path
 		}
+	case "ast_edit":
+		var input AstEditInput
+		if err := json.Unmarshal(args, &input); err == nil {
+			return input.Path
+		}
 	}
 	return ""
 }
@@ -103,16 +96,116 @@ func matchPattern(pattern, value string) bool {
 	return false
 }
 
-// shouldDenyToolCall checks if a tool call should be blocked by deny rules.
-func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
-	// Check default deny patterns
-	for _, rule := range DefaultDenyPatterns {
-		if rule.Tool != toolName {
+// shellSegmentSplitter marks the boundaries between commands in a shell line
+// (operators and grouping/substitution punctuation) so each segment's leading
+// word can be inspected. Redirect targets (> file) are not command positions,
+// so `>`/`<` are deliberately excluded.
+var shellSegmentSplitter = strings.NewReplacer(
+	";", "\n", "|", "\n", "&", "\n", "(", "\n", ")", "\n", "`", "\n",
+)
+
+// commandPrefixWords are leading words that wrap the real command word.
+var commandPrefixWords = map[string]bool{
+	"sudo": true, "doas": true, "env": true, "command": true, "nice": true,
+	"nohup": true, "time": true, "exec": true, "builtin": true,
+}
+
+// denyCommandReason reports why a shell command is blocked, or "" if allowed.
+// Matching is anchored to the command position of each shell segment so only
+// the destructive form is blocked — `rm -rf /` but not `rm -rf /workspace`,
+// `mkfs.ext4 /dev/sda` but not `grep mkfs notes.txt`, `dd of=/dev/sda` but not
+// `dd of=out.bin`.
+func denyCommandReason(cmd string) string {
+	for _, seg := range strings.Split(shellSegmentSplitter.Replace(cmd), "\n") {
+		fields := strings.Fields(seg)
+		i := 0
+		for i < len(fields) && commandPrefixWords[fields[i]] {
+			i++
+		}
+		if i >= len(fields) {
 			continue
 		}
-		matchValue := extractMatchValue(toolName, args)
-		if matchValue != "" && matchPattern(rule.Pattern, matchValue) {
-			return true, "blocked by safety rule: " + rule.Pattern
+		head := fields[i]
+		rest := fields[i+1:]
+		switch {
+		case head == "rm" && rmTargetsRoot(rest):
+			return "blocked by safety rule: recursive removal of /"
+		case head == "mkfs" || strings.HasPrefix(head, "mkfs."):
+			return "blocked by safety rule: mkfs"
+		case head == "dd":
+			for _, a := range rest {
+				if strings.HasPrefix(a, "of=/dev/") {
+					return "blocked by safety rule: dd to a device"
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// rmTargetsRoot reports whether an `rm` argument list recursively targets the
+// filesystem root (`/` or `/*`).
+func rmTargetsRoot(args []string) bool {
+	recursive, rootTarget := false, false
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			if a == "--recursive" || (!strings.HasPrefix(a, "--") && strings.ContainsAny(a, "rR")) {
+				recursive = true
+			}
+			continue
+		}
+		if a == "/" || a == "/*" {
+			rootTarget = true
+		}
+	}
+	return recursive && rootTarget
+}
+
+// denyWritePathReason reports why writing to a path is blocked, or "" if
+// allowed. Matching is on the base name so nested paths (certs/server.pem) are
+// caught, while template files (.env.example) and unrelated names (staging.env)
+// are not.
+func denyWritePathReason(path string) string {
+	if path == "" {
+		return ""
+	}
+	base := filepath.Base(filepath.Clean(path))
+	switch {
+	case base == ".env":
+		return "blocked by safety rule: writing .env"
+	case strings.HasSuffix(base, ".pem"):
+		return "blocked by safety rule: writing a .pem key"
+	case strings.HasSuffix(base, ".key"):
+		return "blocked by safety rule: writing a .key file"
+	case strings.Contains(base, "credentials"):
+		return "blocked by safety rule: writing a credentials file"
+	}
+	return ""
+}
+
+// shouldDenyToolCall checks if a tool call is blocked by the built-in safety
+// rules. These apply in every permission mode.
+func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
+	switch toolName {
+	case "run_command":
+		var input RunCommandInput
+		if json.Unmarshal(args, &input) != nil {
+			return false, ""
+		}
+		if reason := denyCommandReason(input.Command); reason != "" {
+			return true, reason
+		}
+	case "write_file", "edit_file", "ast_edit":
+		if reason := denyWritePathReason(extractMatchValue(toolName, args)); reason != "" {
+			return true, reason
+		}
+	case "move_file":
+		var input MoveFileInput
+		if json.Unmarshal(args, &input) != nil {
+			return false, ""
+		}
+		if reason := denyWritePathReason(input.Destination); reason != "" {
+			return true, reason
 		}
 	}
 	return false, ""

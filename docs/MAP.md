@@ -9,56 +9,91 @@ Every file in the repository. Click any directory in the tree to jump to its des
 - [`.env.example`](#root-config) — Docker Compose environment template
 - [`.gitignore`](#root-config) — Git ignore rules
 - [`atlas.conf.example`](#root-config) — K3s deployment configuration template
-- [`docker-compose.yml`](#root-config) — 5-service Docker Compose stack
+- [`docker-compose.yml`](#root-config) — 6-service Docker Compose stack (incl. redis)
+- [`docker-compose.rocm.yml`](#root-config) — AMD ROCm overlay
+- [`docker-compose.vulkan.yml`](#root-config) — Vulkan overlay (universal GPU fallback)
+- [`docker-compose.cpu.yml`](#root-config) — CPU-only overlay (no `/dev/dri`; lavapipe)
+- [`docker-compose.macos.yml`](#root-config) — macOS hybrid overlay (native llama-server + Docker for the rest)
+- [`docker-compose.override.yml.example`](#root-config) — local override template
 - [`pyproject.toml`](#root-config) — Python package definition (atlas CLI entry point)
 - [`LICENSE`](#root-docs) — GNU Affero General Public License v3.0 (AGPL-3.0)
 - [`README.md`](#root-docs) — Project overview, benchmarks, setup
 - [`CHANGELOG.md`](#root-docs) — Release history
 - [`CODE_OF_CONDUCT.md`](#root-docs) — Community guidelines
 - [`CONTRIBUTING.md`](#root-docs) — Contributor guide
-- [`proxy/`](#atlas-proxy) — Go proxy: agent loop, grammar, tool calls
-  - [`main.go`](#atlas-proxy) — HTTP server, chat handler, verify-repair, tier classification
-  - [`agent.go`](#atlas-proxy) — Agent loop, LLM dispatch, exploration budget, error recovery
-  - [`tools.go`](#atlas-proxy) — 8 tool definitions + executors, tier classifier
-  - [`grammar.go`](#atlas-proxy) — JSON schema + GBNF grammar generation
+- [`proxy/`](#atlas-proxy) — Go proxy: agent loop, grammar, tool calls (~25 source files + tests)
+  - [`main.go`](#atlas-proxy) — HTTP server, routes, health/readiness, passthrough
+  - [`agent.go`](#atlas-proxy) — Agent loop, LLM dispatch, gates, `/v1/agent` + `/cancel`
+  - [`tools.go`](#atlas-proxy) — 15 tool definitions + executors, tier classifier, V3 routing
   - [`types.go`](#atlas-proxy) — Shared types: ToolCall, AgentContext, tiers
+  - [`grammar.go`](#atlas-proxy) — JSON schema + GBNF grammar generation
+  - [`guardrails.go`](#atlas-proxy) — Shell-mutation gate, content sanitizers, shrinkage guard
+  - [`workspace.go`](#atlas-proxy) — Workspace containment for all path-taking tool args
+  - [`security.go`](#atlas-proxy) — Log-field encoding for untrusted text
+  - [`permissions.go`](#atlas-proxy) — Permission rules and hard deny patterns
+  - [`events.go`](#atlas-proxy) — `/events` typed-envelope SSE broker (PC-061)
+  - [`lens_samples.go`](#atlas-proxy) — `/feedback` + `/v1/lens/training-status`: verdicts → lens training samples
+  - [`lens_score.go`](#atlas-proxy) — PC-207 per-write lens scoring + regression intervention
+  - [`calibration_status.go`](#atlas-proxy) — `/v1/calibration/status` lens + ASA verdicts
+  - [`plan_adherence.go`](#atlas-proxy) — Plan-step matching, off-streak counter, auto-revise
+  - [`plan_reminder.go`](#atlas-proxy) — Plan-progress reminder injection
+  - [`claim_check.go`](#atlas-proxy) — Completion-claim verification gate (PC-197)
+  - [`symbol_index.go`](#atlas-proxy) — Per-session project symbol scan + snippet injection
+  - [`tool_repeat.go`](#atlas-proxy) — Tool-call repetition detector
+  - [`reasoning_repeat.go`](#atlas-proxy) — Reasoning-repetition detector
+  - [`traceback.go`](#atlas-proxy) — Crash-traceback → directed-edit steering
   - [`v3_bridge.go`](#atlas-proxy) — Go-to-Python V3 service SSE bridge
   - [`v3_adapter.go`](#atlas-proxy) — File requests to V3 pipeline format
   - [`build_verify.go`](#atlas-proxy) — Per-language build verification commands
   - [`project.go`](#atlas-proxy) — Language/framework detection
-  - [`permissions.go`](#atlas-proxy) — Permission rules and deny patterns
   - [`parallel.go`](#atlas-proxy) — plan_tasks executor with dependency graph
-  - [`go.mod`](#atlas-proxy) — Go module definition
-  - [`Dockerfile`](#atlas-proxy) — Multi-stage Go build
-  - [`README.md`](#atlas-proxy) — Proxy documentation
-  - [`atlas-proxy-v2`](#atlas-proxy) — Compiled Go binary (gitignored in production)
+  - [`*_test.go`](#atlas-proxy) — unit + integration tests (one per subsystem)
+  - [`go.mod`](#atlas-proxy), [`Dockerfile`](#atlas-proxy), [`README.md`](#atlas-proxy)
 - [`tui/`](#atlas-tui) — Bubbletea TUI client (Go) — PC-062
   - [`main.go`](#atlas-tui) — Entry point + Bubbletea program setup
   - [`model.go`](#atlas-tui) — Bubbletea model: events, chat, textarea, hotkeys
-  - [`panes.go`](#atlas-tui) — Pure pane renderers (pipeline / chat / events / stats / input)
+  - [`panes.go`](#atlas-tui) — Pure pane renderers (pipeline / chat / events / files / stats / input)
   - [`state.go`](#atlas-tui) — Pipeline state machine (Envelope → derived UI state)
   - [`consumer.go`](#atlas-tui) — `/events` SSE consumer (typed Envelope stream)
-  - [`chat.go`](#atlas-tui) — `/v1/agent` POST + SSE chat client; `/cancel` POST
-  - [`commands.go`](#atlas-tui) — Slash command dispatch (/add, /diff, /commit, /run, etc.)
-  - [`*_test.go`](#atlas-tui) — 39 unit + integration tests
-  - [`go.mod`](#atlas-tui) — Go module (github.com/itigges22/atlas-tui)
+  - [`chat.go`](#atlas-tui) — `/v1/agent` POST + SSE chat client; `/cancel` + `/feedback` POST
+  - [`commands.go`](#atlas-tui) — Slash command dispatch (/add, /diff, /good, /bad, /review, …)
+  - [`calibration.go`](#atlas-tui) — Lens/ASA header badge from `/v1/calibration/status`
+  - [`files.go`](#atlas-tui) — Files sidebar (workspace tree scan)
+  - [`plan.go`](#atlas-tui) — Plan-mode chat rows (plan_loaded / adherence / revise)
+  - [`demo.go`](#atlas-tui) — `/demo` split-pane raw-vs-ATLAS comparison
+  - [`debug.go`](#atlas-tui) — Append-only debug log
+  - [`*_test.go`](#atlas-tui) — 110+ unit + integration tests
+  - [`go.mod`](#atlas-tui), [`go.sum`](#atlas-tui) — Go module (github.com/itigges22/atlas-tui)
 - [`atlas/`](#atlas-cli) — Python CLI package
   - [`__init__.py`](#atlas-cli)
   - [`cli/`](#atlas-cli)
-    - [`repl.py`](#atlas-cli) — Interactive REPL entry point
+    - [`repl.py`](#atlas-cli) — Entry point: subcommand dispatch, TUI launch, pipe-mode REPL
     - [`client.py`](#atlas-cli) — HTTP client for llama-server, Lens, sandbox
+    - [`compose.py`](#atlas-cli) — Compose config: `.env` reader, service URL/port resolution, overlay selection
+    - [`events.py`](#atlas-cli) — Typed event protocol (canonical Python envelope definition)
+    - [`runtime_artifacts.py`](#atlas-cli) — Freshness checks for Go binaries built from the checkout
     - [`display.py`](#atlas-cli) — Terminal output formatting and colors
     - [`__init__.py`](#atlas-cli), [`__main__.py`](#atlas-cli)
-    - [`commands/`](#atlas-cli)
-      - [`solve.py`](#atlas-cli) — /solve command: generate + score + test
-      - [`bench.py`](#atlas-cli) — /bench command: run V3 benchmarks
-      - [`status.py`](#atlas-cli) — /status command: service health checks
-      - [`doctor.py`](#atlas-cli) — `atlas doctor` — install + service diagnostic
-      - [`tier.py`](#atlas-cli) — `atlas tier` — hardware probe + tier classification
-      - [`tui.py`](#atlas-cli) — `atlas tui` — locate/build/exec the Bubbletea TUI binary (PC-062)
+    - [`commands/`](#atlas-cli) — 15 command modules
+      - [`init.py`](#atlas-cli) — `atlas init` first-run wizard
+      - [`doctor.py`](#atlas-cli) — `atlas doctor` install + service diagnostic
+      - [`tier.py`](#atlas-cli) — `atlas tier` hardware probe + tier classification
+      - [`fit.py`](#atlas-cli) — `atlas tier fit` model-aware runtime sizing (PC-208)
+      - [`model.py`](#atlas-cli) — `atlas model` registry install/verify/remove/recommend
+      - [`model_registry.py`](#atlas-cli) — Built-in model registry (schema + entries)
+      - [`model_recommendations.py`](#atlas-cli) — Back-compat shim over the registry
+      - [`onboard.py`](#atlas-cli) — `atlas onboard` guided model drop-in
+      - [`lens.py`](#atlas-cli) — `atlas lens` check/build/retrain/publish
+      - [`asa.py`](#atlas-cli) — `atlas asa` check/build/publish
+      - [`publish.py`](#atlas-cli) — `atlas publish` combined lens+ASA publish (PC-215)
+      - [`bench.py`](#atlas-cli) — `atlas bench` / `/bench` benchmark launcher
+      - [`solve.py`](#atlas-cli) — `/solve`: generate + score + test
+      - [`status.py`](#atlas-cli) — `/status` service health checks
+      - [`tui.py`](#atlas-cli) — `atlas tui` locate/build/exec the TUI binary
       - [`__init__.py`](#atlas-cli)
 - [`benchmark/`](#benchmark) — Benchmark runner and datasets
-  - [`runner.py`](#benchmark-core) — Code execution, LLM API calls, ChatML formatting
+  - [`runner.py`](#benchmark-core) — Code execution, LLM API calls, prompt formatting
+  - [`llm_client.py`](#benchmark-core) — Shared llama-server client for the runners
   - [`v2_runner.py`](#benchmark-core) — V2 benchmark runner (phases 0-6, telemetry)
   - [`v3_runner.py`](#benchmark-core) — V3 benchmark runner entry point
   - [`v2_report.py`](#benchmark-core) — Markdown report generator
@@ -67,173 +102,96 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`models.py`](#benchmark-core) — BenchmarkTask, AttemptResult, TaskResult dataclasses
   - [`best_of_k.py`](#benchmark-core) — Best-of-K candidate evaluation
   - [`geo_learning.py`](#benchmark-core) — Geometric learning integration
-  - [`run_v2_benchmark.sh`](#benchmark-core) — V2 benchmark launch script
-  - [`measure_bok_latency.sh`](#benchmark-core) — Best-of-K latency measurement
-  - [`README.md`](#benchmark-core) — Benchmark documentation
-  - [`datasets/`](#benchmark-datasets)
-    - [`base.py`](#benchmark-datasets) — Abstract BaseDataset class
-    - [`humaneval.py`](#benchmark-datasets) — HumanEval (164 tasks, function completion)
-    - [`mbpp.py`](#benchmark-datasets) — MBPP (500 tasks, 3-shot format)
-    - [`evalplus_humaneval.py`](#benchmark-datasets) — HumanEval+ (EvalPlus augmented)
-    - [`evalplus_mbpp.py`](#benchmark-datasets) — MBPP+ (EvalPlus augmented)
-    - [`livecodebench.py`](#benchmark-datasets) — LiveCodeBench v5 (599 tasks, stdio)
-    - [`gpqa.py`](#benchmark-datasets) — GPQA Diamond (198 MCQ)
-    - [`ifbench.py`](#benchmark-datasets) — IFBench (300 instruction-following)
-    - [`scicode.py`](#benchmark-datasets) — SciCode (~80 scientific coding)
-    - [`__init__.py`](#benchmark-datasets)
-  - [`analysis/`](#benchmark-analysis)
-    - [`cost_analysis.py`](#benchmark-analysis) — Cost/token analysis
-    - [`hardware_info.py`](#benchmark-analysis) — GPU/CPU detection
-    - [`pass_at_k.py`](#benchmark-analysis) — pass@k metric calculation
-    - [`__init__.py`](#benchmark-analysis)
-  - [`custom/`](#benchmark-custom)
-    - [`tasks.json`](#benchmark-custom) — 100 custom benchmark tasks
-    - [`tasks.json.lock`](#benchmark-custom) — Task lock file
-    - [`validate.py`](#benchmark-custom) — Custom task validation
-    - [`__init__.py`](#benchmark-custom)
+  - [`run_v2_benchmark.sh`](#benchmark-core), [`measure_bok_latency.sh`](#benchmark-core), [`README.md`](#benchmark-core)
+  - [`datasets/`](#benchmark-datasets) — HumanEval, MBPP, EvalPlus, LiveCodeBench, GPQA, IFBench, SciCode loaders
+  - [`analysis/`](#benchmark-analysis) — cost analysis, hardware info, pass@k
+  - [`custom/`](#benchmark-custom) — 100 custom tasks + validation
   - [`v3/`](#benchmark-v3) — V3 pipeline modules (19 files)
-    - [`plan_search.py`](#benchmark-v3) — PlanSearch (1A): 3 constraint-based plans
-    - [`div_sampling.py`](#benchmark-v3) — DivSampling (1B): 12 perturbations
-    - [`budget_forcing.py`](#benchmark-v3) — BudgetForcing (1C): 5 tiers, Wait injection
-    - [`blend_asc.py`](#benchmark-v3) — BlendASC (2A): adaptive K allocation
-    - [`reasc.py`](#benchmark-v3) — ReASC (2B): early stopping
-    - [`s_star.py`](#benchmark-v3) — S* (2C): differential tiebreaking
-    - [`candidate_selection.py`](#benchmark-v3) — 4 selection strategies
-    - [`failure_analysis.py`](#benchmark-v3) — FailureAnalysis (3A): 6 failure categories
-    - [`constraint_refinement.py`](#benchmark-v3) — ConstraintRefiner (3B): cosine filtering
-    - [`pr_cot.py`](#benchmark-v3) — PR-CoT (3C): 4-perspective repair
-    - [`derivation_chains.py`](#benchmark-v3) — DerivationChains (3D): sub-problem decomposition
-    - [`refinement_loop.py`](#benchmark-v3) — RefinementLoop (3E): orchestrator
-    - [`metacognitive.py`](#benchmark-v3) — Metacognitive (3F): failure pattern library
-    - [`ace_pipeline.py`](#benchmark-v3) — ACE (3G): playbook learning
-    - [`self_test_gen.py`](#benchmark-v3) — Model-generated test cases
-    - [`lens_feedback.py`](#benchmark-v3) — Online Lens recalibration
-    - [`embedding_store.py`](#benchmark-v3) — Binary embedding persistence
-    - [`ablation_analysis.py`](#benchmark-v3) — Statistical ablation analysis
-    - [`__init__.py`](#benchmark-v3)
 - [`geometric-lens/`](#geometric-lens) — Scoring, RAG, routing, pattern cache
-  - [`main.py`](#geometric-lens-core) — FastAPI server (26 endpoints)
+  - [`main.py`](#geometric-lens-core) — FastAPI server (29 endpoints, port 8099)
   - [`pipeline.py`](#geometric-lens-core) — RAG pipeline orchestrator
   - [`config.py`](#geometric-lens-core) — Server/Redis/API configuration
   - [`storage.py`](#geometric-lens-core) — Project metadata CRUD
   - [`verify_loop.py`](#geometric-lens-core) — Verify-repair loop logic
-  - [`sandbox_client.py`](#geometric-lens-core) — Sandbox HTTP client
-  - [`sandbox_analysis.py`](#geometric-lens-core) — Sandbox result analysis
-  - [`requirements.txt`](#geometric-lens-core) — Python dependencies (CPU PyTorch)
-  - [`Dockerfile`](#geometric-lens-core) — Container build (port 8099)
-  - [`.dockerignore`](#geometric-lens-core)
+  - [`sandbox_client.py`](#geometric-lens-core) / [`sandbox_analysis.py`](#geometric-lens-core) — Sandbox HTTP client + result analysis
+  - [`requirements.txt`](#geometric-lens-core), [`Dockerfile`](#geometric-lens-core), [`.dockerignore`](#geometric-lens-core)
   - [`geometric_lens/`](#geometric-lens-models) — Scoring models
-    - [`cost_field.py`](#geometric-lens-models) — C(x): 4096->512->128->1 MLP
-    - [`metric_tensor.py`](#geometric-lens-models) — G(x): diagonal metric tensor + PCA
-    - [`service.py`](#geometric-lens-models) — Service layer: evaluate_combined(), scoring API
-    - [`training.py`](#geometric-lens-models) — Training pipeline: contrastive loss, retraining
-    - [`embedding_extractor.py`](#geometric-lens-models) — llama-server /v1/embeddings client
+    - [`cost_field.py`](#geometric-lens-models) — C(x): model-hidden-dim→512→128→1 MLP
+    - [`metric_tensor.py`](#geometric-lens-models) — G(x) metric-tensor fallback (XGBoost preferred)
+    - [`service.py`](#geometric-lens-models) — Service layer: loading, identity checks, scoring API, hot-reload
+    - [`training.py`](#geometric-lens-models) — C(x) + G(x) training pipeline
+    - [`calibration.py`](#geometric-lens-models) — Per-model C(x) sigmoid calibration (`cx_normalization.json`)
+    - [`thresholds.py`](#geometric-lens-models) — Per-model G(x) operating thresholds (`gx_thresholds.json`)
+    - [`identity.py`](#geometric-lens-models) — Artifact↔model identity metadata (`model_identity.json`)
+    - [`embedding_extractor.py`](#geometric-lens-models) — llama-server embedding client
     - [`ewc.py`](#geometric-lens-models) — Elastic Weight Consolidation
     - [`correction.py`](#geometric-lens-models) — Natural gradient correction engine
     - [`replay_buffer.py`](#geometric-lens-models) — Domain-stratified experience replay
-    - [`__init__.py`](#geometric-lens-models)
-  - [`indexer/`](#geometric-lens-indexer) — RAG indexing
-    - [`ast_parser.py`](#geometric-lens-indexer) — tree-sitter AST parsing
-    - [`tree_builder.py`](#geometric-lens-indexer) — Hierarchical code index
-    - [`bm25_index.py`](#geometric-lens-indexer) — BM25 inverted index
-    - [`summarizer.py`](#geometric-lens-indexer) — LLM-generated node summaries
-    - [`persistence.py`](#geometric-lens-indexer) — JSON index persistence
-    - [`__init__.py`](#geometric-lens-indexer)
-  - [`retriever/`](#geometric-lens-retriever) — RAG retrieval
-    - [`bm25_search.py`](#geometric-lens-retriever) — BM25 keyword search
-    - [`tree_search.py`](#geometric-lens-retriever) — LLM-guided tree traversal
-    - [`hybrid.py`](#geometric-lens-retriever) — Hybrid retriever (routes bm25/tree/both)
-    - [`__init__.py`](#geometric-lens-retriever)
-  - [`router/`](#geometric-lens-router) — Confidence routing
-    - [`route_selector.py`](#geometric-lens-router) — Thompson Sampling route selection
-    - [`difficulty_estimator.py`](#geometric-lens-router) — 4-signal difficulty fusion
-    - [`signal_collector.py`](#geometric-lens-router) — Signal collection
-    - [`feedback_recorder.py`](#geometric-lens-router) — Redis-backed outcome recording
-    - [`fallback_chain.py`](#geometric-lens-router) — Route escalation chain
-    - [`__init__.py`](#geometric-lens-router)
-  - [`cache/`](#geometric-lens-cache) — Pattern cache
-    - [`pattern_store.py`](#geometric-lens-cache) — Redis STM/LTM/PERSISTENT storage
-    - [`pattern_matcher.py`](#geometric-lens-cache) — BM25 pattern matching
-    - [`pattern_extractor.py`](#geometric-lens-cache) — LLM-driven pattern extraction
-    - [`pattern_scorer.py`](#geometric-lens-cache) — Ebbinghaus decay scoring
-    - [`co_occurrence.py`](#geometric-lens-cache) — Co-occurrence graph
-    - [`consolidator.py`](#geometric-lens-cache) — Category surprise tracking
-    - [`seed_patterns.py`](#geometric-lens-cache) — Bootstrap seed patterns
-    - [`__init__.py`](#geometric-lens-cache)
+    - [`models/`](#geometric-lens-models) — Artifact directory (per-model weights + calibration; large files gitignored)
+  - [`asa_calibration/`](#geometric-lens-asa) — ASA control-vector build pipeline
+  - [`indexer/`](#geometric-lens-indexer) — RAG indexing (tree-sitter AST, BM25, summaries, persistence)
+  - [`retriever/`](#geometric-lens-retriever) — RAG retrieval (BM25 / tree / hybrid)
+  - [`router/`](#geometric-lens-router) — Confidence routing (Thompson Sampling)
+  - [`cache/`](#geometric-lens-cache) — Pattern cache (STM/LTM, decay, co-occurrence)
+  - [`models/`](#geometric-lens-core) — Pydantic data models (pattern, route, tree_node)
+  - [`data/sample/`](#geometric-lens-core) — Sample embeddings
+  - [`tests/`](#geometric-lens-core) — Lens-local unit tests (identity, thresholds, calibration)
 - [`v3-service/`](#v3-service) — V3 pipeline HTTP wrapper
   - [`main.py`](#v3-service) — HTTP server, pipeline orchestrator, LLM/Lens/Sandbox adapters
+  - [`graph/`](#v3-service) — Structural call-graph engine (#39): extract, resolve, analyses, context, cache, datalog
   - [`Dockerfile`](#v3-service) — Container build (CPU PyTorch, port 8070)
 - [`sandbox/`](#sandbox) — Isolated code execution
-  - [`executor_server.py`](#sandbox) — FastAPI server, 8 language executors, linting, error classification
-  - [`Dockerfile`](#sandbox) — Container build (Python, Node, Go, Rust, gcc)
+  - [`executor_server.py`](#sandbox) — FastAPI server: 8 language executors, `/shell`, background jobs, linting
+  - [`Dockerfile`](#sandbox), [`requirements-runtime.txt`](#sandbox)
 - [`inference/`](#inference) — llama-server configuration
-  - [`Dockerfile.v31`](#inference) — V3.1 9B model build (used by docker-compose)
-  - [`Dockerfile`](#inference) — Base llama.cpp build
-  - [`Dockerfile.mtp`](#inference) — Multi-Token Prediction experimental build
-  - [`entrypoint-v3.1.sh`](#inference) — shared model-neutral Docker/K3s entrypoint (flash-attn, mlock, --fit off, env-driven sizing)
-  - [`entrypoint-v3.1-9b.sh`](#inference) — compatibility wrapper for the former filename
-  - [`entrypoint-v3-specdec.sh`](#inference) — K3s 14B + spec decode entrypoint
-  - [`entrypoint.sh`](#inference) — Default entrypoint
-  - [`entrypoint-embed.sh`](#inference) — Dedicated embedding server entrypoint
-  - [`entrypoint-mtp.sh`](#inference) — MTP experimental entrypoint
-  - [`patches/fix-embeddings-spec-decode.patch`](#inference) — Fix for embeddings + spec decode conflict
-  - [`templates/Qwen3-custom.jinja`](#inference) — Custom Qwen3 chat template
-  - [`templates/Qwen3-no-think.jinja`](#inference) — Qwen3 template with thinking suppressed
-- [`scripts/`](#scripts) — Build, deploy, and training automation
-  - [`install.sh`](#scripts) — K3s + GPU Operator installation
-  - [`uninstall.sh`](#scripts) — K3s teardown
-  - [`build-containers.sh`](#scripts) — Build all container images
-  - [`deploy-9b.sh`](#scripts) — Deploy 9B model to K3s
-  - [`generate-manifests.sh`](#scripts) — K3s manifests from atlas.conf
-  - [`download-models.sh`](#scripts) — Download model weights
-  - [`verify-install.sh`](#scripts) — Post-install verification
-  - [`smoke-test-9b.sh`](#scripts) — Quick 9B deployment smoke test
-  - [`run_full_benchmarks.sh`](#scripts) — Run all benchmark suites
-  - [`run_v31_ablation.sh`](#scripts) — V3.1 ablation study launcher
-  - [`validate_benchmarks.py`](#scripts) — Benchmark result validation
-  - [`derive_ablation.py`](#scripts) — Derive ablation conditions from runs
-  - [`retrain_cx.py`](#scripts) — Retrain C(x) cost field
-  - [`retrain_cx_phase0.py`](#scripts) — Phase 0 C(x) training
-  - [`retrain_lens_from_results.py`](#scripts) — Retrain Lens from benchmark results
-  - [`collect_lens_training_data.py`](#scripts) — Collect embeddings for training
-  - [`prepare_lens_training.py`](#scripts) — Prepare training data
-  - [`lib/config.sh`](#scripts) — Shared bash config loader
+  - [`Dockerfile.v31`](#inference) — CUDA build used by docker-compose
+  - [`Dockerfile.rocm`](#inference) — AMD ROCm build
+  - [`Dockerfile.vulkan`](#inference) — Vulkan build (universal fallback incl. lavapipe CPU)
+  - [`Dockerfile`](#inference) / [`Dockerfile.mtp`](#inference) — base + MTP experimental builds
+  - [`entrypoint-v3.1.sh`](#inference) — shared model-neutral Docker/K3s entrypoint
+  - [`entrypoint-v3.1-9b.sh`](#inference), [`entrypoint-v3-specdec.sh`](#inference), [`entrypoint.sh`](#inference), [`entrypoint-embed.sh`](#inference), [`entrypoint-mtp.sh`](#inference)
+  - [`patches/`](#inference) — `expose-hidden-states.patch` (PC-202), `fix-embeddings-spec-decode.patch`
+  - [`templates/`](#inference) — bundled Jinja chat templates
+- [`scripts/`](#scripts) — Install, deploy, and training automation
+  - [`atlas-bootstrap.sh`](#scripts) — one-shot `curl | bash` installer (PC-051)
+  - [`atlas-setup-macos.sh`](#scripts) / [`atlas-llama-macos.sh`](#scripts) — macOS hybrid setup + native launcher (#32)
+  - [`install.sh`](#scripts) / [`uninstall.sh`](#scripts) — K3s install + teardown
+  - [`build-containers.sh`](#scripts), [`deploy-9b.sh`](#scripts), [`generate-manifests.sh`](#scripts)
+  - [`download-models.sh`](#scripts), [`verify-install.sh`](#scripts), [`smoke-test-9b.sh`](#scripts)
+  - [`production-readiness.py`](#scripts) — repo-level release gates (compose validation, tests)
+  - [`run_full_benchmarks.sh`](#scripts), [`run_v31_ablation.sh`](#scripts), [`validate_benchmarks.py`](#scripts), [`derive_ablation.py`](#scripts)
+  - [`retrain_cx.py`](#scripts), [`retrain_cx_phase0.py`](#scripts), [`retrain_lens_from_results.py`](#scripts), [`collect_lens_training_data.py`](#scripts), [`prepare_lens_training.py`](#scripts)
+  - [`lib/config.sh`](#scripts) — shared bash config loader
+- [`templates/`](#templates) — K3s manifest templates (rendered via envsubst)
 - [`tests/`](#tests) — Test suite
-  - [`validate_tests.py`](#tests) — Test runner entry point
-  - [`conftest.py`](#tests) — Pytest shared fixtures
-  - [`infrastructure/`](#tests)
-    - [`test_llm.py`](#tests) — llama-server connectivity tests
-    - [`test_sandbox.py`](#tests) — Sandbox connectivity tests
-  - [`integration/`](#tests)
-    - [`test_e2e_flow.py`](#tests) — End-to-end pipeline flow test
-    - [`test_e2e_training.py`](#tests) — End-to-end training test
-  - [`v3/`](#tests) — V3 module unit tests (22 files)
-    - [`test_plan_search.py`](#tests), [`test_div_sampling.py`](#tests), [`test_budget_forcing.py`](#tests), [`test_blend_asc.py`](#tests), [`test_reasc.py`](#tests), [`test_s_star.py`](#tests), [`test_candidate_selection.py`](#tests), [`test_failure_analysis.py`](#tests), [`test_constraint_refinement.py`](#tests), [`test_pr_cot.py`](#tests), [`test_derivation_chains.py`](#tests), [`test_refinement_loop.py`](#tests), [`test_metacognitive.py`](#tests), [`test_ace_pipeline.py`](#tests), [`test_self_test_gen.py`](#tests), [`test_lens_feedback.py`](#tests), [`test_embedding_store.py`](#tests), [`test_ablation_analysis.py`](#tests), [`test_ewc.py`](#tests), [`test_replay_buffer.py`](#tests), [`test_enhanced_retrain.py`](#tests), [`test_phase4_validation.py`](#tests), [`test_sandbox_adapter.py`](#tests)
+  - [`cli/`](#tests) — CLI tests (compose, doctor, init, model, onboard, tier, fit, lens, asa, events, …)
+  - [`infrastructure/`](#tests) — llama/sandbox connectivity, compose configuration, CPU images
+  - [`v3/`](#tests) — V3 module unit tests
+  - [`v3-service/`](#tests) — v3-service tests (graph engine, ast_edit, plan scoring, winner selection, …)
+  - [`validate_tests.py`](#tests), [`conftest.py`](#tests)
+- [`.github/workflows/`](#ci) — CI: tests, image builds, installer test, CodeQL
 - [`docs/`](#docs) — Documentation
   - [`ARCHITECTURE.md`](#docs) — Two-layer architecture, component diagrams, data flow
-  - [`API.md`](#docs) — HTTP API reference for all 5 services
-  - [`CLI.md`](#docs) — CLI usage, streaming output, troubleshooting
+  - [`API.md`](#docs) — HTTP API reference for all services
+  - [`CAPABILITIES.md`](#docs) — What ATLAS can and can't do
+  - [`CLI.md`](#docs) — CLI + TUI usage
   - [`CONFIGURATION.md`](#docs) — All environment variables and settings
+  - [`DEVELOPMENT.md`](#docs) — Dev workflow (rebuilds, local proxy, tests)
   - [`MAP.md`](#docs) — This file
-  - [`PUBLISHING.md`](#docs) — Contributor walkthrough: publishing Lens + ASA artifacts back to ATLAS
-  - [`SETUP.md`](#docs) — Installation guide (Docker, bare-metal, K3s)
+  - [`PLAN_MODE.md`](#docs) — Plan mode mechanics + constants
+  - [`PRODUCTION_READINESS.md`](#docs) — Release gate definitions
+  - [`PROTOCOL.md`](#docs) — Typed event envelope contract
+  - [`PUBLISHING.md`](#docs) — Publishing Lens + ASA artifacts back to ATLAS
+  - [`SETUP.md`](#docs) — Installation guide (bootstrap, Docker, K3s)
+  - [`SETUP_MACOS.md`](#docs) — macOS hybrid setup (#32)
+  - [`SOURCES.md`](#docs) — Research papers by status bucket
+  - [`STORY.md`](#docs) — Project background
   - [`TROUBLESHOOTING.md`](#docs) — Common issues and solutions
+  - [`lang/`](#docs) — Translated documentation (zh-CN, ja, ko)
+  - [`demo/`](#docs) — Demo prompt set for the TUI `/demo` mode
+  - [`images/`](#docs) — README banner + demo GIF
   - [`reports/`](#docs-reports) — Ablation studies, status tracking, migration guides
-    - [`V3_ABLATION_STUDY.md`](#docs-reports) — V3 ablation methodology and results
-    - [`V2_5_ABLATION_STUDY.md`](#docs-reports) — V2.5 Geometric Lens ablation (historical)
-    - [`V2_TO_V2_5_MIGRATION.md`](#docs-reports) — V2 to V2.5 migration guide (historical)
-    - [`V3_STATUS.md`](#docs-reports) — V3 implementation status (historical)
-    - [`V3_1_STATUS.md`](#docs-reports) — V3.1 implementation status
-  - [`images/banner.png`](#docs) — README banner image
-  - [`reports/ablation/`](#v3-ablation-results) — Published ablation data
-    - `README.md` — Data format documentation
-    - `config.json` — Ablation run configuration
-    - `preflight.json` — Pre-run system checks
-    - `condition_a_baseline/` — Baseline (54.9%, 599 tasks)
-    - `condition_b_phase1/` — +Phase 1 (67.3%, 599 tasks)
-    - `condition_c_phase1_2/` — +Phase 1+2 (67.3%, 599 tasks)
-    - `condition_d_phase1_3/` — +Phase 1+3 (74.6%, 599 tasks)
-  - Each condition contains `summary.json`, `v3_lcb/results.json`, and `v3_lcb/per_task/` (599 per-task JSON files)
+  - [`reports/ablation/`](#v3-ablation-results) — Published ablation data (599-task conditions)
 
 ---
 
@@ -244,9 +202,14 @@ Every file in the repository. Click any directory in the tree to jump to its des
 
 | File | Description |
 |------|-------------|
-| [`.env.example`](../.env.example) | Docker Compose env template: model path, ports (8080/8099/8070/30820/8090), context size |
-| [`atlas.conf.example`](../atlas.conf.example) | K3s deployment config: model, GPU layers, parallel slots, NodePorts, namespace |
-| [`docker-compose.yml`](../docker-compose.yml) | 5-service stack: llama-server, geometric-lens, v3-service, sandbox, atlas-proxy |
+| [`.env.example`](../.env.example) | Docker Compose env template: model selection, ports (8080/8099/8070/30820/8090), runtime sizing, runtime-tuning knobs |
+| [`atlas.conf.example`](../atlas.conf.example) | K3s deployment config: model, parallel slots, NodePorts, namespace, storage paths |
+| [`docker-compose.yml`](../docker-compose.yml) | 6-service stack: redis, llama-server, geometric-lens, v3-service, sandbox, atlas-proxy (all `restart: unless-stopped`) |
+| [`docker-compose.rocm.yml`](../docker-compose.rocm.yml) | AMD overlay: ROCm image, `/dev/kfd` + `/dev/dri` passthrough |
+| [`docker-compose.vulkan.yml`](../docker-compose.vulkan.yml) | Vulkan overlay: vulkan image, `/dev/dri` passthrough, clears the NVIDIA device reservation |
+| [`docker-compose.cpu.yml`](../docker-compose.cpu.yml) | CPU-only overlay layered on the Vulkan overlay: strips the `/dev/dri` requirement so GPU-less hosts boot via the lavapipe CPU ICD |
+| [`docker-compose.macos.yml`](../docker-compose.macos.yml) | macOS hybrid overlay: containers talk to the native host-side llama-server |
+| [`docker-compose.override.yml.example`](../docker-compose.override.yml.example) | Template for local compose overrides |
 | [`pyproject.toml`](../pyproject.toml) | Python package: `atlas` CLI entry point (`atlas.cli.repl:run`), requires Python >= 3.9 |
 | [`.gitignore`](../.gitignore) | Ignores: model weights, __pycache__, logs, .env, build artifacts |
 
@@ -255,8 +218,8 @@ Every file in the repository. Click any directory in the tree to jump to its des
 
 | File | Description |
 |------|-------------|
-| [`README.md`](../README.md) | Project overview, 74.6% LCB benchmark, setup instructions, hardware requirements |
-| [`CHANGELOG.md`](../CHANGELOG.md) | Release history: V3.0.1 (2026-04-05), V3.0, V2.5, V2 |
+| [`README.md`](../README.md) | Project overview, benchmark results, quickstart, hardware requirements |
+| [`CHANGELOG.md`](../CHANGELOG.md) | Release history: V3.1.2 (2026-06-17), V3.1.0, V3.0.1, V3.0, V2.x, V1 |
 | [`LICENSE`](../LICENSE) | GNU Affero General Public License v3.0 (AGPL-3.0) |
 | [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) | Contributor Covenant Code of Conduct |
 | [`CONTRIBUTING.md`](../CONTRIBUTING.md) | How to contribute: fork, branch, test, PR workflow |
@@ -264,21 +227,35 @@ Every file in the repository. Click any directory in the tree to jump to its des
 <a id="atlas-proxy"></a>
 ### proxy/ — Agent Loop (Go)
 
-The core of the V3.0.1 CLI. Hosts `/v1/agent` (the structured agent endpoint the TUI drives), runs a grammar-constrained agent loop with 8 tools, and routes complex files through the V3 pipeline. `/v1/chat/completions` is a transparent passthrough to llama-server for OpenAI-compat clients.
+The core of the ATLAS CLI. Hosts `/v1/agent` (the structured agent endpoint the TUI drives), runs a grammar-constrained agent loop with 15 tools, and routes complex files through the V3 pipeline. `/v1/chat/completions` is a transparent passthrough to llama-server for OpenAI-compat clients.
 
 | File | Lines | Description |
 |------|-------|-------------|
-| [`main.go`](../proxy/main.go) | ~1600 | HTTP server, route registration, verify-repair pipeline scaffolding, format normalization, helpers shared with the agent loop |
-| [`agent.go`](../proxy/agent.go) | 740 | Agent loop iteration, JSON schema generation, system prompt building, LLM calls with grammar constraint, exploration budget, truncation recovery, `/v1/agent` + `/cancel` handlers |
-| [`tools.go`](../proxy/tools.go) | 905 | 8 tool definitions (read/write/edit/delete file, run command, search, list dir, plan tasks), per-file tier classifier, V3 routing |
-| [`grammar.go`](../proxy/grammar.go) | 192 | JSON schema (oneOf: tool_call/text/done) and GBNF grammar for constrained output, tool documentation generation |
-| [`types.go`](../proxy/types.go) | 390 | AgentContext, ToolDef, ToolResult, tier definitions (T0-T3), max turns per tier, permission types |
-| [`v3_bridge.go`](../proxy/v3_bridge.go) | 120 | HTTP bridge to Python V3 service with SSE progress streaming, Lens scoring bridge |
-| [`v3_adapter.go`](../proxy/v3_adapter.go) | 177 | Translates file write requests into V3GenerateRequest with project context, framework detection, constraint extraction |
-| [`build_verify.go`](../proxy/build_verify.go) | 157 | Per-file-type verification: tsc, py_compile, go build, cargo check, gcc, bash -n. Framework-specific overrides |
-| [`project.go`](../proxy/project.go) | 226 | Detects language (Node/Python/Rust/Go/C/Shell), framework (Next.js/Flask/Express), build/dev/test commands |
-| [`permissions.go`](../proxy/permissions.go) | 150 | Allow/deny rules, dangerous pattern detection (rm -rf, .env, credentials), mode-based access |
-| [`parallel.go`](../proxy/parallel.go) | 213 | plan_tasks executor: topological sort, concurrent sub-task execution (15-turn budget each) |
+| [`main.go`](../proxy/main.go) | ~410 | HTTP server, route registration, `/health` + `/ready` (gates on inference, lens, sandbox, v3-service), passthrough handler |
+| [`agent.go`](../proxy/agent.go) | ~3800 | Agent loop, system prompt, LLM calls with grammar constraint, exploration budget, done-gates (verification / action / claim-check), truncation recovery, `/v1/agent` + `/cancel` handlers |
+| [`tools.go`](../proxy/tools.go) | ~3150 | 15 tool definitions + executors (read/outline/write/edit/ast_edit/delete/move file, search, find, list dir, run_command, plan_tasks, run/tail/stop_background), per-file tier classifier, V3 routing, sandbox bridge |
+| [`types.go`](../proxy/types.go) | ~780 | AgentContext (with locked read-cache accessors), ToolDef, ToolResult, tier definitions, permission types |
+| [`grammar.go`](../proxy/grammar.go) | ~300 | JSON schema (oneOf: tool_call/text/done) and GBNF grammar for constrained output |
+| [`guardrails.go`](../proxy/guardrails.go) | ~760 | `validateShellCommand` catastrophic-command gate, whole-file fence sanitizer, suspicious-shrinkage guard |
+| [`workspace.go`](../proxy/workspace.go) | ~150 | Workspace containment: every path-taking tool arg is resolved and verified inside the workspace root (symlink-safe) |
+| [`security.go`](../proxy/security.go) | ~15 | `safeLogField` — control-byte-safe log encoding for untrusted text |
+| [`permissions.go`](../proxy/permissions.go) | ~150 | Allow/deny rules, `DefaultDenyPatterns` (mode-independent), mode-based access |
+| [`events.go`](../proxy/events.go) | ~195 | `/events` global typed-envelope SSE broker (PC-061) |
+| [`lens_samples.go`](../proxy/lens_samples.go) | ~315 | `/feedback` (accept/deny/thumbs verdicts → weighted lens samples) and `/v1/lens/training-status` (counts + retrain-available flag) |
+| [`lens_score.go`](../proxy/lens_score.go) | ~240 | PC-207: per-write lens scoring via `/internal/lens/score-per-step` + regression intervention |
+| [`calibration_status.go`](../proxy/calibration_status.go) | ~250 | `/v1/calibration/status` — lens verdicts (supported / no-artifacts / incomplete-artifacts / uncalibrated / dim-mismatch / unreachable) + ASA verdicts (supported / missing / unverified / incompatible) |
+| [`plan_adherence.go`](../proxy/plan_adherence.go) | ~360 | Plan-step matching, off-streak counter, auto-revise at `planAutoReviseThreshold=5` |
+| [`plan_reminder.go`](../proxy/plan_reminder.go) | ~85 | Plan-progress reminder injection for long multi-file tasks |
+| [`claim_check.go`](../proxy/claim_check.go) | ~275 | PC-197: structural verification of universal done-summary claims |
+| [`symbol_index.go`](../proxy/symbol_index.go) | ~320 | Per-session project symbol scan; snippet injection via v3-service `/internal/symbol_index` |
+| [`tool_repeat.go`](../proxy/tool_repeat.go) | ~90 | Same-(tool,args) repetition detector |
+| [`reasoning_repeat.go`](../proxy/reasoning_repeat.go) | ~145 | Repeated-reasoning-prefix detector |
+| [`traceback.go`](../proxy/traceback.go) | ~295 | run_command crash → deepest in-project frame → directed `edit_file` steer |
+| [`v3_bridge.go`](../proxy/v3_bridge.go) | ~230 | HTTP bridge to the Python V3 service with SSE progress streaming; `ATLAS_V3_TIMEOUT` cap |
+| [`v3_adapter.go`](../proxy/v3_adapter.go) | ~175 | Translates file write requests into V3GenerateRequest with project context + constraints |
+| [`build_verify.go`](../proxy/build_verify.go) | ~155 | Per-file-type verification: tsc, py_compile, go build, cargo check, gcc, bash -n |
+| [`project.go`](../proxy/project.go) | ~285 | Detects language (Node/Python/Rust/Go/C/Shell), framework, build/dev/test commands |
+| [`parallel.go`](../proxy/parallel.go) | ~210 | plan_tasks executor: topological sort, concurrent sub-task execution |
 | [`go.mod`](../proxy/go.mod) | — | Go module definition |
 | [`Dockerfile`](../proxy/Dockerfile) | — | Multi-stage Go build for containerized deployment |
 
@@ -290,28 +267,48 @@ Native terminal UI that consumes both atlas-proxy SSE streams (`/events` for typ
 | File | Description |
 |------|-------------|
 | [`main.go`](../tui/main.go) | Entry point. Parses `--proxy`, spawns SSE consumer goroutine, runs Bubbletea program in alt-screen mode. |
-| [`model.go`](../tui/model.go) | Bubbletea model — owns Envelope channel, chat history, textarea input. Hotkeys: Enter/Ctrl+L/Ctrl+T/Ctrl+R/Ctrl+C. Spinner tick. |
-| [`panes.go`](../tui/panes.go) | Pure pane renderers: pipeline (stage table), chat (markdown via glamour), events (log), stats (counter strip), input (textarea wrapper). |
-| [`state.go`](../tui/state.go) | Pipeline state machine — pure function from Envelope sequence to derived UI state (stages, counters, active turn, done). |
-| [`consumer.go`](../tui/consumer.go) | `/events` SSE consumer mirroring atlas-proxy's Envelope struct. Reconnect with exponential backoff. |
-| [`chat.go`](../tui/chat.go) | `/v1/agent` POST + chat-protocol SSE parser. `/cancel` POST for explicit turn abort. Optional bearer auth from `secrets/api-keys.json`. |
-| [`commands.go`](../tui/commands.go) | Slash-command dispatch: `/add /drop /context /diff /commit /undo /run /help /quit`. Shell-out commands via `exec.CommandContext` with 60s deadline. |
-| [`*_test.go`](../tui/) | 39 tests covering state machine (12), slash commands (8), model integration (11), chat client + bearer loader (8). |
+| [`model.go`](../tui/model.go) | Bubbletea model — Envelope channel, chat history, textarea input, hotkeys, feedback verdict staging, retrain banner. |
+| [`panes.go`](../tui/panes.go) | Pure pane renderers: pipeline (stage table), chat (markdown via glamour), events (log), files, stats, input. |
+| [`state.go`](../tui/state.go) | Pipeline state machine — pure function from Envelope sequence to derived UI state. |
+| [`consumer.go`](../tui/consumer.go) | `/events` SSE consumer. Reconnect with exponential backoff (backoff resets after a healthy connection). |
+| [`chat.go`](../tui/chat.go) | `/v1/agent` POST + chat-protocol SSE parser; `/cancel` and `/feedback` POSTs. Bearer auth from `secrets/api-keys.json` (all three file shapes, incl. the `atlas init` token-keyed one). |
+| [`commands.go`](../tui/commands.go) | Slash-command dispatch: `/add /drop /context /diff /commit /undo /run /good /bad /review /deny /accept /redo /copy /mouse /hide /show /help /quit`. |
+| [`calibration.go`](../tui/calibration.go) | Lens/ASA badge fetched from `/v1/calibration/status` (PC-059 / PC-061). |
+| [`files.go`](../tui/files.go) | Files sidebar: workspace tree scan, modified-file highlighting. |
+| [`plan.go`](../tui/plan.go) | Plan-mode chat rows: step list, adherence one-liners, revisions. |
+| [`demo.go`](../tui/demo.go) | `/demo` split-pane: raw lane is a direct model completion (no tools/files); V3 lane runs the full agent with its own sandbox subdir + file review. |
+| [`debug.go`](../tui/debug.go) | Append-only JSON-tagged debug log (`~/.cache/atlas-tui/debug.log`). |
+| [`*_test.go`](../tui/) | 110+ tests covering the state machine, slash commands, feedback flow, demo mode, chat client + bearer loader. |
 | [`go.mod`](../tui/go.mod) | Go module definition (github.com/itigges22/atlas-tui). Deps: bubbletea, lipgloss, bubbles, glamour. |
 
 <a id="atlas-cli"></a>
 ### atlas/ — Python CLI
 
-Standalone REPL for direct interaction with ATLAS services. Used for pipe-mode (`echo ... | atlas`) and as a fallback when the TUI can't run.
+Subcommand dispatcher + standalone REPL. `atlas <subcommand>` runs the install/onboarding tooling; plain `atlas` launches the TUI (pipe mode falls through to the `/solve` REPL). Service URLs resolve from shell env, then the Docker `.env` port keys, then defaults.
 
 | File | Description |
 |------|-------------|
-| [`cli/repl.py`](../atlas/cli/repl.py) | Main entry point (`atlas` command). Interactive REPL with /solve, /bench, /status, /help. Pipe mode support. |
-| [`cli/client.py`](../atlas/cli/client.py) | HTTP client for llama-server, Geometric Lens, sandbox. Health checks, generation (batch + streaming), scoring, sandbox execution. |
-| [`cli/display.py`](../atlas/cli/display.py) | Terminal formatting: banner, colors, status blocks, prompts, separators |
-| [`cli/commands/solve.py`](../atlas/cli/commands/solve.py) | /solve: generate code from LLM, extract from think blocks, score via Lens, test via sandbox |
-| [`cli/commands/bench.py`](../atlas/cli/commands/bench.py) | /bench: delegates to benchmark.v3_runner with dataset/strategy/task-count args |
-| [`cli/commands/status.py`](../atlas/cli/commands/status.py) | /status: check health of llama-server, Lens, sandbox |
+| [`cli/repl.py`](../atlas/cli/repl.py) | Main entry point (`atlas` command). Subcommand dispatch (`init doctor tier model onboard lens asa publish bench compose tui`), `--help` usage, unknown-subcommand exit 2, TUI launch with workspace alignment, pipe-mode REPL. |
+| [`cli/client.py`](../atlas/cli/client.py) | HTTP client for llama-server, Geometric Lens, sandbox. Health checks, chat + raw generation (batch/streaming, `reasoning_content` bridged to `<think>` tags), scoring, sandbox execution. |
+| [`cli/compose.py`](../atlas/cli/compose.py) | Compose configuration: `.env` parsing, service URL/port resolution, backend→overlay mapping, `docker compose` command construction, container-id lookup via `compose ps -q`. |
+| [`cli/events.py`](../atlas/cli/events.py) | Canonical Python definition of the typed event envelope (PC-061); `iter_events()` consumer. |
+| [`cli/runtime_artifacts.py`](../atlas/cli/runtime_artifacts.py) | Checks whether built Go binaries (proxy/TUI) are current relative to the checkout. |
+| [`cli/display.py`](../atlas/cli/display.py) | Terminal formatting: banner, colors, status blocks, progress bars |
+| [`cli/commands/init.py`](../atlas/cli/commands/init.py) | First-run wizard: hardware probe, model pick, `.env` + `secrets/api-keys.json`; reports failure when api-keys.json can't be written |
+| [`cli/commands/doctor.py`](../atlas/cli/commands/doctor.py) | 23-check install diagnostic (docker/compose/arch/gpu/containers/health/artifacts/e2e); prints results incrementally, `--json` buffers |
+| [`cli/commands/tier.py`](../atlas/cli/commands/tier.py) | `atlas tier classify \| list \| fit` — hardware probe, tier table, fit dispatch |
+| [`cli/commands/fit.py`](../atlas/cli/commands/fit.py) | GGUF-header + VRAM solver for ctx/KV/ubatch (`atlas tier fit`, PC-208) |
+| [`cli/commands/model.py`](../atlas/cli/commands/model.py) | Registry install (SHA-256, resumable with HTTP-416 finalization), `--url` BYO download, `recommend`, `install-artifacts` (exit 3 when nothing is registered for direct download), verify, remove; models dir resolves from flag → env → `.env` → `<root>/models` |
+| [`cli/commands/model_registry.py`](../atlas/cli/commands/model_registry.py) | Built-in model registry (lens/ASA status, artifact URLs, licenses) |
+| [`cli/commands/model_recommendations.py`](../atlas/cli/commands/model_recommendations.py) | Back-compat shim over the registry (PC-055.2 → PC-056) |
+| [`cli/commands/onboard.py`](../atlas/cli/commands/onboard.py) | Guided drop-in: `--url` download with `--apply`/interactive `.env` update, arch gate, lens check, next steps |
+| [`cli/commands/lens.py`](../atlas/cli/commands/lens.py) | Lens check/build/retrain/publish (PC-057 / PC-058 / PC-059) |
+| [`cli/commands/asa.py`](../atlas/cli/commands/asa.py) | ASA check/build/publish (PC-061); build runs inside the lens container via compose-resolved container id |
+| [`cli/commands/publish.py`](../atlas/cli/commands/publish.py) | Combined lens+ASA publish with joint pre-flight (PC-215) |
+| [`cli/commands/bench.py`](../atlas/cli/commands/bench.py) | Benchmark launcher with live progress (dataset size parsed from runner output) |
+| [`cli/commands/solve.py`](../atlas/cli/commands/solve.py) | `/solve`: chat-completions generation (the GGUF's own template via `--jinja`), extract, score via Lens, test via sandbox |
+| [`cli/commands/status.py`](../atlas/cli/commands/status.py) | `/status`: health of llama-server, Lens, sandbox |
+| [`cli/commands/tui.py`](../atlas/cli/commands/tui.py) | Locate/build/exec the Bubbletea TUI binary |
 
 <a id="benchmark"></a>
 <a id="benchmark-core"></a>
@@ -321,9 +318,10 @@ Runner infrastructure for evaluating LLM code generation across multiple dataset
 
 | File | Description |
 |------|-------------|
-| [`runner.py`](../benchmark/runner.py) | Core execution: function mode + stdio mode, LLM API calls, ChatML formatting, code extraction |
+| [`runner.py`](../benchmark/runner.py) | Core execution: function mode + stdio mode, LLM API calls, code extraction |
+| [`llm_client.py`](../benchmark/llm_client.py) | Shared llama-server client used by the runners |
 | [`v2_runner.py`](../benchmark/v2_runner.py) | V2 benchmark runner: phases 0-6, telemetry, Mode A/B, crash recovery |
-| [`v3_runner.py`](../benchmark/v3_runner.py) | V3 benchmark runner: full pipeline with ablation conditions A-F |
+| [`v3_runner.py`](../benchmark/v3_runner.py) | V3 benchmark runner: full pipeline with ablation conditions A-F; atomic per-task results (interrupted runs resume) |
 | [`v2_report.py`](../benchmark/v2_report.py) | Markdown report generator from benchmark results |
 | [`cli.py`](../benchmark/cli.py) | CLI entry point: `atlas benchmark --humaneval --dry-run` etc. |
 | [`config.py`](../benchmark/config.py) | BenchmarkConfig loaded from atlas.conf |
@@ -387,8 +385,8 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 | [`metacognitive.py`](../benchmark/v3/metacognitive.py) | 3F | Model failure pattern library with frequency tracking, compensation injection, effectiveness monitoring. |
 | [`ace_pipeline.py`](../benchmark/v3/ace_pipeline.py) | 3G | Evolving playbooks: Generator-Reflector-Curator pipeline with confidence decay. |
 | [`self_test_gen.py`](../benchmark/v3/self_test_gen.py) | util | Generate test cases from problem description. Multiple parsing fallbacks. 50% majority threshold. |
-| [`lens_feedback.py`](../benchmark/v3/lens_feedback.py) | util | Online Lens recalibration: collect pass/fail embeddings, trigger retrain at 50-sample intervals. |
-| [`embedding_store.py`](../benchmark/v3/embedding_store.py) | util | Binary append-only embedding storage: task_id + candidate_index + label + 4096-dim float32 vector. |
+| [`lens_feedback.py`](../benchmark/v3/lens_feedback.py) | util | Online Lens recalibration: collect pass/fail embeddings, trigger retrain at 50-sample intervals; keeps its buffer when the service refuses (read-only models dir). |
+| [`embedding_store.py`](../benchmark/v3/embedding_store.py) | util | Binary append-only embedding storage: task_id + candidate_index + label + model-dim float32 vector. |
 | [`ablation_analysis.py`](../benchmark/v3/ablation_analysis.py) | util | Bootstrap significance tests, pass rate computation across ablation conditions. |
 
 <a id="geometric-lens"></a>
@@ -397,14 +395,16 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 
 | File | Description |
 |------|-------------|
-| [`main.py`](../geometric-lens/main.py) | FastAPI server: 26 endpoints for scoring, indexing, routing, caching, pattern management |
+| [`main.py`](../geometric-lens/main.py) | FastAPI server: 29 endpoints for scoring, indexing, routing, caching, retrain/reload (retrain refuses with 503 when the models dir is mounted read-only) |
 | [`pipeline.py`](../geometric-lens/pipeline.py) | RAG orchestrator: retrieve chunks + patterns -> collect signals -> estimate difficulty -> route -> generate -> verify |
-| [`config.py`](../geometric-lens/config.py) | ServerConfig (port 8001), Redis URL, API keys, YAML config loading |
+| [`config.py`](../geometric-lens/config.py) | ServerConfig (port 8099), Redis URL, API keys, YAML config loading |
 | [`storage.py`](../geometric-lens/storage.py) | ProjectMetadata CRUD for indexed projects |
 | [`verify_loop.py`](../geometric-lens/verify_loop.py) | Verify-repair loop with retry and escalation |
 | [`sandbox_client.py`](../geometric-lens/sandbox_client.py) | HTTP client for sandbox code execution |
 | [`sandbox_analysis.py`](../geometric-lens/sandbox_analysis.py) | Classify sandbox execution results |
-| [`requirements.txt`](../geometric-lens/requirements.txt) | Dependencies: FastAPI, uvicorn, torch (CPU), pydantic, redis, tree-sitter |
+| [`models/`](../geometric-lens/models/) | Pydantic data models: pattern, route, tree_node |
+| [`tests/`](../geometric-lens/tests/) | Lens-local unit tests: model identity, threshold loading, score calibration, G(x) weights, ASA prompt templates |
+| [`requirements.txt`](../geometric-lens/requirements.txt) | Dependencies: FastAPI, uvicorn, torch (CPU), pydantic, redis, tree-sitter, gguf |
 | [`Dockerfile`](../geometric-lens/Dockerfile) | Python 3.11-slim, CPU PyTorch, port 8099 |
 
 <a id="geometric-lens-models"></a>
@@ -412,14 +412,28 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 
 | File | Description |
 |------|-------------|
-| [`cost_field.py`](../geometric-lens/geometric_lens/cost_field.py) | C(x): 4096->512->128->1 MLP (SiLU + Softplus). 2.16M params. Contrastive ranking loss. |
-| [`metric_tensor.py`](../geometric-lens/geometric_lens/metric_tensor.py) | G(x): PCA(4096->128) + diagonal metric tensor + input-dependent modulation. Code exists, not deployed. |
-| [`service.py`](../geometric-lens/geometric_lens/service.py) | Service layer: lazy model loading, evaluate_combined() (single embedding for C(x)+G(x)), verdict thresholds, hot-reload |
-| [`training.py`](../geometric-lens/geometric_lens/training.py) | train_cost_field() (200 epochs), retrain_cost_field_bce() (production retrain with class weights, early stopping) |
-| [`embedding_extractor.py`](../geometric-lens/geometric_lens/embedding_extractor.py) | Calls llama-server POST /v1/embeddings, handles pooled and per-token responses, mean pooling |
-| [`ewc.py`](../geometric-lens/geometric_lens/ewc.py) | Elastic Weight Consolidation: Fisher Information Matrix, penalty term, prevents catastrophic forgetting |
+| [`cost_field.py`](../geometric-lens/geometric_lens/cost_field.py) | C(x): model-hidden-dim→512→128→1 MLP (SiLU + Softplus), contrastive ranking loss. Input dim comes from the loaded model's embedding width. |
+| [`metric_tensor.py`](../geometric-lens/geometric_lens/metric_tensor.py) | G(x) metric-tensor fallback: PCA + diagonal metric tensor. Used only when the XGBoost G(x) is unavailable. |
+| [`service.py`](../geometric-lens/geometric_lens/service.py) | Service layer: lazy loading, served-model identity verification (probes llama-server `/v1/models`), embedding-dim checks, evaluate_combined(), hot-reload |
+| [`training.py`](../geometric-lens/geometric_lens/training.py) | train_cost_field() / retrain_cost_field_bce() for C(x); train_gx() (PCA + XGBoost, thresholds derived from out-of-fold CV scores) |
+| [`calibration.py`](../geometric-lens/geometric_lens/calibration.py) | Per-model C(x) sigmoid calibration: derive/save/load `cx_normalization.json` |
+| [`thresholds.py`](../geometric-lens/geometric_lens/thresholds.py) | Per-model G(x) operating thresholds: `gx_thresholds.json` (`off_rails` / `low` / `severe`) |
+| [`identity.py`](../geometric-lens/geometric_lens/identity.py) | `model_identity.json` read/write — binds artifacts to a model name + embedding dim |
+| [`embedding_extractor.py`](../geometric-lens/geometric_lens/embedding_extractor.py) | llama-server embedding client, handles pooled and per-token responses, mean pooling |
+| [`ewc.py`](../geometric-lens/geometric_lens/ewc.py) | Elastic Weight Consolidation: Fisher Information Matrix penalty against catastrophic forgetting |
 | [`correction.py`](../geometric-lens/geometric_lens/correction.py) | Natural gradient correction: -alpha * G_inv * grad_C. PCA projection/unprojection. Correctability score. |
 | [`replay_buffer.py`](../geometric-lens/geometric_lens/replay_buffer.py) | Domain-stratified reservoir sampling. 30% old / 70% new training mix. JSON persistence. |
+| [`models/`](../geometric-lens/geometric_lens/models/) | Artifact directory: `cost_field.pt`, `gx_xgboost.json`, `gx_weights.json`, calibration + identity files (weights gitignored; stats JSONs tracked) |
+
+<a id="geometric-lens-asa"></a>
+### geometric-lens/asa_calibration/ — ASA Control Vector
+
+| File | Description |
+|------|-------------|
+| [`build_steering_vector.py`](../geometric-lens/asa_calibration/build_steering_vector.py) | Extracts contrast activations via the PC-202 hidden-states endpoint and writes the control vector in llama.cpp GGUF format |
+| [`generate_pairs.py`](../geometric-lens/asa_calibration/generate_pairs.py) | Generates the contrast-pair corpus |
+| [`build_cvector_prompts.py`](../geometric-lens/asa_calibration/build_cvector_prompts.py) | Renders pairs with the loaded model's own chat template |
+| [`README.md`](../geometric-lens/asa_calibration/README.md) | Manual build walkthrough (the `atlas asa build` CLI wraps this) |
 
 <a id="geometric-lens-indexer"></a>
 ### geometric-lens/indexer/ — RAG Indexing
@@ -470,7 +484,8 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 
 | File | Description |
 |------|-------------|
-| [`main.py`](../v3-service/main.py) | HTTP server (port 8070). Pipeline orchestrator: Phase 0 (probe) -> Phase 2 (allocate K) -> Phase 1 (generate) -> Selection -> Phase 3 (repair). LLMAdapter, EmbedAdapter, and SandboxAdapter wire generation, embeddings, and syntax checks. Imports all 19 V3 modules. |
+| [`main.py`](../v3-service/main.py) | Threaded HTTP server (port 8070). Pipeline orchestrator: Phase 0 (probe) -> Phase 2 (allocate K) -> Phase 1 (generate) -> Selection (lens + structural vetoes; winners matched by original candidate index) -> Phase 3 (repair). LLMAdapter, EmbedAdapter, SandboxAdapter; client-disconnect aborts at phase boundaries. Serves `/v3/generate`, `/v3/run`, `/v3/plan`, `/internal/ast_edit`, `/internal/symbol_index`, `/internal/cyclomatic_complexity`. |
+| [`graph/`](../v3-service/graph/) | Structural call-graph engine (#39, port of chiasmus): `extract.py` (tree-sitter → CodeGraph), `resolve.py` / `resolve_calls.py` (import + call resolution), `analyses.py` (O(V+E) graph queries), `context.py` (repair-context slices), `cache.py` (thread-safe per-file LRU), `datalog.py` (optional solver layer), `flags.py` (`ATLAS_CALL_GRAPH` gate, default off), `types.py`, `facts.py`. |
 | [`Dockerfile`](../v3-service/Dockerfile) | Python 3.11, CPU PyTorch, copies benchmark/ for V3 module access. Port 8070. |
 
 <a id="sandbox"></a>
@@ -478,90 +493,130 @@ Each loader downloads from HuggingFace (JSON rows API, no pyarrow) and normalize
 
 | File | Description |
 |------|-------------|
-| [`executor_server.py`](../sandbox/executor_server.py) | FastAPI server (port 8020). 8 language executors with compilation, pytest/pylint for Python, syntax checking, error classification (15 types), output truncation. |
+| [`executor_server.py`](../sandbox/executor_server.py) | FastAPI server (port 8020). 8 language executors (process-group cleanup on timeout, optional stdin), `/shell` with workspace-snapshot overlays, background jobs (`/jobs/*`, abandoned-job reaping), O_NOFOLLOW path containment on all write paths, linting, error classification. |
 | [`Dockerfile`](../sandbox/Dockerfile) | Python 3.11-slim + Node.js 20 + Go 1.22 + Rust stable + gcc/g++. tmpfs workspace, read-only root. |
+| [`requirements-runtime.txt`](../sandbox/requirements-runtime.txt) | Python runtime dependencies for the executor |
 
 <a id="inference"></a>
 ### inference/ — llama-server Configuration
 
 | File | Description |
 |------|-------------|
-| [`Dockerfile.v31`](../inference/Dockerfile.v31) | V3.1 9B model Docker build. Used by docker-compose. Builds llama.cpp from source with CUDA. |
+| [`Dockerfile.v31`](../inference/Dockerfile.v31) | CUDA build used by docker-compose. Builds llama.cpp from a pinned revision with the PC-202 hidden-states patch. EXPOSE 8080. |
+| [`Dockerfile.rocm`](../inference/Dockerfile.rocm) | AMD ROCm build (V3.1.1). Installs curl for the compose healthcheck. |
+| [`Dockerfile.vulkan`](../inference/Dockerfile.vulkan) | Vulkan build (PC-114) — universal fallback; the lavapipe CPU ICD covers GPU-less hosts. |
 | [`Dockerfile`](../inference/Dockerfile) | Base llama.cpp build with CUDA support. |
 | [`Dockerfile.mtp`](../inference/Dockerfile.mtp) | Multi-Token Prediction experimental build. |
-| [`entrypoint-v3.1.sh`](../inference/entrypoint-v3.1.sh) | Shared Docker/K3s entrypoint: flash-attn, mlock, --fit off, embeddings; context/KV-type/batch sizes come from env (`atlas tier fit --write`, defaults f16 KV, -b 1024/-ub 1024). |
+| [`entrypoint-v3.1.sh`](../inference/entrypoint-v3.1.sh) | Shared model-neutral Docker/K3s entrypoint: flash-attn, mlock, `--fit off`, embeddings, `--jinja`; context/KV/batch sizing from env (`atlas tier fit --write`); ASA control-vector gate; `ATLAS_GPU_INDEX` device selection. |
 | [`entrypoint-v3.1-9b.sh`](../inference/entrypoint-v3.1-9b.sh) | Compatibility wrapper for the former model-specific filename. |
-| [`entrypoint-v3-specdec.sh`](../inference/entrypoint-v3-specdec.sh) | K3s 14B + spec decode entrypoint: Qwen3-14B main + Qwen3-0.6B draft, embeddings patch. |
+| [`entrypoint-v3-specdec.sh`](../inference/entrypoint-v3-specdec.sh) | K3s spec-decode entrypoint (main + draft model, embeddings patch). |
 | [`entrypoint.sh`](../inference/entrypoint.sh) | Default entrypoint: basic llama-server launch with configurable flags. |
-| [`entrypoint-embed.sh`](../inference/entrypoint-embed.sh) | Dedicated embedding server entrypoint (nomic-embed-text-v1.5). |
+| [`entrypoint-embed.sh`](../inference/entrypoint-embed.sh) | Dedicated embedding-server entrypoint. |
 | [`entrypoint-mtp.sh`](../inference/entrypoint-mtp.sh) | MTP experimental entrypoint. |
+| [`patches/expose-hidden-states.patch`](../inference/patches/expose-hidden-states.patch) | PC-202: per-layer residual `hidden_states` extension on `/embedding` (the Lens and ASA depend on it). |
 | [`patches/fix-embeddings-spec-decode.patch`](../inference/patches/fix-embeddings-spec-decode.patch) | One-line patch: prevents embedding=true from poisoning draft model context in spec decode. |
-| [`templates/Qwen3-custom.jinja`](../inference/templates/Qwen3-custom.jinja) | Custom Qwen3 Jinja2 chat template. |
-| [`templates/Qwen3-no-think.jinja`](../inference/templates/Qwen3-no-think.jinja) | Qwen3 template that suppresses `<think>` blocks. |
+| [`templates/`](../inference/templates/) | Bundled Jinja chat templates (normally unused — the GGUF's own template renders via `--jinja`). |
 
 <a id="scripts"></a>
 ### scripts/ — Automation
 
 | File | Description |
 |------|-------------|
-| [`install.sh`](../scripts/install.sh) | Full K3s installation: prerequisites, GPU Operator, namespace, image build, manifest deployment |
+| [`atlas-bootstrap.sh`](../scripts/atlas-bootstrap.sh) | One-shot `curl \| bash` installer (PC-051): distro detection, Docker + GPU runtime install, `.env` creation with a default model selection when none is set, model + lens artifact download, overlay selection (ROCm / Vulkan / +CPU when no `/dev/dri`), compose up + health wait, ASA build, `atlas doctor` |
+| [`atlas-setup-macos.sh`](../scripts/atlas-setup-macos.sh) | macOS hybrid setup (#32): native llama.cpp build + Docker stack |
+| [`atlas-llama-macos.sh`](../scripts/atlas-llama-macos.sh) | Native macOS llama-server launcher (mirrors the Docker entrypoint defaults) |
+| [`install.sh`](../scripts/install.sh) | Full K3s installation: prerequisites (incl. bc), GPU Operator, namespace, image build, manifest deployment |
 | [`uninstall.sh`](../scripts/uninstall.sh) | K3s teardown and cleanup |
 | [`build-containers.sh`](../scripts/build-containers.sh) | Build all container images and import to K3s |
-| [`deploy-9b.sh`](../scripts/deploy-9b.sh) | Deploy Qwen3.5-9B to K3s cluster |
+| [`deploy-9b.sh`](../scripts/deploy-9b.sh) | Deploy the default 9B configuration to K3s |
 | [`generate-manifests.sh`](../scripts/generate-manifests.sh) | Generate K3s manifests from atlas.conf via envsubst |
-| [`download-models.sh`](../scripts/download-models.sh) | Download model weights from HuggingFace |
+| [`download-models.sh`](../scripts/download-models.sh) | Download the selected model weights via curl (relative `default.gguf` symlink) |
 | [`verify-install.sh`](../scripts/verify-install.sh) | Post-install health verification |
-| [`smoke-test-9b.sh`](../scripts/smoke-test-9b.sh) | Quick smoke test for 9B deployment |
+| [`smoke-test-9b.sh`](../scripts/smoke-test-9b.sh) | Quick deployment smoke test |
+| [`production-readiness.py`](../scripts/production-readiness.py) | Release gates: compose validation for every shipped overlay combination (base / rocm / vulkan / vulkan+cpu / macos), tests, lint |
 | [`run_full_benchmarks.sh`](../scripts/run_full_benchmarks.sh) | Run all benchmark suites sequentially |
 | [`run_v31_ablation.sh`](../scripts/run_v31_ablation.sh) | V3.1 ablation study launcher with conditions A-F |
 | [`validate_benchmarks.py`](../scripts/validate_benchmarks.py) | Validate benchmark results for completeness |
 | [`derive_ablation.py`](../scripts/derive_ablation.py) | Derive ablation conditions from raw benchmark runs |
-| [`retrain_cx.py`](../scripts/retrain_cx.py) | Retrain C(x) cost field from collected embeddings |
-| [`retrain_cx_phase0.py`](../scripts/retrain_cx_phase0.py) | Phase 0 C(x) initial training (597 embeddings) |
-| [`retrain_lens_from_results.py`](../scripts/retrain_lens_from_results.py) | Retrain Lens models from benchmark result embeddings |
+| [`retrain_cx.py`](../scripts/retrain_cx.py) | Retrain C(x) cost field from collected embeddings (resolves ports from the Docker `.env`, K3s NodePort fallback) |
+| [`retrain_cx_phase0.py`](../scripts/retrain_cx_phase0.py) | Phase 0 C(x) initial training |
+| [`retrain_lens_from_results.py`](../scripts/retrain_lens_from_results.py) | Retrain Lens models from benchmark result embeddings (mean-pools per-token responses; hot-reloads the service) |
 | [`collect_lens_training_data.py`](../scripts/collect_lens_training_data.py) | Collect pass/fail embeddings from benchmark runs |
 | [`prepare_lens_training.py`](../scripts/prepare_lens_training.py) | Prepare and validate training data format |
-| [`lib/config.sh`](../scripts/lib/config.sh) | Shared bash config: loads atlas.conf, validates paths, sets defaults |
+| [`lib/config.sh`](../scripts/lib/config.sh) | Shared bash config: loads atlas.conf, validates paths, sets defaults (incl. `ATLAS_LENS_TRAINING_DIR`) |
+
+<a id="templates"></a>
+### templates/ — K3s Manifest Templates
+
+Rendered from `atlas.conf` via envsubst by `scripts/generate-manifests.sh`. Container-side ports are pinned (8080/8099/8070/8020); the `ATLAS_*_PORT` / `ATLAS_*_NODEPORT` vars move only the Service ports.
+
+| File | Description |
+|------|-------------|
+| [`llama-deployment.yaml.tmpl`](../templates/llama-deployment.yaml.tmpl) | llama-server Deployment + Service (GPU request, models hostPath) |
+| [`atlas-proxy-deployment.yaml.tmpl`](../templates/atlas-proxy-deployment.yaml.tmpl) | atlas-proxy Deployment + Service (workspace, read-only models mount, lens-training hostPath, ctx/slots env) |
+| [`geometric-lens-deployment.yaml.tmpl`](../templates/geometric-lens-deployment.yaml.tmpl) | geometric-lens Deployment + Service |
+| [`v3-service-deployment.yaml.tmpl`](../templates/v3-service-deployment.yaml.tmpl) | v3-service Deployment + Service |
+| [`sandbox-deployment.yaml.tmpl`](../templates/sandbox-deployment.yaml.tmpl) | sandbox Deployment + Service |
+| [`redis-deployment.yaml.tmpl`](../templates/redis-deployment.yaml.tmpl) | Redis Deployment + Service + PVC |
 
 <a id="tests"></a>
 ### tests/ — Test Suite
 
-| File | Description |
+| Path | Description |
 |------|-------------|
 | [`validate_tests.py`](../tests/validate_tests.py) | Test runner entry point |
 | [`conftest.py`](../tests/conftest.py) | Pytest shared fixtures |
-| **infrastructure/** | |
-| [`test_llm.py`](../tests/infrastructure/test_llm.py) | llama-server health and generation tests |
-| [`test_sandbox.py`](../tests/infrastructure/test_sandbox.py) | Sandbox execution tests |
-| **integration/** | |
-| [`test_e2e_flow.py`](../tests/integration/test_e2e_flow.py) | End-to-end pipeline flow test |
-| [`test_e2e_training.py`](../tests/integration/test_e2e_training.py) | End-to-end Lens training test |
-| **v3/** — 22 unit tests, one per V3 module | |
-| `test_plan_search.py` `test_div_sampling.py` `test_budget_forcing.py` `test_blend_asc.py` `test_reasc.py` `test_s_star.py` `test_candidate_selection.py` `test_failure_analysis.py` `test_constraint_refinement.py` `test_pr_cot.py` `test_derivation_chains.py` `test_refinement_loop.py` `test_metacognitive.py` `test_ace_pipeline.py` `test_self_test_gen.py` `test_lens_feedback.py` `test_embedding_store.py` `test_ablation_analysis.py` `test_ewc.py` `test_replay_buffer.py` `test_enhanced_retrain.py` `test_phase4_validation.py` `test_sandbox_adapter.py` | |
+| [`cli/`](../tests/cli/) | CLI tests: compose config + `atlas compose`, doctor, init, model (registry, downloads, artifacts), onboard, tier, fit, lens, asa, events, client, macOS launcher, runtime artifacts, REPL dispatch |
+| [`infrastructure/`](../tests/infrastructure/) | llama-server connectivity, sandbox connectivity, compose configuration (env passthrough, restart policy), CPU image checks |
+| [`v3/`](../tests/v3/) | V3 module unit tests — one per `benchmark/v3/` module plus runner extraction and phase-4 validation |
+| [`v3-service/`](../tests/v3-service/) | v3-service tests: graph engine (extract/resolve/analyses/context/solver/multilang), ast_edit HTML, event emission, language verification, lens calibration, plan scoring, sandbox syntax, winner selection |
+
+<a id="ci"></a>
+### .github/workflows/ — CI
+
+| File | Description |
+|------|-------------|
+| [`test.yml`](../.github/workflows/test.yml) | Go + Python test suites, compose validation for every shipped overlay combination |
+| [`build-images.yml`](../.github/workflows/build-images.yml) | Container image builds + GHCR publish |
+| [`install-test.yml`](../.github/workflows/install-test.yml) | Bootstrap installer end-to-end test (asserts a non-empty model selection lands in `.env`) |
+| [`codeql.yml`](../.github/workflows/codeql.yml) | CodeQL static analysis |
 
 <a id="docs"></a>
 ### docs/ — Documentation
 
 | File | Description |
 |------|-------------|
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Two-layer architecture with 13 Mermaid diagrams, component breakdowns, sequence diagrams |
-| [`API.md`](API.md) | HTTP API reference: all endpoints for all 5 services, request/response formats |
-| [`CLI.md`](CLI.md) | CLI usage, streaming output format, workflow examples, troubleshooting |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Two-layer architecture with Mermaid diagrams, component breakdowns, sequence diagrams |
+| [`API.md`](API.md) | HTTP API reference: all endpoints for all services, request/response formats |
+| [`CAPABILITIES.md`](CAPABILITIES.md) | What ATLAS can and can't do |
+| [`CLI.md`](CLI.md) | CLI + TUI usage, subcommands, workflow examples, troubleshooting |
 | [`CONFIGURATION.md`](CONFIGURATION.md) | Every environment variable across all services, internal constants, K3s config |
+| [`DEVELOPMENT.md`](DEVELOPMENT.md) | Dev workflow: targeted rebuilds, host-side proxy, test suites |
 | [`MAP.md`](MAP.md) | This file — repository file map |
+| [`PLAN_MODE.md`](PLAN_MODE.md) | Plan mode: per-turn pre-flight planning + adherence constants |
+| [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) | Release gate definitions (`scripts/production-readiness.py`) |
+| [`PROTOCOL.md`](PROTOCOL.md) | Typed event envelope contract shared by proxy, v3-service, and clients |
 | [`PUBLISHING.md`](PUBLISHING.md) | Contributor walkthrough: HF + GitHub publish flow for Lens / ASA artifacts (PC-059, PC-061) |
-| [`SETUP.md`](SETUP.md) | Installation: Docker Compose, bare-metal, K3s |
+| [`SETUP.md`](SETUP.md) | Installation: one-shot bootstrap, Docker Compose, K3s |
+| [`SETUP_MACOS.md`](SETUP_MACOS.md) | macOS hybrid install (#32): native Metal llama-server + Docker stack |
+| [`SOURCES.md`](SOURCES.md) | Research papers bucketed by status relative to the current release |
+| [`STORY.md`](STORY.md) | Project background |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Common issues and solutions |
+| [`lang/`](lang/) | Translated documentation (zh-CN, ja, ko) |
+| [`demo/demo_prompts.json`](demo/demo_prompts.json) | Prompt set for the TUI `/demo` split-pane mode |
+| [`images/`](images/) | README banner + demo GIF |
+
 <a id="docs-reports"></a>
 ### docs/reports/ — Studies, Status, Migration
 
 | File | Description |
 |------|-------------|
 | [`V3_ABLATION_STUDY.md`](reports/V3_ABLATION_STUDY.md) | V3 ablation methodology: conditions A-D, 599 tasks, statistical analysis |
+| [`CALL_GRAPH_REASONING_V3.md`](reports/CALL_GRAPH_REASONING_V3.md) | Structural call-graph reasoning design (#39) |
 | [`V2_5_ABLATION_STUDY.md`](reports/V2_5_ABLATION_STUDY.md) | Historical: V2.5 Geometric Lens ablation study |
 | [`V2_TO_V2_5_MIGRATION.md`](reports/V2_TO_V2_5_MIGRATION.md) | Historical: V2 to V2.5 migration guide |
 | [`V3_STATUS.md`](reports/V3_STATUS.md) | Historical: V3 implementation tracking |
-| [`V3_1_STATUS.md`](reports/V3_1_STATUS.md) | V3.1 implementation status and roadmap |
+| [`V3_1_STATUS.md`](reports/V3_1_STATUS.md) | V3.1 implementation status |
 
 <a id="v3-ablation-results"></a>
 ### docs/reports/ablation/ — Published Evidence

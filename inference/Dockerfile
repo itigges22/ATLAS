@@ -24,5 +24,6 @@ RUN mkdir -p /models /templates
 COPY templates/ /templates/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-EXPOSE 8000
+# The entrypoint's default listen port (PORT env) is 8080.
+EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

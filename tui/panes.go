@@ -116,7 +116,9 @@ func renderPipelineRow(s *stageStatus, width int) string {
 	icon, style := stageIcon(s)
 	name := lipgloss.NewStyle().Width(16).Render(truncate(s.Name, 16))
 	status := style.Width(8).Render(stageStatusLabel(s))
-	dur := dimStyle.Width(8).Render(formatDuration(s.Duration()))
+	// Truncate to the cell width — content wider than the Width(8) cell
+	// would soft-wrap and push the whole row onto a second line.
+	dur := dimStyle.Width(8).Render(truncate(formatDuration(s.Duration()), 8))
 	detail := dimStyle.Render(truncate(s.Detail, max(0, width-40)))
 	return fmt.Sprintf("%s  %s %s %s %s", icon, name, status, dur, detail)
 }
@@ -441,22 +443,31 @@ func renderMarkdown(body string, r *glamour.TermRenderer) []string {
 }
 
 // wrapPlain hard-wraps long lines at the given width. Nothing fancy —
-// just splits at whitespace when possible.
+// just splits at whitespace when possible. Operates on runes so a
+// multi-byte character (em dash, box drawing, CJK) is never split
+// mid-sequence and width counts characters, not bytes.
 func wrapPlain(s string, width int) []string {
 	if width < 8 {
 		width = 8
 	}
 	out := []string{}
 	for _, line := range strings.Split(s, "\n") {
-		for len(line) > width {
+		runes := []rune(line)
+		for len(runes) > width {
 			cut := width
-			if idx := strings.LastIndex(line[:width], " "); idx > width/2 {
-				cut = idx
+			for i := width - 1; i > width/2; i-- {
+				if runes[i] == ' ' {
+					cut = i
+					break
+				}
 			}
-			out = append(out, line[:cut])
-			line = strings.TrimLeft(line[cut:], " ")
+			out = append(out, string(runes[:cut]))
+			runes = runes[cut:]
+			for len(runes) > 0 && runes[0] == ' ' {
+				runes = runes[1:]
+			}
 		}
-		out = append(out, line)
+		out = append(out, string(runes))
 	}
 	return out
 }
@@ -528,11 +539,13 @@ func renderStatsPane(p *pipelineState, width int,
 // slashCommandList drives the slash-mode autocomplete hint. Order is
 // the order users see; keep frequent commands first.
 var slashCommandList = []string{
-	"/help", "/clear", "/compact",
+	"/help", "/good", "/bad", "/review",
+	"/deny", "/accept", "/redo",
+	"/clear", "/compact",
 	"/add", "/drop", "/context",
 	"/diff", "/commit", "/undo",
 	"/run", "/hide", "/show",
-	"/mouse", "/copy", "/quit",
+	"/mouse", "/copy", "/demo", "/quit",
 }
 
 // renderSlashHint shows a one-line list of slash commands matching
@@ -561,11 +574,14 @@ func renderSlashHint(value string, width int) string {
 	return line
 }
 
-// renderHelpHint shows the full slashCommandHelp body above the input
-// box while the user is in "?" mode. Live hint, no Enter required —
+// renderHelpHint shows the slashCommandHelp body above the input box
+// while the user is in "?" mode. Live hint, no Enter required —
 // matches how /slash shows its command dropdown. Pressing Enter still
 // routes through /help (so the help also lands in chat scrollback).
-func renderHelpHint(width int) string {
+// maxLines is the row budget the layout reserved for the hint block;
+// when the help body doesn't fit, the tail is replaced with a pointer
+// to /help so the block never bleeds past its budget.
+func renderHelpHint(width, maxLines int) string {
 	header := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("220")).
 		Bold(true).
@@ -578,6 +594,14 @@ func renderHelpHint(width int) string {
 	for i, line := range lines {
 		if lipgloss.Width(line) > width {
 			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	if maxLines > 0 && len(lines) > maxLines {
+		if maxLines == 1 {
+			lines = lines[:1]
+		} else {
+			lines = append(lines[:maxLines-1],
+				dimStyle.Render("… (/help for the full list)"))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -623,11 +647,11 @@ func formatTokens(n int) string {
 //
 // Vertical budget (per row, including borders), right column:
 //   header   1
-//   pipeline up to 10  (8 inner + 2 border, capped)
+//   pipeline up to 10  (title + up to 7 rows + 2 border, capped)
 //   chat     fills (≥5)
-//   events   5  (3 inner + 2 border)
+//   events   5  (title + 2 rows + 2 border)
 //   stats    1  (no border)
-//   input    5  (3 inner + 2 border)
+//   input    6  (title + 3 rows + 2 border)
 // selectionState carries the user's drag-in-progress info into
 // layoutFullScreen so the overlay can highlight the active range.
 // Empty pane name = no selection in flight.
@@ -657,26 +681,29 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		headerH = 1
 		statsH  = 1
 	)
-	// Input box: 5 rows by default (3 inner + 2 border). bash/slash
-	// mode adds a one-row hint banner above, so reserve one extra row.
-	// help mode shows the full multi-line slashCommandHelp body — count
-	// its lines so the box doesn't bleed into the chat pane.
-	inputH := 5
+	// Input box: 6 rows by default (title + 3 textarea rows + 2 border).
+	// bash/slash mode adds a one-row hint banner above, so reserve one
+	// extra row. help mode shows the multi-line slashCommandHelp body —
+	// count its lines so the box doesn't bleed into the chat pane.
+	inputH := 6
 	switch inputMode {
 	case "bash", "slash":
-		inputH = 6
+		inputH = 7
 	case "help":
-		// +1 header + N body lines + 1 spacer row before the input box.
-		// Cap at half the terminal height so the chat pane stays
-		// visible on small terminals — the help body is dense but
-		// scrollable in the user's terminal so a clip is acceptable.
+		// 6-row box + 1 hint header + N body lines. Cap at half the
+		// terminal height (floor 8) so the chat pane stays visible on
+		// small terminals — renderHelpHint truncates the body to fit.
 		helpLines := strings.Count(slashCommandHelp, "\n") + 1
-		inputH = 5 + 1 + helpLines + 1
-		if cap := height / 2; cap > 8 && inputH > cap {
+		inputH = 6 + 1 + helpLines
+		cap := height / 2
+		if cap < 8 {
+			cap = 8
+		}
+		if inputH > cap {
 			inputH = cap
 		}
 	}
-	eventsH := 5 // 3 inner + 2 border
+	eventsH := 5 // title + 2 rows + 2 border
 	if hideEvents {
 		eventsH = 0
 	}
@@ -686,20 +713,25 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		if pipelineRows < 1 {
 			pipelineRows = 1
 		}
-		pipelineH = pipelineRows + 2 // borders
+		pipelineH = pipelineRows + 3 // title + borders
 		if pipelineH > 10 {
 			pipelineH = 10
 		}
 	}
 	chatH := height - headerH - pipelineH - eventsH - statsH - inputH
 	if chatH < 5 {
-		// Squeeze the pipeline first, then events, before going below 5.
+		// Squeeze the pipeline (down to its 4-row minimum: title + one
+		// content row + borders) before letting chat go below 5.
 		shortfall := 5 - chatH
-		if pipelineH-shortfall >= 3 {
-			pipelineH -= shortfall
-			chatH = 5
-		} else {
-			chatH = max(3, height-headerH-pipelineH-statsH-inputH-3)
+		if give := pipelineH - 4; give > 0 {
+			if give > shortfall {
+				give = shortfall
+			}
+			pipelineH -= give
+			chatH += give
+		}
+		if chatH < 4 {
+			chatH = 4
 		}
 	}
 
@@ -762,7 +794,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	// instead of jumping back to the title at the top.
 	chatContentH := chatH - 3 // -3 = title row + 2 border rows
 	thinkingRow := ""
-	if turnActive {
+	if turnActive && chatContentH > 1 {
 		chatContentH -= 1 // reserve one row for the indicator
 		mark := spinnerFrames[spinnerFrame%len(spinnerFrames)]
 		// Verb cycles every ~3s. spinnerFrame ticks at 150ms, so divide
@@ -880,7 +912,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	case "help":
 		style = bordStyleSlash
 		title = " ? · help "
-		hint = renderHelpHint(innerW)
+		hint = renderHelpHint(innerW, inputH-6)
 	}
 	inputBox := style.Width(innerW).Render(
 		titleStyle.Render(title) + "\n" + inputView)
@@ -939,6 +971,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		rightX:    filesRightX,
 		viewStart: filesViewStart,
 		lines:     filesAll,
+		padBottom: true, // renderFilesPane pads below the content
 	})
 
 	// Sidebar on the right (after rightCol) per user preference —

@@ -677,10 +677,18 @@ def _step_write_api_keys(atlas_root: str, args: argparse.Namespace,
         mode = os.stat(secrets_dir).st_mode & 0o777
         if mode & 0o077 and not args.yes:
             _safe_print(f"  {YELLOW if color else ''}secrets/ exists with "
-                        f"loose permissions ({oct(mode)}). Re-run with --yes "
-                        f"to chmod to 0700, or chmod manually."
+                        f"loose permissions ({oct(mode)})."
                         f"{RESET if color else ''}")
-            return keys_path, None, ""
+            # Interactive: ask before tightening (the user might have
+            # chmod'd it intentionally for a multi-user setup).
+            # Non-interactive without --yes: refuse — the caller reports
+            # failure instead of a silent skip masquerading as success.
+            if not _confirm("chmod secrets/ to 0700 and continue?",
+                            default_yes=False, args=args):
+                _safe_print("  Not writing api-keys.json into a loose "
+                            "secrets/ dir. Re-run with --yes to chmod to "
+                            "0700, or chmod manually.")
+                return keys_path, None, ""
 
     if args.dry_run:
         _safe_print(f"  (dry-run) would write {keys_path}")
@@ -834,6 +842,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     _safe_print("[5/5] Generating api-keys.json…")
     keys_path, keys_backup, api_key = _step_write_api_keys(atlas_root, args, color)
     _safe_print("")
+    if not args.dry_run and not api_key:
+        # api-keys.json was skipped (loose secrets/ perms, declined or
+        # non-interactive) — the install isn't complete, so don't report
+        # success.
+        _safe_print(f"  {RED if color else ''}Setup incomplete: "
+                    f"api-keys.json was not written.{RESET if color else ''}")
+        return 1
 
     # Next steps. args.backend wins over vendor-derived since the wizard
     # writes that into ATLAS_BACKEND above.

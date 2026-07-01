@@ -45,6 +45,12 @@ import (
 // fence/prose was stripped — the caller should log it so we can spot
 // repeat offenders. .md / .markdown / .rst files are passed through
 // unchanged because fences are legitimate content there.
+//
+// Only a WHOLE-FILE wrapper is stripped: the opening fence must sit at
+// the very top of the content (preceded by at most a few prose lines),
+// and the closing fence may be followed only by a short prose trailer.
+// A fence deeper in the file — e.g. a fenced example inside a docstring
+// — is legitimate content and passes through unchanged.
 func sanitizeFileContent(filePath, content string) (string, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
@@ -54,12 +60,25 @@ func sanitizeFileContent(filePath, content string) (string, bool) {
 
 	lines := strings.Split(content, "\n")
 
+	// Locate the opening fence within the preamble allowance. More than
+	// a few non-empty lines before the first fence — or any line that
+	// opens a docstring/comment block — means the fence is interior
+	// content, not a wrapper.
+	const maxWrapperProseLines = 5
 	openIdx := -1
+	preambleProse := 0
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			openIdx = i
 			break
+		}
+		if trimmed == "" {
+			continue
+		}
+		preambleProse++
+		if preambleProse > maxWrapperProseLines || lineSignalsRealContent(trimmed) {
+			return content, false
 		}
 	}
 	if openIdx < 0 {
@@ -71,6 +90,25 @@ func sanitizeFileContent(filePath, content string) (string, bool) {
 		if strings.TrimSpace(lines[i]) == "```" {
 			closeIdx = i
 			break
+		}
+	}
+
+	// Same whole-file requirement on the way out: after the closing
+	// fence only a short prose trailer ("This file: 1. ... 2. ...") is
+	// allowed. Substantial content or docstring/comment markers after
+	// the fence mean the pair is interior — pass through unchanged.
+	if closeIdx > openIdx {
+		const maxTrailerProseLines = 8
+		trailerProse := 0
+		for _, line := range lines[closeIdx+1:] {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			trailerProse++
+			if trailerProse > maxTrailerProseLines || lineSignalsRealContent(trimmed) {
+				return content, false
+			}
 		}
 	}
 
@@ -91,6 +129,36 @@ func sanitizeFileContent(filePath, content string) (string, bool) {
 		cleaned += "\n"
 	}
 	return cleaned, true
+}
+
+// docstringDelimiters mark a Python/multiline string. When one appears
+// anywhere on a preamble or trailer line, the line is real string content
+// (e.g. `DOC = """usage:`) and a fence around it is legitimate — so the
+// content is not a whole-file wrapper. These are matched with Contains
+// because code commonly precedes the delimiter on the opening line.
+var docstringDelimiters = []string{`"""`, "'''"}
+
+// commentBlockOpeners mark a comment block. These are matched by prefix so
+// that model prose merely mentioning a marker (e.g. "the /* config */
+// block:") does not disqualify a genuine whole-file wrapper, while a line
+// that actually opens a comment block does.
+var commentBlockOpeners = []string{"/*", "*/", "<!--", "-->"}
+
+// lineSignalsRealContent reports whether a trimmed line indicates the text
+// around a fence is real file content (a docstring or comment block) rather
+// than model prose wrapping the file.
+func lineSignalsRealContent(trimmed string) bool {
+	for _, d := range docstringDelimiters {
+		if strings.Contains(trimmed, d) {
+			return true
+		}
+	}
+	for _, m := range commentBlockOpeners {
+		if strings.HasPrefix(trimmed, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // run_command executes inside the sandbox container, which is already a

@@ -294,7 +294,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	// concrete signal of "what the agent knows now" beyond the
 	// original priority-files sample.
 	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	for path, content := range ctx.FilesRead {
+	for path, content := range ctx.SnapshotFilesRead() {
 		if len(pctx) >= 8 {
 			break
 		}
@@ -317,7 +317,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 		ProjectContext: pctx,
 		NCandidates:    3,
 	}
-	plan, err := callV3PlanStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		switch stage {
 		case "token", "llm_start", "llm_end":
 			return

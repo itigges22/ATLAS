@@ -21,9 +21,14 @@ spec:
       - name: v3
         image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-v3:${ATLAS_IMAGE_TAG}
         ports:
-        - containerPort: ${ATLAS_V3_PORT}
+        # The container listens on a fixed 8070 (ATLAS_V3_PORT env below
+        # pins the service's own bind port); the external ATLAS_V3_PORT
+        # var only moves the Service port. Pinning the container-side
+        # ports means changing the external var can't break the probes.
+        - containerPort: 8070
           name: http
         env:
+        - {name: ATLAS_V3_PORT,       value: "8070"}
         - {name: ATLAS_INFERENCE_URL, value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
         - {name: ATLAS_LENS_URL,      value: "http://geometric-lens:${ATLAS_LENS_PORT}"}
         - {name: ATLAS_SANDBOX_URL,   value: "http://sandbox:${ATLAS_SANDBOX_PORT}"}
@@ -31,13 +36,13 @@ spec:
         readinessProbe:
           httpGet:
             path: /health
-            port: ${ATLAS_V3_PORT}
+            port: 8070
           initialDelaySeconds: 15
           periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /health
-            port: ${ATLAS_V3_PORT}
+            port: 8070
           initialDelaySeconds: 30
           periodSeconds: 30
         resources:
@@ -58,6 +63,6 @@ spec:
   selector: {app: v3-service}
   ports:
   - port: ${ATLAS_V3_PORT}
-    targetPort: ${ATLAS_V3_PORT}
+    targetPort: 8070            # fixed container port (see Deployment note)
     nodePort: ${ATLAS_V3_NODEPORT}
     name: http

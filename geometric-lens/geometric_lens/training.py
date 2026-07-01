@@ -317,6 +317,10 @@ def train_gx(
 
     folds = min(n_folds, n_pass, n_fail)
     aucs, accs, best_rounds = [], [], []
+    # Out-of-fold predictions: every sample scored by a booster that never saw
+    # it. Operating thresholds are derived from these instead of the final
+    # booster's in-sample scores, which are optimistically shifted.
+    oof_scores = np.full(n, np.nan, dtype=np.float64)
     skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
     for fold, (tr, te) in enumerate(skf.split(Xp, y)):
         dtr = xgb.DMatrix(Xp[tr], label=y[tr], weight=(w[tr] if w is not None else None))
@@ -325,6 +329,7 @@ def train_gx(
                         evals=[(dte, "val")], early_stopping_rounds=30,
                         verbose_eval=False)
         pred = bst.predict(dte, iteration_range=(0, bst.best_iteration + 1))
+        oof_scores[te] = pred
         aucs.append(roc_auc_score(y[te], pred))
         accs.append(float(((pred >= 0.5).astype(int) == y[te]).mean()))
         best_rounds.append(bst.best_iteration + 1)
@@ -360,8 +365,13 @@ def train_gx(
     #   off_rails (~10th pct)— per-token "stop generating" cutoff
     #   low (~20th pct)      — moderate; run-of-2 below it is a regression
     # Clamped to a sane band and ordered severe <= off_rails <= low.
-    thresholds = _derive_gx_thresholds(scores[y == 1])
-    print(f"G(x) thresholds (from PASS percentiles): {thresholds}")
+    # Derived from the out-of-fold PASS scores collected during CV — the final
+    # booster's in-sample scores sit higher than what unseen writes get at
+    # serve time, which would push every cutoff too high.
+    oof_pass = oof_scores[y == 1]
+    oof_pass = oof_pass[~np.isnan(oof_pass)]
+    thresholds = _derive_gx_thresholds(oof_pass)
+    print(f"G(x) thresholds (from out-of-fold PASS percentiles): {thresholds}")
 
     return {
         "booster": booster,

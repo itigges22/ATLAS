@@ -286,6 +286,37 @@ func TestLoadBearerTokenReadsAPIKey(t *testing.T) {
 	}
 }
 
+// `atlas init` writes {"sk-…": {"user": …}} — token strings keyed to
+// metadata objects. The loader picks the lexicographically first token.
+func TestLoadBearerTokenReadsAtlasInitShape(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/api-keys.json"
+	body := map[string]interface{}{
+		"sk-atlas-zzz": map[string]string{"user": "local", "created_by": "atlas init"},
+		"sk-atlas-aaa": map[string]string{"user": "local", "created_by": "atlas init"},
+	}
+	if err := writeJSON(path, body); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ATLAS_API_KEYS_PATH", path)
+	if got := loadBearerToken(); got != "sk-atlas-aaa" {
+		t.Errorf("loadBearerToken = %q, want sk-atlas-aaa", got)
+	}
+}
+
+func TestLoadBearerTokenReadsGroupedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/api-keys.json"
+	body := map[string]interface{}{"keys": map[string]string{"tui": "tok-1"}}
+	if err := writeJSON(path, body); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ATLAS_API_KEYS_PATH", path)
+	if got := loadBearerToken(); got != "tok-1" {
+		t.Errorf("loadBearerToken = %q, want tok-1", got)
+	}
+}
+
 func writeJSON(path string, v interface{}) error {
 	b, err := json.Marshal(v)
 	if err != nil {

@@ -184,7 +184,8 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 	}
 
 	// Echo the input as a "you" row so the chat reflects what was sent.
-	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: input})
+	// Echo rows are display-only — buildChatHistory never forwards them.
+	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: input, Echo: true})
 
 	parts := strings.Fields(input)
 	cmdName := parts[0]
@@ -267,15 +268,14 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		}
 		sid := m.lastPassSession
 		proxyURL := m.proxyURL
-		// Snapshot the per-file verdicts now, then clear them — this pass is
-		// being submitted.
+		// Snapshot the per-file verdicts for the submit. They're cleared
+		// by the slashResultMsg handler only after a successful submit,
+		// so a failed POST leaves them intact for a retry.
 		var files []fileVerdict
 		for p, v := range m.passVerdicts {
 			files = append(files, fileVerdict{Path: p, Verdict: v})
 		}
 		denied := len(files)
-		m.passVerdicts = map[string]string{}
-		m.passReasons = map[string]string{}
 		return true, func() tea.Msg {
 			n, err := submitFeedback(proxyURL, sid, thumbs, files)
 			if err != nil {
@@ -323,6 +323,25 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 			return true, nil, false
 		}
 		path := args[0]
+		// Only files the last pass actually wrote are rateable — a
+		// mistyped path would otherwise record a verdict the proxy
+		// silently drops at submit time.
+		rateable := false
+		for _, f := range m.lastPassFiles {
+			if f == path {
+				rateable = true
+				break
+			}
+		}
+		if !rateable {
+			body := "No files written in the last pass — nothing to deny."
+			if len(m.lastPassFiles) > 0 {
+				body = fmt.Sprintf("%s isn't in the last pass. Rateable files:\n  %s",
+					path, strings.Join(m.lastPassFiles, "\n  "))
+			}
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error", Body: body})
+			return true, nil, false
+		}
 		if m.passVerdicts == nil {
 			m.passVerdicts = map[string]string{}
 		}

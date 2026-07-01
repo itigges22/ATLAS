@@ -379,6 +379,15 @@ def _docker_exec(container: str, cmd: List[str], capture: bool = False):
     return subprocess.run(full, timeout=3600)
 
 
+def _docker_exec_rm(container: str, path: str) -> None:
+    """Best-effort rm inside the container. A hung docker exec must not
+    turn staging/cleanup into a traceback."""
+    try:
+        _docker_exec(container, ["rm", "-f", path])
+    except subprocess.TimeoutExpired:
+        _safe_print(f"  (cleanup of {path} in {container} timed out)")
+
+
 def _emit_build(args: argparse.Namespace, color: bool) -> int:
     """Train fresh ASA vector by running build_steering_vector.py inside
     the lens container.
@@ -398,7 +407,11 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                     f"{RESET if color else ''}")
         return 1
 
-    container = args.container or DEFAULT_LENS_CONTAINER
+    # Resolve the lens container via compose so non-"atlas" project names
+    # (COMPOSE_PROJECT_NAME, renamed checkout dirs) work; fall back to the
+    # conventional name when compose resolution fails.
+    container = args.container or compose_config.container_id(
+        atlas_root, "geometric-lens", fallback=DEFAULT_LENS_CONTAINER)
 
     # 1. Pre-flight: check the container is up + lens reachable
     _safe_print(f"[1/5] Pre-flight: container {container}, "
@@ -481,7 +494,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     # failed run. Otherwise a fresh crash that writes nothing could copy
     # the old vector back to the host as if it were a new build.
     _safe_print(f"[2/5] Staging script + pairs into {container}…")
-    _docker_exec(container, ["rm", "-f", "/tmp/ast_edit_steering.gguf"])
+    _docker_exec_rm(container, "/tmp/ast_edit_steering.gguf")
     for src, dst in [(script_host, "/tmp/build_steering_vector.py"),
                       (pairs_host, "/tmp/contrast_pairs.jsonl")]:
         cp = subprocess.run(["docker", "cp", src, f"{container}:{dst}"],
@@ -501,7 +514,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         # in the real-run path uses try/finally; here it's just a
         # direct pair of removes since we have no run to wrap.
         for f in ("/tmp/build_steering_vector.py", "/tmp/contrast_pairs.jsonl"):
-            _docker_exec(container, ["rm", "-f", f])
+            _docker_exec_rm(container, f)
         return 0
 
     # 4. Run the build inside the container. try/finally so the staged
@@ -533,7 +546,20 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     copied_out = False   # the built vector survives in the container until True
     try:
         start = time.time()
-        result = _docker_exec(container, cmd)
+        try:
+            result = _docker_exec(container, cmd)
+        except subprocess.TimeoutExpired:
+            _safe_print(f"  {RED if color else ''}training timed out after "
+                        f"1h inside {container}.{RESET if color else ''}")
+            _safe_print(f"  If the run finished writing before the timeout, "
+                        f"the vector may still be in the container — recover "
+                        f"it with: docker cp "
+                        f"{container}:/tmp/ast_edit_steering.gguf .")
+            # Leave /tmp/ast_edit_steering.gguf in the container for
+            # recovery (the finally block only removes it after copy-out
+            # or a clean pre-training failure).
+            built_ok = True
+            return 1
         elapsed = time.time() - start
         if result.returncode != 0:
             _safe_print(f"  {RED if color else ''}build script exited "
@@ -632,7 +658,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             _safe_print(f"  Built vector left in the container for recovery: "
                         f"docker cp {container}:/tmp/ast_edit_steering.gguf .")
         for f in cleanup:
-            _docker_exec(container, ["rm", "-f", f])
+            _docker_exec_rm(container, f)
 
 
 # ---------------------------------------------------------------------------

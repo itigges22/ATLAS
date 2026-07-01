@@ -675,3 +675,22 @@ def test_x86_64_does_not_surface_arch_line(tmp_path, monkeypatch, capsys):
          ["--yes", "--skip-download", "--no-color"])
     out = capsys.readouterr().out
     assert "Architecture:" not in out
+
+
+def test_loose_secrets_perms_without_yes_fails_noninteractive(tmp_path,
+                                                                monkeypatch,
+                                                                capsys):
+    """secrets/ with loose perms + no --yes + non-interactive stdin: the
+    wizard must not report success while silently skipping api-keys.json."""
+    root = _make_atlas_root(tmp_path)
+    secrets_dir = os.path.join(root, "secrets")
+    os.makedirs(secrets_dir, mode=0o755)
+    os.chmod(secrets_dir, 0o755)  # umask-proof
+
+    rc = _run(monkeypatch, root, ["--skip-download", "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "loose permissions" in out
+    assert "Setup incomplete" in out
+    assert "Setup complete" not in out
+    assert not os.path.exists(os.path.join(secrets_dir, "api-keys.json"))

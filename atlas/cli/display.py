@@ -99,10 +99,12 @@ def banner():
     print()
 
 
-def status_block(model: str, speed: str, lens: str, sandbox: str):
-    """Print service status block."""
+def status_block(model: str, lens: str, sandbox: str, speed: str = ""):
+    """Print service status block. The speed line only renders when the
+    caller has a real measurement to report."""
     _status_item("Model", model, BRIGHT_CYAN)
-    _status_item("Speed", speed, BRIGHT_GREEN if "tok" in speed else YELLOW)
+    if speed:
+        _status_item("Speed", speed, BRIGHT_GREEN if "tok" in speed else YELLOW)
     _status_item("Lens", lens, BRIGHT_GREEN if lens == "connected" else RED)
     _status_item("Sandbox", sandbox, BRIGHT_GREEN if sandbox in ("ready", "healthy") else RED)
     print()

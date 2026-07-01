@@ -1056,6 +1056,14 @@ curl -s http://localhost:8080/v1/embeddings \
 
 The `/v1/embeddings` endpoint is available in llama.cpp without special flags for self-embeddings from generation models. In K3s, the `--embeddings` flag is set explicitly in the entrypoint for full embedding support.
 
+### `/internal/lens/retrain` Returns 503 "models directory is mounted read-only"
+
+**Symptom:** POSTing `/internal/lens/retrain` on the lens service returns HTTP 503 with `"reason": "models directory is mounted read-only; run host-side retrain via atlas lens retrain"`.
+
+**Cause:** The standard Compose deployment mounts the lens models directory into the container read-only (`:ro`), so the in-service retrain endpoint cannot write new weights. The endpoint probes writability before training and refuses up front rather than burning a training run.
+
+**Fix:** Run the retrain host-side — `atlas lens retrain` (feedback corpus) or `atlas lens build` (bench candidates) write the artifacts on the host, then the service reloads them via `/internal/lens/reload` (or `docker compose restart geometric-lens`). Benchmark-driven online recalibration (`lens_feedback`) logs the refusal and keeps its sample buffer, so nothing is lost.
+
 ---
 
 ## Sandbox Issues
@@ -1082,9 +1090,9 @@ docker compose logs sandbox
 
 **Symptom:** Sandbox returns `"error_type": "Timeout"`. Code takes too long to execute.
 
-**Default timeout:** 30 seconds per request, max 60 seconds (configurable via `MAX_EXECUTION_TIME` env var).
+**Default timeout:** 30 seconds per request, capped at `MAX_EXECUTION_TIME`. The Compose stack sets that cap to 300 seconds (via `ATLAS_SANDBOX_MAX_EXECUTION_TIME` in `.env`), matching the proxy's `run_command` cap so long builds and test suites complete; outside compose the executor's in-code cap is 60 seconds.
 
-**Fix:** If your code legitimately needs more time, set a higher timeout in the request. If the code has an infinite loop, this is expected behavior.
+**Fix:** If your code legitimately needs more time, set a higher timeout in the request (up to the cap), or raise `ATLAS_SANDBOX_MAX_EXECUTION_TIME`. If the code has an infinite loop, this is expected behavior. On timeout the whole process group is killed, so child processes the command spawned don't linger.
 
 ### Language Not Supported
 

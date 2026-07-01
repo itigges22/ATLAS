@@ -100,10 +100,16 @@ def _read_env_file(atlas_root: str) -> Dict[str, str]:
                     continue
                 k, _, v = line.partition("=")
                 # Drop a whitespace-preceded inline comment ("8080  # note").
-                v = v.lstrip()
-                head, hash_sep, _ = v.partition("#")
-                if hash_sep and head and head[-1] in " \t":
-                    v = head
+                stripped = v.lstrip()
+                if stripped.startswith("#") and stripped != v:
+                    # Empty value followed by an inline comment
+                    # ("KEY= # note") parses as empty.
+                    v = ""
+                else:
+                    v = stripped
+                    head, hash_sep, _ = v.partition("#")
+                    if hash_sep and head and head[-1] in " \t":
+                        v = head
                 out[k.strip()] = v.strip().strip('"').strip("'")
     except OSError:
         # An unreadable optional .env is treated as empty so explicit command
@@ -347,6 +353,9 @@ def main(argv: Optional[List[str]] = None) -> int:
              "(delegates to `atlas model install --url`)")
     parser.add_argument("--file", default=None,
         help="on-disk filename for --url (default: basename of the URL)")
+    parser.add_argument("--apply", action="store_true",
+        help="with --url: write ATLAS_MODEL_FILE + ATLAS_MODEL_NAME into "
+             ".env after the download without prompting")
     parser.add_argument("--models-dir", default=None,
         help="override ATLAS_MODELS_DIR")
     parser.add_argument("--no-start", action="store_true",
@@ -388,10 +397,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         if rc != 0:
             _safe_print(_c(f"{NO} download failed — see above.", RED, color))
             return rc
+        # Offer to wire .env to the downloaded file (the install path has
+        # already validated the .gguf filename).
+        from urllib.parse import urlparse, unquote
+        fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
+        apply_env = args.apply
+        if not apply_env and sys.stdin.isatty() and sys.stdout.isatty():
+            try:
+                ans = input("  Update .env now? [Y/n] ").strip().lower()
+            except EOFError:
+                ans = "n"
+            apply_env = ans in ("", "y", "yes")
+        if apply_env:
+            from atlas.cli.commands import fit as fit_module
+            env_path = fit_module._write_env({
+                "ATLAS_MODEL_FILE": fname,
+                "ATLAS_MODEL_NAME": fname.rsplit(".", 1)[0],
+            })
+            _safe_print(_c(f"  {OK} wrote ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
+                           f"to {env_path}.", GREEN, color))
+            _safe_print("  Re-run `atlas onboard` to continue with the arch "
+                        "and lens checks.")
+            return 0
         _safe_print(_c("  Now set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in .env to "
                        "this file, then re-run `atlas onboard`.", YELL, color))
-        _safe_print("  (onboard reads the model from .env; it won't edit .env "
-                    "for you.)")
+        _safe_print("  (onboard reads the model from .env; pass --apply to "
+                    "write it automatically.)")
         return 0
 
     # Step 1 — resolve the configured model from .env.

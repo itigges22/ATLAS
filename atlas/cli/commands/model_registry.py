@@ -361,7 +361,9 @@ REGISTRY: List[Model] = [
         lens_calibrated=False,
         download_url=None,
         sha256=None,
-        license="apache-2.0",
+        # Gemma-family weights ship under Google's Gemma Terms of Use,
+        # not Apache-2.0 (HF license identifier: "gemma").
+        license="gemma",
         lens_artifact_files=["cost_field.pt", "cost_field.safetensors", "gx_xgboost.json", "gx_weights.json"],
         lens_hf_repo="itigges22/atlas-lens-gemma4-12b",
         notes="Added via `atlas lens publish` — legacy uncalibrated artifacts "
