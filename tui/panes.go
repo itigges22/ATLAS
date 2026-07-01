@@ -607,6 +607,50 @@ func renderHelpHint(width, maxLines int) string {
 	return strings.Join(lines, "\n")
 }
 
+// permBorderStyle frames the interactive permission modal. Amber border so it
+// reads as an action-required prompt, distinct from the pane boxes.
+var permBorderStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color("214"))
+
+// permPromptRows is the fixed rendered height of the permission modal box
+// (2 border rows + title + tool + message + legend). Kept constant so the
+// vertical layout budget can reserve for it before the box is rendered; each
+// content line is truncated to one row so the height never grows.
+const permPromptRows = 6
+
+// renderPermPrompt renders the permission approval modal as a bordered box
+// `innerW` wide (matching the input box's content width). Returns "" when
+// there is no pending request. Each content line is truncated to the box width
+// so the box is always exactly permPromptRows tall.
+func renderPermPrompt(pp *permPrompt, innerW int) string {
+	if pp == nil {
+		return ""
+	}
+	if innerW < 10 {
+		innerW = 10
+	}
+	title := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("214")).Bold(true).
+		Render("⚠ Permission required")
+	tool := chatToolStyle.Render("tool · " + pp.toolName)
+	msg := strings.ReplaceAll(pp.message, "\n", " ")
+	if strings.TrimSpace(msg) == "" {
+		msg = "Allow " + pp.toolName + "?"
+	}
+	msg = chatAssistantStyle.Render(msg)
+	legend := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("117")).
+		Render("[y] allow once   [a] allow for session   [n] deny")
+	lines := []string{title, tool, msg, legend}
+	for i, ln := range lines {
+		if lipgloss.Width(ln) > innerW {
+			lines[i] = ansi.Truncate(ln, innerW, "")
+		}
+	}
+	return permBorderStyle.Width(innerW).Render(strings.Join(lines, "\n"))
+}
+
 // renderBashHint shows a single warning row above the bash input box.
 // Red text; brief enough to fit a single row at any reasonable width.
 func renderBashHint(_ string, width int) string {
@@ -642,23 +686,26 @@ func formatTokens(n int) string {
 // events + stats + input into a full-screen view.
 //
 // Horizontal budget:
-//   files    sidebar — 28 cols when terminal ≥ 110 cols, hidden below
-//   right    everything else
+//
+//	files    sidebar — 28 cols when terminal ≥ 110 cols, hidden below
+//	right    everything else
 //
 // Vertical budget (per row, including borders), right column:
-//   header   1
-//   pipeline up to 10  (title + up to 7 rows + 2 border, capped)
-//   chat     fills (≥5)
-//   events   5  (title + 2 rows + 2 border)
-//   stats    1  (no border)
-//   input    6  (title + 3 rows + 2 border)
+//
+//	header   1
+//	pipeline up to 10  (title + up to 7 rows + 2 border, capped)
+//	chat     fills (≥5)
+//	events   5  (title + 2 rows + 2 border)
+//	stats    1  (no border)
+//	input    6  (title + 3 rows + 2 border)
+//
 // selectionState carries the user's drag-in-progress info into
 // layoutFullScreen so the overlay can highlight the active range.
 // Empty pane name = no selection in flight.
 type selectionState struct {
-	pane           string
-	startY, endY   int
-	startX, endX   int
+	pane         string
+	startY, endY int
+	startX, endX int
 }
 
 func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
@@ -671,6 +718,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	hideFiles, hidePipeline, hideEvents bool,
 	sel selectionState,
 	calibrationBadge string,
+	perm *permPrompt,
 	width, height int) (string, int) {
 
 	if width <= 0 || height <= 0 {
@@ -681,6 +729,12 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		headerH = 1
 		statsH  = 1
 	)
+	// Reserve rows for the permission modal (rendered above the input box)
+	// so nothing clips and View() height stays == terminal height.
+	permH := 0
+	if perm != nil {
+		permH = permPromptRows
+	}
 	// Input box: 6 rows by default (title + 3 textarea rows + 2 border).
 	// bash/slash mode adds a one-row hint banner above, so reserve one
 	// extra row. help mode shows the multi-line slashCommandHelp body —
@@ -718,7 +772,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 			pipelineH = 10
 		}
 	}
-	chatH := height - headerH - pipelineH - eventsH - statsH - inputH
+	chatH := height - headerH - pipelineH - eventsH - statsH - inputH - permH
 	if chatH < 5 {
 		// Squeeze the pipeline (down to its 4-row minimum: title + one
 		// content row + borders) before letting chat go below 5.
@@ -931,7 +985,13 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	if eventsBox != "" {
 		rightParts = append(rightParts, eventsBox)
 	}
-	rightParts = append(rightParts, statsLine, inputBox)
+	rightParts = append(rightParts, statsLine)
+	// Permission modal sits just above the input box so the y/a/n legend is
+	// next to where the user types. Reserved in the height budget above.
+	if perm != nil {
+		rightParts = append(rightParts, renderPermPrompt(perm, innerW))
+	}
+	rightParts = append(rightParts, inputBox)
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, rightParts...)
 
 	// No sidebar on narrow terminals — return the right column at full

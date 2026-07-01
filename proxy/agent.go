@@ -584,10 +584,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				"turn":         turn,
 			}))
 
-			// Check permissions
+			// Check permissions. In default and accept-edits modes a
+			// destructive tool pauses the loop until the client approves or
+			// denies it (via POST /v1/permission). Yolo mode and pre-approved
+			// tools short-circuit needsPermission and never reach here. The
+			// legacy PermissionFn is still honored for non-interactive callers.
 			if needsPermission(ctx, parsed.Name, parsed.Args) {
-				if ctx.PermissionFn != nil && !ctx.PermissionFn(parsed.Name, parsed.Args) {
-					// Permission denied
+				allowed := true
+				if ctx.PermissionFn != nil {
+					allowed = ctx.PermissionFn(parsed.Name, parsed.Args)
+				} else {
+					allowed = awaitPermission(ctx, parsed.Name, permCallID(turn), parsed.Args)
+				}
+				if !allowed {
 					ctx.Stream("permission_denied", map[string]string{
 						"tool": parsed.Name,
 					})
@@ -598,7 +607,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					ctx.Messages = append(ctx.Messages, AgentMessage{
 						Role:       "tool",
 						Content:    `{"success":false,"error":"permission denied by user"}`,
-						ToolCallID: fmt.Sprintf("call_%d", turn),
+						ToolCallID: permCallID(turn),
 						ToolName:   parsed.Name,
 					})
 					continue
@@ -2002,9 +2011,16 @@ func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) b
 		return false
 	}
 
-	// In accept-edits mode, write_file and edit_file are auto-approved
+	// Tools the client pre-approved for the session (or the user approved
+	// with session scope earlier this turn) skip the prompt.
+	if ctx.isToolAllowed(toolName) {
+		return false
+	}
+
+	// In accept-edits mode, file writes and edits are auto-approved;
+	// run_command and delete_file still prompt.
 	if ctx.PermissionMode == PermissionAcceptEdits {
-		if toolName == "write_file" || toolName == "edit_file" {
+		if toolName == "write_file" || toolName == "edit_file" || toolName == "ast_edit" || toolName == "move_file" {
 			return false
 		}
 	}
@@ -2349,6 +2365,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		Mode       string       `json:"mode"`       // "default", "accept-edits", "yolo"
 		SessionID  string       `json:"session_id"` // optional — required for /cancel
 		History    []historyMsg `json:"history,omitempty"`
+		// Tools the client has approved for the whole session so the proxy
+		// skips the interactive prompt for them (see /v1/permission).
+		SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
 		// /demo split-pane flags — tags match tui/chat.go's agentRequest.
 		BypassV3         bool   `json:"bypass_v3,omitempty"`          // baseline pane: disable V3 orchestration
 		DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
@@ -2469,6 +2488,15 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		ctx.YoloMode = true
 	default:
 		ctx.PermissionMode = PermissionDefault
+	}
+
+	// Seed session-approved tools so pre-approved destructive tools skip the
+	// interactive prompt (the client re-sends this list each turn).
+	if len(req.SessionAllowedTools) > 0 {
+		ctx.AllowedTools = make(map[string]bool, len(req.SessionAllowedTools))
+		for _, t := range req.SessionAllowedTools {
+			ctx.AllowedTools[t] = true
+		}
 	}
 
 	// Detect project (implemented in project.go)

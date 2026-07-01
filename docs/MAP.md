@@ -31,6 +31,7 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`workspace.go`](#atlas-proxy) — Workspace containment for all path-taking tool args
   - [`security.go`](#atlas-proxy) — Log-field encoding for untrusted text
   - [`permissions.go`](#atlas-proxy) — Permission rules and hard deny patterns
+  - [`permission_gate.go`](#atlas-proxy) — Interactive approve/deny round-trip: `permission_request` + `/v1/permission`
   - [`events.go`](#atlas-proxy) — `/events` typed-envelope SSE broker (PC-061)
   - [`lens_samples.go`](#atlas-proxy) — `/feedback` + `/v1/lens/training-status`: verdicts → lens training samples
   - [`lens_score.go`](#atlas-proxy) — PC-207 per-write lens scoring + regression intervention
@@ -55,7 +56,8 @@ Every file in the repository. Click any directory in the tree to jump to its des
   - [`panes.go`](#atlas-tui) — Pure pane renderers (pipeline / chat / events / files / stats / input)
   - [`state.go`](#atlas-tui) — Pipeline state machine (Envelope → derived UI state)
   - [`consumer.go`](#atlas-tui) — `/events` SSE consumer (typed Envelope stream)
-  - [`chat.go`](#atlas-tui) — `/v1/agent` POST + SSE chat client; `/cancel` + `/feedback` POST
+  - [`chat.go`](#atlas-tui) — `/v1/agent` POST + SSE chat client; `/cancel`, `/feedback`, `/v1/permission` POST
+  - [`session.go`](#atlas-tui) — Session persistence + `--continue`/`--resume` (`~/.cache/atlas-tui/sessions/`)
   - [`commands.go`](#atlas-tui) — Slash command dispatch (/add, /diff, /good, /bad, /review, …)
   - [`calibration.go`](#atlas-tui) — Lens/ASA header badge from `/v1/calibration/status`
   - [`files.go`](#atlas-tui) — Files sidebar (workspace tree scan)

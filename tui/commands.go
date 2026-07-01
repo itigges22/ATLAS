@@ -398,6 +398,9 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 	case "/clear":
 		m.chat = nil
 		m.chatScroll = 0
+		// Start a fresh persistence session so the cleared transcript
+		// doesn't overwrite the saved one on disk.
+		m.startNewSession()
 		return true, nil, false
 
 	case "/compact":

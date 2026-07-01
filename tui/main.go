@@ -11,10 +11,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -35,9 +38,16 @@ func main() {
 	demoMode := flag.String("demo", "",
 		"launch the split-pane recording demo directly (short|medium|long). "+
 			"Skips the main TUI; same as typing /demo from inside it.")
+	continueFlag := flag.Bool("continue", false,
+		"resume the most recent saved session for the current directory")
+	resumeFlag := flag.Bool("resume", false,
+		"resume a saved session: 'atlas --resume <id>' by id, or 'atlas --resume' "+
+			"to pick from a list")
 	flag.Parse()
 
-	// Cold-start --demo bypasses the main TUI entirely.
+	// Cold-start --demo bypasses the main TUI entirely. Demo and the
+	// continue/resume flags are mutually exclusive — demo wins by
+	// short-circuiting here, so the resume flags are simply ignored.
 	if *demoMode != "" {
 		cwd, _ := os.Getwd()
 		if err := runDemo(*proxyURL, cwd, *demoMode); err != nil {
@@ -58,6 +68,19 @@ func main() {
 	defer cancel()
 
 	model := newTUIModel(*proxyURL)
+	// Persistence is on for the top-level TUI. Demo child models are built
+	// via newTUIModel too but never flip this, so they never write sessions.
+	model.persistEnabled = true
+
+	// --continue / --resume reload a saved transcript before the alt-screen
+	// program starts (the resume picker reads stdin, which the alt-screen
+	// would otherwise capture). --resume takes precedence if both are set.
+	switch {
+	case *resumeFlag:
+		applyResume(&model, flag.Arg(0))
+	case *continueFlag:
+		applyContinue(&model)
+	}
 
 	// Surface the Python wrapper's startup warning (workspace mismatch
 	// etc.) inside the TUI. Without this the warning prints to stderr
@@ -111,4 +134,98 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// applyContinue loads the most recent saved session for the current directory
+// into model. A missing session prints a friendly note and leaves the model
+// fresh rather than failing.
+func applyContinue(model *tuiModel) {
+	cwd, _ := os.Getwd()
+	sess, err := mostRecentForCwd(cwd)
+	if err != nil || sess == nil {
+		fmt.Fprintln(os.Stderr,
+			"atlas-tui: no saved session for this directory — starting fresh")
+		return
+	}
+	loadSessionInto(model, sess, cwd)
+}
+
+// applyResume loads a session by id, or shows a picker when id is empty. An
+// unknown id or an invalid/blank selection starts fresh with a note.
+func applyResume(model *tuiModel, id string) {
+	cwd, _ := os.Getwd()
+	var sess *Session
+	if id != "" {
+		s, err := loadSession(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"atlas-tui: session %q not found — starting fresh\n", id)
+			return
+		}
+		sess = s
+	} else {
+		sess = pickSession()
+		if sess == nil {
+			return // pickSession already printed the reason
+		}
+	}
+	loadSessionInto(model, sess, cwd)
+}
+
+// loadSessionInto splices a saved transcript into model, adopting its id, mode
+// and created stamp and scrolling to the latest message. The CURRENT working
+// directory is kept; if the session was saved elsewhere a system row warns
+// that writes land in the current workspace, not the old path.
+func loadSessionInto(model *tuiModel, sess *Session, cwd string) {
+	model.chat = sess.Messages
+	model.sessionUID = sess.ID
+	if sess.CreatedAt != "" {
+		model.sessionCreatedAt = sess.CreatedAt
+	}
+	if sess.Mode != "" {
+		model.mode = sess.Mode
+	}
+	model.chatScroll = 0 // follow the latest message
+	if sess.Cwd != "" && sess.Cwd != cwd {
+		model.chat = append(model.chat, chatMessage{
+			Role: roleSystem, Meta: "startup",
+			Body: fmt.Sprintf(
+				"resumed session was saved in %s — current workspace is %s; writes go to the current workspace.",
+				sess.Cwd, cwd),
+		})
+	}
+}
+
+// pickSession prints an indexed, newest-first list of saved sessions and reads
+// a selection from stdin. Returns the chosen session, or nil (with a note) on
+// no sessions, a blank line, or an invalid selection.
+func pickSession() *Session {
+	all, err := listSessions()
+	if err != nil || len(all) == 0 {
+		fmt.Fprintln(os.Stderr, "atlas-tui: no saved sessions — starting fresh")
+		return nil
+	}
+	fmt.Fprintln(os.Stdout, "Saved sessions (newest first):")
+	for i, s := range all {
+		title := s.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		fmt.Fprintf(os.Stdout, "  [%d] %s  %s  %s\n",
+			i+1, s.UpdatedAt, truncate(title, 50), s.Cwd)
+	}
+	fmt.Fprint(os.Stdout, "Select a session number (or Enter to start fresh): ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		fmt.Fprintln(os.Stderr, "atlas-tui: no selection — starting fresh")
+		return nil
+	}
+	idx, err := strconv.Atoi(line)
+	if err != nil || idx < 1 || idx > len(all) {
+		fmt.Fprintln(os.Stderr, "atlas-tui: invalid selection — starting fresh")
+		return nil
+	}
+	s := all[idx-1]
+	return &s
 }

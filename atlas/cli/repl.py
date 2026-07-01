@@ -724,6 +724,14 @@ _SUBCOMMAND_HELP = [
     ("tui",     "launch the terminal UI"),
 ]
 
+# Flags recognized by the interactive UI. They are passed through to the TUI
+# binary unchanged (a leading-dash argument is not treated as a subcommand);
+# listed here so `atlas --help` documents them.
+_SESSION_FLAG_HELP = [
+    ("--continue", "resume the most recent session in the current directory"),
+    ("--resume [id]", "resume a session by id, or pick from a list"),
+]
+
 
 def _print_usage(stream=None) -> None:
     out = stream or sys.stdout
@@ -732,6 +740,9 @@ def _print_usage(stream=None) -> None:
     out.write("subcommands:\n")
     for name, desc in _SUBCOMMAND_HELP:
         out.write(f"  {name:<8} {desc}\n")
+    out.write("\nsession flags (interactive UI):\n")
+    for name, desc in _SESSION_FLAG_HELP:
+        out.write(f"  {name:<14} {desc}\n")
 
 
 def _dispatch_subcommand(name: str, argv: List[str]) -> int:

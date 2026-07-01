@@ -28,6 +28,7 @@ There are three primary endpoints for building a client:
 |----------|--------|---------|
 | `/v1/agent` | POST | Send a user message, stream back a turn (tool calls, results, tokens, completion) as SSE |
 | `/cancel` | POST | Abort an in-flight `/v1/agent` turn by `session_id` |
+| `/v1/permission` | POST | Answer a `permission_request` (approve/deny a destructive tool call mid-turn) |
 | `/events` | GET | Subscribe to a global typed-envelope event broker (PC-061) — same events the TUI's pipeline pane uses |
 | `/v1/calibration/status` | GET | Lens + ASA compat verdict for the loaded model — what the TUI's Pipeline pane badge reads on startup (PC-059) |
 | `/feedback` | POST | Record a pass's human verdict (per-file accept/deny and/or pass-level thumbs) as weighted lens training samples |
@@ -63,8 +64,9 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 | `message` | string | (required) | The user's request |
 | `working_dir` | string | `"."` | Host-side working directory. Inside the proxy container this is overridden to `ATLAS_WORKSPACE_DIR` (the bind-mount target — `/workspace` by default). The startup wrapper aligns the bind mount to the user's cwd, so writes land in the right place. |
 | `mode` | string | `"default"` | Permission mode: `"default"` (prompt for destructive ops), `"accept-edits"` (auto-approve write/edit, prompt for delete/run), `"yolo"` (auto-approve everything) |
-| `session_id` | string | `""` | Optional. Required if the client wants to be able to call `/cancel`. The proxy stores a cancel handle keyed by this id while the turn is running. |
+| `session_id` | string | `""` | Optional. Required for `/cancel` and for the interactive permission prompt (`/v1/permission`). The proxy keys the cancel handle and pending permission requests by this id while the turn is running. |
 | `history` | array | `[]` | Optional. Prior-turn `{role, content}` messages (`"user"` / `"assistant"`) the client wants replayed into the conversation before the new message. Capped at the most recent 40 entries. Omit for a single-turn request. |
+| `session_allowed_tools` | array | `[]` | Optional. Tool names the user has approved for the whole session (e.g. from an "allow for session" choice). The proxy skips the interactive permission prompt for these. The client re-sends the current list on each turn. |
 
 **Response:** `text/event-stream` of `data: {...}\n\n` lines. The proxy flushes a `: connected\n\n` SSE comment on connect so clients see HTTP/200 immediately, then emits typed events for the duration of the turn, terminated by `data: [DONE]\n\n`.
 
@@ -81,7 +83,8 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `llm_token` | Each streamed delta | `text` (the delta string — typically a token or two) |
 | `llm_call_end` | LLM call finished | `turn`, `tokens` (this call), `total_tokens` (cumulative for the turn), `ms`, `chars`. On error: `error` instead of `tokens`/`chars`. |
 | `tool_call` | Model emitted a `{"type":"tool_call",...}` JSON | `name` (string), `args` (raw JSON), `turn` |
-| `permission_denied` | User said no via `PermissionFn` callback | `tool` (the tool name) |
+| `permission_request` | A destructive tool call is awaiting approval in `default`/`accept-edits` mode. The turn pauses until the client answers via `POST /v1/permission` (or the client disconnects/cancels, or the fail-safe timeout denies). | `tool_name` (string), `args` (raw JSON), `message` (human-readable description), `tool_call_id` (string — echo back on `/v1/permission`) |
+| `permission_denied` | The pending tool call was denied (by the client, a disconnect/cancel, or the timeout) | `tool` (the tool name) |
 | `tool_result` | Tool finished executing | `tool`, `success` (bool), `data` (raw JSON), `error` (string), `elapsed` (Go duration string, e.g. `"245ms"`) |
 | `text` | Model emitted a `{"type":"text","content":"..."}` JSON (conversational reply) | `content` (string) |
 | `v3_progress` | V3 pipeline stage that doesn't have a dedicated typed event yet (fallback) | `message` (string) — humanized stage label |
@@ -174,6 +177,29 @@ Abort an in-flight `/v1/agent` turn. Idempotent — repeated calls for the same 
 When cancelled, the agent loop exits via `context.Canceled`, the SSE stream emits its trailing `[DONE]`, and the connection closes cleanly. Any in-flight LLM call to llama-server is also aborted via the cascading request context.
 
 The TUI uses this on `Esc` mid-turn — see [CLI.md → Cancelling a turn](CLI.md).
+
+---
+
+### POST /v1/permission
+
+Answer a `permission_request` event. In `default` and `accept-edits` mode the agent loop pauses on a destructive tool call and emits `permission_request`; the turn stays blocked until this endpoint delivers a decision, the client disconnects/cancels, or a fail-safe timeout denies (`ATLAS_PERMISSION_TIMEOUT_SEC`, default 600s). Idempotent — a decision for an unknown or already-resolved request returns 404.
+
+**Request:**
+```json
+{"session_id": "tui-7f3a2c1b", "tool_call_id": "call_3", "decision": "allow", "scope": "once"}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | string | The `session_id` of the paused `/v1/agent` turn |
+| `tool_call_id` | string | The `tool_call_id` from the `permission_request` event |
+| `decision` | string | `"allow"` or `"deny"` (anything other than `"allow"` denies) |
+| `scope` | string | `"once"` (this call only) or `"session"`. `"session"` additionally skips re-prompting for the same tool for the rest of the turn; the client typically also adds the tool to `session_allowed_tools` on subsequent turns. |
+
+**Response (200):** `{"delivered": true}` — the blocked turn was signaled.
+**Response (404):** `{"delivered": false}` — no matching pending request (already resolved, cancelled, or timed out).
+
+The correlation key is `session_id` + `tool_call_id`, so multiple destructive calls within one turn (`call_0`, `call_1`, …) are answered independently. See [CLI.md → Permission modes](CLI.md).
 
 ---
 

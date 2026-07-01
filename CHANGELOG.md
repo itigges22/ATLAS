@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Interactive permissions
+- `default` and `accept-edits` modes now prompt before a destructive tool call runs. The turn pauses on a bordered approval box (`[y] allow once`, `[a] allow for session`, `[n]`/`Esc` deny); `Ctrl+C` still cancels the whole turn. An "allow for session" choice whitelists that tool so it isn't asked again (carried in the request's `session_allowed_tools`). `accept-edits` auto-allows file writes/edits and prompts `run_command`/`delete_file`; `yolo` is unchanged.
+- New `POST /v1/permission` endpoint and `permission_request` SSE event carry the decision back to the paused turn (keyed by `session_id` + `tool_call_id`, mirroring `/cancel`). A fail-safe timeout (`ATLAS_PERMISSION_TIMEOUT_SEC`, default 600s) denies if nothing is answered.
+
+### Sessions
+- The TUI saves each session to `~/.cache/atlas-tui/sessions/<id>.json` (one file per session, written each turn). `atlas --continue` resumes the most recent session in the current directory; `atlas --resume` picks one from a list; `atlas --resume <id>` resumes a specific session. The saved transcript is replayed into the view and fed back to the model as history; a directory mismatch keeps the current directory and warns. `/clear` starts a fresh session, leaving the prior one on disk.
+
 ### Installer / bootstrap
 - Bootstrap writes the registry's default recommended model into `.env` when none is selected (logged), so the one-shot `curl | bash` flow completes without the wizard; an existing selection is respected.
 - No detected GPU selects the Vulkan overlay automatically, plus the new `docker-compose.cpu.yml` when `/dev/dri` is absent — GPU-less hosts boot via the lavapipe CPU ICD (slow but functional).

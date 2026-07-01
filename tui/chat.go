@@ -46,13 +46,17 @@ type historyMessage struct {
 // agentRequest is the POST body for /v1/agent. Field tags MUST match
 // the anonymous struct in proxy/agent.go's handleAgent.
 type agentRequest struct {
-	Message          string           `json:"message"`
-	WorkingDir       string           `json:"working_dir"`
-	Mode             string           `json:"mode"`       // "default" | "accept-edits" | "yolo"
-	SessionID        string           `json:"session_id"` // PC-062: required so /cancel can target this turn
-	History          []historyMessage `json:"history,omitempty"`
-	DisableFreshSlot bool             `json:"disable_fresh_slot,omitempty"` // /demo flag — skip PC-045 so pre-warm survives
-	SandboxSubdir    string           `json:"sandbox_subdir,omitempty"`     // /demo flag — write files into this subdir of the workspace
+	Message    string           `json:"message"`
+	WorkingDir string           `json:"working_dir"`
+	Mode       string           `json:"mode"`       // "default" | "accept-edits" | "yolo"
+	SessionID  string           `json:"session_id"` // PC-062: required so /cancel can target this turn
+	History    []historyMessage `json:"history,omitempty"`
+	// SessionAllowedTools carries the tools the user approved for the whole
+	// session so the proxy skips the interactive permission prompt for them
+	// on later turns. Populated from the model's session allowlist.
+	SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
+	DisableFreshSlot    bool     `json:"disable_fresh_slot,omitempty"` // /demo flag — skip PC-045 so pre-warm survives
+	SandboxSubdir       string   `json:"sandbox_subdir,omitempty"`     // /demo flag — write files into this subdir of the workspace
 }
 
 type rawChatRequest struct {
@@ -284,6 +288,42 @@ func fetchTrainingStatus(proxyURL string) (trainingStatus, error) {
 	return ts, err
 }
 
+// postPermissionDecision answers a mid-turn "permission_request" by POSTing to
+// /v1/permission. decision is "allow" or "deny"; scope is "once" or "session".
+// sessionID is the turn's session id (the value sent on THIS turn) and
+// toolCallID echoes the id carried on the request. A 404 means the pending
+// request already resolved (turn cancelled or timed out) — nothing left to
+// answer, so it is treated as success. Best-effort with a short timeout.
+func postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope string) error {
+	if sessionID == "" || toolCallID == "" {
+		return fmt.Errorf("empty session id or tool call id")
+	}
+	body, _ := json.Marshal(map[string]string{
+		"session_id":   sessionID,
+		"tool_call_id": toolCallID,
+		"decision":     decision,
+		"scope":        scope,
+	})
+	req, err := http.NewRequest("POST",
+		strings.TrimRight(proxyURL, "/")+"/v1/permission", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok := loadBearerToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	// 404 (already resolved) is not an error for the caller — the decision
+	// simply has nowhere to land. Any other status is ignored too: the POST
+	// is advisory, the turn proceeds on the proxy's own fail-safe.
+	resp.Body.Close()
+	return nil
+}
+
 func cancelTurn(proxyURL, sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("empty session id")
@@ -325,6 +365,9 @@ func sendChat(ctx context.Context, proxyURL, message, workingDir, mode,
 type demoOpts struct {
 	disableFreshSlot bool
 	sandboxSubdir    string
+	// allowedTools is the session allowlist sent as session_allowed_tools so
+	// the proxy skips the permission prompt for pre-approved tools.
+	allowedTools []string
 }
 
 // sendChatOpts is sendChat with the demo flags exposed; used by the
@@ -337,13 +380,14 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	opts demoOpts, out chan<- chatEvent) error {
 
 	body, err := json.Marshal(agentRequest{
-		Message:          message,
-		WorkingDir:       workingDir,
-		Mode:             mode,
-		SessionID:        sessionID,
-		History:          history,
-		DisableFreshSlot: opts.disableFreshSlot,
-		SandboxSubdir:    opts.sandboxSubdir,
+		Message:             message,
+		WorkingDir:          workingDir,
+		Mode:                mode,
+		SessionID:           sessionID,
+		History:             history,
+		SessionAllowedTools: opts.allowedTools,
+		DisableFreshSlot:    opts.disableFreshSlot,
+		SandboxSubdir:       opts.sandboxSubdir,
 	})
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)

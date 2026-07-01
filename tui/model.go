@@ -135,6 +135,25 @@ type tuiModel struct {
 	workingDir string
 	mode       string
 
+	// Interactive permission approval. The proxy pauses a destructive tool
+	// call mid-turn and emits a "permission_request"; pendingPerm holds the
+	// prompt while the modal is up and gates all input until the user
+	// answers. sessionAllowedTools is the "allow for session" whitelist —
+	// a tool in it auto-answers allow without re-prompting, and its sorted
+	// keys ride every /v1/agent request as session_allowed_tools so the
+	// proxy skips the prompt proxy-side on later turns.
+	pendingPerm         *permPrompt
+	sessionAllowedTools map[string]bool
+
+	// Session persistence. sessionUID is the stable id for the on-disk
+	// transcript (distinct from turnSessionID, which is minted per turn for
+	// /cancel and /v1/permission correlation). sessionCreatedAt is the
+	// created_at stamp preserved across saves. persistEnabled gates writes
+	// so demo child models never touch the sessions dir.
+	sessionUID       string
+	sessionCreatedAt string
+	persistEnabled   bool
+
 	// Polish state — spinner phase, last-sent message for Ctrl+R.
 	spinnerFrame int
 	lastUserMsg  string
@@ -248,6 +267,17 @@ type tuiModel struct {
 	quitting bool
 }
 
+// permPrompt is the state behind the interactive permission modal. It
+// captures the tool call the proxy paused on plus the turn's session id so
+// the y/a/n decision can POST /v1/permission with the correct correlation.
+type permPrompt struct {
+	toolName   string
+	message    string
+	toolCallID string
+	sessionID  string
+	args       string // raw args JSON, kept for display
+}
+
 // toast is one transient notification. ExpiresAt is checked every tick
 // against time.Now(); expired entries get dropped from m.toasts.
 type toast struct {
@@ -351,15 +381,20 @@ func newTUIModel(proxyURL string) tuiModel {
 	)
 
 	return tuiModel{
-		proxyURL:         proxyURL,
-		events:           make(chan Envelope, 256),
-		state:            newPipelineState(),
-		maxLines:         1000,
-		input:            ta,
-		chatEvents:       make(chan chatEvent, 64),
-		chatRenderer:     renderer,
-		workingDir:       wd,
-		mode:             "default",
+		proxyURL:            proxyURL,
+		events:              make(chan Envelope, 256),
+		state:               newPipelineState(),
+		maxLines:            1000,
+		input:               ta,
+		chatEvents:          make(chan chatEvent, 64),
+		chatRenderer:        renderer,
+		workingDir:          wd,
+		mode:                "default",
+		sessionAllowedTools: map[string]bool{},
+		// Stable persistence key, minted once per model. Distinct from the
+		// per-turn turnSessionID used for /cancel + /v1/permission.
+		sessionUID:       newSessionID(),
+		sessionCreatedAt: time.Now().UTC().Format(time.RFC3339),
 		maxContextTokens: configuredContextTokens(),
 		// File scan is dispatched async from Init() — see scanFilesCmd.
 		// Doing it synchronously here blocked tea.NewProgram from
@@ -563,10 +598,17 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 	mode := m.mode
 	out := m.chatEvents
 	history := m.buildChatHistory()
+	allowed := sortedAllowedTools(m.sessionAllowedTools)
+
+	// Persist the transcript at turn start — the process is often killed or
+	// execv'd, so the safest moment to snapshot is right after the user row
+	// (already appended by the caller) lands.
+	m.saveSession()
 
 	return func() tea.Msg {
 		go func() {
-			err := sendChat(ctx, proxyURL, message, workingDir, mode, sessionID, history, out)
+			err := sendChatOpts(ctx, proxyURL, message, workingDir, mode, sessionID,
+				history, demoOpts{allowedTools: allowed}, out)
 			// Signal turn end via the same channel using a sentinel
 			// chatEvent (type="__turn_done__") — keeps the event
 			// ordering: all messages drain before the done marker.
@@ -577,6 +619,76 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 		}()
 		return nil
 	}
+}
+
+// handlePermKey answers the permission modal. y=allow once, a=allow for the
+// whole session (whitelists the tool so later requests skip the prompt),
+// n/esc=deny. Every other key is swallowed. Each answer records a display-only
+// system row (Echo=true so it never reaches /v1/agent as a fake turn) and
+// returns a Cmd that POSTs the decision off the UI thread, mirroring the
+// /cancel post-back pattern.
+func (m tuiModel) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	pp := m.pendingPerm
+	if pp == nil {
+		return m, nil
+	}
+	switch msg.String() {
+	case "y":
+		m.pendingPerm = nil
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "permission",
+			Body: "allowed " + pp.toolName, Echo: true,
+		})
+		dlog("permission", "allow_once", map[string]interface{}{"tool": pp.toolName})
+		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "allow", "once")
+	case "a":
+		if m.sessionAllowedTools == nil {
+			m.sessionAllowedTools = map[string]bool{}
+		}
+		m.sessionAllowedTools[pp.toolName] = true
+		m.pendingPerm = nil
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "permission",
+			Body: "allowed " + pp.toolName + " for session", Echo: true,
+		})
+		dlog("permission", "allow_session", map[string]interface{}{"tool": pp.toolName})
+		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "allow", "session")
+	case "n", "esc":
+		// The proxy emits a permission_denied event once the deny lands, which
+		// renders the transcript row — no local row here (avoids a duplicate).
+		m.pendingPerm = nil
+		dlog("permission", "deny", map[string]interface{}{"tool": pp.toolName})
+		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "deny", "once")
+	}
+	// Swallow any other key while the modal is up.
+	return m, nil
+}
+
+// postPermissionCmd returns a Cmd that POSTs a permission decision off the UI
+// thread. Best-effort — a failed/404 POST is ignored (the proxy fail-safe and
+// /cancel still bound the turn).
+func (m *tuiModel) postPermissionCmd(sessionID, toolCallID, decision, scope string) tea.Cmd {
+	proxyURL := m.proxyURL
+	return func() tea.Msg {
+		_ = postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope)
+		return nil
+	}
+}
+
+// sortedAllowedTools returns the session allowlist as a sorted slice for the
+// request's session_allowed_tools field (sorted so repeated sends are stable).
+func sortedAllowedTools(allowed map[string]bool) []string {
+	if len(allowed) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(allowed))
+	for tool, ok := range allowed {
+		if ok {
+			out = append(out, tool)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // newSessionID returns a fresh hex token for tagging an /v1/agent turn
@@ -601,6 +713,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Permission modal gates all input: while a request is pending only
+		// the y/a/n (and esc) decision keys are live; every other key is
+		// swallowed so it never reaches the textarea or the normal switch.
+		// Ctrl+C / Ctrl+D still fall through to cancel/quit — cancelling the
+		// turn unblocks the proxy's permission wait via the request context.
+		if m.pendingPerm != nil {
+			if s := msg.String(); s != "ctrl+c" && s != "ctrl+d" {
+				return m.handlePermKey(msg)
+			}
+			m.pendingPerm = nil
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			if m.turnActive && m.turnCancel != nil {
@@ -635,6 +758,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+l":
 			m.chat = nil
+			m.chatScroll = 0
+			// Start a fresh persistence session so the cleared transcript
+			// doesn't overwrite the saved one.
+			m.startNewSession()
 			return m, nil
 
 		case "ctrl+t":
@@ -908,6 +1035,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 			dlog("turn", "ended", map[string]interface{}{"err": p.Err})
+			// Snapshot the completed turn so a later --continue/--resume
+			// reloads the full transcript.
+			m.saveSession()
 			// Post-pass rate prompt — make the thumbs feature discoverable.
 			// Only when the pass actually produced writes (something to rate)
 			// and it wasn't cancelled/errored.
@@ -1306,6 +1436,10 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			m.chat = append(m.chat, chatMessage{
 				Role: roleAssistant, Body: p.Content,
 			})
+			// Persist after an assistant text row so a resumed transcript
+			// reconstructs the full exchange even if the turn's done marker
+			// never arrives (process killed mid-turn).
+			m.saveSession()
 		}
 
 	case "tool_call":
@@ -1376,13 +1510,37 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 
 	case "permission_request":
 		var p struct {
-			ToolName string `json:"tool_name"`
+			ToolName   string          `json:"tool_name"`
+			Message    string          `json:"message"`
+			ToolCallID string          `json:"tool_call_id"`
+			Args       json.RawMessage `json:"args"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "permission",
-			Body: fmt.Sprintf("permission requested for %s (auto-allow in default mode for read tools)", p.ToolName),
-		})
+		// A tool already approved "for session" auto-answers allow without
+		// showing the modal, so the user isn't re-prompted for it. The POST
+		// is fire-and-forget (appendChatEvent has no Cmd return path); the
+		// proxy fail-safe still bounds the turn if it never lands.
+		if m.sessionAllowedTools[p.ToolName] {
+			proxyURL := m.proxyURL
+			sid := m.turnSessionID
+			cid := p.ToolCallID
+			go func() { _ = postPermissionDecision(proxyURL, sid, cid, "allow", "once") }()
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "permission",
+				Body: "auto-allowed " + p.ToolName + " (session)", Echo: true,
+			})
+			return
+		}
+		// Otherwise raise the modal and gate input until the user answers.
+		// Capture the current turn's session id so the decision correlates
+		// to THIS turn on POST /v1/permission.
+		m.pendingPerm = &permPrompt{
+			toolName:   p.ToolName,
+			message:    p.Message,
+			toolCallID: p.ToolCallID,
+			sessionID:  m.turnSessionID,
+			args:       string(p.Args),
+		}
 
 	case "permission_denied":
 		var p struct {
@@ -2387,6 +2545,7 @@ func (m tuiModel) View() string {
 		m.hideFiles, m.hidePipeline, m.hideEvents,
 		sel,
 		renderCalibrationBadge(m.calibration),
+		m.pendingPerm,
 		width, height)
 	// View is supposed to be pure, but we need to know the rendered
 	// line count to clamp PgUp / mouse-wheel-up. Stashing it on the

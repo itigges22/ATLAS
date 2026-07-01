@@ -425,6 +425,12 @@ type AgentContext struct {
 	PermissionMode PermissionMode
 	YoloMode       bool
 
+	// AllowedTools names tools the client has pre-approved for this session
+	// (seeded from the request's session_allowed_tools) plus any the user
+	// approves with session scope during this turn. A named tool skips the
+	// interactive permission prompt. Guarded by mu.
+	AllowedTools map[string]bool
+
 	// Service URLs
 	InferenceURL string
 	SandboxURL   string
@@ -643,6 +649,24 @@ func (c *AgentContext) SnapshotFilesRead() map[string]string {
 	return out
 }
 
+// allowToolForTurn records a tool the user approved with session scope so
+// later calls to it in this turn skip the permission prompt.
+func (c *AgentContext) allowToolForTurn(toolName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.AllowedTools == nil {
+		c.AllowedTools = map[string]bool{}
+	}
+	c.AllowedTools[toolName] = true
+}
+
+// isToolAllowed reports whether a tool has been pre-approved for the session.
+func (c *AgentContext) isToolAllowed(toolName string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.AllowedTools[toolName]
+}
+
 // ---------------------------------------------------------------------------
 // Permission system types
 // ---------------------------------------------------------------------------
@@ -772,7 +796,8 @@ type SSEEvent struct {
 }
 
 type PermissionRequest struct {
-	ToolName string          `json:"tool_name"`
-	Args     json.RawMessage `json:"args"`
-	Message  string          `json:"message"` // human-readable description
+	ToolName   string          `json:"tool_name"`
+	Args       json.RawMessage `json:"args"`
+	Message    string          `json:"message"`      // human-readable description
+	ToolCallID string          `json:"tool_call_id"` // echoed back on POST /v1/permission
 }

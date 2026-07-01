@@ -15,7 +15,20 @@ cd /path/to/your/project
 atlas              # interactive: launches the TUI
 atlas tui          # explicit form
 echo "fix bug" | atlas   # pipe mode: routes through /solve
+atlas --continue   # resume the most recent session in this directory
+atlas --resume     # pick a past session from a list
+atlas --resume <id># resume a specific session by id
 ```
+
+Sessions are saved automatically (one JSON file per session under
+`~/.cache/atlas-tui/sessions/`, written each turn). `--continue` reopens
+the newest session started in the current directory; `--resume` with no
+id prints a numbered list (newest first) to choose from; `--resume <id>`
+reopens a specific one. The saved transcript is replayed into the view
+and fed back to the model as conversation history (capped at the last 40
+turns). Resuming a session whose saved directory differs from your
+current one keeps the current directory and shows a warning. `/clear`
+(or `Ctrl+L`) starts a fresh session, leaving the prior one on disk.
 
 The top-level `atlas` binary also dispatches to non-TUI subcommands:
 
@@ -112,8 +125,9 @@ to return to chat mode.
 |---|---|
 | `Enter` | Send message / run bash command / fire slash command |
 | `Shift+Enter` | Insert a newline (multi-line input) |
-| `Ctrl+L` | Clear chat history |
+| `Ctrl+L` | Clear chat history (starts a fresh saved session) |
 | `Ctrl+T` | Cycle permission mode (default → accept-edits → yolo) |
+| `y` / `a` / `n` | At an approval prompt: allow once / allow for session / deny (`Esc` also denies) |
 | `Ctrl+R` | Re-send the last message |
 | `Ctrl+C` | First press cancels the in-flight turn; second press exits |
 | `Ctrl+D` | Exit immediately |
@@ -291,10 +305,32 @@ Cycle with `Ctrl+T`:
 
 The exact gate is `Destructive: true` on the tool definition in
 `proxy/tools.go`; `accept-edits` additionally auto-approves
-`write_file` and `edit_file` (the latter is already non-destructive).
+`write_file`, `edit_file`, `ast_edit`, and `move_file`.
 
-The current mode shows in the header. Approval prompts appear in chat
-as `permission_request` rows.
+The current mode shows in the header.
+
+### Approval prompt
+
+When a destructive tool needs approval, the turn pauses and a bordered
+prompt appears above the input box showing the tool and what it will do:
+
+```
+● run_command wants to run:
+    npm install
+  [y] allow once   [a] allow for session   [n] deny
+```
+
+- **`y`** — allow this one call.
+- **`a`** — allow this tool for the rest of the session; you won't be
+  asked again for it (the tool is added to the request's
+  `session_allowed_tools` on later turns).
+- **`n`** / **`Esc`** — deny; the model is told the call was refused and
+  continues.
+
+`Ctrl+C` still cancels the whole turn while a prompt is up. The decision
+is sent to the proxy via `POST /v1/permission`; a safety timeout
+(`ATLAS_PERMISSION_TIMEOUT_SEC`, default 600s) denies if nothing is
+answered. See [API.md → POST /v1/permission](API.md).
 
 ---
 

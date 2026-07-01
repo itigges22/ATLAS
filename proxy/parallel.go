@@ -120,15 +120,29 @@ func runSubTask(task PlannedTask, parentCtx *AgentContext) error {
 	subCtx.YoloMode = parentCtx.YoloMode
 	subCtx.StreamFn = parentCtx.StreamFn
 	subCtx.PermissionFn = parentCtx.PermissionFn
+	// Carry the session id and request context so a destructive tool in a
+	// sub-task reaches the same interactive permission prompt (and the same
+	// cancellation) as the parent turn rather than executing unprompted.
+	subCtx.PassID = parentCtx.PassID
+	if parentCtx.Ctx != nil {
+		subCtx.Ctx = parentCtx.Ctx
+	}
 	subCtx.MaxTurns = 15 // Sub-tasks get limited turns
 
-	// Copy file read state from parent
+	// Copy file read state and the session tool allowlist from parent under
+	// its lock (a plain reference copy would race the sub-context's own mu).
 	parentCtx.mu.Lock()
 	for k, v := range parentCtx.FilesRead {
 		subCtx.FilesRead[k] = v
 	}
 	for k, v := range parentCtx.FileReadTimes {
 		subCtx.FileReadTimes[k] = v
+	}
+	if len(parentCtx.AllowedTools) > 0 {
+		subCtx.AllowedTools = make(map[string]bool, len(parentCtx.AllowedTools))
+		for k, v := range parentCtx.AllowedTools {
+			subCtx.AllowedTools[k] = v
+		}
 	}
 	parentCtx.mu.Unlock()
 

@@ -276,6 +276,7 @@ func newProxyMux() *http.ServeMux {
 	mux.HandleFunc("/v1/agent", handleAgent)                             // tool-based agent endpoint
 	mux.HandleFunc("/events", handleEvents)                              // PC-061: typed SSE event stream
 	mux.HandleFunc("/cancel", handleCancel)                              // PC-062: TUI abort hook
+	mux.HandleFunc("/v1/permission", handlePermission)                   // interactive approve/deny for destructive tools
 	mux.HandleFunc("/feedback", handleFeedback)                          // per-file accept/deny + pass thumbs → lens samples
 	mux.HandleFunc("/v1/lens/training-status", handleLensTrainingStatus) // sample counts for the "retrain available" alert
 	// PC-059: TUI calls this on connect to render a Lens/ASA compat badge.
