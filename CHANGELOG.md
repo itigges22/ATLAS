@@ -26,6 +26,13 @@
 - The safety deny-list (`.env`/`*.pem`/`*credentials*` writes, destructive shell patterns) is enforced centrally at tool dispatch in every permission mode.
 - `outline_file` returns structured JSON including the rendered outline; `delete_file` reports removal errors and refuses non-empty directories; exploration budget escalates its nudge instead of skipping the read; session read-cache access is lock-guarded.
 
+### Security & workspace containment
+- Proxy-level workspace containment: every path-taking tool argument (`path`, `source`, `destination`, `cwd`) is resolved and checked against the workspace root before any handler touches the filesystem. Paths escaping via `..`, absolute paths, or symlinked components are refused in every permission mode.
+- Untrusted text written to logs is field-encoded so it can't forge or split log lines.
+- v3-service verifies candidate code before accepting it: an allowlisted build/test command gate (shell metacharacters blocked) and language-aware syntax checks reject candidates that don't compile/parse.
+- Sandbox executor parses XML with `defusedxml` (untrusted-input safe).
+- `scripts/production-readiness.py` is the developer gate (test integrity, Python compile + unit tests, Go race/vet for proxy and TUI, and the v3 syntax/sandbox contract tests); CI runs the same named gates.
+
 ### TUI
 - `/demo` raw lane runs with no sandbox or file tools; in review mode the raw pane keeps the model response while the V3 pane shows written files; stream events can no longer be overtaken by the done marker; prompt animation is multi-byte-safe; markdown re-wraps on terminal resize.
 - Feedback flow: staged per-file verdicts survive a failed submit; `/deny` validates the path against the files the last pass actually wrote; non-200 `/feedback` responses surface as errors; input echoes never replay into agent history.
@@ -38,6 +45,12 @@
 - `atlas doctor` prints each result as it completes (JSON mode still buffers).
 - `atlas model`: models dir resolves from the compose `.env`; a resumed download that the server reports complete (HTTP 416) is verified and finalized in place; `install-artifacts` exits 3 when no artifacts are registered for direct download and points at the published repos; Gemma-family registry entries carry the `gemma` license identifier.
 - `atlas init` reports failure when `api-keys.json` is not written and asks before tightening a loose `secrets/` dir; `atlas asa build` resolves the lens container via compose (non-default project names) and survives docker-exec timeouts with recovery guidance; `atlas solve` uses `/v1/chat/completions` so the GGUF's own chat template applies; the startup status block drops the hardcoded speed figure; version reports 3.1.2.
+
+### Geometric Lens — per-model calibration
+- Per-model score calibration, model-identity checks, and threshold loading are their own modules (`calibration.py`, `identity.py`, `thresholds.py`): C(x) energy is normalized to a per-model scale and G(x) verdicts use per-model thresholds, so the same framework works across models without hardcoded constants.
+- The proxy exposes `GET /v1/calibration/status` (lens + ASA compat verdict for the loaded model); the TUI reads it as a header badge on startup.
+- `atlas lens check | build | publish` and `atlas asa check | build | publish` cover the per-model probe, training, and artifact-publish flow.
+- Adds the `entrypoint-v3.1.sh` inference entrypoint (env-driven, model-neutral) shared by the Docker images and the macOS launcher.
 
 ### Lens service + retrain tooling
 - `/internal/lens/retrain` refuses with a structured 503 when the models dir is mounted read-only, pointing at host-side `atlas lens retrain`; retrain/reload are serialized and refresh the readiness state on success.
@@ -58,6 +71,7 @@
 
 ### Docs
 - Documentation refreshed against the current code: MAP regenerated; API (feedback/training-status endpoints, readiness gate, tool table, workspace containment); CLI, CONFIGURATION, SETUP, SOURCES, PLAN_MODE, TROUBLESHOOTING updated.
+- Documentation refactor for concision and structure: internal ticket references and dated change-narration removed from user-facing prose; duplicated content consolidated to a single canonical home with cross-links; `CAPABILITIES.md` + `PRODUCTION_READINESS.md` merged into `RELEASE.md`; `MAP.md` slimmed to a directory-level orientation map; shipped-release status trackers moved to `docs/reports/archive/`. Translations (`docs/lang/`) re-sync as a follow-up.
 
 ## [3.1.2] - 2026-06-17 — Maia
 
