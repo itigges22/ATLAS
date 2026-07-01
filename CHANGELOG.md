@@ -16,7 +16,8 @@
 - No detected GPU selects the Vulkan overlay automatically, plus the new `docker-compose.cpu.yml` when `/dev/dri` is absent — GPU-less hosts boot via the lavapipe CPU ICD (slow but functional).
 - firewalld changes are opt-in via `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1`; services bind loopback, so local installs leave the firewall alone.
 - ASA steering-vector build dispatches per GPU vendor (CUDA/ROCm image + device flags), loads `.env` keys first, and skips cleanly on CPU-only hosts; re-runs pull the existing checkout as its owner (no dubious-ownership failure under sudo); service health wait raised to 450s to cover llama-server warmup.
-- `install.sh` (K3s) fails early with guidance when `bc` is missing; `download-models.sh` downloads via curl and writes a relative `default.gguf` symlink; the macOS native launcher's fallback defaults match the Docker path (ctx 131072, f16/f16 KV, 4 slots).
+- `install.sh` (K3s) fails early with guidance when `bc` is missing; `download-models.sh` downloads via curl and writes a relative `default.gguf` symlink; the macOS native launcher keeps smaller fallback defaults than the Docker path (ctx 32768, q8_0/q4_0 KV, 1 slot) for Mac unified-memory headroom, and treats `.env` as optional so an env-only launch works.
+- GPU vendor detection word-bounds the AMD `lspci` match so NVIDIA/Intel GPUs aren't misdetected as AMD (#129).
 
 ### Proxy
 - `/ready` also gates on v3-service health.
