@@ -12,8 +12,8 @@
 > - Module file counts (e.g. "854/854 V3 tests passing") reflect the
 >   2026-03 codebase, not the V3.1.0 release.
 >
-> For current shipped state, see [`docs/SOURCES.md`](../SOURCES.md)
-> §"Active in V3.1.0" and [`docs/MAP.md`](../MAP.md). The snapshot
+> For current shipped state, see [`docs/SOURCES.md`](../../SOURCES.md)
+> §"Active in V3.1.0" and [`docs/MAP.md`](../../MAP.md). The snapshot
 > below is preserved unedited for historical reference (release-prep
 > diary).
 

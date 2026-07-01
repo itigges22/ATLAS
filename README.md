@@ -31,19 +31,10 @@ The published 74.6% LiveCodeBench result belongs to the frozen 14B reference bui
 
 ---
 
-## 🔥 Latest News
+## Latest News
 
 - **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads, and an agent-reliability pass
 - **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
-- **2026-04-13** - ["How to Run an AI Coding Assistant on a $500 GPU and Beat Claude Sonnet"](https://devtrends.ru/python/itigges22-atlas) - devtrends.ru
-- **2026-04-05** - **[V3.0.1 released](CHANGELOG.md)** - interactive CLI, Docker Compose deployment, 95.8% reliability
-- **2026-04-03** - ["$500 GPU Beats Claude: Local AI Revolution for Web Devs"](https://ownet.it/blog/500-gpu-beats-claude-local-ai-revolution-for-web-devs) - ownet.it
-- **2026-03-29** - ["A $500 GPU Just Outscored Claude Sonnet on Coding Benchmarks"](https://aivy.com.au/news/atlas-500-gpu-outperforms-claude-sonnet-coding/) - Aivy
-- **2026-03-28** - ["Why a $500 GPU Can Beat Claude Sonnet on Coding Benchmarks"](https://medium.com/data-science-collective/why-a-500-gpu-can-beat-claude-sonnet-on-coding-benchmarks-6c8169ffe4fe) - Data Science Collective
-- **2026-03-27** - ["ATLAS: A $500 GPU Outperforms Claude Sonnet"](https://clauday.com/article/b92c5551-b490-4d76-ae3d-d8dedf10d88b) - Clauday
-- **2026-03-27** - ["ATLAS – lokal AI-koding på 5000kr GPU slår Claude på benchmark"](https://www.jansverre.net/atlas-lokal-ai-koding-pa-500-gpu-slar-claude-pa-benchmark/) - jansverre.net (Norwegian)
-- **2026-03-26** - ["Local LLM Coding: $500 GPU Beats Claude: Not the Story"](https://novaknown.com/2026/03/26/local-llm-coding/) - Sarah Fraser, novaknown.com
-- **2026-03-26** - ["ATLAS: How a $500 GPU Achieves 74.6% LiveCodeBench Performance Through Intelligent Infrastructure"](https://techplanet.today/post/atlas-how-a-500-gpu-achieves-746-livecodebench-performance-through-intelligent-infrastructure) - TechPlanet
 - **2026-03-26** - [Hacker News front page](https://news.ycombinator.com/item?id=47533297) - 489 points, 285 comments
 - **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
@@ -60,7 +51,7 @@ The published 74.6% LiveCodeBench result belongs to the frozen 14B reference bui
 
 ## 🧱 What ATLAS Does
 
-1. **[atlas-tui](docs/CLI.md)** - native Bubbletea terminal UI; the canonical chat client (PC-062). Type `atlas` in any project directory to launch it.
+1. **[atlas-tui](docs/CLI.md)** - native Bubbletea terminal UI; the canonical chat client. Type `atlas` in any project directory to launch it.
    - [Live pipeline view](docs/CLI.md#panes) - watch V3 stages stream in a side pane
    - [Slash commands](docs/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
    - [Input modes](docs/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
@@ -68,7 +59,7 @@ The published 74.6% LiveCodeBench result belongs to the frozen 14B reference bui
 2. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
    - [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
    - [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas keep JSON output valid
-   - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations-may-2026-biasbusters-synthesis) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `ast_edit` for structural code edits
+   - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `ast_edit` for structural code edits
    - [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
 
 3. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
@@ -154,9 +145,9 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ---
 
-## 💖 Support ATLAS
+## Support ATLAS
 
-ATLAS is built by a single college student in his free time on a single consumer GPU. If the project has been useful to you and you want to help keep it sustainable, please consider **[sponsoring on GitHub](https://github.com/sponsors/itigges22)**.
+ATLAS is built by a single college student in his free time on a single consumer GPU ([the story behind ATLAS](docs/STORY.md)). If the project has been useful to you and you want to help keep it sustainable, please consider **[sponsoring on GitHub](https://github.com/sponsors/itigges22)**.
 
 Sponsorship directly funds:
 
@@ -171,11 +162,11 @@ Every sponsor is credited in the release notes of the version they helped fund.
 
 ## 🤝 Contributing
 
-We're building ATLAS in the open and we're actively looking for contributors and core maintainers. Whether you're fixing a bug, adding accelerator support, or rethinking a whole subsystem - there's a place for you here. If you believe open models deserve better infrastructure, come build with us.
+ATLAS is developed in the open and welcomes contributors and core maintainers. Bug fixes, accelerator support, and larger subsystem work are all welcome.
 
 Found a bug or hit a wall? **[Open an issue](https://github.com/itigges22/ATLAS/issues)** - you don't need to submit a fix. Bug reports and feedback help just as much as code.
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for guidelines.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for guidelines and the [repository map](docs/MAP.md) for an overview of the codebase layout.
 
 ---
 

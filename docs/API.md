@@ -20,7 +20,7 @@ API endpoints for each ATLAS service. All services communicate over HTTP/JSON. S
 
 The main entry point. Wraps llama-server with an agent loop, grammar-constrained tool calls, Lens scoring, and sandbox verification.
 
-**This is the public client surface.** The canonical client is [atlas-tui](CLI.md), but the contract below is stable and other front-ends (web UIs, editor plugins, CI bots, custom CLIs) can use it directly. Tracking issue for richer client-facing docs: [PC-063](../ISSUES.md).
+**This is the public client surface.** The canonical client is [atlas-tui](CLI.md), but the contract below is stable and other front-ends (web UIs, editor plugins, CI bots, custom CLIs) can use it directly.
 
 There are three primary endpoints for building a client:
 
@@ -29,8 +29,8 @@ There are three primary endpoints for building a client:
 | `/v1/agent` | POST | Send a user message, stream back a turn (tool calls, results, tokens, completion) as SSE |
 | `/cancel` | POST | Abort an in-flight `/v1/agent` turn by `session_id` |
 | `/v1/permission` | POST | Answer a `permission_request` (approve/deny a destructive tool call mid-turn) |
-| `/events` | GET | Subscribe to a global typed-envelope event broker (PC-061) — same events the TUI's pipeline pane uses |
-| `/v1/calibration/status` | GET | Lens + ASA compat verdict for the loaded model — what the TUI's Pipeline pane badge reads on startup (PC-059) |
+| `/events` | GET | Subscribe to a global typed-envelope event broker — same events the TUI's pipeline pane uses |
+| `/v1/calibration/status` | GET | Lens + ASA compat verdict for the loaded model — what the TUI's Pipeline pane badge reads on startup |
 | `/feedback` | POST | Record a pass's human verdict (per-file accept/deny and/or pass-level thumbs) as weighted lens training samples |
 | `/v1/lens/training-status` | GET | Collected lens-sample counts for the loaded model plus a retrain-available flag |
 
@@ -95,15 +95,15 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_divsampling` | DivSampling step (`divsampling`, `divsampling_done`, `divsampling_error`) | `stage`, `detail`, `slots` (int), `total` (int, on `_done`) |
 | `v3_sandbox` | Per-candidate sandbox test (`sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`) | `stage`, `detail`, `index` (int), `elapsed_ms` (int), `energy` (float, on `_pass`), `stderr` (string, first 120 chars on `_fail`), `passed` / `total` (on `_done`) |
 | `v3_select` | Candidate selection (`s_star`, `s_star_winner`, `selected`) | `stage`, `detail`, `index` (int), `energy` (float) |
-| `v3_lens_per_step` | PC-207 wiring: per-token C(x)+G(x) scoring of each candidate via `/internal/lens/score-per-step`. Fires once per candidate after generation (PlanSearch + DivSampling paths). Lets the TUI surface WHERE a candidate's quality cratered, and gives downstream candidate-selection logic a per-step signal beyond the single `energy` scalar. | `stage`, `detail`, `index` (int, candidate index), `source` (`plansearch`\|`divsampling`), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `cx_norm_max` (float), `n_tokens` (int) |
-| `v3_lens_veto` | PC-207 alignment: V3 hard-rejected a sandbox-passing candidate because its `gx_min` sat below the selected model artifact's calibrated severe-quality threshold. Sandbox proves execution; lens checks that the model's internal state did not collapse to a stub. Disabled when the Lens is uncalibrated. | `stage`, `detail`, `index` (int, candidate index), `gx_score_min` (float), `first_off_rails_idx` (int, -1 if none) |
-| `v3_structural_veto` | GH #39 point 1: V3 hard-rejected a sandbox-passing candidate because tree-sitter found one or more direct-identifier calls that don't resolve to a local def, import, builtin, or project symbol. Sandbox can pass for code with try/except ImportError fallbacks or dead branches; structural verification doesn't care whether the unresolved call actually executes, only that it can't resolve. Fires per-vetoed-candidate, after `v3_lens_veto`, before selection. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
-| `v3_call_chain_context` | GH #39 point 3: V3's phase-3 repair built a call-chain context block for the failing function (parsed from the deepest non-`<module>` frame in the candidate's stderr) and is about to inject it into PR-CoT, refinement-loop, and derivation-chain prompts. Informational, not a veto. Fires once per phase-3 entry, only when the failing function is actually defined in `file_map`. | `stage`, `detail`, `function` (string — the failing function name) |
-| `symbol_index_injected` | GH #39 point 4: before the first LLM call, the proxy auto-injects function/class snippets for symbols referenced in the user message (via `/internal/symbol_index`). This event fires once per turn-zero, listing what got injected so the TUI can show "pre-loaded 3 snippets" instead of an opaque burst of context. | `matched` (string[] — matched symbol names), `n_files` (int — project files scanned), `skipped` (int — symbols that didn't resolve) |
-| `agent_lens_score` | PC-207 agent-loop integration: lens scored a `write_file` or `edit_file` tool call's content via `/internal/lens/score-per-step`. Fires per write/edit before tool execution. The score reflects the model's output quality (independent of whether the tool succeeds). Used by the proxy to detect stuck/repetitive patterns (see `agent_lens_intervention`). | `tool` (`write_file`\|`edit_file`), `turn` (int), `n_tokens` (int), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `latency_ms` (float) |
-| `agent_lens_intervention` | PC-207 agent-loop integration: lens detected consecutive low-quality writes using the selected model artifact's calibrated `low`/`severe` thresholds. The proxy queues a corrective system message for the next LLM call. Disabled when calibration is absent. | `turn` (int), `tool` (string), `reason` (string — the multi-sentence corrective injected into ctx.Messages) |
-| `agent_repeat_intervention` | Tool-call repetition detector (`proxy/tool_repeat.go`): proxy saw the model emit the same `(tool_name, args)` signature ≥3 times in the last 8 turns and queued a corrective for the next LLM call. Sibling to `agent_lens_intervention` — the lens covers semantic repetition in `write_file`/`edit_file` content; this covers structural repetition (e.g. `read_file('app.py')` 4 times in 6 turns, `run_command('curl …')` after the same error) for any tool. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
-| `agent_reasoning_intervention` | Reasoning-repetition detector (`proxy/reasoning_repeat.go`, May 10 2026 BiasBusters #30). Proxy saw the model's `reasoning_content` stream open with the same normalized prefix for ≥3 consecutive turns ("Now I need to look at the file" / similar) and queued a corrective. Third pillar alongside `agent_lens_intervention` (content quality) and `agent_repeat_intervention` (call-shape repetition) — this catches the case where THINKING is stuck even when content/calls vary. | `turn` (int), `consecutive` (int — how many turns the snippet repeated), `snippet` (string — the normalized opening that triggered), `reason` (string — corrective injected into ctx.Messages) |
+| `v3_lens_per_step` | Per-token lens scoring of a generated candidate. Fires once per candidate. | `stage`, `detail`, `index` (int, candidate index), `source` (`plansearch`\|`divsampling`), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `cx_norm_max` (float), `n_tokens` (int) |
+| `v3_lens_veto` | A sandbox-passing candidate was rejected because its `gx_min` fell below the model's severe-quality threshold. Absent when the Lens is uncalibrated. | `stage`, `detail`, `index` (int, candidate index), `gx_score_min` (float), `first_off_rails_idx` (int, -1 if none) |
+| `v3_structural_veto` | A sandbox-passing candidate was rejected because tree-sitter found direct-identifier calls resolving to no local def, import, builtin, or project symbol. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
+| `v3_call_chain_context` | Phase-3 repair injected a call-chain context block for the failing function. Informational. | `stage`, `detail`, `function` (string — the failing function name) |
+| `symbol_index_injected` | Turn-zero auto-injection of function/class snippets for symbols named in the user message. | `matched` (string[] — matched symbol names), `n_files` (int — project files scanned), `skipped` (int — symbols that didn't resolve) |
+| `agent_lens_score` | Lens scored a `write_file` or `edit_file` tool call's content. Fires per write/edit before tool execution. | `tool` (`write_file`\|`edit_file`), `turn` (int), `n_tokens` (int), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `latency_ms` (float) |
+| `agent_lens_intervention` | Lens detected consecutive low-quality writes against the model's `low`/`severe` thresholds and queued a corrective for the next LLM call. Absent when calibration is missing. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
+| `agent_repeat_intervention` | Proxy saw the same `(tool_name, args)` signature ≥3× in the last 8 turns and queued a corrective. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
+| `agent_reasoning_intervention` | Proxy saw the model's `reasoning_content` open with the same prefix for ≥3 consecutive turns and queued a corrective. | `turn` (int), `consecutive` (int — how many turns the snippet repeated), `snippet` (string — the normalized opening that triggered), `reason` (string — corrective injected into ctx.Messages) |
 | `reasoning_token` | One delta from a model's optional `reasoning_content` stream during SSE chat completion. These tokens are forwarded to the TUI for live display. Distinct from `llm_token` (which carries the JSON tool-call content destined for parse). | `text` (string — single delta of reasoning prose) |
 | `v3_repair` | Phase 3 repair strategy (`phase3`, `pr_cot*`, `refinement*`, `derivation*`, `fallback`) | `stage`, `detail`, `strategy` (string: `pr_cot` / `refinement` / `derivation`), `failing` (int), `iterations` (int, on `refinement_pass`), `tokens` (int, on `_pass`) |
 | `v3_probe` | Probe phase events (`probe`, `probe_light`, `probe_retry`, `probe_failed`, `probe_scored`, `probe_sandbox`, `probe_pass`) | `stage`, `detail` |
@@ -117,7 +117,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 
 After the final event the server writes the SSE sentinel `data: [DONE]\n\n` and closes the response.
 
-> **Why so many event types?** A client that only cares about the user-facing chat surface needs `text`, `tool_call`, `tool_result`, `done`, and `error`. The `llm_*` and `v3_*` events exist so the TUI can show what the model is *doing* during the 5–60 s gap between user input and final reply (encoding the prompt, streaming a tool call, V3 grinding through a probe → PlanSearch → DivSampling → sandbox cycle). Drop them if your UI doesn't care.
+> A minimal chat client needs only `text`, `tool_call`, `tool_result`, `done`, `error`. The `llm_*` and `v3_*` events report model activity during the turn; ignore them if your UI doesn't render progress.
 
 #### Stream parsing example (Python)
 
@@ -151,7 +151,7 @@ with requests.post(
             print(f"✗ {d['error']}")
 ```
 
-That is the minimum viable client. Full streaming chat with token-level rendering is roughly +20 lines (buffer `llm_token` deltas, flush on `llm_call_end`).
+Full streaming chat with token-level rendering is roughly +20 lines (buffer `llm_token` deltas, flush on `llm_call_end`).
 
 ---
 
@@ -205,7 +205,7 @@ The correlation key is `session_id` + `tool_call_id`, so multiple destructive ca
 
 ### GET /events
 
-Subscribe to the **global typed-envelope broker** (PC-061). Unlike `/v1/agent` (per-request stream of one turn), `/events` is a long-lived pub/sub feed of structured envelopes from across the proxy: agent loop boundaries, tool calls, V3 stage transitions, metrics. Multiple clients can subscribe simultaneously; slow consumers drop events rather than blocking producers.
+Subscribe to the **global typed-envelope broker**. Unlike `/v1/agent` (per-request stream of one turn), `/events` is a long-lived pub/sub feed of structured envelopes from across the proxy: agent loop boundaries, tool calls, V3 stage transitions, metrics. Multiple clients can subscribe simultaneously; slow consumers drop events rather than blocking producers.
 
 **Envelope wire format** (matches `atlas/cli/events.py` exactly). A `stage_start` example (`parent_id` is reserved but never set by current producers; `duration_ms` is only set on `stage_end` / `tool_result`):
 ```json
@@ -218,7 +218,7 @@ Subscribe to the **global typed-envelope broker** (PC-061). Unlike `/v1/agent` (
 }
 ```
 
-**Event types:** `stage_start`, `stage_end`, `tool_call`, `tool_result`, `metric`, `error`, `done`. See [PROTOCOL.md](PROTOCOL.md) for the full per-type payload contracts and the legacy → envelope translation atlas-proxy applies to v3-service SSE.
+**Event types:** `stage_start`, `stage_end`, `tool_call`, `tool_result`, `metric`, `error`, `done`. See [PROTOCOL.md](PROTOCOL.md) for the full per-type payload contracts and the `{stage, detail}` → envelope translation atlas-proxy applies to v3-service SSE.
 
 **Transport:** SSE. Each line is `data: <json>\n\n`. The server sends `: connected\n\n` immediately on subscribe and a `: heartbeat\n\n` comment every 15 s during quiet stretches to keep proxies/load-balancers from idling out the connection.
 
@@ -233,7 +233,7 @@ Use `/events` when you want a global observability feed (a TUI pipeline pane, a 
 
 ### GET /v1/calibration/status
 
-Returns the proxy's view of whether the loaded model has compatible Geometric Lens artifacts (PC-057 verdict, distilled from the lens service's `/health` payload) and whether an ASA control vector is in play. The TUI hits this on startup to render the badge next to the Pipeline pane title.
+Returns the proxy's view of whether the loaded model has compatible Geometric Lens artifacts (the verdict distilled from the lens service's `/health` payload) and whether an ASA control vector is in play. The TUI hits this on startup to render the badge next to the Pipeline pane title.
 
 **Response shape:**
 
@@ -253,7 +253,7 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
     "verdict": "missing",
     "vector_path": "/models/ast_edit_steering.gguf",
     "vector_present": false,
-    "hint": "no control vector at /models/ast_edit_steering.gguf — build one via `atlas asa build` (PC-061)"
+    "hint": "no control vector at /models/ast_edit_steering.gguf — build one via `atlas asa build`"
   }
 }
 ```
@@ -363,18 +363,18 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
 | `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Cheaper than `read_file` for orienting in a large file. |
-| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go:557-568`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). PC-201 exempts corrupted-looking files (prose preamble, stray markdown fences) so a self-heal full-replace is allowed there. |
+| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go:557-568`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Corrupted-looking files (prose preamble, stray markdown fences) are exempt, so a self-heal full-replace is allowed there. |
 | `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. The wrong tool for >10 lines of change — switch to `ast_edit`. |
-| `ast_edit` | GH #39 — surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. |
+| `ast_edit` | Surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. |
 | `delete_file` | Remove a file (or an empty directory) from the workspace |
 | `move_file` | Rename/move a file within the workspace (`source` → `destination`) |
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
-| `find_file` | Regex search by file **name** or relative path. Use to check whether a file exists. (PC-028) |
+| `find_file` | Regex search by file **name** or relative path. Use to check whether a file exists. |
 | `list_directory` | List files and subdirectories at a given path |
-| `run_command` | Execute a shell command via bash inside the **sandbox container** (PC-188). Sees `/workspace` (your project, bind-mounted rw, same path as the proxy). Has python3 + pip, node + npm, go, rust, gcc/g++, bash, pytest, tsx pre-installed. Falls back to local proxy exec when the sandbox is unreachable so the dev/test workflow without docker compose still works. The proxy still runs `validateShellCommand` upstream as the destructive-verb gate — this entry just picks the executor. |
-| `run_background` | PC-196 — start a long-running process (e.g. `python app.py`, `npm run dev`) in the sandbox and return immediately with a `job_id`. The proxy detects shell `&` backgrounding through `run_command` and routes it here. |
-| `tail_background` | PC-196 — fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
-| `stop_background` | PC-196 — terminate a backgrounded job by `job_id`. |
+| `run_command` | Execute a shell command via bash inside the **sandbox container**. Sees `/workspace` (your project, bind-mounted rw, same path as the proxy). Has python3 + pip, node + npm, go, rust, gcc/g++, bash, pytest, tsx pre-installed. Falls back to local proxy exec when the sandbox is unreachable so the dev/test workflow without docker compose still works. The proxy still runs `validateShellCommand` upstream as the destructive-verb gate — this entry just picks the executor. |
+| `run_background` | Start a long-running process (e.g. `python app.py`, `npm run dev`) in the sandbox and return immediately with a `job_id`. The proxy detects shell `&` backgrounding through `run_command` and routes it here. |
+| `tail_background` | Fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
+| `stop_background` | Terminate a backgrounded job by `job_id`. |
 | `plan_tasks` | Decompose work into parallel tasks with dependencies |
 
 **Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`proxy/workspace.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
@@ -428,7 +428,7 @@ curl http://localhost:8090/ready
 }
 ```
 
-Returns 200 only when **all** gates pass: llama-server `/health`, geometric-lens `/ready` (503s when scoring is degraded — lens weights missing, embedding-dim mismatch, see PC-019), sandbox `/health`, and v3-service `/health` (checked whenever a V3 URL is configured). 503 with the same body otherwise.
+Returns 200 only when **all** gates pass: llama-server `/health`, geometric-lens `/ready` (503s when scoring is degraded — lens weights missing, embedding-dim mismatch), sandbox `/health`, and v3-service `/health` (checked whenever a V3 URL is configured). 503 with the same body otherwise.
 
 ---
 
@@ -561,7 +561,7 @@ If all candidates fail to parse, the endpoint returns a single-step fallback (`{
 
 ### POST /internal/ast_edit
 
-GH #39 v1 — friendly-selector AST node replacement. Stateless transform: caller provides the file's source bytes, server parses with tree-sitter, finds the named node, returns the new full file content. The proxy reads + writes; this endpoint never touches the filesystem.
+Friendly-selector AST node replacement. Stateless transform: caller provides the file's source bytes, server parses with tree-sitter, finds the named node, returns the new full file content. The proxy reads + writes; this endpoint never touches the filesystem.
 
 **Request:**
 ```json
@@ -599,7 +599,7 @@ Hard rule: selector must match exactly one node. Ambiguous selectors fail with a
 
 ### POST /internal/symbol_index
 
-GH #39 point 4 — resolve user-message symbol references against project source. The proxy extracts candidate symbols from the user message via regex (backticked identifiers, "the X function" patterns, dotted-path leaves), walks the working directory for `.py` files (capped at 50 files / 500 KB total), and POSTs to this endpoint. Server tree-sitter-walks each file for `function_definition` and `class_definition` nodes, returns snippets for the symbols defined in the project. Matched snippets are auto-injected into the agent's first turn so the model doesn't burn turns on `read_file`-spelunking.
+Resolve user-message symbol references against project source. The proxy extracts candidate symbols from the user message via regex (backticked identifiers, "the X function" patterns, dotted-path leaves), walks the working directory for `.py` files (capped at 50 files / 500 KB total), and POSTs to this endpoint. Server tree-sitter-walks each file for `function_definition` and `class_definition` nodes, returns snippets for the symbols defined in the project. Matched snippets are auto-injected into the agent's first turn so the model doesn't burn turns on `read_file`-spelunking.
 
 **Request:**
 ```json
@@ -630,7 +630,7 @@ Stateless: each call rebuilds the index from the file_map. No caching.
 
 ### POST /internal/cyclomatic_complexity
 
-GH #39 point 2 — McCabe cyclomatic complexity from tree-sitter AST traversal. Used by the proxy's `classifyFileTier` to *escalate* (never downgrade) the regex-based tier verdict when real branching complexity warrants the V3 pipeline.
+McCabe cyclomatic complexity from tree-sitter AST traversal. Used by the proxy's `classifyFileTier` to *escalate* (never downgrade) the regex-based tier verdict when real branching complexity warrants the V3 pipeline.
 
 **Request:**
 ```json
@@ -720,7 +720,7 @@ Always returns 200 — the endpoint is informational. `status` is `"healthy"` or
 curl http://localhost:8099/ready
 ```
 
-Readiness probe (`geometric-lens/main.py:294`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch — see PC-019). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
+Readiness probe (`geometric-lens/main.py:294`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
 
 <details>
 <summary><b>Additional internal endpoints</b></summary>
@@ -751,7 +751,7 @@ These are used internally by other ATLAS services. They are stable but not part 
 | `/internal/lens/retrain` | POST | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
 | `/internal/lens/reload` | POST | Reload model weights (refreshes the `/ready` state) |
 | `/internal/lens/correctability` | POST | Correctability evaluation |
-| `/internal/lens/score-per-step` | POST | PC-207 lens-as-PRM: per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires PC-202 patch on llama-server). |
+| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
 | `/internal/sandbox/analyze` | POST | Sandbox result analysis |
 
 </details>
@@ -764,7 +764,7 @@ Isolated code execution with compilation, testing, and linting support. The cont
 
 ### POST /jobs/start
 
-PC-196 — spawn a background process and return a `job_id` immediately. Used by the proxy's `run_background` tool for long-running things like `python app.py` or `npm run dev`. The process runs in a new session group so `/jobs/{id}/stop` can kill the whole tree.
+Spawn a background process and return a `job_id` immediately. Used by the proxy's `run_background` tool for long-running things like `python app.py` or `npm run dev`. The process runs in a new session group so `/jobs/{id}/stop` can kill the whole tree.
 
 **Request:**
 ```json
@@ -807,7 +807,7 @@ SIGTERM the process group, wait briefly, SIGKILL if still alive. Used by the pro
 
 ### POST /shell
 
-Run a shell command against the bind-mounted workspace. The proxy's `run_command` tool routes here (PC-188) so the agent's verification commands (`pytest`, `python app.py`, `npm run build`, `curl`, etc.) execute against the user's actual files with the full language matrix the proxy lacks.
+Run a shell command against the bind-mounted workspace. The proxy's `run_command` tool routes here so the agent's verification commands (`pytest`, `python app.py`, `npm run build`, `curl`, etc.) execute against the user's actual files with the full language matrix the proxy lacks.
 
 **Request:**
 ```json
@@ -864,7 +864,7 @@ Execute code in an isolated environment.
 | `test_code` | string | null | Optional test code (e.g. pytest assertions) |
 | `requirements` | string[] | null | Python packages to pip install before execution |
 | `timeout` | int | 30 | Max execution time in seconds (capped at `MAX_EXECUTION_TIME`) |
-| `files` | object | null | Map of `relative-path → file-content` written into the workspace before execution. Use to ship multi-file project context (e.g. modules the candidate imports). Path traversal (`..`, absolute paths, symlink components) is rejected. See PC-046. |
+| `files` | object | null | Map of `relative-path → file-content` written into the workspace before execution. Use to ship multi-file project context (e.g. modules the candidate imports). Path traversal (`..`, absolute paths, symlink components) is rejected. |
 | `stdin` | string | null | Optional standard input piped to the run step. When null the process inherits the server's stdin. |
 
 **Response:**
@@ -981,13 +981,13 @@ Raw completion endpoint (no chat template). Used internally by the benchmark run
 
 Generate embeddings for input text. Used by Geometric Lens for C(x)/G(x) scoring.
 
-#### ATLAS extension: per-layer residual hidden states (PC-202)
+#### ATLAS extension: per-layer residual hidden states
 
-`/embedding` and `/embeddings` (the legacy paths — *not* `/v1/embeddings`)
+`/embedding` and `/embeddings` (the native paths — *not* `/v1/embeddings`)
 accept an optional `layers` parameter that returns the post-block residual
 stream at the requested transformer layers, in addition to the standard
-final-layer embedding. Used by the Geometric Lens (PC-207, lens-as-PRM)
-and the Qwen-Scope SAE service (PC-203).
+final-layer embedding. Used by the Geometric Lens (lens-as-PRM scoring)
+and the Qwen-Scope SAE service.
 
 **Request:**
 
@@ -1048,7 +1048,7 @@ DeltaNet/SSM-based, so all 32 layers of Qwen3.5-9B are accessible.
 
 **Wire format rationale:** base64 over JSON arrays. Empirically a single
 layer of 84 tokens × 4096 dims is 1.4 MiB raw float32, 1.8 MiB as base64,
-or 7 MiB as a JSON array of floats — and PC-207 fires this every N tokens
+or 7 MiB as a JSON array of floats — and lens-as-PRM scoring fires this every N tokens
 during generation. JSON would push 50+ MiB per multi-layer scoring call;
 base64 keeps it manageable.
 
@@ -1073,4 +1073,4 @@ A minimal client needs three things:
 
 The TUI ([atlas tui](CLI.md)) is a Go reference implementation (~3 kloc) — its `model.go` shows how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example.
 
-PC-063 tracks producing a fully-worked web client recipe and an OpenAPI spec generated from `tools.go`. Until then, this document and the TUI source are the canonical reference.
+This document and the TUI source are the canonical reference for building a client.

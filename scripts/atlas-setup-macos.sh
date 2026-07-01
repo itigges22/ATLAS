@@ -224,10 +224,10 @@ if [[ $NEED_BUILD -eq 1 ]]; then
         fetch --depth 1 origin "$LLAMA_CPP_REV"
     git checkout -q FETCH_HEAD
 
-    # Apply PC-202 hidden-states patch (real .patch file, must apply
+    # Apply the hidden-states patch (real .patch file, must apply
     # cleanly — CI gates on this via llama-patches-apply).
     if ! git apply --check "$PATCH_DIR/expose-hidden-states.patch"; then
-      red "PC-202 patch does not apply to $LLAMA_CPP_REV."
+      red "hidden-states patch does not apply to $LLAMA_CPP_REV."
       red "  See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
       exit 1
     fi

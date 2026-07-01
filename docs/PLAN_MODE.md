@@ -5,7 +5,7 @@ Plan mode is a pre-flight planning step that runs once per agent turn before the
 Designed to address two failure modes:
 
 1. **Discovery thrashing.** Without a plan, the model's first 2–4 tool calls are often `read_file → list_directory → search_files → read_file → ...` — exploring instead of acting. With a plan, the system prompt tells it explicitly: read this, edit that, verify with curl.
-2. **No-evidence "done"**. The plan's `verify_step` is treated as the proof-of-fix. The verification gate (PC-179) refuses `done` until that step has run successfully.
+2. **No-evidence "done"**. The plan's `verify_step` is treated as the proof-of-fix. The verification gate refuses `done` until that step has run successfully.
 
 ## End-to-end flow
 
@@ -97,7 +97,7 @@ Two predicates in `shouldGeneratePlan`:
 1. **`ctx.Tier == Tier0Conversational`** — trivial chat ("hi", "thanks") never plans.
 2. **`len(message) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
 
-Outside those, every turn plans. Failures (`/v3/plan` 5xx, network error, all candidates unparseable beyond the fallback) degrade silently — the loop runs without `ctx.Plan`, identical to pre-PC-185 behaviour.
+Outside those, every turn plans. Failures (`/v3/plan` 5xx, network error, all candidates unparseable beyond the fallback) degrade silently — the loop runs without `ctx.Plan`, and the agent loop behaves as it does when plan mode is off.
 
 ## Cost
 

@@ -1,6 +1,6 @@
 # ATLAS Setup — macOS (Apple Silicon, Hybrid Metal + Docker)
 
-This is the install guide for **Apple Silicon Macs** (M1, M2, M3, M4). Intel Macs should use the [Vulkan path](SETUP.md#vulkan--the-universal-fallback-pc-114) instead — Metal is Apple-Silicon-only.
+This is the install guide for **Apple Silicon Macs** (M1, M2, M3, M4). Intel Macs should use the [Vulkan path](SETUP.md#vulkan--cross-vendor-fallback) instead — Metal is Apple-Silicon-only.
 
 ATLAS on Mac uses a **hybrid architecture** (#32):
 
@@ -70,7 +70,7 @@ What this does (idempotent, re-runs are cheap):
 3. Verifies Homebrew is installed
 4. Installs missing brew packages: `cmake`, `git`, `python@3.12`, `pipx`, `go`
 5. Reads `LLAMA_CPP_REV` from `inference/Dockerfile.v31` (the pinned SHA used by the Docker images — keeps the native build in lockstep with the linux + cuda/rocm builds)
-6. Fetches llama.cpp at that exact SHA, applies the PC-202 hidden-states patch + spec-decode embeddings fix
+6. Fetches llama.cpp at that exact SHA, applies the hidden-states patch + spec-decode embeddings fix
 7. Builds `llama-server` with `-DGGML_METAL=ON -DGGML_METAL_USE_BF16=ON` (Apple GPU compute backend, bf16 support for M3/M4)
 8. Installs the binary to `~/.atlas/macos/bin/llama-server-metal` (plus `llama-cli-metal` and `llama-cvector-generator-metal` for ASA workflows)
 9. Installs the `atlas` Python CLI via `pipx install --editable` (isolated venv, dodges Homebrew Python's PEP 668 enforcement)
@@ -200,12 +200,7 @@ Your Mac
      |   forwards every connection to the native server on the host.)
 ```
 
-Why this design:
-
-- **No core component changes.** The 4 docker services (proxy, v3, lens, sandbox) are unchanged from the Linux + CUDA path. The base `docker-compose.yml` is unchanged. Only the new `docker-compose.macos.yml` overlay differs.
-- **Fast Metal inference.** llama.cpp built with `-DGGML_METAL=ON` uses Apple's GPU directly. MoltenVK + Docker Desktop adds 5-10x overhead which kills inference perf.
-- **Standard atlas UX.** Same `atlas init` / `atlas doctor` / `atlas` commands as Linux.
-- **Reversible.** Stop the native llama-server, rerun `atlas init --backend vulkan`, and you fall back to the docker-only path that uses MoltenVK. Useful for scripting.
+The 4 Docker services and the base `docker-compose.yml` are unchanged — only the `docker-compose.macos.yml` overlay differs, so `atlas init` / `atlas doctor` / `atlas` behave the same as on Linux. Native Metal (`-DGGML_METAL=ON`) uses Apple's GPU directly. The path is reversible: stop the native server and rerun `atlas init --backend vulkan` to fall back to the docker-only MoltenVK path.
 
 ## Troubleshooting
 
@@ -282,9 +277,9 @@ This is Homebrew Python's PEP 668 enforcement — `pip install` and `pip install
 
 Either path puts the `atlas` binary in `~/.local/bin/` with its dependencies isolated in a pipx-managed venv. `git pull` upgrades atlas in place because we used `--editable`.
 
-### Setup script fails at `PC-202 patch does not apply`
+### Setup script fails at `hidden-states patch does not apply`
 
-Upstream llama.cpp has drifted past the pinned SHA. See [docs/TROUBLESHOOTING.md § llama.cpp patch drift](TROUBLESHOOTING.md#llamacpp-patch-drift-when-the-publish-workflow-fails-at-patch-does-not-apply) for the bump runbook.
+Upstream llama.cpp has drifted past the pinned SHA. See [docs/TROUBLESHOOTING.md § Rebuilding llama.cpp](TROUBLESHOOTING.md#rebuilding-llamacpp-new-model-architecture-or-patch-drift) for the bump runbook.
 
 ### I want to skip the native build entirely (use only Docker)
 
@@ -295,25 +290,7 @@ atlas init --backend vulkan
 docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
 ```
 
-Inference will be 5-10x slower but you don't need brew, cmake, or the setup script.
-
-## What this changes vs the standard install
-
-This is intentionally a small change to keep things easy to maintain:
-
-| File | Change |
-|---|---|
-| `scripts/atlas-setup-macos.sh` | NEW |
-| `scripts/atlas-llama-macos.sh` | NEW |
-| `docker-compose.macos.yml` | NEW |
-| `docs/SETUP_MACOS.md` | NEW (this file) |
-| `atlas/cli/commands/init.py` | new branch for darwin + apple silicon |
-| `atlas/cli/commands/doctor.py` | new `_check_metal_native()` |
-| `atlas/cli/commands/tier.py` | `apple` vendor flipped from unsupported → supported |
-| `docker-compose.yml` | **UNCHANGED** |
-| All other service code | **UNCHANGED** |
-
-Linux + CUDA / ROCm installs see zero behavior change.
+Inference will be slower but you don't need brew, cmake, or the setup script.
 
 ## Roadmap
 

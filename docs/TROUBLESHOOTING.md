@@ -1,6 +1,6 @@
 # ATLAS Troubleshooting Guide
 
-Common issues and solutions for ATLAS V3.1.0, organized by service.
+Common issues and solutions, organized by service.
 
 ---
 
@@ -12,13 +12,6 @@ Run these first to identify where the problem is:
 # Docker Compose — check all services at once
 docker compose ps
 
-# Individual health checks
-curl -s http://localhost:8080/health | python3 -m json.tool   # llama-server
-curl -s http://localhost:8099/health | python3 -m json.tool   # geometric-lens
-curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
-curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
-curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy (shows all service statuses)
-
 # GPU status
 nvidia-smi
 
@@ -26,7 +19,7 @@ nvidia-smi
 docker compose logs --tail 50
 ```
 
-The atlas-proxy health endpoint reports the status of all upstream services:
+For the per-service health-check curls, see [SETUP.md § Verify Installation](SETUP.md#verify-installation). The atlas-proxy health endpoint is the most useful for triage — it reports the status of all upstream services:
 ```json
 {
   "status": "ok",
@@ -39,7 +32,7 @@ The atlas-proxy health endpoint reports the status of all upstream services:
 }
 ```
 
-If any field is `false`, that service is the problem. `status` flips to `"degraded"` whenever any of `inference`, `lens`, `lens_ready`, or `sandbox` is false. The split between `lens` and `lens_ready` (PC-019) lets you tell "Lens process is up but its `/ready` gate is failing — usually missing weights or embedding-dim mismatch" apart from "Lens HTTP is unreachable."
+If any field is `false`, that service is the problem. `status` flips to `"degraded"` whenever any of `inference`, `lens`, `lens_ready`, or `sandbox` is false. The split between `lens` and `lens_ready` lets you tell "Lens process is up but its `/ready` gate is failing — usually missing weights or embedding-dim mismatch" apart from "Lens HTTP is unreachable."
 
 ---
 
@@ -123,7 +116,7 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    sudo ldconfig && sudo systemctl restart docker
    ```
 
-4. **Generate a CDI spec (newer toolkit replaces "legacy" mode):**
+4. **Generate a CDI spec:**
    ```bash
    sudo mkdir -p /etc/cdi
    sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
@@ -196,7 +189,7 @@ atlas doctor
 
 **What it means:** llama.cpp's HIP kernels were compiled for `gfx` targets that don't include your GPU. ROCm has a long-standing pattern of dropping older consumer GPUs from official support while still letting them work with the right override.
 
-**Fix:** force a compatible gfx version at runtime via `ATLAS_HSA_OVERRIDE_GFX_VERSION`. Common overrides:
+**Fix:** force a compatible gfx version at runtime via `ATLAS_HSA_OVERRIDE_GFX_VERSION`. Common overrides (for the canonical card→gfx table, see [SETUP.md § AMD GPU Targets](SETUP.md#amd-gpu-targets-dockerfilerocm)):
 
 | Your GPU | Set `ATLAS_HSA_OVERRIDE_GFX_VERSION=` |
 |---|---|
@@ -236,7 +229,7 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 
 **Important: do NOT set `ATLAS_HSA_OVERRIDE_GFX_VERSION` for gfx1200/gfx1201.** ROCm 7.0+ supports these targets natively; overriding the GFX version inside Docker causes a mismatch between the compiled kernels and the runtime target, which results in crashes. Leave `ATLAS_HSA_OVERRIDE_GFX_VERSION` unset (the default).
 
-> Tested on AMD Radeon AI PRO R9700 (gfx1201) with ROCm 7.2, `ATLAS_ROCM_TAG=7.2.3-complete`. ATLAS PC-202 patch applies cleanly to the pinned llama.cpp SHA. Inference runs correctly across text generation and embedding generation without any additional flags.
+> Tested on AMD Radeon AI PRO R9700 (gfx1201) with ROCm 7.2, `ATLAS_ROCM_TAG=7.2.3-complete`. The hidden-states patch applies cleanly to the pinned llama.cpp SHA. Inference runs correctly across text generation and embedding generation without any additional flags.
 
 ### ROCm container can't pull `rocm/rocm-terminal`
 
@@ -272,7 +265,7 @@ fatal: fetch-pack: invalid index-pack output
 
 **Cause:** The full llama.cpp git history is large (~1 GB) and the clone is sensitive to flaky/slow connections. A momentary stall causes the SSL read to time out and the whole transfer to abort.
 
-**Fix (already applied in `inference/Dockerfile.v31`):** the Dockerfile uses `git clone --depth 1 --single-branch` with `http.postBuffer=524288000` and `http.lowSpeedLimit/Time` to fail-fast on dead connections instead of hanging for 11 minutes. If you have an older Dockerfile or the issue recurs:
+**Fix:** `inference/Dockerfile.v31` uses `git clone --depth 1 --single-branch` with `http.postBuffer=524288000` and `http.lowSpeedLimit/Time` to fail-fast on dead connections. If you have an older Dockerfile or the issue recurs:
 
 1. Retry the build — transient network blips happen, especially on residential connections.
 2. If retries keep failing, pre-pull the repo on the host and bind-mount it into the build context. Quick recipe:
@@ -280,109 +273,39 @@ fatal: fetch-pack: invalid index-pack output
    git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
    # then edit Dockerfile.v31 to COPY from /tmp/llama.cpp instead of cloning
    ```
-3. Long term: prebuilt llama-server images on GHCR will skip this step entirely (Phase 0 roadmap item).
+3. Prebuilt llama-server images on GHCR skip this step entirely — pull instead of building.
 
-### Rebuilding llama.cpp for a new model architecture
+### Rebuilding llama.cpp (new model architecture, or patch drift)
 
-**Symptom:** A freshly dropped-in model fails to load with:
+Developer-maintenance task. Two triggers land here:
 
-```
-error loading model: unknown (model) architecture 'gemma4'
-```
+- **A dropped-in model fails to load** with `error loading model: unknown (model) architecture 'gemma4'` — the pinned llama.cpp predates that architecture.
+- **A build fails** with `error: patch failed: tools/server/server-context.cpp:NN` / `patch does not apply` — upstream drifted past the pinned SHA.
 
-**Cause:** The `atlas-llama` image bundles a llama.cpp built at a fixed point in
-time. A model whose architecture was added to llama.cpp *after* your image was
-built won't load until you rebuild the inference image against newer llama.cpp.
+The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) and re-applies `inference/patches/expose-hidden-states.patch` (the per-layer `hidden_states` extension the Geometric Lens depends on) during the build. To learn a new architecture, move the pin to a llama.cpp SHA that includes it. Prebuilt GHCR images skip the local build; only rebuild when you need an architecture newer than the published image.
 
-**Fix:** rebuild just the llama-server image (this is the one legitimate reason
-to do a long rebuild — `atlas onboard` will tell you when it's needed; it will
-**not** rebuild for you):
+**Preserve the hidden-states patch — rebase it, don't delete it.** Removing the `git apply` step builds a server that has silently lost the lens plumbing (`/embedding` ignores the `layers:` parameter). Bump runbook:
 
-```bash
-# The image pins llama.cpp via LLAMA_CPP_REV (see Dockerfile.v31) so a
-# plain rebuild reuses the SAME revision and won't learn new architectures.
-# Point the pin at a llama.cpp commit that includes your model's arch:
-docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server   # ~70 min on CUDA
-docker compose up -d llama-server --no-deps
-```
-
-> ⚠️ **Preserve ATLAS's custom llama.cpp patches — do not strip them.** The build
-> re-applies `inference/patches/expose-hidden-states.patch` (PC-202: the
-> per-layer `hidden_states` extension the Geometric Lens depends on for SAE /
-> lens-as-PRM) to the freshly-cloned source, via the `git apply` step in
-> `inference/Dockerfile.v31` (shared by `Dockerfile.rocm` / `Dockerfile.vulkan`).
-> When upstream has drifted, that step fails and the build aborts:
->
-> ```
-> error: patch failed: tools/server/server-context.cpp:NN
-> error: tools/server/server-context.cpp: patch does not apply
-> ```
->
-> **The fix is to rebase the patch, NOT to delete it or remove the `git apply`
-> line.** Removing it builds a working server that has silently lost the lens
-> plumbing (`/embedding` will ignore the `layers:` parameter). To rebase:
->
-> 1. Shallow-fetch the SHA you're bumping to (see the bump runbook in
->    "llama.cpp patch drift" below for the fetch recipe).
-> 2. `cd /tmp/llcpp && git apply --reject inference/patches/expose-hidden-states.patch`
->    — clean hunks apply; failures land in `*.rej`.
-> 3. Re-insert each rejected hunk at its (moved) anchor. These are additive, so
->    watch for upstream **renames** in the surrounding code — e.g. the server
->    context member `model` → `model_tgt` — and update the patch's added lines to
->    match.
-> 4. Regenerate: `git diff > expose-hidden-states.patch`, validate with
->    `git apply --check` on a clean checkout, and (recommended) compile just the
->    touched file CPU-only to catch member/type errors before the 70-min CUDA
->    build: `cmake -B build-cpu -DGGML_CUDA=OFF && make -C build-cpu server-context`.
-> 5. Replace `inference/patches/expose-hidden-states.patch` and rebuild.
-
-After the rebuild loads the model, the Geometric Lens still needs retraining for
-the new model — see [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
-
-### llama.cpp patch drift (when the publish workflow fails at "patch does not apply")
-
-**Symptom:** The `Build & publish container images` workflow fails in the `llama` job with:
-
-```
-error: patch failed: tools/server/server-context.cpp:36
-error: tools/server/server-context.cpp: patch does not apply
-```
-
-**Cause:** The PC-202 hidden-states patch (`inference/patches/expose-hidden-states.patch`) is pinned against a specific llama.cpp SHA via the `LLAMA_CPP_REV` build arg in all four Dockerfiles. When upstream llama.cpp shifts context around the patch target (e.g. a blank line removed, an include reordered), the patch's expected line numbers stop matching even though the SHA pin is still valid. This usually means someone bumped `LLAMA_CPP_REV` without regenerating the patch against the new SHA.
-
-The CI smoke test (`tests` workflow, `llama.cpp patches apply to pinned SHA` job) catches this in ~30 seconds before the 30+ minute publish workflow burns runner time. If you see this fail locally instead of in CI, follow the bump runbook below.
-
-**Bump runbook** — when you need to move `LLAMA_CPP_REV` forward (new llama.cpp feature, security fix, or an old SHA you no longer want to pin):
-
-1. **Find a candidate SHA.** Browse [ggml-org/llama.cpp commits](https://github.com/ggml-org/llama.cpp/commits/master) — pick something recent that includes the feature/fix you want.
-
-2. **Verify the existing patch still applies.** Fast check, no Docker needed:
+1. **Verify the patch against the target SHA** (fast, no Docker):
    ```bash
    mkdir -p /tmp/llama-check && cd /tmp/llama-check
    git init -q llama.cpp && cd llama.cpp
    git remote add origin https://github.com/ggml-org/llama.cpp
-   git fetch --depth 1 origin <NEW_SHA>
-   git checkout -q FETCH_HEAD
+   git fetch --depth 1 origin <NEW_SHA> && git checkout -q FETCH_HEAD
    git apply --check $REPO/inference/patches/expose-hidden-states.patch
    ```
-   (Only this patch is `git apply`-ed by the build. The spec-decode
-   embeddings fix is applied as a `sed` inside the Dockerfiles and is a
-   no-op when its target line is absent — don't `git apply` it.)
-
-3. **If it applies cleanly:** great, just bump `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) to the new SHA. The CI smoke test will verify all four agree.
-
-4. **If a patch fails:** regenerate it against the new SHA.
+   (Only this patch is `git apply`-ed. The spec-decode embeddings fix is a `sed` in the Dockerfiles, a no-op when its target line is absent.)
+2. **If it applies cleanly:** bump `LLAMA_CPP_REV` in all four Dockerfiles to the new SHA. The CI smoke test verifies they agree.
+3. **If it fails:** `git apply --reject …` to land the clean hunks, re-insert each `*.rej` hunk at its moved anchor (watch for upstream renames in surrounding code, e.g. `model` → `model_tgt`, and update the patch's added lines), then `git diff > $REPO/inference/patches/expose-hidden-states.patch`. Re-run step 1. Compile just the touched file CPU-only to catch member/type errors before the long CUDA build: `cmake -B build-cpu -DGGML_CUDA=OFF && make -C build-cpu server-context`.
+4. Rebuild and bring up:
    ```bash
-   cd /tmp/llama-check/llama.cpp
-   # Apply the OLD patch's intent manually (look at the patch body to see
-   # what hunks should land), then:
-   git diff > $REPO/inference/patches/expose-hidden-states.patch
+   docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server
+   docker compose up -d llama-server --no-deps
    ```
-   Re-run step 2 to verify, then bump the four Dockerfiles.
 
-5. **Walk forward, not backward.** If you can't find a recent SHA where the patch applies, prefer regenerating the patch over pinning to an older SHA — pinning further into the past means missing upstream fixes.
+Prefer regenerating the patch over pinning to an older SHA — pinning backward means missing upstream fixes.
 
-**Why no automatic patch-against-master CI?** That would notify us of upstream drift as soon as it happens, but it would also notify us constantly (llama.cpp moves fast) and there's nothing actionable until we want to bump. The pinned SHA + smoke test pattern gates on intent: drift becomes a problem only when someone tries to move forward.
+After the rebuild loads the model, the Geometric Lens still needs retraining for the new model — see [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
 
 ### SELinux Blocking Container Access (Fedora/RHEL)
 
@@ -459,7 +382,7 @@ atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
 `atlas tier fit` reads the GGUF header and your GPU's VRAM and solves for the
-largest fully-on-GPU configuration (see [CLI.md § atlas tier fit](CLI.md#atlas-tier-fit-pc-208)).
+largest fully-on-GPU configuration (see [CLI.md § atlas tier fit](CLI.md#atlas-tier-fit)).
 ATLAS runs llama-server with `--fit off` so a config that doesn't fit fails
 loudly at startup instead of silently running partly on the CPU.
 
@@ -581,9 +504,9 @@ V3 fires when **all conditions** are met:
 1. File has **50+ lines** of content
 2. File has **3+ logic indicators** (function defs, control flow, API patterns)
 3. V3 service is reachable at `ATLAS_V3_URL`
-4. **Request tier ≥ T2** (classifier output, after any agent override) **AND** the file's own tier ≥ T2 (PC-042)
+4. **Request tier ≥ T2** (classifier output, after any agent override) **AND** the file's own tier ≥ T2
 
-**Both** `write_file` and `edit_file` route through V3 since PC-042. Before that, only `write_file` did — and since the system prompt steers the model toward `edit_file` for all changes to existing files, V3 effectively never ran on real edits. If you're on a build that predates PC-042, that's why.
+Both `write_file` and `edit_file` route through V3.
 
 **Diagnose:**
 ```bash
@@ -607,213 +530,52 @@ If V3 is unreachable, the proxy logs `V3 failed: ...` and falls back to direct w
 
 **Cause:** The model is trying to write too much content in one call. The proxy detects truncated JSON and rejects the tool call.
 
-**What happens automatically:**
-- For existing files > 100 lines: proxy rejects `write_file` and tells the model to use `edit_file` instead
-- After 3 consecutive failures: error loop breaker stops the agent and returns a summary
+The proxy rejects `write_file` on existing files over 100 lines and tells the model to use `edit_file` instead; after 3 consecutive failures the error loop breaker stops the agent and returns a summary.
 
-**What you can do:** Rephrase your request to ask for targeted changes rather than full file rewrites. For example, "Add input validation to the login function" instead of "Rewrite auth.py".
+**Fix:** Rephrase your request to ask for targeted changes rather than full file rewrites — "Add input validation to the login function" instead of "Rewrite auth.py".
 
-**False positives, pre-PC-040.** Before PC-040, *any*
-`unexpected end of JSON` from a tool's input parser was
-relabeled "tool call truncated." The most common trigger
-was the model emitting a tool call with **no `args` field
-at all** — e.g. `{"type":"tool_call","name":"read_file"}`
-— which is malformed input, not truncated output. The old
-remap then steered the model toward `edit_file` of a file
-it had never read, looping until the 3-error breaker
-fired. PC-040 fixes this in two ways:
-
-1. Empty/missing `args` is caught **before** the tool's
-   `Execute` runs, and the proxy returns a per-tool hint
-   like `read_file: no arguments provided. Call with
-   {"path":"<file>"}. Use list_directory {"path":"."}
-   first if you need to discover what files exist.`
-2. The "truncated" remap now only fires when the args
-   payload is over 200 bytes (real truncation territory).
-   Short or empty args fall through to the actual parser
-   error.
-
-If you still see "tool call truncated" after PC-040 ships,
-it's a real truncation — the model was actually trying to
-write a payload too long for the context window. The
-`edit_file` advice still applies in that case.
-
-**PC-041 alt-shape lifting.** Some models emit tool calls
-in OpenAI-style (`arguments` instead of `args`),
-Anthropic-style (`parameters`), or with arguments inlined
-at the top level (`{"name":"read_file","path":"x.py"}`).
-The proxy now normalizes all three shapes into the
-canonical `args` envelope automatically. If a tool call
-still arrives with empty args after normalization, the
-proxy logs `[agent] turn=N EMPTY ARGS — raw model output:
-"..."` so you can see the exact shape it sent and either
-add it to the lift list or rephrase the prompt.
+The proxy distinguishes real truncation (args payload over 200 bytes) from a tool call sent with empty or missing `args` — the latter gets a per-tool hint like `read_file: no arguments provided. Call with {"path":"<file>"}` instead of the truncation remap. It also normalizes OpenAI-style (`arguments`), Anthropic-style (`parameters`), and top-level-inlined argument shapes into the canonical `args` envelope. If a tool call still arrives empty after normalization, the proxy logs `[agent] turn=N EMPTY ARGS — raw model output: "..."` so you can see the exact shape and rephrase.
 
 ### Long Pause Between Tool Result and Next Action
 
-**Symptom:** A tool succeeds, then the agent loop sits
-idle for ~30 seconds before the next turn fires. No
-errors, no output — eventually the next tool call appears.
+**Symptom:** A tool succeeds, then the agent loop sits idle for ~30 seconds before the next turn fires. No errors, no output — eventually the next tool call appears.
 
-**Cause (PC-043).** Some local models under a constrained JSON
-grammar occasionally emit zero
-tokens after a tool result. The grammar requires the
-response to start with `{`, but the model's natural
-continuation after a tool result is a brief whitespace /
-acknowledgment, which the grammar rejects. The model
-emits EOS as its first token, returning empty content,
-which the parse-error retry path then has to recover
-from with a fresh user message — that's the lost ~30
-seconds.
+**What's happening:** Under a constrained JSON grammar, some local models emit EOS as their first token after a tool result, returning empty content that the parse-error retry path has to recover from — that's the lost ~30 seconds.
 
-PC-043 catches this inside `callLLMConstrained` and
-retries inline once with `temperature=0.7` and a
-transient continuation nudge appended to the messages.
-The agent loop never sees the empty turn.
-
-**Diagnose:**
-```bash
-docker compose logs atlas-proxy | grep -E "PC-043|empty LLM|raw_len=0"
-```
-- `[agent] empty LLM response (PC-043), retrying with
-  temp=0.7 + continuation nudge` — the retry fired; if
-  the next log line is a normal `turn=N type=tool_call ...`
-  the recovery worked.
-- `parse error: ... raw_len=0 | raw: ""` — both the
-  initial call AND the PC-043 retry returned empty. The
-  outer parse-error retry will handle it, but you'll see
-  the long pause. If this happens consistently, model is
-  in a worse state than PC-043 anticipates — file a
-  follow-up ticket with the full proxy log.
-
-**Workaround if PC-043 isn't enough:** Restart the proxy
-to clear llama.cpp's slot cache:
+**What to do:** The proxy catches the empty turn inside `callLLMConstrained` and retries inline once with `temperature=0.7` and a continuation nudge. If it recurs consistently, restart the proxy to clear llama.cpp's slot cache:
 ```bash
 docker compose restart atlas-proxy llama-server
 ```
+Check `docker compose logs atlas-proxy | grep -E "empty LLM|raw_len=0"` — `raw_len=0` on both the initial call and the retry means the model is in a worse state than the retry handles.
 
 ### Model Keeps Editing After V3 Already Confirmed the Fix
 
-**Symptom:** The agent makes a successful V3-verified
-edit (the TUI shows V3 progress events ending in
-`Probe passed`), then re-reads the same file and starts
-editing other unrelated functions. Each follow-on edit
-triggers another full V3 cycle (~110s), and the new edits
-sometimes touch code that has nothing to do with the
-original bug.
+**Symptom:** The agent makes a successful V3-verified edit (the TUI shows V3 progress events ending in `Probe passed`), then re-reads the same file and starts editing unrelated functions. Each follow-on edit triggers another full V3 cycle (~110s).
 
-**Cause (PC-044).** Compact local models can have trouble
-self-assessing "is the user's original problem solved?"
-After a tool result with `v3_used=true,
-phase_solved=probe`, it has no strong signal to stop, so
-it just continues planning more work.
+**What's happening:** Compact local models can have trouble self-assessing "is the user's original problem solved?" and keep planning more work after a verified edit.
 
-**What PC-044 does.** Immediately after a V3-verified
-write_file or edit_file, the agent loop appends a strong
-user-role nudge: *"V3 verified this edit passed its
-{phase} pipeline. The fix is on disk and build-checked.
-If this resolves the user's original request, respond
-NOW with {"type":"done","summary":"..."}. Only continue
-if you have a specific, concrete additional change to
-make — do not re-read the file to double-check, and do
-not edit unrelated code."*
-
-**Diagnose:**
-```bash
-docker compose logs atlas-proxy | grep "PC-044"
-```
-- `[agent] PC-044: V3-verified edit_file on ... — nudging
-  toward done` — the nudge fired. The next agent turn
-  should be `type=done`. If it isn't, the model ignored
-  the nudge — file a follow-up ticket noting the
-  prompt and the next-turn tool call.
-
-**If the model still won't stop after PC-044:** The
-follow-up options (hard-stop after re-read, per-file
-edit cap, or auto-done from the proxy) are listed in
-ISSUES.md PC-044 under "Caveat — promote to a harder
-option if the soft nudge doesn't stick."
+**What to do:** The agent loop appends a strong user-role nudge after a V3-verified write toward emitting `{"type":"done"}`. If the model ignores it, be more explicit in your prompt that the single change is all you want. Harder stops (per-file edit cap, auto-done) are tracked as follow-up options.
 
 ### Model Hallucinates Filenames From Previous Sessions
 
-**Symptom:** Brand-new session, fresh prompt about a file
-in the current directory, and the model's first tool call
-is a `read_file` on a filename that doesn't exist
-anywhere in this workspace — usually a filename that
-*does* exist somewhere else you've worked recently.
+**Symptom:** Brand-new session, fresh prompt, and the model's first tool call is a `read_file` on a filename that doesn't exist in this workspace — usually one that exists somewhere else you've worked recently.
 
-**Cause (PC-045).** llama.cpp's KV slot persists between
-chat completions to keep the cache warm (PC-035). Across
-*sessions*, that means residual attention bias from the
-previous session's tokens leaks into the new session.
-Most prompts dominate this bias, but model-fabricated
-filenames and other low-entropy outputs can pick it up.
+**What's happening:** llama.cpp's KV slot persists between chat completions to keep the cache warm. Across sessions, residual attention bias from the previous session's tokens can leak into low-entropy outputs like fabricated filenames.
 
-**What PC-045 does.** Every `runAgentLoop` invocation
-(one per user turn) starts by POSTing
-`/slots/0?action=erase` to llama-server. The KV cache is
-reset; the next chat completion re-encodes the system
-prompt from scratch (~1-2s on warm GPU). Within the
-session, subsequent turns share the now-fresh cache as
-normal.
-
-**Diagnose:**
-```bash
-docker compose logs atlas-proxy | grep "PC-045"
-```
-- `[PC-045] erased llama slot 0 — fresh KV cache for
-  this session` on every user turn — working as
-  intended.
-- `[PC-045] erase slot: ...` followed by an error — the
-  HTTP call to llama-server failed. Slot may still hold
-  stale state, but next chat completion will partially
-  overwrite it. Worst case: pre-PC-045 behavior.
-
-**Disable** if you measure the per-message ~1-2s blip
-and decide it's worse than occasional cross-session
-leakage:
+**What to do:** Every user turn starts by erasing llama slot 0 so the next completion re-encodes the system prompt fresh (~1-2s on warm GPU). To disable the per-session erase if you'd rather keep the cache fully warm:
 ```bash
 # .env
 ATLAS_FRESH_SLOT_PER_SESSION=0
 ```
-Restart the proxy after changing.
-
-**Workaround if PC-045 is somehow disabled and you see
-hallucinations:** Restart `llama-server` to fully clear
-all slots:
-```bash
-docker compose restart llama-server
-```
+Restart the proxy after changing. If you see hallucinations with the erase disabled, restart `llama-server` to clear all slots.
 
 ### Multi-File Project: Sandbox `ModuleNotFoundError`
 
-**Symptom:** Edit on a file that imports another module
-in the same project. V3 reports verification failure
-with `ModuleNotFoundError: No module named 'utils'` (or
-similar) even though the import works fine on your
-machine.
+**Symptom:** Edit on a file that imports another module in the same project. V3 reports verification failure with `ModuleNotFoundError: No module named 'utils'` even though the import works on your machine.
 
-**Cause (PC-046).** Pre-PC-046 the sandbox wrote *only*
-the candidate file as `solution.py` to its workspace.
-Any `from utils import …` failed because `utils.py`
-didn't exist in the sandbox's tmpdir.
+**What's happening:** V3's `SandboxAdapter` ships every file the agent has read into the sandbox workspace alongside `solution.py`. A file that isn't in the read set (`ctx.FilesRead`) won't be there, so its imports fail.
 
-**What PC-046 does.** Sandbox `/execute` accepts a
-`files: Dict[str, str]` map; V3's `SandboxAdapter`
-ships every file the agent has read (the same
-`ProjectContext` dict V3 already feeds to the LLM
-prompt) into the sandbox workspace alongside
-`solution.py`. Multi-file imports resolve.
-
-**Diagnose:** if you still see `ModuleNotFoundError`
-in V3 progress events, the file is probably not in
-`ctx.FilesRead` (the proxy's read-tracking set). Read
-the missing file via `read_file` so it lands in the
-project context that V3 ships to the sandbox.
-
-**If you're using the sandbox `/execute` API directly**
-(scripts, tests), pass the supporting files in the
-request body:
+**What to do:** Read the missing file via `read_file` so it lands in the project context. If you're calling the sandbox `/execute` API directly, pass supporting files in the request body:
 ```bash
 curl -X POST http://localhost:30820/execute -d '{
   "code": "from utils import greet\nprint(greet(\"x\"))",
@@ -824,17 +586,9 @@ curl -X POST http://localhost:30820/execute -d '{
 
 ### Curses Bottom-Row `addwstr() returned ERR`
 
-**Symptom:** Your curses program (snake game, TUI menu,
-status bar, etc.) crashes at runtime with:
-```
-_curses.error: addwstr() returned ERR
-```
-…but ATLAS reported the edit passed V3 verification.
+**Symptom:** Your curses program crashes at runtime with `_curses.error: addwstr() returned ERR`, but ATLAS reported the edit passed V3 verification.
 
-**Cause.** Writing to the last cell of a curses window
-(any row=LINES-1, or column=COLS-1) is documented as
-returning ERR. This is decades-old curses behavior. The
-idiomatic fix:
+**What's happening:** Writing to the last cell of a curses window (row=LINES-1 or column=COLS-1) returns ERR by documented curses behavior. `interactive_lint` rejects candidates that write there without a `try/except curses.error` wrap, so V3 has to find a wrapped variant before certifying. The idiomatic fix:
 ```python
 try:
     stdscr.addstr(curses.LINES - 1, 0, border)
@@ -842,144 +596,25 @@ except curses.error:
     pass  # writing the bottom-right cell errors; benign
 ```
 
-**What PC-047 does.** `interactive_lint` now AST-walks
-for `addstr/addnstr/addch(curses.LINES - N, ...)` (and
-the bare `LINES - N` form after `from curses import LINES`)
-that aren't inside a `try/except curses.error` block.
-Such candidates are rejected at the lint gate — V3 has
-to find a wrapped variant before certifying.
-
-**Diagnose:**
-```bash
-docker compose logs v3-service | grep "interactive_lint"
-```
-- `[interactive_lint] OK` — candidate passed all checks.
-- `[interactive_lint] FAIL: curses bottom-row write
-  without try/except curses.error wrap — line N: ...` —
-  PC-047 fired. V3 will either find a wrapped variant
-  or surface the failure to the model so it can produce
-  one.
-
-**If V3 can't find a wrapped variant**, the model is in
-the structural-reasoning gap (Issue B): it knows the
-file uses `curses.LINES - 1` but can't reliably
-synthesize the try/except wrap. Workaround: tell the
-model explicitly in your prompt: *"wrap the
-addstr call at line N in `try: ... except curses.error:
-pass`."*
+**What to do:** If V3 can't synthesize the wrap on its own, tell the model explicitly: *"wrap the addstr call at line N in `try: ... except curses.error: pass`."* Check `docker compose logs v3-service | grep interactive_lint` to confirm the lint gate fired.
 
 ### V3 Hangs for Several Minutes on Non-Python Files
 
-**Symptom:** Asking ATLAS to write an HTML/CSS/JSON file
-causes a long pause (~5 minutes) with progress events
-showing PR-CoT repair attempts and LLM timeouts. The
-file eventually gets written via the direct-write
-fallback, but the V3 cycle was wasted.
+**Symptom:** Asking ATLAS to write an HTML/CSS/JSON file causes a ~5-minute pause with PR-CoT repair attempts and LLM timeouts. The file eventually lands via the direct-write fallback.
 
-**Cause (PC-048).** Pre-PC-048 the V3 smoke check
-hardcoded `compile(_src, '<smoke>', 'exec')` (Python AST
-parse) for **every** interactive-task candidate — HTML,
-CSS, JSON, anything. Any non-Python file failed the
-smoke check with `SYNTAX_ERROR`, which kicked V3 into
-PR-CoT repair, which made LLM calls that timed out, then
-fell back to direct write.
+**What's happening:** The V3 smoke check is language-aware — it derives language from the target file's extension and routes to the right checker (`.py` → Python compile, `.js` → `node --check`, `.ts` → `tsc --noEmit`, `.go` → `gofmt -e`, `.rs` → `rustc`, `.c`/`.cpp` → `-fsyntax-only`, `.sh` → `bash -n`, `.html` → `html.parser`, `.xml` → `ElementTree`, `.json` → `json.loads`, `.yaml` → `yaml.safe_load`). An unrecognized extension falls back to Python and fails, which cascades into repair.
 
-**What PC-048 does.** `smoke_compile_check` is now
-language-aware. The V3 pipeline derives language from
-the target file's extension (`pipeline.run(file_path=…)`)
-and routes:
-- `.py` → Python parse/compile
-- `.js` / `.mjs` / `.cjs` → `node --check`
-- `.ts` / `.tsx` → `tsc --noEmit --strict`
-- `.go` → `gofmt -e`
-- `.rs` → `rustc` syntax check
-- `.c` / `.cpp` → compiler `-fsyntax-only`
-- `.sh` / `.bash` → `bash -n`
-- `.html` / `.htm` → `html.parser`
-- `.xml` → `xml.etree.ElementTree`
-- `.json` → `json.loads`
-- `.yaml` / `.yml` → `yaml.safe_load`
+If `/v3/generate` receives an approved project build command, V3 emits a `build_verify` event after syntax/self-test verification. The command runs in an ephemeral sandbox workspace with the candidate overlaid onto the project, so failed build evidence blocks `passed=true` without writing the candidate into the real checkout. Overlay snapshots skip dependency caches, secrets, model/data artifacts, symlinks, and large files, and enforce file-count and byte limits. If a project needs heavyweight dependencies to build, install them inside the sandbox workspace as part of the explicit verification workflow.
 
-Unknown formats fail with an explicit "syntax verification
-unavailable" error instead of passing without evidence.
-
-If `/v3/generate` receives an approved project build command, V3 emits a
-`build_verify` event after syntax/self-test verification. The command runs in
-an ephemeral sandbox workspace with the candidate overlaid onto the project, so
-failed build evidence blocks `passed=true` without writing the candidate into
-the real checkout. Overlay snapshots intentionally skip dependency caches,
-secrets, model/data artifacts, symlinks, and large files, and enforce file-count
-and byte limits. If a project needs heavyweight dependencies to build, install
-them inside the sandbox workspace as part of the explicit verification workflow
-or use release/container qualification for that project.
-
-**Diagnose:**
-```bash
-docker compose logs v3-service | grep "smoke_check"
-```
-- `[smoke_check] compile=OK (html)` — PC-048 routed
-  correctly.
-- `[smoke_check] compile=OK (python)` on a `.html` file —
-  the proxy didn't pass `file_path` through. Check
-  `proxy/v3_bridge.go` and the
-  `V3GenerateRequest`.
-- `[smoke_check] compile=FAIL` followed by
-  `[phase3] All candidates failed — entering repair
-  phase` followed by `[LLM] Attempt N failed: timed
-  out` — the cascade PC-048 was supposed to prevent
-  is happening anyway. File a follow-up ticket with
-  the failing file extension.
-
-**If you're hitting this on a file extension PC-048
-doesn't recognize**, the smoke check defaults to Python
-and you get the same cascade. Workaround: add the
-extension to `_ext_to_lang` in `v3-service/main.py`
-(see the existing dispatch table around the `_ext_to_lang`
-constant) and rebuild the `v3-service` image. As an
-immediate escape valve, the proxy falls back to a direct
-write when V3 errors out — so the file does eventually
-land on disk, just slowly.
+**What to do:** For an unrecognized extension, add it to `_ext_to_lang` in `v3-service/main.py` and rebuild the `v3-service` image. The proxy falls back to a direct write when V3 errors out, so the file lands regardless — just slowly. Check `docker compose logs v3-service | grep smoke_check` to confirm the right language was routed.
 
 ### V3 Pipeline Doesn't Fire on "Fix It Again" Prompts
 
-**Symptom:** First request creates a file, V3 pipeline
-runs (you see V3 progress events). Follow-up "still
-doesn't work, try again"-style prompts complete in
-microseconds with no V3 events visible. The model just
-edits and exits without verification.
+**Symptom:** First request creates a file and V3 runs. Follow-up "still doesn't work, try again"-style prompts complete in microseconds with no V3 events — the model just edits and exits.
 
-**Cause (PC-049).** Pre-PC-049 the agent-loop tier
-classifier checked a narrow vocabulary (`fix`,
-`broken`, `doesn't work`, `bug`, …) and required at
-least one explicit file extension in the prompt. Real
-iterative-fix prompts use natural phrases ("still does
-not", "isn't working", "try again") with no `.py` in
-sight, so the classifier returned T1, V3 never fires.
+**What's happening:** The agent-loop tier classifier covers natural fix language (`doesn't`, `is not`, `failed`, `wrong`, …) plus continuation markers (`still`, `again`, `retry`, `another`) that substitute for an explicit file name. A prompt that misses this vocabulary classifies as T1, so V3 never fires.
 
-**What PC-049 does.** Vocabulary expanded to cover
-natural fix language (`doesn't`, `is not`, `aren't`,
-`failed`, `wrong`, etc.), plus a separate
-"continuation marker" detector (`still`, `again`,
-`retry`, `another`). Continuation markers substitute
-for explicit file names — if you say "still doesn't
-work" we now know you mean "the existing file isn't
-working" even if you don't name it.
-
-**Diagnose:**
-```bash
-docker compose logs atlas-proxy | grep "agent tier override"
-```
-- `agent tier override: T2:medium` — PC-049 promoted
-  correctly. V3 should fire on the next edit_file.
-- `agent tier override: T1:simple` on a clearly-iterative
-  prompt — PC-049's vocabulary missed it. File a
-  follow-up ticket with the exact prompt; the
-  vocabulary is finite.
-
-**Workaround if classifier still misses your prompt:**
-Mention the file by name in the prompt — `app.py` is
-enough. The original `fileIndicators >= 1` gate still
-works for explicit file mentions.
+**What to do:** Mention the file by name (`app.py` is enough) — the explicit-file gate promotes it to T2. Check `docker compose logs atlas-proxy | grep "agent tier override"`: `T2:medium` means it promoted correctly, `T1:simple` on a clearly-iterative prompt means the vocabulary missed it.
 
 ### File Not Read Before Editing
 
@@ -987,7 +622,7 @@ works for explicit file mentions.
 
 **Cause:** The proxy tracks which files the agent has read. If the model tries to edit a file it hasn't read in this session, the edit is rejected as a staleness protection.
 
-**Fix:** This is normal behavior — the model should read the file first. If it keeps failing, the model may be confused about which files it has seen. Type `/clear` in the TUI to reset chat history and rephrase.
+**Fix:** The model should read the file first. If it keeps failing, type `/clear` in the TUI to reset chat history and rephrase.
 
 ### File Modified Externally
 
@@ -1003,7 +638,7 @@ works for explicit file mentions.
 
 **Cause:** The model has made 4+ consecutive read-only calls (read_file, search_files, list_directory) without writing anything. After 4 reads, the proxy warns. After 5+, it skips reads entirely and tells the model to write.
 
-**Fix:** This is protective behavior. If the model is genuinely stuck exploring, try being more specific about what you want changed.
+**Fix:** If the model is genuinely stuck exploring, be more specific about what you want changed.
 
 ---
 

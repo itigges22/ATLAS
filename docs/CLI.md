@@ -2,7 +2,7 @@
 
 The ATLAS CLI launches the inference stack and drops you into an interactive
 coding session. The canonical chat client is the native Bubbletea TUI
-(`atlas tui`, introduced in PC-062). Plain `atlas` in an interactive
+(`atlas tui`). Plain `atlas` in an interactive
 terminal launches the same TUI; pipe mode falls through to the built-in
 `/solve` REPL.
 
@@ -40,14 +40,14 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | `atlas model list \| recommend \| install \| install-artifacts \| verify \| remove` | Model registry operations. `recommend` names the best registry model for this hardware; `install --url <hf>` fetches an **unregistered** model (drop-in / BYO); `install-artifacts <name>` fetches a registered model's published lens + ASA artifacts. |
 | `atlas onboard` | Guided drop-in for a new model: arch check, rebuild gate, lens-retrain guidance (see below). |
 | `atlas bench` | Generate + self-label candidates for the loaded model (baseline benchmark). Feeds `atlas lens build --from-results` (see below). |
-| `atlas lens check \| build \| publish` | Geometric Lens compat probe + per-model training (PC-057 / PC-058 — see below). |
-| `atlas asa check \| build \| publish` | ASA control-vector compat probe + per-model training + publish (PC-061 — see below). |
-| `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both (PC-215). `--lens-only` / `--asa-only` delegate to the per-component flows. |
+| `atlas lens check \| build \| publish` | Geometric Lens compat probe + per-model training (see below). |
+| `atlas asa check \| build \| publish` | ASA control-vector compat probe + per-model training + publish (see below). |
+| `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both. `--lens-only` / `--asa-only` delegate to the per-component flows. |
 | `atlas compose <args...>` | `docker compose` passthrough with ATLAS's compose file set (base file + the backend overlay resolved from `ATLAS_BACKEND`). E.g. `atlas compose ps`, `atlas compose logs -f atlas-proxy`. |
 
 `atlas --help` (or `-h`) prints the subcommand list. An unknown subcommand prints the same usage to stderr and exits 2.
 
-`atlas` does the right thing automatically:
+`atlas` performs these startup steps:
 
 1. **Locates the `atlas-tui` binary** on `$PATH` or in `~/.local/bin`.
 2. **Builds from source** in `tui/` if the binary is missing and Go
@@ -341,7 +341,7 @@ cancels the local `context.Context` (closing the TCP connection) **and**
 POSTs `/cancel` with the same `session_id` as defense-in-depth, in case
 a reverse proxy buffers the disconnect. The proxy's agent loop watches
 `ctx.Done()` and exits at the next turn boundary. The cancel propagates
-through to llama-server (PC-036).
+through to llama-server.
 
 ---
 
@@ -394,15 +394,16 @@ cwd to re-align.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ATLAS_PROXY_URL` | `http://localhost:8090` | Default `--proxy` value |
 | `ATLAS_TUI_LOG` | `~/.cache/atlas-tui/debug.log` | TUI debug log path; set `off` to disable |
 | `ATLAS_TUI_STARTUP_NOTE` | _(unset)_ | Initial system message inserted at startup (used by the Python wrapper to surface workspace warnings) |
 | `ATLAS_TUI_MOUSE` | `on` | Mouse capture at startup; `off` skips `WithMouseCellMotion` so native terminal select works without modifiers. Mid-session toggle via `/mouse on\|off`. Also exposed as the `--mouse` flag. |
 | `GLAMOUR_STYLE` | `dark` | Markdown rendering style for assistant text |
-| `ATLAS_AUTO_WORKSPACE` | `1` | Set `0` to disable auto-realign of the proxy's bind mount |
 
-See [CONFIGURATION.md](CONFIGURATION.md) for the full set of variables
-that affect the proxy and inference stack.
+This table lists only TUI-scoped variables. The proxy endpoint
+(`ATLAS_PROXY_URL`), the workspace auto-realign toggle
+(`ATLAS_AUTO_WORKSPACE`), and every variable that affects the proxy and
+inference stack are documented in
+[CONFIGURATION.md § 7](CONFIGURATION.md#7-python-cli).
 
 ---
 
@@ -446,7 +447,7 @@ Notes:
 
 ---
 
-## atlas tier fit (PC-208)
+## atlas tier fit
 
 Sizes the llama-server runtime for a specific model on *your* GPU. Reads the
 GGUF header (layer count, per-layer KV-head geometry, sliding-window layout)
@@ -471,40 +472,20 @@ atlas tier fit — selected-model-Q4_K_M.gguf
   fit: ctx 131072 (32768/slot × 4), KV f16, ubatch 2048
 ```
 
-The VRAM budget it solves under:
+With `--write` it updates `ATLAS_CTX_SIZE`, `ATLAS_PARALLEL_SLOTS`,
+`ATLAS_KV_TYPE_K/V`, `ATLAS_UBATCH`, and `ATLAS_BATCH` in the **ATLAS
+install's** `.env` (path printed as `wrote …`, resolved the same way as
+`atlas doctor` and `atlas bench`); apply with
+`docker compose up -d llama-server --no-deps --force-recreate`. If the model
+can't fit at even the minimum acceptable context (8k per slot, q8_0), it names
+the largest quant file size that *would* fit and exits 1. The server runs with
+`--fit off`, so an oversized config refuses to start rather than demoting
+layers to CPU.
 
-```
-weights (file size × 1.02)
-+ KV: global-attention layers × total ctx              (per-layer KV-head dims
-      + sliding-window layers × (slots × window         and per-group head
-                                 + ubatch)              widths from the GGUF)
-+ compute buffer (~ubatch × n_embd × 280 bytes)  ← the term that OOMs first
-+ 1.9 GiB reserve (CUDA context, graphs, fragmentation)
-≤ VRAM
-```
-
-It prefers f16 KV and a large micro-batch, trading down (q8_0 KV, smaller
-ubatch) only when that buys context, and caps at 32k per slot. With `--write`
-it updates `ATLAS_CTX_SIZE`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_KV_TYPE_K/V`,
-`ATLAS_UBATCH`, and `ATLAS_BATCH` in `.env`; apply with
-`docker compose up -d llama-server --no-deps --force-recreate`.
-
-`--write` always targets the **ATLAS install's** `.env` (the path is printed
-as `wrote …`), regardless of your current directory — same root resolution as
-`atlas doctor` and `atlas bench`. If you run it from inside a *different*
-compose project, it warns that the cwd's `.env` was not the one written.
-
-If the model can't fit at even the minimum acceptable context (8k per slot,
-q8_0), it says so, names the largest quant file size of this model's geometry
-that *would* fit (at the current slot count and at `--slots 1`), and exits 1.
-Pre-download sizing guidance lives in
+Run it whenever `ATLAS_MODEL_FILE` or the GPU changes; `atlas onboard` prints
+the recommendation and flags a stale `.env`. For the full VRAM-budget
+derivation see [ARCHITECTURE.md](ARCHITECTURE.md); for pre-download sizing see
 [TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu).
-The server itself runs with `--fit off`, so an oversized config **refuses to
-start** instead of silently demoting layers to CPU (the 5×-slower failure
-mode this command exists to prevent).
-
-Run it whenever `ATLAS_MODEL_FILE` or the GPU changes. `atlas onboard` prints
-the fit recommendation automatically and flags a stale `.env`.
 
 ---
 
@@ -535,7 +516,7 @@ What it does:
    loaded it (starts it if needed). If the bundled llama.cpp doesn't know the
    architecture, it prints the rebuild command **and stops** — it never rebuilds
    for you. The message links to the TROUBLESHOOTING.md procedure that ensures
-   you don't strip the `expose-hidden-states` (PC-202) patch when rebuilding.
+   you don't strip the `expose-hidden-states` patch when rebuilding.
 3. **Lens check** — reports the model's embedding dim and whether `C(x)` needs
    retraining.
 4. **Next steps** — prints the operator-driven `bench → retrain → asa build`
@@ -584,7 +565,7 @@ requested, the dataset cache is a partial download — see
 
 ---
 
-## atlas lens (PC-057 / PC-058)
+## atlas lens
 
 Geometric Lens compat probe + per-model training. Lets you bring a non-default GGUF and either verify it'll score with the existing C(x) artifacts or train fresh ones for it.
 
@@ -607,7 +588,7 @@ Verdict + exit code:
 | `needs-build` | 1 | Model loads but no cost_field.pt at the right dim. Run `atlas lens build`. |
 | `incompatible` | 2 | Can't probe — llama-server unreachable, `/embedding` silent, etc. |
 
-Reports the model's embedding dim, layer count, PC-202 hidden-states-patch status, the artifact dir it checked, and the artifact's own input dim. JSON mode produces a stable shape (`verdict`, `reason`, `probe.*`, `artifact_dir`, `artifact_dim`, `matched_model`, `exit_code`).
+Reports the model's embedding dim, layer count, hidden-states-patch status, the artifact dir it checked, and the artifact's own input dim. JSON mode produces a stable shape (`verdict`, `reason`, `probe.*`, `artifact_dir`, `artifact_dim`, `matched_model`, `exit_code`).
 
 ### `atlas lens build`
 
@@ -643,28 +624,25 @@ Minimums: at least 50 samples with both classes present (build refuses below thi
 
 Training runs host-side and needs PyTorch plus XGBoost/scikit-learn
 (`pip install torch --index-url https://download.pytorch.org/whl/cpu`,
-`pip install xgboost scikit-learn` — CPU builds are enough). Samples
-longer than the server's micro-batch (e.g. runaway candidates that hit the
-generation cap) are embedded in line-boundary chunks and mean-pooled rather
-than dropped; the build log notes each chunked sample.
+`pip install xgboost scikit-learn` — CPU builds are enough). Samples longer
+than the server's micro-batch are embedded in line-boundary chunks and
+mean-pooled rather than dropped; the build log notes each chunked sample.
 
-Extracted embeddings are cached (keyed by text hash and dim), so re-running
-a build — after growing the results dir, or to finish G(x) after installing
-a missing dependency — only embeds the new samples. For `--from-results
-<run>/v3_lcb/per_task` the cache lives at `<run>/v3_lcb/embeddings_cache.jsonl`
-(beside the `per_task/` dir); for `--samples file.json` it's
-`file.json.embcache.jsonl`. A model switch changes the embedding dim and
-invalidates the cache automatically.
+Extracted embeddings are cached (keyed by text hash and dim), so re-running a
+build only embeds the new samples. The cache sits beside its input:
+`<run>/v3_lcb/embeddings_cache.jsonl` for `--from-results`,
+`file.json.embcache.jsonl` for `--samples`. A model switch changes the
+embedding dim and invalidates the cache automatically.
 
 After a successful build:
 1. `cost_field.pt`, `gx_xgboost.json`, `gx_weights.json`, both calibration files, and `model_identity.json` land in the artifact dir (default `geometric-lens/geometric_lens/models/`, override with `--artifact-dir`). The identity file prevents a same-width artifact from being reused with a different model.
 2. Restart the lens service so it loads them: `docker compose restart geometric-lens`.
 3. Re-run `atlas lens check` — should now report `compat`.
-4. Run `atlas lens publish` (PC-059, below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/cli/commands/model_registry.py` to set `lens_status="supported"`.
+4. Run `atlas lens publish` (below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/cli/commands/model_registry.py` to set `lens_status="supported"`.
 
 ### `atlas lens publish`
 
-Uploads trained artifacts to a HuggingFace repo and generates a maintainer-reviewable PR body that adds the model to the ATLAS registry (PC-059, GH #101).
+Uploads trained artifacts to a HuggingFace repo and generates a maintainer-reviewable PR body that adds the model to the ATLAS registry.
 
 > **New to publishing?** See [docs/PUBLISHING.md](PUBLISHING.md) for the end-to-end walkthrough — HF account setup, token generation, what happens after submission, and troubleshooting. The reference below assumes you've already got `HF_TOKEN` set.
 
@@ -690,7 +668,7 @@ atlas lens publish <model> --skip-pr            # upload to HF, print PR body fo
 
 ---
 
-## atlas asa (PC-061)
+## atlas asa
 
 ASA control-vector compat probe + per-model training + publish. Same shape as `atlas lens`, different mechanics. Wraps `geometric-lens/asa_calibration/build_steering_vector.py` end-to-end so swap-in models can be calibrated without learning the underlying scripts.
 
@@ -717,7 +695,7 @@ Requires the `gguf` Python pkg on the host (`pip install gguf`) for the dim prob
 
 ### `atlas asa build`
 
-Trains a fresh ASA vector by running `build_steering_vector.py` inside the lens container (which has the PC-202 hidden-states client + numpy + the gguf writer). The script + contrast pairs are docker-cp'd in, the run executes there, and the output `.gguf` is copied back to the host.
+Trains a fresh ASA vector by running `build_steering_vector.py` inside the lens container (which has the hidden-states client + numpy + the gguf writer). The script + contrast pairs are docker-cp'd in, the run executes there, and the output `.gguf` is copied back to the host.
 
 ```bash
 atlas asa build                                  # train w/ bundled contrast_pairs.jsonl
@@ -760,23 +738,27 @@ When you launch `atlas` (the TUI), the Pipeline pane title gets a compact Lens/A
 
 ### Prereqs
 
-Both subcommands require a running `llama-server`. `atlas lens check` reuses the same URL resolution as the lens service (`ATLAS_LLAMA_URL` → `LLAMA_EMBED_URL` → `LLAMA_URL` → `http://localhost:8080`). The PC-202 hidden-states patch (baked into `inference/Dockerfile.v31` and `Dockerfile.rocm`) is required for G(x) metric-tensor training but not for C(x) — `check` reports its presence as informational.
+Both subcommands require a running `llama-server`. `atlas lens check` reuses the same URL resolution as the lens service (`ATLAS_LLAMA_URL` → `LLAMA_EMBED_URL` → `LLAMA_URL` → `http://localhost:8080`). The hidden-states patch (baked into `inference/Dockerfile.v31` and `Dockerfile.rocm`) is required for G(x) metric-tensor training but not for C(x) — `check` reports its presence as informational.
 
 ---
 
 ## Troubleshooting
 
+TUI-specific symptoms are below. For stack-wide issues (llama-server won't
+start, benchmark failures, GPU sizing) see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 ### TUI renders, but the file pane is empty
 
 You're probably running from a directory the proxy's `/workspace` mount
-doesn't cover. Check:
+doesn't cover. Check that the mount matches your `pwd`:
 
 ```bash
 docker inspect atlas-atlas-proxy-1 --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}'
 ```
 
-The output should match your `pwd`. If not, exit and restart `atlas tui`
-from the right directory; the wrapper auto-realigns on launch.
+If not, exit and restart `atlas tui` from the right directory; the wrapper
+auto-realigns on launch.
 
 ### "atlas-tui binary not found and Go is not available"
 
@@ -795,35 +777,21 @@ tmux intercepts mouse events. Either enable mouse passthrough in tmux
 
 ### V3 doesn't fire on small files
 
-By design: V3 only fires for files that look like meaningful code. The
-trigger rule (see `classifyFileTier` in `proxy/tools.go`):
-
-- Config files by name (`package.json`, `tsconfig.json`, `Dockerfile`, …)
-  → always T1 (direct write).
-- Data extensions (`.json`, `.yaml`, `.toml`, `.csv`, `.xml`, `.env`),
-  style files (`.css`, `.scss`, `.less`), prose (`.md`, `.txt`, `.rst`),
-  and shell scripts (`.sh`, `.bash`) → always T1.
-- Anything under 10 lines → T1 (nothing for V3 to meaningfully
-  diversify on).
-- ≥10 lines and either (a) `hasLogicIndicators` returns true (2+ matches
-  across 9 pattern families — function/method, control flow, error
-  handling, Flask/FastAPI, Express/Node, React state, validation,
-  database, JSX) or (b) the extension is in the code/markup set
-  (`.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.c`, `.cpp`,
-  `.cc`, `.h`, `.hpp`, `.java`, `.kt`, `.swift`, `.rb`, `.php`,
-  `.vue`, `.svelte`, `.html`, `.htm`) → T2 (V3 pipeline).
-- Unknown extensions → T1.
+By design: V3 only activates for files that look like meaningful code (≥10
+lines plus logic indicators or a recognized code/markup extension; config,
+data, prose, and shell files stay direct-write). The tier rule is the
+`classifyFileTier` config surface in
+[CONFIGURATION.md § 2](CONFIGURATION.md#2-atlas-proxy); for the concept see
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### "encoding prompt…" lingers for >30 s
 
 Llama.cpp doesn't flush HTTP response headers until the first decoded
 token, so "header time" = "prompt eval time". Long conversation
 histories (8K+ tokens) can take ~60 s of prompt eval before the first
-token arrives. As of May 2026 the proxy runs with no
-`ResponseHeaderTimeout` so long V3 chains (which can spend several
-minutes before the first SSE frame) complete instead of being killed
-mid-flight. If "encoding prompt…" sits for many minutes, the prompt is
-genuinely too big — `/compact` to summarize.
+token arrives. The proxy sets no `ResponseHeaderTimeout`, so long V3 chains
+complete instead of being killed mid-flight. If "encoding prompt…" sits for
+many minutes, the prompt is genuinely too big — `/compact` to summarize.
 
 ---
 
@@ -831,4 +799,4 @@ genuinely too big — `/compact` to summarize.
 
 `atlas-proxy`'s `/v1/agent`, `/events`, and `/cancel` endpoints are the
 public client contract. Anything that speaks SSE can be a chat client.
-See [API.md § Building a non-TUI client](API.md#building-a-non-tui-client) for the protocol and a minimal Python example. PC-063 tracks the full spec writeup.
+See [API.md § Building a non-TUI client](API.md#building-a-non-tui-client) for the protocol and a minimal Python example.

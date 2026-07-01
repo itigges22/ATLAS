@@ -1,6 +1,6 @@
 # V2 to V2.5 Migration: Two-Server Inference
 
-> **This document describes the V2 → V2.5 architecture change. For the current architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).**
+> **This document describes the V2 → V2.5 architecture change. For the current architecture, see [ARCHITECTURE.md](../../ARCHITECTURE.md).**
 
 Documents the infrastructure change from V2's single-server design to V2.5's two-server architecture, discovered during the V2.5 ablation study (2026-02-19 to 2026-02-21).
 

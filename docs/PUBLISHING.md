@@ -8,13 +8,12 @@ It's the long-form walkthrough for the artifact-contribution flow introduced in 
 
 ## What you'll do, end to end
 
-1. **Train** an artifact locally (`atlas lens build` or `atlas asa build`)
-2. **Publish** it (`atlas lens publish` / `atlas asa publish`) — this does **two** things in one command:
-   - **Uploads the binary** to a HuggingFace repo *you* own
-   - **Opens a registry PR** against `github.com/itigges22/ATLAS` containing the HF link + SHA-256 + dim + license
-3. **Wait for review** — the maintainer pulls the artifact onto a verification VM, runs it against a private trust-gate set, and merges (or asks for changes) on the GitHub PR
+1. **Train** an artifact locally (`atlas lens build` or `atlas asa build`).
+2. **Publish** it (`atlas lens publish` / `atlas asa publish`) — one command uploads the binary to a HuggingFace repo you own and opens a registry PR against `github.com/itigges22/ATLAS`.
+3. **Wait for review** — the maintainer verifies the artifact and merges the PR (see [What happens after you submit](#what-happens-after-you-submit)).
 
-Once the registry PR is merged, downstream users see your model show up under `atlas model list` and can install it with `atlas model install <name>` — your trained artifact comes along automatically.
+Once merged, downstream users see your model under `atlas model list` and get
+the artifact automatically on `atlas model install <name>`.
 
 ---
 
@@ -42,29 +41,41 @@ The CLI also reads `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` if you'v
 
 ---
 
-## Publishing everything at once (recommended)
+## What publish does
 
-After onboarding a model you have both lens halves and the ASA vector —
-publish them as one action:
+Every publish command runs the same sequence; only the artifact and the
+registry field it sets differ:
+
+1. **Pre-flight** — checks `HF_TOKEN` is set and the artifact is valid (a Lens `cost_field.pt` must load as a torch checkpoint, not a half-finished download).
+2. **Hash** — SHA-256s the artifact so the PR carries a tamper-detectable fingerprint.
+3. **Upload to HF** — creates the repo (idempotent), uploads the artifact files, and generates a model card README with license + base-model badge.
+4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested diff for `atlas/cli/commands/model_registry.py`.
+5. **Open the PR** — with `gh` installed and authed, the PR is built entirely through the GitHub API (branch created on your fork if you can't push upstream, a complete `Model(...)` registry entry committed) and opened against the `dev` branch — no local git checkout needed. If the model is already registered upstream or `gh` is unavailable, the body is printed for manual paste into https://github.com/itigges22/ATLAS/compare.
+
+`--dry-run` runs pre-flight, hash, and PR-body render but skips the HF upload
+and PR. `--skip-pr` uploads to HF and prints the PR body for manual paste.
+
+---
+
+## Publishing everything at once
+
+After onboarding a model you have both lens halves and the ASA vector. Publish
+them as one action:
 
 ```bash
 atlas publish --lens-repo your-username/atlas-lens-<model> \
               --asa-repo  your-username/atlas-asa-<model>
 ```
 
-This uploads both artifact sets to their HF repos and opens a **single
-registry PR** whose entry carries `lens_status="supported"` and
-`asa_status="supported"` together — no sequencing between two PRs to
-manage. `--dry-run` previews, `--skip-pr` uploads without the PR,
-`--lens-only` / `--asa-only` delegate to the per-component commands
-below (which handle the publish-while-the-other-PR-is-open case via
-stacked PRs).
+This opens a **single registry PR** whose entry carries
+`lens_status="supported"` and `asa_status="supported"` together.
+`--lens-only` / `--asa-only` delegate to the per-component commands below.
 
 ## Publishing a Lens artifact
 
-Assumes you've already run `atlas lens build --samples your-data.json` and
-have the C(x), G(x), model identity, and per-model calibration files in the artifact directory.
-If not, see the `atlas lens build` section in [CLI.md](CLI.md).
+Assumes you've run `atlas lens build --samples your-data.json` and have the
+C(x), G(x), model identity, and per-model calibration files in the artifact
+directory. If not, see the `atlas lens build` section in [CLI.md](CLI.md).
 
 ```bash
 # Preview the PR body without uploading anything
@@ -77,17 +88,9 @@ atlas lens publish <model-name> \
     --repo your-username/atlas-lens-model-name
 ```
 
-The `--repo` flag is the HuggingFace destination (created if it doesn't exist). Naming convention: `atlas-lens-<model-slug>` keeps it discoverable.
-
-### What happens during publish
-
-1. **Pre-flight** — checks `HF_TOKEN` is set, artifact file exists, and that `cost_field.pt` is actually a torch checkpoint (not a half-finished download).
-2. **Hash** — SHA-256s the artifact so the PR has a tamper-detectable fingerprint.
-3. **Upload to HF** — creates the repo (idempotent), uploads C(x), G(x), `model_identity.json`, `cx_normalization.json`, and `gx_thresholds.json`, then generates a model card README with license + base-model badge.
-4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested Python diff for `atlas/cli/commands/model_registry.py`.
-5. **Open the PR** — if `gh` is installed and authed, the PR is built through the GitHub API: a branch is created (on your automatic fork if you can't push upstream), a real registry edit is committed — a complete `Model(...)` entry with `lens_status="supported"` and your HF repo recorded — and the PR opens against the `dev` branch. No local git checkout is needed; this works from any install. If the model is already registered upstream, or `gh` is unavailable, the body is printed for manual paste into https://github.com/itigges22/ATLAS/compare instead.
-
-   Publishing the ASA vector right after the lens (before the lens PR merges) is handled: when the model's entry is pending in an open publish PR, the ASA change becomes a **separate PR stacked on it** (diff shows only the ASA edit; merging the first PR with branch deletion makes GitHub retarget the second to `dev` automatically). Fork-based publishes commit onto the pending PR's branch instead — GitHub can't base a PR on a fork's branch — so one PR carries both changes there.
+`--repo` is the HuggingFace destination (created if it doesn't exist);
+`atlas-lens-<model-slug>` is the naming convention. The upload includes C(x),
+G(x), `model_identity.json`, `cx_normalization.json`, and `gx_thresholds.json`.
 
 ### Common flags
 
@@ -102,7 +105,8 @@ The `--repo` flag is the HuggingFace destination (created if it doesn't exist). 
 
 ## Publishing an ASA control vector
 
-Same shape, different artifact. Assumes you've trained a vector with `atlas asa build` (see [CLI.md](CLI.md) for the training walkthrough).
+Same shape, different artifact. Assumes you've trained a vector with `atlas asa
+build` (see [CLI.md](CLI.md) for the training walkthrough).
 
 ```bash
 atlas asa publish <model-name> \
@@ -113,14 +117,12 @@ atlas asa publish <model-name> \
     --repo your-username/atlas-asa-model-name
 ```
 
-The publish flow:
-
-1. Reads GGUF metadata from the `.gguf` to extract residual dim, layer count, and the `model_hint` baked in by the calibration script
-2. Hashes + uploads to HF (single `.gguf` file + model card)
-3. Renders a PR body documenting which model it's for and the suggested `asa_status="supported"` registry change
-4. Opens the PR via `gh` (or prints for manual paste)
-
-If your `ATLAS_CONTROL_VECTOR` is set to a container-relative path like `/models/x.gguf`, the CLI auto-resolves it to the host path by trying `<atlas_root>/models/` and `$ATLAS_MODELS_DIR`. You shouldn't need to translate paths manually.
+The ASA delta: publish reads GGUF metadata from the `.gguf` to extract residual
+dim, layer count, and the `model_hint` baked in by the calibration script,
+uploads the single `.gguf` file, and sets `asa_status="supported"`. If your
+`ATLAS_CONTROL_VECTOR` is a container-relative path like `/models/x.gguf`, the
+CLI auto-resolves it to the host path via `<atlas_root>/models/` and
+`$ATLAS_MODELS_DIR`.
 
 ---
 

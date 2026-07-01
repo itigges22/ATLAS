@@ -1,22 +1,10 @@
-# ATLAS Event Protocol (PC-061)
+# ATLAS Event Protocol
 
 ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). This document is the wire-format spec — every producer (v3-service Python, atlas-proxy Go) implements it identically, and every consumer (TUI, tests, future web dashboard, bench CLI) reads it through `atlas/cli/events.py`.
 
-This protocol is the foundation for Phase 1's UI/UX work. The Bubbletea TUI, live decode streaming, per-stage spinners, and compute budget visualizer all consume these events.
-
-## Why this exists
-
-Before PC-061, ATLAS had three different progress mechanisms:
-
-- **v3-service** spoke SSE but with an opaque `{"stage": <str>, "detail": <str>}` shape — consumers had to string-parse to know what kind of event they got.
-- **atlas-proxy** emitted bracket-tagged stdout lines (`[agent] turn=N type=X name=Y args=Z`) — pseudo-structured but not parseable as data.
-- **The benchmark runners** had their own progress format.
-
-A TUI that wants to render "current stage" / "elapsed time" / "tool calls so far" had to triple-implement parsing for all three. PC-061 unifies them into one schema with explicit event types and a consumer library so the TUI is one parser, not three.
-
 ## Transport
 
-**Server-Sent Events (SSE)** — `text/event-stream`, server-push only. Cancellation is out of scope for this protocol; clients cancel via a separate POST endpoint (TBD when the TUI lands).
+**Server-Sent Events (SSE)** — `text/event-stream`, server-push only. Cancellation is out of scope for this protocol; clients cancel via [`POST /cancel`](API.md#post-cancel).
 
 Each event arrives as one SSE frame:
 
@@ -33,22 +21,15 @@ The protocol uses three SSE comment / control patterns. None are envelope events
 
 | Frame | When | Why |
 |---|---|---|
-| `: connected\n\n` | First body byte after a successful `/events` connection (atlas-proxy only) | Forces the response headers + first body chunk to leave the server immediately. Without it, Go buffers the response until the first envelope or 15s heartbeat fires, and clients with short connect timeouts see "no response received" (PC-061 follow-up). |
+| `: connected\n\n` | First body byte after a successful `/events` connection (atlas-proxy only) | Forces the response headers + first body chunk to leave the server immediately. Without it, Go buffers the response until the first envelope or 15s heartbeat fires, and clients with short connect timeouts see "no response received". |
 | `: heartbeat\n\n` | Every 15s during quiet stretches (atlas-proxy only) | Keeps proxies / load balancers from idling out the connection. |
-| `event: result\ndata: {...}\n\n` | Right before stream end on `/v3/run` (v3-service only, legacy) | Carries the final pipeline `result` dict in the legacy back-compat shape. v2 envelope consumers should ignore this and watch for the `done` envelope instead. |
+| `event: result\ndata: {...}\n\n` | Right before stream end on `/v3/run` (v3-service only) | Carries the final pipeline `result` dict in the back-compat `{stage, detail}` shape. Envelope consumers ignore this and watch for the `done` envelope instead. |
 
 The Python `iter_sse_lines` helper already filters comment lines (any line starting with `:`) automatically. Named-event lines (`event: result`) come through prefixed (`result: <data>`) so the caller can distinguish them.
 
 ## Single-session broadcast model (current limitation)
 
-atlas-proxy's `/events` endpoint **broadcasts every envelope event from every concurrent agent session to every connected subscriber.** There is no `session_id` field in the envelope, and no per-session `?session_id=X` filtering on the endpoint.
-
-For Phase 1's single-user TUI consumer, this is fine — most users run one ATLAS at a time, so the broadcast model degenerates to "you see your own session." If multi-user / multi-session use cases emerge:
-
-1. Add a `session_id` field to the envelope (back-compatible — consumers that don't recognize it ignore it)
-2. Add a `?session_id=X` filter to `/events` that drops envelopes whose session doesn't match
-
-Documented as a known scope-defining choice rather than a bug. v3-service's `/v3/run` endpoint is per-request streaming, so session interleaving is not an issue there.
+atlas-proxy's `/events` endpoint broadcasts every envelope from every concurrent agent session to every connected subscriber — there is no `session_id` field in the envelope and no `?session_id=X` filter on the endpoint. With one ATLAS running at a time, a subscriber sees only its own session. v3-service's `/v3/run` is per-request streaming, so no interleaving occurs there.
 
 ## Envelope
 
@@ -194,11 +175,11 @@ Always the last event in a stream. Consumers that detect EOF without a `done` ev
 | Service | Endpoint | Notes |
 |---|---|---|
 | atlas-proxy | `GET /events` | Broadcasts all envelope events from any active session to every connected subscriber. Heartbeat every 15s to defeat proxy idle timeouts. |
-| v3-service | `POST /v3/run` (existing) | Dual-emits: legacy `{stage, detail}` always; envelope additionally when client opts in via `Accept: application/json+envelope` or `?event_format=v2`. |
+| v3-service | `POST /v3/run` | Dual-emits: `{stage, detail}` always; envelope additionally when the client opts in via `Accept: application/json+envelope` or `?event_format=v2`. |
 
 ## Opting into typed events
 
-For back-compat, v3-service's `/v3/run` keeps emitting the legacy `{stage, detail}` shape unconditionally. Clients that want envelopes opt in via either:
+v3-service's `/v3/run` emits the `{stage, detail}` shape unconditionally. Clients that want envelopes opt in via either:
 
 ```
 Accept: application/json+envelope
@@ -210,9 +191,7 @@ or appending to the URL:
 ?event_format=v2
 ```
 
-When the opt-in is present, v3-service emits both shapes (legacy first, then envelope). Consumers that opt in must filter the legacy frames — the Python helper `atlas.cli.events.iter_events()` does this automatically (skips frames that raise `LegacyEventError`).
-
-The dual-emission window stays open for one release after PC-061. Removal of the legacy shape is a separate ticket once downstream consumers (Aider integration, current bench runners) have all migrated.
+When the opt-in is present, v3-service emits both shapes (`{stage, detail}` first, then envelope). Consumers that opt in must filter the `{stage, detail}` frames — the Python helper `atlas.cli.events.iter_events()` does this automatically (skips frames that raise `LegacyEventError`).
 
 ## Consumer library: `atlas/cli/events.py`
 
@@ -227,11 +206,11 @@ for ev in iter_events("http://localhost:8090/events"):
         break
 ```
 
-`iter_events(url)` yields `Event` dataclass objects with typed fields. `parse_envelope(blob)` parses one frame; raises `LegacyEventError` if the blob is the v3-service legacy shape, `SchemaError` if it's malformed.
+`iter_events(url)` yields `Event` dataclass objects with typed fields. `parse_envelope(blob)` parses one frame; raises `LegacyEventError` if the blob is the v3-service `{stage, detail}` shape, `SchemaError` if it's malformed.
 
 ## Stage-name suffix conventions (v3-service)
 
-v3-service uses these suffix conventions to derive envelope `type` from the existing 46 stage names without hand-mapping each one:
+v3-service uses these suffix conventions to derive envelope `type` from its stage names without hand-mapping each one:
 
 | Suffix | Envelope type | Notes |
 |---|---|---|

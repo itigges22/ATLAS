@@ -6,10 +6,6 @@ into images at build time, so every code change requires a rebuild.
 This page documents the opt-in dev iteration mode that skips the
 rebuild loop.
 
-For first-time setup, see `docs/SETUP.md`. For configuration, see
-`docs/CONFIGURATION.md`. For troubleshooting, see
-`docs/TROUBLESHOOTING.md`.
-
 ---
 
 ## When to use dev mode
@@ -64,10 +60,7 @@ need to restart the container — but no rebuild:
 docker compose restart v3-service
 ```
 
-Restart is ~1 second vs ~30 seconds for a rebuild. If you find
-yourself doing this constantly, the next step is to add `watchfiles`
-or migrate to uvicorn — file as a follow-up if it becomes a real
-pain point.
+Restart is ~1 second vs ~30 seconds for a rebuild.
 
 ---
 
@@ -160,7 +153,6 @@ This is the fallback whenever dev mode is off or doesn't apply
 
 ## Cross-references
 
-- `ISSUES.md` PC-030 — ticket that introduced this workflow.
 - `docs/SETUP.md` — first-time install.
 - `docs/CONFIGURATION.md` — env vars used by each service.
 - `docs/TROUBLESHOOTING.md` — runtime symptoms and fixes.

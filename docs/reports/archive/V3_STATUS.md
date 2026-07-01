@@ -3,11 +3,11 @@
 > **Historical snapshot (frozen 2026-03-05)** — captures the state at V3.0
 > ship + the V3.1 planning that followed. The 74.6% LCB number on
 > 14B is still the canonical published evidence (also in
-> [V3_ABLATION_STUDY.md](V3_ABLATION_STUDY.md)). Some "Next" predictions
+> [V3_ABLATION_STUDY.md](../V3_ABLATION_STUDY.md)). Some "Next" predictions
 > shifted during implementation — most notably G(x) was **kept**, not
 > redesigned (CHANGELOG: "Corrected G(x) XGBoost status: deployed and
-> active"). For current shipped state see [`docs/SOURCES.md`](../SOURCES.md)
-> §"Active in V3.1.0" and [`docs/MAP.md`](../MAP.md).
+> active"). For current shipped state see [`docs/SOURCES.md`](../../SOURCES.md)
+> §"Active in V3.1.0" and [`docs/MAP.md`](../../MAP.md).
 
 **Last Updated**: 2026-03-05
 **Current Phase**: V3.0 Complete — Preparing V3.1
@@ -36,7 +36,7 @@
 
 Phase 3 was redesigned to use self-generated test cases instead of real LCB tests. The model generates its own I/O pairs from the problem statement, uses them for iterative repair, and only submits to real tests for final scoring. This makes the result legitimate and comparable to other systems' pass@1.
 
-Full ablation report: [V3_ABLATION_STUDY.md](V3_ABLATION_STUDY.md)
+Full ablation report: [V3_ABLATION_STUDY.md](../V3_ABLATION_STUDY.md)
 
 ---
 
