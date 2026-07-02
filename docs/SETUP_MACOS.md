@@ -19,7 +19,7 @@ The hybrid keeps the rest of ATLAS unchanged from the Linux + CUDA/ROCm path whi
 | Xcode Command Line Tools | cmake, git, metal-cpp headers | `xcode-select --install` |
 | Homebrew | brew package manager | https://brew.sh |
 | pipx | install atlas CLI in an isolated venv (Homebrew Python enforces PEP 668, plain `pip install` is blocked) | `brew install pipx` (the setup script handles this automatically) |
-| Go 1.24+ | build the atlas-tui binary (Bubbletea TUI client invoked by `atlas`) | `brew install go` (the setup script handles this automatically) |
+| Go 1.26.2+ | build the atlas-tui binary (Bubbletea TUI client invoked by `atlas`) | `brew install go` (the setup script handles this automatically) |
 | Docker Desktop | runs the 4 non-inference services | https://docker.com/products/docker-desktop |
 
 Notes:
@@ -65,7 +65,7 @@ atlas
 
 What this does (idempotent, re-runs are cheap):
 
-1. Verifies macOS + Apple Silicon (errors out on Intel + offers Vulkan as alternative)
+1. Verifies macOS + Apple Silicon (on an Intel Mac it warns that Metal is Apple-Silicon-only, suggests the Docker + Vulkan path instead, and asks `Continue anyway? [y/N]` — confirming proceeds with a CPU-only build)
 2. Checks Xcode Command Line Tools are installed
 3. Verifies Homebrew is installed
 4. Installs missing brew packages: `cmake`, `git`, `python@3.12`, `pipx`, `go`
@@ -159,7 +159,7 @@ atlas doctor
 You should see (among other checks):
 
 ```
-  [OK]  arch          x86_64                       # ← reads as x86_64 in Docker but you're on arm64 host
+  [OK]  arch          aarch64 (Apple Silicon) — Metal hybrid path supported (#32)
   [OK]  metal-native  native llama-server up at /Users/you/.atlas/macos/bin/llama-server-metal, listening on :8080
 ```
 

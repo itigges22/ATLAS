@@ -7,6 +7,8 @@ atlas.conf
 .jwt_secret
 *.local.conf
 *.local
+# Compose dev-mode override (local copy of docker-compose.override.yml.example)
+docker-compose.override.yml
 
 # ----- Development Task Files -----
 TASK*.md

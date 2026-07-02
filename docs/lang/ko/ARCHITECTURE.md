@@ -77,6 +77,7 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | **v3-service** | 8070 | Python | V3 파이프라인 HTTP 래퍼(PlanSearch, DivSampling, PR-CoT 등) |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) 에너지 스코어링, G(x) XGBoost 품질 예측, RAG/프로젝트 인덱싱 |
 | **sandbox** | 30820 (호스트) / 8020 (컨테이너) | Python (FastAPI) | 격리된 코드 실행, 컴파일, 린팅, 테스트 실행 |
+| **redis** | 6379 (내부) | C (Redis 7) | 패턴 캐시, 동시 발생 그래프, 태스크 큐, 라우터 상태; geometric-lens의 백킹 스토어 |
 
 ---
 
@@ -144,11 +145,12 @@ JSON 스키마는 `additionalProperties: false`와 함께 `oneOf`를 사용하�
 
 ### 도구
 
-`proxy/tools.go`에 등록된 13개의 도구:
+`proxy/tools.go`에 등록된 15개의 도구:
 
 | 도구 | 용도 | 읽기 전용 |
 |------|---------|-----------|
 | `read_file` | 파일 내용 읽기(선택적 offset/limit 포함) | 예 |
+| `outline_file` | 파일의 최상위 함수/클래스를 본문 없이 줄 범위와 함께 나열(`.py`는 tree-sitter, 그 외는 최선 노력 스캔). 정밀 읽기의 진입점: 먼저 아웃라인하고, 그다음 offset/limit으로 `read_file` | 예 |
 | `write_file` | 새(NEW) 파일 생성(5줄 초과의 기존 파일에 대해서는 거부 — 안전 제한 참고) | 아니오 |
 | `edit_file` | ≤10줄 변경을 위한 정밀 인라인 문자열 치환(old_str/new_str) | 아니오 |
 | `ast_edit` | tree-sitter 셀렉터(`function:NAME`, `class:NAME`, `<tag>`)를 통한 함수/클래스/HTML 요소 전체 재작성; 노드 전체 교체에는 edit_file보다 필수(REQUIRED). GH #39, v1에서는 .py/.html/.htm만 | 아니오 |
@@ -223,7 +225,7 @@ Qwen3.5-9B는 ast_edit가 옳은 경우에도 `ast_edit`보다 `edit_file`을
 
 2026년 5월 강화 작업에서 `absoluteMaxTurns` 상한을 제거하고 등급별 T1/T2/T3 상한을 0("무제한")으로 낮췄습니다. 이는 이제 루프 내부의 8개 디텍터 스택이 언제 중단할지를 결정하기 때문입니다: lens 회귀(`agent_lens_intervention`), 추론 반복(`agent_reasoning_intervention`), 도구 호출 반복(`agent_repeat_intervention`), 경로 인식 에러 브레이커, 동작 없는 done 게이트, 주장 검증 게이트, 계획 준수 임계값, 빈 응답 폴백. 운영자는 일회성 "앱 전체 수정" 프롬프트를 위해 여전히 `ATLAS_MAX_TURNS=<n>`으로 재정의할 수 있습니다 — `proxy/types.go::envOverrideMaxTurns` 참고.
 
-분류기는 `proxy/tools.go:1721+`(`classifyFileTier`)에 있고, 로직 패턴 매처는 `tools.go:1874+`(`hasLogicIndicators`)에 있습니다.
+분류기는 `proxy/tools.go`(`classifyFileTier`)에 있고, 로직 패턴 매처는 같은 파일(`hasLogicIndicators`)에 있습니다.
 
 **항상 T1 (직접 쓰기):**
 - 이름으로 식별되는 설정 파일(코드에 총 29개): `package.json`, `tsconfig.json`, `next.config.{js,ts,mjs}`, `tailwind.config.{ts,js}`, `postcss.config.{js,mjs}`, `vite.config.{ts,js}`, `.eslintrc.json`, `.prettierrc`, `jest.config.{ts,js}`, `cargo.toml`, `go.mod`, `go.sum`, `makefile`, `cmakelists.txt`, `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `pipfile`, `.editorconfig`, `.gitignore`, `dockerfile`, `docker-compose.{yml,yaml}`
@@ -438,7 +440,7 @@ Wait 주입은 "Wait, let me reconsider.\n"을 덧붙여 더 긴 사고를 강�
 
 ### 모듈 맵
 
-`benchmark/v3/`의 18개 Python 모듈을 `v3-service/main.py`가 오케스트레이션합니다:
+`benchmark/v3/`의 18개 Python 모듈. `v3-service/main.py`가 그중 13개를 오케스트레이션하며, `reasc`, `ace_pipeline`, `lens_feedback`, `embedding_store`는 오프라인 벤치 러너(`benchmark/v3_runner.py`)에서만 실행되고, `ablation_analysis`는 독립 실행형 분석 스크립트입니다(다이어그램에는 없음):
 
 ```mermaid
 graph LR
@@ -446,7 +448,7 @@ graph LR
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
     Main --> BASC["BlendASC 2A"]
-    Main --> REASC["ReASC 2B"]
+    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
     Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
@@ -455,10 +457,10 @@ graph LR
     Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
     Main --> MC["Metacognitive 3F"]
-    Main --> ACE["ACE 3G"]
+    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
-    Main --> LF["LensFeedback"]
-    Main --> ES["EmbeddingStore"]
+    Bench --> LF["LensFeedback"]
+    Bench --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR
@@ -469,6 +471,7 @@ graph LR
     LF --> BF
 
     style Main fill:#333,color:#fff
+    style Bench fill:#333,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
@@ -488,7 +491,7 @@ graph LR
     style ES fill:#333,color:#fff
 ```
 
-범례: 파랑 = Phase 1(생성), 초록 = Phase 2(선택), 갈색 = Phase 3(수리), 회색 = 유틸리티.
+범례: 파랑 = Phase 1(생성), 초록 = Phase 2(선택), 갈색 = Phase 3(수리), 회색 = 유틸리티. `v3_runner.py`가 공급하는 모듈은 벤치 러너 전용이며, 서비스는 이를 호출하지 않습니다.
 
 ---
 
@@ -504,7 +507,7 @@ Anthropic의 [Manipulating Manifolds](https://transformer-circuits.pub/2025/line
 
 ATLAS는 이를 두 개의 상호 보완적 모델로 구현합니다. C(x)는 모델 자체 임베딩 위의 학습된 에너지 함수(4096-512-128-1 MLP)입니다. 각 코드 후보는 llama-server에 의해 임베딩되고, C(x)는 그것이 그 기하 구조에서 어디에 위치하는지 스코어링합니다. 낮은 에너지는 후보가 알려진 정답 코드와 군집함을 의미합니다. 높은 에너지는 알려진 오답 코드와 군집함을 의미합니다. 외부 오라클도, 실행도 필요 없습니다 — 모델 자체 표현의 기하 구조만 필요합니다.
 
-G(x)는 메트릭 텐서(metric tensor)입니다 — PCA로 축소된 임베딩 공간의 대각 텐서로, 에너지 지형이 서로 다른 방향으로 어떻게 휘는지를 포착합니다. C(x)가 "이 후보가 얼마나 좋은가?"에 답한다면, G(x)는 "개선하려면 어느 방향으로 움직여야 하는가?"에 답합니다. 보정 엔진은 G(x)를 사용해 기하 인식 그래디언트 스텝(`-α · G⁻¹ · ∇C`)을 계산하여, 단순한 그래디언트 스텝을 취하는 대신 매니폴드의 자연스러운 곡률을 따라 후보를 정답 쪽 내리막으로 스티어링합니다. G(x)는 구현·배포되어 있습니다(V3.0.1에서 제공되어 V3.1.0에서도 여전히 활성).
+G(x)는 품질 예측기입니다 — PCA로 축소된 임베딩 위의 XGBoost 분류기로, 후보가 축소된 공간에서 어디에 위치하는지로부터 통과/실패를 예측합니다. C(x)가 "이 후보가 얼마나 좋은가?"에 답한다면, G(x)는 "이 후보가 통과할 가능성이 있는가?"에 답합니다. 코드에는 메트릭 텐서(metric tensor) 경로도 존재하지만 배포되어 있지는 않습니다: PCA 공간의 대각 텐서(XGBoost 아티팩트가 없을 때만 폴백으로 로드됨)와, 기하 인식 그래디언트 스텝(`-α · G⁻¹ · ∇C`)을 계산해 매니폴드의 곡률을 따라 후보를 내리막으로 스티어링하는 보정 엔진이 그것입니다. 텐서에서는 스칼라 보정 가능성 점수만 노출되며(`/internal/lens/correctability`), 그래디언트 스텝 보정은 서비스에 연결되어 있지 않습니다.
 
 ### 스코어링 모델
 
@@ -629,7 +632,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-허용되는 언어 별칭: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). 최대 실행 시간: 60초. 최대 메모리: 512 MB. 두 개의 워크스페이스 경로: **`/execute`**(V3 후보 테스트 경로)는 `/tmp/sandbox`(tmpfs) 아래의 일시적 스크래치 디렉토리를 사용; **`/shell`**(PC-188 기준 에이전트의 `run_command` 경로, 그리고 백그라운드 프로세스용 `/jobs/*`)은 `/workspace`에 대해 실행됩니다 — `ATLAS_PROJECT_DIR`(Docker)에서 바인드 마운트된 프로젝트 루트 또는 hostPath `${ATLAS_PROJECTS_DIR}`(K3s)로, 프록시가 보는 것과 동일한 경로입니다.
+허용되는 언어 별칭: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). 최대 실행 시간: Docker 배포에서는 300초(compose가 프록시의 5분 `run_command` 상한에 맞춰 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}`를 설정; 순수 코드 기본값은 60초). 최대 메모리: 512 MB. 두 개의 워크스페이스 경로: **`/execute`**(V3 후보 테스트 경로)는 `/tmp/sandbox`(tmpfs) 아래의 일시적 스크래치 디렉토리를 사용; **`/shell`**(PC-188 기준 에이전트의 `run_command` 경로, 그리고 백그라운드 프로세스용 `/jobs/*`)은 `/workspace`에 대해 실행됩니다 — `ATLAS_PROJECT_DIR`(Docker)에서 바인드 마운트된 프로젝트 루트 또는 hostPath `${ATLAS_PROJECTS_DIR}`(K3s)로, 프록시가 보는 것과 동일한 경로입니다.
 
 ---
 
@@ -669,10 +672,13 @@ llama-server 외부의 모든 연산은 CPU에서 돌아갑니다. GPU는 오로
 
 ```mermaid
 graph LR
-    LLM["llama-server"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
+    RD["redis"] -->|"healthy"| GL["geometric-lens"]
+    LLM["llama-server"] -->|"healthy"| GL -->|"healthy"| AP["atlas-proxy"]
     LLM -->|"healthy"| V3["v3-service"] -->|"healthy"| AP
+    GL -->|"healthy"| V3
     SB["sandbox"] -->|"healthy"| AP
 
+    style RD fill:#5c1a1a,color:#fff
     style LLM fill:#5c1a1a,color:#fff
     style GL fill:#2d5016,color:#fff
     style V3 fill:#2d5016,color:#fff
@@ -680,7 +686,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server`와 `sandbox`는 독립적으로 시작합니다(의존성 없음). `geometric-lens`와 `v3-service`는 `llama-server`가 healthy해지기를 기다립니다. `atlas-proxy`는 네 개의 서비스를 모두 기다립니다. 첫 실행은 컨테이너 이미지를 빌드하고(수 분 소요), 이후 시작은 빠릅니다. 표준 `docker compose up -d`로 기동하세요 — 베이스 `docker-compose.yml`이 `driver: nvidia` GPU 예약을 선언하며, 이는 호스트의 `nvidia-container-toolkit`을 통해 동작합니다.
+`redis`, `llama-server`, `sandbox`는 독립적으로 시작합니다. `geometric-lens`는 `redis`와 `llama-server`가 healthy해지기를 기다리고, `v3-service`는 `llama-server`와 `geometric-lens`를, `atlas-proxy`는 `llama-server`, `geometric-lens`, `v3-service`, `sandbox`를 기다립니다. 첫 실행은 컨테이너 이미지를 빌드하고(수 분 소요), 이후 시작은 빠릅니다. 표준 `docker compose up -d`로 기동하세요 — 베이스 `docker-compose.yml`이 `driver: nvidia` GPU 예약을 선언하며, 이는 호스트의 `nvidia-container-toolkit`을 통해 동작합니다.
 
 ### 8.2 Docker Compose — AMD ROCm (V3.1.1)
 

@@ -77,6 +77,7 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
 | **sandbox** | 30820 (host) / 8020 (container) | Python (FastAPI) | Isolated code execution, compilation, linting, test running |
+| **redis** | 6379 (internal) | C (Redis 7) | Pattern cache, co-occurrence graph, task queue, router state; backing store for geometric-lens |
 
 ---
 
@@ -144,11 +145,12 @@ The JSON schema uses `oneOf` with `additionalProperties: false` and enumerates t
 
 ### Tools
 
-13 tools registered in `proxy/tools.go`:
+15 tools registered in `proxy/tools.go`:
 
 | Tool | Purpose | Read-only |
 |------|---------|-----------|
 | `read_file` | Read file contents (with optional offset/limit) | Yes |
+| `outline_file` | List a file's top-level functions/classes with line ranges, no bodies (tree-sitter for `.py`, best-effort scan otherwise). The surgical-read entry point: outline first, then `read_file` with offset/limit | Yes |
 | `write_file` | Create a NEW file (rejected for existing files >5 lines — see safety limits) | No |
 | `edit_file` | Surgical inline string replacement (old_str/new_str) for ≤10-line changes | No |
 | `ast_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
@@ -214,7 +216,7 @@ Each `write_file`/`edit_file` call is classified independently:
 
 Tier caps are 0 (uncapped); the detector stack inside the loop decides when to break: lens regression (`agent_lens_intervention`), reasoning repetition (`agent_reasoning_intervention`), tool-call repetition (`agent_repeat_intervention`), path-aware error breaker, done-without-action gate, claim-check gate, plan adherence threshold, and the empty-response fallback. Operators can override with `ATLAS_MAX_TURNS=<n>` for one-off "fix the entire app" prompts — see `proxy/types.go::envOverrideMaxTurns`.
 
-Classifier in `proxy/tools.go:1721+` (`classifyFileTier`); logic-pattern matcher in `tools.go:1874+` (`hasLogicIndicators`).
+Classifier in `proxy/tools.go` (`classifyFileTier`); logic-pattern matcher in the same file (`hasLogicIndicators`).
 
 **Always T1 (direct write):**
 - Config files matched by name (e.g. `package.json`, `go.mod`, `pyproject.toml`, `dockerfile`, `docker-compose.*`)
@@ -342,7 +344,7 @@ Wait injection appends "Wait, let me reconsider.\n" to request a longer reasonin
 
 ### Module Map
 
-18 Python modules in `benchmark/v3/` orchestrated by `v3-service/main.py`:
+18 Python modules in `benchmark/v3/`. `v3-service/main.py` orchestrates 13 of them; `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`benchmark/v3_runner.py`), and `ablation_analysis` is a standalone analysis script (not shown):
 
 ```mermaid
 graph LR
@@ -350,7 +352,7 @@ graph LR
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
     Main --> BASC["BlendASC 2A"]
-    Main --> REASC["ReASC 2B"]
+    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
     Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
@@ -359,10 +361,10 @@ graph LR
     Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
     Main --> MC["Metacognitive 3F"]
-    Main --> ACE["ACE 3G"]
+    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
-    Main --> LF["LensFeedback"]
-    Main --> ES["EmbeddingStore"]
+    Bench --> LF["LensFeedback"]
+    Bench --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR
@@ -373,6 +375,7 @@ graph LR
     LF --> BF
 
     style Main fill:#333,color:#fff
+    style Bench fill:#333,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
@@ -392,7 +395,7 @@ graph LR
     style ES fill:#333,color:#fff
 ```
 
-Legend: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 3 (repair), gray = utilities.
+Legend: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 3 (repair), gray = utilities. Modules fed by `v3_runner.py` are bench-runner-only; the service does not call them.
 
 ---
 
@@ -408,7 +411,7 @@ Anthropic's [Manipulating Manifolds](https://transformer-circuits.pub/2025/lineb
 
 ATLAS implements this with two complementary models. C(x) is a learned energy function (`hidden_dim`→512→128→1 MLP) over the selected model's own embeddings. Each code candidate gets embedded by llama-server, and C(x) scores where it sits in that geometry. Low energy means the candidate clusters with known-correct code. High energy means it clusters with known-incorrect code. No external oracle, no execution required—just the geometry of the selected model's representations.
 
-G(x) is the metric tensor - a diagonal tensor in PCA-reduced embedding space that captures how the energy landscape curves in different directions. Where C(x) answers "how good is this candidate?", G(x) answers "which direction should we move to improve it?" The correction engine uses G(x) to compute geometry-aware gradient steps (`-α · G⁻¹ · ∇C`), steering candidates downhill toward correctness along the natural curvature of the manifold rather than taking naive gradient steps. G(x) is implemented and deployed (shipped in V3.0.1, still active in V3.1.2).
+G(x) is the quality predictor - an XGBoost classifier over PCA-reduced embeddings that predicts pass/fail from where a candidate sits in the reduced space. Where C(x) answers "how good is this candidate?", G(x) answers "is this candidate likely to pass?" A metric-tensor path also exists in the code but is not deployed: a diagonal tensor in PCA space (loaded only as a fallback when no XGBoost artifact is present) and a correction engine that computes geometry-aware gradient steps (`-α · G⁻¹ · ∇C`) to steer candidates downhill along the manifold's curvature. Only the tensor's scalar correctability score is exposed (`/internal/lens/correctability`); the gradient-step correction is not wired into the service.
 
 ### Scoring Models
 
@@ -545,7 +548,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 60s. Max memory: 512 MB. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
+Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Max memory: 512 MB. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
 
 ---
 
@@ -585,10 +588,13 @@ Service dependency graph (identical across deployment modes):
 
 ```mermaid
 graph LR
-    LLM["llama-server"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
+    RD["redis"] -->|"healthy"| GL["geometric-lens"]
+    LLM["llama-server"] -->|"healthy"| GL -->|"healthy"| AP["atlas-proxy"]
     LLM -->|"healthy"| V3["v3-service"] -->|"healthy"| AP
+    GL -->|"healthy"| V3
     SB["sandbox"] -->|"healthy"| AP
 
+    style RD fill:#5c1a1a,color:#fff
     style LLM fill:#5c1a1a,color:#fff
     style GL fill:#2d5016,color:#fff
     style V3 fill:#2d5016,color:#fff
@@ -596,7 +602,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` and `sandbox` start independently. `geometric-lens` and `v3-service` wait for `llama-server` to be healthy; `atlas-proxy` waits for all four. The same `inference/entrypoint-v3.1.sh` drives every mode, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across Docker Compose, bare metal, macOS hybrid-Metal, and K3s.
+`redis`, `llama-server`, and `sandbox` start independently. `geometric-lens` waits for `redis` and `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives every mode, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across Docker Compose, bare metal, macOS hybrid-Metal, and K3s.
 
 Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](SETUP.md); the macOS native path is in [SETUP_MACOS.md](SETUP_MACOS.md).
 

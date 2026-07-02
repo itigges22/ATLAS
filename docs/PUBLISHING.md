@@ -46,7 +46,7 @@ The CLI also reads `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` if you'v
 Every publish command runs the same sequence; only the artifact and the
 registry field it sets differ:
 
-1. **Pre-flight** — checks `HF_TOKEN` is set and the artifact is valid (a Lens `cost_field.pt` must load as a torch checkpoint, not a half-finished download).
+1. **Pre-flight** — checks credentials and tooling: `HF_TOKEN` set, `huggingface_hub` installed, `gh` present or not. It then verifies the artifact files exist and the calibration JSONs are complete and valid. The torch checkpoint itself is not loaded as a gate — a failed dim probe warns and continues.
 2. **Hash** — SHA-256s the artifact so the PR carries a tamper-detectable fingerprint.
 3. **Upload to HF** — creates the repo (idempotent), uploads the artifact files, and generates a model card README with license + base-model badge.
 4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested diff for `atlas/cli/commands/model_registry.py`.
@@ -157,13 +157,13 @@ Either install `gh` from https://cli.github.com, or use `--skip-pr` — the CLI 
 
 The dim probe needs `torch` installed on the host (`pip install torch`). Without it, the PR body shows "unverified" and the maintainer will probe the dim on their side. Not a blocker — the upload still happens.
 
-### `cost_field.pt looks corrupted`
+### `Lens artifact is incomplete or uncalibrated` / `Lens calibration is invalid`
 
-The pre-flight check failed to load the file as a torch checkpoint. Most often this means the training run was killed mid-save. Re-run `atlas lens build` and confirm it prints `[done] saved cost_field.pt` before retrying.
+Publish refuses to upload when the artifact directory is missing runtime files or its calibration JSONs don't match the model — typically an interrupted training run, or a directory holding a previous model's artifacts. Re-run `atlas lens build` and confirm it ends with `Build complete (C(x) + G(x)).` before retrying.
 
-### `License must be permissive for redistribution`
+### Non-permissive licenses
 
-ATLAS only accepts artifacts under permissive licenses (apache-2.0, mit, bsd-3-clause). If your training data was scraped under a more restrictive license, that license can't be loosened by repackaging the trained weights — please don't try.
+The CLI accepts any `--license` value — there's no runtime license gate. The gate is review: the maintainer PR checklist includes "License is permissive for redistribution", and ATLAS only merges artifacts under permissive licenses (apache-2.0, mit, bsd-3-clause). If your training data was scraped under a more restrictive license, that license can't be loosened by repackaging the trained weights — please don't try.
 
 ---
 

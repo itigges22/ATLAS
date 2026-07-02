@@ -32,8 +32,8 @@ docker compose up -d
 ```
 
 To turn dev mode off, delete the override file (or rename it) and
-re-run `docker compose up -d`. The override is git-ignored by
-convention; commit changes to the `.example` file instead.
+re-run `docker compose up -d`. The override is git-ignored; commit
+changes to the `.example` file instead.
 
 ### geometric-lens
 
@@ -91,7 +91,6 @@ ATLAS_LLAMA_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:30820 \
 ATLAS_V3_URL=http://localhost:8070 \
-ATLAS_AGENT_LOOP=1 \
 ATLAS_MODEL_NAME=local-model \
 ATLAS_WORKSPACE_DIR=$(pwd)/.. \
 go run .

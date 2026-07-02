@@ -218,17 +218,16 @@ atlas-proxy-v2
 
 > **注意：** 裸机模式下沙箱监听端口为 **8020**（没有 Docker 端口映射）。代理的 `ATLAS_SANDBOX_URL` 必须使用端口 8020，而非 30820。
 
-### 使用启动脚本
+### 启动 TUI
 
-你也可以将启动脚本复制到 PATH 中：
+`atlas` 命令是 Python 包的控制台入口点，已由构建步骤中的 `pip install -e .` 安装 — 无需单独的启动脚本。在上述服务运行的情况下：
 
 ```bash
-cp /path/to/atlas-launcher ~/.local/bin/atlas
-chmod +x ~/.local/bin/atlas
-atlas    # 启动所有缺失的服务并运行 Aider
+cd /path/to/your/project
+atlas    # 检查 atlas-proxy 可达后启动 TUI
 ```
 
-启动脚本会自动检测哪些服务已在运行，只启动缺失的服务。如果检测到 Docker Compose 栈，则直接连接。
+如果 `atlas-tui` 二进制文件缺失或比检出代码旧，`atlas` 会自动从 `tui/` 构建它（需要 PATH 中有 Go 1.26.2+），并在移交给 TUI 之前验证 localhost:8090 上的代理。
 
 ---
 

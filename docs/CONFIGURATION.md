@@ -31,12 +31,12 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_MAX_TOKENS` | `8192` | Per-turn generation ceiling (`max_tokens`). An agent turn is a tool call or a whole-file `write_file` (a few thousand tokens); 8192 covers a ~600-line generation and bounds a content runaway to a couple minutes. Raise only for genuinely large single-file writes. |
 | `ATLAS_AGENT_HISTORY_BUDGET` | (unset) | Optional hard ceiling (tokens) on the kept conversation window. **Unset by default**: the window is sized to the slot — `per-slot context − ATLAS_MAX_TOKENS − 2048` — so it uses the whole slot rather than an artificial cap. Set this only to bound per-turn re-encode cost below slot capacity on SWA models (trades retained context for faster turns). The active file under edit is pinned in the trim regardless, so it never falls out of the window. |
 | `ATLAS_DEDUP_READS` | `1` | When `1`, a whole-file re-read of an unchanged file returns a compact pointer **only if the content is still in the live context**; if the content was trimmed out, the full file is re-served (so the model never edits blind). Set `0` to always serve the full re-read. |
-| `ATLAS_REASONING_BUDGET` | `6144` | Per-turn reasoning-token budget (estimated at 4 chars/token). When a generation accumulates this much `reasoning_content` without emitting any content tokens, the proxy cuts the stream and re-prompts. Bounds reasoning spirals. `0` disables. |
 | `ATLAS_KV_TYPE_K` | `f16` | KV-cache K quantization (`f16`, `q8_0`, `q4_0`). Set by `atlas tier fit --write`. |
 | `ATLAS_KV_TYPE_V` | `f16` | KV-cache V quantization. Set by `atlas tier fit --write`. |
 | `ATLAS_UBATCH` | `1024` | llama-server micro-batch size (`-ub`). Drives the compute-buffer VRAM cost (~ubatch × n_embd × 280 bytes) — the term that OOMs first on tight cards. Set by `atlas tier fit --write`. |
 | `ATLAS_BATCH` | `1024` | llama-server logical batch size (`-b`). Must be no larger than `ATLAS_UBATCH` because self-embeddings are always enabled. Set by `atlas tier fit --write`. |
 | `ATLAS_PROJECT_DIR` | (cwd at `compose up`) | Host directory bind-mounted to `/workspace` inside the atlas-proxy container. Switch projects by re-creating the proxy container with this var set. |
+| `ATLAS_LENS_HOST_DIR` | `./lens_training` | Host path of the lens training-data corpus, bind-mounted into atlas-proxy at `/data/lens_training` (see `ATLAS_LENS_DATA_DIR`, § 2) so `atlas lens retrain` on the host reads the corpus the proxy writes. |
 | `ATLAS_GHCR_OWNER` | `itigges22` | GHCR namespace to pull images from. Set to your own GitHub username if you've published forked images. |
 | `ATLAS_IMAGE_TAG` | `latest` | Image tag to pull (`latest` for main, `dev` for the dev branch, `vX.Y.Z` or `sha-...` for pinned releases). |
 | `ATLAS_LLAMA_PORT` | `8080` | llama-server host port |
@@ -49,6 +49,7 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (TUI and OpenAI-compat clients connect here) |
 | `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1, x86_64 only), `vulkan` (universal fallback), `metal` (Apple Silicon hybrid: native llama-server + Docker for the rest — see [SETUP_MACOS.md](SETUP_MACOS.md)), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm + Vulkan + Metal also require bringing up the stack with `-f docker-compose.rocm.yml`, `-f docker-compose.vulkan.yml`, or `-f docker-compose.macos.yml` respectively (the wizard prints the right command). On aarch64 hosts (DGX Spark, Snapdragon X Elite, Jetson, Pi 5) `atlas init` filters out `rocm` since AMD has no arm64 release — see [SETUP.md § arm64](SETUP.md#arm64). |
 | `ATLAS_MACOS_PREFIX` | `~/.atlas/macos` | macOS Metal only. Native llama.cpp install root shared by setup, launcher, and doctor. Set this when setup used `--prefix`. |
+| `ATLAS_LLAMA_HOST` | `127.0.0.1` | macOS Metal only. Bind address for the native llama-server launched by `scripts/atlas-llama-macos.sh`. Loopback by default; override only when access from another host is intentionally required. |
 | `ATLAS_GPU_VENDOR` | (auto-detected) | Vendor of the GPU ATLAS should use: `nvidia`, `amd`, `apple`, `intel`. Only meaningful on multi-vendor hosts; auto-detect picks the largest-VRAM GPU. |
 | `ATLAS_GPU_INDEX` | (unset — all GPUs visible) | Vendor-local index of the GPU ATLAS should use on multi-GPU hosts. Compose passes it into the llama-server container; the entrypoint maps it to `CUDA_VISIBLE_DEVICES` (NVIDIA) or the HIP/Vulkan equivalent, and skips the export when empty. |
 | `ATLAS_GFX_TARGET` | `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a` | **ROCm only.** AMD compute target(s), semicolon-separated. Forwarded to `Dockerfile.rocm` as `AMDGPU_TARGETS` at build time. Trim to your GPU for a smaller image — see [SETUP.md § AMD GPU Targets](SETUP.md#amd-gpu-targets-dockerfilerocm). |
@@ -57,7 +58,7 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 
 Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are fixed inside the Docker network and usually do not need to be configured by users. On macOS Metal, `docker-compose.macos.yml` keeps the container-side URL at `llama-server:8080` but forwards it to the native host-side `${ATLAS_LLAMA_PORT:-8080}`, so the port can move when 8080 is already occupied.
 
-**Runtime-tuning passthrough.** `.env.example` carries a commented "Runtime tuning" section, and compose passes each key through to the owning container as an empty-default env var — so setting any of `ATLAS_V3_TIMEOUT`, `ATLAS_MAX_TOKENS`, `ATLAS_AGENT_HISTORY_BUDGET`, `ATLAS_LENS_RETRAIN_MIN`, `ATLAS_KEEP_LLAMA_WARM`, `ATLAS_FRESH_SLOT_PER_SESSION` (proxy, § 2), `ATLAS_SANDBOX_MAX_EXECUTION_TIME` (sandbox, § 5), or `ATLAS_GPU_INDEX` / `ATLAS_BACKEND` / `ATLAS_GRAMMAR_MODE` in `.env` reaches the container without a compose edit. An empty/unset key means the in-code default applies.
+**Runtime-tuning passthrough.** `.env.example` carries a commented "Runtime tuning" section, and compose passes each key through to the owning container as an empty-default env var — so setting any of `ATLAS_V3_TIMEOUT`, `ATLAS_MAX_TOKENS`, `ATLAS_AGENT_HISTORY_BUDGET`, `ATLAS_LENS_RETRAIN_MIN`, `ATLAS_KEEP_LLAMA_WARM`, `ATLAS_FRESH_SLOT_PER_SESSION` (proxy, § 2), `ATLAS_SANDBOX_MAX_EXECUTION_TIME` (sandbox, § 5), or `ATLAS_GPU_INDEX` / `ATLAS_GRAMMAR_MODE` in `.env` reaches the container without a compose edit. (`ATLAS_BACKEND` is not in the passthrough: it drives the host-side overlay choice, and the ROCm/Vulkan overlays set their own container-side value.) An empty/unset key means the in-code default applies.
 
 **Restart policy.** Every service in `docker-compose.yml` runs with `restart: unless-stopped`, so the stack comes back up after a host reboot or a container crash without a manual `docker compose up`.
 
@@ -229,13 +230,15 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | `ATLAS_LENS_URL` | `http://localhost:8099` | Geometric Lens scoring endpoint |
 | `ATLAS_SANDBOX_URL` | `http://localhost:30820` | Sandbox code execution endpoint |
 | `ATLAS_V3_URL` | `http://localhost:8070` | V3 Pipeline service endpoint |
-| `ATLAS_LENS_DATA_DIR` | `/data/lens_training` | Where collected lens-training samples are written (per-model `samples.jsonl`). Each agent file-write becomes a candidate sample; a `/feedback` call (per-file accept/deny + pass 👍/👎) labels and weights it. Backed by the `lens-training` Docker volume so it persists across proxy restarts and accumulates toward a retrain. Consumed by `atlas lens retrain`. |
+| `ATLAS_LENS_DATA_DIR` | `/data/lens_training` | Where collected lens-training samples are written (per-model `samples.jsonl`). Each agent file-write becomes a candidate sample; a `/feedback` call (per-file accept/deny + pass 👍/👎) labels and weights it. Backed by the `${ATLAS_LENS_HOST_DIR:-./lens_training}` host bind mount (§ 1) so it persists across proxy restarts, accumulates toward a retrain, and is readable by the host CLI. Consumed by `atlas lens retrain`. |
 | `ATLAS_LENS_RETRAIN_MIN` | `2000` | Labeled-sample count at which the TUI surfaces the "retrain available" prompt (`/v1/lens/training-status`). A balance guard also requires ≥ 25% of this in the minority class, so the corpus isn't all-pass or all-fail. Raise for a larger, more representative corpus before retraining. |
 | `ATLAS_V3_TIMEOUT` | `180` | Interactive wall-clock cap (seconds) on a single V3 pipeline call from the agent path (`write_file` / `edit_file`). On timeout the proxy falls back to the model's own content (already syntax-gated) instead of hanging the session — bounds the long-tail Phase-3 repair stall (observed ~11 min on a 103-line write). Set `0` to disable the cap (uncapped behavior for offline bench runs). |
 | `ATLAS_MODEL_NAME` | `local-model` | Neutral fallback request identifier; `/v1/models` reports llama-server's loaded model when available |
 | `ATLAS_KEEP_LLAMA_WARM` | `1` | Set to `0` to disable the keep-warm goroutine that pings llama-server every 45s with a 1-token completion. Keeping warm avoids the cold-start path that fires after 1-2 min idle. Disable for CPU-only or tightly power-budgeted setups. |
 | `ATLAS_FRESH_SLOT_PER_SESSION` | `1` | Set to `0` to disable per-session llama.cpp KV-slot erase. With it enabled (default), the proxy POSTs `/slots/0?action=erase` at the start of each agent loop invocation, giving each turn a clean cache. Adds ~1-2s to the first turn but prevents cross-session token-state leakage (e.g. filenames hallucinated from prior sessions). |
 | `ATLAS_MAX_TURNS` | (unset) | Operator override for the agent-loop turn cap. Any positive int caps all tiers; unset / `0` / invalid falls through to tier defaults (T0=5, T1/T2/T3=uncapped). |
+| `ATLAS_REASONING_BUDGET` | `6144` | Per-turn reasoning-token budget (estimated at 4 chars/token). When a generation accumulates this much `reasoning_content` without emitting any content tokens, the proxy cuts the stream and re-prompts. Bounds reasoning spirals. `0` disables. `docker-compose.yml` does not pass this through, so setting it in `.env` does not reach the container — it applies to a host-run proxy, or add it to the `atlas-proxy` `environment` block in the compose file. |
+| `ATLAS_PERMISSION_TIMEOUT_SEC` | `600` | Fail-safe timeout (seconds) on interactive permission requests (`proxy/permission_gate.go`). If no decision arrives at `POST /v1/permission` and the client neither disconnects nor cancels, the tool call is denied rather than hanging the turn. |
 | `ATLAS_GRAMMAR_MODE` | `strict` | Schema-constrained JSON sampling. Default `strict` ships the full tool-call schema in `response_format` so llama-server's C-side sampler converts it to internal GBNF and the token decoder can ONLY emit our `tool_call/text/done` union. Set to `loose` to send a `{"type":"json_object"}` payload instead — escape hatch for models that handle schema-to-GBNF poorly. |
 | `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | Path to the ASA control-vector GGUF. The proxy reads this only for the `/v1/calibration/status` presence/marker probe; the vector itself is loaded by the llama-server entrypoint (see § 6 for `ATLAS_CONTROL_VECTOR_SCALE`, `_LAYER_RANGE`, `_ALLOW_UNVERIFIED` — those are entrypoint-consumed, not proxy). |
 | `ATLAS_CALL_GRAPH` | `0` | Structural call-graph reasoning. When enabled (`1`/`true`/`yes`/`on`), the proxy attaches intra-file call edges to `read_file`/`outline_file` output and symbol-index snippets; v3-service reads the same flag for its graph-based veto and repair context. Default off. |
@@ -256,7 +259,7 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | Suspicious-shrinkage guard | `oldSize ≥ 100B` AND `newSize < 64B` | Rejects writes that replace a non-trivial file with a stub (doctype-only / mid-output cut). See `validateNotSuspiciouslyShrunk`. |
 | Per-step grammar gate | Trigger: write_file rejection on existing .py/.html/.htm > 5 lines | Bans `edit_file` and `write_file` from GBNF tool-name production for next decision |
 | ASA control vector | Model-gated `/models/ast_edit_steering.gguf` | Activates `--control-vector-scaled` only when the adjacent `.model` marker matches `ATLAS_MODEL_NAME`; a stale vector from another model stays disabled. |
-| Conversation trim | Trigger: `> 12` messages | Keeps `system + most-recent user message (pinned) + last 8` (`trimMessages` in `proxy/agent.go`). The pin is the most-recent `role=="user"` message so long tool-call chains don't push the user's task off the tail. |
+| Conversation trim | Trigger: conversation exceeds the token budget | Keeps `system + most-recent user message (pinned) + a token-budgeted tail` (`budgetedKeepLast` / `trimMessages` in `proxy/agent.go`). The tail is sized to the per-slot budget (see `ATLAS_AGENT_HISTORY_BUDGET`, § 1), floored at 8 kept messages. The pin is the most-recent `role=="user"` message so long tool-call chains don't push the user's task off the tail. |
 | Command stdout limit | 8,000 chars | Prevents context flooding |
 | Command stderr limit | 4,000 chars | Prevents context flooding |
 | Search results limit | 200 matches | Prevents context flooding |
@@ -273,11 +276,11 @@ These 8 safety detectors run in place of a per-tier turn cap. Each fires indepen
 | Tool-call repetition | Same `(tool, args)` signature `3×` within the last `8` calls | `proxy/tool_repeat.go` (`toolRepeatThreshold=3`, `toolRepeatWindow=8`) |
 | Reasoning repetition | Same reasoning snippet `2×` consecutive turns | `proxy/reasoning_repeat.go` (`reasoningRepeatThreshold=2`) |
 | Lens regression | `gx_score_min` runs `2` consecutive turns below the selected artifact's `low` threshold, OR one turn below its `severe` threshold; disabled if uncalibrated | `proxy/lens_score.go`, `gx_thresholds.json` |
-| Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → skip | `proxy/agent.go:953` |
-| Path-aware error-loop | 3 consecutive failures on the **same** path (rotating paths don't trip) | `proxy/agent.go:838-877` (`consecutiveErrors >= 3` + path match) |
-| Action gate | Turn emits `done` but the user prompt has action-intent and no successful write/edit/ast_edit fired this loop | `proxy/agent.go:404` (action_gate) |
-| Verification gate | Turn emits `done` after a fix-intent prompt with no successful verification command this loop | `proxy/agent.go:375` (verification_gate) |
-| Claim-check gate | `done` summary makes universal claims (`works perfectly`, `tested all routes`) without backing evidence, OR the prompt asks for multi-issue work | `proxy/agent.go:441` + `proxy/claim_check.go` |
+| Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → skip | `proxy/agent.go` |
+| Path-aware error-loop | 3 consecutive failures on the **same** path (rotating paths don't trip) | `proxy/agent.go` (`consecutiveErrors >= 3` + path match) |
+| Action gate | Turn emits `done` but the user prompt has action-intent and no successful write/edit/ast_edit fired this loop | `proxy/agent.go` (action_gate) |
+| Verification gate | Turn emits `done` after a fix-intent prompt with no successful verification command this loop | `proxy/agent.go` (verification_gate) |
+| Claim-check gate | `done` summary makes universal claims (`works perfectly`, `tested all routes`) without backing evidence, OR the prompt asks for multi-issue work | `proxy/agent.go` + `proxy/claim_check.go` |
 
 ### Plan-mode auto-revision (plan_adherence)
 
@@ -286,16 +289,16 @@ These 8 safety detectors run in place of a per-tier turn cap. Each fires indepen
 | `planAutoReviseThreshold` | `5` | Consecutive off-plan tool calls before the proxy regenerates the plan |
 | `planMaxRevisions` | `2` | Hard cap on auto-revisions per loop (prevents revision oscillation) |
 
-### Hard-blocked patterns (`DefaultDenyPatterns`)
+### Hard-blocked patterns (`proxy/permissions.go`)
 
-These pattern matches in `proxy/permissions.go:shouldDenyToolCall` are checked BEFORE the per-tool permission gate, so `yolo` mode does not bypass them.
+These checks (`denyCommandReason` / `denyWritePathReason`, dispatched from `shouldDenyToolCall` in `proxy/permissions.go`) run BEFORE the per-tool permission gate, so `yolo` mode does not bypass them.
 
 | Tool | Pattern | Behavior |
 |------|---------|----------|
-| `run_command` | `rm -rf /`, `rm -rf /*`, `mkfs*`, `dd if=*of=/dev/*` | Reject with "tool call refused" — host-destroying commands |
-| `write_file` | `.env`, `*.pem`, `*.key`, `*credentials*` | Reject — model can't accidentally clobber secret files |
+| `run_command` | `rm -rf /`, `rm -rf /*`, `mkfs*`, `dd … of=/dev/*` | Reject — host-destroying commands |
+| `write_file` / `edit_file` / `ast_edit` / `move_file` (destination) | `.env`, `*.pem`, `*.key`, `*credentials*` | Reject — model can't accidentally clobber secret files |
 
-These are pattern-`Contains` matches against the command / file path, so the `.env` pattern catches `app/.env`, `.env.local`, etc.
+Command patterns are anchored to the command position of each shell segment (prefixes like `sudo`/`env` are skipped), so only the destructive form is blocked — `grep mkfs notes.txt` or `dd of=out.bin` pass. Write-path patterns match on the base name: `.env` requires the file to be named exactly `.env` (`app/.env` is caught; `.env.local` and `.env.example` are not), `*credentials*` matches any base name containing `credentials`.
 
 ### Shell-mutation gate
 
@@ -303,10 +306,11 @@ These are pattern-`Contains` matches against the command / file path, so the `.e
 
 | Pattern | Reaction |
 |---------|----------|
-| Leading verb in `{rm, mv, cp, rmdir, chmod, chown, truncate}` | Reject |
-| `find … -delete` or `find … -exec rm` | Reject |
-| `bash -c "…"` / `sh -c "…"` / `zsh -c "…"` / `dash -c "…"` / `eval …` | Reject (wrappers hide arbitrary commands from the per-segment check) |
-| Truncating `> /path` redirect | Reject — except `/dev/null`, `/dev/stderr`, `.log`, `.out` (intentional log capture) |
+| Recursive `rm` of a root / glob-everything target (`/`, `.`, `*`, `~`, `..`, `$HOME`, `/workspace`, or their `/*` variants) | Reject — targeted recursive deletes (`rm -rf build`, `rm -rf node_modules`) run freely |
+| `find … -delete` or `find … -exec rm` | Reject — deletes recursively from the search root |
+| Fork bomb (function whose body pipes to itself and backgrounds, then self-invokes) | Reject |
+| `mkfs*` / `wipefs`, `dd … of=/dev/…`, or a `>` redirect onto a block device (`/dev/sd*`, `/dev/nvme*`, …) | Reject — device/filesystem destruction |
+| `bash -c "…"` / `sh -c "…"` / `zsh -c "…"` / `dash -c "…"` / `ksh -c "…"` / `eval …` | Unwrapped one layer; the inner command is re-checked against the rules above |
 
 These checks are enforced regardless of permission mode — `yolo` does NOT bypass them.
 
@@ -450,8 +454,8 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 | `/shell` stdout truncation | 4,000 chars | Last N chars kept |
 | `/shell` stderr truncation | 2,000 chars | Last N chars kept |
 | `error_message` truncation | 500 chars | First N chars kept on `/execute` failures |
-| Timeout error preview | 50 chars | Tail of stdout/stderr shown when `/execute` times out |
-| Supported languages | 8 | python, javascript, typescript, go, rust, c, cpp, bash |
+| Timeout response | `Execution timed out after Ns` | `/execute` timeout returns `success: false`, `returncode: -1`, this message as `stderr`, and empty `stdout` |
+| Supported languages | 12 | python, javascript, typescript, go, rust, c, cpp, bash, html/htm, xml, json, yaml/yml |
 
 ### Background process tools
 
@@ -518,10 +522,11 @@ The entrypoint always launches with this flag set (regardless of deployment mode
 | `-b` / `-ub` | `$BATCH_SIZE` / `$UBATCH_SIZE` | Batch / micro-batch size (defaults `1024` / `1024`; batch cannot exceed micro-batch while embeddings are enabled) |
 | `--slot-save-path` | `$SLOT_SAVE_PATH` | Where llama-server persists slot state |
 | `--ctx-checkpoints` | `0` | Disable context checkpoints |
-| `--no-cache-prompt` | — | Disable prompt caching (prevents cross-session leakage) |
 | `--embeddings` | — | Enable self-embedding endpoint (lens C(x)/G(x) needs this) |
 | `--jinja` | — | Jinja chat-template support |
 | `--control-vector-scaled` | `$ATLAS_CONTROL_VECTOR:$ATLAS_CONTROL_VECTOR_SCALE` | Added only when the vector exists and its `.model` marker matches the selected model |
+
+Prompt caching stays enabled so each agent-loop turn reuses its encoded prefix; cross-session isolation comes from the proxy erasing the KV slot at session start (`ATLAS_FRESH_SLOT_PER_SESSION`, § 2), not from disabling the cache.
 
 > **Note:** The Docker entrypoint and the K3s entrypoint are the same script. The only practical knobs that diverge are `CONTEXT_LENGTH` (Docker defaults `131072` via `ATLAS_CTX_SIZE`; K3s defaults `16384` via `ATLAS_CONTEXT_LENGTH`) and `PARALLEL_SLOTS` (Docker compose defaults `4` via `ATLAS_PARALLEL_SLOTS` to support `/demo` split-pane plus V3 plan-search fanout; K3s defaults `1` via `atlas.conf`). The runtime-sizing keys (`ATLAS_KV_TYPE_K/V`, `ATLAS_UBATCH`, `ATLAS_BATCH`) are compose-only; on K3s the entrypoint defaults apply unless set in the deployment manifest.
 
@@ -557,7 +562,7 @@ CLI.
 | temperature | 0.6 | REPL generation temperature (per-service; the agent loop in § 2 uses 0.3) |
 | top_k | 20 | Top-K sampling |
 | top_p | 0.95 | Nucleus sampling |
-| stop | `["<\|im_end\|>"]` | Stop sequence |
+| stop | (none) | No stop sequences are sent. llama-server applies the GGUF's own chat template (`--jinja`), so no hand-built stop tokens are needed. |
 
 ---
 

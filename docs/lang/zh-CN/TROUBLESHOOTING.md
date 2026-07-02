@@ -254,9 +254,11 @@ ps aux | grep llama-server | grep ctx-size
 **现象：** 所有 `write_file` 调用都是 T1（直接写入）。输出中没有 V3 Pipeline 阶段。
 
 V3 仅在**同时满足以下三个条件**时触发：
-1. 文件内容**超过 50 行**
-2. 文件有**3 个以上逻辑指标**（函数定义、控制流、API 模式）
+1. 文件内容达到 **10 行以上**（不足 10 行始终为 T1）
+2. 文件有**至少 2 个逻辑指标**（函数定义、控制流、API 模式）——或具有可识别的代码/标记扩展名（`.py`、`.go`、`.js`、`.html` 等），此时即使没有任何指标，10 行以上也会归入 T2
 3. V3 服务可通过 `ATLAS_V3_URL` 访问
+
+配置、数据、样式、Markdown 和 shell 文件（`package.json`、`.yaml`、`.css`、`.md`、`.sh` 等）无论大小始终为 T1。
 
 **诊断方法：**
 ```bash
@@ -277,7 +279,7 @@ docker compose logs atlas-proxy | grep "write_file"
 **原因：** 模型试图在一次调用中写入过多内容。代理检测到截断的 JSON 并拒绝了该工具调用。
 
 **自动处理机制：**
-- 对于超过 100 行的现有文件：代理拒绝 `write_file` 并告知模型改用 `edit_file`
+- 对于现有文件：代理拒绝所有 `write_file` 并告知模型改用 `edit_file`（仅有的例外：5 行以下的文件、磁盘上看起来已损坏的文件、本会话自己写入的文件）
 - 连续 3 次失败后：错误循环断路器会停止代理并返回摘要
 
 **你可以做的：** 重新表述请求，要求进行针对性修改而非完整文件重写。例如，使用"为登录函数添加输入验证"而非"重写 auth.py"。
@@ -300,9 +302,9 @@ docker compose logs atlas-proxy | grep "write_file"
 
 ### 探索预算警告
 
-**现象：** 输出显示 "You have full project context in the system prompt. Do not read more files." 或读取操作被跳过。
+**现象：** 输出显示 "You have full project context in the system prompt. Do not read more files."
 
-**原因：** 模型连续进行了 4 次以上的只读调用（read_file、search_files、list_directory）而没有写入任何内容。4 次读取后代理会发出警告。5 次以上则直接跳过读取并告知模型进行写入。
+**原因：** 模型连续进行了 4 次以上的只读调用（read_file、search_files、list_directory）而没有写入任何内容。4 次读取时代理会注入引导写入的提示；5 次以上则注入更强的提示。读取始终会执行——提示只是引导下一轮转向写入，绝不会跳过读取。
 
 **解决方法：** 这是保护性行为。如果模型确实在探索中卡住了，请更具体地说明你想要修改的内容。
 
@@ -520,7 +522,7 @@ atlas bench --run-id <your-run-id> --tasks 200
 - **第三阶段修复：** 约 2-5 分钟（PR-CoT + Refinement + Derivation，如果需要）
 
 如需更快（但质量较低）的结果：
-- 保持文件在 50 行以下（维持 T1，不触发 V3）
+- 保持文件不足 10 行（维持 T1，不触发 V3）——可识别的代码扩展名达到 10 行以上时，无论复杂度如何都会归入 T2
 - 降低逻辑复杂度（减少函数、控制流）
 - V3 仅在确实需要时才触发 - 简单文件会立即写入
 

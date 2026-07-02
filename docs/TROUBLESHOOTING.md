@@ -282,7 +282,7 @@ Developer-maintenance task. Two triggers land here:
 - **A dropped-in model fails to load** with `error loading model: unknown (model) architecture 'gemma4'` — the pinned llama.cpp predates that architecture.
 - **A build fails** with `error: patch failed: tools/server/server-context.cpp:NN` / `patch does not apply` — upstream drifted past the pinned SHA.
 
-The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) and re-applies `inference/patches/expose-hidden-states.patch` (the per-layer `hidden_states` extension the Geometric Lens depends on) during the build. To learn a new architecture, move the pin to a llama.cpp SHA that includes it. Prebuilt GHCR images skip the local build; only rebuild when you need an architecture newer than the published image.
+The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`), and `Dockerfile.v31`, `Dockerfile.rocm`, and `Dockerfile.vulkan` — the three the compose files build from — apply `inference/patches/expose-hidden-states.patch` (the per-layer `hidden_states` extension the Geometric Lens depends on) during the build. The plain `Dockerfile` pins the rev but does not apply the patch, so a server built from it lacks the lens plumbing. To learn a new architecture, move the pin to a llama.cpp SHA that includes it. Prebuilt GHCR images skip the local build; only rebuild when you need an architecture newer than the published image.
 
 **Preserve the hidden-states patch — rebase it, don't delete it.** Removing the `git apply` step builds a server that has silently lost the lens plumbing (`/embedding` ignores the `layers:` parameter). Bump runbook:
 
@@ -501,10 +501,12 @@ ps aux | grep llama-server | grep ctx-size
 **Symptom:** All `write_file` *or* `edit_file` calls are T1 (direct write). No V3 pipeline stages in output.
 
 V3 fires when **all conditions** are met:
-1. File has **50+ lines** of content
-2. File has **3+ logic indicators** (function defs, control flow, API patterns)
+1. File has **10+ lines** of content (under 10 lines is always T1)
+2. File has **2+ logic indicators** (function defs, control flow, API patterns) — **or** a recognized code/markup extension (`.py`, `.go`, `.js`, `.html`, …), which goes T2 at 10+ lines even with zero indicators
 3. V3 service is reachable at `ATLAS_V3_URL`
-4. **Request tier ≥ T2** (classifier output, after any agent override) **AND** the file's own tier ≥ T2
+4. For `edit_file` only: the resulting file warrants a whole-file re-run — cyclomatic complexity ≥ 8, or ≥ 80 lines when complexity can't be measured
+
+Config, data, style, markdown, and shell files (`package.json`, `.yaml`, `.css`, `.md`, `.sh`, …) are always T1 regardless of size. The request tier is forwarded to V3 but doesn't gate activation — the file's own tier does.
 
 Both `write_file` and `edit_file` route through V3.
 
@@ -517,7 +519,7 @@ curl -s http://localhost:8070/health
 docker compose logs atlas-proxy | grep -E "write_file|edit_file|tier="
 # Look for:
 #   "tier=T2:medium" or higher in classifier output
-#   "[edit_file] V3 pipeline activating for X (req_tier=2, file_tier=2)"
+#   "[edit_file] V3 pipeline activating for X (file_tier=2, req_tier=2)"
 #   "[write_file] V3 pipeline activating for X"
 # T1 means direct write — no V3.
 ```
@@ -530,7 +532,7 @@ If V3 is unreachable, the proxy logs `V3 failed: ...` and falls back to direct w
 
 **Cause:** The model is trying to write too much content in one call. The proxy detects truncated JSON and rejects the tool call.
 
-The proxy rejects `write_file` on existing files over 100 lines and tells the model to use `edit_file` instead; after 3 consecutive failures the error loop breaker stops the agent and returns a summary.
+The proxy rejects every `write_file` against an existing path — `write_file` is for creating files — and tells the model to use `edit_file` instead. The only exceptions: files of 5 lines or fewer, files that look corrupted on disk (prose preamble, stray markdown fences), and files this session wrote itself. After 3 consecutive failures the error loop breaker stops the agent and returns a summary.
 
 **Fix:** Rephrase your request to ask for targeted changes rather than full file rewrites — "Add input validation to the login function" instead of "Rewrite auth.py".
 
@@ -602,7 +604,7 @@ except curses.error:
 
 **Symptom:** Asking ATLAS to write an HTML/CSS/JSON file causes a ~5-minute pause with PR-CoT repair attempts and LLM timeouts. The file eventually lands via the direct-write fallback.
 
-**What's happening:** The V3 smoke check is language-aware — it derives language from the target file's extension and routes to the right checker (`.py` → Python compile, `.js` → `node --check`, `.ts` → `tsc --noEmit`, `.go` → `gofmt -e`, `.rs` → `rustc`, `.c`/`.cpp` → `-fsyntax-only`, `.sh` → `bash -n`, `.html` → `html.parser`, `.xml` → `ElementTree`, `.json` → `json.loads`, `.yaml` → `yaml.safe_load`). An unrecognized extension falls back to Python and fails, which cascades into repair.
+**What's happening:** The V3 smoke check is language-aware — it derives language from the target file's extension and routes to the right checker (`.py` → Python compile, `.js` → `node --check`, `.ts` → `tsc --noEmit`, `.go` → `gofmt -e`, `.rs` → `rustc`, `.sh` → `bash -n`, `.html` → `html.parser`, `.xml` → `ElementTree`, `.json` → `json.loads`, `.yaml` → `yaml.safe_load`). An unrecognized extension falls back to Python and fails, which cascades into repair. Note `.c`/`.cpp`/`.h` are not in the extension map (`_ext_to_lang` in `v3-service/main.py`), so C/C++ files hit the Python fallback even though the sandbox itself has C/C++ checkers.
 
 If `/v3/generate` receives an approved project build command, V3 emits a `build_verify` event after syntax/self-test verification. The command runs in an ephemeral sandbox workspace with the candidate overlaid onto the project, so failed build evidence blocks `passed=true` without writing the candidate into the real checkout. Overlay snapshots skip dependency caches, secrets, model/data artifacts, symlinks, and large files, and enforce file-count and byte limits. If a project needs heavyweight dependencies to build, install them inside the sandbox workspace as part of the explicit verification workflow.
 
@@ -610,11 +612,11 @@ If `/v3/generate` receives an approved project build command, V3 emits a `build_
 
 ### V3 Pipeline Doesn't Fire on "Fix It Again" Prompts
 
-**Symptom:** First request creates a file and V3 runs. Follow-up "still doesn't work, try again"-style prompts complete in microseconds with no V3 events — the model just edits and exits.
+**Symptom:** First request creates a file and V3 runs. A terse follow-up like "ok" or "yes" gets a conversational reply — no tool calls, no V3 events.
 
-**What's happening:** The agent-loop tier classifier covers natural fix language (`doesn't`, `is not`, `failed`, `wrong`, …) plus continuation markers (`still`, `again`, `retry`, `another`) that substitute for an explicit file name. A prompt that misses this vocabulary classifies as T1, so V3 never fires.
+**What's happening:** The agent-loop tier classifier treats T2 as the floor for any non-trivial message — "still doesn't work, try again" classifies T2 and gets the pipeline. Only messages under 5 characters or exact matches against a small trivial-chat list (`hi`, `thanks`, `ok`, `yes`, …) stay at T0: conversational, no pipeline.
 
-**What to do:** Mention the file by name (`app.py` is enough) — the explicit-file gate promotes it to T2. Check `docker compose logs atlas-proxy | grep "agent tier override"`: `T2:medium` means it promoted correctly, `T1:simple` on a clearly-iterative prompt means the vocabulary missed it.
+**What to do:** Say what you want, even briefly — "yes, fix it" clears the T0 gate. If a follow-up runs the agent loop but V3 stays silent, the request tier isn't the gate — the file's own tier is. See [V3 Pipeline Not Firing on Feature Files](#v3-pipeline-not-firing-on-feature-files) and check `docker compose logs atlas-proxy | grep -E "write_file|edit_file"` for the file-tier line (e.g. `[write_file] app.py → T1:simple (8 lines)`).
 
 ### File Not Read Before Editing
 
@@ -634,9 +636,9 @@ If `/v3/generate` receives an approved project build command, V3 emits a `build_
 
 ### Exploration Budget Warning
 
-**Symptom:** Output shows "You have full project context in the system prompt. Do not read more files." or reads are being skipped.
+**Symptom:** Output shows "You have full project context in the system prompt. Do not read more files."
 
-**Cause:** The model has made 4+ consecutive read-only calls (read_file, search_files, list_directory) without writing anything. After 4 reads, the proxy warns. After 5+, it skips reads entirely and tells the model to write.
+**Cause:** The model has made 4+ consecutive read-only calls (read_file, search_files, list_directory) without writing anything. At 4 reads, the proxy injects a nudge toward writing; at 5+, an escalated nudge. Reads always execute — the nudge steers the next turn, it never skips the read.
 
 **Fix:** If the model is genuinely stuck exploring, be more specific about what you want changed.
 
@@ -787,7 +789,7 @@ This is normal for T2 files. The V3 pipeline makes multiple LLM calls:
 - **Phase 3 repair:** ~2-5 minutes (PR-CoT + Refinement + Derivation, if needed)
 
 To get faster (but lower quality) results:
-- Keep files under 50 lines (stays T1, no V3)
+- Keep files under 10 lines (stays T1, no V3) — recognized code extensions at 10+ lines go T2 regardless of complexity
 - Reduce logic complexity (fewer functions, control flow)
 - V3 only fires when truly needed — simple files are written instantly
 

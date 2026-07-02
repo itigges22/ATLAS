@@ -77,6 +77,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | **v3-service** | 8070 | Python | V3 pipeline 的 HTTP 封装（PlanSearch、DivSampling、PR-CoT 等） |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) 能量打分、G(x) XGBoost 质量预测、RAG/项目索引 |
 | **sandbox** | 30820（主机）/ 8020（容器） | Python (FastAPI) | 隔离的代码执行、编译、检查、测试运行 |
+| **redis** | 6379（内部） | C (Redis 7) | 模式缓存、共现图、任务队列、路由器状态；geometric-lens 的后备存储 |
 
 ---
 
@@ -144,11 +145,12 @@ llama-server 的 `response_format: {"type": "json_object"}` 强制每一次模�
 
 ### 工具
 
-`proxy/tools.go` 中注册了 13 个工具：
+`proxy/tools.go` 中注册了 15 个工具：
 
 | 工具 | 用途 | 只读 |
 |------|---------|-----------|
 | `read_file` | 读取文件内容（可选 offset/limit） | 是 |
+| `outline_file` | 列出文件的顶层函数/类及其行号范围，不含函数体（`.py` 使用 tree-sitter，其余为尽力而为的扫描）。外科式读取的入口点：先 outline，再用带 offset/limit 的 `read_file` | 是 |
 | `write_file` | 创建一个新文件（对超过 5 行的已有文件会被拒绝 —— 见安全限制） | 否 |
 | `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
 | `ast_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，优先于 edit_file 使用。GH #39，v1 中仅支持 .py/.html/.htm | 否 |
@@ -220,7 +222,7 @@ Qwen3.5-9B 有一个有据可查的偏差：即便 ast_edit 才是正确选择�
 
 2026 年 5 月的加固扫荡移除了 `absoluteMaxTurns` 上限，并把逐 tier 的 T1/T2/T3 上限降为零（"无上限"），因为循环内部的 8 检测器栈现在会决定何时中断：lens 回退（`agent_lens_intervention`）、推理重复（`agent_reasoning_intervention`）、工具调用重复（`agent_repeat_intervention`）、路径感知的错误熔断器、无动作即 done 门控、claim-check 门控、计划遵循阈值，以及空回复回退。对于一次性的"修复整个应用"提示，运维人员仍可用 `ATLAS_MAX_TURNS=<n>` 覆盖 —— 见 `proxy/types.go::envOverrideMaxTurns`。
 
-分类器在 `proxy/tools.go:1721+`（`classifyFileTier`）；逻辑模式匹配器在 `tools.go:1874+`（`hasLogicIndicators`）。
+分类器在 `proxy/tools.go`（`classifyFileTier`）；逻辑模式匹配器在同一文件中（`hasLogicIndicators`）。
 
 **始终为 T1（直接写入）：**
 - 按名称匹配的配置文件（代码中共 29 个）：`package.json`、`tsconfig.json`、`next.config.{js,ts,mjs}`、`tailwind.config.{ts,js}`、`postcss.config.{js,mjs}`、`vite.config.{ts,js}`、`.eslintrc.json`、`.prettierrc`、`jest.config.{ts,js}`、`cargo.toml`、`go.mod`、`go.sum`、`makefile`、`cmakelists.txt`、`pyproject.toml`、`setup.py`、`setup.cfg`、`requirements.txt`、`pipfile`、`.editorconfig`、`.gitignore`、`dockerfile`、`docker-compose.{yml,yaml}`
@@ -435,7 +437,7 @@ Wait 注入会追加 "Wait, let me reconsider.\n" 以强制更长的思考。Tie
 
 ### 模块图
 
-`benchmark/v3/` 中的 18 个 Python 模块,由 `v3-service/main.py` 编排：
+`benchmark/v3/` 中的 18 个 Python 模块。`v3-service/main.py` 编排其中的 13 个；`reasc`、`ace_pipeline`、`lens_feedback` 和 `embedding_store` 只在离线 bench 运行器（`benchmark/v3_runner.py`）下运行，而 `ablation_analysis` 是一个独立的分析脚本（未在图中显示）：
 
 ```mermaid
 graph LR
@@ -443,7 +445,7 @@ graph LR
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
     Main --> BASC["BlendASC 2A"]
-    Main --> REASC["ReASC 2B"]
+    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
     Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
@@ -452,10 +454,10 @@ graph LR
     Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
     Main --> MC["Metacognitive 3F"]
-    Main --> ACE["ACE 3G"]
+    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
-    Main --> LF["LensFeedback"]
-    Main --> ES["EmbeddingStore"]
+    Bench --> LF["LensFeedback"]
+    Bench --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR
@@ -466,6 +468,7 @@ graph LR
     LF --> BF
 
     style Main fill:#333,color:#fff
+    style Bench fill:#333,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
@@ -485,7 +488,7 @@ graph LR
     style ES fill:#333,color:#fff
 ```
 
-图例：蓝色 = Phase 1（生成），绿色 = Phase 2（选择），棕色 = Phase 3（修复），灰色 = 工具。
+图例：蓝色 = Phase 1（生成），绿色 = Phase 2（选择），棕色 = Phase 3（修复），灰色 = 工具。由 `v3_runner.py` 供给的模块仅用于 bench 运行器；服务不会调用它们。
 
 ---
 
@@ -501,7 +504,7 @@ Anthropic 的 [Manipulating Manifolds](https://transformer-circuits.pub/2025/lin
 
 ATLAS 用两个互补的模型实现这一点。C(x) 是建立在模型自身嵌入之上的一个习得的能量函数（4096-到-512-到-128-到-1 的 MLP）。每个代码候选都由 llama-server 嵌入，C(x) 给出它在那个几何结构中所处的位置打分。低能量意味着该候选与已知正确的代码聚成一类。高能量意味着它与已知错误的代码聚成一类。无需外部预言机，无需执行 —— 仅仅是模型自身表示的几何结构。
 
-G(x) 是度量张量 —— PCA 降维后的嵌入空间中的一个对角张量，刻画了能量景观在不同方向上的弯曲方式。当 C(x) 回答"这个候选有多好？"时，G(x) 回答"我们应该朝哪个方向移动来改进它？"修正引擎用 G(x) 计算几何感知的梯度步（`-α · G⁻¹ · ∇C`），沿着流形的自然曲率把候选导向下坡、趋向正确，而不是采取朴素的梯度步。G(x) 已实现并部署（随 V3.0.1 发布，在 V3.1.0 中仍然活跃）。
+G(x) 是质量预测器 —— 一个建立在 PCA 降维嵌入之上的 XGBoost 分类器，根据候选在降维空间中所处的位置预测通过/失败。当 C(x) 回答"这个候选有多好？"时，G(x) 回答"这个候选可能通过吗？"代码中还存在一条度量张量路径，但未部署：PCA 空间中的一个对角张量（仅在没有 XGBoost 工件时作为回退加载），以及一个计算几何感知梯度步（`-α · G⁻¹ · ∇C`）、沿流形曲率把候选导向下坡的修正引擎。只有该张量的标量可修正性分数被暴露出来（`/internal/lens/correctability`）；梯度步修正并未接入服务。
 
 ### 打分模型
 
@@ -626,7 +629,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-接受的语言别名：`py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`rs`（Rust）、`c++`（C++）、`sh`/`shell`（Bash）。最大执行时间：60s。最大内存：512 MB。两个工作区路径：**`/execute`**（V3 候选测试路径）使用 `/tmp/sandbox`（tmpfs）下的一个临时草稿目录；**`/shell`**（agent 按 PC-188 的 `run_command` 路由，外加用于后台进程的 `/jobs/*`）针对 `/workspace` 运行 —— 即来自 `ATLAS_PROJECT_DIR`（Docker）或 hostPath `${ATLAS_PROJECTS_DIR}`（K3s）绑定挂载的项目根，与代理看到的是同一路径。
+接受的语言别名：`py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`rs`（Rust）、`c++`（C++）、`sh`/`shell`（Bash）。最大执行时间：Docker 部署中为 300s（compose 设置 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` 以匹配代理 5 分钟的 `run_command` 上限；裸代码默认值为 60s）。最大内存：512 MB。两个工作区路径：**`/execute`**（V3 候选测试路径）使用 `/tmp/sandbox`（tmpfs）下的一个临时草稿目录；**`/shell`**（agent 按 PC-188 的 `run_command` 路由，外加用于后台进程的 `/jobs/*`）针对 `/workspace` 运行 —— 即来自 `ATLAS_PROJECT_DIR`（Docker）或 hostPath `${ATLAS_PROJECTS_DIR}`（K3s）绑定挂载的项目根，与代理看到的是同一路径。
 
 ---
 
@@ -666,10 +669,13 @@ llama-server 之外的所有计算都跑在 CPU 上。GPU 仅用于 LLM 推理�
 
 ```mermaid
 graph LR
-    LLM["llama-server"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
+    RD["redis"] -->|"healthy"| GL["geometric-lens"]
+    LLM["llama-server"] -->|"healthy"| GL -->|"healthy"| AP["atlas-proxy"]
     LLM -->|"healthy"| V3["v3-service"] -->|"healthy"| AP
+    GL -->|"healthy"| V3
     SB["sandbox"] -->|"healthy"| AP
 
+    style RD fill:#5c1a1a,color:#fff
     style LLM fill:#5c1a1a,color:#fff
     style GL fill:#2d5016,color:#fff
     style V3 fill:#2d5016,color:#fff
@@ -677,7 +683,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` 和 `sandbox` 独立启动（无依赖）。`geometric-lens` 和 `v3-service` 等待 `llama-server` 变为健康。`atlas-proxy` 等待全部四个服务。首次运行会构建容器镜像（数分钟）；后续启动很快。用标准的 `docker compose up -d` 拉起 —— 基础 `docker-compose.yml` 声明了 `driver: nvidia` 的 GPU 预留，它通过主机上的 `nvidia-container-toolkit` 生效。
+`redis`、`llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `redis` 和 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。首次运行会构建容器镜像（数分钟）；后续启动很快。用标准的 `docker compose up -d` 拉起 —— 基础 `docker-compose.yml` 声明了 `driver: nvidia` 的 GPU 预留，它通过主机上的 `nvidia-container-toolkit` 生效。
 
 ### 8.2 Docker Compose —— AMD ROCm (V3.1.1)
 

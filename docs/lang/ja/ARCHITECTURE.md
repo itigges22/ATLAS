@@ -77,6 +77,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | **v3-service** | 8070 | Python | V3 パイプラインの HTTP ラッパー（PlanSearch、DivSampling、PR-CoT など） |
 | **geometric-lens** | 8099 | Python (FastAPI) | C(x) エネルギースコアリング、G(x) XGBoost 品質予測、RAG/プロジェクトインデキシング |
 | **sandbox** | 30820 (ホスト) / 8020 (コンテナ) | Python (FastAPI) | 分離されたコード実行、コンパイル、リント、テスト実行 |
+| **redis** | 6379 (内部) | C (Redis 7) | パターンキャッシュ、共起グラフ、タスクキュー、ルーター状態; geometric-lens のバッキングストア |
 
 ---
 
@@ -144,11 +145,12 @@ JSON スキーマは `oneOf` と `additionalProperties: false` を用い、ツ�
 
 ### ツール
 
-`proxy/tools.go` に登録された13個のツール:
+`proxy/tools.go` に登録された15個のツール:
 
 | ツール | 役割 | 読み取り専用 |
 |------|---------|-----------|
 | `read_file` | ファイル内容を読む（任意の offset/limit 付き） | はい |
+| `outline_file` | ファイルのトップレベルの関数/クラスを行範囲付きで一覧表示し、本体は含めない（`.py` は tree-sitter、それ以外はベストエフォートのスキャン）。外科的読み取りのエントリーポイント: まずアウトラインし、次に offset/limit 付きで `read_file` する | はい |
 | `write_file` | 新規ファイルを作成（既存の5行超ファイルでは拒否 — 安全制限を参照） | いいえ |
 | `edit_file` | ≤10 行の変更向けの外科的なインライン文字列置換（old_str/new_str） | いいえ |
 | `ast_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。GH #39、v1 では .py/.html/.htm のみ | いいえ |
@@ -189,7 +191,7 @@ Qwen3.5-9B には、ast_edit が正しい場合でも `ast_edit` より `edit_fi
 
 2026年5月のハードニングスイープにより `absoluteMaxTurns` の上限が撤去され、ティアごとの T1/T2/T3 の上限がゼロ（「上限なし」）に引き下げられました。これは、ループ内の8つの検出器スタックが、いつ打ち切るかを決めるようになったためです: lens リグレッション（`agent_lens_intervention`）、推論の繰り返し（`agent_reasoning_intervention`）、ツールコールの繰り返し（`agent_repeat_intervention`）、パス対応のエラーブレーカー、アクションなしの done ゲート、claim-check ゲート、プラン遵守の閾値、空応答のフォールバック。オペレーターは依然として、単発の「アプリ全体を直す」プロンプト向けに `ATLAS_MAX_TURNS=<n>` でオーバーライドできます — `proxy/types.go::envOverrideMaxTurns` を参照。
 
-分類器は `proxy/tools.go:1721+`（`classifyFileTier`）に、ロジックパターンマッチャーは `tools.go:1874+`（`hasLogicIndicators`）にあります。
+分類器は `proxy/tools.go`（`classifyFileTier`）に、ロジックパターンマッチャーは同じファイル（`hasLogicIndicators`）にあります。
 
 **常に T1（直接書き込み）:**
 - 名前による設定ファイル（コード中で計29個）: `package.json`、`tsconfig.json`、`next.config.{js,ts,mjs}`、`tailwind.config.{ts,js}`、`postcss.config.{js,mjs}`、`vite.config.{ts,js}`、`.eslintrc.json`、`.prettierrc`、`jest.config.{ts,js}`、`cargo.toml`、`go.mod`、`go.sum`、`makefile`、`cmakelists.txt`、`pyproject.toml`、`setup.py`、`setup.cfg`、`requirements.txt`、`pipfile`、`.editorconfig`、`.gitignore`、`dockerfile`、`docker-compose.{yml,yaml}`
@@ -404,7 +406,7 @@ Wait 注入は、より長い思考を強制するために「Wait, let me recon
 
 ### モジュールマップ
 
-`v3-service/main.py` がオーケストレーションする `benchmark/v3/` 内の18個の Python モジュール:
+`benchmark/v3/` 内の18個の Python モジュール。そのうち13個を `v3-service/main.py` がオーケストレーションします; `reasc`、`ace_pipeline`、`lens_feedback`、`embedding_store` はオフラインのベンチランナー（`benchmark/v3_runner.py`）の下でのみ動作し、`ablation_analysis` はスタンドアロンの分析スクリプトです（図には含まれません）:
 
 ```mermaid
 graph LR
@@ -412,7 +414,7 @@ graph LR
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
     Main --> BASC["BlendASC 2A"]
-    Main --> REASC["ReASC 2B"]
+    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
     Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
@@ -421,10 +423,10 @@ graph LR
     Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
     Main --> MC["Metacognitive 3F"]
-    Main --> ACE["ACE 3G"]
+    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
-    Main --> LF["LensFeedback"]
-    Main --> ES["EmbeddingStore"]
+    Bench --> LF["LensFeedback"]
+    Bench --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR
@@ -435,6 +437,7 @@ graph LR
     LF --> BF
 
     style Main fill:#333,color:#fff
+    style Bench fill:#333,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
@@ -454,7 +457,7 @@ graph LR
     style ES fill:#333,color:#fff
 ```
 
-凡例: 青 = フェーズ1（生成）、緑 = フェーズ2（選択）、茶 = フェーズ3（修復）、グレー = ユーティリティ。
+凡例: 青 = フェーズ1（生成）、緑 = フェーズ2（選択）、茶 = フェーズ3（修復）、グレー = ユーティリティ。`v3_runner.py` から供給されるモジュールはベンチランナー専用で、サービスはそれらを呼び出しません。
 
 ---
 
@@ -470,7 +473,7 @@ Anthropic の[Manipulating Manifolds](https://transformer-circuits.pub/2025/line
 
 ATLAS はこれを2つの補完的なモデルで実装します。C(x) は、モデル自身の埋め込み上の学習されたエネルギー関数（4096-to-512-to-128-to-1 の MLP）です。各コード候補は llama-server によって埋め込まれ、C(x) はそれがその幾何のどこに位置するかをスコア化します。低いエネルギーは候補が既知の正しいコードとクラスタリングすることを意味します。高いエネルギーは既知の正しくないコードとクラスタリングすることを意味します。外部オラクルも実行も不要 — ただモデル自身の表現の幾何だけです。
 
-G(x) は計量テンソルです — PCA で次元削減した埋め込み空間における対角テンソルで、エネルギー地形が異なる方向にどう湾曲するかを捉えます。C(x) が「この候補はどれくらい良いか?」に答えるのに対し、G(x) は「改善するにはどの方向へ動くべきか?」に答えます。補正エンジンは G(x) を使って幾何を意識した勾配ステップ（`-α · G⁻¹ · ∇C`）を計算し、素朴な勾配ステップを取る代わりに、多様体の自然な曲率に沿って候補を正しさへと下り坂方向へステアします。G(x) は実装・デプロイ済みです（V3.0.1 で出荷、V3.1.0 でも依然アクティブ）。
+G(x) は品質予測器です — PCA で次元削減した埋め込み上の XGBoost 分類器で、候補が削減後の空間のどこに位置するかから合格/不合格を予測します。C(x) が「この候補はどれくらい良いか?」に答えるのに対し、G(x) は「この候補は合格しそうか?」に答えます。コードには計量テンソルのパスも存在しますが、デプロイはされていません: PCA 空間における対角テンソル（XGBoost アーティファクトが存在しない場合のフォールバックとしてのみロードされる）と、多様体の曲率に沿って候補を下り坂方向へステアする幾何を意識した勾配ステップ（`-α · G⁻¹ · ∇C`）を計算する補正エンジンです。公開されているのはテンソルのスカラーの correctability スコアだけで（`/internal/lens/correctability`）、勾配ステップによる補正はサービスには配線されていません。
 
 ### スコアリングモデル
 
@@ -595,7 +598,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-受け付ける言語エイリアス: `py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`rs`（Rust）、`c++`（C++）、`sh`/`shell`（Bash）。最大実行時間: 60秒。最大メモリ: 512 MB。2つのワークスペースパス: **`/execute`**（V3 候補テストパス）は `/tmp/sandbox`（tmpfs）下の一時的なスクラッチディレクトリを使用; **`/shell`**（PC-188 によるエージェントの `run_command` ルート、加えてバックグラウンドプロセス向けの `/jobs/*`）は `/workspace` — `ATLAS_PROJECT_DIR`（Docker）または hostPath `${ATLAS_PROJECTS_DIR}`（K3s）からバインドマウントされたプロジェクトルートで、プロキシが見るのと同じパス — に対して実行します。
+受け付ける言語エイリアス: `py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`rs`（Rust）、`c++`（C++）、`sh`/`shell`（Bash）。最大実行時間: Docker デプロイでは300秒（compose がプロキシの `run_command` の5分上限に合わせて `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` を設定します; 素のコードのデフォルトは60秒）。最大メモリ: 512 MB。2つのワークスペースパス: **`/execute`**（V3 候補テストパス）は `/tmp/sandbox`（tmpfs）下の一時的なスクラッチディレクトリを使用; **`/shell`**（PC-188 によるエージェントの `run_command` ルート、加えてバックグラウンドプロセス向けの `/jobs/*`）は `/workspace` — `ATLAS_PROJECT_DIR`（Docker）または hostPath `${ATLAS_PROJECTS_DIR}`（K3s）からバインドマウントされたプロジェクトルートで、プロキシが見るのと同じパス — に対して実行します。
 
 ---
 
@@ -635,10 +638,13 @@ llama-server 以外のすべての計算は CPU 上で動作します。GPU は 
 
 ```mermaid
 graph LR
-    LLM["llama-server"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
+    RD["redis"] -->|"healthy"| GL["geometric-lens"]
+    LLM["llama-server"] -->|"healthy"| GL -->|"healthy"| AP["atlas-proxy"]
     LLM -->|"healthy"| V3["v3-service"] -->|"healthy"| AP
+    GL -->|"healthy"| V3
     SB["sandbox"] -->|"healthy"| AP
 
+    style RD fill:#5c1a1a,color:#fff
     style LLM fill:#5c1a1a,color:#fff
     style GL fill:#2d5016,color:#fff
     style V3 fill:#2d5016,color:#fff
@@ -646,7 +652,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` と `sandbox` は独立して起動します（依存関係なし）。`geometric-lens` と `v3-service` は `llama-server` が healthy になるのを待ちます。`atlas-proxy` は4つすべてのサービスを待ちます。初回実行ではコンテナイメージをビルドします（数分）。以降の起動は高速です。標準の `docker compose up -d` で立ち上げます — ベースの `docker-compose.yml` は `driver: nvidia` の GPU 予約を宣言しており、これはホスト上の `nvidia-container-toolkit` 経由で機能します。
+`redis`、`llama-server`、`sandbox` は独立して起動します。`geometric-lens` は `redis` と `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。初回実行ではコンテナイメージをビルドします（数分）。以降の起動は高速です。標準の `docker compose up -d` で立ち上げます — ベースの `docker-compose.yml` は `driver: nvidia` の GPU 予約を宣言しており、これはホスト上の `nvidia-container-toolkit` 経由で機能します。
 
 ### 8.2 Docker Compose — AMD ROCm（V3.1.1）
 

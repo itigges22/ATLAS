@@ -26,7 +26,7 @@ the newest session started in the current directory; `--resume` with no
 id prints a numbered list (newest first) to choose from; `--resume <id>`
 reopens a specific one. The saved transcript is replayed into the view
 and fed back to the model as conversation history (capped at the last 40
-turns). Resuming a session whose saved directory differs from your
+user + assistant messages, i.e. ~20 turns). Resuming a session whose saved directory differs from your
 current one keeps the current directory and shows a warning. `/clear`
 (or `Ctrl+L`) starts a fresh session, leaving the prior one on disk.
 
@@ -40,7 +40,7 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | `atlas model list \| recommend \| install \| install-artifacts \| verify \| remove` | Model registry operations. `recommend` names the best registry model for this hardware; `install --url <hf>` fetches an **unregistered** model (drop-in / BYO); `install-artifacts <name>` fetches a registered model's published lens + ASA artifacts. |
 | `atlas onboard` | Guided drop-in for a new model: arch check, rebuild gate, lens-retrain guidance (see below). |
 | `atlas bench` | Generate + self-label candidates for the loaded model (baseline benchmark). Feeds `atlas lens build --from-results` (see below). |
-| `atlas lens check \| build \| publish` | Geometric Lens compat probe + per-model training (see below). |
+| `atlas lens check \| build \| retrain \| publish` | Geometric Lens compat probe + per-model training (see below). |
 | `atlas asa check \| build \| publish` | ASA control-vector compat probe + per-model training + publish (see below). |
 | `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both. `--lens-only` / `--asa-only` delegate to the per-component flows. |
 | `atlas compose <args...>` | `docker compose` passthrough with ATLAS's compose file set (base file + the backend overlay resolved from `ATLAS_BACKEND`). E.g. `atlas compose ps`, `atlas compose logs -f atlas-proxy`. |
@@ -64,6 +64,9 @@ atlas tui                                # default proxy at localhost:8090
 atlas tui --proxy http://other-host:8090 # remote proxy
 atlas tui --log /tmp/atlas-tui.log       # custom debug-log path
 ATLAS_TUI_LOG=off atlas tui              # disable debug logging
+atlas tui --demo short                   # launch the split-pane demo directly
+                                         # (short|medium|long), skipping the main TUI —
+                                         # same as typing /demo inside it
 ```
 
 If the binary is missing **and** Go is unavailable, the launcher prints
@@ -184,6 +187,7 @@ the last message; pass an integer for the last N messages).
 | `/mouse on\|off` | Toggle mouse capture (off lets you copy text) |
 | `/copy [N]` | Copy the last N chat messages (default 1) to clipboard via OSC52 |
 | `/yank [N]` | Alias for `/copy` |
+| `/demo [short\|medium\|long]` | Exit to the split-pane recording demo: base agent vs V3, same proxy/model (default `medium`) |
 | `/quit` | Exit (same as `Ctrl+D`) |
 
 The `/add /drop /context` set is TUI-side state — file paths are
@@ -271,7 +275,7 @@ lines so very long generations don't churn the renderer.
 
 A "thinking…" spinner with rotating verbs (Pondering, Cogitating,
 Brewing, Conjuring, Synthesizing, Mulling, …) sits at the bottom of the
-chat box during a turn. Word changes every ~3 s.
+chat box during a turn. Word changes every 2 s.
 
 ### Events
 
@@ -355,11 +359,14 @@ of the live view impractical).
 tail -f ~/.cache/atlas-tui/debug.log
 ```
 
-Each line is a JSON-tagged record:
-`HH:MM:SS.mmm category:subject {fields}`. Categories are `session`,
-`user` (input events), `turn` (turn lifecycle), `chat` (every
+Each line is a JSON-tagged record with a full UTC ISO timestamp:
+`2026-05-02T17:03:21.123Z category:subject {fields}`. Categories are
+`session`, `user` (input events), `turn` (turn lifecycle), `chat` (every
 chatStreamMsg type except `llm_token` to keep the file readable), `event`
-(every typed envelope), and `slash` (slash command dispatch + result).
+(every typed envelope), `conn` (event-stream connect/disconnect +
+backoff), `permission` (approval-prompt decisions), `mouse`
+(drag-select press/release), and `slash` (slash command dispatch +
+result).
 
 Override the path via `--log <path>` or `$ATLAS_TUI_LOG`. Set
 `ATLAS_TUI_LOG=off` to disable.
@@ -554,7 +561,7 @@ atlas bench                                  # full dataset (hours on a local mo
 | `--strategy` | `random` | candidate selection (`lens`/`random`/`logprob`/`oracle`) |
 
 On completion it prints the matching `atlas lens build --force --from-results …` command.
-(Also available as `/bench` inside the TUI.)
+(Also available as `/bench [--tasks N] [--strategy NAME]` in the pipe-mode `/solve` REPL.)
 
 **Interrupted runs resume.** Each task's result is written atomically as it
 completes; re-running the same `atlas bench` command skips finished tasks
@@ -639,6 +646,28 @@ After a successful build:
 2. Restart the lens service so it loads them: `docker compose restart geometric-lens`.
 3. Re-run `atlas lens check` — should now report `compat`.
 4. Run `atlas lens publish` (below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/cli/commands/model_registry.py` to set `lens_status="supported"`.
+
+### `atlas lens retrain`
+
+Retrains the lens on samples collected from your own agent use — the `/good`/`/bad` pass verdicts and per-file `/deny` marks banked under `ATLAS_LENS_DATA_DIR` (see [Slash commands](#slash-commands)). This is `build` sourced from the collected corpus: the same pipeline (embed → C(x)+G(x) → calibrated thresholds → save), always replacing the current artifacts.
+
+```bash
+atlas lens retrain                     # retrain on the collected corpus
+atlas lens retrain <registry-name>    # target a registry entry by name
+atlas lens retrain --epochs 400        # tune training (default 200)
+atlas lens retrain --dry-run           # extract embeddings, skip training + save
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `model` (positional) | _(loaded model)_ | registry name or path; defaults to whatever llama-server has loaded |
+| `--epochs N` | `200` | training epochs |
+| `--lr F` | `1e-3` | learning rate |
+| `--margin F` | `1.0` | contrastive ranking margin |
+| `--artifact-dir DIR` | _(registry-resolved path)_ | where to save the artifacts |
+| `--dry-run` | — | extract embeddings but skip training + save |
+
+The TUI's **"🧠 Lens retrain available"** banner points here once enough labeled samples have accumulated.
 
 ### `atlas lens publish`
 

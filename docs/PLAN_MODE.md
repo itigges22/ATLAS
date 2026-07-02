@@ -92,10 +92,11 @@ Defined in `proxy/plan_adherence.go`:
 
 ## When plan mode is skipped
 
-Two predicates in `shouldGeneratePlan`:
+Three predicates in `shouldGeneratePlan`:
 
-1. **`ctx.Tier == Tier0Conversational`** — trivial chat ("hi", "thanks") never plans.
-2. **`len(message) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
+1. **`ctx.BypassV3`** — a V3-bypassed turn (the baseline side of the split-pane demo) doesn't plan; its file writes bypass V3 later in the turn, so a plan would make that pane look orchestrated.
+2. **`ctx.Tier == Tier0Conversational`** — trivial chat ("hi", "thanks") never plans.
+3. **`len(message) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
 
 Outside those, every turn plans. Failures (`/v3/plan` 5xx, network error, all candidates unparseable beyond the fallback) degrade silently — the loop runs without `ctx.Plan`, and the agent loop behaves as it does when plan mode is off.
 

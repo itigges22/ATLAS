@@ -177,13 +177,13 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.24+ — required for the TUI client (atlas tui) and
+# 4. Install Go 1.26.2+ — required for the TUI client (atlas tui) and
 #    optional for the proxy (proxy builds automatically on first run if Go
 #    is present; otherwise it runs in Docker with file access limited to
 #    ATLAS_PROJECT_DIR). Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -529,17 +529,16 @@ atlas-proxy-v2
 
 > **Note:** The sandbox listens on port **8020** in bare-metal mode (no Docker port remapping). The proxy's `ATLAS_SANDBOX_URL` must use port 8020, not 30820.
 
-### Start with the Launcher Script
+### Launch the TUI
 
-Alternatively, copy the launcher script to your PATH:
+The `atlas` command is the Python package's console entrypoint, installed by `pip install -e .` in the Build step — no separate launcher script is needed. With the services above running:
 
 ```bash
-cp /path/to/atlas-launcher ~/.local/bin/atlas
-chmod +x ~/.local/bin/atlas
-atlas    # Starts all missing services and launches the TUI
+cd /path/to/your/project
+atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-The launcher auto-detects which services are already running and starts only what's missing. If it detects a Docker Compose stack, it connects to that instead.
+`atlas` builds the `atlas-tui` binary from `tui/` automatically if it is missing or older than the checkout (requires Go 1.26.2+ on PATH), and verifies the proxy on localhost:8090 before handing over to the TUI.
 
 ---
 
@@ -808,20 +807,24 @@ class / element rewrites, applied **before** the grammar gate has a
 chance to reject anything. Strictly optional — ATLAS continues to work
 without it, just with an unsteered tool-selection bias.
 
-`atlas-bootstrap.sh` builds it automatically as Step 8.5, after the
-services come up. The pipeline is:
+`atlas-bootstrap.sh` builds it automatically after the services come
+up. The pipeline is:
 
 1. `build_cvector_prompts.py` turns the committed
    `geometric-lens/asa_calibration/contrast_pairs.jsonl` (1000 pairs)
    into positive / negative prompt files.
 2. The bootstrap stops `llama-server` briefly, runs
    `llama-cvector-generator` as a one-shot container with `--method mean
-   -ngl 99`, writes `models/ast_edit_steering.gguf`, then restarts
-   `llama-server`.
-3. `inference/entrypoint-v3.1.sh` sees the file on the next start
+   -ngl 99`, writes `models/ast_edit_steering.gguf` plus a
+   `models/ast_edit_steering.gguf.model` sidecar marker recording which
+   model the vector was built against, then restarts `llama-server`.
+3. `inference/entrypoint-v3.1.sh` sees the file on the next start,
+   checks that the `.model` sidecar marker matches the selected model,
    and appends `--control-vector-scaled
    /models/ast_edit_steering.gguf:0.5` to the `llama-server` command
-   line.
+   line. A vector whose marker is missing or names a different model
+   stays **disabled** (the startup banner reports why) — vectors are
+   residual-space artifacts tied to one model.
 
 Total wall time on a 16GB GPU: ~5 minutes. Build runs on the same
 hardware the model lives on; the resulting vector is model-specific
@@ -835,6 +838,7 @@ one model's artifacts to a host running a different base model).
 | `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | Override path |
 | `ATLAS_CONTROL_VECTOR_SCALE` | `0.5` | Conservative. Bump to 1.0–1.5 if the bias is too subtle, drop toward 0.2 if non-tool tasks degrade. |
 | `ATLAS_CONTROL_VECTOR_LAYER_RANGE` | (all layers) | Pass two integers, e.g. `"24 30"`, to scope to a layer band. Narrower = safer but weaker. |
+| `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED` | `0` | Set to `1` to apply a vector even when its `.model` sidecar marker is missing or doesn't match the selected model. Only for vectors you built yourself and know match. |
 
 **If the local build fails** (e.g. cvector-generator missing in an
 older `atlas-llama` image, GPU OOM, network hiccup pulling the
