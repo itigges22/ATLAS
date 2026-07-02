@@ -25,6 +25,9 @@ concurrency:
   group: install-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   bootstrap-dry-run:
     name: bootstrap on ${{ matrix.distro.name }}
@@ -36,10 +39,12 @@ jobs:
           - { name: 'ubuntu-22.04', image: 'ubuntu:22.04', pkg: 'apt' }
           - { name: 'ubuntu-24.04', image: 'ubuntu:24.04', pkg: 'apt' }
           - { name: 'debian-12',    image: 'debian:12',    pkg: 'apt' }
-          - { name: 'rockylinux-9', image: 'rockylinux:9', pkg: 'dnf' }
+          # rockylinux/rockylinux is the maintained namespace; the
+          # Docker-library `rockylinux` image stopped receiving updates.
+          - { name: 'rockylinux-9', image: 'rockylinux/rockylinux:9', pkg: 'dnf' }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: bootstrap inside ${{ matrix.distro.image }}
         run: |
@@ -145,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: bootstrap as root with a non-root target owner
         run: |

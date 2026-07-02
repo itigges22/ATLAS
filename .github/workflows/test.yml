@@ -18,6 +18,9 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   go-tests:
     name: go test (${{ matrix.module }})
@@ -27,9 +30,9 @@ jobs:
       matrix:
         module: [proxy, tui]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           # 1.24 floor for proxy. tui requires 1.26+ via go.mod, but
           # GOTOOLCHAIN=auto (1.21+ default) auto-fetches the newer
@@ -49,21 +52,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # tests/v3/, tests/v3-service/, and tests/cli/ are pure unit tests —
-        # no services needed. tests/integration/ + tests/infrastructure/
-        # require a live llama-server / sandbox / lens, gated separately by
-        # the integration workflow (not yet wired up — PC-064).
+        # tests/v3/, tests/v3-service/, tests/cli/, and geometric-lens/tests/
+        # are pure unit tests — no services needed. tests/infrastructure/ is
+        # mixed: test_llm.py + test_sandbox.py carry the `integration` marker
+        # (need a live llama-server / sandbox stack; deselected by the
+        # default `-m "not integration"` addopts, gated separately by the
+        # integration workflow — not yet wired up, PC-064), while the compose
+        # and CPU-image checks are static file assertions that run anywhere.
         subset:
           - tests/v3
           - tests/v3-service
           - tests/cli
+          - tests/infrastructure
+          - geometric-lens/tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.12'
           cache: pip
+          # Default cache key only tracks requirements*.txt; include
+          # pyproject.toml so dependency changes there rotate the cache.
+          cache-dependency-path: |
+            pyproject.toml
+            **/requirements*.txt
 
       - name: install
         run: |
@@ -79,6 +92,16 @@ jobs:
         if: matrix.subset == 'tests/v3-service'
         run: pip install -r sandbox/requirements-runtime.txt
 
+      - name: install lens dependencies (CPU torch)
+        if: matrix.subset == 'geometric-lens/tests'
+        # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
+        # CUDA default is ~2 GB and pointless on a CPU runner), then the
+        # service requirements. xgboost tests importorskip if absent, but
+        # requirements.txt pins xgboost-cpu so they run here.
+        run: |
+          pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r geometric-lens/requirements.txt
+
       - name: pytest
         run: python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
 
@@ -86,11 +109,20 @@ jobs:
     name: ruff (python lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.12'
+
+      - name: test integrity + compile check
+        # test-integrity runs tests/validate_tests.py (the weakened-test
+        # linter); python-compile is a whole-tree syntax check. Both are
+        # static — no dependencies beyond the stdlib.
+        run: |
+          python scripts/production-readiness.py \
+            --only test-integrity \
+            --only python-compile
 
       - name: ruff check
         # --select F is Pyflakes — real-bug rules (undefined names, redefined
@@ -108,7 +140,7 @@ jobs:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
@@ -123,7 +155,7 @@ jobs:
     name: docker compose config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: validate compose YAML
         # The runner has docker compose v2 pre-installed. `config -q`
@@ -142,7 +174,7 @@ jobs:
     name: yamllint (workflows)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: yamllint
         run: |
@@ -163,7 +195,7 @@ jobs:
     name: llama.cpp patches apply to pinned SHA
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: extract LLAMA_CPP_REV + check Dockerfiles agree
         id: sha

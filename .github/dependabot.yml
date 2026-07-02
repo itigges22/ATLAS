@@ -1,0 +1,46 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /proxy
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /tui
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /proxy
+      - /v3-service
+      - /sandbox
+      - /geometric-lens
+      - /inference
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ["*"]
