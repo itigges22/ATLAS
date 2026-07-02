@@ -55,15 +55,17 @@ jobs:
         # tests/v3/, tests/v3-service/, tests/cli/, and geometric-lens/tests/
         # are pure unit tests — no services needed. tests/infrastructure/ is
         # mixed: test_llm.py + test_sandbox.py carry the `integration` marker
-        # (need a live llama-server / sandbox stack; deselected by the
-        # default `-m "not integration"` addopts, gated separately by the
-        # integration workflow — not yet wired up, PC-064), while the compose
-        # and CPU-image checks are static file assertions that run anywhere.
+        # (they need a live llama-server / sandbox stack, so they are
+        # hardware-gated and do not run in GitHub-hosted CI; deterministic
+        # control-plane coverage is the e2e-acceptance job below), while the
+        # compose and CPU-image checks are static file assertions that run
+        # anywhere.
         subset:
           - tests/v3
           - tests/v3-service
           - tests/cli
           - tests/infrastructure
+          - tests/contracts
           - geometric-lens/tests
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4

@@ -410,7 +410,7 @@ Anthropic's [Manipulating Manifolds](https://transformer-circuits.pub/2025/lineb
 
 ATLAS implements this with two complementary models. C(x) is a learned energy function (`hidden_dim`→512→128→1 MLP) over the selected model's own embeddings. Each code candidate gets embedded by llama-server, and C(x) scores where it sits in that geometry. Low energy means the candidate clusters with known-correct code. High energy means it clusters with known-incorrect code. No external oracle, no execution required—just the geometry of the selected model's representations.
 
-G(x) is the quality predictor - an XGBoost classifier over PCA-reduced embeddings that predicts pass/fail from where a candidate sits in the reduced space. Where C(x) answers "how good is this candidate?", G(x) answers "is this candidate likely to pass?" A metric-tensor path also exists in the code but is not deployed: a diagonal tensor in PCA space (loaded only as a fallback when no XGBoost artifact is present) and a correction engine that computes geometry-aware gradient steps (`-α · G⁻¹ · ∇C`) to steer candidates downhill along the manifold's curvature. Only the tensor's scalar correctability score is exposed (`/internal/lens/correctability`); the gradient-step correction is not wired into the service.
+G(x) is the quality predictor - an XGBoost classifier over PCA-reduced embeddings that predicts pass/fail from where a candidate sits in the reduced space. Where C(x) answers "how good is this candidate?", G(x) answers "is this candidate likely to pass?" It is the only G(x) implementation: the earlier metric-tensor formulation and its correctability endpoint were removed once XGBoost became the deployed path (see git history for the geometry-aware variant).
 
 ### Scoring Models
 

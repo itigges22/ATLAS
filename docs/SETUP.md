@@ -146,7 +146,7 @@ atlas tier --json       # machine-readable (used by atlas init wizard)
 
 ## Method 1: Docker Compose (Recommended)
 
-This is the tested deployment method.
+This is the most heavily exercised deployment method: CI validates the compose files and drives the full control plane deterministically (fake inference), and releases are smoke-tested under Compose on real hardware. Real GPU inference behavior is validated on the cards listed in the hardware table below, not in GitHub-hosted CI.
 
 ### Additional Prerequisites
 
