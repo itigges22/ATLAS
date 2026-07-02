@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakePlanServer streams a canned SSE plan response that mirrors what
@@ -123,5 +124,191 @@ func TestV3StageToEventCoversPlanStages(t *testing.T) {
 		if got := v3StageToEvent(s); got != "v3_plan" {
 			t.Errorf("v3StageToEvent(%q) = %q, want v3_plan", s, got)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// callV3GenerateStreaming + v3CallTimeout — the generate path. All three
+// proxy callers treat a bridge error as "fall back to the model's own
+// content", so every failure path must return, not hang.
+// ---------------------------------------------------------------------------
+
+func TestV3CallTimeout(t *testing.T) {
+	t.Run("default is 180s", func(t *testing.T) {
+		t.Setenv("ATLAS_V3_TIMEOUT", "")
+		if d := v3CallTimeout(); d != 180*time.Second {
+			t.Errorf("default = %v", d)
+		}
+	})
+	t.Run("env override in seconds", func(t *testing.T) {
+		t.Setenv("ATLAS_V3_TIMEOUT", "30")
+		if d := v3CallTimeout(); d != 30*time.Second {
+			t.Errorf("override = %v", d)
+		}
+	})
+	t.Run("zero disables the cap", func(t *testing.T) {
+		t.Setenv("ATLAS_V3_TIMEOUT", "0")
+		if d := v3CallTimeout(); d != 0 {
+			t.Errorf("0 should disable, got %v", d)
+		}
+	})
+	t.Run("garbage falls back to default", func(t *testing.T) {
+		t.Setenv("ATLAS_V3_TIMEOUT", "soon")
+		if d := v3CallTimeout(); d != 180*time.Second {
+			t.Errorf("garbage value gave %v", d)
+		}
+	})
+}
+
+func fakeGenerateServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v3/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		handler(w, r)
+	}))
+}
+
+func sseLines(w http.ResponseWriter, lines ...string) {
+	fl, _ := w.(http.Flusher)
+	for _, l := range lines {
+		fmt.Fprint(w, l+"\n")
+		if fl != nil {
+			fl.Flush()
+		}
+	}
+}
+
+func TestCallV3GenerateStreamingParsesResultAndProgress(t *testing.T) {
+	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseLines(w,
+			`data: {"stage":"plan_search","detail":"3 candidates","data":{"count":3}}`,
+			``,
+			`event: result`,
+			`data: {"code":"print(1)","passed":true,"phase_solved":"phase1","candidates_tested":3}`,
+			``,
+			`data: [DONE]`,
+			``)
+	})
+	defer srv.Close()
+
+	var stages []string
+	var gotData map[string]interface{}
+	result, err := callV3GenerateStreaming(context.Background(), srv.URL,
+		V3GenerateRequest{FilePath: "a.py"},
+		func(stage, detail string, data map[string]interface{}) {
+			stages = append(stages, stage)
+			gotData = data
+		})
+	if err != nil {
+		t.Fatalf("streaming call failed: %v", err)
+	}
+	if result.Code != "print(1)" || !result.Passed {
+		t.Errorf("result = %+v", result)
+	}
+	if len(stages) != 1 || stages[0] != "plan_search" {
+		t.Errorf("progress stages = %v", stages)
+	}
+	if gotData["count"] != float64(3) {
+		t.Errorf("structured progress data = %v", gotData)
+	}
+}
+
+func TestCallV3GenerateStreamingNon200IsAnError(t *testing.T) {
+	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "overloaded", http.StatusServiceUnavailable)
+	})
+	defer srv.Close()
+
+	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
+		V3GenerateRequest{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Errorf("err = %v, want the 503 surfaced", err)
+	}
+}
+
+func TestCallV3GenerateStreamingMissingResultIsAnError(t *testing.T) {
+	// Progress events then [DONE] with no result event — the pipeline
+	// died server-side. Must be an error, not a nil result.
+	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseLines(w,
+			`data: {"stage":"plan_search","detail":"working"}`,
+			``,
+			`data: [DONE]`,
+			``)
+	})
+	defer srv.Close()
+
+	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
+		V3GenerateRequest{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "without result") {
+		t.Errorf("err = %v, want completed-without-result", err)
+	}
+}
+
+func TestCallV3GenerateStreamingTimeoutFires(t *testing.T) {
+	t.Setenv("ATLAS_V3_TIMEOUT", "1")
+	// `release` unblocks the stalled handler after the call returns:
+	// srv.Close() waits for active handlers, and server-side disconnect
+	// detection isn't reliable enough to end the stall on its own.
+	release := make(chan struct{})
+	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
+		select { // stall past the cap
+		case <-r.Context().Done():
+		case <-release:
+		}
+	})
+	defer srv.Close()
+	// LIFO: runs before srv.Close(), releasing the stalled handler.
+	defer close(release)
+
+	start := time.Now()
+	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
+		V3GenerateRequest{}, nil)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("stalled V3 run did not time out")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("timeout took %v with a 1s cap", elapsed)
+	}
+}
+
+func TestCallV3GenerateStreamingCancelAborts(t *testing.T) {
+	// User Ctrl-C: cancelling the request context must abort a stalled
+	// stream promptly — the regression this guards is the "ctrl-c does
+	// not stop it" multi-minute PlanSearch hang.
+	release := make(chan struct{})
+	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	})
+	defer srv.Close()
+	// LIFO: runs before srv.Close(), releasing the stalled handler.
+	defer close(release)
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := callV3GenerateStreaming(reqCtx, srv.URL, V3GenerateRequest{}, nil)
+	if err == nil {
+		t.Fatal("cancelled V3 run returned no error")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("cancel took %v to unblock", elapsed)
 	}
 }
