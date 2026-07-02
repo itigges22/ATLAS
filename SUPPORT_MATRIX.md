@@ -53,7 +53,7 @@ matrix in `docs/reports/COMPLETION_WIRING_2026-07.md`.
 | Registry ID | Level | Lens | ASA | Notes |
 |---|---|---|---|---|
 | Qwen3.5-9B-Q6_K | Supported | supported (uncalibrated legacy bundle) | supported (A/B-validated May 2026) | Reference model; hash-pinned public download |
-| gemma-4-12b-it-Q4_K_M | Preview | supported (uncalibrated; calibration derivable via `atlas lens retrain`) | Preview — vector built + published, runtime marker pending validation | Manual GGUF download (Gemma ToU); artifacts hash-pinned |
+| gemma-4-12b-it-Q4_K_M | Preview | supported (calibration derived — see § Lens calibration below) | Preview — vector built, published, and hash-pinned; **off by default** (no `.model` marker) pending an A/B effect measurement. One opt-in command activates it: `atlas asa build`. Not Supported until §9.6 A/B + quality-regression bounds exist | Manual GGUF download (Gemma ToU); artifacts hash-pinned |
 | Qwen3.5-9B-Q4_K_M / Q8_0 | Preview | unverified (same-family artifacts, combo unvalidated) | unverified | Hash-pinned public downloads |
 | Qwen3.5-7B / 14B / 32B | Preview | no-artifacts | no-artifacts | HF-gated upstream (HF_TOKEN required; no anonymous hash) |
 | Bring-your-own GGUF | Preview | Requires `atlas lens build` (per-model bundle) | Requires `atlas asa build` | Direct agent mode works model-agnostically; V3 scoring/steering need the per-model bundle — see § Model contract |
@@ -106,7 +106,7 @@ timeouts/output caps; **syntax** = compile/parse check only.
 | Direct agent (tools, permissions, sandbox verify) | Supported | Deterministic E2E in CI + unit/contract suites |
 | V3 pipeline (probe → candidates → selection) | Supported (control plane) / Preview (per-model quality) | Deterministic V3/Lens E2E in CI; real-model quality validated on the reference model only |
 | Lens C(x)/G(x) scoring | Supported (contract) / per-model calibration required for interventions | Identity + dim checks enforced; calibration status surfaced everywhere |
-| ASA steering | Supported on Qwen3.5-9B-Q6_K; Preview on gemma | A/B-validated (May 2026) on Qwen; gemma marker pending |
+| ASA steering | Supported on Qwen3.5-9B-Q6_K; Preview on gemma (off by default — opt in with `atlas asa build`) | A/B-validated (May 2026) on Qwen; gemma effect unmeasured, so steering is withheld by default rather than shipped unvalidated |
 | Call-graph reasoning (#39) | Experimental | `ATLAS_CALL_GRAPH=1`; hermetic tests |
 | Host verification (`ATLAS_VERIFY_IN=host`) | Experimental | Explicit opt-in; removes the container backstop |
 | Benchmark/ablation stack (`ATLAS_V3_*`, ReASC, lens feedback, ACE) | Research-only | Never read by the product runtime (contract-tested) |

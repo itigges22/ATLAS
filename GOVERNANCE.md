@@ -20,9 +20,23 @@ pretend a committee exists.
 ## Change flow
 
 All changes land on `dev`, are promoted to `staging`, then fast-forward
-to `main` (no direct pushes to `main`). Releases are tagged from `main`
-and published only through the CI pipeline (immutable `sha-*` images,
-tag promotion gated on the tests workflow).
+to `main`. Releases are tagged from `main` and published only through
+the CI pipeline (immutable `sha-*` images, tag promotion gated on the
+tests workflow).
+
+Both `main` and `dev` are protected: force-pushes and deletions are
+blocked, the full CI check set (21 contexts — Go/Python/lens/contract/
+E2E tests, lint, compose, install matrix, CodeQL) is required, and
+conversation resolution is required on PRs. Admin enforcement is
+**off** by design: as a solo maintainer, the lead direct-pushes to
+`dev` and fast-forwards `main` (both are ordinary non-force pushes that
+protection permits), while any external contributor PR must pass every
+required check before merge. Human PR review is **not** required — with
+one maintainer there is no second reviewer, so requiring it would
+deadlock the branch; this relaxation is revisited the moment a second
+maintainer exists (see MAINTAINERS.md open seats). This is the honest
+maximum protection for a single-maintainer project: it stops accidents
+and enforces the test gate without pretending a review quorum exists.
 
 ## Release authority
 

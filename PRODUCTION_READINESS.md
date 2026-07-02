@@ -135,7 +135,7 @@ Last updated: 2026-07-02 (dev).
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| 12.1 Branch protection | **Maintainer** | Needs repo-admin action; recommended config documented in GOVERNANCE.md flow (PRs to dev, ff promotion) |
+| 12.1 Branch protection | **Done** | Applied to main + dev: 21 required CI checks, no force-push/deletion, conversation resolution; enforce_admins off so the solo ff-flow works. Config + rationale in GOVERNANCE.md |
 | 12.2 CODEOWNERS | **Done** | `.github/CODEOWNERS` |
 | 12.3 Required jobs | **Partial** | Have: go test/race/vet, py tests, lens tests, contracts, both E2Es, install matrix, compose, images, shellcheck, ruff, CodeQL, yamllint, patch-apply. Missing: staticcheck, type checking, scans (container/secret/license), SBOM validation, fuzz smoke, repro check, link checker |
 | 12.4 Static typing | **Not started** | |
@@ -232,6 +232,6 @@ upgrade/rollback E2E, offline install (unsupported).
 | 15 | ASA resolution | **Partial** (Qwen validated; gemma Preview pending marker) |
 | 16 | Performance budgets | **Not started** |
 | 17 | Concurrency/soak/chaos/recovery | **Partial** |
-| 18 | Branch protection + CODEOWNERS | CODEOWNERS **Done**; protection **Maintainer** |
+| 18 | Branch protection + CODEOWNERS | **Done** (CODEOWNERS + protection applied to main/dev) |
 | 19 | Governance docs | **Done** |
 | 20 | Signed immutable releases | **Done** (image pipeline) |

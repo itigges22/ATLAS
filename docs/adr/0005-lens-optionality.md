@@ -18,3 +18,14 @@ Scoring never silently substitutes defaults for calibrated output.
 A fresh install without `atlas lens build` runs uncalibrated and says
 so everywhere. The router's energy signal logs once per load cycle when
 disabled. V3 candidate selection degrades to neutral-score ordering.
+
+The same principle governs ASA activation: the `.model` marker gates
+steering at boot on model *identity*, but Supported status additionally
+requires a measured A/B effect + bounded quality regression
+(SUPPORT_MATRIX §9.6). A structurally-correct vector whose effect is
+unmeasured on a given model stays **off by default** (marker withheld)
+— activating an unvalidated steering vector by default is the
+"default-on without measured value" anti-pattern. Reference model
+(Qwen3.5-9B): A/B-validated, marker present, Supported. New models
+(gemma): one opt-in command (`atlas asa build`) away, Preview until the
+A/B runs.
