@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### End-to-end acceptance test
+- CI runs a deterministic full-control-plane test (`tests/e2e/`): the real proxy binary and the real sandbox executor (host uvicorn, no Docker) against a scripted fake llama-server, driving one complete agent turn — read, edit, sandbox-verified `run_command` behind an interactive permission approve, done — over the production SSE protocol. Asserts stage order (a silently skipped stage fails), file contents, and the sandbox side-effect; a second test pins the fail-closed session-less deny. The sandbox executor's workspace root is env-overridable (`ATLAS_SANDBOX_WORKSPACE_ROOT`; containers keep `/workspace`).
+
+### Permissions fail closed
+- `/v1/agent` requests without a `session_id` deny destructive tool calls in `default`/`accept-edits` mode instead of silently executing them (there is no channel to answer the prompt). Unattended clients use `mode:"yolo"` or `session_allowed_tools`; the API doc's non-TUI client guide now covers `/v1/permission`. The TUI clears a pending permission modal on `permission_denied` and turn end.
+
+### Wiring completed
+- `v3_reasoning_token` is rendered in the TUI's V3 streaming row (previously emitted and dropped — a frozen "decoding…" row through every PlanSearch phase).
+- Lens retrains (both the service endpoint and `scripts/retrain_lens_from_results.py`) write `model_identity.json` for the served model; without it the load path's identity check disabled the entire lens on the next restart. Published lens bundles on HF now include identity files, pinned in the registry, so `atlas model install-artifacts` yields a bundle that actually loads. The gemma registry entry carries lens+ASA url bases and hashes.
+- Compose passes through the documented-but-unreachable knobs: `ATLAS_PLAN_THINKING` (v3-service), `ATLAS_SHELL_SNAPSHOT_*` (sandbox), `ATLAS_CONTROL_VECTOR_*` (llama-server). `.env.example` gains the five consumed-but-undocumented keys.
+- `scripts/build-containers.sh` builds the five current services from their real contexts and tags exactly as the K3s manifests reference (previously built from a removed directory layout, silently producing one image under names no manifest pulls); `uninstall.sh`'s image removal no longer aborts on an unset variable.
+- ASA marker checks are case-insensitive in both launchers, matching `atlas asa check`; `atlas publish --dry-run` without repos no longer crashes; the `train` extra includes xgboost + scikit-learn and the ImportError guidance mentions it.
+
+### Removed (unwired, placeholder, or caller-less — verified)
+- The `plan_tasks` tool (acknowledged tasks as pending without executing them) and its never-wired parallel executor; the `PermissionRule`/`checkPermissionRules` rules engine (nothing loaded rules — the live machinery is `needsPermission` + `awaitPermission` + the built-in deny-list); `build_verify.go`, `v3_adapter.go`, unused grammar/schema wrappers, `EmitSimple`, `calibrationTooltip`, and v3-service's unwired dual-emit envelope helper.
+- The metric-tensor G(x) path: `evaluate_gx` is XGBoost-only and the metric tensor served only `/internal/lens/correctability`, an endpoint with no caller; the 67 MB `metric_tensor.pt` is out of the Q6_K bundle.
+- The V3.0-era inference files (`Dockerfile.mtp`, spec-decode/9B/embed entrypoints, custom jinja templates, the malformed unused patch file), the `model_recommendations` back-compat shim (callers migrated to `model_registry`), zero-reference scripts (`run_full_benchmarks.sh`, `validate_benchmarks.py`, `smoke-test-9b.sh`, `deploy-9b.sh`, `measure_bok_latency.sh`), `router/fallback_chain.py`, the `/ablation` coming-soon stub, the benchmark `--runs` no-op flag, and the dead `ATLAS_ENABLE_TRAINING`/`ATLAS_REGISTRY` config keys.
+- Docs describe only the live protocol: the v3-service dual-emit claim, the "done is always last" broker claim, and stale consumer lists are corrected in PROTOCOL.md and `atlas/cli/events.py`.
+
 ### Supply-chain & artifact integrity
 - Lens/ASA artifact downloads verify SHA-256 against per-file hashes in the model registry (`lens_artifact_sha256` / `asa_artifact_sha256`); a mismatch removes the partial file and fails the install, and files without a registry hash are labeled unverified instead of `[ok]`. `download-models.sh` verifies GGUF downloads against the same registry hashes (previously size-check only on the shell path).
 - Lens checkpoint loading uses `torch.load(weights_only=True)` (the artifact can come from a remote download; full-pickle loading would execute code during deserialization). The legacy `gx_xgboost.pkl` fallback is opt-in via `ATLAS_ALLOW_PICKLE_GX=1` instead of automatic.
