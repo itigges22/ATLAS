@@ -1234,12 +1234,25 @@ def lens_retrain(request: LensRetrainRequest):
 def lens_reload():
     """Reload Geometric Lens weights from disk after retraining."""
     try:
-        from geometric_lens.service import reload_weights
+        from geometric_lens.service import reload_weights, get_model_info
         with _lens_weights_lock:
             result = reload_weights()
             # Refresh the boot-state cache so /ready reflects the new state.
             if result.get("status") == "reloaded":
                 _run_lens_self_test()
+                # Report the authoritative post-self-test state, not the
+                # transient summary from reload_weights() — that summary's
+                # gx_loaded/cx fields are captured mid-swap and can read
+                # stale, which the host-side retrain script prints verbatim
+                # and misled operators into thinking G(x) failed to load.
+                info = get_model_info()
+                return {
+                    "status": "reloaded",
+                    "gx_loaded": bool(info.get("gx_loaded")),
+                    "cx_calibrated": bool(info.get("cx_calibrated")),
+                    "gx_calibrated": bool(info.get("gx_calibrated")),
+                    "artifact_model": info.get("artifact_model"),
+                }
         return {"status": result.get("status", "unknown"), **result}
     except Exception as e:
         return {"status": "error", "error": _safe_detail(e, "lens reload")}
