@@ -88,10 +88,11 @@ def _write(s: str):
 
 def banner():
     """Print startup banner with box drawing."""
+    from atlas import __version__
     tw = min(w(), 64)
     print()
     print(f"  {BOX_TL}{BOX_H * (tw - 4)}{BOX_TR}")
-    title = f" {BOLD}{BRIGHT_CYAN}ATLAS{RESET} {DIM}v3.1{RESET} {GRAY}{DIAMOND} Adaptive Test-time Learning{RESET} "
+    title = f" {BOLD}{BRIGHT_CYAN}ATLAS{RESET} {DIM}v{__version__}{RESET} {GRAY}{DIAMOND} Adaptive Test-time Learning{RESET} "
     # Center the title
     padding = tw - 4 - 42  # rough visible length
     print(f"  {BOX_V}{title}{' ' * max(padding, 0)}{BOX_V}")
@@ -158,7 +159,7 @@ def stream_thinking_start():
 def stream_thinking_token(text: str):
     """Stream a thinking token (dimmed)."""
     # Indent and dim
-    text = text.replace("\n", f"\n  ")
+    text = text.replace("\n", "\n  ")
     _write(f"{DIM}{text}{RESET}{DIM}")
 
 

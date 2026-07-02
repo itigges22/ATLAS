@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+### Supply-chain & artifact integrity
+- Lens/ASA artifact downloads verify SHA-256 against per-file hashes in the model registry (`lens_artifact_sha256` / `asa_artifact_sha256`); a mismatch removes the partial file and fails the install, and files without a registry hash are labeled unverified instead of `[ok]`. `download-models.sh` verifies GGUF downloads against the same registry hashes (previously size-check only on the shell path).
+- Lens checkpoint loading uses `torch.load(weights_only=True)` (the artifact can come from a remote download; full-pickle loading would execute code during deserialization). The legacy `gx_xgboost.pkl` fallback is opt-in via `ATLAS_ALLOW_PICKLE_GX=1` instead of automatic.
+- `benchmark/custom/validate.py` enforces `tasks.json.lock`: a task set that drifted from its approved hash fails validation instead of the lock being informational.
+- `gx_thresholds.json` (per-model G(x) operating thresholds) is tracked with its sibling lens artifacts, so a fresh clone runs with threshold interventions enabled.
+
+### CI / release safety
+- Image publishing is two-phase: the build matrix pushes only immutable `:sha-<short>` tags; a promote job repoints `:dev` / `:latest` / semver tags via `imagetools create` only after every service built **and** the `tests` workflow passed on the same commit. Failed tests or a partial matrix can no longer overwrite moving tags, including with mixed-commit images.
+- Pull requests build the four small service images (`push: false`) so Dockerfile breakage is caught before merge instead of on the post-merge publish.
+- Every GitHub Action is pinned to a full commit SHA (Dependabot keeps them fresh); `test.yml` / `install-test.yml` run with explicit `permissions: contents: read`; Dependabot also covers the Docker base images across all five service directories.
+- CI runs the static `tests/infrastructure` checks, `geometric-lens/tests` (34 hermetic tests, previously never in CI), the `test-integrity` + `python-compile` gates, and shellcheck over all of `scripts/*.sh` (previously 2 of 13 scripts). Install matrix uses the maintained `rockylinux/rockylinux:9` image.
+
+### Community health
+- `SECURITY.md` (threat model scoped to the single-user local deployment, private reporting via GitHub advisories), issue templates (bug report requires `atlas doctor` output), a PR template, and Dependabot config.
+
+### CLI
+- `atlas --version` prints the CLI version; the REPL banner shows the real version instead of a hardcoded `v3.1`.
+- `atlas bench` exits non-zero when the runner fails or produces no results (previously always exited 0).
+
+### Fixes & accuracy
+- Sandbox trust-model docstring describes what the container actually enforces; the never-enforced `MAX_MEMORY_MB` knob is removed (memory is capped by `ATLAS_SANDBOX_MEM`).
+- `plan_tasks` is documented as a planning aid (tasks are acknowledged, not executed); the unreferenced MTP inference experiment files are removed.
+- Packaging metadata completed (readme, URLs, classifiers, `train` extra for `atlas lens/asa build` dependencies; `setuptools>=77` to match the SPDX license form). Docs: uninstall section in SETUP, six previously-undocumented env vars in CONFIGURATION, `python3 -m benchmark.cli` invocation corrected, pass@1-v(k=3) defined where the headline number appears.
+
 ### Interactive permissions
 - `default` and `accept-edits` modes now prompt before a destructive tool call runs. The turn pauses on a bordered approval box (`[y] allow once`, `[a] allow for session`, `[n]`/`Esc` deny); `Ctrl+C` still cancels the whole turn. An "allow for session" choice whitelists that tool so it isn't asked again (carried in the request's `session_allowed_tools`). `accept-edits` auto-allows file writes/edits and prompts `run_command`/`delete_file`; `yolo` is unchanged.
 - New `POST /v1/permission` endpoint and `permission_request` SSE event carry the decision back to the paused turn (keyed by `session_id` + `tool_call_id`, mirroring `/cancel`). A fail-safe timeout (`ATLAS_PERMISSION_TIMEOUT_SEC`, default 600s) denies if nothing is answered.

@@ -444,6 +444,28 @@ docker compose pull          # grab fresh :latest images from GHCR
 docker compose up -d
 ```
 
+### Uninstalling
+
+```bash
+# Stop and remove the containers, network, and named volumes
+docker compose down -v
+
+# Remove the published images
+docker images "ghcr.io/*/atlas-*" -q | xargs -r docker rmi
+
+# Remove the CLI and TUI binaries
+pip uninstall atlas
+rm -f ~/.local/bin/atlas-tui
+rm -rf ~/.cache/atlas-tui          # TUI session history
+
+# The repo checkout, .env, and downloaded models live wherever you put
+# them — delete the checkout and its models/ directory to reclaim the
+# disk (models are the multi-GB part).
+```
+
+K3s installs use `scripts/uninstall.sh` instead, which tears down the
+manifests and (optionally) the K3s node itself.
+
 ---
 
 ## Method 2: Bare Metal

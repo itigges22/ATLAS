@@ -83,7 +83,7 @@ def build_context_prompt(chunks: List[Dict[str, Any]], max_tokens: int = 8000) -
             # Check if we have room
             if total_chars + len(chunk_text) > max_chars:
                 context_parts.append(
-                    f"\n... (additional context truncated due to length limit)"
+                    "\n... (additional context truncated due to length limit)"
                 )
                 break
 

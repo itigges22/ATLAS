@@ -2,9 +2,39 @@
 name = "atlas"
 version = "3.1.2"
 description = "Adaptive Test-time Learning and Autonomous Specialization"
+readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.9"
-authors = [{name = "Isaac"}]
+authors = [{name = "Isaac Tigges"}]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Code Generators",
+]
+# The core CLI is deliberately stdlib-only (every third-party import in
+# atlas/ is lazy/function-level), so there are no base dependencies.
+
+[project.optional-dependencies]
+# `atlas lens build` / `atlas asa build` (per-model artifact training)
+# hard-require these at runtime. Lower bounds only — the CLI has no
+# reason to pin exact versions.
+train = [
+    "torch>=2",
+    "numpy>=1.24",
+    "gguf",
+    "huggingface_hub",
+    "psutil",
+]
+
+[project.urls]
+Homepage = "https://github.com/itigges22/ATLAS"
+Repository = "https://github.com/itigges22/ATLAS"
+Issues = "https://github.com/itigges22/ATLAS/issues"
+Changelog = "https://github.com/itigges22/ATLAS/blob/main/CHANGELOG.md"
 
 [project.scripts]
 atlas = "atlas.cli.repl:run"
@@ -14,7 +44,9 @@ testpaths = ["tests"]
 addopts = "-m 'not integration'"
 
 [build-system]
-requires = ["setuptools>=64"]
+# >=77 because the SPDX-string `license` form (PEP 639) fails the build
+# on older setuptools ("license should be a table").
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

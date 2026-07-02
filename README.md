@@ -36,7 +36,7 @@ The published 74.6% LiveCodeBench result belongs to the frozen 14B reference bui
 - **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads, and an agent-reliability pass
 - **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
 - **2026-03-26** - [Hacker News front page](https://news.ycombinator.com/item?id=47533297) - 489 points, 285 comments
-- **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B
+- **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B (pass@1 with k=3 generated candidates, Lens selection, and repair — not single-generation pass@1; [methodology](docs/reports/V3_ABLATION_STUDY.md))
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
 
 <a href="https://star-history.com/#itigges22/ATLAS&Date">

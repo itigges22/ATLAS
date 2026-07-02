@@ -184,7 +184,7 @@ def train_cost_field(
         pass_energies = model(all_pass).squeeze()
         fail_energies = model(all_fail).squeeze()
 
-    print(f"\n--- Final Results ---")
+    print("\n--- Final Results ---")
     print(f"Best test AUC: {best_test_auc:.4f}")
     print(f"Final train AUC: {final_train_auc:.4f}")
     print(f"Final test AUC: {final_test_auc:.4f}")
@@ -349,7 +349,7 @@ def train_gx(
     top_dims = np.argsort(feat_imp)[::-1][:30]
 
     cv_auc = float(np.mean(aucs))
-    print(f"\n--- G(x) Results ---")
+    print("\n--- G(x) Results ---")
     print(f"CV AUC: {cv_auc:.4f} +/- {np.std(aucs):.4f} ({folds} folds)")
     print(f"PASS score: {scores[y == 1].mean():.4f} | "
           f"FAIL score: {scores[y == 0].mean():.4f}")
@@ -695,7 +695,7 @@ def retrain_cost_field_bce(
     # For binary labels, rank-biserial ρ = 2*AUC - 1 (exact, Cureton 1956)
     spearman_rho = 2.0 * final_val_auc - 1.0
 
-    print(f"\n--- Retrain Results ---")
+    print("\n--- Retrain Results ---")
     print(f"Best val AUC:    {best_val_auc:.4f}")
     print(f"Final train AUC: {final_train_auc:.4f}")
     print(f"Final val AUC:   {final_val_auc:.4f}")

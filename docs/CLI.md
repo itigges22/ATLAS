@@ -45,7 +45,7 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both. `--lens-only` / `--asa-only` delegate to the per-component flows. |
 | `atlas compose <args...>` | `docker compose` passthrough with ATLAS's compose file set (base file + the backend overlay resolved from `ATLAS_BACKEND`). E.g. `atlas compose ps`, `atlas compose logs -f atlas-proxy`. |
 
-`atlas --help` (or `-h`) prints the subcommand list. An unknown subcommand prints the same usage to stderr and exits 2.
+`atlas --help` (or `-h`) prints the subcommand list. `atlas --version` (or `-V`) prints the CLI version. An unknown subcommand prints the same usage to stderr and exits 2.
 
 `atlas` performs these startup steps:
 

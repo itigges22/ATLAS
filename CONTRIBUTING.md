@@ -194,7 +194,7 @@ python scripts/production-readiness.py --only test-integrity
 # Run specific test file
 pytest tests/v3/test_plan_search.py -v
 
-# Run with coverage
+# Run with coverage (needs `pip install pytest-cov` — not a declared dependency)
 pytest tests/ --cov=. --cov-report=html
 ```
 

@@ -743,6 +743,7 @@ def _print_usage(stream=None) -> None:
     out.write("\nsession flags (interactive UI):\n")
     for name, desc in _SESSION_FLAG_HELP:
         out.write(f"  {name:<14} {desc}\n")
+    out.write("\n  --version     print the CLI version and exit\n")
 
 
 def _dispatch_subcommand(name: str, argv: List[str]) -> int:
@@ -787,6 +788,10 @@ def run():
         known = {name for name, _ in _SUBCOMMAND_HELP}
         if first in ("--help", "-h"):
             _print_usage()
+            sys.exit(0)
+        if first in ("--version", "-V"):
+            from atlas import __version__
+            print(f"atlas {__version__}")
             sys.exit(0)
         if first in known:
             sys.exit(_dispatch_subcommand(first, sys.argv[2:]))
