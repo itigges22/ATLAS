@@ -1111,8 +1111,9 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  {RED if color else ''}Could not import training "
                     f"module: {e}.{RESET if color else ''}")
         if "torch" in str(e):
-            _safe_print("  Training runs on the host and needs PyTorch "
-                        "(the CPU build is enough for this small model):")
+            _safe_print("  Training runs on the host and needs the train "
+                        "extra (or a CPU torch, which is enough here):")
+            _safe_print("    pip install 'atlas[train]'   # or:")
             _safe_print("    pip install torch --index-url "
                         "https://download.pytorch.org/whl/cpu")
         else:
@@ -1165,7 +1166,8 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             _safe_print(f"  {RED if color else ''}Could not import the G(x) "
                         f"trainer: {e}.{RESET if color else ''}")
             _safe_print("  G(x) training needs XGBoost + scikit-learn on the "
-                        "host: pip install xgboost scikit-learn")
+                        "host: pip install 'atlas[train]' (or pip install "
+                        "xgboost scikit-learn)")
             _safe_print("  The previous live bundle is unchanged; embeddings "
                         "are cached for a quick retry.")
             return 1
@@ -1873,8 +1875,6 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         # Legacy G(x) carrier — only relevant when the JSON pair is absent.
         # `lens build` doesn't refresh this file, so on a retrained dir it
         # is a previous model's artifact and must not ship.
-        if os.path.isfile(os.path.join(artifact_dir, "metric_tensor.pt")):
-            files_to_upload.append("metric_tensor.pt")
 
     # 2. Compute SHA + inspect
     _safe_print(f"[1/5] Hashing {cost_path}…")

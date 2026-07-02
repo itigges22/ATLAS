@@ -81,7 +81,6 @@ def test_lens_weights_report_legacy_bundle_as_uncalibrated(
     artifact_dir = tmp_path / "lens"
     artifact_dir.mkdir()
     (artifact_dir / "cost_field.pt").write_bytes(b"legacy")
-    (artifact_dir / "metric_tensor.pt").write_bytes(b"legacy")
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(artifact_dir))
     monkeypatch.setattr(doctor, "MODEL_NAME", "Qwen3.5-9B-Q6_K")
     monkeypatch.setattr(doctor, "MODEL_FILE", "Qwen3.5-9B-Q6_K.gguf")

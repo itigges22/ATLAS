@@ -291,6 +291,21 @@ def main():
     except ValueError as e:
         print(f"   WARNING: calibration not refreshed: {e}")
 
+    # Stamp the bundle's model identity — the lens load path hard-requires
+    # model_identity.json, so a retrained bundle without it fails the
+    # identity check on the next service restart and the lens stays off.
+    model_name = os.environ.get("ATLAS_MODEL_NAME", "").strip() \
+        or _read_env_var("ATLAS_MODEL_NAME")
+    if model_name:
+        from geometric_lens.identity import save_model_identity
+        identity_path = save_model_identity(
+            os.path.dirname(args.save_path) or ".", model_name, dim)
+        print(f"   Identity saved:    {identity_path} (model={model_name})")
+    else:
+        print("   WARNING: ATLAS_MODEL_NAME unresolved — "
+              "model_identity.json not written; the reloaded bundle will "
+              "fail the identity check on restart")
+
     request_lens_reload()
     print("=" * 60)
 

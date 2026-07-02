@@ -1173,6 +1173,26 @@ def lens_retrain(request: LensRetrainRequest):
                     metrics["pass_energy_mean"], metrics["fail_energy_mean"])
                 save_cx_normalization(models_dir, calibration)
 
+                # The load path hard-requires model_identity.json (the
+                # cross-model artifact guard). A retrain produces a new
+                # bundle for the model llama-server is serving RIGHT NOW,
+                # so stamp/refresh the identity here — without this, a
+                # retrained bundle fails the identity check on the next
+                # container restart and the whole lens stays disabled.
+                from geometric_lens.identity import save_model_identity
+                from geometric_lens.service import _probe_served_model
+                served = _probe_served_model() or os.environ.get(
+                    "ATLAS_MODEL_NAME", "").strip()
+                if served and embeddings:
+                    save_model_identity(models_dir, served,
+                                        len(embeddings[0]))
+                    metrics["model_identity"] = served
+                else:
+                    logger.warning(
+                        "retrain: could not resolve the served model — "
+                        "model_identity.json not written; the reloaded "
+                        "bundle will fail the identity check on restart")
+
             # Remove non-serializable 'model' key from metrics
             metrics.pop("model", None)
 
@@ -1293,42 +1313,9 @@ def lens_score_per_step(request: LensScorePerStepRequest):
         }
 
 
-@app.post("/internal/lens/correctability")
-def lens_correctability(request: LensScoreTextRequest):
-    """Compute correctability + energy for a text string.
-
-    Correctability measures how traversable the cost landscape is at this
-    embedding — higher means repair is more likely to succeed.
-
-    Requires G(x) metric tensor to be loaded.
-    """
-    try:
-        from geometric_lens.service import evaluate_correctability, is_enabled
-
-        if not is_enabled():
-            return {"correctability": 0.0, "energy": 0.0, "normalized": 0.5,
-                    "enabled": False}
-
-        corr, raw_energy, norm_energy = evaluate_correctability(request.text)
-        return {
-            "correctability": corr,
-            "energy": raw_energy,
-            "normalized": norm_energy,
-            "gx_available": corr > 0.0,
-            "enabled": True,
-        }
-    except Exception as e:
-        return {
-            "correctability": 0.0,
-            "energy": 0.0,
-            "normalized": 0.5,
-            "error": _safe_detail(e, "lens correctability"),
-        }
-
-
-# ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # Sandbox Analysis Endpoint
-# ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 class SandboxAnalyzeRequest(BaseModel):
     code: str

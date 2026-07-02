@@ -834,7 +834,7 @@ def test_registry_has_lens_and_asa_urls_for_qwen_9b_q6k():
     """The Q6_K record is the lead's reference setup — Lens + ASA both
     'supported' status MUST have download URLs populated, otherwise
     `atlas model install` can't fetch them and the user ends up with
-    cost_field.pt + metric_tensor.pt + ast_edit_steering.gguf missing."""
+    cost_field.pt + ast_edit_steering.gguf missing."""
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     assert m.lens_status == "supported"
     assert m.lens_artifact_url_base is not None
@@ -884,17 +884,15 @@ def test_install_artifacts_uses_url_base_plus_filename(tmp_path, monkeypatch):
     rc = model.main(["install-artifacts", "Qwen3.5-9B-Q6_K",
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 0
-    # Should have fetched 2 lens files + 1 asa file = 3 requests.
+    # Should have fetched 1 lens file + 1 asa file = 2 requests.
     urls = [r.full_url for r in captured]
     assert any("cost_field.pt" in u for u in urls)
-    assert any("metric_tensor.pt" in u for u in urls)
     assert any("ast_edit_steering.gguf" in u for u in urls)
     # All URLs should be rooted at the registered base, not random.
     for u in urls:
         assert u.startswith("https://huggingface.co/datasets/itigges22/ATLAS/")
     # Files should land in the right dirs.
     assert (lens_dir / "cost_field.pt").is_file()
-    assert (lens_dir / "metric_tensor.pt").is_file()
     assert (tmp_path / "ast_edit_steering.gguf").is_file()
     assert (tmp_path / "ast_edit_steering.gguf.model").read_text().strip() == \
         "Qwen3.5-9B-Q6_K"
@@ -907,7 +905,6 @@ def test_install_artifacts_skips_already_present_files(tmp_path, monkeypatch,
     lens_dir = tmp_path / "lens"
     lens_dir.mkdir()
     (lens_dir / "cost_field.pt").write_bytes(b"already here")
-    (lens_dir / "metric_tensor.pt").write_bytes(b"already here")
     (tmp_path / "ast_edit_steering.gguf").write_bytes(b"already here")
     (tmp_path / "ast_edit_steering.gguf.model").write_text(
         "Qwen3.5-9B-Q6_K\n"
@@ -932,7 +929,7 @@ def test_install_artifacts_skips_already_present_files(tmp_path, monkeypatch,
                      "--models-dir", str(tmp_path),
                      "--force-artifacts", "--no-color"])
     assert rc == 0
-    assert len(captured) == 3  # all 3 re-fetched
+    assert len(captured) == 2  # both re-fetched
     assert (lens_dir / "cost_field.pt").read_bytes() == b"NEW"
 
 

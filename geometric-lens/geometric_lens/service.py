@@ -2,7 +2,7 @@
 
 Provides:
 - evaluate(embedding) -> energy scalar (C(x))
-- evaluate_correctability(embedding) -> correctability scalar (G(x))
+- evaluate_gx(query) -> XGBoost G(x) verdict dict
 - is_enabled() -> bool
 - get_geometric_energy(query) -> float in [0,1] for router signal
 """
@@ -26,7 +26,6 @@ _weights_lock = threading.RLock()
 
 # Lazy-loaded models (CPU only)
 _cost_field = None
-_metric_tensor = None  # PCAMetricTensor wrapper (legacy, replaced by XGBoost G(x))
 _gx_xgboost = None        # XGBoost G(x) classifier
 _gx_pca_components = None  # PCA projection matrix, numpy (pca_dim, hidden_dim)
 _gx_pca_mean = None        # PCA mean vector, numpy (hidden_dim,)
@@ -41,6 +40,11 @@ _model_identity_error = ""
 # was exported at container start. Reset by reload_weights().
 _served_model_id = None
 _served_model_probed = False
+
+# Once-per-load-cycle warning flag for the router's energy signal — a
+# disabled lens must not silently read as "low energy". Reset by
+# reload_weights().
+_energy_disabled_logged = False
 
 # C(x) energy scales are learned, not universal. The selected model's Lens
 # artifact must provide its own sigmoid calibration. Without one, raw energy is
@@ -163,7 +167,7 @@ def _snapshot_weights():
     """
     with _weights_lock:
         return (
-            _cost_field, _metric_tensor, _gx_xgboost,
+            _cost_field, _gx_xgboost,
             _gx_pca_components, _gx_pca_mean, _gx_top_dims,
             _cx_normalization, _gx_thresholds,
         )
@@ -246,9 +250,8 @@ def _load_gx_models(models_dir: str) -> None:
     failure leaves the corresponding G(x) slot None and scoring degrades
     gracefully.
     """
-    global _metric_tensor, _gx_xgboost, _gx_pca_components, _gx_pca_mean, _gx_top_dims
+    global _gx_xgboost, _gx_pca_components, _gx_pca_mean, _gx_top_dims
 
-    _metric_tensor = None
     _gx_xgboost = None
     _gx_pca_components = None
     _gx_pca_mean = None
@@ -308,22 +311,8 @@ def _load_gx_models(models_dir: str) -> None:
             logger.warning(f"G(x) XGBoost load failed (non-fatal): {e}")
             _gx_xgboost = None
 
-    # G(x) metric tensor fallback (legacy — only when XGBoost is unavailable)
     if _gx_xgboost is None:
-        gx_path = os.path.join(models_dir, "metric_tensor.pt")
-        if os.path.exists(gx_path):
-            try:
-                from geometric_lens.metric_tensor import load_metric_tensor
-                _metric_tensor = load_metric_tensor(gx_path)
-                if _metric_tensor is not None:
-                    logger.info(f"Geometric Lens G(x) loaded (PCA {_metric_tensor.original_dim}→{_metric_tensor.pca_dim})")
-                else:
-                    logger.warning("G(x) load returned None — correctability unavailable")
-            except Exception as e:
-                logger.warning(f"G(x) load failed (non-fatal): {e}")
-                _metric_tensor = None
-        else:
-            logger.info("No G(x) model found — correctability unavailable")
+        logger.info("No G(x) model found — G(x) verdicts unavailable")
 
 
 def _ensure_models_loaded():
@@ -392,7 +381,7 @@ def reload_weights(model_dir: str = None) -> dict:
 
     Used after retraining to hot-swap model weights.
     """
-    global _cost_field, _metric_tensor, _gx_xgboost, _gx_pca_components
+    global _cost_field, _gx_xgboost, _gx_pca_components
     global _gx_pca_mean, _gx_top_dims, _models_loaded, _load_attempted
     global _cx_normalization, _gx_thresholds
     global _artifact_model_identity, _model_identity_error
@@ -407,7 +396,7 @@ def reload_weights(model_dir: str = None) -> dict:
 
 def _reload_weights_locked(model_dir: str = None) -> dict:
     """Body of reload_weights(); callers hold _weights_lock."""
-    global _cost_field, _metric_tensor, _gx_xgboost, _gx_pca_components
+    global _cost_field, _gx_xgboost, _gx_pca_components
     global _gx_pca_mean, _gx_top_dims, _models_loaded, _load_attempted
     global _cx_normalization, _gx_thresholds
     global _artifact_model_identity, _model_identity_error
@@ -416,7 +405,6 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
     _models_loaded = False
     _load_attempted = False
     _cost_field = None
-    _metric_tensor = None
     _gx_xgboost = None
     _gx_pca_components = None
     _gx_pca_mean = None
@@ -428,6 +416,8 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
     # Re-probe llama-server on reload — the served model may have changed.
     _served_model_id = None
     _served_model_probed = False
+    global _energy_disabled_logged
+    _energy_disabled_logged = False
 
     if model_dir:
         try:
@@ -446,7 +436,7 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
             return {
                 "status": "reloaded",
                 "model_dir": model_dir,
-                "gx_loaded": _metric_tensor is not None or _gx_xgboost is not None,
+                "gx_loaded": _gx_xgboost is not None,
             }
         except Exception as e:
             logger.error(f"Failed to reload models from {model_dir}: {e}")
@@ -456,7 +446,7 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
         success = _ensure_models_loaded()
         return {
             "status": "reloaded" if success else "error",
-            "gx_loaded": _metric_tensor is not None or _gx_xgboost is not None,
+            "gx_loaded": _gx_xgboost is not None,
         }
 
 
@@ -468,19 +458,25 @@ def get_geometric_energy(query: str) -> float:
 
     Used as the 4th signal in the Confidence Router.
 
-    Returns 0.0 if lens is disabled or models aren't loaded.
+    Returns 0.0 if lens is disabled or models aren't loaded — logged once
+    per load cycle so a disabled lens can't silently masquerade as
+    "genuinely low energy" in the router's signal mix.
     """
-    if not is_enabled():
-        return 0.0
-
-    if not _ensure_models_loaded():
+    global _energy_disabled_logged
+    if not is_enabled() or not _ensure_models_loaded():
+        if not _energy_disabled_logged:
+            _energy_disabled_logged = True
+            logger.warning(
+                "get_geometric_energy: lens disabled or weights not "
+                "loaded — returning 0.0 to the confidence router for "
+                "every query until weights load")
         return 0.0
 
     try:
         import torch
         from geometric_lens.embedding_extractor import extract_embedding
 
-        cost_field, _, _, _, _, _, cx_cfg, _ = _snapshot_weights()
+        cost_field, _, _, _, _, cx_cfg, _ = _snapshot_weights()
 
         start = time.monotonic()
 
@@ -521,7 +517,7 @@ def evaluate_energy(query: str) -> Tuple[float, float]:
         import torch
         from geometric_lens.embedding_extractor import extract_embedding
 
-        cost_field, _, _, _, _, _, cx_cfg, _ = _snapshot_weights()
+        cost_field, _, _, _, _, cx_cfg, _ = _snapshot_weights()
 
         emb = extract_embedding(query)
         x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
@@ -556,76 +552,20 @@ def get_model_info() -> dict:
         "cost_field_params": cost_params,
         "device": "cpu",
         "cx_calibrated": _cx_normalization is not None,
-        "gx_loaded": _metric_tensor is not None or _gx_xgboost is not None,
+        "gx_loaded": _gx_xgboost is not None,
         "gx_calibrated": _gx_thresholds is not None,
         "gx_thresholds": (dict(_gx_thresholds)
                           if _gx_thresholds is not None else None),
         "artifact_model": (_artifact_model_identity or {}).get("model"),
-        "gx_type": "xgboost" if _gx_xgboost is not None else (
-            "metric_tensor" if _metric_tensor is not None else "none"
-        ),
+        "gx_type": "xgboost" if _gx_xgboost is not None else "none",
     }
 
     if _gx_xgboost is not None:
         info["gx_pca_dim"] = _gx_pca_components.shape[0] if _gx_pca_components is not None else 0
         info["gx_top_dims"] = _gx_top_dims[:10] if _gx_top_dims else []
-        info["total_params"] = cost_params
-    elif _metric_tensor is not None:
-        gx_params = sum(p.numel() for p in _metric_tensor.parameters())
-        info["metric_tensor_params"] = gx_params
-        info["gx_pca_dim"] = _metric_tensor.pca_dim
-        info["total_params"] = cost_params + gx_params
-    else:
-        info["total_params"] = cost_params
+    info["total_params"] = cost_params
 
     return info
-
-
-def evaluate_correctability(query: str) -> Tuple[float, float, float]:
-    """Compute correctability score using G(x) metric tensor.
-
-    Returns (correctability, raw_energy, normalized_energy).
-    Returns (0.0, 0.0, 0.0) if G(x) is not loaded.
-    """
-    if not is_enabled() or not _ensure_models_loaded():
-        return (0.0, 0.0, 0.0)
-
-    cost_field, metric_tensor, _, _, _, _, cx_cfg, _ = _snapshot_weights()
-
-    if metric_tensor is None:
-        # G(x) not available — return energy only
-        raw, norm = evaluate_energy(query)
-        return (0.0, raw, norm)
-
-    try:
-        import torch
-        from geometric_lens.embedding_extractor import extract_embedding
-        from geometric_lens.correction import compute_correctability
-
-        start = time.monotonic()
-
-        emb = extract_embedding(query)
-        x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
-
-        # C(x) energy
-        with torch.no_grad():
-            energy = cost_field(x).item()
-        normalized = _normalize_cx_energy(energy, cx_cfg)
-
-        # G(x) correctability
-        corr = compute_correctability(x, cost_field, metric_tensor)
-
-        elapsed_ms = (time.monotonic() - start) * 1000
-        logger.debug(
-            f"Correctability: {corr:.4f}, energy: raw={energy:.2f} "
-            f"norm={normalized:.3f}, latency={elapsed_ms:.1f}ms"
-        )
-
-        return (corr, energy, normalized)
-
-    except Exception as e:
-        logger.error(f"Correctability computation failed: {e}")
-        return (0.0, 0.0, 0.0)
 
 
 def evaluate_gx(query: str) -> dict:
@@ -637,7 +577,7 @@ def evaluate_gx(query: str) -> dict:
     if not is_enabled() or not _ensure_models_loaded():
         return {"gx_score": 0.5, "verdict": "unavailable", "gx_available": False}
 
-    (_, _, gx_xgboost, gx_pca_components, gx_pca_mean,
+    (_, gx_xgboost, gx_pca_components, gx_pca_mean,
      gx_top_dims, _, gx_thresholds) = _snapshot_weights()
 
     if gx_xgboost is None:
@@ -696,7 +636,7 @@ def evaluate_combined(query: str) -> dict:
         import numpy as np
         from geometric_lens.embedding_extractor import extract_embedding
 
-        (cost_field, _, gx_xgboost, gx_pca_components, gx_pca_mean,
+        (cost_field, gx_xgboost, gx_pca_components, gx_pca_mean,
          _, cx_cfg, gx_thresholds) = _snapshot_weights()
 
         start = time.monotonic()
@@ -787,7 +727,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             extract_per_token,
         )
 
-        (cost_field, _, gx_xgboost, gx_pca_components, gx_pca_mean,
+        (cost_field, gx_xgboost, gx_pca_components, gx_pca_mean,
          gx_top_dims, cx_cfg, gx_thresholds) = _snapshot_weights()
 
         start = time.monotonic()

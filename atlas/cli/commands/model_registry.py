@@ -3,10 +3,9 @@
 
 Single source of truth for "which models can ATLAS run end-to-end?"
 
-This module is the upgrade-in-place of PC-055.2's
-`model_recommendations.py` stub. It preserves the stable public API
+This module owns the model registry. It exposes the stable public API
 (`for_tier`, `tier_for_model`, the Model record's name-compat fields)
-that doctor + tier callers depend on, while extending each entry with
+that doctor + tier callers depend on, extending each entry with
 download metadata + the critical `lens_status` field that captures the
 key truth surfaced during PC-056 scoping:
 
@@ -272,7 +271,7 @@ REGISTRY: List[Model] = [
         # PC-056.1: declare the artifact files so doctor can cross-check.
         # lens_artifact_dir=None means "use the global ATLAS_LENS_MODELS
         # dir" — current single-model layout.
-        lens_artifact_files=["cost_field.pt", "metric_tensor.pt"],
+        lens_artifact_files=["cost_field.pt"],
         # Lens artifacts live on the public itigges22/ATLAS dataset on
         # HF (no token needed). Installer appends each filename in
         # lens_artifact_files to this base. Note: *.pt is gitignored in
@@ -287,7 +286,6 @@ REGISTRY: List[Model] = [
         # Update whenever the artifacts are re-published.
         lens_artifact_sha256={
             "cost_field.pt": "79176de9746076ebbe9e9ea0e56207d04410b1f88e3dc255bcbc9fd1689164d9",
-            "metric_tensor.pt": "d0855a3f00ef0de23a0e6326c7c1d4e921c36016cccb442963b2b7c60fc0e0d5",
         },
         # PC-061: ASA control vector trained + published 2026-05-12.
         asa_status="supported",
@@ -422,7 +420,7 @@ REGISTRY: List[Model] = [
 
 
 # ---------------------------------------------------------------------------
-# Lookups — preserves PC-055.2 model_recommendations public API
+# Lookups — the public API doctor/tier/model consume
 # ---------------------------------------------------------------------------
 
 def for_tier(tier_name: str) -> Optional[Model]:

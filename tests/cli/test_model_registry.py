@@ -1,5 +1,4 @@
-"""Tests for atlas.cli.commands.model_registry (PC-056) + the
-PC-055.2 model_recommendations back-compat shim.
+"""Tests for atlas.cli.commands.model_registry (PC-056).
 
 Covers:
   - REGISTRY shape + lens_status truth (only 9B is supported today)
@@ -7,11 +6,10 @@ Covers:
   - is_installed / installed_size_gb file-system probe
   - can_install reflects download_url
   - supported_models / models_for_tier filters
-  - PC-055.2 shim still resolves the same names + ModelRecommendation
-    is now an alias for Model
+  - stable public field names on the Model record
 """
 
-from atlas.cli.commands import model_registry, model_recommendations
+from atlas.cli.commands import model_registry
 
 
 # ---------------------------------------------------------------------------
@@ -220,31 +218,18 @@ def test_installed_size_gb_returns_none_when_absent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# PC-055.2 back-compat shim
+# Stable public API
 # ---------------------------------------------------------------------------
 
-def test_shim_for_tier_resolves_same_as_registry():
-    for tier_name in ("small", "medium", "large", "xlarge"):
-        a = model_recommendations.for_tier(tier_name)
-        b = model_registry.for_tier(tier_name)
-        assert a is b, f"shim and registry disagree on tier {tier_name!r}"
+def test_tier_for_model_known_file():
+    assert model_registry.tier_for_model("Qwen3.5-9B-Q6_K.gguf") == "medium"
 
 
-def test_shim_tier_for_model_works():
-    assert model_recommendations.tier_for_model("Qwen3.5-9B-Q6_K.gguf") == "medium"
-
-
-def test_shim_modelrecommendation_is_model_alias():
-    """The shim must keep ModelRecommendation pointing at Model so
-    isinstance() checks in PC-055.2-era code keep working."""
-    assert model_recommendations.ModelRecommendation is model_registry.Model
-
-
-def test_shim_callers_can_access_old_field_names():
-    """PC-055.2 callers do `rec.model_file`, `rec.model_display`,
-    `rec.model_size_gb`. The PC-056 Model preserves those exact field
-    names so the shim is transparent."""
-    rec = model_recommendations.for_tier("medium")
+def test_model_exposes_stable_field_names():
+    """Callers do `rec.model_file`, `rec.model_display`,
+    `rec.model_size_gb` — the Model record keeps those exact field
+    names stable."""
+    rec = model_registry.for_tier("medium")
     assert hasattr(rec, "model_file")
     assert hasattr(rec, "model_display")
     assert hasattr(rec, "model_size_gb")
@@ -332,7 +317,6 @@ def test_pc0561_supported_model_has_lens_artifact_files():
     'supported' claim — doctor cross-checks against this list."""
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     assert "cost_field.pt" in m.lens_artifact_files
-    assert "metric_tensor.pt" in m.lens_artifact_files
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +406,6 @@ def test_lens_artifacts_present_ok_when_files_exist(tmp_path):
     art_dir = tmp_path / "lens-models"
     art_dir.mkdir()
     (art_dir / "cost_field.pt").write_bytes(b"x")
-    (art_dir / "metric_tensor.pt").write_bytes(b"y")
     import os
     os.environ["ATLAS_LENS_MODELS"] = str(art_dir)
     try:
@@ -443,7 +426,6 @@ def test_lens_artifacts_present_missing_files_listed(tmp_path):
         state = model_registry.lens_artifacts_present(m, str(tmp_path))
         assert state["ok"] is False
         assert "cost_field.pt" in state["missing_files"]
-        assert "metric_tensor.pt" in state["missing_files"]
     finally:
         del os.environ["ATLAS_LENS_MODELS"]
 
