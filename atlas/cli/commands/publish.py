@@ -83,7 +83,9 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     # Upload each component through its own flow, deferring the PR.
     _safe_print(f"{GREEN if color else ''}── Lens artifacts ──"
                 f"{RESET if color else ''}")
-    lens_args = ["publish", "--repo", args.lens_repo, "--skip-pr"]
+    lens_args = ["publish", "--skip-pr"]
+    if args.lens_repo:
+        lens_args += ["--repo", args.lens_repo]
     if args.model:
         lens_args.insert(1, args.model)
     if args.license:
@@ -100,7 +102,9 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
 
     _safe_print(f"{GREEN if color else ''}── ASA vector ──"
                 f"{RESET if color else ''}")
-    asa_args = ["publish", "--repo", args.asa_repo, "--skip-pr"]
+    asa_args = ["publish", "--skip-pr"]
+    if args.asa_repo:
+        asa_args += ["--repo", args.asa_repo]
     if args.model:
         asa_args.insert(1, args.model)
     if args.license:

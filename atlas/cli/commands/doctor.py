@@ -828,7 +828,7 @@ def check_tier_match() -> CheckResult:
     elsewhere and want a smaller-than-recommended model).
     """
     try:
-        from atlas.cli.commands import tier, model_recommendations
+        from atlas.cli.commands import tier, model_registry
     except ImportError as e:
         return CheckResult("tier_match", "skip",
             "tier module unavailable", str(e))
@@ -837,7 +837,7 @@ def check_tier_match() -> CheckResult:
         return CheckResult("tier_match", "skip",
             "no GPU detected (cpu tier)")
     recommended = tier.classify(p)
-    rec_model = model_recommendations.for_tier(recommended.tier)
+    rec_model = model_registry.for_tier(recommended.tier)
     actual_model = MODEL_FILE
     if rec_model is not None and actual_model == rec_model.model_file:
         # PC-056.1: even on exact tier match, cross-check that the
@@ -870,7 +870,7 @@ def check_tier_match() -> CheckResult:
             f"({rec_model.model_display})")
     # Mismatch — figure out direction. Reverse-lookup which tier owns
     # the configured model, then compare.
-    actual_tier_name = model_recommendations.tier_for_model(actual_model)
+    actual_tier_name = model_registry.tier_for_model(actual_model)
     if actual_tier_name is None:
         return CheckResult("tier_match", "warn",
             f"configured model `{actual_model}` is not in any tier preset",

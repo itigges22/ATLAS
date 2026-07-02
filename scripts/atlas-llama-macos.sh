@@ -160,10 +160,14 @@ if [[ -f "$CVECTOR_PATH" ]]; then
   fi
   CVECTOR_MODEL_BASE="$(basename "$CVECTOR_MODEL")"
   CVECTOR_MODEL_STEM="${CVECTOR_MODEL_BASE%.gguf}"
+  # Case-insensitive marker match, mirroring entrypoint-v3.1.sh and
+  # `atlas asa check`'s casefolded canonicalization.
+  shopt -s nocasematch
   if [[ "$CVECTOR_MODEL" == "$MODEL_ID" ||
         "$CVECTOR_MODEL_BASE" == "$MODEL_BASENAME" ||
         "$CVECTOR_MODEL_STEM" == "$MODEL_STEM" ||
         "${ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
+    shopt -u nocasematch
     CVECTOR_SCALE="${ATLAS_CONTROL_VECTOR_SCALE:-0.5}"
     CVECTOR_FLAGS=(--control-vector-scaled "$CVECTOR_PATH:$CVECTOR_SCALE")
     if [[ -n "${ATLAS_CONTROL_VECTOR_LAYER_RANGE:-}" ]]; then
@@ -179,6 +183,7 @@ if [[ -f "$CVECTOR_PATH" ]]; then
     fi
     CVECTOR_STATUS="$CVECTOR_PATH (model=$CVECTOR_MODEL, scale=$CVECTOR_SCALE)"
   else
+    shopt -u nocasematch
     CVECTOR_STATUS="disabled: marked for ${CVECTOR_MODEL:-unknown}, selected $MODEL_ID"
   fi
 fi

@@ -143,9 +143,12 @@ if [ -f "$ATLAS_CONTROL_VECTOR" ]; then
   if [ -f "$CVECTOR_MARKER" ]; then
     CVECTOR_MODEL="$(tr -d '\r\n' < "$CVECTOR_MARKER")"
   fi
-  if [ "$CVECTOR_MODEL" = "$ATLAS_MODEL_ID" ] || \
-     [ "$CVECTOR_MODEL" = "$MODEL_BASENAME" ] || \
-     [ "$CVECTOR_MODEL" = "$MODEL_STEM" ] || \
+  # Case-insensitive marker match — `atlas asa check` canonicalizes with
+  # casefold, so the boot gate must accept the same markers it does.
+  CVECTOR_MODEL_LC="$(printf '%s' "$CVECTOR_MODEL" | tr '[:upper:]' '[:lower:]')"
+  if [ "$CVECTOR_MODEL_LC" = "$(printf '%s' "$ATLAS_MODEL_ID" | tr '[:upper:]' '[:lower:]')" ] || \
+     [ "$CVECTOR_MODEL_LC" = "$(printf '%s' "$MODEL_BASENAME" | tr '[:upper:]' '[:lower:]')" ] || \
+     [ "$CVECTOR_MODEL_LC" = "$(printf '%s' "$MODEL_STEM" | tr '[:upper:]' '[:lower:]')" ] || \
      [ "${ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED:-0}" = "1" ]; then
     CVECTOR_SCALE="${ATLAS_CONTROL_VECTOR_SCALE:-0.5}"
     CVECTOR_FLAGS=(--control-vector-scaled "$ATLAS_CONTROL_VECTOR:$CVECTOR_SCALE")

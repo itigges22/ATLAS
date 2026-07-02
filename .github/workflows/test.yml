@@ -241,13 +241,8 @@ jobs:
         #   2. `sed -i '/auto params_dft = params_base;/a ...'` for the
         #      spec-decode embeddings fix. The sed has `|| true`, so a
         #      missing target line would silently no-op... we verify the
-        #      target line exists so that doesn't go unnoticed.
-        #
-        # NOTE: inference/patches/fix-embeddings-spec-decode.patch is
-        # NOT checked here. It's malformed (blank context lines lack
-        # leading space) and unused — the sed is what actually applies.
-        # That patch file should be either fixed or removed in a
-        # future cleanup; tracked informally for now.
+        #      target line exists so that doesn't go unnoticed. The sed
+        #      IS the patch — there is no separate .patch file for it.
         run: |
           cd llama.cpp
           # 1. PC-202 hidden-states patch

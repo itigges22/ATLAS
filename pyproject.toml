@@ -20,14 +20,17 @@ classifiers = [
 
 [project.optional-dependencies]
 # `atlas lens build` / `atlas asa build` (per-model artifact training)
-# hard-require these at runtime. Lower bounds only — the CLI has no
-# reason to pin exact versions.
+# hard-require these at runtime — including xgboost + scikit-learn for
+# the G(x) training step. Lower bounds only — the CLI has no reason to
+# pin exact versions.
 train = [
     "torch>=2",
     "numpy>=1.24",
     "gguf",
     "huggingface_hub",
     "psutil",
+    "xgboost>=2",
+    "scikit-learn>=1.3",
 ]
 
 [project.urls]

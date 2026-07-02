@@ -133,12 +133,6 @@ ATLAS_JWT_SECRET="auto"
 # validated as compatible with the main model.
 ATLAS_ENABLE_SPECULATIVE=false
 
-# Continuous learning toggle (reserved — see below).
-# Reserved: nightly lens retraining. The CronJob template was removed —
-# the lens retrain endpoint requires a training_data payload a scheduled
-# trigger cannot supply. Keep false until a self-contained trigger exists.
-ATLAS_ENABLE_TRAINING=false
-
 #-------------------------------------------
 # Timeouts (seconds)
 #-------------------------------------------
@@ -187,13 +181,9 @@ ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL=50
 #-------------------------------------------
 # Advanced (usually don't change)
 #-------------------------------------------
-# Container registry for locally-built images (scripts/build-containers.sh
-# tags as ${ATLAS_REGISTRY}/<image>:${ATLAS_IMAGE_TAG}). The K3s manifests
-# themselves pull from ghcr.io/${ATLAS_GHCR_OWNER}/...; this is only
-# relevant when side-loading images into k3s.
-ATLAS_REGISTRY="localhost"
-
-# Image tag for both the local-build path and the GHCR pull path
+# Image tag for both the local-build path (scripts/build-containers.sh —
+# tags exactly as the K3s manifests reference, ghcr.io/${ATLAS_GHCR_OWNER}/...)
+# and the GHCR pull path.
 ATLAS_IMAGE_TAG="latest"
 
 # K3s config path (set to "auto" to inherit from $KUBECONFIG)

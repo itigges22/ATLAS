@@ -269,7 +269,6 @@ def help_text():
   {GRAY}{BOX_H * (tw - 4)}{RESET}
   {CYAN}/solve{RESET} {DIM}<file>{RESET}       Solve a problem from file
   {CYAN}/bench{RESET} {DIM}[options]{RESET}    Run benchmark
-  {CYAN}/ablation{RESET} {DIM}[opts]{RESET}    Run ablation study
   {CYAN}/status{RESET}              Service health
   {CYAN}/help{RESET}                This help
   {CYAN}/quit{RESET}                Exit

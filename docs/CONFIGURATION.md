@@ -50,10 +50,10 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 | `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1, x86_64 only), `vulkan` (universal fallback), `metal` (Apple Silicon hybrid: native llama-server + Docker for the rest — see [SETUP_MACOS.md](SETUP_MACOS.md)), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm + Vulkan + Metal also require bringing up the stack with `-f docker-compose.rocm.yml`, `-f docker-compose.vulkan.yml`, or `-f docker-compose.macos.yml` respectively (the wizard prints the right command). On aarch64 hosts (DGX Spark, Snapdragon X Elite, Jetson, Pi 5) `atlas init` filters out `rocm` since AMD has no arm64 release — see [SETUP.md § arm64](SETUP.md#arm64). |
 | `ATLAS_MACOS_PREFIX` | `~/.atlas/macos` | macOS Metal only. Native llama.cpp install root shared by setup, launcher, and doctor. Set this when setup used `--prefix`. |
 | `ATLAS_LLAMA_HOST` | `127.0.0.1` | macOS Metal only. Bind address for the native llama-server launched by `scripts/atlas-llama-macos.sh`. Loopback by default; override only when access from another host is intentionally required. |
-| `ATLAS_GPU_VENDOR` | (auto-detected) | Vendor of the GPU ATLAS should use: `nvidia`, `amd`, `apple`, `intel`. Only meaningful on multi-vendor hosts; auto-detect picks the largest-VRAM GPU. |
 | `ATLAS_GPU_INDEX` | (unset — all GPUs visible) | Vendor-local index of the GPU ATLAS should use on multi-GPU hosts. Compose passes it into the llama-server container; the entrypoint maps it to `CUDA_VISIBLE_DEVICES` (NVIDIA) or the HIP/Vulkan equivalent, and skips the export when empty. |
 | `ATLAS_GFX_TARGET` | `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a` | **ROCm only.** AMD compute target(s), semicolon-separated. Forwarded to `Dockerfile.rocm` as `AMDGPU_TARGETS` at build time. Trim to your GPU for a smaller image — see [SETUP.md § AMD GPU Targets](SETUP.md#amd-gpu-targets-dockerfilerocm). |
 | `ATLAS_ROCM_TAG` | `6.2-complete` | **ROCm only.** Base image tag for `rocm/dev-ubuntu-22.04`. Bump when you want to test a newer ROCm release. |
+| `ATLAS_UBUNTU_TAG` | `24.04` | **Vulkan only.** Base image tag for the `ubuntu` build stage of `Dockerfile.vulkan` (compose build arg). |
 | `ATLAS_HSA_OVERRIDE_GFX_VERSION` | (unset) | **ROCm only.** Force a specific HSA gfx version at runtime — workaround for "officially unsupported" GPUs (e.g., older Vega) that still work with a compatible target. Example: `10.3.0` makes RDNA1 cards masquerade as RDNA2 for HIP kernel selection. |
 
 Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are fixed inside the Docker network and usually do not need to be configured by users. On macOS Metal, `docker-compose.macos.yml` keeps the container-side URL at `llama-server:8080` but forwards it to the native host-side `${ATLAS_LLAMA_PORT:-8080}`, so the port can move when 8080 is already occupied.
@@ -387,7 +387,7 @@ Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence r
 | `SANDBOX_TIMEOUT` | `30` | Per-request timeout (seconds) when the lens itself calls the sandbox. |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8080` | Allowed CORS origins (comma-separated) |
 | `CONFIG_PATH` | `/app/config/config.yaml` | Path to YAML config file (optional, defaults used if missing) |
-| `API_KEYS_PATH` | `/app/secrets/api-keys.json` | Path to API keys JSON. The lens's `/v1/*` endpoints return 401 until a key file is mounted. |
+| `API_KEYS_PATH` | `/app/secrets/api-keys.json` | Path to API keys JSON. The lens's `/v1/*` endpoints return 401 until a key file is mounted. To mount one in Docker, uncomment the `${ATLAS_SECRETS_DIR:-./secrets}:/app/secrets:ro` volume line in `docker-compose.yml` and point `ATLAS_SECRETS_DIR` at the host directory holding `api-keys.json`. |
 | `ATLAS_ALLOW_PICKLE_GX` | unset | Opt-in for loading the legacy `gx_xgboost.pkl` G(x) format. Unpickling executes arbitrary code, so the service refuses `.pkl` by default and asks for the JSON export (`gx_xgboost.json`). Set to `1` once to load an old bundle, then re-export. |
 
 ### Scoring Model Parameters
@@ -554,6 +554,7 @@ CLI.
 | `ATLAS_BACKEND` | `cuda` (default) / `rocm` / `vulkan` | Which llama-server build dispatch path is active. Written by `atlas init` based on GPU vendor (or `--backend vulkan` override). The entrypoint reads this to pick vendor-specific runtime flags. `vulkan` is the universal fallback — ~20–40% slower than tuned native backends but covers AMD/Intel/Snapdragon/Apple-via-MoltenVK/CPU with one image. See [SETUP.md § Vulkan](SETUP.md). |
 | `ATLAS_VK_DEVICE_SELECT` | (unset → first Vulkan ICD enumerated) | Vulkan-only: forwarded to `MESA_VK_DEVICE_SELECT` to pin a specific physical device when multiple ICDs are visible (e.g., dGPU + iGPU, two Intel Arc cards). Format: `"vendorID:deviceID"` (hex) or a device-name substring. Use `GGML_VK_VISIBLE_DEVICES` (numeric index) instead when the Mesa selector isn't granular enough. |
 | `ATLAS_ROOT` | (cwd) | Repo-root override read by `atlas onboard` when the checkout can't be resolved from the working directory. |
+| `ATLAS_GPU_VENDOR` | (auto-detected) | Process-env override read by `atlas init` / `atlas tier` on multi-vendor hosts: `nvidia`, `amd`, `apple`, `intel`. Auto-detect picks the largest-VRAM GPU. Not read from `.env`. |
 | `ATLAS_UPSTREAM_REPO` | `itigges22/ATLAS` | GitHub repo that `atlas lens publish` / `atlas publish` open the registry PR against. Override to target a fork. |
 | `ATLAS_PARALLEL_TASKS` | `1` | Benchmark runner: number of tasks processed concurrently. `atlas bench` pins this to `1` (the safe default for any model); export a higher value when driving `benchmark.v3_runner` directly on hardware that can take it. |
 | `ATLAS_LLM_PARALLEL` | `0` | Benchmark runner: set `1` to allow concurrent llama-server calls instead of serialized generation. |
@@ -577,7 +578,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 > **Note:** `atlas.conf` is only used by K3s deployment scripts. Docker Compose uses `.env` instead. The two files configure different deployment targets and should not be mixed.
 
-> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark/v3 ablation runner — except `ATLAS_ENABLE_TRAINING`, which is explicitly reserved (§ 8.7). Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.12).
+> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark/v3 ablation runner. Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.12).
 
 ### 8.1 Cluster & Network
 
@@ -651,7 +652,6 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_ENABLE_SPECULATIVE` | `false` | Gates draft-model download in `scripts/download-models.sh`. Enable it only after selecting a draft model compatible with the main model and runtime architecture. |
-| `ATLAS_ENABLE_TRAINING` | `false` | Reserved. No self-contained retrain trigger exists; keep `false`. |
 
 ### 8.8 Timeouts (seconds)
 
@@ -683,7 +683,7 @@ Consumed by `benchmark/v3_runner.py:_load_v3_config` for ablation studies. The p
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_REGISTRY` | `localhost` | Container registry prefix for locally-built images. Used by `scripts/build-containers.sh` to tag (e.g. `localhost/atlas-proxy:latest`). The K3s manifests themselves pull from `ghcr.io/${ATLAS_GHCR_OWNER}/...`, so this matters only when you're building images locally and side-loading them into k3s. |
+| `ATLAS_GHCR_OWNER` | `itigges22` | GHCR namespace for service images. Read by the K3s manifests **and** `scripts/build-containers.sh`, which tags local builds exactly as the manifests reference them (`ghcr.io/${ATLAS_GHCR_OWNER}/atlas-*`) so side-loaded images are picked up without editing manifests. |
 | `ATLAS_IMAGE_TAG` | `latest` | Image tag for both the local-build path and the GHCR pull path |
 
 The install scripts also honor two runtime-only env vars (not in `atlas.conf` itself):
@@ -695,4 +695,4 @@ The install scripts also honor two runtime-only env vars (not in `atlas.conf` it
 
 ### 8.12 Removed variables
 
-Vars removed in earlier trims are ignored if left in an `atlas.conf`; see CHANGELOG.
+Vars removed in earlier trims are ignored if left in an `atlas.conf`; see CHANGELOG. Most recently removed: `ATLAS_ENABLE_TRAINING` (was reserved with no reader — the nightly-retrain CronJob it anticipated was never built; lens retraining is the interactive `atlas lens retrain` / `/internal/lens/retrain` path).

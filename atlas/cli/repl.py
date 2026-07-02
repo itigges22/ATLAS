@@ -702,9 +702,6 @@ def handle_command(line: str):
             return
         bench.bench(max_tasks=tasks, selection_strategy=strategy)
 
-    elif cmd == "/ablation":
-        display.warn("Ablation mode coming soon")
-
     else:
         display.error(f"Unknown command: {cmd}")
         display.info("Type /help for commands")

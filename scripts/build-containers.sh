@@ -6,7 +6,14 @@ set -euo pipefail
 # Note: Importing to K3s requires sudo (will prompt if not root)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/config.sh"
+
+# Images are tagged exactly as the K3s manifests reference them
+# (templates/*-deployment.yaml.tmpl pull ghcr.io/${ATLAS_GHCR_OWNER}/...),
+# so a side-loaded local build is picked up without editing manifests.
+IMAGE_PREFIX="ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}"
+IMAGE_TAG="${ATLAS_IMAGE_TAG:-latest}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,22 +38,19 @@ detect_runtime() {
 
 build_image() {
     local name="$1"
-    local dir="$2"
-    local runtime="$3"
+    local context="$2"
+    local dockerfile="$3"
+    local runtime="$4"
 
     log_info "Building $name..."
 
-    if [[ ! -d "$dir" ]]; then
-        log_warn "Directory not found: $dir - skipping"
-        return 0
+    if [[ ! -f "$REPO_ROOT/$dockerfile" ]]; then
+        log_error "Dockerfile not found: $dockerfile (broken checkout?)"
+        exit 1
     fi
 
-    if [[ ! -f "$dir/Dockerfile" ]]; then
-        log_warn "Dockerfile not found in $dir - skipping"
-        return 0
-    fi
-
-    $runtime build -t "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" "$dir"
+    $runtime build -t "${IMAGE_PREFIX}/$name:${IMAGE_TAG}" \
+        -f "$REPO_ROOT/$dockerfile" "$REPO_ROOT/$context"
 
     log_info "$name built successfully"
 }
@@ -58,17 +62,17 @@ import_to_k3s() {
     log_info "Importing $name to K3s..."
 
     # Check if image exists
-    if ! $runtime image inspect "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" >/dev/null 2>&1; then
-        log_warn "Image ${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG} not found, skipping import"
+    if ! $runtime image inspect "${IMAGE_PREFIX}/$name:${IMAGE_TAG}" >/dev/null 2>&1; then
+        log_warn "Image ${IMAGE_PREFIX}/$name:${IMAGE_TAG} not found, skipping import"
         return 0
     fi
 
     # K3s containerd socket requires root access
     # Use full path since sudo doesn't inherit PATH
     if [[ $EUID -eq 0 ]]; then
-        $runtime save "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" | /usr/local/bin/k3s ctr images import -
+        $runtime save "${IMAGE_PREFIX}/$name:${IMAGE_TAG}" | /usr/local/bin/k3s ctr images import -
     else
-        $runtime save "${ATLAS_REGISTRY}/$name:${ATLAS_IMAGE_TAG}" | sudo /usr/local/bin/k3s ctr images import -
+        $runtime save "${IMAGE_PREFIX}/$name:${IMAGE_TAG}" | sudo /usr/local/bin/k3s ctr images import -
     fi
 
     log_info "$name imported to K3s"
@@ -80,42 +84,29 @@ main() {
     echo "=========================================="
     echo ""
     echo "Configuration:"
-    echo "  Registry:    $ATLAS_REGISTRY"
-    echo "  Image tag:   $ATLAS_IMAGE_TAG"
+    echo "  Prefix:      $IMAGE_PREFIX"
+    echo "  Image tag:   $IMAGE_TAG"
     echo ""
 
     RUNTIME=$(detect_runtime)
     log_info "Using container runtime: $RUNTIME"
 
-    # Core services (in k8s root)
-    declare -a CORE_IMAGES=(
-        "llama-server:$K8S_DIR/llama-server"
-        "geometric-lens:$K8S_DIR/geometric-lens"
-        "llm-proxy:$K8S_DIR/llm-proxy"
+    # name|build-context|dockerfile — matches the compose/build-images.yml
+    # matrix and the K3s manifest image names. v3 uses the repo root as
+    # context because v3-service/Dockerfile reads sibling dirs at build time.
+    declare -a IMAGES=(
+        "atlas-llama|inference|inference/Dockerfile.v31"
+        "atlas-lens|geometric-lens|geometric-lens/Dockerfile"
+        "atlas-proxy|proxy|proxy/Dockerfile"
+        "atlas-sandbox|sandbox|sandbox/Dockerfile"
+        "atlas-v3|.|v3-service/Dockerfile"
     )
 
-    # Atlas services (in k8s/atlas)
-    declare -a ATLAS_IMAGES=(
-        "sandbox:$K8S_DIR/atlas/sandbox"
-        # atlas-trainer: V1 LoRA training, moved to atlas/v1_archived/ (V3.1 uses frozen model)
-    )
-
-    # Build all core images
     echo ""
-    echo "Building core service images..."
-    for entry in "${CORE_IMAGES[@]}"; do
-        name="${entry%%:*}"
-        dir="${entry#*:}"
-        build_image "$name" "$dir" "$RUNTIME"
-    done
-
-    # Build all atlas images
-    echo ""
-    echo "Building Atlas service images..."
-    for entry in "${ATLAS_IMAGES[@]}"; do
-        name="${entry%%:*}"
-        dir="${entry#*:}"
-        build_image "$name" "$dir" "$RUNTIME"
+    echo "Building service images..."
+    for entry in "${IMAGES[@]}"; do
+        IFS="|" read -r name context dockerfile <<< "$entry"
+        build_image "$name" "$context" "$dockerfile" "$RUNTIME"
     done
 
     # Import to K3s
@@ -124,13 +115,8 @@ main() {
     if [[ $EUID -ne 0 ]]; then
         log_warn "K3s import requires sudo - you may be prompted for your password"
     fi
-    for entry in "${CORE_IMAGES[@]}"; do
-        name="${entry%%:*}"
-        import_to_k3s "$name" "$RUNTIME"
-    done
-
-    for entry in "${ATLAS_IMAGES[@]}"; do
-        name="${entry%%:*}"
+    for entry in "${IMAGES[@]}"; do
+        IFS="|" read -r name _ _ <<< "$entry"
         import_to_k3s "$name" "$RUNTIME"
     done
 
@@ -141,9 +127,9 @@ main() {
     echo ""
     echo "Images built and imported:"
     if [[ $EUID -eq 0 ]]; then
-        /usr/local/bin/k3s ctr images list 2>/dev/null | grep "$ATLAS_REGISTRY" || echo "  (use 'sudo k3s ctr images list' to verify)"
+        /usr/local/bin/k3s ctr images list 2>/dev/null | grep "$IMAGE_PREFIX" || echo "  (use 'sudo k3s ctr images list' to verify)"
     else
-        sudo /usr/local/bin/k3s ctr images list 2>/dev/null | grep "$ATLAS_REGISTRY" || echo "  (use 'sudo k3s ctr images list' to verify)"
+        sudo /usr/local/bin/k3s ctr images list 2>/dev/null | grep "$IMAGE_PREFIX" || echo "  (use 'sudo k3s ctr images list' to verify)"
     fi
     echo ""
 }

@@ -112,9 +112,10 @@ remove_atlas_services() {
 remove_container_images() {
     log_info "Removing container images..."
 
-
-    for img in $IMAGES; do
-        k3s ctr images rm "${ATLAS_REGISTRY}/$img:${ATLAS_IMAGE_TAG}" 2>/dev/null || true
+    local prefix="ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}"
+    local tag="${ATLAS_IMAGE_TAG:-latest}"
+    for img in atlas-llama atlas-llama-vulkan atlas-lens atlas-proxy atlas-sandbox atlas-v3; do
+        k3s ctr images rm "${prefix}/${img}:${tag}" 2>/dev/null || true
     done
 
     log_info "Container images removed"

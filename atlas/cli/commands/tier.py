@@ -3,14 +3,13 @@
 Classifies the host's GPU/RAM/disk into one of five tiers and emits the
 recommended ATLAS *runtime* settings for that tier (context length,
 parallel slots, KV cache quantization). The recommended *model* per tier
-lives in `model_recommendations.py` so PC-056's full model registry can
+lives in `model_registry.py` so PC-056's full model registry can
 absorb that surface without churning every caller of TierProfile.
 
 Layering:
-    tier.py                  -> hardware capability + runtime knobs
-    model_recommendations.py -> per-tier default model (PC-056 will replace)
-    PC-054 wizard            -> consumes both, writes merged .env
-    PC-056 model registry    -> upgrades model_recommendations in place
+    tier.py           -> hardware capability + runtime knobs
+    model_registry.py -> per-tier default model (full registry schema)
+    init wizard       -> consumes both, writes merged .env
 
 Tier breakpoints are based on VRAM, the hardest constraint for LLM
 inference. Vendor-agnostic as of V3.1.1 — NVIDIA, AMD (ROCm), Apple
@@ -55,7 +54,7 @@ import sys
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional, Tuple
 
-from atlas.cli.commands import model_recommendations
+from atlas.cli.commands import model_registry
 
 # Reuse doctor's color + unicode-safety primitives so output looks consistent.
 RESET = "\033[0m"
@@ -525,7 +524,7 @@ class TierProfile:
 
     PC-055.2 split: this record is pure *hardware capability* + the
     llama-server runtime knobs that derive from it. Model selection
-    (which gguf to load) lives in `model_recommendations.py` so PC-056's
+    (which gguf to load) lives in `model_registry.py` so PC-056's
     full model registry can absorb that surface without touching tiers.
 
     Runtime fields map directly to docker-compose.yml / .env knobs:
@@ -564,7 +563,7 @@ class TierProfile:
         for .env writing.
 
         Model-related env vars (ATLAS_MODEL_FILE, ATLAS_MODEL_NAME) are
-        rendered by `model_recommendations.ModelRecommendation.env_vars()`.
+        rendered by `model_registry.ModelRecommendation.env_vars()`.
         Wizard / installer code merges the two dicts before writing .env.
         """
         return {
@@ -878,7 +877,7 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     # PC-055.2: model lookup lives in model_recommendations (now a shim
     # over model_registry). PC-056 added lens_status — surface it here
     # so users see the warning before committing to install.
-    rec = model_recommendations.for_tier(t.tier)
+    rec = model_registry.for_tier(t.tier)
     if rec is not None:
         lens = getattr(rec, "lens_status", None)  # tolerate older shim
         if lens == "supported":
@@ -962,14 +961,14 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
         # the new `recommendation` key, and `env` is the merged dict (model
         # vars + tier runtime vars) so consumers writing .env get one bag.
         constraints = (evaluate_constraints(p, t) if t.tier != "cpu" else [])
-        rec = model_recommendations.for_tier(t.tier)
+        rec = model_registry.for_tier(t.tier)
         env = dict(t.env_vars())
         if rec is not None:
             env.update(rec.env_vars())
         out = {
             "probe": _round_floats(asdict(p)),
             "tier": asdict(t),
-            "recommendation": (model_recommendations.as_dict(rec)
+            "recommendation": (model_registry.as_dict(rec)
                                if rec is not None else None),
             "env": env,
             "constraints": [_round_floats(asdict(c)) for c in constraints],

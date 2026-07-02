@@ -42,6 +42,7 @@
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
+#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.24.0)
 #
 # Exit codes:
 #   0   success
@@ -452,7 +453,7 @@ install_nvidia_driver_libs() {
                         | head -1 | cut -d. -f1)
             if [[ -z "$drv_major" || "$drv_major" == "0" ]]; then
                 log_err "nvidia-smi didn't return a driver version — install the NVIDIA driver first."
-                log_err "  $SUDO $PKG install -y nvidia-driver-XXX  (where XXX is your driver branch, e.g. 570)"
+                log_err "  $SUDO $PKG install -y nvidia-driver-<branch>  (your driver branch, e.g. 570)"
                 return 1
             fi
             log_info "Installing libnvidia-compute-$drv_major to match driver $drv_major…"

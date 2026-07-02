@@ -88,6 +88,12 @@ services:
       # CUDA_VISIBLE_DEVICES (or the HIP/Vulkan equivalent) and skips
       # the export when empty, so the default is "all GPUs visible".
       - ATLAS_GPU_INDEX=${ATLAS_GPU_INDEX:-}
+      # ASA control-vector knobs (read by entrypoint-v3.1.sh; without the
+      # passthrough the documented .env knobs only work on the macOS
+      # native launcher). Empty values keep the entrypoint defaults.
+      - ATLAS_CONTROL_VECTOR_SCALE=${ATLAS_CONTROL_VECTOR_SCALE:-}
+      - ATLAS_CONTROL_VECTOR_LAYER_RANGE=${ATLAS_CONTROL_VECTOR_LAYER_RANGE:-}
+      - ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED=${ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED:-}
 
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
@@ -140,6 +146,9 @@ services:
       # Structural call-graph reasoning (#39, experimental, default off). Read by
       # call_graph_enabled() inside this process, so it must be forwarded here.
       - ATLAS_CALL_GRAPH=${ATLAS_CALL_GRAPH:-0}
+      # Plan-generation thinking mode (read inside this process — must be
+      # forwarded here or setting it in .env has no effect).
+      - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-}
     ports:
       - "127.0.0.1:${ATLAS_V3_PORT:-8070}:8070"
     depends_on:
@@ -167,6 +176,12 @@ services:
       # proxy's 300s run_command cap so long builds/tests aren't cut off
       # by the executor's internal 60s default.
       - MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}
+      # Workspace-snapshot caps for overlay-file runs (executor_server.py
+      # reads these; without the passthrough the documented .env knobs
+      # would be silently ignored in container deployments).
+      - ATLAS_SHELL_SNAPSHOT_MAX_FILES=${ATLAS_SHELL_SNAPSHOT_MAX_FILES:-20000}
+      - ATLAS_SHELL_SNAPSHOT_MAX_BYTES=${ATLAS_SHELL_SNAPSHOT_MAX_BYTES:-268435456}
+      - ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES=${ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES:-16777216}
     # Writable mounts for language toolchains. The container fs is
     # read_only=true for hardening, so every install/cache target a
     # toolchain wants to write to needs an explicit tmpfs. One per
