@@ -7,7 +7,16 @@ services:
     # redis:7-alpine — digest-pinned (Dependabot maintains)
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # AOF persistence + a bounded, fail-closed memory policy. noeviction
+    # is deliberate: the pattern cache, co-occurrence graph, and Thompson
+    # router posteriors are learned TTL-less state — silently LRU-evicting
+    # them would be data loss; a write error when full is visible and
+    # recoverable. Learned state lives in the redis-data volume; losing
+    # the volume resets learning (documented in BACKUP_RESTORE.md).
+    command: ["redis-server", "--appendonly", "yes",
+              "--maxmemory", "${ATLAS_REDIS_MAXMEMORY:-512mb}",
+              "--maxmemory-policy", "noeviction"]
+    mem_limit: ${ATLAS_REDIS_MEM:-768m}
     volumes:
       - redis-data:/data
     healthcheck:

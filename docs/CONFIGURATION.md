@@ -382,7 +382,9 @@ Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence r
 | `LLAMA_EMBED_URL` | (falls back to `LLAMA_URL`) | Dedicated embedding endpoint. Use this if you have a separate embedding server; otherwise embeddings reuse the LLAMA_URL host. |
 | `ROUTING_ENABLED` | `true` | Master switch for the confidence-router pipeline. Setting `false` short-circuits routing and uses STANDARD for every query. |
 | `PROJECT_DATA_DIR` | `/data/projects` | Directory for project index storage |
-| `REDIS_URL` | `redis://redis:6379` | Redis connection for confidence router and pattern cache. Features using Redis degrade gracefully if unavailable. |
+| `REDIS_URL` | `redis://redis:6379` | Redis connection. Outage behavior is split: the pattern cache, co-occurrence graph, and confidence router degrade gracefully (neutral routing, empty cache); the task-queue endpoints (`/v1/tasks/*`) return 503 when Redis is down. Learned state (patterns, router posteriors) is TTL-less and lives in the `redis-data` volume — volume loss resets learning. |
+| `ATLAS_REDIS_MAXMEMORY` | `512mb` | Redis `--maxmemory` (policy is `noeviction` — writes fail visibly when full rather than silently evicting learned state). |
+| `ATLAS_REDIS_MEM` | `768m` | Container memory limit for the redis service. |
 | `SANDBOX_URL` | `http://sandbox:8020` | Sandbox endpoint used by the lens's own `sandbox_client.py` (separate from `ATLAS_SANDBOX_URL` read by atlas-proxy). |
 | `SANDBOX_TIMEOUT` | `30` | Per-request timeout (seconds) when the lens itself calls the sandbox. |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8080` | Allowed CORS origins (comma-separated) |

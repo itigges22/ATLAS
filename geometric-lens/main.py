@@ -737,10 +737,18 @@ async def submit_task(
         "metrics": {}
     }
 
-    # Store task
-    redis_client.hset(f"task:{task_id}", mapping={"data": json.dumps(task_data)})
-    # Add to priority queue
-    redis_client.rpush(f"tasks:{request.priority}", task_id)
+    # Store task + enqueue. The client object exists even when the
+    # server is down (created without a ping at import), so a mid-flight
+    # outage surfaces here — return the same clean 503 as the
+    # client-is-None case instead of a raw connection error.
+    try:
+        redis_client.hset(f"task:{task_id}",
+                          mapping={"data": json.dumps(task_data)})
+        redis_client.rpush(f"tasks:{request.priority}", task_id)
+    except Exception as e:
+        logger.warning("task queue unavailable: %s", _safe_log(e))
+        raise HTTPException(status_code=503,
+                            detail="Task queue not available")
 
     return TaskSubmitResponse(task_id=task_id, status="pending")
 

@@ -1,0 +1,25 @@
+# ADR 0001: Local single-user trust model
+
+Status: accepted (documented 2026-07; practiced since V3.0)
+
+## Context
+ATLAS runs entirely on the operator's machine: proxy, V3, Lens,
+sandbox, and inference as local containers (or native llama-server on
+macOS). There is no hosted component and no multi-tenant deployment
+target.
+
+## Decision
+The security boundary is the machine + the sandbox container, not
+per-service authentication. Services bind to 127.0.0.1; model-generated
+tool calls are the untrusted input; file edits are workspace-confined
+(proxy path validation) and shell runs in the hardened sandbox
+container (non-root, cap_drop ALL, read-only root, pids/mem/cpu
+limits). Attacks requiring exposed ports or another hostile local user
+are out of scope (SECURITY.md).
+
+## Consequences
+Internal service endpoints are unauthenticated by design today —
+acceptable only under this model, and re-evaluated if any remote or
+multi-user mode is ever added. Defense-in-depth improvements (internal
+tokens) remain on the roadmap but are not a correctness requirement of
+this model.
