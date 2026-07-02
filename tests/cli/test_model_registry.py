@@ -20,9 +20,9 @@ from atlas.cli.commands import model_registry, model_recommendations
 
 def test_registry_has_known_qwen_entries():
     """PC-056 shipped with 4 tier presets; PC-056.1 added Q4_K_M and
-    Q8_0 variants of the 9B for a total of 6. Adding more is a
-    deliberate scope change and should be a separate ticket — flag
-    it loudly here."""
+    Q8_0 variants of the 9B; PC-215 added gemma-4-12b for a total of 7.
+    Adding more is a deliberate scope change and should be a separate
+    ticket — flag it loudly here."""
     assert len(model_registry.REGISTRY) == 7
     names = {m.name for m in model_registry.REGISTRY}
     assert names == {"Qwen3.5-7B-Q4_K_M",
@@ -258,7 +258,7 @@ def test_shim_callers_can_access_old_field_names():
 # PC-056.1 schema additions: 9B variants, commit-pinned URLs, requires_hf_token
 # ---------------------------------------------------------------------------
 
-def test_pc0561_registry_now_has_six_entries():
+def test_pc0561_registry_now_has_seven_entries():
     """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B; PC-215 added
     gemma-4-12b via the publish flow. Adding more is a deliberate scope
     change — flag it loudly here."""

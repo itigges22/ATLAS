@@ -23,8 +23,10 @@ def _atlas_root() -> Path:
 
 
 def bench(dataset: str = "livecodebench", max_tasks: int = 0,
-          selection_strategy: str = "random", run_id: str = None):
-    """Run benchmark with live progress display.
+          selection_strategy: str = "random", run_id: str = None) -> int:
+    """Run benchmark with live progress display. Returns a process exit
+    code: 0 on success (including a fully-resumed run), 1 when the runner
+    fails or produces nothing.
 
     Delegates to the V3 runner but displays progress inline. The runner is
     launched with the repo root as its working directory (the `benchmark`
@@ -109,7 +111,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     except KeyboardInterrupt:
         proc.terminate()
         display.warn("Benchmark interrupted")
-        return
+        return 1
 
     proc.wait()
 
@@ -117,7 +119,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
         display.error(f"benchmark runner exited with code {proc.returncode}")
         for l in tail:
             print(f"    {l}")
-        return
+        return 1
 
     if task_count == 0 and not saw_complete:
         # The runner exited without processing a single task (e.g. an aborted
@@ -126,7 +128,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
         display.error("runner exited without processing any tasks")
         for l in tail:
             print(f"    {l}")
-        return
+        return 1
     if task_count == 0:
         # Resume found every task already complete — the summary below is
         # the prior run's results, which is exactly what the operator wants.
@@ -154,10 +156,11 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
         display.info(f"Lens retrain: atlas lens build --force --from-results "
                      f"{results_dir}")
         display.separator()
-    else:
-        display.error("No results found")
-        for l in tail:
-            print(f"    {l}")
+        return 0
+    display.error("No results found")
+    for l in tail:
+        print(f"    {l}")
+    return 1
 
 
 def main(argv=None) -> int:
@@ -181,6 +184,5 @@ def main(argv=None) -> int:
         parser.error("--tasks must be >= 0 (0 runs the full dataset)")
 
     # The runner supports LiveCodeBench only, so no --dataset flag is exposed.
-    bench(max_tasks=args.tasks, selection_strategy=args.strategy,
-          run_id=args.run_id)
-    return 0
+    return bench(max_tasks=args.tasks, selection_strategy=args.strategy,
+                 run_id=args.run_id)

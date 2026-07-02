@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(
     not os.path.isfile(PROXY_BINARY) or not os.access(PROXY_BINARY, os.X_OK),
     reason=f"atlas-proxy binary not available at {PROXY_BINARY} "
-           f"— run `cd atlas-proxy && go build -o {PROXY_BINARY} .` first",
+           f"— run `cd proxy && go build -o {PROXY_BINARY} .` first",
 )
 
 
