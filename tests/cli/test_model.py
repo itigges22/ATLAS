@@ -843,6 +843,29 @@ def test_registry_has_lens_and_asa_urls_for_qwen_9b_q6k():
     assert m.asa_artifact_url_base is not None
 
 
+def _patch_registry_artifact_hashes(monkeypatch, name: str, body: bytes):
+    """Point the registry entry's per-artifact hashes at the fake body the
+    test serves, so download verification passes on fixture bytes."""
+    import dataclasses
+    import atlas.cli.commands.model_registry as reg
+
+    digest = hashlib.sha256(body).hexdigest()
+    original_by_name = reg.by_name
+    entry = original_by_name(name)
+    patched = dataclasses.replace(
+        entry,
+        lens_artifact_sha256={f: digest for f in entry.lens_artifact_files},
+        asa_artifact_sha256={f: digest for f in entry.asa_artifact_files},
+    )
+
+    def fake_by_name(query):
+        if query == name:
+            return patched
+        return original_by_name(query)
+
+    monkeypatch.setattr(reg, "by_name", fake_by_name)
+
+
 def test_install_artifacts_uses_url_base_plus_filename(tmp_path, monkeypatch):
     """`atlas model install-artifacts <name>` should hit
     lens_artifact_url_base + each filename for the lens files, and
@@ -851,6 +874,8 @@ def test_install_artifacts_uses_url_base_plus_filename(tmp_path, monkeypatch):
     captured: list = []
     _install_with_fake_urlopen(monkeypatch, body=b"FAKE_BLOB", status=200,
                                 captured=captured)
+    _patch_registry_artifact_hashes(monkeypatch, "Qwen3.5-9B-Q6_K",
+                                    b"FAKE_BLOB")
 
     # Force lens dir into tmp_path so we don't pollute the repo.
     lens_dir = tmp_path / "lens"
@@ -892,6 +917,7 @@ def test_install_artifacts_skips_already_present_files(tmp_path, monkeypatch,
     captured: list = []
     _install_with_fake_urlopen(monkeypatch, body=b"NEW", status=200,
                                 captured=captured)
+    _patch_registry_artifact_hashes(monkeypatch, "Qwen3.5-9B-Q6_K", b"NEW")
 
     rc = model.main(["install-artifacts", "Qwen3.5-9B-Q6_K",
                      "--models-dir", str(tmp_path), "--no-color"])
@@ -919,6 +945,8 @@ def test_install_artifacts_replaces_cross_model_asa_vector(tmp_path,
     captured = []
     _install_with_fake_urlopen(monkeypatch, body=b"selected vector", status=200,
                                 captured=captured)
+    _patch_registry_artifact_hashes(monkeypatch, "Qwen3.5-9B-Q6_K",
+                                    b"selected vector")
 
     rc = model.main(["install-artifacts", "Qwen3.5-9B-Q6_K",
                      "--models-dir", str(tmp_path), "--no-color"])
@@ -926,6 +954,31 @@ def test_install_artifacts_replaces_cross_model_asa_vector(tmp_path,
     assert vector.read_bytes() == b"selected vector"
     assert (tmp_path / "ast_edit_steering.gguf.model").read_text().strip() == \
         "Qwen3.5-9B-Q6_K"
+
+
+def test_install_artifacts_rejects_hash_mismatch(tmp_path, monkeypatch, capsys):
+    """A downloaded artifact whose bytes don't match the registry hash
+    must fail the install and leave nothing at the target path — lens
+    .pt files are deserialized by the lens service, so a tampered or
+    silently re-published file must not land on disk as trusted."""
+    captured: list = []
+    _install_with_fake_urlopen(monkeypatch, body=b"TAMPERED", status=200,
+                                captured=captured)
+    _patch_registry_artifact_hashes(monkeypatch, "Qwen3.5-9B-Q6_K",
+                                    b"what was published")
+
+    lens_dir = tmp_path / "lens"
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(lens_dir))
+
+    rc = model.main(["install-artifacts", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "SHA-256 mismatch" in out
+    # Neither the artifact nor its .part temp file may remain.
+    assert not (lens_dir / "cost_field.pt").exists()
+    assert not (lens_dir / "cost_field.pt.part").exists()
+    assert not (tmp_path / "ast_edit_steering.gguf").exists()
 
 
 def test_install_no_artifacts_flag_skips_artifact_download(tmp_path, monkeypatch,

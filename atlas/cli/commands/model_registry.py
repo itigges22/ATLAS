@@ -108,6 +108,12 @@ class Model:
     # `supported` claim to be honest. doctor.check_tier_match
     # cross-checks this — registered "supported" + missing files = warn.
     lens_artifact_files: List[str] = field(default_factory=list)
+    # Per-file SHA-256 of the published lens artifacts, keyed by filename.
+    # Lens .pt files are torch checkpoints — a tampered download would be
+    # deserialized on the lens container, so the installer verifies any
+    # file that has an entry here and reports unverified ones. Populate
+    # from HF's x-linked-etag (LFS objects) or sha256sum of the upload.
+    lens_artifact_sha256: Dict[str, str] = field(default_factory=dict)
     # PC-214: HuggingFace repo holding this model's published lens
     # artifacts (`atlas lens publish` destination). None = unpublished;
     # consumers download per the HF repo's model card.
@@ -135,6 +141,9 @@ class Model:
     # open for multi-vector setups (per-layer banks) without a schema
     # change. doctor cross-checks alongside lens_artifact_files.
     asa_artifact_files: List[str] = field(default_factory=list)
+    # Per-file SHA-256 of the published ASA artifacts — same contract as
+    # lens_artifact_sha256.
+    asa_artifact_sha256: Dict[str, str] = field(default_factory=dict)
     # PC-214: HuggingFace repo holding this model's published ASA vector.
     asa_hf_repo: Optional[str] = None
     # Base URL where the asa_artifact_files live for download. Same
@@ -274,6 +283,12 @@ REGISTRY: List[Model] = [
             "https://huggingface.co/datasets/itigges22/ATLAS/"
             "resolve/main/models/"
         ),
+        # x-linked-etag of the HF LFS objects (captured 2026-07-02).
+        # Update whenever the artifacts are re-published.
+        lens_artifact_sha256={
+            "cost_field.pt": "79176de9746076ebbe9e9ea0e56207d04410b1f88e3dc255bcbc9fd1689164d9",
+            "metric_tensor.pt": "d0855a3f00ef0de23a0e6326c7c1d4e921c36016cccb442963b2b7c60fc0e0d5",
+        },
         # PC-061: ASA control vector trained + published 2026-05-12.
         asa_status="supported",
         asa_artifact_files=["ast_edit_steering.gguf"],
@@ -281,6 +296,12 @@ REGISTRY: List[Model] = [
             "https://huggingface.co/datasets/itigges22/ATLAS/"
             "resolve/main/models/"
         ),
+        # sha256sum of the published file (captured 2026-07-02; the HF
+        # etag is a git blob SHA-1 for this non-LFS file, so the hash
+        # was computed from the downloaded bytes). Update on re-publish.
+        asa_artifact_sha256={
+            "ast_edit_steering.gguf": "8b9a7d8ba617dc2b9d6c0f53b398314390ac3e3573748c71a2b3a2721bdeea70",
+        },
         notes="ATLAS development target. Legacy Lens artifacts are "
               "downloadable but require `atlas lens build` to add current "
               "per-model calibration. "

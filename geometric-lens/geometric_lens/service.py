@@ -272,26 +272,35 @@ def _load_gx_models(models_dir: str) -> None:
                 booster.load_model(xgb_json)
                 _gx_xgboost = _BoosterClassifier(booster)
                 load_path = "json"
-            else:
-                # Legacy pickle fallback. Emits the forward-compat
-                # warning the JSON path was added to silence; keep
-                # this branch for one release while users migrate.
+            elif os.environ.get("ATLAS_ALLOW_PICKLE_GX") == "1":
+                # Legacy pickle fallback, opt-in only: unpickling executes
+                # arbitrary code, and model dirs can contain downloaded
+                # artifacts. Users on the old format set
+                # ATLAS_ALLOW_PICKLE_GX=1 once to load it, then re-export.
                 import pickle
                 with open(xgb_pkl, 'rb') as f:
                     _gx_xgboost = pickle.load(f)
                 load_path = "pickle (deprecated — re-export to gx_xgboost.json)"
+            else:
+                logger.warning(
+                    "G(x) found only as legacy gx_xgboost.pkl; refusing to "
+                    "unpickle by default. Set ATLAS_ALLOW_PICKLE_GX=1 to load "
+                    "it once and re-export to gx_xgboost.json."
+                )
+                _gx_xgboost = None
 
-            with open(weights_path, 'r') as f:
-                weights = json_mod.load(f)
+            if _gx_xgboost is not None:
+                with open(weights_path, 'r') as f:
+                    weights = json_mod.load(f)
 
-            _gx_pca_components = np.array(weights['pca_components'], dtype=np.float32)
-            _gx_pca_mean = np.array(weights['pca_mean'], dtype=np.float32)
-            _gx_top_dims = weights.get('top_dims', [])
+                _gx_pca_components = np.array(weights['pca_components'], dtype=np.float32)
+                _gx_pca_mean = np.array(weights['pca_mean'], dtype=np.float32)
+                _gx_top_dims = weights.get('top_dims', [])
 
-            logger.info(
-                f"G(x) XGBoost loaded ({load_path}, AUC={weights.get('cv_auc_mean', 0):.4f}, "
-                f"PCA {weights.get('original_dim', '?')}→{weights.get('pca_dim', '?')})"
-            )
+                logger.info(
+                    f"G(x) XGBoost loaded ({load_path}, AUC={weights.get('cv_auc_mean', 0):.4f}, "
+                    f"PCA {weights.get('original_dim', '?')}→{weights.get('pca_dim', '?')})"
+                )
         except ImportError:
             logger.warning("G(x) XGBoost model found but xgboost package not installed")
             _gx_xgboost = None

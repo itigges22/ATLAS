@@ -105,7 +105,12 @@ def load_metric_tensor(model_path: str) -> Optional[PCAMetricTensor]:
         return None
 
     try:
-        checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+        # weights_only=True: the checkpoint is plain tensors/dicts/scalars
+        # (architecture, pca_dim, hidden, pca_components, pca_mean,
+        # state_dict, original_dim). The lens .pt can come from a remote
+        # artifact download, so full-pickle loading would let a tampered
+        # file execute code during deserialization.
+        checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
 
         arch = checkpoint.get('architecture', 'unknown')
         if arch == 'xgboost_importance':

@@ -2327,7 +2327,10 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 }
 
 // runLocally executes a command only when the operator explicitly selects
-// host verification. Sandbox outages never route here implicitly.
+// host verification (ATLAS_VERIFY_IN=host). Sandbox outages never route
+// here implicitly. Host mode removes the container backstop entirely:
+// the only thing between model output and the host shell is
+// validateShellCommand's catastrophe-only blocklist.
 func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

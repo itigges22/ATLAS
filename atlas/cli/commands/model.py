@@ -608,7 +608,8 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
                 continue
             attempted += 1
             url = m.lens_artifact_url_base + fname
-            if _download_artifact(url, target_path, color) != 0:
+            if _download_artifact(url, target_path, color,
+                                  expected_sha256=m.lens_artifact_sha256.get(fname)) != 0:
                 failures += 1
 
     # ----- ASA artifacts ----------------------------------------------
@@ -639,7 +640,8 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
                             f"to {marker or 'another model'}")
             attempted += 1
             url = m.asa_artifact_url_base + fname
-            if _download_artifact(url, target_path, color) != 0:
+            if _download_artifact(url, target_path, color,
+                                  expected_sha256=m.asa_artifact_sha256.get(fname)) != 0:
                 failures += 1
             else:
                 try:
@@ -657,23 +659,50 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
     return 0
 
 
-def _download_artifact(url: str, target_path: str, color: bool) -> int:
+def _download_artifact(url: str, target_path: str, color: bool,
+                       expected_sha256: Optional[str] = None) -> int:
     """Download a single artifact file (lens .pt or asa .gguf). These
     are small (KB to a few MB) compared to the model gguf, so no
     progress bar or resume — just a one-shot urlretrieve-style fetch
     with the HF token header if available.
+
+    Lens .pt files are torch checkpoints and ASA vectors are fed to
+    llama-server, so when the registry carries a hash the bytes are
+    verified before the file is moved into place; a mismatch is a hard
+    failure. Files without a registry hash download with an explicit
+    "unverified" note rather than a silent [ok].
     """
     token = _hf_token()
     req = _build_request(url, range_start=0, token=token)
     fname = os.path.basename(target_path)
     tmp_path = target_path + ".part"
     try:
+        hasher = hashlib.sha256()
         with urllib.request.urlopen(req, timeout=60) as resp:
             with open(tmp_path, "wb") as out:
-                shutil.copyfileobj(resp, out, length=64 * 1024)
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+                    out.write(chunk)
+        if expected_sha256:
+            actual = hasher.hexdigest()
+            if actual != expected_sha256.lower():
+                _safe_print(f"    [fail] {fname}: SHA-256 mismatch — "
+                            f"expected {expected_sha256[:16]}…, got {actual[:16]}…. "
+                            f"Refusing to install; the artifact may have been "
+                            f"re-published (update the registry hash) or tampered with.")
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+                return 1
         os.replace(tmp_path, target_path)
         size_kb = os.path.getsize(target_path) / 1024
-        _safe_print(f"    [ok] {fname} ({size_kb:.1f} KB)")
+        if expected_sha256:
+            _safe_print(f"    [ok] {fname} ({size_kb:.1f} KB, sha256 verified)")
+        else:
+            _safe_print(f"    [ok] {fname} ({size_kb:.1f} KB, unverified — "
+                        f"no registry hash for this file)")
         return 0
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         _safe_print(f"    [fail] {fname}: {e}")

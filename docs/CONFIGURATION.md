@@ -388,6 +388,7 @@ Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence r
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8080` | Allowed CORS origins (comma-separated) |
 | `CONFIG_PATH` | `/app/config/config.yaml` | Path to YAML config file (optional, defaults used if missing) |
 | `API_KEYS_PATH` | `/app/secrets/api-keys.json` | Path to API keys JSON. The lens's `/v1/*` endpoints return 401 until a key file is mounted. |
+| `ATLAS_ALLOW_PICKLE_GX` | unset | Opt-in for loading the legacy `gx_xgboost.pkl` G(x) format. Unpickling executes arbitrary code, so the service refuses `.pkl` by default and asks for the JSON export (`gx_xgboost.json`). Set to `1` once to load an old bundle, then re-export. |
 
 ### Scoring Model Parameters
 
@@ -440,7 +441,6 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAX_EXECUTION_TIME` | `60` (in-code); `300` in the Compose stack | Maximum execution time in seconds. Compose sets it from `ATLAS_SANDBOX_MAX_EXECUTION_TIME` (default 300) so per-call limits match the proxy's `run_command` cap. |
-| `MAX_MEMORY_MB` | `512` | Maximum memory per execution in MB |
 | `WORKSPACE_BASE` | `/tmp/sandbox` | Base directory for execution workspaces |
 | `ATLAS_SHELL_SNAPSHOT_MAX_FILES` | `20000` | File-count cap when `/shell` copies a bounded workspace snapshot into tmpfs for overlay-file runs (V3 candidate testing without touching real files). Exceeding the cap fails the snapshot with a structured error. |
 | `ATLAS_SHELL_SNAPSHOT_MAX_BYTES` | `268435456` (256 MB) | Total-bytes cap on the same workspace snapshot. |
@@ -553,6 +553,11 @@ CLI.
 | `HF_TOKEN` | (unset) | HuggingFace write token used by `atlas lens publish` / `atlas asa publish` for artifact upload. Get one at https://huggingface.co/settings/tokens (scope: write). `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` are also honored. Full walkthrough: [PUBLISHING.md](PUBLISHING.md). |
 | `ATLAS_BACKEND` | `cuda` (default) / `rocm` / `vulkan` | Which llama-server build dispatch path is active. Written by `atlas init` based on GPU vendor (or `--backend vulkan` override). The entrypoint reads this to pick vendor-specific runtime flags. `vulkan` is the universal fallback — ~20–40% slower than tuned native backends but covers AMD/Intel/Snapdragon/Apple-via-MoltenVK/CPU with one image. See [SETUP.md § Vulkan](SETUP.md). |
 | `ATLAS_VK_DEVICE_SELECT` | (unset → first Vulkan ICD enumerated) | Vulkan-only: forwarded to `MESA_VK_DEVICE_SELECT` to pin a specific physical device when multiple ICDs are visible (e.g., dGPU + iGPU, two Intel Arc cards). Format: `"vendorID:deviceID"` (hex) or a device-name substring. Use `GGML_VK_VISIBLE_DEVICES` (numeric index) instead when the Mesa selector isn't granular enough. |
+| `ATLAS_ROOT` | (cwd) | Repo-root override read by `atlas onboard` when the checkout can't be resolved from the working directory. |
+| `ATLAS_UPSTREAM_REPO` | `itigges22/ATLAS` | GitHub repo that `atlas lens publish` / `atlas publish` open the registry PR against. Override to target a fork. |
+| `ATLAS_PARALLEL_TASKS` | `1` | Benchmark runner: number of tasks processed concurrently. `atlas bench` pins this to `1` (the safe default for any model); export a higher value when driving `benchmark.v3_runner` directly on hardware that can take it. |
+| `ATLAS_LLM_PARALLEL` | `0` | Benchmark runner: set `1` to allow concurrent llama-server calls instead of serialized generation. |
+| `ATLAS_API_KEYS_PATH` | `./secrets/api-keys.json` | Read by the TUI to locate the lens API-key file (the lens container itself reads `API_KEYS_PATH`, § 4). |
 
 ### Generation Parameters
 
@@ -572,7 +577,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 > **Note:** `atlas.conf` is only used by K3s deployment scripts. Docker Compose uses `.env` instead. The two files configure different deployment targets and should not be mixed.
 
-> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark/v3 ablation runner; vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.12).
+> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark/v3 ablation runner — except `ATLAS_ENABLE_TRAINING`, which is explicitly reserved (§ 8.7). Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.12).
 
 ### 8.1 Cluster & Network
 

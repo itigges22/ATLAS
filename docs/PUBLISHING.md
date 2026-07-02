@@ -92,6 +92,13 @@ atlas lens publish <model-name> \
 `atlas-lens-<model-slug>` is the naming convention. The upload includes C(x),
 G(x), `model_identity.json`, `cx_normalization.json`, and `gx_thresholds.json`.
 
+After any re-publish, update the `lens_artifact_sha256` / `asa_artifact_sha256`
+entries for the model in `atlas/cli/commands/model_registry.py` — the installer
+verifies downloads against those hashes and will refuse files that don't match
+the pinned values. For HF LFS objects the hash is the `x-linked-etag` response
+header of the `resolve/` URL; for small non-LFS files use `sha256sum` on the
+uploaded file.
+
 ### Common flags
 
 | Flag | Purpose |

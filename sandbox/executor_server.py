@@ -6,13 +6,18 @@ Provides isolated code execution with resource limits and structured error repor
 
 Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     This service IS the trust boundary. Its entire purpose is to execute
-    agent-supplied code and shell commands on behalf of ATLAS. The
-    container provides isolation (tmpfs workspace, read-only root,
-    network-locked-down, per-call resource limits via MAX_EXECUTION_TIME
-    and MAX_MEMORY_MB). The Python code in this file does NOT need to
-    sanitize inputs to subprocess.run, validate user-controlled paths
-    inside the workspace, or treat agent-supplied code as untrusted —
-    that's the container's job.
+    agent-supplied code and shell commands on behalf of ATLAS. Isolation
+    comes from the container, and only from what the container actually
+    enforces: read-only rootfs, no-new-privileges, pids_limit (fork-bomb
+    stop), tmpfs workspace, /workspace as the only writable host mount,
+    and the compose `mem_limit` (written by `atlas init`; unlimited until
+    then on a raw `compose up`). Per-call wall-clock is capped in-process
+    via MAX_EXECUTION_TIME. Outbound network is NOT restricted — the
+    sandbox sits on the regular bridge network so toolchains can fetch
+    dependencies; do not describe it as egress-locked. The Python code in
+    this file does NOT need to sanitize inputs to subprocess.run, validate
+    user-controlled paths inside the workspace, or treat agent-supplied
+    code as untrusted — that's the container's job.
 
     CodeQL routinely flags `py/command-line-injection` and
     `py/path-injection` here. Those alerts are by-design false positives:
@@ -45,7 +50,6 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="ATLAS Code Execution Sandbox")
 
 MAX_EXECUTION_TIME = int(os.getenv("MAX_EXECUTION_TIME", "60"))
-MAX_MEMORY_MB = int(os.getenv("MAX_MEMORY_MB", "512"))
 WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/sandbox"))
 
 SUPPORTED_LANGUAGES = {

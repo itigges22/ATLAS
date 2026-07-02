@@ -84,6 +84,25 @@ declare -A KNOWN_MODEL_URLS=(
     ["Qwen3-0.6B-Q8_0.gguf"]="$QWEN3_0_6B_URL"
 )
 
+# SHA-256 per model file, mirroring the `sha256` fields in
+# atlas/cli/commands/model_registry.py (HF x-linked-etag values). The
+# Python installer (`atlas model install`) already verifies these; this
+# map closes the same gap on the shell path. Files without an entry get
+# the size sanity check only — add the hash when a new model lands in
+# the registry.
+declare -A KNOWN_MODEL_SHA256=(
+    ["Qwen3.5-9B-Q6_K.gguf"]="91898433cf5ce0a8f45516a4cc3e9343b6e01d052d01f684309098c66a326c59"
+)
+
+sha256_of() {
+    # sha256sum on Linux, shasum on macOS.
+    if command -v sha256sum &>/dev/null; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
 download_model() {
     local url="$1"
     local filename="$2"
@@ -108,6 +127,25 @@ download_model() {
         log_error "curl failed downloading $filename — see output above."
         log_error "Recovery: re-run this script (curl resumes from .tmp)."
         return 1
+    fi
+
+    local expected="${KNOWN_MODEL_SHA256[$filename]:-}"
+    if [[ -n "$expected" ]]; then
+        log_info "Verifying SHA-256 of $filename (multi-GB file — this takes a moment)"
+        local actual
+        actual=$(sha256_of "$filepath.tmp")
+        if [[ "$actual" != "$expected" ]]; then
+            log_error "SHA-256 mismatch for $filename:"
+            log_error "  expected $expected"
+            log_error "  got      $actual"
+            log_error "The download is corrupt or the upstream file changed."
+            log_error "Removing the partial file; re-run to download fresh."
+            rm -f "$filepath.tmp"
+            return 1
+        fi
+        log_info "SHA-256 verified"
+    else
+        log_warn "No pinned SHA-256 for $filename — size check only"
     fi
     mv "$filepath.tmp" "$filepath"
 
