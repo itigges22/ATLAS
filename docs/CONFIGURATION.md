@@ -442,6 +442,7 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 |----------|---------|-------------|
 | `MAX_EXECUTION_TIME` | `60` (in-code); `300` in the Compose stack | Maximum execution time in seconds. Compose sets it from `ATLAS_SANDBOX_MAX_EXECUTION_TIME` (default 300) so per-call limits match the proxy's `run_command` cap. |
 | `WORKSPACE_BASE` | `/tmp/sandbox` | Base directory for execution workspaces |
+| `ATLAS_SANDBOX_WORKSPACE_ROOT` | `/workspace` | The bind-mounted project root the executor confines `cwd` to. Container deployments keep the default; the E2E acceptance test overrides it to run the executor on the host under a temp dir. |
 | `ATLAS_SHELL_SNAPSHOT_MAX_FILES` | `20000` | File-count cap when `/shell` copies a bounded workspace snapshot into tmpfs for overlay-file runs (V3 candidate testing without touching real files). Exceeding the cap fails the snapshot with a structured error. |
 | `ATLAS_SHELL_SNAPSHOT_MAX_BYTES` | `268435456` (256 MB) | Total-bytes cap on the same workspace snapshot. |
 | `ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES` | `16777216` (16 MB) | Per-file size cap — larger files are skipped (logged), not fatal. |
