@@ -118,6 +118,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write  # keyless cosign signing via the workflow OIDC identity
     strategy:
       fail-fast: false
       matrix:
@@ -213,6 +214,7 @@ jobs:
       #   others -> GHA cache (small, fast, no extra registry write).
       - name: Build & push (llama CUDA, registry cache)
         if: matrix.service.name == 'llama'
+        id: build-llama
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5
         with:
           context: ${{ matrix.service.context }}
@@ -222,7 +224,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache,mode=max
-          provenance: false
+          provenance: mode=max
+          sbom: true
 
       # #116: llama-vulkan with conditional arm64. The platforms
       # expression evaluates to amd64+arm64 only on tag pushes (releases),
@@ -230,6 +233,7 @@ jobs:
       # emulation via QEMU is 5-10x slower.
       - name: Build & push (llama Vulkan, registry cache, arch-conditional)
         if: matrix.service.name == 'llama-vulkan'
+        id: build-vulkan
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5
         with:
           context: ${{ matrix.service.context }}
@@ -240,10 +244,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama-vulkan:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama-vulkan:buildcache,mode=max
-          provenance: false
+          provenance: mode=max
+          sbom: true
 
       - name: Build & push (small services, GHA cache)
         if: matrix.service.name != 'llama' && matrix.service.name != 'llama-vulkan'
+        id: build-small
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5
         with:
           context: ${{ matrix.service.context }}
@@ -253,7 +259,27 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,scope=${{ matrix.service.name }},mode=max
-          provenance: false
+          provenance: mode=max
+          sbom: true
+
+      # Keyless (OIDC) signature over the pushed digest. Signing the
+      # digest covers every tag that ever points at it — including the
+      # dev/latest/semver tags the promote job repoints later, since
+      # imagetools create reuses the same manifest digest. Verify with:
+      #   cosign verify \
+      #     --certificate-identity-regexp 'github.com/itigges22/ATLAS' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     ghcr.io/itigges22/atlas-<svc>@<digest>
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
+
+      - name: Sign image (keyless)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build-llama.outputs.digest || steps.build-vulkan.outputs.digest || steps.build-small.outputs.digest }}
+        run: |
+          cosign sign --yes "${REGISTRY}/${OWNER}/atlas-${{ matrix.service.name }}@${DIGEST}"
 
   # Phase 2: repoint the moving tags at the :sha-<short> images, but only
   # after every service built and the `tests` workflow succeeded on this
