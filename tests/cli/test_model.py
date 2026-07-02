@@ -905,6 +905,7 @@ def test_install_artifacts_skips_already_present_files(tmp_path, monkeypatch,
     lens_dir = tmp_path / "lens"
     lens_dir.mkdir()
     (lens_dir / "cost_field.pt").write_bytes(b"already here")
+    (lens_dir / "model_identity.json").write_text('{"model": "Qwen3.5-9B-Q6_K", "embedding_dim": 4096}')
     (tmp_path / "ast_edit_steering.gguf").write_bytes(b"already here")
     (tmp_path / "ast_edit_steering.gguf.model").write_text(
         "Qwen3.5-9B-Q6_K\n"
@@ -929,7 +930,7 @@ def test_install_artifacts_skips_already_present_files(tmp_path, monkeypatch,
                      "--models-dir", str(tmp_path),
                      "--force-artifacts", "--no-color"])
     assert rc == 0
-    assert len(captured) == 2  # both re-fetched
+    assert len(captured) == 3  # all three re-fetched
     assert (lens_dir / "cost_field.pt").read_bytes() == b"NEW"
 
 

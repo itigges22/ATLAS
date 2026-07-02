@@ -406,6 +406,7 @@ def test_lens_artifacts_present_ok_when_files_exist(tmp_path):
     art_dir = tmp_path / "lens-models"
     art_dir.mkdir()
     (art_dir / "cost_field.pt").write_bytes(b"x")
+    (art_dir / "model_identity.json").write_text('{"model": "Qwen3.5-9B-Q6_K", "embedding_dim": 4096}')
     import os
     os.environ["ATLAS_LENS_MODELS"] = str(art_dir)
     try:
