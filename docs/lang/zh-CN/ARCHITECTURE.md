@@ -145,7 +145,7 @@ llama-server 的 `response_format: {"type": "json_object"}` 强制每一次模�
 
 ### 工具
 
-`proxy/tools.go` 中注册了 15 个工具：
+`proxy/tools.go` 中注册了 14 个工具：
 
 | 工具 | 用途 | 只读 |
 |------|---------|-----------|
@@ -163,7 +163,6 @@ llama-server 的 `response_format: {"type": "json_object"}` 强制每一次模�
 | `run_background` | PC-196 —— 在 sandbox 中启动一个长时间运行的进程（例如 `python app.py`）；立即返回一个 `job_id` | 否 |
 | `tail_background` | PC-196 —— 通过 `job_id` 获取某个后台任务新增的 stdout/stderr | 是 |
 | `stop_background` | PC-196 —— 通过 `job_id` 对某个后台任务发送 SIGTERM/SIGKILL | 否 |
-| `plan_tasks` | 将工作分解为带依赖关系的并行任务 | 否 |
 
 ### 工具选择偏差缓解（2026 年 5 月 BiasBusters 综合方案）
 
@@ -722,7 +721,7 @@ macOS 无法把 GPU 直通给 Docker 容器，因此 llama-server 无法在 Dock
 
 `templates/*.yaml.tmpl` 中的清单由 `scripts/generate-manifests.sh`（或 `install.sh` 的 `process_templates` 步骤）使用 `envsubst` 对照 `atlas.conf` 渲染为 `manifests/*.yaml`。各服务作为 Pod 部署在 `atlas` 命名空间；外部访问通过 NodePort（`ATLAS_PROXY_NODEPORT`、`ATLAS_LLAMA_NODEPORT`、`ATLAS_LENS_NODEPORT`、`ATLAS_SANDBOX_NODEPORT`、`ATLAS_V3_NODEPORT`）。K3s 入口点与 Docker Compose 下使用的 `inference/entrypoint-v3.1.sh` 相同 —— 上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量（`ATLAS_CONTEXT_LENGTH`、`ATLAS_FLASH_ATTENTION` 等）驱动，因此跨部署模式行为一致。proxy 和 sandbox Pod 都把 `${ATLAS_PROJECTS_DIR}` 以 `hostPath` 挂载到 `/workspace`，使 agent 的工具调用在两个 Pod 中看到相同的文件。
 
-`scripts/deploy-9b.sh` 接受 `--backend cuda|rocm`（或 `ATLAS_BACKEND` 环境变量）来部署设置了相应环境变量的任一镜像。ROCm K8s pod 还额外需要 `/dev/kfd` + `/dev/dri` hostPath 挂载，以及在其 Pod 规格中的 `render`/`video` 组成员身份 —— 这方面的清单模板是 V3.1.2 的工作；仅靠环境变量补丁不足以构成一个可工作的 ROCm K3s 部署。
+ROCm K8s pod 需要 `/dev/kfd` + `/dev/dri` hostPath 挂载，以及在其 Pod 规格中的 `render`/`video` 组成员身份 —— 这方面的清单模板是 V3.1.2 的工作；仅靠环境变量补丁不足以构成一个可工作的 ROCm K3s 部署。
 
 ---
 

@@ -1299,11 +1299,6 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 // and write_file from the tool-name production. See callLLMConstrained
 // docstring for the BiasBusters context.
 func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
-	// The /demo baseline keeps the ordinary file/tool harness so both panes
-	// produce comparable artifacts, but removes the explicit orchestration
-	// tool from the model's token-level vocabulary.
-	baselineExcluded := baselineToolExclusions(ctx)
-
 	// Plan-progress reminder. Always rendered when ctx.Plan exists;
 	// not persisted to ctx.Messages so it doesn't accumulate. Lands
 	// AT THE TAIL of the messages slice so the model sees it as the
@@ -1323,21 +1318,16 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 		}
 		messages = append(messages, AgentMessage{Role: "user", Content: tbNote})
 		log.Printf("[agent] traceback step-restriction: banning run tools, forcing an edit")
-		return messages, buildGBNFGrammarForTools(mergeToolExclusions(baselineExcluded, tbExcluded))
+		return messages, buildGBNFGrammarForTools(tbExcluded)
 	}
 
 	excluded, ext := stepExclusions(ctx)
 	if len(excluded) == 0 {
-		if planReminder == "" && len(baselineExcluded) == 0 {
+		if planReminder == "" {
 			return ctx.Messages, ""
 		}
 		messages := append([]AgentMessage(nil), ctx.Messages...)
-		if planReminder != "" {
-			messages = append(messages, AgentMessage{Role: "user", Content: planReminder})
-		}
-		if len(baselineExcluded) > 0 {
-			return messages, buildGBNFGrammarForTools(baselineExcluded)
-		}
+		messages = append(messages, AgentMessage{Role: "user", Content: planReminder})
 		return messages, ""
 	}
 
@@ -1352,31 +1342,9 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 	}
 	messages = append(messages, AgentMessage{Role: "user", Content: note})
 
-	grammar := buildGBNFGrammarForTools(mergeToolExclusions(baselineExcluded, excluded))
+	grammar := buildGBNFGrammarForTools(excluded)
 	log.Printf("[agent] step-restriction active: banning %v from tool-name enum (ext=%q) — BiasBusters #2/#3", excluded, ext)
 	return messages, grammar
-}
-
-func baselineToolExclusions(ctx *AgentContext) []string {
-	if ctx != nil && ctx.BypassV3 {
-		return []string{"plan_tasks"}
-	}
-	return nil
-}
-
-func mergeToolExclusions(groups ...[]string) []string {
-	seen := make(map[string]struct{})
-	var merged []string
-	for _, group := range groups {
-		for _, name := range group {
-			if _, exists := seen[name]; exists {
-				continue
-			}
-			seen[name] = struct{}{}
-			merged = append(merged, name)
-		}
-	}
-	return merged
 }
 
 // stepExclusions inspects the tail of ctx.Messages and returns the list
@@ -2049,9 +2017,8 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("- **Don't use `text` mid-task.** Roll narration into the done.summary at the end, or skip it entirely. Mid-task `text` ends the turn early.\n")
 	sb.WriteString("- **When unsure** whether the user wants chat or work: ask in a single `text` reply. Don't speculatively start tool-calling.\n\n")
 
-	// Tool descriptions. A demo baseline excludes orchestration-only tools
-	// from both this prompt and the per-turn grammar.
-	sb.WriteString(buildToolDescriptionsExcluding(baselineToolExclusions(ctx)))
+	// Tool descriptions.
+	sb.WriteString(buildToolDescriptionsExcluding(nil))
 
 	// Rules
 	sb.WriteString("## Rules\n\n")

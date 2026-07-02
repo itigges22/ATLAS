@@ -145,7 +145,7 @@ JSON 스키마는 `additionalProperties: false`와 함께 `oneOf`를 사용하�
 
 ### 도구
 
-`proxy/tools.go`에 등록된 15개의 도구:
+`proxy/tools.go`에 등록된 14개의 도구:
 
 | 도구 | 용도 | 읽기 전용 |
 |------|---------|-----------|
@@ -163,7 +163,6 @@ JSON 스키마는 `additionalProperties: false`와 함께 `oneOf`를 사용하�
 | `run_background` | PC-196 — 샌드박스에서 장기 실행 프로세스(예: `python app.py`) 시작; 즉시 `job_id` 반환 | 아니오 |
 | `tail_background` | PC-196 — `job_id`로 백그라운드 작업의 새 stdout/stderr 가져오기 | 예 |
 | `stop_background` | PC-196 — `job_id`로 백그라운드 작업을 SIGTERM/SIGKILL | 아니오 |
-| `plan_tasks` | 작업을 의존성이 있는 병렬 태스크로 분해 | 아니오 |
 
 ### 도구 선택 편향 완화 (2026년 5월 BiasBusters 종합)
 
@@ -725,7 +724,7 @@ Apple Silicon에서는 `atlas init`가 Docker-GPU 경로 대신 `ATLAS_BACKEND=m
 
 `templates/*.yaml.tmpl`의 매니페스트는 `scripts/generate-manifests.sh`(또는 `install.sh`의 `process_templates` 단계)가 `atlas.conf`에 대해 `envsubst`를 사용해 `manifests/*.yaml`로 렌더링합니다. 서비스는 `atlas` 네임스페이스에 Pod로 배포되고, 외부 접근은 NodePort(`ATLAS_PROXY_NODEPORT`, `ATLAS_LLAMA_NODEPORT`, `ATLAS_LENS_NODEPORT`, `ATLAS_SANDBOX_NODEPORT`, `ATLAS_V3_NODEPORT`)를 통합니다. K3s 엔트리포인트는 Docker Compose에서 쓰는 것과 동일한 `inference/entrypoint-v3.1.sh`입니다 — 컨텍스트 크기, KV 캐시 양자화, flash attention, mlock이 모두 환경 변수(`ATLAS_CONTEXT_LENGTH`, `ATLAS_FLASH_ATTENTION` 등)로 구동되므로 배포 모드 전반에서 동작이 동일합니다. 프록시와 샌드박스 Pod는 둘 다 `${ATLAS_PROJECTS_DIR}`를 `/workspace`에 `hostPath`-마운트하여 에이전트의 도구 호출이 두 Pod에서 같은 파일을 보게 합니다.
 
-`scripts/deploy-9b.sh`는 적절한 환경 변수 설정과 함께 어느 이미지든 배포하기 위해 `--backend cuda|rocm`(또는 `ATLAS_BACKEND` 환경)을 받습니다. ROCm K8s Pod는 추가로 `/dev/kfd` + `/dev/dri` hostPath 마운트와 Pod 스펙의 `render`/`video` 그룹 멤버십이 필요합니다 — 이를 위한 매니페스트 템플릿은 V3.1.2 작업입니다; 환경 변수 패치만으로는 동작하는 ROCm K3s 배포에 충분하지 않습니다.
+ROCm K8s Pod는 `/dev/kfd` + `/dev/dri` hostPath 마운트와 Pod 스펙의 `render`/`video` 그룹 멤버십이 필요합니다 — 이를 위한 매니페스트 템플릿은 V3.1.2 작업입니다; 환경 변수 패치만으로는 동작하는 ROCm K3s 배포에 충분하지 않습니다.
 
 ---
 

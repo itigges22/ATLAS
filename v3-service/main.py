@@ -19,7 +19,6 @@ import sys
 import threading
 import time
 import urllib.request
-import uuid
 import urllib.error
 from pathlib import Path, PurePath
 from typing import Any, Dict, List, Optional, Tuple
@@ -112,110 +111,6 @@ def _post_pattern_outcome(problem: str, result: dict):
 
 
 # --- PC-061 step B: typed event emission ------------------------------------
-# Stage names ending in known suffixes get classified into envelope types and
-# their logical stage stripped of the suffix. This lets a single emit call
-# decide whether it's a stage_start, stage_end (with success), or error event
-# without each call site needing to know the envelope schema.
-
-_STAGE_SUFFIX_CLASS = {
-    "_pass":   ("stage_end", True),
-    "_skip":   ("stage_end", True),
-    "_done":   ("stage_end", True),
-    "_failed": ("stage_end", False),
-    "_error":  ("error", None),
-    "_retry":  ("stage_start", None),
-}
-
-# Suffixes that have a "logical" parent stage. _retry is excluded — it's a
-# fresh stage_start, not a terminal event, so its logical name is itself.
-_TERMINAL_SUFFIXES = ("_pass", "_skip", "_done", "_failed", "_error")
-
-
-def _classify_stage(stage: str):
-    """Map a stage name to (envelope_type, success_value).
-
-    Returns ("stage_start", None) for names without a known suffix.
-    """
-    for suffix, classification in _STAGE_SUFFIX_CLASS.items():
-        if stage.endswith(suffix):
-            return classification
-    return ("stage_start", None)
-
-
-def _logical_stage(stage: str) -> str:
-    """Strip a known terminal suffix to get the canonical stage name. Used to
-    pair stage_end events back to their stage_start by name."""
-    for suffix in _TERMINAL_SUFFIXES:
-        if stage.endswith(suffix):
-            return stage[:-len(suffix)]
-    return stage
-
-
-def _emit_event(wfile, envelope_opt_in: bool, stage: str, detail: str,
-                stage_start_ids: dict) -> None:
-    """Emit one or two SSE frames for `stage`:
-      1. Always: legacy ``{"stage", "detail"}`` shape (back-compat).
-      2. If ``envelope_opt_in``: typed envelope per docs/PROTOCOL.md.
-
-    ``stage_start_ids`` is mutated to track stage_start IDs by logical stage
-    name; a later stage_end with the same logical name picks up parent_id +
-    duration_ms automatically. BrokenPipeError on writes is swallowed —
-    client disconnect mid-stream must not propagate into the pipeline
-    thread.
-    """
-    legacy = json.dumps({"stage": stage, "detail": detail})
-    try:
-        wfile.write(f"data: {legacy}\n\n".encode())
-        wfile.flush()
-    except Exception:
-        return  # client gone — don't try the envelope either
-
-    if not envelope_opt_in:
-        return
-
-    event_type, success = _classify_stage(stage)
-    logical = _logical_stage(stage)
-    now = time.time()
-    event_id = "evt_" + uuid.uuid4().hex[:8]
-
-    parent_id = None
-    duration_ms = None
-    if event_type == "stage_start":
-        # Track this start so a future stage_end can pair to it. Keyed by
-        # logical name so e.g. "phase2" and "phase2_pass" share a key.
-        stage_start_ids[logical] = (event_id, now)
-    elif event_type == "stage_end":
-        prior = stage_start_ids.get(logical)
-        if prior is not None:
-            parent_id, start_ts = prior
-            duration_ms = max(0, int((now - start_ts) * 1000))
-
-    if event_type == "error":
-        payload = {"message": detail, "recoverable": True}
-    elif event_type == "stage_end":
-        payload = {"detail": detail, "success": success}
-    else:
-        payload = {"detail": detail}
-
-    envelope = {
-        "event_id":  event_id,
-        "timestamp": now,
-        "type":      event_type,
-        "stage":     logical,
-        "payload":   payload,
-    }
-    if parent_id is not None:
-        envelope["parent_id"] = parent_id
-    if duration_ms is not None:
-        envelope["duration_ms"] = duration_ms
-
-    try:
-        wfile.write(f"data: {json.dumps(envelope)}\n\n".encode())
-        wfile.flush()
-    except Exception:
-        pass  # client gone after legacy frame went through — best-effort
-
-
 # --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
 
 class LLMAdapter:

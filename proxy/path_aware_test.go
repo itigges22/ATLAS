@@ -26,7 +26,6 @@ func TestExtractFailurePath(t *testing.T) {
 		{"search_files", `{"pattern":"TODO","path":"src/"}`, "src/"},
 		{"run_command", `{"command":"python app.py"}`, ""}, // no path applicable
 		{"run_background", `{"command":"flask run"}`, ""},
-		{"plan_tasks", `{"tasks":[]}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {

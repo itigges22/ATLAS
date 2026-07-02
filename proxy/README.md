@@ -28,10 +28,11 @@ Each user message drives an agent loop that runs until the model emits
 2. **Grammar-constrained generation** — `llama-server` produces a JSON
    envelope: `tool_call`, `text`, or `done`. GBNF + `response_format:
    json_object` makes invalid output unrepresentable.
-3. **Tool dispatch + validation** — 13 tools (`read_file`,
-   `search_files`, `list_directory`, `find_file`, `write_file`,
-   `edit_file`, `ast_edit`, `delete_file`, `run_command`, `plan_tasks`,
-   `run_background`, `tail_background`, `stop_background`). Per-tool
+3. **Tool dispatch + validation** — 14 tools (`read_file`,
+   `outline_file`, `search_files`, `list_directory`, `find_file`,
+   `write_file`, `edit_file`, `ast_edit`, `delete_file`, `move_file`,
+   `run_command`, `run_background`, `tail_background`,
+   `stop_background`). Per-tool
    guardrails: read-tracking, mtime checks, default-deny patterns,
    suspicious-shrinkage guard (`guardrails.go`).
 4. **V3 routing for T2+ writes** — when a file edit qualifies (≥ 50

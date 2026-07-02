@@ -103,11 +103,15 @@ func TestHandlePermissionUnknownKey(t *testing.T) {
 }
 
 // A caller without a session id proceeds without prompting (non-TUI path).
-func TestAwaitPermissionNoSessionProceeds(t *testing.T) {
+func TestAwaitPermissionNoSessionDenies(t *testing.T) {
+	// Fail closed: with no session_id there is no channel to answer a
+	// prompt, and proceeding would make mode:"default" yolo-equivalent
+	// for any client that omits the field. Unattended clients opt in
+	// explicitly via mode:"yolo" or session_allowed_tools.
 	ctx, cancel := permCtx("")
 	defer cancel()
-	if !awaitPermission(ctx, "run_command", "call_5", json.RawMessage(`{}`)) {
-		t.Error("awaitPermission should proceed when there is no session id")
+	if awaitPermission(ctx, "run_command", "call_5", json.RawMessage(`{}`)) {
+		t.Error("awaitPermission must deny when there is no session id")
 	}
 }
 

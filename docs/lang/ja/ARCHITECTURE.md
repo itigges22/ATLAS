@@ -145,7 +145,7 @@ JSON スキーマは `oneOf` と `additionalProperties: false` を用い、ツ�
 
 ### ツール
 
-`proxy/tools.go` に登録された15個のツール:
+`proxy/tools.go` に登録された14個のツール:
 
 | ツール | 役割 | 読み取り専用 |
 |------|---------|-----------|
@@ -163,7 +163,6 @@ JSON スキーマは `oneOf` と `additionalProperties: false` を用い、ツ�
 | `run_background` | PC-196 — サンドボックス内で長時間実行プロセス（例: `python app.py`）を開始; `job_id` を即座に返す | いいえ |
 | `tail_background` | PC-196 — バックグラウンドジョブの新しい stdout/stderr を `job_id` で取得 | はい |
 | `stop_background` | PC-196 — バックグラウンドジョブを `job_id` で SIGTERM/SIGKILL | いいえ |
-| `plan_tasks` | 作業を依存関係付きの並列タスクに分解 | いいえ |
 
 ### ツール選択バイアスの緩和策（2026年5月 BiasBusters の総合）
 
@@ -691,7 +690,7 @@ Apple Silicon では、`atlas init` は Docker-GPU パスではなく `ATLAS_BAC
 
 `templates/*.yaml.tmpl` 内のマニフェストは、`atlas.conf` に対する `envsubst` を使って `scripts/generate-manifests.sh`（または `install.sh` の `process_templates` ステップ）によって `manifests/*.yaml` にレンダリングされます。サービスは `atlas` ネームスペースの Pod としてデプロイされ、外部アクセスは NodePort（`ATLAS_PROXY_NODEPORT`、`ATLAS_LLAMA_NODEPORT`、`ATLAS_LENS_NODEPORT`、`ATLAS_SANDBOX_NODEPORT`、`ATLAS_V3_NODEPORT`）経由です。K3s のエントリーポイントは Docker Compose 下で使われるのと同じ `inference/entrypoint-v3.1.sh` です — コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock はすべて環境変数（`ATLAS_CONTEXT_LENGTH`、`ATLAS_FLASH_ATTENTION` など）で駆動されるため、挙動はデプロイモードをまたいで同一です。プロキシとサンドボックスの Pod はどちらも `${ATLAS_PROJECTS_DIR}` を `/workspace` に `hostPath` マウントするため、エージェントのツールコールは両 Pod で同じファイルを見ます。
 
-`scripts/deploy-9b.sh` は `--backend cuda|rocm`（または `ATLAS_BACKEND` 環境変数）を受け付け、適切な環境変数セットでいずれかのイメージをデプロイします。ROCm の K8s Pod はさらに、Pod スペックでの `/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要です — このためのマニフェストテンプレートは V3.1.2 の作業です; 環境変数のパッチだけでは ROCm K3s デプロイの動作には不十分です。
+ROCm の K8s Pod は、Pod スペックでの `/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要です — このためのマニフェストテンプレートは V3.1.2 の作業です; 環境変数のパッチだけでは ROCm K3s デプロイの動作には不十分です。
 
 ---
 

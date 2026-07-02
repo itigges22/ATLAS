@@ -100,14 +100,6 @@ func buildToolCallSchemaJSON() string {
 	return string(b)
 }
 
-// buildToolCallSchemaJSONForTools returns the JSON-encoded schema with the
-// listed tools excluded from the tool-name enum.
-func buildToolCallSchemaJSONForTools(excluded []string) string {
-	schema := buildToolCallSchemaForTools(excluded)
-	b, _ := json.Marshal(schema)
-	return string(b)
-}
-
 // buildResponseFormat picks the response_format payload to send to
 // llama-server based on ATLAS_GRAMMAR_MODE (#33).
 //
@@ -143,14 +135,8 @@ func buildResponseFormat() interface{} {
 // GBNF Grammar fallback
 // ---------------------------------------------------------------------------
 
-// buildGBNFGrammar generates a GBNF grammar string that constrains output
-// to the same tool_call/text/done union. Currently unused; kept as
-// reference in case json_object mode needs to be replaced with GBNF.
-func buildGBNFGrammar() string {
-	return buildGBNFGrammarForTools(nil)
-}
-
-// buildGBNFGrammarForTools is buildGBNFGrammar with the listed tools
+// buildGBNFGrammarForTools generates a GBNF grammar string constraining
+// output to the tool_call/text/done union, with the listed tools
 // removed from the tool-name production. May 2026 BiasBusters #2: when
 // the next step must NOT use edit_file (e.g. write_file just got rejected
 // on a .py/.html file >5 lines), llama-server enforces the restriction
@@ -222,11 +208,6 @@ func buildGBNFGrammarForTools(excluded []string) string {
 // System prompt: tool descriptions for the model
 // ---------------------------------------------------------------------------
 
-// buildToolDescriptions generates the tool documentation section of the system prompt.
-func buildToolDescriptions() string {
-	return buildToolDescriptionsExcluding(nil)
-}
-
 // buildToolDescriptionsExcluding generates the tool documentation section
 // with the listed tools removed entirely. Used for the per-step nudge
 // note when edit_file/write_file must be banned for a single decision.
@@ -292,8 +273,6 @@ func generateInputExample(toolName string) string {
 		return `{"pattern": "def main", "path": "src/", "glob": "*.py"}`
 	case "list_directory":
 		return `{"path": "."}`
-	case "plan_tasks":
-		return `{"tasks": [{"id": "config", "description": "Create config files", "files": ["package.json"], "depends_on": []}]}`
 	default:
 		return `{}`
 	}

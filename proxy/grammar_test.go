@@ -76,22 +76,20 @@ func TestDemoBaselineExcludesOrchestrationTool(t *testing.T) {
 		Messages: []AgentMessage{{Role: "user", Content: "build the project"}},
 	}
 	prompt := buildSystemPrompt(ctx)
-	if strings.Contains(prompt, "### plan_tasks") {
-		t.Fatal("baseline prompt advertises plan_tasks orchestration tool")
+	if strings.Contains(prompt, "plan_tasks") {
+		t.Fatal("prompt advertises the removed plan_tasks tool")
 	}
-	_, grammar := buildStepRequest(ctx)
-	if grammar == "" {
-		t.Fatal("baseline must use a token-level grammar that excludes orchestration tools")
-	}
-	if strings.Contains(grammar, `\"plan_tasks\"`) {
-		t.Fatal("baseline grammar still permits plan_tasks")
+	// With no orchestration exclusions, the baseline needs no override
+	// grammar on a plain first step.
+	if _, grammar := buildStepRequest(ctx); grammar != "" {
+		t.Fatalf("baseline unexpectedly received override grammar: %q", grammar)
 	}
 }
 
-func TestNormalAgentKeepsOrchestrationTool(t *testing.T) {
+func TestNormalAgentPromptOmitsRemovedTools(t *testing.T) {
 	ctx := &AgentContext{Messages: []AgentMessage{{Role: "user", Content: "build the project"}}}
-	if prompt := buildSystemPrompt(ctx); !strings.Contains(prompt, "### plan_tasks") {
-		t.Fatal("normal agent prompt lost plan_tasks")
+	if prompt := buildSystemPrompt(ctx); strings.Contains(prompt, "plan_tasks") {
+		t.Fatal("prompt still mentions the removed plan_tasks tool")
 	}
 	_, grammar := buildStepRequest(ctx)
 	if grammar != "" {

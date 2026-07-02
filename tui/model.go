@@ -201,8 +201,9 @@ type tuiModel struct {
 	// Same idea, but for V3's *internal* LLM calls (candidate gen,
 	// scoring). Tracked separately so a v3_token doesn't overwrite the
 	// agent loop's row and vice versa.
-	streamingV3     bool
-	streamingV3Text string
+	streamingV3              bool
+	streamingV3Text          string
+	streamingV3ReasoningText string
 
 	// Plan state — populated by plan_loaded events from the proxy.
 	// One planView per turn (replaced on revision). nil when the
@@ -1016,6 +1017,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatStreamMsg:
 		if msg.ev.Type == "__turn_done__" {
 			m.turnActive = false
+			// A permission prompt can't outlive its turn — the proxy-side
+			// pending entry is gone, so answering would just 404. Clear
+			// the modal so input isn't gated by a dead prompt.
+			m.pendingPerm = nil
 			// The just-finished pass is now rateable via /good and /bad.
 			m.lastPassSession = m.turnSessionID
 			// Freeze the pass's written files for /review and per-file verdicts.
@@ -1547,6 +1552,12 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			Tool string `json:"tool"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
+		// A deny can originate proxy-side (timeout, cancel) while the
+		// modal is still up — clear it so the input isn't gated by a
+		// prompt that no longer has a pending request behind it.
+		if m.pendingPerm != nil && m.pendingPerm.toolName == p.Tool {
+			m.pendingPerm = nil
+		}
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "denied",
 			Body: fmt.Sprintf("permission denied for %s", p.Tool),
@@ -1610,6 +1621,26 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			m.replaceV3LLMRow(body)
 		}
 
+	case "v3_reasoning_token":
+		// Reasoning deltas from V3's streaming LLM call (candidate
+		// generation / repair phases think before emitting code).
+		// Rendered into the same in-place v3-llm row as v3_token, with
+		// the ‹thinking› prefix the chat-path reasoning_token uses, so
+		// long PlanSearch phases show live progress instead of a
+		// frozen "decoding…" row.
+		var p struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil && p.Text != "" {
+			m.streamingV3ReasoningText += p.Text
+			body := "decoding…\n" +
+				"  ‹thinking› " + formatStreamingLLM(m.streamingV3ReasoningText)
+			if m.streamingV3Text != "" {
+				body += "\n" + formatStreamingLLM(m.streamingV3Text)
+			}
+			m.replaceV3LLMRow(body)
+		}
+
 	case "v3_llm_end":
 		// V3's LLM call finished. Replace the streaming row with the
 		// summary detail ("1234 tok · 12345ms") so scrollback shows a
@@ -1625,6 +1656,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		m.replaceV3LLMRow(body)
 		m.streamingV3 = false
 		m.streamingV3Text = ""
+		m.streamingV3ReasoningText = ""
 
 	case "v3_progress":
 		// V3 pipeline narration emitted by proxy/tools.go via

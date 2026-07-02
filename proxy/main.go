@@ -407,9 +407,3 @@ func (t Tier) String() string {
 	return "T?:unknown"
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

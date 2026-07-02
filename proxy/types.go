@@ -59,11 +59,6 @@ func envOverrideMaxTurns() int {
 	return n
 }
 
-// TierUsesV3 returns whether write_file/edit_file should route through V3.
-func TierUsesV3(t Tier) bool {
-	return t >= Tier2Medium
-}
-
 // ---------------------------------------------------------------------------
 // Agent messages — the conversation between model and tool executor
 // ---------------------------------------------------------------------------
@@ -382,29 +377,6 @@ type ListDirectoryOutput struct {
 	Path    string     `json:"path"`
 }
 
-// -- plan_tasks --
-
-type PlanTasksInput struct {
-	Tasks []PlannedTask `json:"tasks"`
-}
-
-type PlannedTask struct {
-	ID          string   `json:"id"`
-	Description string   `json:"description"`
-	Files       []string `json:"files,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-}
-
-type TaskStatus struct {
-	ID     string `json:"id"`
-	Status string `json:"status"` // "completed", "failed", "skipped"
-	Error  string `json:"error,omitempty"`
-}
-
-type PlanTasksOutput struct {
-	Results []TaskStatus `json:"results"`
-}
-
 // ---------------------------------------------------------------------------
 // Agent context — shared state for the agent loop
 // ---------------------------------------------------------------------------
@@ -438,11 +410,10 @@ type AgentContext struct {
 	V3URL        string
 
 	// BypassV3 short-circuits the V3 layer for this request: pre-flight
-	// plan generation, the orchestration-only plan_tasks tool, and the
-	// write/edit candidate pipelines. The base file/tool agent and its
-	// guardrails still run so /demo can compare executable outputs from
-	// the same model without falsely presenting the left side as a bare
-	// chat completion.
+	// plan generation and the write/edit candidate pipelines. The base
+	// file/tool agent and its guardrails still run so /demo can compare
+	// executable outputs from the same model without falsely presenting
+	// the left side as a bare chat completion.
 	BypassV3 bool
 
 	// DisableFreshSlot skips the PC-045 slot-erase at the start of the
@@ -689,13 +660,6 @@ func (m PermissionMode) String() string {
 		return "yolo"
 	}
 	return "default"
-}
-
-// PermissionRule is a pattern-based allow/deny rule.
-type PermissionRule struct {
-	Tool    string `json:"tool"`    // e.g., "run_command"
-	Pattern string `json:"pattern"` // e.g., "npm *"
-	Action  string `json:"action"`  // "allow" or "deny"
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,10 @@
 """ATLAS event protocol — typed events streaming over SSE (PC-061).
 
 This module is the canonical Python definition of the event envelope
-and the consumer helpers. Producers (v3-service, atlas-proxy) emit
-JSON in this shape; consumers (TUI, tests, bench CLI) call
-`iter_events(url)` to receive typed `Event` objects.
+and the consumer helpers. atlas-proxy's `/events` broker emits JSON in
+this shape; the Go TUI consumes it via its own implementation of the
+same contract (tui/consumer.go), and the tests here consume it via
+`iter_events(url)`.
 
 The schema is also documented in docs/PROTOCOL.md; this docstring is
 the executable spec.
@@ -33,18 +34,18 @@ Per-type payload contracts
   error         {stage: str, message: str, recoverable: bool}
   done          {success: bool, total_duration_ms: int, summary?: str}
 
-The `done` event is always the last event in a stream. Consumers that
-detect EOF without a `done` event should treat the stream as truncated.
+One `done` event closes each agent pass. `/events` is a persistent
+broker stream: it keeps heartbeating after a `done`, so EOF-without-done
+only means truncation for consumers reading a single pass.
 
-Backward compatibility
-----------------------
+Legacy shape
+------------
 
-v3-service emits BOTH the new envelope AND the legacy
-`{"stage": ..., "detail": ...}` shape for one release window. Consumers
-that want envelopes opt in via the `Accept: application/json+envelope`
-header or the `?event_format=v2` query param. `parse_envelope` raises
-`LegacyEventError` on the legacy shape so callers can fall back
-explicitly rather than silently mis-parsing.
+v3-service's own `/v3/run` SSE emits the legacy
+`{"stage": ..., "detail": ...}` shape (consumed by the Go proxy bridge,
+proxy/v3_bridge.go — not by this module). `parse_envelope` raises
+`LegacyEventError` on that shape so callers fall back explicitly rather
+than silently mis-parsing.
 """
 
 from __future__ import annotations

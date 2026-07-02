@@ -37,7 +37,6 @@ func init() {
 	registerTool(searchFilesTool())
 	registerTool(findFileTool())
 	registerTool(listDirectoryTool())
-	registerTool(planTasksTool())
 	registerTool(runBackgroundTool())
 	registerTool(tailBackgroundTool())
 	registerTool(stopBackgroundTool())
@@ -2363,40 +2362,6 @@ func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 }
 
 // ---------------------------------------------------------------------------
-// plan_tasks — orchestration tool for parallel execution
-// ---------------------------------------------------------------------------
-
-func planTasksTool() *ToolDef {
-	return &ToolDef{
-		Name:        "plan_tasks",
-		Description: "Decompose work into parallel tasks with dependencies. Independent tasks run concurrently. Use for multi-file project creation.",
-		InputSchema: PlanTasksInput{},
-		ReadOnly:    false,
-		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input PlanTasksInput
-			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
-			}
-
-			// Returns pending status — parallel execution is defined in
-			// parallel.go (executePlanTasksTool) but not yet wired in
-			results := make([]TaskStatus, len(input.Tasks))
-			for i, t := range input.Tasks {
-				results[i] = TaskStatus{
-					ID:     t.ID,
-					Status: "pending",
-				}
-			}
-
-			out := PlanTasksOutput{Results: results}
-			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
-		},
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Per-file tier classification for V3 pipeline activation
 // ---------------------------------------------------------------------------
 
@@ -2923,19 +2888,6 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// firstNonEmptyLine returns the first non-blank line of s, trimmed of trailing
-// whitespace. Used to surface a one-line hint from a tool's stderr without
-// dumping the whole buffer to the UI.
-func firstNonEmptyLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		trimmed := strings.TrimRight(line, " \t\r")
-		if strings.TrimSpace(trimmed) != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 // ---------------------------------------------------------------------------

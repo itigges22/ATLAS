@@ -153,7 +153,7 @@ func extractScorableContent(toolName string, args json.RawMessage) (string, bool
 // search/list/find/run_background's cwd). Used by the path-aware
 // error-loop breaker to distinguish "stuck on one file" from
 // "grinding through different files." Returns "" when no path is
-// applicable to the tool (e.g. plan_tasks, run_command's arbitrary
+// applicable to the tool (e.g. run_command's arbitrary
 // shell) — empty paths compare unequal, which prevents the breaker
 // from firing on tool-mix sequences.
 func extractFailurePath(toolName string, args json.RawMessage) string {

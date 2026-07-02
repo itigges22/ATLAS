@@ -144,27 +144,6 @@ func TestFetchCalibrationStatusCmd_ProxyDown_ReturnsErr(t *testing.T) {
 	}
 }
 
-func TestCalibrationTooltip_OnlyShowsNonSupported(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "supported"
-	s.Lens.Hint = "ready"
-	s.ASA.Verdict = "missing"
-	s.ASA.Hint = "no control vector at /models/ast_edit_steering.gguf"
-	got := calibrationTooltip(s)
-	if strings.Contains(got, "Lens:") {
-		t.Errorf("supported Lens should not appear in tooltip: %q", got)
-	}
-	if !strings.Contains(got, "ASA:") {
-		t.Errorf("missing ASA should appear: %q", got)
-	}
-}
-
-func TestCalibrationTooltip_NilStatus_Empty(t *testing.T) {
-	if got := calibrationTooltip(nil); got != "" {
-		t.Errorf("expected empty tooltip for nil status, got %q", got)
-	}
-}
-
 func TestBadgeActionHint_BothSupported_Empty(t *testing.T) {
 	s := &calibrationStatus{}
 	s.Lens.Verdict = "supported"

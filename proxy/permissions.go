@@ -11,35 +11,8 @@ import (
 // Permission system — controls which tool calls require user confirmation
 // ---------------------------------------------------------------------------
 
-// PermissionConfig holds the loaded permission rules.
-type PermissionConfig struct {
-	AllowRules []PermissionRule
-	DenyRules  []PermissionRule
-}
-
-// checkPermissionRules evaluates rules against a tool call.
-// Returns "allow", "deny", or "" (no matching rule).
-func checkPermissionRules(rules []PermissionRule, toolName string, args json.RawMessage) string {
-	for _, rule := range rules {
-		if rule.Tool != toolName {
-			continue
-		}
-
-		// Extract the relevant value from args for pattern matching
-		matchValue := extractMatchValue(toolName, args)
-		if matchValue == "" {
-			continue
-		}
-
-		// Match pattern against value
-		if matchPattern(rule.Pattern, matchValue) {
-			return rule.Action
-		}
-	}
-	return ""
-}
-
-// extractMatchValue extracts the value to match against permission patterns.
+// extractMatchValue extracts the path/command value from a tool call's
+// args for the built-in safety deny-list below.
 func extractMatchValue(toolName string, args json.RawMessage) string {
 	switch toolName {
 	case "run_command":
@@ -64,36 +37,6 @@ func extractMatchValue(toolName string, args json.RawMessage) string {
 		}
 	}
 	return ""
-}
-
-// matchPattern matches a glob-like pattern against a value.
-// Supports * as wildcard.
-func matchPattern(pattern, value string) bool {
-	// Direct match
-	if pattern == value {
-		return true
-	}
-
-	// Glob-style matching
-	matched, err := filepath.Match(pattern, value)
-	if err == nil && matched {
-		return true
-	}
-
-	// Check if pattern is a prefix with wildcard
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
-		if strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-
-	// Check if value contains the pattern (for command matching)
-	if strings.Contains(value, pattern) {
-		return true
-	}
-
-	return false
 }
 
 // shellSegmentSplitter marks the boundaries between commands in a shell line

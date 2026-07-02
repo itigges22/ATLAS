@@ -60,10 +60,16 @@ func permissionTimeout() time.Duration {
 // the call is allowed. On an allow with session scope the tool is added to the
 // turn's in-context allowlist so subsequent calls in this turn skip the prompt.
 func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMessage) bool {
-	// No session id means no channel back from the client (e.g. non-TUI
-	// callers); fall back to the pre-existing behavior of proceeding.
+	// No session id means no channel back from the client to answer a
+	// prompt. Failing open here would make mode:"default" silently
+	// yolo-equivalent for any client that omits session_id — deny
+	// instead. Clients that want unattended destructive tools opt in
+	// explicitly with mode:"yolo" (or pre-approve via
+	// session_allowed_tools); interactive clients pass session_id and
+	// answer /v1/permission.
 	if ctx.PassID == "" {
-		return true
+		log.Printf("[permission] %s requires approval but the request has no session_id — denying. Pass session_id and answer POST /v1/permission, pre-approve via session_allowed_tools, or use mode \"yolo\".", toolName)
+		return false
 	}
 
 	entry := &pendingPermission{decision: make(chan permDecision, 1)}

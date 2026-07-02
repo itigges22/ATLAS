@@ -121,16 +121,6 @@ func Emit(ev Envelope) {
 	defaultBroker.emit(ev)
 }
 
-// EmitSimple is a convenience for the common stage_start / stage_end /
-// metric cases — saves callers from constructing the map themselves.
-func EmitSimple(typ, stage string, detail string) {
-	payload := map[string]interface{}{}
-	if detail != "" {
-		payload["detail"] = detail
-	}
-	Emit(NewEnvelope(typ, stage, payload))
-}
-
 // ---------------------------------------------------------------------------
 // HTTP handler
 // ---------------------------------------------------------------------------

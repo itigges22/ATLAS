@@ -1,0 +1,4 @@
+{
+  "model": "gemma-4-12b-it-Q4_K_M",
+  "embedding_dim": 3840
+}

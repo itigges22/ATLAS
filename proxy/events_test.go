@@ -207,46 +207,6 @@ func TestBrokerConcurrentSubscribeUnsubscribeIsRaceFree(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// EmitSimple convenience
-// ---------------------------------------------------------------------------
-
-func TestEmitSimpleProducesValidEnvelope(t *testing.T) {
-	// Subscribe to the default broker first so EmitSimple's event lands somewhere.
-	ch := defaultBroker.subscribe()
-	defer defaultBroker.unsubscribe(ch)
-
-	EmitSimple(EvtStageStart, "agent", "starting")
-
-	select {
-	case ev := <-ch:
-		if ev.Type != EvtStageStart {
-			t.Fatalf("type = %q", ev.Type)
-		}
-		if ev.Payload["detail"] != "starting" {
-			t.Fatalf("detail not propagated: %+v", ev.Payload)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("EmitSimple event didn't reach subscriber")
-	}
-}
-
-func TestEmitSimpleOmitsEmptyDetailFromPayload(t *testing.T) {
-	ch := defaultBroker.subscribe()
-	defer defaultBroker.unsubscribe(ch)
-
-	EmitSimple(EvtStageStart, "agent", "")
-
-	select {
-	case ev := <-ch:
-		if _, has := ev.Payload["detail"]; has {
-			t.Errorf("empty detail leaked into payload: %+v", ev.Payload)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("event didn't arrive")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // /events handler — integration test
 // ---------------------------------------------------------------------------
 

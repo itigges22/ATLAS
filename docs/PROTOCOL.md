@@ -1,6 +1,6 @@
 # ATLAS Event Protocol
 
-ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). This document is the wire-format spec — atlas-proxy (Go) is the live envelope producer, and every consumer (TUI, tests, future web dashboard, bench CLI) reads it through `atlas/cli/events.py`.
+ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). This document is the wire-format spec — atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/consumer.go`); `atlas/cli/events.py` is the canonical Python implementation, used by the test suite.
 
 ## Transport
 
@@ -154,7 +154,7 @@ Something went wrong. The payload carries `message` only; the envelope's top-lev
 
 ### `done`
 
-Always the last event in a stream. Consumers that detect EOF without a `done` event should treat the stream as truncated (network drop, server crash, etc.).
+Closes one agent pass. The `/events` broker is a persistent stream — it keeps heartbeating after a `done`, emitting one per pass — so EOF-without-`done` indicates truncation (network drop, server crash) only for consumers reading a single pass.
 
 ```json
 {
@@ -177,7 +177,7 @@ Always the last event in a stream. Consumers that detect EOF without a `done` ev
 
 ## `/v3/run` and typed events
 
-v3-service's `/v3/run` emits the `{stage, detail}` shape only. A dual-emit envelope helper (`_emit_event` in `v3-service/main.py`) exists in code but is not wired into the handler: the handler never inspects the `Accept` header, and `?event_format=v2` returns 404 (routing matches the exact path string). Envelope consumers subscribe to atlas-proxy's `GET /events` instead — the proxy's v3 bridge translates the `{stage, detail}` frames it receives from v3-service into envelopes.
+v3-service's `/v3/run` emits the `{stage, detail}` shape only. Envelope consumers subscribe to atlas-proxy's `GET /events` instead — the proxy's v3 bridge translates the `{stage, detail}` frames it receives from v3-service into envelopes.
 
 Consumers reading a mixed stream must filter the `{stage, detail}` frames — the Python helper `atlas.cli.events.iter_events()` does this automatically (skips frames that raise `LegacyEventError`).
 
@@ -196,21 +196,9 @@ for ev in iter_events("http://localhost:8090/events"):
 
 `iter_events(url)` yields `Event` dataclass objects with typed fields. `parse_envelope(blob)` parses one frame; raises `LegacyEventError` if the blob is the v3-service `{stage, detail}` shape, `SchemaError` if it's malformed.
 
-## Stage-name suffix conventions (v3-service emitter)
+## Stage names from v3-service
 
-v3-service's envelope helper (`_emit_event` — present in code, not wired into any endpoint) derives envelope `type` from stage names via these suffix conventions:
-
-| Suffix | Envelope type | Notes |
-|---|---|---|
-| `_error` | `error` | Wrapped with `recoverable: true` by default. |
-| `_failed` | `stage_end` | `payload.success = false`. |
-| `_pass` | `stage_end` | `payload.success = true`. |
-| `_done` | `stage_end` | `payload.success = true`. |
-| `_skip` | `stage_end` | `payload.success = true` (skipped is success in flow). |
-| `_retry` | `stage_start` | A re-attempt of the same logical stage. |
-| (no suffix) | `stage_start` | Fresh stage entry. |
-
-The live producer works differently: the proxy's v3 bridge emits `v3:` + the stage name verbatim, suffixes included (`v3:sandbox_pass`). A stage-name change closes the previous stage (`stage_end`, `success: true`) and opens the new one (`stage_start`); a repeated stage name emits a `metric` (`name: "progress"`).
+The proxy's v3 bridge emits `v3:` + the v3-service stage name verbatim, suffixes included (`v3:sandbox_pass`). A stage-name change closes the previous stage (`stage_end`, `success: true`) and opens the new one (`stage_start`); a repeated stage name emits a `metric` (`name: "progress"`).
 
 ## Schema versioning
 
