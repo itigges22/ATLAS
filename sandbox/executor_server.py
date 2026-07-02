@@ -196,7 +196,11 @@ class ShellResponse(BaseModel):
     elapsed_ms: int
 
 
-WORKSPACE_ROOT = Path("/workspace")
+# The bind-mounted project root. /workspace in every container
+# deployment (compose/K3s mount it there); overridable so the executor
+# can run directly on a host — e.g. the E2E acceptance test boots it
+# under a pytest tmp dir.
+WORKSPACE_ROOT = Path(os.getenv("ATLAS_SANDBOX_WORKSPACE_ROOT", "/workspace"))
 SHELL_SNAPSHOT_IGNORE = {
     ".git",
     ".hg",

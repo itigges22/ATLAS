@@ -196,6 +196,12 @@ pytest tests/v3/test_plan_search.py -v
 
 # Run with coverage (needs `pip install pytest-cov` — not a declared dependency)
 pytest tests/ --cov=. --cov-report=html
+
+# End-to-end acceptance test (real proxy + sandbox executor + fake
+# llama-server; no GPU or model needed). Build the proxy binary first.
+cd proxy && go build -o /tmp/test-atlas-proxy . && cd ..
+pip install -r sandbox/requirements-runtime.txt
+pytest tests/e2e -v
 ```
 
 ### Writing Tests
