@@ -27,3 +27,32 @@ Please report vulnerabilities privately via [GitHub Security Advisories](https:/
 Include what you can of: the affected component (proxy, TUI, CLI, v3-service, sandbox, install scripts), reproduction steps, and the impact under the single-user local model above.
 
 You can expect an acknowledgment within a week. Fixes for confirmed vulnerabilities land on `dev` and are promoted to a release as soon as they are validated; credit is given in the changelog unless you ask otherwise.
+
+If GitHub advisories are unavailable to you, open a minimal public issue saying "security — need a private channel" **without details**, and the maintainer will provide one.
+
+## Severity and response targets
+
+This is a single-maintainer project; targets are best-effort but taken seriously.
+
+| Severity | Definition (in this trust model) | Acknowledge | Fix target |
+| --- | --- | --- | --- |
+| Critical | Sandbox/workspace escape reachable from model output; RCE via a verified artifact path; credential exfiltration from a default install | 48h | Patch release ASAP, days not weeks |
+| High | Same classes requiring non-default config, or integrity bypass of artifact verification | 72h | Next release, ≤30 days |
+| Medium | Hardening gaps with real but bounded impact (e.g. a resource-exhaustion vector) | 1 week | Scheduled release |
+| Low | Defense-in-depth improvements, doc corrections | 1 week | Backlog with issue |
+
+## Disclosure and embargo
+
+Confirmed Critical/High reports stay embargoed until a fixed release is published, targeted at ≤90 days from confirmation. The fix may land on `dev` with a neutral commit message during embargo. Reporters are consulted on the advisory text and credited. CVE IDs are requested through GitHub's advisory CNA flow when a report warrants one.
+
+## Backports and releases
+
+Security fixes are released for the current release (N) and backported to N−1 within its 90-day window (see `SUPPORT_MATRIX.md`). A security release follows the normal release pipeline (immutable `sha-*` images, test-gated tag promotion) plus a changelog entry marking it security-relevant and an advisory publication.
+
+## Artifact revocation
+
+If a published model, Lens, or ASA artifact turns out to be bad (malware, corruption, wrong calibration, license problem):
+
+1. The artifact is removed or replaced at its HF location.
+2. The registry's pinned SHA-256 for it is updated or the entry's status is downgraded in a patch release — installers verify hashes, so already-published pins stop matching the bad artifact and refuse to install it.
+3. The changelog and a pinned issue name the affected hashes so users can check installed files with `atlas model verify` / `atlas doctor`.
