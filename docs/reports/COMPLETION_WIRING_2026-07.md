@@ -139,10 +139,10 @@ Python and shell paths.
 - The 7B/14B/32B registry entries are HF-gated upstream: installable
   with `HF_TOKEN`, but anonymous SHA-256 capture is impossible, so their
   gguf hashes are absent by construction (documented in the registry).
-- `cx_normalization.json` for the live gemma bundle requires a retrain
-  to derive (it is training-statistics-derived, not constructible);
-  until then C(x) normalized scores are neutral — explicitly surfaced
-  as `cx_calibrated: false`.
+- `cx_normalization.json` for the gemma bundle has been derived +
+  verified on maintainer hardware (val AUC 0.73; the live lens reports
+  `cx_calibrated: true`). The published HF bundle is still uncalibrated —
+  re-publishing is a maintainer decision (see CALIBRATION_PROVENANCE.md).
 - The sandbox has open egress and is memory-uncapped before `atlas
   init` writes `ATLAS_SANDBOX_MEM` — stated in SECURITY.md rather than
   silently claimed otherwise.

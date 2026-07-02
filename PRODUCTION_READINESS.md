@@ -110,8 +110,8 @@ Last updated: 2026-07-02 (dev).
 | 9.2 Quality regression suite | **Not started** | (P1.11-adjacent) |
 | 9.3 Repo-level benchmark | **Not started** | (P1.11) |
 | 9.4 Ablations | **Partial** | 14B 4-condition study published; 9B 6-condition scripted (`run_v31_ablation.sh`) awaiting the maintainer's run |
-| 9.5 Lens provenance | **Partial** | Bundles carry identity/hashes/thresholds; full provenance manifest (dataset, seed, hyperparams, training commit) not embedded |
-| 9.6 ASA validation | **Partial** | Qwen vector A/B-validated; gemma = Preview (vector published + hash-pinned; runtime marker unset — `atlas asa build` or marker write pending, maintainer's call). SUPPORT_MATRIX reflects this |
+| 9.5 Lens provenance | **Partial** | Bundles carry identity/hashes/thresholds; `CALIBRATION_PROVENANCE.md` records the full §9.5 manifest (backbone, dim, dataset, samples, seed, hyperparams, training commit, metrics, normalization) for the gemma calibration derived this pass. Not yet auto-embedded per bundle |
+| 9.6 ASA validation | **Partial** (decided) | Qwen vector A/B-validated + marker present = Supported. Gemma stays **off by default** (marker withheld) pending an A/B — decision documented in ADR 0005 + SUPPORT_MATRIX: activating an unvalidated steering vector by default is the anti-pattern; it's one opt-in command (`atlas asa build`) away |
 | 9.7 Claim governance | **Done** | README pins the 74.6% claim to the frozen build + methodology link; completion report records commit/hardware/run evidence for CI claims |
 
 ## §10–11 Packaging, deployment
@@ -229,7 +229,7 @@ upgrade/rollback E2E, offline install (unsupported).
 | 12 | Upgrade/rollback/migration | **Partial** (procedures done; commands absent) |
 | 13 | Structured logging/diagnostics | **Partial** |
 | 14 | Real-model validation per model | **Maintainer** |
-| 15 | ASA resolution | **Partial** (Qwen validated; gemma Preview pending marker) |
+| 15 | ASA resolution | **Done** (decision) — Qwen Supported; gemma off-by-default pending A/B, documented (ADR 0005) |
 | 16 | Performance budgets | **Not started** |
 | 17 | Concurrency/soak/chaos/recovery | **Partial** |
 | 18 | Branch protection + CODEOWNERS | **Done** (CODEOWNERS + protection applied to main/dev) |
