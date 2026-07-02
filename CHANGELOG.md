@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### V3/Lens pipeline acceptance test
+- A second deterministic E2E (`tests/e2e/test_v3_lens_acceptance.py`) boots the **real v3-service** alongside the real proxy and sandbox: a Tier-2 write routes through the proxy's V3 bridge, the probe fails on purpose, lens-calibrated allocation yields k=3, PlanSearch generates candidates via the fake llama, each candidate is scored through both lens endpoints (a recording fake lens proves the calls) and verified in the real sandbox, and winner selection writes the lens-preferred candidate to disk. Failure modes at the seams: V3 unreachable/malformed/timeout fall back to the documented direct write; a lens outage leaves V3 running uncalibrated.
+- `tests/contracts/` drift gates run in CI: proxy↔TUI event producer/consumer parity, envelope-type parity (Go producer / Go consumer / Python spec), config keys ↔ readers ↔ docs, CLI subcommands ↔ implementations, registry hash/consumption contracts.
+- Product/benchmark scoring contracts aligned: unified neutral lens fail-soft sentinel, deterministic energy-sorted benchmark candidate ordering, corrected pattern-cache retry key; intentional orchestrator differences documented in `benchmark/README.md`.
+
 ### End-to-end acceptance test
 - CI runs a deterministic full-control-plane test (`tests/e2e/`): the real proxy binary and the real sandbox executor (host uvicorn, no Docker) against a scripted fake llama-server, driving one complete agent turn — read, edit, sandbox-verified `run_command` behind an interactive permission approve, done — over the production SSE protocol. Asserts stage order (a silently skipped stage fails), file contents, and the sandbox side-effect; a second test pins the fail-closed session-less deny. The sandbox executor's workspace root is env-overridable (`ATLAS_SANDBOX_WORKSPACE_ROOT`; containers keep `/workspace`). Scope: this covers the control plane deterministically — real llama.cpp inference, GPU backends, hidden-state extraction, ASA steering, and model-dependent V3/Lens quality remain hardware-gated or manually validated (see the SETUP hardware table).
 

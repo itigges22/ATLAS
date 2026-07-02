@@ -107,7 +107,17 @@ Python and shell paths.
 ## CI Gates Added
 
 - `e2e-acceptance` job — builds the proxy, boots the control plane,
-  hard-fails if the acceptance test skips.
+  hard-fails if any acceptance test skips. Covers the direct agent
+  path (test_acceptance.py) AND the differentiated V3/Lens pipeline
+  (test_v3_lens_acceptance.py: real v3-service, real proxy→V3 bridge,
+  fake deterministic llama + lens, real sandbox — asserting V3 is not
+  bypassed, lens scoring is called, winner selection picks the
+  lens-preferred candidate, plus V3-unreachable/malformed/timeout and
+  lens-outage failure modes).
+- `tests/contracts/` drift gates — proxy↔TUI event producer/consumer
+  parity, envelope-type parity across Go/Python, config keys vs
+  readers vs docs, CLI subcommand implementations, and registry
+  hash/consumption contracts.
 - (Same-day wave) two-phase image publish gated on the tests workflow;
   SHA-pinned actions; `geometric-lens/tests` + static infrastructure
   tests + `test-integrity`/`python-compile` gates; shellcheck over all
@@ -143,29 +153,95 @@ Python and shell paths.
 
 ```
 python scripts/production-readiness.py            # 15/15 gates
-python -m pytest tests geometric-lens/tests       # 1396 passed
+python -m pytest tests geometric-lens/tests       # 1416 passed
 cd proxy && go vet ./... && go test -race ./...   # ok
 cd tui   && go vet ./... && go test -race ./...   # ok
 cd proxy && go build -o /tmp/test-atlas-proxy .
 pip install -r sandbox/requirements-runtime.txt
-python -m pytest tests/e2e -v                     # 2 passed (1.7s)
+python -m pytest tests/e2e -v                     # 7 passed (~26s)
 atlas model install-artifacts gemma-4-12b-it-Q4_K_M --models-dir <tmp>  # 6/6 sha256 verified
 curl -s localhost:8099/health                     # lens self_test_pass: true
 ```
+
+## Scope of Validation
+
+**Verified in standard (GitHub-hosted, deterministic) CI:** the direct
+agent control plane, the proxy→V3 bridge and the full V3 pipeline
+orchestration (real v3-service), the Lens scoring contract and winner
+selection (fake deterministic lens proving the calls and the choice),
+permission flow, sandbox execution, TUI/CLI/proxy unit suites,
+producer/consumer contract gates, configuration, compose, packaging,
+and static validation.
+
+**Verified outside standard CI (hardware-gated / manual):** CUDA, ROCm,
+Metal, and Vulkan inference; hidden-state extraction from real models
+(PC-202 patch application is CI-checked, behavior is not); ASA steering
+effect on real models; real-model V3/Lens quality behavior; performance.
+The cards and validation provenance are listed in SETUP.md's hardware
+table; the hardware-gated pytest suites are `tests/infrastructure/`
+(`integration` marker).
+
+**Not yet verified:** — (empty for supported software paths; hardware
+coverage is a support-matrix limitation, not unfinished implementation).
+
+## Acceptance Matrix
+
+| Area | Deterministic CI | Hardware-gated | Manual | Status |
+|---|---:|---:|---:|---|
+| Direct agent control plane | Yes | No | No | Pass |
+| V3 bridge (proxy→v3-service) | Yes | No | No | Pass |
+| V3 pipeline orchestration | Yes | No | No | Pass |
+| Lens scoring contract | Yes | No | No | Pass |
+| Winner selection | Yes | No | No | Pass |
+| Permission flow | Yes | No | No | Pass |
+| Sandbox execution | Yes | No | No | Pass |
+| Event/config/CLI/registry contracts | Yes | No | No | Pass |
+| Install bootstrap (4 distros) | Yes | No | No | Pass |
+| Image builds + gated publish | Yes | No | No | Pass |
+| CUDA inference | No | Yes | Yes | Pass (RTX 5060 Ti — primary dev box) |
+| ROCm inference | No | Yes | Yes | Pass (RX 7900 XTX — community, GH #26) |
+| Metal inference | No | Yes | Yes | Pass (M2 Pro — maintainer-verified) |
+| Vulkan/CPU inference | No | Yes | Yes | Smoke-tested (lavapipe boot path) |
+| Real hidden-state Lens | No | Yes | Yes | Pass on dev box (gemma bundle, self-test) |
+| Real ASA steering | No | Yes | Yes | Validated on Qwen3.5-9B (A/B, May 2026); gemma vector built, marker pending |
 
 ## Final Statement
 
 - All advertised features are wired: **yes** — every documented tool,
   endpoint, event, command, and config key has a producer, consumer,
   and reader, or has been removed from code and docs.
-- All production paths are tested: **yes** at the unit/contract level
-  and via the E2E acceptance test; GPU-inference behavior itself is
-  validated by the hardware-gated integration suite, not CI.
+- All critical control-plane paths — including the differentiated
+  V3/Lens pipeline — are covered by deterministic CI acceptance
+  testing. Real llama.cpp inference, GPU backend behavior,
+  hidden-state extraction, ASA steering, and model-dependent V3/Lens
+  quality remain hardware-gated or manually validated (see the
+  Acceptance Matrix).
 - All placeholders removed: **yes** — no production code path remains
   whose purpose is "wired in later".
 - All incomplete abstractions removed: **yes** (verified caller-less
   before each deletion).
-- The end-to-end test passes: **yes**, locally and as a required CI
-  job.
-- Ready to merge: **yes** — the full suite, static checks, builds,
-  compose validation, and the acceptance test pass on `dev`.
+- Both end-to-end acceptance tests pass, locally and as required CI
+  jobs; contract drift gates run in the CI pytest matrix.
+- Ready to merge: **yes**, with the scope above — the full suite,
+  static checks, builds, compose validation, both acceptance tests,
+  and the contract gates pass on `dev` (verified GitHub Actions runs
+  recorded below).
+
+## Verified CI Runs (dev code head `e93cfdd`)
+
+| Workflow | Conclusion | Run |
+|---|---|---|
+| tests (incl. both e2e acceptance jobs + contract gates) | success | [28618554574](https://github.com/itigges22/ATLAS/actions/runs/28618554574) |
+| install matrix (4 distros × 2 runs + sudo path) | success | [28618554576](https://github.com/itigges22/ATLAS/actions/runs/28618554576) |
+| Build & publish container images (6 images + gated promote) | success | [28618554644](https://github.com/itigges22/ATLAS/actions/runs/28618554644) |
+| codeql (python + go) | success | [28618554573](https://github.com/itigges22/ATLAS/actions/runs/28618554573) |
+
+Within the tests run: `e2e acceptance (proxy + sandbox + fake llama)`
+— success (covers both `test_acceptance.py` and
+`test_v3_lens_acceptance.py`; the job hard-fails on any skip) — and
+`pytest (tests/contracts)` — success. Skipped jobs: the `PR build
+check` and `promote` steps skip by design on the event types that
+don't use them. Allowed failures: none. Hardware-gated exclusions:
+`tests/infrastructure/test_llm.py` + `test_sandbox.py` (`integration`
+marker — need a live model stack; see Scope of Validation). Commits
+after `e93cfdd` on this branch are documentation-only.
