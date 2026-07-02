@@ -879,7 +879,12 @@ ensure_repo_and_env() {
 
 # Read a key's value from ./.env (first match, raw text after `=`).
 env_file_value() {
-    grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2-
+    # `|| true`: under `set -euo pipefail`, an absent key would otherwise
+    # exit the whole script when the result is captured in a bare
+    # assignment (grep's 1 fails the pipeline) — an absent key must read
+    # as empty, not fatal. Broke every install-matrix distro when
+    # persist_backend_selection queried the commented-out ATLAS_BACKEND.
+    grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true
 }
 
 # Set (or append) key=value in ./.env.
