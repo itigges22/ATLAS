@@ -184,12 +184,17 @@ jobs:
           python scripts/production-readiness.py --only workflow-yaml
 
   e2e-acceptance:
-    # Deterministic end-to-end acceptance test: real proxy binary + real
-    # sandbox executor + scripted fake llama-server. Drives a complete
-    # agent turn (read -> edit -> sandbox verification -> interactive
-    # permission -> done) through the production SSE protocol and
-    # asserts file contents + that no stage was silently skipped. No
-    # GPU, no model download — see tests/e2e/test_acceptance.py.
+    # Deterministic end-to-end acceptance tests (tests/e2e/): real proxy
+    # binary + real sandbox executor + scripted fake llama-server.
+    # test_acceptance.py drives the direct agent path (read -> edit ->
+    # sandbox verification -> interactive permission -> done);
+    # test_v3_lens_acceptance.py boots the REAL v3-service and drives
+    # the differentiated pipeline (probe -> lens-calibrated k ->
+    # PlanSearch candidates -> per-candidate lens scoring -> sandbox
+    # verification -> lens winner selection), asserting V3 was not
+    # bypassed, lens scoring was called, and the lens-preferred
+    # candidate landed on disk — plus V3-unreachable/malformed/timeout
+    # and lens-unreachable failure modes. No GPU, no model download.
     name: e2e acceptance (proxy + sandbox + fake llama)
     runs-on: ubuntu-latest
     steps:
