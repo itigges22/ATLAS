@@ -1029,23 +1029,33 @@ def test_install_artifacts_unknown_model_returns_error(tmp_path, capsys):
     assert "Unknown model" in capsys.readouterr().out
 
 
-def test_install_artifacts_nothing_registered_is_distinct_failure(tmp_path,
-                                                                    capsys):
+def test_install_artifacts_nothing_registered_is_distinct_failure(
+        tmp_path, monkeypatch, capsys):
     """A model with no artifact URL bases has nothing to download —
     install-artifacts must say so and exit with a distinct nonzero code,
-    not report success."""
-    m = model_registry.by_name("gemma-4-12b-it-Q4_K_M")
-    assert m is not None
-    assert m.lens_artifact_url_base is None
-    assert m.asa_artifact_url_base is None
+    not report success. Every published entry now carries url bases, so
+    the fixture strips them from a real entry."""
+    import dataclasses
+
+    real = model_registry.by_name("gemma-4-12b-it-Q4_K_M")
+    assert real is not None
+    stripped = dataclasses.replace(
+        real,
+        lens_artifact_url_base=None, lens_artifact_sha256={},
+        asa_artifact_url_base=None, asa_artifact_sha256={},
+    )
+    monkeypatch.setattr(
+        model_registry, "by_name",
+        lambda name: stripped if name == real.name else None)
+
     rc = model.main(["install-artifacts", "gemma-4-12b-it-Q4_K_M",
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 3
     out = capsys.readouterr().out
     assert "No artifacts are registered for direct download" in out
     # The published HF repos are surfaced as the manual path.
-    assert m.lens_hf_repo in out
-    assert m.asa_hf_repo in out
+    assert stripped.lens_hf_repo in out
+    assert stripped.asa_hf_repo in out
     assert "installed" not in out.lower()
 
 
