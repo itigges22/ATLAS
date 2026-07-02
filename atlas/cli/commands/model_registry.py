@@ -271,7 +271,7 @@ REGISTRY: List[Model] = [
         # PC-056.1: declare the artifact files so doctor can cross-check.
         # lens_artifact_dir=None means "use the global ATLAS_LENS_MODELS
         # dir" — current single-model layout.
-        lens_artifact_files=["cost_field.pt"],
+        lens_artifact_files=["cost_field.pt", "model_identity.json"],
         # Lens artifacts live on the public itigges22/ATLAS dataset on
         # HF (no token needed). Installer appends each filename in
         # lens_artifact_files to this base. Note: *.pt is gitignored in
@@ -286,6 +286,7 @@ REGISTRY: List[Model] = [
         # Update whenever the artifacts are re-published.
         lens_artifact_sha256={
             "cost_field.pt": "79176de9746076ebbe9e9ea0e56207d04410b1f88e3dc255bcbc9fd1689164d9",
+            "model_identity.json": "d0c3039cb7ad62237152a09ca6e83683dd5e148f463eaa07eee8ba9056d18ced",
         },
         # PC-061: ASA control vector trained + published 2026-05-12.
         asa_status="supported",
@@ -383,7 +384,7 @@ REGISTRY: List[Model] = [
         # Gemma-family weights ship under Google's Gemma Terms of Use,
         # not Apache-2.0 (HF license identifier: "gemma").
         license="gemma",
-        lens_artifact_files=["cost_field.pt", "cost_field.safetensors", "gx_xgboost.json", "gx_weights.json"],
+        lens_artifact_files=["cost_field.pt", "cost_field.safetensors", "gx_xgboost.json", "gx_weights.json", "model_identity.json"],
         lens_hf_repo="itigges22/atlas-lens-gemma4-12b",
         lens_artifact_url_base=(
             "https://huggingface.co/itigges22/atlas-lens-gemma4-12b/"
@@ -397,6 +398,7 @@ REGISTRY: List[Model] = [
             "cost_field.safetensors": "d1ce645da3e3453505c6e31a5d055f5dd1d27da030a713fc79be6f148b3b4324",
             "gx_weights.json": "343805ed5eec909fa21456f553382d7c5a7eeacd71cd99e7622d2db557770ed8",
             "gx_xgboost.json": "5fc13d9054616e789244391df6f1264c7547bc330f938aaf9799c12263e77d8d",
+            "model_identity.json": "e08d6c596b3f8354e0c7ef5e5b8fe1d5b683f1fd367156ded68861b787737105",
         },
         notes="Added via `atlas lens publish` — legacy uncalibrated artifacts "
               "(3840-dim) at https://huggingface.co/itigges22/atlas-lens-gemma4-12b. "
