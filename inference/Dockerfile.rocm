@@ -116,8 +116,7 @@ COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 # CUDA image — the ASA workflow is backend-agnostic at the file level.
 COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
 
-RUN mkdir -p /models /templates
-COPY templates/ /templates/
+RUN mkdir -p /models
 COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

@@ -145,8 +145,7 @@ COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 # a separate llama.cpp install on the host. Same as CUDA + ROCm images.
 COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
 
-RUN mkdir -p /models /templates
-COPY templates/ /templates/
+RUN mkdir -p /models
 COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

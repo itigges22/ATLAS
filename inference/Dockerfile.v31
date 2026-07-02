@@ -130,8 +130,7 @@ COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 # the ASA steering-vector build (BiasBusters #4) as a one-shot container
 # without needing a separate llama.cpp install on the host.
 COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
-RUN mkdir -p /models /templates
-COPY templates/ /templates/
+RUN mkdir -p /models
 COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 # The entrypoint's default listen port (PORT env) is 8080; the compose
