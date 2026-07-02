@@ -24,9 +24,14 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN go version
 
-# Install Rust (rustup, stable toolchain)
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-ENV PATH="/root/.cargo/bin:${PATH}"
+# Install Rust (rustup, stable toolchain) under /opt so the runtime
+# user (non-root) can read it. RUSTUP_HOME stays /opt/rustup at runtime
+# (read-only toolchain); CARGO_HOME is repointed to the user's tmpfs
+# home by compose so registry/cache writes work on the read-only root.
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
+    && chmod -R a+rX /opt/rustup /opt/cargo
+ENV PATH="/opt/cargo/bin:${PATH}"
 RUN rustc --version && cargo --version
 
 # Install JavaScript/TypeScript verification tools and package managers.
@@ -36,9 +41,11 @@ RUN rustc --version && cargo --version
 RUN npm install -g typescript tsx pnpm yarn
 RUN tsc --version && pnpm --version && yarn --version
 
-# Install Bun for bun.lockb projects.
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+# Install Bun for bun.lockb projects (under /opt for non-root reads).
+ENV BUN_INSTALL=/opt/bun
+RUN curl -fsSL https://bun.sh/install | bash \
+    && chmod -R a+rX /opt/bun
+ENV PATH="/opt/bun/bin:${PATH}"
 RUN bun --version
 
 # Pre-baked Python deps — kept INTENTIONALLY MINIMAL after PC-191.
@@ -72,8 +79,18 @@ RUN pip install --no-cache-dir \
 # Create sandbox workspace
 RUN mkdir -p /tmp/sandbox && chmod 777 /tmp/sandbox
 
+# Non-root runtime user. Compose may override the uid/gid at runtime
+# (ATLAS_SANDBOX_UID/GID, written by `atlas init` to match the host
+# user so /workspace writes keep the right owner); HOME comes from the
+# compose environment because an overridden uid has no passwd entry.
+RUN groupadd -g 1000 sandbox && useradd -u 1000 -g 1000 -d /home/sandbox -s /bin/bash sandbox \
+    && mkdir -p /home/sandbox && chown 1000:1000 /home/sandbox
+
 COPY executor_server.py .
 
 EXPOSE 8020
+
+USER sandbox
+ENV HOME=/home/sandbox
 
 CMD ["python", "executor_server.py"]

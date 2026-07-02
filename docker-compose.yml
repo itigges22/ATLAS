@@ -131,6 +131,7 @@ services:
       retries: 5
     networks:
       - atlas
+      - sandbox-net
 
   # --- V3 Pipeline Service ---
   v3-service:
@@ -164,6 +165,7 @@ services:
       retries: 5
     networks:
       - atlas
+      - sandbox-net
 
   # --- Sandbox (isolated code execution) ---
   sandbox:
@@ -183,6 +185,12 @@ services:
       - ATLAS_SHELL_SNAPSHOT_MAX_FILES=${ATLAS_SHELL_SNAPSHOT_MAX_FILES:-20000}
       - ATLAS_SHELL_SNAPSHOT_MAX_BYTES=${ATLAS_SHELL_SNAPSHOT_MAX_BYTES:-268435456}
       - ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES=${ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES:-16777216}
+      # Non-root runtime: the uid may be overridden below to match the
+      # host user, and an overridden uid has no passwd entry — HOME and
+      # the toolchain write-roots must come from the environment.
+      - HOME=/home/sandbox
+      - CARGO_HOME=/home/sandbox/.cargo
+      - GOPATH=/home/sandbox/go
     # Writable mounts for language toolchains. The container fs is
     # read_only=true for hardening, so every install/cache target a
     # toolchain wants to write to needs an explicit tmpfs. One per
@@ -194,18 +202,19 @@ services:
     # against the user's lockfile without any of these tmpfs at all.
     tmpfs:
       - /tmp:size=1G                 # /tmp itself (pip download dir, mktemp targets, /tmp/sandbox lives inside)
-      - /root/.local:size=256M       # Python: pip install --user
-      - /root/.cache:size=256M       # generic cache root (pip wheel cache, ruff, mypy)
-      - /root/.npm:size=256M         # Node: npm cache
-      - /root/.cargo/registry:size=512M # Rust: crate downloads
-      - /root/go:size=512M           # Go: module cache + bin
-      - /root/.m2:size=512M          # Java: Maven local repo
-      - /root/.gradle:size=512M      # Java/Kotlin: Gradle caches
-      - /root/.bundle:size=256M      # Ruby: bundler --path
-      - /root/.gem:size=256M         # Ruby: gem install --user-install
-      - /root/.composer:size=256M    # PHP: composer global
-      - /root/.nuget:size=256M       # .NET: NuGet packages
-      - /root/.pub-cache:size=256M   # Dart: pub packages
+      - /home/sandbox:size=128M      # dotfiles + misc config the toolchains scatter
+      - /home/sandbox/.local:size=256M   # Python: pip install --user
+      - /home/sandbox/.cache:size=256M   # generic cache root (pip wheel cache, ruff, mypy)
+      - /home/sandbox/.npm:size=256M     # Node: npm cache
+      - /home/sandbox/.cargo:size=512M   # Rust: crate downloads (CARGO_HOME; toolchain stays read-only in /opt)
+      - /home/sandbox/go:size=512M       # Go: module cache + bin (GOPATH)
+      - /home/sandbox/.m2:size=512M      # Java: Maven local repo
+      - /home/sandbox/.gradle:size=512M  # Java/Kotlin: Gradle caches
+      - /home/sandbox/.bundle:size=256M  # Ruby: bundler --path
+      - /home/sandbox/.gem:size=256M     # Ruby: gem install --user-install
+      - /home/sandbox/.composer:size=256M # PHP: composer global
+      - /home/sandbox/.nuget:size=256M   # .NET: NuGet packages
+      - /home/sandbox/.pub-cache:size=256M # Dart: pub packages
     # The container fs stays read-only (hardening). The user's project
     # is bind-mounted at /workspace — same path the proxy sees — so the
     # /shell endpoint can run pip install, python app.py, etc. against
@@ -215,6 +224,13 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
+    # Non-root + zero capabilities. The uid/gid default to 1000 and are
+    # overridden by `atlas init` to match the host user, so /workspace
+    # writes keep the right owner without CAP_DAC_OVERRIDE (which is why
+    # cap_drop ALL is safe — nothing in the executor needs a capability).
+    user: "${ATLAS_SANDBOX_UID:-1000}:${ATLAS_SANDBOX_GID:-1000}"
+    cap_drop:
+      - ALL
     # Resource caps. run_command runs untrusted model-authored shell in
     # here, so the container — not a regex — is the real backstop against
     # resource exhaustion. pids_limit is a hard fork-bomb stop at the
@@ -227,6 +243,10 @@ services:
     # uncapped on memory until reconfigured.
     pids_limit: ${ATLAS_SANDBOX_PIDS:-1024}
     mem_limit: ${ATLAS_SANDBOX_MEM:-0}
+    # CPU quota so a runaway build can't starve the latency-sensitive
+    # llama-server. Same pattern as mem_limit: `atlas init` writes ~75%
+    # of host cores; 0 = unlimited on a raw compose up.
+    cpus: ${ATLAS_SANDBOX_CPUS:-0}
     # Don't override working_dir — the image uses WORKDIR=/app for
     # executor_server.py. The /shell endpoint defaults its cwd to
     # /workspace at request time, which is the bind-mounted user
@@ -240,8 +260,16 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # The sandbox lives on its own network so egress can be cut without
+    # touching the rest of the stack: ATLAS_SANDBOX_NET_INTERNAL=true
+    # makes sandbox-net internal (no default route — executed code loses
+    # all egress; service-to-service HTTP from proxy/v3/lens still
+    # works). Caveats of internal mode: the 127.0.0.1:30820 host publish
+    # above goes dead (atlas doctor probes the sandbox via docker exec
+    # fallback), and pip/npm installs inside verification runs will fail
+    # by design. Default false = unrestricted egress (documented).
     networks:
-      - atlas
+      - sandbox-net
 
   # --- ATLAS Proxy (agent loop + grammar + structured tool calls) ---
   # The proxy needs access to your project files for read_file, write_file, etc.
@@ -338,6 +366,7 @@ services:
       retries: 5
     networks:
       - atlas
+      - sandbox-net
 
 volumes:
   lens-data:
@@ -346,3 +375,9 @@ volumes:
 networks:
   atlas:
     driver: bridge
+  # Dedicated sandbox network so egress can be cut independently:
+  # internal:true removes the default route (executed code loses all
+  # egress) while service-to-service HTTP on this network keeps working.
+  sandbox-net:
+    driver: bridge
+    internal: ${ATLAS_SANDBOX_NET_INTERNAL:-false}

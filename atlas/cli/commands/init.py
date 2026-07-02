@@ -496,23 +496,32 @@ def _detect_total_ram_gib() -> float:
         return 0.0
 
 
-def _sandbox_limits() -> Tuple[str, str]:
-    """Compute (ATLAS_SANDBOX_MEM, ATLAS_SANDBOX_PIDS) for THIS host.
+def _sandbox_limits() -> Tuple[str, str, str, str, str]:
+    """Compute (MEM, PIDS, CPUS, UID, GID) sandbox settings for THIS host.
 
     The sandbox runs untrusted model-authored shell, so the container is the
-    real backstop against resource exhaustion. We cap memory at ~75% of host
-    RAM (a ceiling, not a reservation — normal builds use a few GB) so a
-    runaway can't OOM the host, with a 2 GiB floor so a small box can still
-    build. pids_limit is a constant fork-bomb stop. Returns ("0", …) for
-    memory when RAM can't be detected — "0" means Docker leaves it uncapped,
-    so detection failure degrades to the prior behavior rather than a bad cap.
+    real backstop against resource exhaustion. Memory caps at ~75% of host
+    RAM (a ceiling, not a reservation) with a 2 GiB floor; CPUs cap at ~75%
+    of cores (1-core floor) so a runaway build can't starve the
+    latency-sensitive llama-server; pids_limit is a constant fork-bomb stop.
+    UID/GID are the invoking user's, so the non-root sandbox writes
+    /workspace files with the right owner (no CAP_DAC_OVERRIDE needed —
+    the container drops all capabilities). "0" for mem/cpus means Docker
+    leaves them uncapped, so detection failure degrades to the prior
+    behavior rather than a bad cap.
     """
     ram = _detect_total_ram_gib()
     if ram <= 0:
         mem = "0"  # undetectable → no cap (no regression vs. before)
     else:
         mem = f"{max(2, int(ram * 0.75))}g"
-    return mem, "1024"
+    cores = os.cpu_count() or 0
+    cpus = str(max(1, int(cores * 0.75))) if cores else "0"
+    try:
+        uid, gid = str(os.getuid()), str(os.getgid())
+    except AttributeError:  # non-POSIX host
+        uid, gid = "1000", "1000"
+    return mem, "1024", cpus, uid, gid
 
 
 def _render_env(m: model_registry.Model, profile: tier.TierProfile,
@@ -549,7 +558,7 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         backend_id, backend_name, _ = _backend_for(vendor)
     gpu_index = str(selected_gpu.index) if selected_gpu else "0"
 
-    sandbox_mem, sandbox_pids = _sandbox_limits()
+    sandbox_mem, sandbox_pids, sandbox_cpus, sandbox_uid, sandbox_gid = _sandbox_limits()
 
     keys = {
         "ATLAS_MODELS_DIR": models_value,
@@ -574,6 +583,9 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         # mem ~75% of detected RAM; pids a constant fork-bomb stop.
         "ATLAS_SANDBOX_MEM": sandbox_mem,
         "ATLAS_SANDBOX_PIDS": sandbox_pids,
+        "ATLAS_SANDBOX_CPUS": sandbox_cpus,
+        "ATLAS_SANDBOX_UID": sandbox_uid,
+        "ATLAS_SANDBOX_GID": sandbox_gid,
     }
 
     gpu_descr = (f"{selected_gpu.name} ({selected_gpu.vram_gb:.1f} GB VRAM)"

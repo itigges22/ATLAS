@@ -32,23 +32,31 @@ spec:
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop: [ALL]
+          seccompProfile:
+            type: RuntimeDefault
         volumeMounts:
         # Project workspace — bind-mount equivalent.
         - {name: workspace,  mountPath: /workspace}
         # Per-language ephemeral caches. Mirrors docker-compose tmpfs config.
         - {name: tmp,        mountPath: /tmp}
-        - {name: pylocal,    mountPath: /root/.local}
-        - {name: cache,      mountPath: /root/.cache}
-        - {name: npm,        mountPath: /root/.npm}
-        - {name: cargo,      mountPath: /root/.cargo/registry}
-        - {name: go,         mountPath: /root/go}
-        - {name: m2,         mountPath: /root/.m2}
-        - {name: gradle,     mountPath: /root/.gradle}
-        - {name: bundle,     mountPath: /root/.bundle}
-        - {name: gem,        mountPath: /root/.gem}
-        - {name: composer,   mountPath: /root/.composer}
-        - {name: nuget,      mountPath: /root/.nuget}
-        - {name: pubcache,   mountPath: /root/.pub-cache}
+        - {name: home,       mountPath: /home/sandbox}
+        - {name: pylocal,    mountPath: /home/sandbox/.local}
+        - {name: cache,      mountPath: /home/sandbox/.cache}
+        - {name: npm,        mountPath: /home/sandbox/.npm}
+        - {name: cargo,      mountPath: /home/sandbox/.cargo}
+        - {name: go,         mountPath: /home/sandbox/go}
+        - {name: m2,         mountPath: /home/sandbox/.m2}
+        - {name: gradle,     mountPath: /home/sandbox/.gradle}
+        - {name: bundle,     mountPath: /home/sandbox/.bundle}
+        - {name: gem,        mountPath: /home/sandbox/.gem}
+        - {name: composer,   mountPath: /home/sandbox/.composer}
+        - {name: nuget,      mountPath: /home/sandbox/.nuget}
+        - {name: pubcache,   mountPath: /home/sandbox/.pub-cache}
         readinessProbe:
           httpGet:
             path: /health
@@ -74,6 +82,7 @@ spec:
           path: ${ATLAS_PROJECTS_DIR}
           type: DirectoryOrCreate
       - {name: tmp,      emptyDir: {sizeLimit: 1Gi}}
+      - {name: home,     emptyDir: {sizeLimit: 128Mi}}
       - {name: pylocal,  emptyDir: {sizeLimit: 256Mi}}
       - {name: cache,    emptyDir: {sizeLimit: 256Mi}}
       - {name: npm,      emptyDir: {sizeLimit: 256Mi}}
