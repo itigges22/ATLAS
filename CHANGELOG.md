@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Production-platform pass (support, supply chain, governance, ops)
+- `SUPPORT_MATRIX.md`: every OS/backend/model/deployment/language/feature path classified (Supported/Preview/Experimental/Community-tested/Research-only/Unsupported) with validation provenance; N/N-1 compatibility policy; the model contract stated plainly (direct-mode agnostic, per-model bundles for V3/Lens/ASA).
+- Supply chain: all Docker bases digest-pinned (Dependabot-maintained); every pushed image carries SLSA provenance + SPDX SBOM attestations and a keyless cosign signature over its digest.
+- Sandbox: non-root runtime (uid-mapped to the host user by `atlas init`), cap_drop ALL, CPU quota, toolchains relocated out of /root, K3s securityContext with seccomp RuntimeDefault, and an optional egress cutoff (`ATLAS_SANDBOX_NET_INTERNAL`) — verified on a local hardened-profile run.
+- Redis resolved (ADR 0002, GH #57): kept + hardened — bounded maxmemory with explicit noeviction (learned TTL-less state fails visibly instead of silently evicting), mem_limit, graceful task-queue 503s, honest outage docs.
+- Governance: GOVERNANCE/MAINTAINERS/CODEOWNERS; SECURITY.md severities, response targets, embargo/CVE, backports, artifact revocation; THIRD_PARTY_NOTICES; six ADRs; UPGRADE/ROLLBACK/BACKUP_RESTORE/OPERATIONS runbooks; `PRODUCTION_READINESS.md` per-item tracker (honest statuses — production maturity is NOT claimed).
+- Tracker hygiene: label vocabulary created + applied to all open issues; #39 closed with evidence; fresh-audit status on #66/#115/#27; #124/#126/#128 marked blocked with exact conformance lists.
+
 ### V3/Lens pipeline acceptance test
 - A second deterministic E2E (`tests/e2e/test_v3_lens_acceptance.py`) boots the **real v3-service** alongside the real proxy and sandbox: a Tier-2 write routes through the proxy's V3 bridge, the probe fails on purpose, lens-calibrated allocation yields k=3, PlanSearch generates candidates via the fake llama, each candidate is scored through both lens endpoints (a recording fake lens proves the calls) and verified in the real sandbox, and winner selection writes the lens-preferred candidate to disk. Failure modes at the seams: V3 unreachable/malformed/timeout fall back to the documented direct write; a lens outage leaves V3 running uncalibrated.
 - `tests/contracts/` drift gates run in CI: proxy↔TUI event producer/consumer parity, envelope-type parity (Go producer / Go consumer / Python spec), config keys ↔ readers ↔ docs, CLI subcommands ↔ implementations, registry hash/consumption contracts.
