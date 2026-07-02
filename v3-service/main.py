@@ -65,7 +65,7 @@ MAX_TOKENS = 8192
 # The pattern cache uses retry_count / max_retries as a "surprise" proxy — higher
 # retries mean the pattern was harder to find and worth caching with more weight.
 _PHASE_RETRY_COUNT = {
-    "probe_pass": 1,        # solved on first probe
+    "probe": 1,             # solved on first probe (phase_solved="probe")
     "phase1": 2,            # plan-search candidates passed
     "phase1_sstar": 2,      # S* tiebreak among passing candidates
     "pr_cot": 3,            # required PR-CoT repair

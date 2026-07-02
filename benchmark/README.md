@@ -15,6 +15,33 @@ Until the 9B numbers land, the **V3 (14B) results in
 are the canonical published evidence (74.6% LiveCodeBench v5 pass@1,
 599 tasks, 4 ablation conditions).
 
+### How the benchmark path differs from the product path
+
+The phase engines (`benchmark/v3/*`), candidate selection, S*, and the
+lens service backend (identity checks, thresholds, C(x)/G(x) math,
+artifact resolution) are one shared implementation — v3-service imports
+these modules directly. The orchestrators differ deliberately, and
+benchmark numbers should be read with these differences in mind:
+
+- **Lens usage.** The benchmark scores C(x) only
+  (`/internal/lens/score-text`). The product additionally requests
+  per-step G(x) scoring and applies the severe-veto / per-step
+  threshold stack to every write — that product-side quality gate is
+  not measured by benchmark pass rates.
+- **Candidate budget.** The benchmark runs a fixed k=3 and logs
+  BlendASC/ReASC as telemetry only; the product allocates k adaptively
+  from calibrated C(x) energy when calibration is present.
+- **Probe budget.** The product probes with a light→standard→nothink
+  cascade; the benchmark issues a single standard probe.
+- **Verification oracle.** The benchmark verifies against the dataset's
+  ground-truth tests; the product has no oracle at runtime and uses
+  SelfTestGen + build/syntax gates instead.
+
+Failure sentinels are aligned (an unscorable candidate reads as the
+neutral `(0.0, 0.5)` on both paths), and benchmark candidate ordering
+is energy-sorted like the product's, so scoring cannot diverge
+silently within the shared stages.
+
 ---
 
 ## V2 Benchmark (Historical)

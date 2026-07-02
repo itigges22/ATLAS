@@ -964,6 +964,10 @@ class V3Pipeline:
                     cand = future.result()
                     if cand.get("passed"):
                         passing_candidates.append(cand)
+            # as_completed order is thread-completion order — run-dependent.
+            # Sort by energy (ascending, matching the product pipeline) so
+            # S* pairs and the [0] fallbacks are deterministic.
+            passing_candidates.sort(key=lambda c: c.get("energy", 0.0))
         else:
             for cand in candidates:
                 cand = _test_and_embed(cand)

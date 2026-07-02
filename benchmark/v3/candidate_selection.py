@@ -6,7 +6,7 @@ Provides four selection strategies for choosing among passing candidates:
 - logprob: Select by highest mean token log-probability (baseline)
 - oracle: Always select a passing candidate if one exists (ceiling)
 
-Config: ATLAS_V3_SELECTION_STRATEGY in atlas.conf
+Strategy is chosen by the caller (bench: --selection-strategy; product: lens)
 """
 
 import random
