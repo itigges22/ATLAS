@@ -387,6 +387,19 @@ REGISTRY: List[Model] = [
         license="gemma",
         lens_artifact_files=["cost_field.pt", "cost_field.safetensors", "gx_xgboost.json", "gx_weights.json"],
         lens_hf_repo="itigges22/atlas-lens-gemma4-12b",
+        lens_artifact_url_base=(
+            "https://huggingface.co/itigges22/atlas-lens-gemma4-12b/"
+            "resolve/main/"
+        ),
+        # x-linked-etag of the HF LFS objects; gx_xgboost.json is a small
+        # non-LFS file, so its hash is sha256sum of the published bytes.
+        # Captured 2026-07-02; update on re-publish.
+        lens_artifact_sha256={
+            "cost_field.pt": "82b2d960b71b84a90ecc69189c67bc72a9b7cbc5c79b7b207dcaf2634b0af509",
+            "cost_field.safetensors": "d1ce645da3e3453505c6e31a5d055f5dd1d27da030a713fc79be6f148b3b4324",
+            "gx_weights.json": "343805ed5eec909fa21456f553382d7c5a7eeacd71cd99e7622d2db557770ed8",
+            "gx_xgboost.json": "5fc13d9054616e789244391df6f1264c7547bc330f938aaf9799c12263e77d8d",
+        },
         notes="Added via `atlas lens publish` — legacy uncalibrated artifacts "
               "(3840-dim) at https://huggingface.co/itigges22/atlas-lens-gemma4-12b. "
               "download_url not captured at publish time; maintainers "
@@ -394,6 +407,16 @@ REGISTRY: List[Model] = [
         asa_status="supported",
         asa_artifact_files=["ast_edit_steering.gguf"],
         asa_hf_repo="itigges22/atlas-asa-gemma4-12b",
+        asa_artifact_url_base=(
+            "https://huggingface.co/itigges22/atlas-asa-gemma4-12b/"
+            "resolve/main/"
+        ),
+        # sha256sum of the published vector — verified byte-identical to
+        # the locally built models/ast_edit_steering.gguf (gemma4,
+        # layer 36). Captured 2026-07-02; update on re-publish.
+        asa_artifact_sha256={
+            "ast_edit_steering.gguf": "fbcfd8af85980c21fd0eb7d37c5627b027008934ad6c626b99eabf6e5587bb46",
+        },
     ),
 ]
 
