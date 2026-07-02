@@ -7,7 +7,12 @@ and various generation parameters.
 
 import json
 import pytest
-import httpx
+
+# importorskip, not a plain import: the `-m "not integration"` default
+# deselects these tests, but pytest still imports the module during
+# collection — a hard import would fail collection on environments
+# (like CI) that don't install the integration deps.
+httpx = pytest.importorskip("httpx")
 
 
 class TestLlamaHealth:

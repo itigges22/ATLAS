@@ -6,7 +6,10 @@ linting, and resource limits.
 """
 
 import pytest
-import httpx
+
+# importorskip, not a plain import — see test_llm.py: keeps collection
+# alive on environments without the integration deps.
+httpx = pytest.importorskip("httpx")
 
 
 class TestSandboxHealth:
