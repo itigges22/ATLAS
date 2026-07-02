@@ -43,7 +43,7 @@ class HumanEvalPlusDataset(BaseDataset):
         if filepath.exists():
             return filepath
 
-        print(f"Downloading HumanEval+ dataset from HuggingFace...")
+        print("Downloading HumanEval+ dataset from HuggingFace...")
         rows = []
 
         # Fetch in batches of 100 (164 tasks = 2 requests)

@@ -2746,10 +2746,8 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
 # PR-CoT / refinement so the repair LLM sees it as part of failure
 # context.
 
-import re as _re_phase3
-
 # Python traceback frame: `File "path", line N, in funcname`
-_TRACEBACK_FRAME_RE = _re_phase3.compile(r'File "[^"]+", line \d+, in (\S+)')
+_TRACEBACK_FRAME_RE = re.compile(r'File "[^"]+", line \d+, in (\S+)')
 
 
 def _failing_function_from_stderr(stderr: str):

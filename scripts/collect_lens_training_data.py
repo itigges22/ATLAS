@@ -120,7 +120,7 @@ def main():
     n_fail = len(labels) - n_pass
     dim = len(embeddings[0]) if embeddings else 0
 
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"Total: {len(embeddings)} (PASS={n_pass}, FAIL={n_fail})")
     print(f"Skipped: {skipped}")
     print(f"Embedding dim: {dim}")

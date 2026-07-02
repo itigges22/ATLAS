@@ -503,7 +503,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             _safe_print(f"  {RED if color else ''}docker cp {src} failed: "
                         f"{cp.stderr.strip()}{RESET if color else ''}")
             return 1
-    _safe_print(f"  staged")
+    _safe_print("  staged")
 
     if args.dry_run:
         _safe_print(f"[3/5] (dry-run) would run build_steering_vector.py "
@@ -638,10 +638,10 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         copied_out = True
         _safe_print("")
         _safe_print(f"  {GREEN if color else ''}Build complete.{RESET if color else ''}")
-        _safe_print(f"  Next: restart llama-server so it picks up the new vector:")
-        _safe_print(f"    docker compose restart llama-server")
-        _safe_print(f"  Then verify: atlas asa check")
-        _safe_print(f"  Or share it: atlas asa publish --repo USER/REPO")
+        _safe_print("  Next: restart llama-server so it picks up the new vector:")
+        _safe_print("    docker compose restart llama-server")
+        _safe_print("  Then verify: atlas asa check")
+        _safe_print("  Or share it: atlas asa publish --repo USER/REPO")
         return 0
     finally:
         # Clean up staged inputs in the container's /tmp. The built OUTPUT
@@ -811,20 +811,20 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
             api.upload_file(path_or_fileobj=vpath,
                              path_in_repo=DEFAULT_VECTOR_NAME,
                              repo_id=hf_repo)
-            _safe_print(f"  uploaded")
+            _safe_print("  uploaded")
         except Exception as e:
             _safe_print(f"  {RED if color else ''}upload failed: "
                         f"{e}{RESET if color else ''}")
             return 1
 
-    _safe_print(f"[3/4] Rendering registry-PR body…")
+    _safe_print("[3/4] Rendering registry-PR body…")
     # The vector file knows which layer it steers (direction.<N> tensor) —
     # trust it over the --layer flag's default.
     layer = meta.get("steered_layer") or args.layer
     pr_body = _render_asa_pr_body(model_label, hf_repo, base_model,
                                     dim, layer, sha, license_id)
     if args.skip_pr or args.dry_run:
-        _safe_print(f"[4/4] (skipping PR open — printing body for paste)")
+        _safe_print("[4/4] (skipping PR open — printing body for paste)")
         _safe_print("")
         _safe_print(pr_body)
         _safe_print("")
@@ -837,7 +837,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     import shutil as _shutil
     gh_path = _shutil.which("gh")
     if not gh_path:
-        _safe_print(f"[4/4] `gh` not found — printing PR body for manual paste")
+        _safe_print("[4/4] `gh` not found — printing PR body for manual paste")
         _safe_print("")
         _safe_print(pr_body)
         return 0
@@ -846,7 +846,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     # vector's HF repo — no local git checkout required. The model must
     # already have a registry entry (the lens publish PR adds it); when
     # it doesn't, fall back to the printed body.
-    _safe_print(f"[4/4] Opening registry-PR via the GitHub API…")
+    _safe_print("[4/4] Opening registry-PR via the GitHub API…")
     title = (f"Registry: add ASA vector for {model_label} "
              f"(via atlas asa publish)")
     vector_name = os.path.basename(

@@ -233,8 +233,11 @@ class BenchmarkConfig:
             "mbpp_pass1": 0.734,           # 73.4% per tech report (3-shot)
             "humaneval_plus_pass1": 0.61,  # EvalPlus leaderboard estimate
             "mbpp_plus_pass1": 0.65,       # EvalPlus leaderboard estimate
-            "livecodebench_pass1": 0.20,   # Placeholder — will update after first run
-            "scicode_pass1": 0.10,         # Placeholder — will update after first run
+            # Measured in-repo: 54.9% single-generation baseline on the
+            # 599-task LiveCodeBench set (docs/reports/V3_ABLATION_STUDY.md).
+            "livecodebench_pass1": 0.549,
+            # No published or measured figure; unvalidated estimate.
+            "scicode_pass1": 0.10,
         }
 
     def ensure_directories(self) -> None:

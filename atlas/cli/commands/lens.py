@@ -1157,7 +1157,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
 
         # 5. Train + save G(x) on the same embeddings. Nothing reaches the
         # live directory unless both halves and their metadata are complete.
-        _safe_print(f"[5/5] Training G(x) XGBoost…")
+        _safe_print("[5/5] Training G(x) XGBoost…")
         try:
             from geometric_lens.training import train_gx, save_gx
             gx_result = train_gx(data)
@@ -1609,11 +1609,11 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
 
     _safe_print("")
     _safe_print(f"  atlas {kind} publish — submission pre-flight")
-    _safe_print(f"  ──────────────────────────────────────────")
-    _safe_print(f"  Publish does TWO things in one command:")
-    _safe_print(f"    1. Uploads the artifact to a HuggingFace repo you own")
-    _safe_print(f"    2. Opens a registry PR against github.com/itigges22/ATLAS")
-    _safe_print(f"  Full walkthrough: docs/PUBLISHING.md")
+    _safe_print("  ──────────────────────────────────────────")
+    _safe_print("  Publish does TWO things in one command:")
+    _safe_print("    1. Uploads the artifact to a HuggingFace repo you own")
+    _safe_print("    2. Opens a registry PR against github.com/itigges22/ATLAS")
+    _safe_print("  Full walkthrough: docs/PUBLISHING.md")
     _safe_print("")
 
     token_ok = bool(_hf_token())
@@ -1629,7 +1629,7 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
         if ok:
             mark = f"{GREEN_}✓{RESET_}"
         elif dry_run:
-            mark = f"○"  # neutral — not enforced
+            mark = "○"  # neutral — not enforced
         elif required:
             mark = f"{RED_}✗{RESET_}"
         else:
@@ -1637,7 +1637,7 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
         if ok or dry_run:
             # Don't print the "required" hint when we're not enforcing it —
             # it adds visual noise that contradicts the dry-run header.
-            suffix = "" if ok else f"  (would be needed for a real upload)"
+            suffix = "" if ok else "  (would be needed for a real upload)"
         else:
             suffix = f"  {hint}"
         _safe_print(f"  {mark} {label}{suffix}")
@@ -1666,8 +1666,8 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
     missing_required = (not token_ok) or (not hf_pkg_ok)
     if missing_required:
         _safe_print(f"  {RED_}Cannot continue: missing required credentials.{RESET_}")
-        _safe_print(f"  Fix the items marked ✗ above, then re-run. "
-                    f"Or use --dry-run to preview the PR body without uploading.")
+        _safe_print("  Fix the items marked ✗ above, then re-run. "
+                    "Or use --dry-run to preview the PR body without uploading.")
         _safe_print("")
         return False
 
@@ -1950,21 +1950,21 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
             api.upload_file(path_or_fileobj=card_md.encode(),
                              path_in_repo="README.md",
                              repo_id=hf_repo)
-            _safe_print(f"  uploaded README.md (model card)")
+            _safe_print("  uploaded README.md (model card)")
         except Exception as e:
             _safe_print(f"  {YELL if color else ''}model card upload "
                         f"failed (artifacts uploaded fine): {e}"
                         f"{RESET if color else ''}")
 
     # 4. Render registry-PR body
-    _safe_print(f"[3/5] Rendering registry-PR body…")
+    _safe_print("[3/5] Rendering registry-PR body…")
     pr_body = _render_registry_pr_body(model_label, hf_repo, base_model,
                                          dim, sha, license_id,
                                          artifact_files=files_to_upload)
 
     # 5. Open PR (or print body for paste)
     if args.skip_pr or args.dry_run:
-        _safe_print(f"[4/5] (skipping PR open — printing body for paste)")
+        _safe_print("[4/5] (skipping PR open — printing body for paste)")
         _safe_print("")
         _safe_print(pr_body)
         _safe_print("")
@@ -1978,7 +1978,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     import shutil as _shutil
     gh_path = _shutil.which("gh")
     if not gh_path:
-        _safe_print(f"[4/5] `gh` not found — printing PR body for manual paste")
+        _safe_print("[4/5] `gh` not found — printing PR body for manual paste")
         _safe_print("")
         _safe_print(pr_body)
         _safe_print(f"  {GREEN if color else ''}Upload complete.{RESET if color else ''} "
@@ -1990,7 +1990,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     # The PR is built through the GitHub API (branch + commit + PR) so it
     # works from any install — no local git checkout required. The commit
     # is a real registry edit, not a paste-me suggestion.
-    _safe_print(f"[4/5] Opening registry-PR via the GitHub API…")
+    _safe_print("[4/5] Opening registry-PR via the GitHub API…")
     title = (f"Registry: add Lens artifacts for {model_label} "
              f"(via atlas lens publish)")
 

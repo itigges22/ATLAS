@@ -150,7 +150,7 @@ class BaseDataset(ABC):
         """
         for task in self.tasks:
             if not task.task_id:
-                raise ValueError(f"Task missing task_id")
+                raise ValueError("Task missing task_id")
             if not task.prompt:
                 raise ValueError(f"Task {task.task_id} missing prompt")
             if not task.entry_point:

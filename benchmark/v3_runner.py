@@ -1596,7 +1596,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     atomic_write_json(run_dir / "run_meta.json", meta)
 
     print("=" * 60)
-    print(f"  ATLAS V3 Benchmark")
+    print("  ATLAS V3 Benchmark")
     print(f"  Run ID: {run_id}")
     print(f"  Results: {run_dir}")
     print(f"  Phase 1: {'ON' if enable_phase1 else 'OFF'}")
@@ -1692,9 +1692,9 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         breakdown[phase] = breakdown.get(phase, 0) + 1
 
     print("\n" + "=" * 60)
-    print(f"  V3 BENCHMARK COMPLETE")
+    print("  V3 BENCHMARK COMPLETE")
     print(f"  pass@1: {passed}/{total} ({rate*100:.1f}%)")
-    print(f"  Solved by:")
+    print("  Solved by:")
     for phase, count in sorted(breakdown.items()):
         print(f"    {phase}: {count}")
     print(f"  Results: {run_dir}")

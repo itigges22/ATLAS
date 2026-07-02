@@ -163,7 +163,7 @@ The JSON schema uses `oneOf` with `additionalProperties: false` and enumerates t
 | `run_background` | Start a long-running process (e.g. `python app.py`) in the sandbox; returns a `job_id` immediately | No |
 | `tail_background` | Fetch new stdout/stderr from a backgrounded job by `job_id` | Yes |
 | `stop_background` | SIGTERM/SIGKILL a backgrounded job by `job_id` | No |
-| `plan_tasks` | Decompose work into parallel tasks with dependencies | No |
+| `plan_tasks` | Record a task decomposition with dependencies (planning aid). Tasks are acknowledged as pending, not executed — parallel execution is not wired in | No |
 
 ### Tool-selection bias mitigations
 

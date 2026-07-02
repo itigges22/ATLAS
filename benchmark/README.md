@@ -5,8 +5,8 @@
 The V3 pipeline runner (`v3_runner.py` + the modules in `v3/`) targets
 the V3.1.0 model+topology: Qwen3.5-9B-Q6_K with the PlanSearch /
 DivSampling / Budget Forcing / PR-CoT / Refinement / Derivation stack.
-Ablation work is tracked under `scripts/run_v31_ablation.sh`; the
-6-condition study (A–F) is mid-run on hardware tier `medium`.
+Ablation work is tracked under `scripts/run_v31_ablation.sh` (a
+6-condition study, A–F, on hardware tier `medium`).
 Headline 9B numbers are not yet published — `docs/SOURCES.md`
 "Known Limitations" lists this as a V3.1.x roadmap item.
 
@@ -62,7 +62,7 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 | File | Purpose |
 |------|---------|
 | `runner.py` | Base benchmark runner (function + stdio modes, ChatML formatting, code extraction) |
-| `cli.py` | Command-line interface (`atlas benchmark --humaneval --dry-run`, etc.) |
+| `cli.py` | Command-line interface (`python3 -m benchmark.cli --humaneval --dry-run`, etc.) |
 | `config.py` | Benchmark configuration loaded from `atlas.conf` |
 | `models.py` | Data models: BenchmarkTask, AttemptResult, TaskResult, BenchmarkRun |
 | `datasets/` | Dataset loaders (HumanEval, MBPP, EvalPlus, LiveCodeBench v5, GPQA, IFBench, SciCode) |

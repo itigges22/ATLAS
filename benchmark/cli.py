@@ -5,16 +5,16 @@ ATLAS Benchmark CLI.
 Main entry point for running benchmarks and analyzing results.
 
 Usage:
-    atlas benchmark --humaneval [--dry-run] [--k K] [--runs N]
-    atlas benchmark --mbpp [--dry-run] [--k K] [--runs N]
-    atlas benchmark --humaneval-plus [--dry-run] [--k K] [--runs N]
-    atlas benchmark --mbpp-plus [--dry-run] [--k K] [--runs N]
-    atlas benchmark --livecodebench [--dry-run] [--k K] [--runs N]
-    atlas benchmark --scicode [--dry-run] [--k K] [--runs N]
-    atlas benchmark --custom [--dry-run] [--k K] [--runs N]
-    atlas benchmark --all [--dry-run] [--k K] [--runs N]
-    atlas benchmark analyze --input DIR --output DIR
-    atlas benchmark cost --input DIR --output DIR
+    python3 -m benchmark.cli --humaneval [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli --mbpp [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli --humaneval-plus [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli --mbpp-plus [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli --livecodebench [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli --scicode [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli --custom [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli --all [--dry-run] [--k K] [--runs N]
+    python3 -m benchmark.cli analyze --input DIR --output DIR
+    python3 -m benchmark.cli cost --input DIR --output DIR
 """
 
 import argparse
@@ -476,16 +476,16 @@ def main():
         epilog="""
 Examples:
     # Run HumanEval in dry-run mode (validation only)
-    atlas benchmark --humaneval --dry-run
+    python3 -m benchmark.cli --humaneval --dry-run
 
     # Run HumanEval with pass@1
-    atlas benchmark --humaneval --k 1
+    python3 -m benchmark.cli --humaneval --k 1
 
     # Run HumanEval with pass@20
-    atlas benchmark --humaneval --k 20 --runs 3
+    python3 -m benchmark.cli --humaneval --k 20 --runs 3
 
     # Analyze results
-    atlas benchmark analyze --input benchmark/results/v1/ --output benchmark/results/v1/analysis/
+    python3 -m benchmark.cli analyze --input benchmark/results/v1/ --output benchmark/results/v1/analysis/
 """
     )
 

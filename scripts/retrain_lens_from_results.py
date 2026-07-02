@@ -262,7 +262,7 @@ def main():
         save_path=args.save_path,
     )
 
-    print(f"\n5. Results:")
+    print("\n5. Results:")
     print(f"   Val AUC:      {result.get('val_auc', 0):.4f}")
     print(f"   Train AUC:    {result.get('train_auc', 0):.4f}")
     print(f"   Val accuracy: {result.get('val_accuracy', 0):.2%}")
@@ -278,7 +278,7 @@ def main():
 
     # Refresh the per-model C(x) calibration beside the new weights so
     # normalized scores track the retrained energy distribution.
-    print(f"\n6. Refreshing C(x) calibration + hot-reloading the lens service")
+    print("\n6. Refreshing C(x) calibration + hot-reloading the lens service")
     from geometric_lens.calibration import (
         derive_cx_normalization, save_cx_normalization,
     )

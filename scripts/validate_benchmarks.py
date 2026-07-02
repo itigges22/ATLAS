@@ -92,10 +92,10 @@ def verify_file_structure():
             content = fh.read()
         check(".gitignore has datasets/.cache",
               ".cache" in content or "datasets/.cache" in content,
-              f"Searched .gitignore for cache exclusion")
+              "Searched .gitignore for cache exclusion")
         check(".gitignore has benchmark/results",
               "results" in content or "benchmark/results" in content,
-              f"Searched .gitignore for results exclusion")
+              "Searched .gitignore for results exclusion")
     else:
         warn(".gitignore not found at repo root")
 
@@ -130,7 +130,7 @@ def verify_custom_tasks():
         # Could be {"tasks": [...]} or {"ALGO_001": {...}, ...} etc.
         if "tasks" in raw and isinstance(raw["tasks"], list):
             tasks = raw["tasks"]
-            print(f"  JSON structure: dict with 'tasks' key")
+            print("  JSON structure: dict with 'tasks' key")
         elif "categories" in raw:
             # Might be {"categories": {"Algorithm": [...], ...}}
             tasks = []
@@ -147,7 +147,7 @@ def verify_custom_tasks():
                     if isinstance(tdata, dict):
                         tdata.setdefault("task_id", tid)
                         tasks.append(tdata)
-                print(f"  JSON structure: dict keyed by task ID")
+                print("  JSON structure: dict keyed by task ID")
             else:
                 print(f"  {RED}Unrecognized JSON structure: dict with {type(first_val).__name__} values{RESET}")
                 print(f"  Top-level keys: {list(raw.keys())[:10]}")
@@ -158,7 +158,7 @@ def verify_custom_tasks():
         print(f"  Preview: {str(raw)[:300]}")
         return
 
-    check(f"Task count is 100", len(tasks) == 100, f"Found {len(tasks)} tasks")
+    check("Task count is 100", len(tasks) == 100, f"Found {len(tasks)} tasks")
 
     # Verify required fields
     required_fields = ["task_id", "category", "difficulty", "prompt",
@@ -182,7 +182,7 @@ def verify_custom_tasks():
             continue
         cat = t.get("category", "UNKNOWN")
         categories[cat] = categories.get(cat, 0) + 1
-    print(f"\n  Category distribution:")
+    print("\n  Category distribution:")
     expected = {
         "Algorithm": 20, "Data Processing": 20, "API/Integration": 15,
         "Test Generation": 15, "Refactoring": 15, "Bug Fixing": 15
@@ -199,12 +199,12 @@ def verify_custom_tasks():
             continue
         d = t.get("difficulty", "UNKNOWN")
         difficulties[d] = difficulties.get(d, 0) + 1
-    print(f"\n  Difficulty distribution:")
+    print("\n  Difficulty distribution:")
     for d, count in sorted(difficulties.items()):
         print(f"    {d}: {count}")
 
     # Verify canonical solutions pass their own tests
-    print(f"\n  Running canonical solutions against test cases...")
+    print("\n  Running canonical solutions against test cases...")
     solutions_passed = 0
     solutions_failed = []
     for t in tasks:
@@ -241,7 +241,7 @@ def verify_custom_tasks():
                 # best-effort: swallow on failure (caller continues)
                 pass
 
-    check(f"Canonical solutions pass own tests",
+    check("Canonical solutions pass own tests",
           solutions_passed == len(tasks),
           f"{solutions_passed}/{len(tasks)} passed")
     if solutions_failed:
@@ -301,7 +301,7 @@ def verify_mutation_testing():
         warn("Could not parse tasks.json for mutation testing")
         return
 
-    print(f"  Mutating canonical solutions (replacing return → return None)...")
+    print("  Mutating canonical solutions (replacing return → return None)...")
     print(f"  Testing {len(tasks)} tasks...\n")
 
     caught = 0
@@ -347,7 +347,7 @@ def verify_mutation_testing():
                 pass
 
     detection_rate = (caught / len(tasks)) * 100 if tasks else 0
-    check(f"Mutation detection rate ≥ 90%",
+    check("Mutation detection rate ≥ 90%",
           detection_rate >= 90,
           f"{caught}/{len(tasks)} mutants caught ({detection_rate:.1f}%)")
 
@@ -357,7 +357,7 @@ def verify_mutation_testing():
             print(f"    ⚠ {tid}")
         if len(escaped) > 10:
             print(f"    ... and {len(escaped) - 10} more")
-        print(f"  These tasks may have weak test cases that inflate pass@k scores.")
+        print("  These tasks may have weak test cases that inflate pass@k scores.")
 
     if errors:
         warn(f"{errors} tasks had errors during mutation testing")
@@ -375,9 +375,9 @@ def verify_datasets():
 
         he = HumanEvalDataset()
         tasks = he.load()
-        check(f"HumanEval loads successfully", tasks is not None and len(tasks) > 0,
+        check("HumanEval loads successfully", tasks is not None and len(tasks) > 0,
               f"Loaded {len(tasks)} tasks")
-        check(f"HumanEval has 164 tasks", len(tasks) == 164,
+        check("HumanEval has 164 tasks", len(tasks) == 164,
               f"Found {len(tasks)}")
 
         # Spot-check task 0
@@ -409,10 +409,10 @@ def verify_datasets():
 
         mbpp = MBPPDataset()
         tasks = mbpp.load()
-        check(f"MBPP loads successfully", tasks is not None and len(tasks) > 0,
+        check("MBPP loads successfully", tasks is not None and len(tasks) > 0,
               f"Loaded {len(tasks)} tasks")
         # MBPP-S is ~374-500 depending on version
-        check(f"MBPP has reasonable task count (300-500)",
+        check("MBPP has reasonable task count (300-500)",
               300 <= len(tasks) <= 500,
               f"Found {len(tasks)}")
 
@@ -461,7 +461,7 @@ def verify_pass_at_k():
         check("All pass@k estimator tests pass", all_pass)
 
         # Verify monotonicity: pass@k should increase with k
-        print(f"\n  Monotonicity check (pass@k increases with k):")
+        print("\n  Monotonicity check (pass@k increases with k):")
         prev = 0
         monotonic = True
         for k in [1, 2, 5, 10, 15, 20]:
@@ -528,7 +528,7 @@ def verify_runner_isolation():
         if execute_fn is None:
             warn("Could not find execution function in benchmark.runner",
                  "Looked for: execute_code, run_code, execute_task, run_in_sandbox")
-            print(f"  Falling back to subprocess-based isolation test...\n")
+            print("  Falling back to subprocess-based isolation test...\n")
 
             # Test isolation via subprocess directly
             # Timeout test
@@ -550,10 +550,10 @@ def verify_runner_isolation():
             return
 
         check(f"Found execution function: {execute_name}", True)
-        print(f"  Running isolation tests...\n")
+        print("  Running isolation tests...\n")
 
         # Timeout test
-        print(f"  Testing timeout enforcement...")
+        print("  Testing timeout enforcement...")
         start = time.time()
         try:
             result = execute_fn("import time; time.sleep(60)")
@@ -574,7 +574,7 @@ def verify_runner_isolation():
                   f"Exception after {elapsed:.1f}s: {type(e).__name__}")
 
         # Network isolation test
-        print(f"  Testing network isolation...")
+        print("  Testing network isolation...")
         try:
             net_code = 'import urllib.request; urllib.request.urlopen("http://1.1.1.1", timeout=3)'
             result = execute_fn(net_code)
@@ -589,7 +589,7 @@ def verify_runner_isolation():
                   f"Raised {type(e).__name__}")
 
         # Memory limit test
-        print(f"  Testing memory limits...")
+        print("  Testing memory limits...")
         try:
             mem_code = 'x = bytearray(1024 * 1024 * 1024)'  # 1GB
             result = execute_fn(mem_code)
@@ -604,7 +604,7 @@ def verify_runner_isolation():
                   f"Raised {type(e).__name__}")
 
         # Filesystem write test
-        print(f"  Testing filesystem restrictions...")
+        print("  Testing filesystem restrictions...")
         try:
             fs_code = 'open("/tmp/atlas_test_escape", "w").write("escaped")'
             # Side-effect call: result discarded; the check below is on
@@ -839,7 +839,7 @@ def main():
     # Verify we're in the right directory
     if not os.path.isdir("benchmark"):
         print(f"\n{RED}ERROR: 'benchmark/' directory not found.{RESET}")
-        print(f"Run this script from the ATLAS repo root directory.")
+        print("Run this script from the ATLAS repo root directory.")
         sys.exit(1)
 
     start = time.time()

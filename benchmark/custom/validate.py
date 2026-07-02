@@ -5,11 +5,37 @@ Validate custom benchmark tasks.
 Runs all canonical solutions against their test cases to ensure correctness.
 """
 
+import hashlib
 import json
 import sys
 import tempfile
 import subprocess
 from pathlib import Path
+
+
+def check_lock(tasks_file: Path) -> bool:
+    """Verify tasks.json matches the approved hash in tasks.json.lock.
+
+    The lock records the SHA-256 of the task set that was human-reviewed;
+    a drifted hash means the tasks changed without re-approval, which
+    would silently change what the benchmark measures. Missing lock file
+    is a warning (older checkouts), mismatch is a failure.
+    """
+    lock_file = tasks_file.with_suffix('.json.lock')
+    if not lock_file.exists():
+        print(f"Warning: {lock_file.name} not found — task set is unapproved")
+        return True
+    locked = lock_file.read_text().split()[0]
+    actual = hashlib.sha256(tasks_file.read_bytes()).hexdigest()
+    if actual != locked:
+        print(f"Error: {tasks_file.name} does not match its approved hash")
+        print(f"  locked:  {locked}")
+        print(f"  actual:  {actual}")
+        print("If the change is intentional, re-approve: update "
+              f"{lock_file.name} with the new hash, approver, and date.")
+        return False
+    print(f"Lock OK: {tasks_file.name} matches approved hash\n")
+    return True
 
 
 def validate_task(task: dict) -> dict:
@@ -59,6 +85,9 @@ def main():
 
     if not tasks_file.exists():
         print(f"Error: {tasks_file} not found")
+        sys.exit(1)
+
+    if not check_lock(tasks_file):
         sys.exit(1)
 
     with open(tasks_file, 'r') as f:

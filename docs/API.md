@@ -381,7 +381,7 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `run_background` | Start a long-running process (e.g. `python app.py`, `npm run dev`) in the sandbox and return immediately with a `job_id`. The proxy detects shell `&` backgrounding through `run_command` and routes it here. |
 | `tail_background` | Fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
 | `stop_background` | Terminate a backgrounded job by `job_id`. |
-| `plan_tasks` | Decompose work into parallel tasks with dependencies |
+| `plan_tasks` | Record a task decomposition with dependencies (planning aid). Tasks are acknowledged as pending, not executed — parallel execution is not wired in |
 
 **Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`proxy/workspace.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
 
