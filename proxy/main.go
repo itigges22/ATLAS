@@ -320,6 +320,9 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	// Private-value filtering: every log line passes through the
+	// filter before it reaches stderr (see private_values.go).
+	log.SetOutput(filteringWriter{w: os.Stderr})
 
 	addr := ":" + proxyPort
 	log.Printf("ATLAS Proxy v3.0.1 starting on %s", addr)

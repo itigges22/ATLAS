@@ -45,9 +45,12 @@ from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 # filesystem paths or internal types to a remote caller.
 def _safe_log(value: object, maxlen: int = 200) -> str:
     """Render a value for inclusion in a log line. Strips CR/LF and
-    other ASCII control chars, truncates to maxlen."""
+    other ASCII control chars, masks credential-shaped values,
+    truncates to maxlen."""
+    from geometric_lens.private_values import filter_private_values
     s = str(value)
     s = "".join(c for c in s if c == "\t" or 0x20 <= ord(c) < 0x7f or ord(c) > 0x9f)
+    s = filter_private_values(s)
     if len(s) > maxlen:
         s = s[:maxlen] + "…"
     return s
@@ -70,11 +73,16 @@ try:
 except Exception:
     redis_client = None
 
-# Configure logging
+# Configure logging. The private-value filter sits on the root handler
+# so every logger in the process (pipeline, cache, router) is covered
+# before serialization.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+from geometric_lens.private_values import PrivateValueLogFilter
+for _h in logging.getLogger().handlers:
+    _h.addFilter(PrivateValueLogFilter())
 logger = logging.getLogger(__name__)
 
 

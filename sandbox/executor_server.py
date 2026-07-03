@@ -45,6 +45,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
+# Private-value filter on the root handler: every executor log record
+# is masked before serialization (see private_values.py — canonical
+# copy notice applies).
+from private_values import PrivateValueLogFilter  # noqa: E402
+for _h in logging.getLogger().handlers:
+    _h.addFilter(PrivateValueLogFilter())
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ATLAS Code Execution Sandbox")

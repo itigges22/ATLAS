@@ -3637,7 +3637,28 @@ class V3Handler(BaseHTTPRequestHandler):
 
 # --- Main --------------------------------------------------------------------
 
+class _PrivateValueStream:
+    """Line-filtering wrapper for stdout/stderr: the v3 service logs
+    via print(), so the stream is the serialization choke point (the
+    equivalent of the root-handler filter in the FastAPI services)."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text):
+        from private_values import filter_private_values
+        self._stream.write(filter_private_values(text))
+
+    def flush(self):
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
 if __name__ == "__main__":
+    sys.stdout = _PrivateValueStream(sys.stdout)
+    sys.stderr = _PrivateValueStream(sys.stderr)
     print(f"ATLAS V3 Pipeline Service starting on :{PORT}")
     print(f"  Inference:     {INFERENCE_URL}")
     print(f"  Geometric Lens: {LENS_URL}")

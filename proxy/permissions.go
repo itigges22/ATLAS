@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -126,6 +127,56 @@ func denyWritePathReason(path string) string {
 	return ""
 }
 
+// denyReadPathReason reports why READING a path into model context is
+// blocked, or "" if allowed. Credential stores are excluded from model
+// context by default: their contents would otherwise flow into prompts,
+// logs, session files, and lens training samples. Matching is on base
+// name (plus the .ssh/.aws/.kube parent-dir cases) so templates
+// (.env.example) and unrelated names stay readable. Explicit override:
+// ATLAS_ALLOW_CREDENTIAL_READS=1 (the refusal message says so).
+func denyReadPathReason(path string) string {
+	if path == "" || os.Getenv("ATLAS_ALLOW_CREDENTIAL_READS") == "1" {
+		return ""
+	}
+	clean := filepath.Clean(path)
+	base := filepath.Base(clean)
+	parent := filepath.Base(filepath.Dir(clean))
+	blocked := ""
+	switch {
+	case base == ".env" || (strings.HasPrefix(base, ".env.") && base != ".env.example"):
+		blocked = base
+	case base == ".netrc" || base == "_netrc":
+		blocked = base
+	case base == ".npmrc" || base == ".pypirc":
+		blocked = base
+	case strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key"):
+		blocked = base
+	case base == "id_rsa" || base == "id_ecdsa" || base == "id_ed25519" || base == "id_dsa":
+		blocked = base
+	case parent == ".ssh" && !strings.HasSuffix(base, ".pub"):
+		blocked = ".ssh/" + base
+	case parent == ".aws" && (base == "credentials" || base == "config"):
+		blocked = ".aws/" + base
+	case parent == ".kube" && base == "config":
+		blocked = ".kube/" + base
+	case parent == ".docker" && base == "config.json":
+		blocked = ".docker/" + base
+	case base == "service-token" && parent == "secrets":
+		blocked = "secrets/" + base
+	case base == "api-keys.json" && parent == "secrets":
+		blocked = "secrets/" + base
+	case strings.Contains(base, "credentials"):
+		blocked = base
+	}
+	if blocked == "" {
+		return ""
+	}
+	return fmt.Sprintf("blocked by safety rule: reading %s into model "+
+		"context (credential file). If this file is intentionally "+
+		"non-sensitive, set ATLAS_ALLOW_CREDENTIAL_READS=1 on the proxy "+
+		"and retry.", blocked)
+}
+
 // shouldDenyToolCall checks if a tool call is blocked by the built-in safety
 // rules. These apply in every permission mode.
 func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
@@ -140,6 +191,16 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 		}
 	case "write_file", "edit_file", "ast_edit":
 		if reason := denyWritePathReason(extractMatchValue(toolName, args)); reason != "" {
+			return true, reason
+		}
+	case "read_file", "outline_file":
+		var input struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(args, &input) != nil {
+			return false, ""
+		}
+		if reason := denyReadPathReason(input.Path); reason != "" {
 			return true, reason
 		}
 	case "move_file":

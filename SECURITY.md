@@ -20,6 +20,31 @@ Two current limits of that boundary, so reports can be calibrated against what i
 | 3.1.x   | Yes       |
 | < 3.1   | No        |
 
+## Sensitive-file exclusion and private-value filtering
+
+Two defaults reduce accidental data exposure:
+
+**Sensitive-file exclusion** — the agent's read tools refuse known
+credential-bearing files (`.env` and variants, `.netrc`, `.npmrc`,
+`.pypirc`, key files, SSH/AWS/kube/docker credential stores,
+`secrets/*`) so their contents never enter model context, session
+files, or lens training samples by default. A user who knows a
+specific file is non-sensitive can include it explicitly by setting
+`ATLAS_ALLOW_CREDENTIAL_READS=1` on the proxy (the refusal message
+says exactly this). `.env.example` stays readable — it's a template.
+
+**Private-value filtering** — log output across all services passes
+through a shared filter that masks credential-shaped values
+(assignments with secret-like key names, bearer headers, URL
+passwords, private-key blocks) with `[FILTERED]` before serialization.
+The pattern spec is pinned by a synthetic fixture corpus
+(`tests/fixtures/private_value_fixtures.json`) that every
+implementation must pass (Go: `proxy/private_values.go`; Python: three
+byte-identical copies enforced by
+`tests/contracts/test_private_value_filtering.py`). Filtering is a
+backstop for accidents, not a guarantee against adversarial encoding;
+the exclusion rule above is the primary control.
+
 ## Reporting a vulnerability
 
 Please report vulnerabilities privately via [GitHub Security Advisories](https://github.com/itigges22/ATLAS/security/advisories/new) rather than opening a public issue.

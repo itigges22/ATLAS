@@ -1,0 +1,84 @@
+{
+  "_comment": "Synthetic filtering fixtures. Every value is obviously fake and exists only to prove the private-value filter masks it before serialization. The Go filter (proxy/private_values.go) and the Python filters (three byte-identical copies, see tests/contracts/test_private_value_filtering.py) must all pass this corpus.",
+  "placeholder": "[FILTERED]",
+  "cases": [
+    {
+      "name": "env-style api token",
+      "input": "EXAMPLE_API_TOKEN=not-a-real-token",
+      "must_not_contain": ["not-a-real-token"]
+    },
+    {
+      "name": "env-style password",
+      "input": "DB_PASSWORD=fake-example-password-123",
+      "must_not_contain": ["fake-example-password-123"]
+    },
+    {
+      "name": "yaml-style secret",
+      "input": "client_secret: fake-oauth-secret-value",
+      "must_not_contain": ["fake-oauth-secret-value"]
+    },
+    {
+      "name": "database url with password",
+      "input": "DATABASE_URL=postgres://demo:example@localhost/test",
+      "must_not_contain": [":example@"]
+    },
+    {
+      "name": "bearer header",
+      "input": "Authorization: Bearer fake.jwt.example-value",
+      "must_not_contain": ["fake.jwt.example-value"]
+    },
+    {
+      "name": "clearly labeled fake private-key block",
+      "input": "-----BEGIN PRIVATE KEY-----\nTHIS-IS-A-FAKE-TEST-FIXTURE-KEY-BODY\nSECOND-FAKE-LINE\n-----END PRIVATE KEY-----",
+      "must_not_contain": ["THIS-IS-A-FAKE-TEST-FIXTURE-KEY-BODY", "SECOND-FAKE-LINE"]
+    },
+    {
+      "name": "rsa key variant",
+      "input": "-----BEGIN RSA PRIVATE KEY-----\nFAKE-RSA-FIXTURE-BODY\n-----END RSA PRIVATE KEY-----",
+      "must_not_contain": ["FAKE-RSA-FIXTURE-BODY"]
+    },
+    {
+      "name": "aws-style access key assignment",
+      "input": "aws_secret_access_key = fakeExampleSecretKeyValue000",
+      "must_not_contain": ["fakeExampleSecretKeyValue000"]
+    },
+    {
+      "name": "json field",
+      "input": "{\"api_key\": \"fake-json-embedded-token\"}",
+      "must_not_contain": ["fake-json-embedded-token"]
+    },
+    {
+      "name": "cli flag",
+      "input": "connect --password=fake-cli-password --host localhost",
+      "must_not_contain": ["fake-cli-password"]
+    },
+    {
+      "name": "mixed log line keeps context",
+      "input": "request failed for user alice: TOKEN=fake-mixed-value status=401",
+      "must_not_contain": ["fake-mixed-value"],
+      "must_contain": ["request failed for user alice", "status=401"]
+    }
+  ],
+  "negative_cases": [
+    {
+      "name": "ordinary assignment is untouched",
+      "input": "timeout=30 retries=5 mode=strict",
+      "must_equal_input": true
+    },
+    {
+      "name": "url without credentials untouched",
+      "input": "connecting to http://localhost:8099/health",
+      "must_equal_input": true
+    },
+    {
+      "name": "prose about tokens untouched",
+      "input": "the tokenizer produced 512 tokens for this prompt",
+      "must_equal_input": true
+    },
+    {
+      "name": "public key block untouched",
+      "input": "-----BEGIN PUBLIC KEY-----\nFAKE-PUBLIC-PART\n-----END PUBLIC KEY-----",
+      "must_equal_input": true
+    }
+  ]
+}
