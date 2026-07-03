@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, AsyncGenerator
 from datetime import datetime, timezone
 
 from config import config
+from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -690,7 +691,7 @@ async def forward_to_llama(
     if tools:
         payload["tools"] = tools
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=300.0, headers=_svc_auth_headers()) as client:
         response = await client.post(
             f"{config.llama.base_url}/v1/chat/completions",
             json=payload,
@@ -748,7 +749,7 @@ async def forward_to_llama_stream(
     if tools:
         payload["tools"] = tools
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=300.0, headers=_svc_auth_headers()) as client:
         async with client.stream(
             "POST",
             f"{config.llama.base_url}/v1/chat/completions",

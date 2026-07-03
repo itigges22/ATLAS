@@ -53,6 +53,31 @@ from benchmark.v3.candidate_selection import CandidateInfo, select_candidate
 INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
 LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
 SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
+
+
+def _load_service_token() -> str:
+    """Internal-auth token (Authorization: Bearer). Empty = auth
+    disabled — an install without `atlas init` keeps the open-localhost
+    behavior and `atlas doctor` warns. The value is never logged."""
+    path = os.environ.get("ATLAS_SERVICE_TOKEN_FILE",
+                          "/run/atlas-secrets/service-token")
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+SERVICE_TOKEN = _load_service_token()
+
+if SERVICE_TOKEN:
+    # Outbound injection: one opener covers every urllib call site
+    # (llama, lens, sandbox). urllib merges addheaders under explicit
+    # per-request headers, so requests that already set Authorization
+    # keep their own value.
+    _opener = urllib.request.build_opener()
+    _opener.addheaders = [("Authorization", f"Bearer {SERVICE_TOKEN}")]
+    urllib.request.install_opener(_opener)
 PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
 
 BASE_TEMPERATURE = 0.6
@@ -2974,7 +2999,26 @@ pipeline = V3PipelineService()
 
 
 class V3Handler(BaseHTTPRequestHandler):
+    def _authorized(self) -> bool:
+        """Token check for every route except /health. Constant-time
+        compare; 401 bodies never echo token material."""
+        if not SERVICE_TOKEN or self.path == "/health":
+            return True
+        import hmac
+        got = self.headers.get("Authorization", "")
+        want = f"Bearer {SERVICE_TOKEN}"
+        if hmac.compare_digest(got, want):
+            return True
+        self._json_response(401, {
+            "error": "unauthorized",
+            "detail": "internal service auth is enabled; send "
+                      "Authorization: Bearer <service-token> "
+                      "(secrets/service-token)"})
+        return False
+
     def do_POST(self):
+        if not self._authorized():
+            return
         if self.path == "/v3/run":
             self._handle_run()
         elif self.path == "/v3/generate":
@@ -2999,6 +3043,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._json_response(404, {"error": "not found"})
 
     def do_GET(self):
+        if not self._authorized():
+            return
         if self.path == "/health":
             self._json_response(200, {"status": "ok", "service": "v3-pipeline"})
         else:

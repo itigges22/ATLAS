@@ -22,7 +22,14 @@ if [ "$BATCH_SIZE" -gt "$UBATCH_SIZE" ]; then
   BATCH_SIZE="$UBATCH_SIZE"
 fi
 echo "=== ATLAS llama-server — No MTP, Parallel $PARALLEL ==="
+# Internal service auth (see entrypoint-v3.1.sh for rationale).
+API_KEY_FLAGS=()
+TOKEN_FILE="${ATLAS_SERVICE_TOKEN_FILE:-/run/atlas-secrets/service-token}"
+if [ -s "$TOKEN_FILE" ]; then
+  API_KEY_FLAGS=(--api-key-file "$TOKEN_FILE")
+fi
 exec /usr/local/bin/llama-server \
+  "${API_KEY_FLAGS[@]}" \
   -m "$MODEL" -c "$CTX_LENGTH" \
   -ctk "$KV_CACHE_K" -ctv "$KV_CACHE_V" \
   --parallel "$PARALLEL" --cont-batching -ngl 99 \

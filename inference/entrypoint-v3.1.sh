@@ -178,6 +178,18 @@ echo "  container. See docs/TROUBLESHOOTING.md 'Model + KV cache don't fit'."
 # Prompt caching stays on so each agent-loop turn can reuse its encoded
 # prefix. Cross-session isolation comes from the proxy erasing the KV slot at
 # session start (PC-045), not from disabling the cache.
+# Internal service auth: enable llama-server's API key when the
+# per-installation token is mounted (atlas init writes it; compose
+# mounts it read-only). llama-server exempts /health, so the compose
+# healthcheck stays headerless. The token never appears in argv —
+# --api-key-file reads it in-process.
+API_KEY_FLAGS=()
+TOKEN_FILE="${ATLAS_SERVICE_TOKEN_FILE:-/run/atlas-secrets/service-token}"
+if [ -s "$TOKEN_FILE" ]; then
+  API_KEY_FLAGS=(--api-key-file "$TOKEN_FILE")
+  echo "Internal auth: enabled (api-key-file)"
+fi
+
 exec /usr/local/bin/llama-server \
   -m "$MODEL_FILE" \
   -c "$CTX_LENGTH" \
@@ -196,4 +208,5 @@ exec /usr/local/bin/llama-server \
   --ctx-checkpoints 0 \
   --embeddings \
   --jinja \
-  "${CVECTOR_FLAGS[@]}"
+  "${CVECTOR_FLAGS[@]}" \
+  "${API_KEY_FLAGS[@]}"

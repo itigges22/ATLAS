@@ -15,6 +15,16 @@ import re
 import time
 import urllib.error
 import urllib.request
+
+try:
+    from benchmark.config import (service_token_headers as _auth_headers,
+                                  install_urllib_opener as
+                                  _install_auth_opener)
+except ImportError:  # direct-script use from benchmark/
+    from config import (service_token_headers as _auth_headers,
+                        install_urllib_opener as _install_auth_opener)
+
+_install_auth_opener()
 from typing import Dict, List, Optional
 
 try:
@@ -134,7 +144,8 @@ def chat_completion(
     payload = json.dumps(body).encode("utf-8")
     start = time.time()
     if HAS_HTTPX:
-        resp = httpx.post(endpoint, json=body, timeout=timeout)
+        resp = httpx.post(endpoint, json=body, timeout=timeout,
+                          headers=_auth_headers())
         resp.raise_for_status()
         data = resp.json()
     else:

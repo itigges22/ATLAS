@@ -249,3 +249,33 @@ class BenchmarkConfig:
 
 # Global config instance
 config = BenchmarkConfig()
+
+
+def _service_token() -> str:
+    """Internal-auth token (secrets/service-token). Empty = disabled."""
+    import os
+    path = os.environ.get("ATLAS_SERVICE_TOKEN_FILE",
+                          str(get_project_root() / "secrets" /
+                              "service-token"))
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def service_token_headers() -> dict:
+    tok = _service_token()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+def install_urllib_opener() -> None:
+    """Cover every benchmark urllib site with the internal-auth header
+    (urllib merges these under explicit per-request headers)."""
+    import urllib.request
+    tok = _service_token()
+    if not tok:
+        return
+    opener = urllib.request.build_opener()
+    opener.addheaders = [("Authorization", f"Bearer {tok}")]
+    urllib.request.install_opener(opener)

@@ -744,6 +744,52 @@ def _step_write_api_keys(atlas_root: str, args: argparse.Namespace,
     return keys_path, backup, key
 
 
+def _step_write_service_token(atlas_root: str, args: argparse.Namespace,
+                               color: bool) -> str:
+    """Generate <root>/secrets/service-token (0600) unless present.
+
+    The token authenticates internal service-to-service and CLI-to-
+    service requests (Authorization: Bearer). Existing tokens are kept
+    so re-running init doesn't break a live stack; --rotate-token
+    regenerates (restart services afterwards so they reload it). The
+    value itself is never printed.
+    """
+    secrets_dir = os.path.join(atlas_root, "secrets")
+    tok_path = os.path.join(secrets_dir, "service-token")
+
+    if args.dry_run:
+        _safe_print(f"  (dry-run) would write {tok_path}")
+        return tok_path
+
+    if os.path.isfile(tok_path) and not getattr(args, "rotate_token", False):
+        _safe_print(f"  Service token already present at {tok_path} (kept; "
+                    "use --rotate-token to regenerate)")
+        return tok_path
+
+    os.makedirs(secrets_dir, mode=0o700, exist_ok=True)
+    token = "atlas-st-" + secrets_mod.token_urlsafe(32)
+    fd = os.open(tok_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(token + "\n")
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(tok_path, 0o600)
+    except PermissionError:
+        pass
+    action = "Rotated" if getattr(args, "rotate_token", False) else "Wrote"
+    _safe_print(f"  {action} {tok_path} (mode 0600) — internal service auth")
+    if getattr(args, "rotate_token", False):
+        _safe_print("    Restart the stack so services reload it: "
+                    "docker compose restart")
+    return tok_path
+
+
 # ---------------------------------------------------------------------------
 # Already-configured guard
 # ---------------------------------------------------------------------------
@@ -777,6 +823,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--skip-download", action="store_true",
         help="write config but don't download the model "
              "(bring-your-own gguf)")
+    parser.add_argument("--rotate-token", action="store_true",
+        help="regenerate secrets/service-token (internal service auth); "
+             "restart the stack afterwards so services reload it")
     parser.add_argument("--reconfigure", action="store_true",
         help="back up existing .env and api-keys.json (.bak suffix) "
              "before writing new ones")
@@ -853,6 +902,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Step 5
     _safe_print("[5/5] Generating api-keys.json…")
     keys_path, keys_backup, api_key = _step_write_api_keys(atlas_root, args, color)
+    if api_key or args.dry_run:
+        # Same secured secrets/ dir; skipped when api-keys was refused
+        # (loose perms) so we never write a token into a loose dir.
+        _step_write_service_token(atlas_root, args, color)
     _safe_print("")
     if not args.dry_run and not api_key:
         # api-keys.json was skipped (loose secrets/ perms, declined or

@@ -42,6 +42,7 @@ import uuid
 
 import pytest
 
+from tests.e2e import conftest
 from tests.e2e.conftest import (
     PROXY_BINARY, REPO, drive_agent_turn, free_port, ordered_subsequence,
     sandbox_deps_available, start_proxy, wait_for_port,
@@ -255,7 +256,9 @@ def v3_service(fake_llama, fake_lens, sandbox_executor):
            "ATLAS_V3_PORT": str(port),
            "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
            "ATLAS_LENS_URL": f"http://127.0.0.1:{fake_lens}",
-           "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}"}
+           "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
+           # the sandbox executor enforces internal auth session-wide
+           "ATLAS_SERVICE_TOKEN_FILE": conftest._TOKEN_FILE}
     env.pop("ATLAS_CALL_GRAPH", None)
     proc = subprocess.Popen(
         ["python", "main.py"],
@@ -477,6 +480,7 @@ def test_lens_unreachable_pipeline_completes_uncalibrated(
            "ATLAS_V3_PORT": str(v3_port),
            "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
            "ATLAS_LENS_URL": "http://127.0.0.1:9",  # unreachable
+           "ATLAS_SERVICE_TOKEN_FILE": conftest._TOKEN_FILE,
            "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}"}
     env.pop("ATLAS_CALL_GRAPH", None)
     v3_proc = subprocess.Popen(

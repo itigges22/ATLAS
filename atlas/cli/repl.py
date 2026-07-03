@@ -780,6 +780,15 @@ def run():
     3. Default (interactive tty) → launch the Bubbletea TUI
     4. Pipe mode (no tty) → built-in REPL with /solve, /bench
     """
+    # Internal service auth: one global opener covers every urllib
+    # call the CLI makes (proxy, llama, lens, v3, sandbox). No-op when
+    # secrets/service-token doesn't exist.
+    try:
+        from atlas.cli.token import install_urllib_opener
+        install_urllib_opener()
+    except Exception:
+        pass  # auth is best-effort on the client side; servers enforce
+
     if len(sys.argv) > 1:
         first = sys.argv[1]
         known = {name for name, _ in _SUBCOMMAND_HELP}

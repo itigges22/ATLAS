@@ -8,6 +8,7 @@ from typing import Optional
 import httpx
 
 from models.pattern import Pattern, PatternType, PatternTier, HALF_LIVES
+from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ async def _llm_extract(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=_svc_auth_headers()) as client:
             response = await client.post(
                 f"{llama_url}/v1/chat/completions",
                 json={

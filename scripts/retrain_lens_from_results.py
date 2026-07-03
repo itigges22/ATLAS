@@ -19,6 +19,22 @@ import json
 import os
 import sys
 import urllib.request
+
+# Internal service auth: cover this script's llama/lens calls.
+try:
+    import pathlib as _pl
+    _tok_path = __import__("os").environ.get(
+        "ATLAS_SERVICE_TOKEN_FILE",
+        str(_pl.Path(__file__).resolve().parent.parent / "secrets" /
+            "service-token"))
+    with open(_tok_path) as _fh:
+        _svc_tok = _fh.read().strip()
+    if _svc_tok:
+        _op = urllib.request.build_opener()
+        _op.addheaders = [("Authorization", f"Bearer {_svc_tok}")]
+        urllib.request.install_opener(_op)
+except OSError:
+    pass  # no token => auth disabled
 import urllib.error
 
 RESULTS_DIR = os.environ.get(

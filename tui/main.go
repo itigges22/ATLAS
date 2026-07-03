@@ -27,6 +27,7 @@ const (
 )
 
 func main() {
+	installTokenTransport()
 	proxyURL := flag.String("proxy", envOr("ATLAS_PROXY_URL", defaultProxyURL),
 		"atlas-proxy base URL (default: $ATLAS_PROXY_URL or http://localhost:8090)")
 	logPath := flag.String("log", envOr("ATLAS_TUI_LOG", ""),

@@ -333,6 +333,8 @@ func main() {
 	// steering: present at X" banner is folded into logCalibrationStatusAtStartup
 	// below (which also adds the corresponding Lens line) so the proxy
 	// surfaces a unified calibration view at startup.
+	installTokenTransport()
+
 	logCalibrationStatusAtStartup()
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
@@ -342,7 +344,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           http.MaxBytesHandler(newProxyMux(), maxRequestBodyBytes),
+		Handler:           http.MaxBytesHandler(requireServiceToken(newProxyMux()), maxRequestBodyBytes),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,

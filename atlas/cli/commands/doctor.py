@@ -623,6 +623,77 @@ def check_health_endpoints() -> List[CheckResult]:
     return results
 
 
+def check_internal_auth(atlas_root: str) -> List[CheckResult]:
+    """Internal service auth: token file status + live enforcement.
+
+    Three outcomes per the auth design (proxy/auth.go, ADR 0001):
+      - no token file       -> warn (auth disabled; localhost-only model)
+      - token, loose perms  -> fail (the credential is readable by others)
+      - token configured    -> probe one authenticated surface both ways:
+        an unauthenticated POST must 401 and an authenticated GET must
+        not 401 — this catches the two silent failure modes (a service
+        that never loaded the token, and a client/server token mismatch
+        after rotation without restart). Token values never appear in
+        output.
+    """
+    from atlas.cli import token as token_mod
+    results: List[CheckResult] = []
+    ok, detail = token_mod.check_file_permissions(atlas_root)
+    tok = token_mod.read_token(atlas_root)
+    if not tok:
+        results.append(CheckResult(
+            "internal_auth", "warn",
+            "internal service auth disabled (no secrets/service-token)",
+            "run `atlas init` (or `atlas init --rotate-token`) to enable; "
+            "services stay open-localhost until then"))
+        return results
+    if not ok:
+        results.append(CheckResult("internal_auth", "fail", detail))
+        return results
+
+    # Live enforcement probe against the proxy (representative surface;
+    # /health stays open by design so probe /v1/models).
+    probe_url = f"{PROXY_URL}/v1/models"
+    try:
+        req = urllib.request.Request(probe_url, method="GET")
+        req.add_header("Authorization", "Bearer atlas-doctor-wrong-token")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            enforced = False
+        except urllib.error.HTTPError as e:
+            enforced = (e.code == 401)
+        if not enforced:
+            results.append(CheckResult(
+                "internal_auth", "warn",
+                "token file present but the proxy accepts wrong tokens",
+                "the proxy container predates the token or lacks the "
+                "secrets mount — docker compose up -d atlas-proxy"))
+            return results
+        req2 = urllib.request.Request(probe_url, method="GET")
+        req2.add_header("Authorization", f"Bearer {tok}")
+        try:
+            urllib.request.urlopen(req2, timeout=5)
+            results.append(CheckResult(
+                "internal_auth", "pass",
+                "enabled and enforced (401 without token, 200 with)"))
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                results.append(CheckResult(
+                    "internal_auth", "fail",
+                    "host token rejected by the proxy (rotation without "
+                    "restart?)",
+                    "docker compose restart  # services reload the token"))
+            else:
+                results.append(CheckResult(
+                    "internal_auth", "pass",
+                    f"enforced (wrong token 401; valid token {e.code})"))
+    except Exception as e:
+        results.append(CheckResult(
+            "internal_auth", "skip",
+            f"token present; enforcement probe skipped ({type(e).__name__})"))
+    return results
+
+
 def check_model_file(atlas_root: str) -> CheckResult:
     if not MODEL_FILE:
         return CheckResult("model_file", "fail",
@@ -1215,6 +1286,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 6. Endpoint health (only if at least one container is running)
     if any(r.status == "pass" for r in container_results):
         for item in check_health_endpoints():
+            _add(item)
+        for item in check_internal_auth(atlas_root):
             _add(item)
 
     # 7. Model file (host-side)

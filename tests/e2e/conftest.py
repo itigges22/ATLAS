@@ -4,11 +4,19 @@ Boots the real sandbox executor and provides the SSE driver + port
 helpers both acceptance modules use. See test_acceptance.py for the
 direct-agent scenario and test_v3_lens_acceptance.py for the V3/Lens
 pipeline scenario.
+
+Internal service auth is ENABLED for the whole session: a synthetic
+token file is generated once, handed to the proxy and the sandbox
+executor via ATLAS_SERVICE_TOKEN_FILE, and every driver request sends
+the Bearer header — so the acceptance suite exercises the production
+enforcement path, not the auth-disabled fallback. Negative cases
+(missing/wrong token) live in test_service_auth.py.
 """
 
 import http.client
 import json
 import os
+import secrets as _secrets
 import socket
 import subprocess
 import time
@@ -18,6 +26,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 PROXY_BINARY = os.environ.get("ATLAS_PROXY_BINARY", "/tmp/test-atlas-proxy")
+
+# Synthetic per-run token (never a real credential).
+SERVICE_TOKEN = "atlas-st-e2e-" + _secrets.token_urlsafe(16)
+_TOKEN_FILE = None  # populated by the session fixture
 
 
 def sandbox_deps_available() -> bool:
@@ -45,18 +57,30 @@ def wait_for_port(port: int, timeout: float = 20.0) -> None:
     raise TimeoutError(f"port {port} never came up")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def service_token_file(tmp_path_factory):
+    """Write the synthetic token once; 0600 like the real installer."""
+    global _TOKEN_FILE
+    path = tmp_path_factory.mktemp("auth") / "service-token"
+    path.write_text(SERVICE_TOKEN + "\n")
+    path.chmod(0o600)
+    _TOKEN_FILE = str(path)
+    return _TOKEN_FILE
+
+
 @pytest.fixture(scope="session")
 def workspace_root(tmp_path_factory):
     return tmp_path_factory.mktemp("workspace-root")
 
 
 @pytest.fixture(scope="session")
-def sandbox_executor(tmp_path_factory, workspace_root):
+def sandbox_executor(tmp_path_factory, workspace_root, service_token_file):
     port = free_port()
     scratch = tmp_path_factory.mktemp("sandbox-scratch")
     env = {**os.environ,
            "WORKSPACE_BASE": str(scratch),
            "ATLAS_SANDBOX_WORKSPACE_ROOT": str(workspace_root),
+           "ATLAS_SERVICE_TOKEN_FILE": service_token_file,
            "MAX_EXECUTION_TIME": "60"}
     proc = subprocess.Popen(
         ["python", "-m", "uvicorn", "executor_server:app",
@@ -75,8 +99,8 @@ def sandbox_executor(tmp_path_factory, workspace_root):
 
 
 def start_proxy(env_overrides: dict) -> tuple:
-    """Boot the proxy binary with a pinned minimal env. Returns
-    (port, Popen). Caller terminates."""
+    """Boot the proxy binary with a pinned minimal env (auth enabled).
+    Returns (port, Popen). Caller terminates."""
     port = free_port()
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -84,6 +108,7 @@ def start_proxy(env_overrides: dict) -> tuple:
         "ATLAS_PROXY_PORT": str(port),
         "ATLAS_KEEP_LLAMA_WARM": "0",
         "ATLAS_PERMISSION_TIMEOUT_SEC": "30",
+        "ATLAS_SERVICE_TOKEN_FILE": _TOKEN_FILE or "/nonexistent",
         **env_overrides,
     }
     proc = subprocess.Popen([PROXY_BINARY], env=env,
@@ -98,13 +123,31 @@ def start_proxy(env_overrides: dict) -> tuple:
     return port, proc
 
 
-def post_json(port: int, path: str, body: dict) -> dict:
+def _auth_header() -> dict:
+    return {"Authorization": f"Bearer {SERVICE_TOKEN}"}
+
+
+def post_json(port: int, path: str, body: dict, token: str = None) -> dict:
+    headers = {"Content-Type": "application/json", **_auth_header()}
+    if token is not None:  # explicit override for negative tests
+        headers["Authorization"] = f"Bearer {token}"
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     try:
-        conn.request("POST", path, json.dumps(body),
-                     {"Content-Type": "application/json"})
+        conn.request("POST", path, json.dumps(body), headers)
         resp = conn.getresponse()
         return json.loads(resp.read() or b"{}")
+    finally:
+        conn.close()
+
+
+def request_status(port: int, method: str, path: str, body: dict = None,
+                   headers: dict = None) -> int:
+    """Raw status probe for auth tests (no default auth header)."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        payload = json.dumps(body) if body is not None else None
+        conn.request(method, path, payload, headers or {})
+        return conn.getresponse().status
     finally:
         conn.close()
 
@@ -116,7 +159,8 @@ def drive_agent_turn(port: int, body: dict, deadline_s: float = 120.0):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=deadline_s)
     conn.request("POST", "/v1/agent", json.dumps(body),
                  {"Content-Type": "application/json",
-                  "Accept": "text/event-stream"})
+                  "Accept": "text/event-stream",
+                  **_auth_header()})
     resp = conn.getresponse()
     assert resp.status == 200, resp.read()[:500]
 

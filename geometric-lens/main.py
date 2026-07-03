@@ -27,6 +27,7 @@ from indexer.tree_builder import build_tree_from_files
 from indexer.bm25_index import BM25Index
 from indexer.summarizer import summarize_tree, collect_summaries
 from indexer.persistence import save_index, load_index, delete_index
+from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +183,7 @@ def _redis_state() -> Dict[str, Any]:
 def _llama_state() -> Dict[str, Any]:
     url = config.llama.base_url.rstrip("/") + "/health"
     try:
-        with httpx.Client(timeout=2.0) as client:
+        with httpx.Client(timeout=2.0, headers=_svc_auth_headers()) as client:
             r = client.get(url)
         return {"reachable": r.status_code == 200, "status_code": r.status_code}
     except Exception as e:
@@ -236,6 +237,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Internal service auth (per-installation token) ---
+# /v1/* keeps its api-keys.json Bearer scheme; the service token is
+# injected into that dict below so one credential works everywhere.
+# /internal/* (previously unauthenticated by design) is enforced by
+# this middleware when a token is configured. /health, /ready and /
+# stay open (compose/K8s probes are headerless).
+from geometric_lens.auth_token import (SERVICE_TOKEN as _SERVICE_TOKEN,
+                                       install_urllib_opener as
+                                       _install_urllib_opener)
+import hmac as _hmac
+
+_install_urllib_opener()  # outbound: embedding extractor, identity probe
+
+if _SERVICE_TOKEN:
+    api_keys[_SERVICE_TOKEN] = {"user": "atlas-internal"}
+
+@app.middleware("http")
+async def _require_service_token(request, call_next):
+    # Enforce only on /internal/* — /v1/* has its own Bearer check
+    # (verify_api_key Depends, which now also accepts the service
+    # token), and /health, /ready, / stay open for probes.
+    if _SERVICE_TOKEN and request.url.path.startswith("/internal/"):
+        got = request.headers.get("authorization", "")
+        if not _hmac.compare_digest(got, f"Bearer {_SERVICE_TOKEN}"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=401, content={
+                "error": "unauthorized",
+                "detail": "internal service auth is enabled; send "
+                          "Authorization: Bearer <service-token> "
+                          "(secrets/service-token)"})
+    return await call_next(request)
 
 
 # Auth dependency — local key file lookup, no remote portal.
@@ -684,7 +717,7 @@ async def chat_completions(
 async def list_models(api_key: str = Depends(verify_api_key)):
     """List available models (proxy to llama-server)."""
     import httpx
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(headers=_svc_auth_headers()) as client:
         response = await client.get(f"{config.llama.base_url}/v1/models")
         return response.json()
 

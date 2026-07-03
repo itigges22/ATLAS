@@ -10,6 +10,7 @@ import logging
 from typing import Optional, Tuple
 
 import httpx
+from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def execute_sandbox(
         (passed, stdout, stderr) tuple
     """
     try:
-        async with httpx.AsyncClient(timeout=timeout_sec + 10) as client:
+        async with httpx.AsyncClient(timeout=timeout_sec + 10, headers=_svc_auth_headers()) as client:
             resp = await client.post(
                 f"{SANDBOX_URL}/execute",
                 json={

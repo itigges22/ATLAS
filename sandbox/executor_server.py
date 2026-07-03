@@ -49,6 +49,40 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ATLAS Code Execution Sandbox")
 
+
+def _load_service_token() -> str:
+    """Internal-auth token (Authorization: Bearer). Empty = auth
+    disabled (pre-token behavior; `atlas doctor` warns). Never logged.
+    This is the highest-value enforcement point in the stack — /shell
+    and /execute run arbitrary commands against the bind-mounted
+    workspace."""
+    path = os.getenv("ATLAS_SERVICE_TOKEN_FILE",
+                     "/run/atlas-secrets/service-token")
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+SERVICE_TOKEN = _load_service_token()
+
+
+@app.middleware("http")
+async def _require_service_token(request, call_next):
+    if SERVICE_TOKEN and request.url.path not in ("/health", "/languages"):
+        import hmac
+        got = request.headers.get("authorization", "")
+        if not hmac.compare_digest(got, f"Bearer {SERVICE_TOKEN}"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=401, content={
+                "error": "unauthorized",
+                "detail": "internal service auth is enabled; send "
+                          "Authorization: Bearer <service-token> "
+                          "(secrets/service-token)"})
+    return await call_next(request)
+
+
 MAX_EXECUTION_TIME = int(os.getenv("MAX_EXECUTION_TIME", "60"))
 WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/sandbox"))
 

@@ -129,6 +129,16 @@ def main(argv: List[str]) -> int:
     if "--proxy" not in args:
         args = ["--proxy", PROXY_URL] + args
 
+    # Hand the TUI the checkout's service token path (internal auth) —
+    # the TUI runs from arbitrary project dirs, so a cwd-relative
+    # lookup wouldn't find it. Only the PATH crosses the env boundary,
+    # never the token value.
+    if not os.environ.get("ATLAS_SERVICE_TOKEN_FILE"):
+        from atlas.cli import token as _token
+        tok_path = _token.token_path()
+        if os.path.isfile(tok_path):
+            os.environ["ATLAS_SERVICE_TOKEN_FILE"] = tok_path
+
     # Default --log to a stable path under ~/.cache so debugging the
     # TUI doesn't require the user to remember a flag. Alt-screen mode
     # makes it impractical to copy text out of the live view; the log

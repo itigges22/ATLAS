@@ -245,4 +245,12 @@ if (( ${#CVECTOR_FLAGS[@]} )); then
   SERVER_ARGS+=("${CVECTOR_FLAGS[@]}")
 fi
 
+# Internal service auth: native path reads the checkout's token file
+# directly (no container mount). llama-server exempts /health.
+TOKEN_FILE="${ATLAS_SERVICE_TOKEN_FILE:-$ATLAS_ROOT/secrets/service-token}"
+if [ -s "$TOKEN_FILE" ]; then
+  SERVER_ARGS+=(--api-key-file "$TOKEN_FILE")
+  echo "Internal auth: enabled (api-key-file)"
+fi
+
 exec "$LLAMA_SERVER" "${SERVER_ARGS[@]}"
