@@ -69,12 +69,10 @@ RUN bun --version
 # Python. Keep the API runtime dependencies in one shared file so the
 # container and the unit-test environment cannot drift apart.
 COPY requirements-runtime.txt /tmp/sandbox-requirements-runtime.txt
+COPY requirements-verify.txt /tmp/sandbox-requirements-verify.txt
 RUN pip install --no-cache-dir \
     -r /tmp/sandbox-requirements-runtime.txt \
-    pytest \
-    requests \
-    ruff \
-    mypy
+    -r /tmp/sandbox-requirements-verify.txt
 
 # Create sandbox workspace
 RUN mkdir -p /tmp/sandbox && chmod 777 /tmp/sandbox
@@ -86,6 +84,7 @@ RUN mkdir -p /tmp/sandbox && chmod 777 /tmp/sandbox
 RUN groupadd -g 1000 sandbox && useradd -u 1000 -g 1000 -d /home/sandbox -s /bin/bash sandbox \
     && mkdir -p /home/sandbox && chown 1000:1000 /home/sandbox
 
+COPY private_values.py .
 COPY executor_server.py .
 
 EXPOSE 8020

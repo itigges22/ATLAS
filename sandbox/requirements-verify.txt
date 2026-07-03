@@ -1,0 +1,7 @@
+# Verification/lint tools available inside the sandbox for the agent's
+# run_command flow (the executor itself only needs requirements-runtime).
+# Pinned for reproducible builds.
+pytest==9.1.1
+requests==2.34.2
+ruff==0.15.20
+mypy==2.1.0

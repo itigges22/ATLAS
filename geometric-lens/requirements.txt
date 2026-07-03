@@ -1,4 +1,4 @@
-numpy>=1.26
+numpy==2.4.6
 # Linux containers use XGBoost's minimal CPU distribution. The ordinary
 # package now pulls NCCL even on arm64; Lens never executes GPU algorithms.
 xgboost-cpu==2.1.4; sys_platform == "linux"
@@ -12,12 +12,12 @@ python-multipart==0.0.6
 # tiktoken: unused in V2 (was used for V1 chunking token counting). Retained as
 # it is a transitive dependency that may be needed by future features.
 tiktoken==0.5.2
-redis>=5.0.0
-tree-sitter>=0.23.0
-tree-sitter-python>=0.23.0
+redis==8.0.1
+tree-sitter==0.26.0
+tree-sitter-python==0.25.0
 # gguf: writes ASA steering vectors in llama.cpp's control-vector format
 # (asa_calibration/build_steering_vector.py runs inside this container).
-gguf>=0.10
+gguf==0.19.0
 # Dockerfile installs this pinned version from PyTorch's CPU-only index before
 # resolving the rest of this file. Keeping the requirement here documents the
 # runtime contract and lets pip verify the preinstalled wheel satisfies it.
