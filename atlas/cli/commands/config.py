@@ -46,31 +46,51 @@ def _validate(path: str) -> int:
 
 def _migrate(path: str, dry_run: bool = False) -> int:
     env = _read_env(path)
-    migrated, notes = cs.migrate(env)
+    _migrated, notes = cs.migrate(env)
     for n in notes:
         print(f"  {n}")
+
+    # Determine which keys are dropped (deprecated) and whether the
+    # schema-version stamp needs adding — but rewrite LINE-BY-LINE so
+    # comments, blank lines, and formatting survive the migration.
+    dropped = {k for k in env if k not in _migrated}
+    have_version = "ATLAS_CONFIG_SCHEMA_VERSION" in env
+
     if dry_run:
-        added = [k for k in migrated if k not in env]
-        removed = [k for k in env if k not in migrated]
-        print(f"config migrate (preview): +{len(added)} -{len(removed)} keys, "
+        added = [] if have_version else ["ATLAS_CONFIG_SCHEMA_VERSION"]
+        print(f"config migrate (preview): +{len(added)} -{len(dropped)} keys, "
               f"target schema v{cs.CONFIG_SCHEMA_VERSION}")
-        if removed:
-            print("  would remove: " + ", ".join(removed))
+        if dropped:
+            print("  would remove: " + ", ".join(sorted(dropped)))
         if added:
             print("  would add:    " + ", ".join(added))
         print("  (no changes written — drop --dry-run to apply)")
         return 0
-    # back up then rewrite as KEY=VALUE lines
+
     if os.path.isfile(path):
         import shutil
         shutil.copy2(path, path + ".bak")
         print(f"  backed up {path} → {path}.bak")
+
+    out_lines = []
+    with open(path) as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in dropped:
+                    continue  # drop deprecated key line (comments preserved)
+            out_lines.append(raw if raw.endswith("\n") else raw + "\n")
+    if not have_version:
+        out_lines.append(
+            f"ATLAS_CONFIG_SCHEMA_VERSION={cs.CONFIG_SCHEMA_VERSION}\n")
+
     tmp = path + ".migrating"
     with open(tmp, "w") as fh:
-        for k, v in migrated.items():
-            fh.write(f"{k}={v}\n")
+        fh.writelines(out_lines)
     os.replace(tmp, path)
-    print(f"config migrate: wrote schema v{cs.CONFIG_SCHEMA_VERSION}")
+    print(f"config migrate: wrote schema v{cs.CONFIG_SCHEMA_VERSION} "
+          "(comments preserved)")
     return 0
 
 

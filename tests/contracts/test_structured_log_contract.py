@@ -47,3 +47,24 @@ def test_json_formatter_shape():
     assert d["service"] == "svc" and d["level"] == "INFO"
     assert d["msg"] == "hello" and d["request_id"] == "req-json"
     m.set_request_id("")
+
+
+def test_request_id_isolated_across_async_tasks():
+    """Concurrent async tasks must not see each other's request id — the
+    reason this uses contextvars, not threading.local (which would bleed
+    between interleaved requests on one event-loop thread)."""
+    import asyncio
+    m = _load(COPIES[0])
+    seen = {}
+
+    async def worker(name):
+        m.set_request_id(f"req-{name}")
+        await asyncio.sleep(0)          # yield: another task runs here
+        await asyncio.sleep(0)
+        seen[name] = m.get_request_id()  # must still be our own id
+
+    async def run():
+        await asyncio.gather(*(worker(n) for n in ("a", "b", "c", "d")))
+
+    asyncio.run(run())
+    assert seen == {"a": "req-a", "b": "req-b", "c": "req-c", "d": "req-d"}, seen

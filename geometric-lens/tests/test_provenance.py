@@ -54,3 +54,18 @@ def test_missing_manifest_is_incomplete():
     assert not provenance.is_complete(None)
     assert set(provenance.missing_fields(None)) == set(
         provenance.REQUIRED_FOR_COMPLETE)
+
+
+def test_is_complete_rejects_zero_dim():
+    m = {
+        "model": "m", "embedding_dim": 0, "created_at": "t",
+        "training_commit": "abc", "dataset": "ds",
+        "metrics": {"val_auc": 0.7}, "normalization": {"midpoint": 1.0},
+        "artifact_sha256": {"cost_field.pt": "x" * 64},
+    }
+    assert not provenance.is_complete(m)
+    assert "embedding_dim" in provenance.missing_fields(m)
+    # a valid positive dim passes
+    m["embedding_dim"] = 3840
+    assert provenance.is_complete(m)
+    assert "embedding_dim" not in provenance.missing_fields(m)

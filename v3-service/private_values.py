@@ -25,7 +25,7 @@ _ASSIGNMENT = re.compile(
     r'|passwd|credential|access[_-]?key)[A-Z0-9_.-]*"?\s*[=:]\s*"?)'
     r'([^\s"\',;&]+)')
 _BEARER = re.compile(r'(?i)(bearer\s+)([A-Za-z0-9._~+/=-]+)')
-_URL_PASSWORD = re.compile(r'(://[^/:@\s]+:)([^@\s]+)(@)')
+_URL_PASSWORD = re.compile(r'(://[^/:@\s]*:)([^@\s]+)(@)')
 _PRIVATE_KEY_BLOCK = re.compile(
     r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----',
     re.S)

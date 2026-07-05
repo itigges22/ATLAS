@@ -15,17 +15,23 @@ an inbound X-ATLAS-Request-ID header) and included in every record.
 import json
 import logging
 import os
-import threading
+import contextvars
 
-_LOCAL = threading.local()
+# contextvars, NOT threading.local: the async FastAPI services (lens,
+# sandbox) interleave requests on one event-loop thread, so a thread-
+# local id would bleed between concurrent requests. A ContextVar is
+# isolated per async task AND per thread, so it is correct for both the
+# async services and the thread-per-request v3 service.
+_REQUEST_ID: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "atlas_request_id", default="")
 
 
 def set_request_id(request_id):
-    _LOCAL.request_id = request_id or ""
+    _REQUEST_ID.set(request_id or "")
 
 
 def get_request_id():
-    return getattr(_LOCAL, "request_id", "")
+    return _REQUEST_ID.get()
 
 
 class JsonFormatter(logging.Formatter):

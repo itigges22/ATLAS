@@ -92,3 +92,19 @@ def test_resolve_typed_coerces():
 
 def test_resolve_typed_missing_is_none():
     assert cs.resolve_typed("ATLAS_CTX_SIZE", {}, None, environ={}) is None
+
+
+def test_migrate_preserves_comments_and_blanks(tmp_path):
+    from atlas.cli.commands import config as cfg
+    p = tmp_path / ".env"
+    p.write_text("# header comment\nATLAS_CTX_SIZE=131072\n\n"
+                 "# deprecated below\nATLAS_REGISTRY=old\n")
+    cfg.main(["migrate", str(p)])
+    out = p.read_text()
+    assert "# header comment" in out          # comments survive
+    assert "# deprecated below" in out
+    assert "" == out.splitlines()[2].strip() or "\n\n" in out  # blank kept
+    assert "ATLAS_REGISTRY" not in out        # deprecated dropped
+    assert "ATLAS_CTX_SIZE=131072" in out
+    assert "ATLAS_CONFIG_SCHEMA_VERSION=1" in out
+    assert (tmp_path / ".env.bak").exists()   # backup written

@@ -29,7 +29,7 @@ var privateValuePatterns = []*regexp.Regexp{
 	// Authorization / bearer values.
 	regexp.MustCompile(`(?i)(bearer\s+)([A-Za-z0-9._~+/=-]+)`),
 	// URL userinfo passwords: scheme://user:pass@host
-	regexp.MustCompile(`(://[^/:@\s]+:)([^@\s]+)(@)`),
+	regexp.MustCompile(`(://[^/:@\s]*:)([^@\s]+)(@)`),
 	// Private-key blocks (any BEGIN ... PRIVATE KEY variant), body inclusive.
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 }

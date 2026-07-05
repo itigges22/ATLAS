@@ -128,6 +128,11 @@ def is_complete(manifest: Optional[dict]) -> bool:
         val = manifest.get(key)
         if val in (None, "", {}, [], "(unknown)"):
             return False
+    # embedding_dim must be a positive int (0 would pass the emptiness
+    # check above but is never a valid lens dimension).
+    dim = manifest.get("embedding_dim")
+    if not isinstance(dim, int) or dim <= 0:
+        return False
     return True
 
 
@@ -139,4 +144,7 @@ def missing_fields(manifest: Optional[dict]) -> List[str]:
         val = manifest.get(key)
         if val in (None, "", {}, [], "(unknown)"):
             out.append(key)
+    dim = manifest.get("embedding_dim")
+    if "embedding_dim" not in out and (not isinstance(dim, int) or dim <= 0):
+        out.append("embedding_dim")
     return out
