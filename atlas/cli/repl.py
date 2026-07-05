@@ -721,6 +721,7 @@ _SUBCOMMAND_HELP = [
     ("upgrade", "staged upgrade with auto-restore on failure"),
     ("rollback","return the deployment to a previous release"),
     ("diagnostics", "collect a filtered diagnostic bundle"),
+    ("artifact", "verify / snapshot / roll back artifact bundles"),
     ("tui",     "launch the terminal UI"),
 ]
 

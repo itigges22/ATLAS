@@ -201,3 +201,5 @@ _agenttest/
 lens_training/
 .atlas-upgrade/
 geometric-lens/geometric_lens/models/provenance.json
+geometric-lens/geometric_lens/models/provenance.json.sig
+geometric-lens/geometric_lens/models/.previous-bundle/
