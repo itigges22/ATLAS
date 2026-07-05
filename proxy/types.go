@@ -529,6 +529,11 @@ type AgentContext struct {
 	// sandbox can't see. Shell-op guardrails still apply either way.
 	VerifyOnHost bool
 
+	// TrustMode gates command execution (untrusted refuses; trusted =
+	// sandbox; fully-trusted permits host execution). Resolved once per
+	// turn from ATLAS_TRUST_MODE.
+	TrustMode trustMode
+
 	// Streaming callback
 	StreamFn func(eventType string, data interface{})
 

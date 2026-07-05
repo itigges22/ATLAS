@@ -2404,6 +2404,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// proxy environment. Either source can downgrade to "sandbox"
 	// explicitly. Default stays sandbox.
 	ctx.VerifyOnHost = resolveVerifyTarget(workingDir) == "host"
+	ctx.TrustMode = resolveTrustMode()
 
 	// Seed prior-turn transcript from the request body. The TUI ships
 	// user/assistant text rows from its local chat history so the agent

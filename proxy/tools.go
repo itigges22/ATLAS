@@ -2191,6 +2191,13 @@ func runCommandTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
+			// Trust gate: untrusted mode refuses command execution;
+			// host execution is honored only under fully-trusted (else
+			// downgraded to the sandbox below).
+			if !ctx.TrustMode.commandsAllowed() {
+				return &ToolResult{Success: false, Error: untrustedRefusal}, nil
+			}
+
 			timeoutSec := 30
 			if input.Timeout != nil && *input.Timeout > 0 {
 				timeoutSec = *input.Timeout
@@ -2224,7 +2231,11 @@ func runCommandTool() *ToolDef {
 			// to the host path so the command lands in the right dir.
 			var out RunCommandOutput
 			var err error
-			if ctx.VerifyOnHost {
+			// Host execution requires fully-trusted; otherwise a
+			// host request is downgraded to sandbox so the trust
+			// level can't be silently escalated by ATLAS_VERIFY_IN.
+			useHost := ctx.VerifyOnHost && ctx.TrustMode.hostExecutionAllowed()
+			if useHost {
 				hostCwd := cwd
 				if ctx.HostWorkingDir != "" && strings.HasPrefix(cwd, ctx.WorkingDir) {
 					hostCwd = ctx.HostWorkingDir + strings.TrimPrefix(cwd, ctx.WorkingDir)

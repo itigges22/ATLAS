@@ -252,19 +252,15 @@ services:
     # Resource caps. run_command runs untrusted model-authored shell in
     # here, so the container — not a regex — is the real backstop against
     # resource exhaustion. pids_limit is a hard fork-bomb stop at the
-    # kernel level (1024 is far above any normal build, far below a bomb);
-    # it's a safe constant on every box, so it defaults inline. mem_limit
-    # caps RAM so a runaway can't OOM the host; its value is host-specific,
-    # so `atlas init` detects total RAM and writes ATLAS_SANDBOX_MEM (~75%)
-    # to .env. The :-0 fallback means "no limit" — so a raw `docker compose
-    # up` without running the wizard still works (pids-protected), just
-    # uncapped on memory until reconfigured.
+    # kernel level (1024 is far above any normal build, far below a bomb).
+    # mem_limit and cpus have CONSERVATIVE non-zero defaults so a raw
+    # `docker compose up` (no wizard) is never unlimited — a runaway can't
+    # OOM or peg the host out of the box. `atlas init` detects host RAM/
+    # cores and writes host-appropriate ATLAS_SANDBOX_MEM (~75% RAM) /
+    # ATLAS_SANDBOX_CPUS (~75% cores) to .env, which override these floors.
     pids_limit: ${ATLAS_SANDBOX_PIDS:-1024}
-    mem_limit: ${ATLAS_SANDBOX_MEM:-0}
-    # CPU quota so a runaway build can't starve the latency-sensitive
-    # llama-server. Same pattern as mem_limit: `atlas init` writes ~75%
-    # of host cores; 0 = unlimited on a raw compose up.
-    cpus: ${ATLAS_SANDBOX_CPUS:-0}
+    mem_limit: ${ATLAS_SANDBOX_MEM:-4g}
+    cpus: ${ATLAS_SANDBOX_CPUS:-2}
     # Don't override working_dir — the image uses WORKDIR=/app for
     # executor_server.py. The /shell endpoint defaults its cwd to
     # /workspace at request time, which is the bind-mounted user

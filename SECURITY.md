@@ -20,6 +20,23 @@ Two current limits of that boundary, so reports can be calibrated against what i
 | 3.1.x   | Yes       |
 | < 3.1   | No        |
 
+## Command-execution trust modes
+
+Model-authored commands from a newly-opened repository are untrusted
+content. `ATLAS_TRUST_MODE` makes the execution decision explicit:
+
+- `untrusted` — `run_command` is refused; no repository commands run.
+- `trusted` (default) — commands run only in the isolated sandbox
+  container (non-root, cap_drop ALL, resource-capped).
+- `fully-trusted` — additionally permits host execution
+  (`ATLAS_VERIFY_IN=host`), dropping the container backstop; for working
+  codebases that depend on host state, chosen deliberately.
+
+Under `trusted`, a host-execution request is downgraded to the sandbox
+rather than silently honored, so the trust level can't be escalated by a
+stray `ATLAS_VERIFY_IN=host`. A raw `docker compose up` (no wizard) runs
+the sandbox with conservative memory/CPU/PID caps, never unlimited.
+
 ## Sensitive-file exclusion and private-value filtering
 
 Two defaults reduce accidental data exposure:
