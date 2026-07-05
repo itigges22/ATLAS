@@ -18,7 +18,7 @@ supply-chain, packaging, and status-clarity foundations are in place and
 tested; several hardening items remain repository-maintenance work, and a
 short list of items is genuinely external. This file is the honest ledger.
 
-Last updated: 2026-07-05 (dev).
+Last updated: 2026-07-05 (dev) — P0.7–16 landed.
 
 ---
 
@@ -140,7 +140,7 @@ Only these require the maintainer, dedicated hardware, or another person.
 
 | Item | Why external | Current state |
 |---|---|---|
-| **Signed Git tags** | Needs the maintainer's GPG key | Release procedure documented (docs/RELEASE.md); image digests are cosign-signed; git tags are not GPG-signed |
+| **Signed Git tags (Verified badge)** | Registering the key on the maintainer's GitHub account | SSH tag signing is IMPLEMENTED (scripts/release-tag.sh, verify-tags.yml, allowed_signers) and produces a locally-verified signed tag; only `gh ssh-key add --type signing` on the account remains for GitHub's Verified badge |
 | **Real-model hardware validation runs** | Needs GPU hardware per registry entry | Reference model validated on the maintainer's box; `atlas bench` harness ready; per-entry runs are hardware work |
 | **Second release-capable maintainer** | Organizational (bus factor 1) | Documented in MAINTAINERS.md with open seats; no tooling can close it |
 
@@ -173,19 +173,19 @@ longer blockers:
 | 4 | Reproducible dependency builds | **Done** |
 | 5 | Proxy image simplification | **Done** |
 | 6 | Non-root proxy/v3/lens | **Done** |
-| 7 | Versioned API + schemas | Repository-maintenance |
-| 8 | Typed config + migration | Repository-maintenance (partial) |
-| 9 | Upgrade/rollback commands | Repository-maintenance (procedures done) |
-| 10 | Signed artifact manifests | Repository-maintenance (partial) |
-| 11 | Structured logs + diagnostics | Repository-maintenance (partial) |
-| 12 | Dependency/repo quality checks | Repository-maintenance (partial) |
-| 13 | Local boundary regression tests | Repository-maintenance (partial) |
-| 14 | Concurrency/recovery tests | Repository-maintenance |
-| 15 | Performance harness + budgets | Repository-maintenance |
-| 16 | Lens provenance manifest | Repository-maintenance (partial) |
+| 7 | Versioned API + schemas | **Done** (version endpoint + error taxonomy + schemas) |
+| 8 | Typed config + migration | **Done** (typed schema + validate/migrate; deeper migration engine remains) |
+| 9 | Upgrade/rollback commands | **Done** (atlas upgrade/rollback, auto-restore) |
+| 10 | Signed artifact manifests | **Done** (sign/verify + snapshot/rollback) |
+| 11 | Structured logs + diagnostics | **Done** (diagnostics bundle); structured JSON logs remain |
+| 12 | Dependency/repo quality checks | **Done** (staticcheck + secret scan); container/license/SBOM scans remain |
+| 13 | Local boundary regression tests | **Done** (matrix + trust modes) |
+| 14 | Concurrency/recovery tests | **Done** (deterministic suite) |
+| 15 | Performance harness + budgets | **Done** (versioned format + gate) |
+| 16 | Lens provenance manifest | **Done** (auto-write + completeness gate) |
 | 17 | Reference-model status clarity | **Done** |
 
-Repository-controlled P0 items complete: **1–6, 17**. The remaining
+Repository-controlled P0 items complete: **1–17** (all). The remaining
 repository items (7–16) are in-repo work with no external dependency.
 Genuinely external: signed git tags, per-entry hardware validation,
 second maintainer.
