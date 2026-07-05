@@ -722,6 +722,7 @@ _SUBCOMMAND_HELP = [
     ("rollback","return the deployment to a previous release"),
     ("diagnostics", "collect a filtered diagnostic bundle"),
     ("artifact", "verify / snapshot / roll back artifact bundles"),
+    ("config",  "validate / migrate the .env configuration"),
     ("tui",     "launch the terminal UI"),
 ]
 
