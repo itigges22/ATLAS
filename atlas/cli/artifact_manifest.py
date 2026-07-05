@@ -65,13 +65,34 @@ def sign_manifest(bundle_dir: str) -> str:
     return os.path.join(bundle_dir, SIGNATURE)
 
 
-def _signer_principal() -> Optional[str]:
+def _signature_principals(sig_path: str) -> List[str]:
+    """Principals to verify the signature against. Verification must not
+    depend on the *verifier's* identity (any user can verify a bundle
+    signed by the maintainer), so ask ssh-keygen which allowed_signers
+    principals match the signature, falling back to every principal
+    listed in the file."""
     try:
-        return subprocess.check_output(
-            ["git", "config", "--get", "user.email"],
-            text=True, stderr=subprocess.DEVNULL).strip() or None
+        out = subprocess.check_output(
+            ["ssh-keygen", "-Y", "find-principals",
+             "-f", _allowed_signers(), "-s", sig_path],
+            text=True, stderr=subprocess.DEVNULL)
+        principals = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if principals:
+            return principals
     except (subprocess.SubprocessError, OSError):
-        return None
+        pass
+    principals = []
+    try:
+        with open(_allowed_signers()) as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    # The principal field may hold a comma-separated list
+                    # (sshsig allowed_signers format).
+                    principals.extend(line.split()[0].split(","))
+    except OSError:
+        pass
+    return principals
 
 
 def _sha256(path: str) -> Optional[str]:
@@ -98,19 +119,27 @@ def verify_manifest(bundle_dir: str, principal: Optional[str] = None
 
     # 1. Signature (when present — a bundle may be hash-only Preview).
     if os.path.isfile(sig_path):
-        who = principal or _signer_principal()
-        if not who:
-            problems.append("cannot determine signer principal to verify")
+        candidates = [principal] if principal else \
+            _signature_principals(sig_path)
+        if not candidates:
+            problems.append("cannot determine signer principal to verify "
+                            "(no matching entry in allowed_signers)")
         else:
-            try:
-                with open(manifest_path, "rb") as mf:
-                    subprocess.run(
-                        ["ssh-keygen", "-Y", "verify", "-f",
-                         _allowed_signers(), "-I", who, "-n", NAMESPACE,
-                         "-s", sig_path],
-                        stdin=mf, check=True,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except (subprocess.SubprocessError, OSError):
+            def _verifies(who: str) -> bool:
+                try:
+                    with open(manifest_path, "rb") as mf:
+                        subprocess.run(
+                            ["ssh-keygen", "-Y", "verify", "-f",
+                             _allowed_signers(), "-I", who, "-n", NAMESPACE,
+                             "-s", sig_path],
+                            stdin=mf, check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+                    return True
+                except (subprocess.SubprocessError, OSError):
+                    return False
+
+            if not any(_verifies(who) for who in candidates):
                 problems.append("manifest signature did not verify against "
                                 "allowed_signers")
     else:

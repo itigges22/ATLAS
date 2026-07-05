@@ -9,7 +9,9 @@ atlas rollback --to v1.1.0  # or target a specific immutable tag
 
 With no argument it reads the restore point written by `atlas upgrade`
 (`.atlas-upgrade/restore-point.json`) and brings the previous release
-back up. The manual procedures below are the equivalent by hand and the
+back up. With `--to TAG`, a pull/start failure (e.g. a typo'd tag that
+doesn't exist) restores `.env` to the tag that was deployed before the
+attempt. The manual procedures below are the equivalent by hand and the
 fallback when no restore point exists.
 
 ## Images

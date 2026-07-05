@@ -16,6 +16,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -291,22 +292,23 @@ func newProxyMux() *http.ServeMux {
 func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	// %q on the path quotes + escapes CR/LF so a crafted URL can't
 	// fake additional log entries (go/log-injection).
-	log.Printf("passthrough: %s %q", r.Method, r.URL.Path)
+	logEvent("info", fmt.Sprintf("passthrough: %s %q", r.Method, r.URL.Path),
+		requestIDFromContext(r.Context()), nil)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "request body exceeds the configured limit", http.StatusRequestEntityTooLarge)
+		writeError(w, http.StatusRequestEntityTooLarge, ErrResourceLimit, "request body exceeds the configured limit")
 		return
 	}
 	upstreamURL := inferenceURL + r.URL.RequestURI()
 	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(body))
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeError(w, http.StatusInternalServerError, ErrInternal, err.Error())
 		return
 	}
 	proxyReq.Header = r.Header.Clone()
 	resp, err := http.DefaultClient.Do(proxyReq)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeError(w, http.StatusBadGateway, ErrDependencyDown, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -323,7 +325,15 @@ func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	// Private-value filtering: every log line passes through the
 	// filter before it reaches stderr (see private_values.go).
-	log.SetOutput(filteringWriter{w: os.Stderr})
+	// In json mode the filtered line is then wrapped into a JSON
+	// record; the record stamps its own ts, so the log package's
+	// time prefix is dropped to keep it out of msg.
+	out := io.Writer(os.Stderr)
+	if logJSON {
+		log.SetFlags(0)
+		out = jsonLineWriter{w: os.Stderr}
+	}
+	log.SetOutput(filteringWriter{w: out})
 
 	addr := ":" + proxyPort
 	log.Printf("ATLAS Proxy v3.0.1 starting on %s", addr)

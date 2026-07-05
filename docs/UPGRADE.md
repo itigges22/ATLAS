@@ -49,8 +49,21 @@ readiness, runs a quick-doctor smoke check, and finalizes. **If any step
 fails — a bad pull, a service that never becomes ready, or a failed
 smoke check — it automatically restores the previous release** (your
 `.env`, including `ATLAS_IMAGE_TAG`, and brings the old images back up on
-the cached layers). `--skip-smoke` skips only the final check; the
-restore-on-failure guarantee still holds for the earlier steps.
+the locally cached layers — the restore never re-pulls, since a mutable
+previous tag could have moved). `--skip-smoke` skips only the final
+check; the restore-on-failure guarantee still holds for the earlier
+steps.
+
+Re-running with the tag already deployed: a release tag (`vX.Y.Z`) is a
+no-op — those tags never move. A mutable tag (`latest`, `dev`) runs the
+full staged flow anyway ("refresh"), because the registry may point the
+same tag at newer images; the pull is cheap when nothing changed. Note
+that a refresh replaces the locally cached images under the same tag, so
+`atlas rollback` after a successful refresh cannot return to the
+pre-refresh build — pin release tags for reversible upgrades. Images not
+published in the registry for your backend (e.g. the locally-built ROCm
+llama image) are skipped by signature verification, and a slow pull gets
+up to `ATLAS_UPGRADE_PULL_TIMEOUT` (default 3600 s) to finish.
 
 The manual sequence above remains valid and is what `atlas upgrade`
 automates. To undo a *successful* upgrade later, `atlas rollback`

@@ -64,3 +64,30 @@ def test_snapshot_then_rollback_restores(tmp_path):
 def test_rollback_without_snapshot_errors(tmp_path):
     d = _bundle(tmp_path)
     assert artifact._rollback(d) == 1
+
+
+def test_snapshot_replaces_previous_generation(tmp_path):
+    # Gen-1 snapshot leaves cost_field.pt; gen-2 bundle uses
+    # safetensors. The gen-2 snapshot must not inherit gen-1 leftovers.
+    d = _bundle(tmp_path)
+    artifact._snapshot(d)
+    (tmp_path / "cost_field.pt").unlink()
+    (tmp_path / "cost_field.safetensors").write_bytes(b"weights-v2")
+    artifact._snapshot(d)
+    snap = tmp_path / artifact.SNAPSHOT_DIR
+    assert (snap / "cost_field.safetensors").is_file()
+    assert not (snap / "cost_field.pt").exists()
+
+
+def test_rollback_removes_files_absent_from_snapshot(tmp_path):
+    # Old bundle: .pt only. New (bad) bundle: .safetensors. Rollback
+    # must remove the .safetensors, or a loader preferring it would
+    # still load the bad weights.
+    d = _bundle(tmp_path)
+    artifact._snapshot(d)
+    (tmp_path / "cost_field.pt").unlink()
+    (tmp_path / "cost_field.safetensors").write_bytes(b"weights-BAD")
+    rc = artifact._rollback(d)
+    assert rc == 0
+    assert (tmp_path / "cost_field.pt").read_bytes() == b"weights-v1"
+    assert not (tmp_path / "cost_field.safetensors").exists()

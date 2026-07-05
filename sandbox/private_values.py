@@ -22,7 +22,7 @@ PLACEHOLDER = "[FILTERED]"
 
 _ASSIGNMENT = re.compile(
     r'(?i)([A-Z0-9_.-]*(?:api[_-]?key|apikey|token|secret|password'
-    r'|passwd|credential|access[_-]?key)[A-Z0-9_.-]*"?\s*[=:]\s*"?)'
+    r'|passwd|credential|access[_-]?key)[A-Z0-9_.-]*["\']?\s*[=:]\s*["\']?)'
     r'([^\s"\',;&]+)')
 _BEARER = re.compile(r'(?i)(bearer\s+)([A-Za-z0-9._~+/=-]+)')
 _URL_PASSWORD = re.compile(r'(://[^/:@\s]*:)([^@\s]+)(@)')
@@ -54,6 +54,15 @@ class PrivateValueLogFilter(logging.Filter):
             if filtered != msg:
                 record.msg = filtered
                 record.args = ()
+            # Tracebacks reach the sink via exc_info/exc_text, not msg —
+            # and their last line is `ExceptionType: <message>`, which can
+            # embed credentials (e.g. a connection error quoting a URL
+            # with a password). Pre-format and mask here: the stdlib
+            # formatter honors a pre-set exc_text, and JsonFormatter
+            # prefers it too.
+            if record.exc_info and not record.exc_text:
+                record.exc_text = filter_private_values(
+                    logging.Formatter().formatException(record.exc_info))
         except Exception:
             pass  # a filtering failure must never suppress the log line
         return True

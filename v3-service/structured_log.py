@@ -17,6 +17,21 @@ import logging
 import os
 import contextvars
 
+try:  # package layout (geometric-lens)
+    from .private_values import filter_private_values
+except ImportError:
+    try:  # flat layout (sandbox/v3 copy)
+        from private_values import filter_private_values  # type: ignore
+    except ImportError:  # loaded as a standalone file (contract tests)
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_atlas_private_values",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "private_values.py"))
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        filter_private_values = _mod.filter_private_values
+
 # contextvars, NOT threading.local: the async FastAPI services (lens,
 # sandbox) interleave requests on one event-loop thread, so a thread-
 # local id would bleed between concurrent requests. A ContextVar is
@@ -50,8 +65,16 @@ class JsonFormatter(logging.Formatter):
         rid = get_request_id()
         if rid:
             rec["request_id"] = rid
-        if record.exc_info:
-            rec["exc"] = self.formatException(record.exc_info)
+        if record.exc_text:
+            # Pre-formatted (and private-value-masked) by
+            # PrivateValueLogFilter.
+            rec["exc"] = record.exc_text
+        elif record.exc_info:
+            # Filter not installed on this handler — mask here so the
+            # traceback's `ExceptionType: <message>` line can't leak a
+            # credential into the JSON record.
+            rec["exc"] = filter_private_values(
+                self.formatException(record.exc_info))
         return json.dumps(rec)
 
 

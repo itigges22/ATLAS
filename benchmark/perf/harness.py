@@ -28,10 +28,18 @@ def _cli_import_time_s() -> float:
     """Cold import time of the CLI entry module (a stdlib-only import;
     a regression here means an accidental heavy dependency)."""
     start = time.perf_counter()
-    subprocess.run(
+    proc = subprocess.run(
         [sys.executable, "-c", "import atlas.cli.repl"],
         cwd=str(REPO), capture_output=True, timeout=60)
-    return round(time.perf_counter() - start, 3)
+    elapsed = round(time.perf_counter() - start, 3)
+    if proc.returncode != 0:
+        # A failed import returns fast — without this check the exact
+        # regression this metric exists to catch (a new heavy/broken
+        # dependency) would record a GREAT time and pass the gate.
+        raise RuntimeError(
+            "importing atlas.cli.repl failed:\n"
+            + proc.stderr.decode(errors="replace"))
+    return elapsed
 
 
 def _proxy_binary_bytes() -> Optional[int]:
@@ -80,18 +88,31 @@ def load_budgets() -> dict:
 
 def check(result: dict, budgets: Optional[dict] = None) -> Dict[str, Any]:
     """Compare deterministic metrics against budgets. Returns
-    {passed: bool, violations: [...]}. Missing metrics are skipped (a
-    metric that couldn't be measured is not a regression)."""
+    {passed: bool, violations: [...]}. An individual missing metric is
+    skipped (a metric that couldn't be measured is not a regression),
+    but a result matching ZERO budgeted metrics fails — that's a
+    renamed key or an empty result, and passing it would disarm the
+    gate silently."""
     budgets = budgets or load_budgets()
     violations = []
+    sv = result.get("schema_version")
+    if sv is not None and sv != SCHEMA_VERSION:
+        violations.append(
+            f"schema_version={sv} does not match harness {SCHEMA_VERSION}")
     det = result.get("deterministic", {})
+    matched = 0
     for metric, limit in budgets.get("deterministic_max", {}).items():
         val = det.get(metric)
         if val is None:
             continue
+        matched += 1
         if val > limit:
             violations.append(
                 f"{metric}={val} exceeds budget {limit}")
+    if matched == 0:
+        violations.append(
+            "no budgeted metric present in the result — refusing to pass "
+            "vacuously")
     return {"passed": not violations, "violations": violations}
 
 

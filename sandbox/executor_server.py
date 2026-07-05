@@ -55,16 +55,6 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="ATLAS Code Execution Sandbox")
 
 
-@app.middleware("http")
-async def _correlation_id(request, call_next):
-    rid = request.headers.get("x-atlas-request-id", "")
-    _set_rid(rid)
-    resp = await call_next(request)
-    if rid:
-        resp.headers["X-ATLAS-Request-ID"] = rid
-    return resp
-
-
 def _load_service_token() -> str:
     """Internal-auth token (Authorization: Bearer). Empty = auth
     disabled (pre-token behavior; `atlas doctor` warns). Never logged.
@@ -96,6 +86,19 @@ async def _require_service_token(request, call_next):
                           "Authorization: Bearer <service-token> "
                           "(secrets/service-token)"})
     return await call_next(request)
+
+
+# Registered AFTER the token middleware: Starlette wraps in reverse
+# registration order (last = outermost), and the correlation ID must be
+# set/echoed even on requests the auth middleware rejects with 401.
+@app.middleware("http")
+async def _correlation_id(request, call_next):
+    rid = request.headers.get("x-atlas-request-id", "")
+    _set_rid(rid)
+    resp = await call_next(request)
+    if rid:
+        resp.headers["X-ATLAS-Request-ID"] = rid
+    return resp
 
 
 MAX_EXECUTION_TIME = int(os.getenv("MAX_EXECUTION_TIME", "60"))

@@ -47,6 +47,10 @@ def _verify(bundle_dir: str) -> int:
 
 def _snapshot(bundle_dir: str) -> int:
     dest = os.path.join(bundle_dir, SNAPSHOT_DIR)
+    # Start clean: files left over from an earlier snapshot generation
+    # would otherwise merge into this one and roll back as a chimera.
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
     os.makedirs(dest, exist_ok=True)
     kept = 0
     for name in BUNDLE_FILES + [am.MANIFEST, am.SIGNATURE]:
@@ -65,8 +69,17 @@ def _rollback(bundle_dir: str) -> int:
               "(run `atlas artifact snapshot` before activating a new bundle)",
               file=sys.stderr)
         return 1
+    # Remove current-bundle files the snapshot doesn't have, so the
+    # restored bundle is exactly the snapshot (a leftover new-format
+    # weight file or stale .sig would otherwise shadow the restored one).
+    snap_files = set(os.listdir(src))
+    for name in BUNDLE_FILES + [am.MANIFEST, am.SIGNATURE]:
+        if name not in snap_files:
+            stale = os.path.join(bundle_dir, name)
+            if os.path.isfile(stale):
+                os.unlink(stale)
     restored = 0
-    for name in os.listdir(src):
+    for name in snap_files:
         shutil.copy2(os.path.join(src, name), os.path.join(bundle_dir, name))
         restored += 1
     print(f"artifact rollback: restored {restored} files. "

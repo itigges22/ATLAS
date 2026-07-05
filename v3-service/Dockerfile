@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir torch==2.12.1 \
 COPY benchmark/ /app/benchmark/
 COPY v3-service/main.py /app/main.py
 COPY v3-service/private_values.py /app/private_values.py
+COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
 # Pure stdlib + the tree-sitter grammars installed above; no extra deps.
 COPY v3-service/graph/ /app/graph/

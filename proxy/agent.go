@@ -445,7 +445,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// Log the args truncated — enables diagnosing failures like
 		// "all 3 tool calls returned Success=false" without having to add
 		// breakpoints. See ISSUES.md PC-039 follow-up.
-		log.Printf("[agent] turn=%d type=%s name=%s args=%s", turn, parsed.Type, parsed.Name, truncateStr(string(parsed.Args), 200))
+		logEvent("info",
+			fmt.Sprintf("[agent] turn=%d type=%s name=%s args=%s",
+				turn, parsed.Type, parsed.Name, truncateStr(string(parsed.Args), 200)),
+			requestIDFromContext(ctx.Ctx), nil)
 
 		// PC-041: when a tool_call still has no args after liftMissingArgs,
 		// log the raw model output so we can see exactly what shape was
@@ -2318,7 +2321,7 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 // handleAgent is the HTTP handler for the new agent endpoint.
 func handleAgent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
 		return
 	}
 
@@ -2341,12 +2344,12 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
 		return
 	}
 
 	if req.Message == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "message is required")
 		return
 	}
 
@@ -2473,7 +2476,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// Set up SSE streaming
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, ErrInternal, "streaming not supported")
 		return
 	}
 
@@ -2554,18 +2557,18 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 // closes cleanly. The TUI surfaces a "turn cancelled" system message.
 func handleCancel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
 		return
 	}
 	var req struct {
 		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
 		return
 	}
 	if req.SessionID == "" {
-		http.Error(w, "session_id required", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "session_id required")
 		return
 	}
 	v, ok := activeSessions.LoadAndDelete(req.SessionID)

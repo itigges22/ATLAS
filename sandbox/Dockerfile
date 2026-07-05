@@ -84,6 +84,7 @@ RUN mkdir -p /tmp/sandbox && chmod 777 /tmp/sandbox
 RUN groupadd -g 1000 sandbox && useradd -u 1000 -g 1000 -d /home/sandbox -s /bin/bash sandbox \
     && mkdir -p /home/sandbox && chown 1000:1000 /home/sandbox
 
+COPY structured_log.py .
 COPY private_values.py .
 COPY executor_server.py .
 

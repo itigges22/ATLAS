@@ -5,3 +5,7 @@ pytest==9.1.1
 requests==2.34.2
 ruff==0.15.20
 mypy==2.1.0
+# executor_server's YAML syntax verification (lazy `import yaml`) —
+# absent, every YAML verify call false-fails with a ModuleNotFoundError
+# reported as a YAML error.
+pyyaml==6.0.3

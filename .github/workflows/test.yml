@@ -69,6 +69,8 @@ jobs:
           - tests/cli
           - tests/infrastructure
           - tests/contracts
+          - tests/concurrency
+          - tests/perf
           - geometric-lens/tests
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -87,14 +89,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest
+          # pyyaml: tests/contracts/test_openapi_contract.py importorskips
+          # yaml — without the install the whole route-parity contract
+          # silently skips instead of gating.
+          pip install pytest pyyaml
           # tree-sitter grammars for the #39 call-graph extraction tests under
           # tests/v3-service/ (they skip cleanly if absent, but CI should run
           # them). Pre-built wheels, no build toolchain needed.
           pip install tree_sitter tree_sitter_python tree_sitter_javascript
 
       - name: install sandbox runtime dependencies
-        if: matrix.subset == 'tests/v3-service'
+        # tests/infrastructure needs these too: the boundary-regression
+        # suite boots sandbox/executor_server.py, which imports
+        # fastapi/pydantic unconditionally.
+        if: matrix.subset == 'tests/v3-service' || matrix.subset == 'tests/infrastructure'
         run: pip install -r sandbox/requirements-runtime.txt
 
       - name: install lens dependencies (CPU torch)

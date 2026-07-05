@@ -98,6 +98,34 @@
       "must_not_contain": [
         "fake-pg-pw"
       ]
+    },
+    {
+      "name": "single-quoted env assignment",
+      "input": "EXAMPLE_TOKEN='fake-single-quoted-value'",
+      "must_not_contain": [
+        "fake-single-quoted-value"
+      ]
+    },
+    {
+      "name": "python dict repr (single quotes)",
+      "input": "config loaded: {'api_key': 'fake-dict-repr-token', 'timeout': 30}",
+      "must_not_contain": [
+        "fake-dict-repr-token"
+      ],
+      "must_contain": [
+        "config loaded",
+        "'timeout': 30"
+      ]
+    },
+    {
+      "name": "single-quoted cli flag",
+      "input": "connect --password='fake-sq-cli-pw' --host localhost",
+      "must_not_contain": [
+        "fake-sq-cli-pw"
+      ],
+      "must_contain": [
+        "--host localhost"
+      ]
     }
   ],
   "negative_cases": [

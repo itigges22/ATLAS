@@ -181,3 +181,79 @@ def test_bad_signature_aborts_and_restores(tmp_path):
     up_target = [t for (c, t) in fake.calls if c == "up" and t == "v2.0.0"]
     assert not up_target
     assert eng.read_env_tag(root) == "v1.0.0"
+
+
+def test_same_mutable_tag_refreshes_instead_of_noop(tmp_path):
+    # `atlas upgrade` on the default install is latest -> latest; the
+    # registry tag can move, so the staged flow must still run.
+    root = _root(tmp_path, "latest")
+    fake = FakeSteps()
+    res = eng.run_upgrade(root, "latest", fake.as_steps(root), "stampR")
+    assert res["status"] == "refreshed"
+    assert ("pull", "latest") in fake.calls
+
+
+def test_same_release_tag_noops(tmp_path):
+    root = _root(tmp_path, "v2.0.0")
+    fake = FakeSteps()
+    res = eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stampN")
+    assert res["status"] == "noop"
+    assert not [c for c in fake.calls if c[0] == "pull"]
+
+
+def test_tag_mutability_classification():
+    assert eng.tag_is_mutable("latest")
+    assert eng.tag_is_mutable("dev")
+    assert not eng.tag_is_mutable("v2.0.0")
+    assert not eng.tag_is_mutable("v2.0.0-rc.1")
+
+
+def test_restore_never_pulls_the_previous_tag(tmp_path):
+    # A mutable previous tag could have moved; restore must come up on
+    # the locally cached images, not re-pull.
+    root = _root(tmp_path, "v1.0.0")
+    fake = FakeSteps(ready=False)
+    with pytest.raises(eng.UpgradeError):
+        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stampP")
+    pulls = [t for (c, t) in fake.calls if c == "pull"]
+    assert pulls == ["v2.0.0"]  # target staged once; no pull during restore
+    assert eng.read_env_tag(root) == "v1.0.0"
+
+
+def test_failed_restore_reports_both_failures(tmp_path):
+    # fail_on="up" fails the upgrade's up AND the restore's up: the
+    # error must carry the original cause and flag the failed restore,
+    # not swallow either.
+    root = _root(tmp_path, "v1.0.0")
+    fake = FakeSteps(fail_on="up")
+    with pytest.raises(eng.UpgradeError) as ei:
+        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stampF")
+    msg = str(ei.value)
+    assert "up failed (simulated)" in msg
+    assert "ALSO failed" in msg
+
+
+def test_rollback_to_missing_tag_restores_env(tmp_path):
+    # A typo'd --to tag whose pull fails must not leave .env pointing
+    # at it (every later compose up would fail).
+    root = _root(tmp_path, "v1.0.0")
+    fake = FakeSteps(fail_on="pull")
+    with pytest.raises(eng.UpgradeError) as ei:
+        eng.run_rollback(root, fake.as_steps(root), target_tag="v9.9.9")
+    assert eng.read_env_tag(root) == "v1.0.0"
+    assert "restored to the previous tag" in str(ei.value)
+
+
+def test_real_set_env_tag_appends_newline_first(tmp_path):
+    # .env whose last line lacks a trailing newline: the appended tag
+    # must not be glued onto it.
+    from atlas.cli.commands.upgrade import _set_env_tag
+    root = _root(tmp_path, "v1.0.0")
+    env = os.path.join(root, ".env")
+    with open(env, "w") as fh:
+        fh.write("ATLAS_CTX_SIZE=131072")  # no trailing newline, no tag
+    _set_env_tag(root, "v2.0.0")
+    content = open(env).read()
+    assert "ATLAS_CTX_SIZE=131072\n" in content
+    assert "ATLAS_IMAGE_TAG=v2.0.0\n" in content
+    assert eng.read_env_tag(root) == "v2.0.0"

@@ -263,18 +263,6 @@ if _SERVICE_TOKEN:
     api_keys[_SERVICE_TOKEN] = {"user": "atlas-internal"}
 
 @app.middleware("http")
-async def _correlation_id(request, call_next):
-    # Adopt the caller's correlation ID (or none); echo it back so the
-    # whole turn shares one id across services.
-    rid = request.headers.get("x-atlas-request-id", "")
-    _set_rid(rid)
-    response = await call_next(request)
-    if rid:
-        response.headers["X-ATLAS-Request-ID"] = rid
-    return response
-
-
-@app.middleware("http")
 async def _require_service_token(request, call_next):
     # Enforce only on /internal/* — /v1/* has its own Bearer check
     # (verify_api_key Depends, which now also accepts the service
@@ -289,6 +277,21 @@ async def _require_service_token(request, call_next):
                           "Authorization: Bearer <service-token> "
                           "(secrets/service-token)"})
     return await call_next(request)
+
+
+# Registered AFTER the token middleware: Starlette wraps in reverse
+# registration order (last = outermost), and the correlation ID must be
+# set/echoed even on requests the auth middleware rejects with 401.
+@app.middleware("http")
+async def _correlation_id(request, call_next):
+    # Adopt the caller's correlation ID (or none); echo it back so the
+    # whole turn shares one id across services.
+    rid = request.headers.get("x-atlas-request-id", "")
+    _set_rid(rid)
+    response = await call_next(request)
+    if rid:
+        response.headers["X-ATLAS-Request-ID"] = rid
+    return response
 
 
 # Auth dependency — local key file lookup, no remote portal.

@@ -103,7 +103,7 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 // key returns 404, mirroring /cancel.
 func handlePermission(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
 		return
 	}
 	var req struct {
@@ -113,11 +113,11 @@ func handlePermission(w http.ResponseWriter, r *http.Request) {
 		Scope      string `json:"scope"`    // "once" (default) or "session"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
 		return
 	}
 	if req.SessionID == "" || req.ToolCallID == "" {
-		http.Error(w, "session_id and tool_call_id required", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "session_id and tool_call_id required")
 		return
 	}
 

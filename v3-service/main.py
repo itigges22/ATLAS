@@ -80,6 +80,23 @@ if SERVICE_TOKEN:
     urllib.request.install_opener(_opener)
 PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
 
+
+def _service_headers(rid: str = "") -> dict:
+    """Headers for outbound service-to-service calls: forwards the
+    current request's correlation ID so lens/sandbox/llama log records
+    join the same trace. Pass rid explicitly from background threads —
+    a new thread doesn't inherit the request's ContextVar."""
+    headers = {"Content-Type": "application/json"}
+    if not rid:
+        try:
+            from structured_log import get_request_id
+            rid = get_request_id()
+        except ImportError:
+            rid = ""
+    if rid:
+        headers["X-ATLAS-Request-ID"] = rid
+    return headers
+
 BASE_TEMPERATURE = 0.6
 DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
@@ -109,6 +126,14 @@ def _post_pattern_outcome(problem: str, result: dict):
     """
     import threading
 
+    # Capture the correlation ID on the request thread — the ContextVar
+    # doesn't propagate into a newly created thread.
+    try:
+        from structured_log import get_request_id
+        rid = get_request_id()
+    except ImportError:
+        rid = ""
+
     def _do_post():
         payload = {
             "query": problem,
@@ -124,7 +149,7 @@ def _post_pattern_outcome(problem: str, result: dict):
             req = urllib.request.Request(
                 f"{LENS_URL}/internal/patterns/write",
                 data=json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(rid),
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -276,7 +301,7 @@ class LLMAdapter:
         req = urllib.request.Request(
             f"{INFERENCE_URL}/v1/chat/completions",
             data=json.dumps(chat_body).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=_service_headers(),
         )
         for attempt in range(5):
             try:
@@ -391,7 +416,7 @@ class SandboxAdapter:
             req = urllib.request.Request(
                 f"{SANDBOX_URL}/execute",
                 data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(),
             )
             # 45s client timeout: the sandbox's server-side budgets (syntax
             # check + optional pip install + lint + the 15s run cap) can sum
@@ -414,7 +439,7 @@ class SandboxAdapter:
             req = urllib.request.Request(
                 f"{SANDBOX_URL}/syntax-check",
                 data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(),
             )
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read())
@@ -449,7 +474,7 @@ class SandboxAdapter:
             req = urllib.request.Request(
                 f"{SANDBOX_URL}/shell",
                 data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(),
             )
             with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
                 data = json.loads(resp.read())
@@ -477,7 +502,7 @@ class EmbedAdapter:
             req = urllib.request.Request(
                 f"{INFERENCE_URL}/v1/embeddings",
                 data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(),
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read())
@@ -508,7 +533,7 @@ def score_candidate_per_step(code: str) -> dict:
         req = urllib.request.Request(
             f"{LENS_URL}/internal/lens/score-per-step",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=_service_headers(),
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
@@ -563,7 +588,7 @@ def score_candidate(code: str) -> Tuple[float, float, bool]:
         req = urllib.request.Request(
             f"{LENS_URL}/internal/lens/gx-score",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=_service_headers(),
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())

@@ -13,10 +13,12 @@ package main
 // through the private-value filter (main() wraps the log writer).
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -95,4 +97,36 @@ func logEvent(level, msg, requestID string, kv map[string]interface{}) {
 	} else {
 		log.Printf("[%s] %s", level, msg)
 	}
+}
+
+// jsonLineWriter converts each (already private-value-filtered) log line
+// into the same JSON record shape logEvent emits, so ATLAS_LOG_FORMAT=json
+// covers every log call in the process, not only logEvent call sites.
+// Lines that are already JSON objects (logEvent's json-mode output) pass
+// through unchanged.
+type jsonLineWriter struct {
+	w io.Writer
+}
+
+func (j jsonLineWriter) Write(p []byte) (int, error) {
+	line := bytes.TrimRight(p, "\n")
+	if len(line) > 0 && line[0] == '{' && json.Valid(line) {
+		return j.w.Write(p)
+	}
+	rec := map[string]interface{}{
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+		"level":   "info",
+		"service": "atlas-proxy",
+		"version": APIVersion,
+		"msg":     string(line),
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return j.w.Write(p)
+	}
+	b = append(b, '\n')
+	if _, err := j.w.Write(b); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }

@@ -21,12 +21,19 @@ from atlas.cli import upgrade_engine as eng
 
 def _compose(atlas_root: str, args: List[str], timeout: int = 600) -> None:
     cmd = compose_config.command(atlas_root, args)
-    rc = subprocess.call(cmd, cwd=atlas_root)
+    try:
+        rc = subprocess.call(cmd, cwd=atlas_root, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise eng.UpgradeError(
+            f"`{' '.join(args[:2])}` timed out after {timeout}s")
     if rc != 0:
         raise eng.UpgradeError(f"`{' '.join(args[:2])}` failed (exit {rc})")
 
 
-_IMAGES = ["atlas-proxy", "atlas-v3", "atlas-lens", "atlas-sandbox"]
+# Fallback when the compose config can't be queried; must cover every
+# GHCR image the base compose file deploys.
+_IMAGES = ["atlas-proxy", "atlas-v3", "atlas-lens", "atlas-sandbox",
+           "atlas-llama"]
 _OWNER = os.environ.get("ATLAS_GHCR_OWNER", "itigges22")
 # Images are built + signed on both branch pushes (refs/heads/…) and tag
 # pushes (refs/tags/vX.Y.Z), so the identity must accept either ref type
@@ -35,6 +42,26 @@ _COSIGN_IDENTITY = (
     r"https://github.com/itigges22/ATLAS/.github/workflows/"
     r"build-images.yml@refs/(heads|tags)/.*")
 _COSIGN_ISSUER = "https://token.actions.githubusercontent.com"
+
+
+def _target_images(atlas_root: str, tag: str) -> List[str]:
+    """GHCR-owned image refs from the effective compose config (backend
+    overlays included — e.g. the Vulkan llama image), re-pinned to the
+    target tag. Falls back to the static list if compose can't answer."""
+    refs: List[str] = []
+    prefix = f"ghcr.io/{_OWNER}/"
+    try:
+        cmd = compose_config.command(atlas_root, ["config", "--images"])
+        out = subprocess.check_output(cmd, cwd=atlas_root, text=True,
+                                      timeout=60)
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith(prefix):
+                name = line[len(prefix):].split(":", 1)[0]
+                refs.append(f"{prefix}{name}:{tag}")
+    except (subprocess.SubprocessError, OSError):
+        pass
+    return refs or [f"{prefix}{img}:{tag}" for img in _IMAGES]
 
 
 def _verify_signatures(atlas_root: str, tag: str) -> None:
@@ -49,17 +76,38 @@ def _verify_signatures(atlas_root: str, tag: str) -> None:
     if shutil.which("cosign") is None:
         print("  (cosign not installed — skipping signature verification)")
         return
-    for img in _IMAGES:
-        ref = f"ghcr.io/{_OWNER}/{img}:{tag}"
-        rc = subprocess.call(
-            ["cosign", "verify",
-             "--certificate-identity-regexp", _COSIGN_IDENTITY,
-             "--certificate-oidc-issuer", _COSIGN_ISSUER, ref],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if rc != 0:
+    for ref in _target_images(atlas_root, tag):
+        try:
+            proc = subprocess.run(
+                ["cosign", "verify",
+                 "--certificate-identity-regexp", _COSIGN_IDENTITY,
+                 "--certificate-oidc-issuer", _COSIGN_ISSUER, ref],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                text=True, timeout=300)
+        except subprocess.TimeoutExpired:
             raise eng.UpgradeError(
-                f"signature verification failed for {ref} — refusing to "
-                "upgrade (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
+                f"signature verification timed out for {ref} — refusing "
+                "to upgrade (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
+        if proc.returncode == 0:
+            continue
+        err = proc.stderr or ""
+        # Not-published refs are skipped, not fatal: some compose
+        # services build locally and never push (e.g. the ROCm llama
+        # image). GHCR answers 403 DENIED at the anonymous token grant
+        # for a repo that doesn't exist, so "access denied" here means
+        # "no such published image", not a signature problem; a repo
+        # that exists without the tag yields MANIFEST_UNKNOWN. A real
+        # bad signature on a published image still falls through to the
+        # UpgradeError.
+        err_upper = err.upper()
+        not_published = ("MANIFEST_UNKNOWN", "MANIFEST UNKNOWN",
+                         "NAME_UNKNOWN", "DENIED", "UNAUTHORIZED")
+        if any(code in err_upper for code in not_published):
+            print(f"  (skipping {ref}: not published in the registry)")
+            continue
+        raise eng.UpgradeError(
+            f"signature verification failed for {ref} — refusing to "
+            "upgrade (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
 
 
 def _snapshot_digests(atlas_root: str) -> Dict[str, str]:
@@ -109,6 +157,10 @@ def _set_env_tag(atlas_root: str, tag: str) -> None:
                 else:
                     lines.append(line)
     if not found:
+        # A .env whose last line lacks a trailing newline would otherwise
+        # get the tag glued onto it, destroying both variables.
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
         lines.append(f"ATLAS_IMAGE_TAG={tag}\n")
     import tempfile
     d = os.path.dirname(path) or "."
@@ -147,11 +199,20 @@ def _smoke(atlas_root: str) -> bool:
     return rc == 0
 
 
+def _pull_timeout() -> int:
+    """Staging ~13 GB of images can legitimately take a long while on a
+    slow link; the pull gets a much longer leash than up/config."""
+    try:
+        return int(os.environ.get("ATLAS_UPGRADE_PULL_TIMEOUT", "3600"))
+    except ValueError:
+        return 3600
+
+
 def _default_steps() -> eng.Steps:
     return eng.Steps(
         snapshot_digests=_snapshot_digests,
         set_env_tag=_set_env_tag,
-        pull=lambda root: _compose(root, ["pull"]),
+        pull=lambda root: _compose(root, ["pull"], timeout=_pull_timeout()),
         up=lambda root: _compose(root, ["up", "-d"]),
         readiness=_readiness,
         smoke=_smoke,
@@ -202,9 +263,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("  (dry run — nothing changed)")
         return 0
 
-    if not args.yes and previous != args.to:
-        print(f"Upgrade {previous} → {args.to}. A restore point is recorded "
-              "first; a failed upgrade auto-restores the previous release.")
+    same_tag = previous == args.to
+    will_noop = same_tag and not eng.tag_is_mutable(args.to)
+    if not args.yes and not will_noop:
+        if same_tag:
+            print(f"Re-pull {args.to} (a mutable tag — the registry may "
+                  "point it at newer images). A restore point is recorded "
+                  "first.")
+        else:
+            print(f"Upgrade {previous} → {args.to}. A restore point is "
+                  "recorded first; a failed upgrade auto-restores the "
+                  "previous release.")
         try:
             if input("Continue? [y/N] ").strip().lower() != "y":
                 print("aborted.")
@@ -222,6 +291,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if result["status"] == "noop":
         print(result["detail"])
+        return 0
+    if result["status"] == "refreshed":
+        # No rollback hint: a same-tag refresh replaces the cached
+        # images, so `atlas rollback` can only come back up on the
+        # refreshed build, not the pre-refresh one.
+        print(f"\nRefreshed {result['target_tag']}. For reversible "
+              "upgrades, pin release tags (--to vX.Y.Z).")
         return 0
     print(f"\nUpgraded to {result['target_tag']}. "
           f"Roll back with: atlas rollback")

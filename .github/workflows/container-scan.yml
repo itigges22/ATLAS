@@ -38,20 +38,32 @@ jobs:
     steps:
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
-      - name: Verify the image carries SBOM + provenance attestations
+      - name: Verify signature + BuildKit SBOM/provenance attestations
+        # build-images.yml runs `cosign sign` (image signature) and
+        # BuildKit `sbom: true` / `provenance: mode=max`, which attach
+        # UNSIGNED in-toto attestation manifests to the OCI index —
+        # `cosign verify-attestation` cannot see those (it checks
+        # cosign-signed DSSE attestations, which we don't produce). So:
+        # cosign verifies the signature; imagetools inspect asserts the
+        # BuildKit SBOM + provenance are actually attached.
         run: |
           set -euo pipefail
           REF="ghcr.io/itigges22/${{ matrix.image }}:dev"
-          echo "Checking attestations on $REF"
-          # SPDX SBOM attestation
-          cosign verify-attestation --type spdxjson \
+          echo "Verifying cosign signature on $REF"
+          cosign verify \
             --certificate-identity-regexp \
               "https://github.com/itigges22/ATLAS/.github/workflows/build-images.yml@.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "$REF"
-          # SLSA provenance attestation
-          cosign verify-attestation --type slsaprovenance \
-            --certificate-identity-regexp \
-              "https://github.com/itigges22/ATLAS/.github/workflows/build-images.yml@.*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "$REF"
+            "$REF" > /dev/null
+          echo "Checking BuildKit attestations on $REF"
+          SBOM=$(docker buildx imagetools inspect "$REF" --format '{{ json .SBOM }}')
+          if [ -z "$SBOM" ] || [ "$SBOM" = "null" ] || [ "$SBOM" = "{}" ]; then
+            echo "::error::$REF carries no BuildKit SBOM attestation"
+            exit 1
+          fi
+          PROV=$(docker buildx imagetools inspect "$REF" --format '{{ json .Provenance }}')
+          if [ -z "$PROV" ] || [ "$PROV" = "null" ] || [ "$PROV" = "{}" ]; then
+            echo "::error::$REF carries no BuildKit provenance attestation"
+            exit 1
+          fi
+          echo "OK: signature verified; SBOM + provenance attached"

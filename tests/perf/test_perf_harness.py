@@ -28,10 +28,30 @@ def test_check_flags_regression():
     assert any("cli_import_time_s" in x for x in v["violations"])
 
 
-def test_missing_metric_is_not_a_regression():
-    result = {"deterministic": {}}
-    budgets = {"deterministic_max": {"cli_import_time_s": 3.0}}
+def test_single_missing_metric_is_not_a_regression():
+    # One metric couldn't be measured (None/absent) but another matched:
+    # not a regression.
+    result = {"deterministic": {"cli_import_time_s": 1.0,
+                                "proxy_binary_bytes": None}}
+    budgets = {"deterministic_max": {"cli_import_time_s": 3.0,
+                                     "proxy_binary_bytes": 60_000_000}}
     assert harness.check(result, budgets)["passed"]
+
+
+def test_no_matching_metrics_fails_not_passes_vacuously():
+    # A result that matches zero budgeted metrics (renamed keys, empty
+    # file) must FAIL — a vacuous pass disarms the gate silently.
+    v = harness.check({}, {"deterministic_max": {"cli_import_time_s": 3.0}})
+    assert not v["passed"]
+
+
+def test_schema_version_mismatch_fails():
+    result = {"schema_version": harness.SCHEMA_VERSION + 1,
+              "deterministic": {"cli_import_time_s": 1.0}}
+    budgets = {"deterministic_max": {"cli_import_time_s": 3.0}}
+    v = harness.check(result, budgets)
+    assert not v["passed"]
+    assert any("schema_version" in x for x in v["violations"])
 
 
 def test_real_budgets_file_loads():

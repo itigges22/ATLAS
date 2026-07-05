@@ -2929,6 +2929,13 @@ func runBackgroundTool() *ToolDef {
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
+
+			// Trust gate: same contract as run_command — untrusted mode
+			// refuses all command execution, foreground or background.
+			if !ctx.TrustMode.commandsAllowed() {
+				return &ToolResult{Success: false, Error: untrustedRefusal}, nil
+			}
+
 			if strings.TrimSpace(input.Command) == "" {
 				return &ToolResult{Success: false, Error: "run_background: command cannot be empty"}, nil
 			}

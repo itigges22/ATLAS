@@ -25,7 +25,8 @@ Two current limits of that boundary, so reports can be calibrated against what i
 Model-authored commands from a newly-opened repository are untrusted
 content. `ATLAS_TRUST_MODE` makes the execution decision explicit:
 
-- `untrusted` — `run_command` is refused; no repository commands run.
+- `untrusted` — command execution is refused (`run_command` and
+  `run_background`); no repository commands run.
 - `trusted` (default) — commands run only in the isolated sandbox
   container (non-root, cap_drop ALL, resource-capped).
 - `fully-trusted` — additionally permits host execution

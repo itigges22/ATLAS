@@ -234,7 +234,7 @@ func lensRetrainThreshold() int {
 // when absent, the pass thumbs labels every write coarsely.
 func handleFeedback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
 		return
 	}
 	var req struct {
@@ -246,7 +246,7 @@ func handleFeedback(w http.ResponseWriter, r *http.Request) {
 		} `json:"files"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
 		return
 	}
 	pass, ok := takePendingPass(req.SessionID)

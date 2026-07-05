@@ -80,6 +80,13 @@ def _migrate(path: str, dry_run: bool = False) -> int:
                 key = stripped.split("=", 1)[0].strip()
                 if key in dropped:
                     continue  # drop deprecated key line (comments preserved)
+                if key == "ATLAS_CONFIG_SCHEMA_VERSION":
+                    # Rewrite a stale stamp to the migration target —
+                    # cs.migrate() force-sets it; the file must match.
+                    out_lines.append(
+                        f"ATLAS_CONFIG_SCHEMA_VERSION="
+                        f"{cs.CONFIG_SCHEMA_VERSION}\n")
+                    continue
             out_lines.append(raw if raw.endswith("\n") else raw + "\n")
     if not have_version:
         out_lines.append(

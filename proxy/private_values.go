@@ -25,7 +25,7 @@ const privateValuePlaceholder = "[FILTERED]"
 var privateValuePatterns = []*regexp.Regexp{
 	// KEY=value / key: value / "key": "value" assignments where the key
 	// smells like a credential. Value part is masked, key kept.
-	regexp.MustCompile(`(?i)([A-Z0-9_.-]*(?:api[_-]?key|apikey|token|secret|password|passwd|credential|access[_-]?key)[A-Z0-9_.-]*"?\s*[=:]\s*"?)([^\s"',;&]+)`),
+	regexp.MustCompile(`(?i)([A-Z0-9_.-]*(?:api[_-]?key|apikey|token|secret|password|passwd|credential|access[_-]?key)[A-Z0-9_.-]*["']?\s*[=:]\s*["']?)([^\s"',;&]+)`),
 	// Authorization / bearer values.
 	regexp.MustCompile(`(?i)(bearer\s+)([A-Za-z0-9._~+/=-]+)`),
 	// URL userinfo passwords: scheme://user:pass@host

@@ -107,11 +107,13 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // transport choke points: the process default (covers every client
 // with a nil Transport — http.DefaultClient, &http.Client{} literals,
 // http.Post) and the dedicated LLM streaming client.
+// The transport is installed even when auth is unconfigured: RoundTrip
+// guards token injection on serviceToken, and correlation-ID forwarding
+// must work on open-localhost installs too.
 func installTokenTransport() {
-	if serviceToken == "" {
-		return
-	}
 	http.DefaultTransport = &tokenTransport{base: http.DefaultTransport}
 	llmStreamClient.Transport = &tokenTransport{base: llmStreamClient.Transport}
-	log.Printf("  Internal auth: enabled (token file configured)")
+	if serviceToken != "" {
+		log.Printf("  Internal auth: enabled (token file configured)")
+	}
 }

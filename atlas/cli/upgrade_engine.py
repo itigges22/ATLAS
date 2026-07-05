@@ -14,6 +14,7 @@ registry. The default callables shell out to docker compose + doctor.
 
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -131,14 +132,48 @@ def _restore(atlas_root: str, point: dict, steps: Steps) -> None:
     # Belt-and-suspenders: force the tag back even if the .env restore
     # was a no-op (e.g. .env absent when the restore point was written).
     steps.set_env_tag(atlas_root, point["previous_tag"])
-    # The previous images are already present locally (they were running
-    # before the upgrade), so a pull failure here must NOT abort the
-    # restore — prefer bringing the stack back up on cached images.
-    try:
-        steps.pull(atlas_root)
-    except UpgradeError as e:
-        steps.log(f"restore pull skipped ({e}); using cached images")
+    # No pull here: the previous images are already present locally (they
+    # were running before the upgrade), and for a mutable previous tag
+    # (latest, dev) a pull could replace the known-good cached images
+    # with whatever the tag points at NOW. `up` starts from the cache;
+    # compose fetches on its own only if an image is truly absent.
+    if point["previous_tag"] == point.get("target_tag"):
+        steps.log("note: upgrade re-pulled the same tag — if the tag moved, "
+                  "the cached previous images may already be gone")
     steps.up(atlas_root)
+
+
+def _restore_or_flag(atlas_root: str, steps: Steps, cause: str,
+                     previous_tag: str) -> "UpgradeError":
+    """Attempt the automatic restore; return the UpgradeError to raise.
+
+    A restore that itself fails must not swallow the original upgrade
+    failure — the caller needs both: why the upgrade failed AND that the
+    install is now in a half-restored state.
+    """
+    point = read_restore_point(atlas_root)
+    if not point:
+        return UpgradeError(
+            f"{cause}. No restore point found — the install was left on "
+            f"the target tag; run `atlas rollback --to {previous_tag}` "
+            "to return manually.")
+    try:
+        _restore(atlas_root, point, steps)
+    except Exception as restore_err:
+        return UpgradeError(
+            f"{cause}. Automatic restore of the previous release "
+            f"({previous_tag}) ALSO failed: {restore_err}. The stack may "
+            "be partially down — once Docker is healthy, run "
+            "`atlas rollback` to finish restoring.")
+    return UpgradeError(
+        f"{cause}. Automatically restored the previous release "
+        f"({previous_tag}).")
+
+
+def tag_is_mutable(tag: str) -> bool:
+    """Release tags (vX.Y.Z…) are treated as immutable; anything else
+    (latest, dev, branch tags) can move between pulls."""
+    return re.fullmatch(r"v\d+(\.\d+)*([.-].*)?", tag) is None
 
 
 def run_upgrade(atlas_root: str, target_tag: str, steps: Steps,
@@ -149,10 +184,18 @@ def run_upgrade(atlas_root: str, target_tag: str, steps: Steps,
     Raises UpgradeError (after a completed restore) if any step fails.
     """
     previous_tag = read_env_tag(atlas_root)
-    if previous_tag == target_tag:
+    same_tag = previous_tag == target_tag
+    if same_tag and not tag_is_mutable(target_tag):
+        # Release tags don't move; re-applying the same one is a no-op.
         return {"status": "noop", "previous_tag": previous_tag,
                 "target_tag": target_tag,
                 "detail": f"already on {target_tag}"}
+    if same_tag:
+        # Mutable tag (latest, dev): "already on latest" says nothing
+        # about whether the tag moved in the registry, so run the full
+        # staged flow — the pull is cheap when nothing changed.
+        steps.log(f"already on {target_tag} — refreshing "
+                  "(mutable tags can move)")
 
     steps.log(f"upgrade {previous_tag} → {target_tag}")
     digests = steps.snapshot_digests(atlas_root)
@@ -175,22 +218,14 @@ def run_upgrade(atlas_root: str, target_tag: str, steps: Steps,
             if not steps.smoke(atlas_root):
                 raise UpgradeError("post-upgrade smoke check failed")
     except UpgradeError as e:
-        point = read_restore_point(atlas_root)
-        if point:
-            _restore(atlas_root, point, steps)
-        raise UpgradeError(
-            f"{e}. Automatically restored the previous release "
-            f"({previous_tag}).")
+        raise _restore_or_flag(atlas_root, steps, str(e), previous_tag)
     except Exception as e:  # unexpected: still attempt restore
-        point = read_restore_point(atlas_root)
-        if point:
-            _restore(atlas_root, point, steps)
-        raise UpgradeError(
-            f"unexpected error: {e}. Restored the previous release "
-            f"({previous_tag}).")
+        raise _restore_or_flag(atlas_root, steps,
+                               f"unexpected error: {e}", previous_tag)
 
     steps.log("upgrade succeeded")
-    return {"status": "upgraded", "previous_tag": previous_tag,
+    return {"status": "refreshed" if same_tag else "upgraded",
+            "previous_tag": previous_tag,
             "target_tag": target_tag,
             "rollback_hint": f"atlas rollback  # returns to {previous_tag}"}
 
@@ -206,8 +241,17 @@ def run_rollback(atlas_root: str, steps: Steps,
         previous = read_env_tag(atlas_root)
         steps.log(f"rolling back to {target_tag}…")
         steps.set_env_tag(atlas_root, target_tag)
-        steps.pull(atlas_root)
-        steps.up(atlas_root)
+        try:
+            steps.pull(atlas_root)
+            steps.up(atlas_root)
+        except UpgradeError as e:
+            # Don't leave .env pointing at a tag that never came up
+            # (typo'd / nonexistent tag) — every later `compose up`
+            # would fail on it.
+            steps.set_env_tag(atlas_root, previous)
+            raise UpgradeError(
+                f"{e}. The tag may not exist; .env was restored to the "
+                f"previous tag ({previous}).")
         if not steps.readiness(atlas_root):
             raise UpgradeError(
                 f"services did not become ready on {target_tag}; the tag "

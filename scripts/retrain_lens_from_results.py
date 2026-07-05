@@ -336,7 +336,7 @@ def main():
             model=model_name or "(unknown)", embedding_dim=dim,
             created_at=_now_iso(),
             dataset=os.path.basename(os.path.normpath(args.results_dir)),
-            n_samples=len(labels), n_pass=n_pass, n_fail=n_fail,
+            n_samples=len(labels_kept), n_pass=n_pass, n_fail=n_fail,
             metrics={
                 "val_auc": result.get("val_auc"),
                 "train_auc": result.get("train_auc"),
