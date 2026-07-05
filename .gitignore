@@ -200,3 +200,4 @@ _agenttest/
 # Lens training corpus collected from agent use (local, per-machine)
 lens_training/
 .atlas-upgrade/
+geometric-lens/geometric_lens/models/provenance.json

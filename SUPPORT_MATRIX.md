@@ -93,6 +93,17 @@ supported (A/B-validated). The gemma reference install additionally has
 `lens_calibration` calibrated (derived + verified locally) with
 `lens_intervention` active and `asa` unverified (marker withheld).
 
+### Lens bundle provenance
+
+A retrained lens bundle now auto-writes `provenance.json` (SUPPORT_MATRIX
+§9.5): backbone + dim + quant + layer, dataset, training commit,
+hyperparameters, seed, train/val split, validation metrics,
+normalization + thresholds, creation time, and SHA-256 of every artifact
+file. `geometric_lens.provenance.is_complete()` gates Supported
+eligibility — a bundle missing required fields stays Preview/Legacy
+rather than silently claiming Supported. The gemma reference bundle
+carries a complete manifest (val AUC 0.73, all seven files hashed).
+
 ### Model contract
 
 ATLAS is **direct-mode model-agnostic, per-model-bundle for Lens/ASA**:

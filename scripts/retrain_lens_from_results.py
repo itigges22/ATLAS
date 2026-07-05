@@ -136,6 +136,11 @@ def get_embedding(text: str, url: str) -> list:
     return emb
 
 
+def _now_iso() -> str:
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
 def load_results(results_dir: str, max_tasks: int = 0) -> tuple:
     """Load pass/fail codes from per-task result files.
 
@@ -321,6 +326,30 @@ def main():
         print("   WARNING: ATLAS_MODEL_NAME unresolved — "
               "model_identity.json not written; the reloaded bundle will "
               "fail the identity check on restart")
+
+    # Write the per-bundle provenance manifest (SUPPORT_MATRIX §9.5) so
+    # the bundle is reproducible and its status is auditable.
+    try:
+        from geometric_lens.provenance import build_manifest, save_provenance
+        save_dir = os.path.dirname(args.save_path) or "."
+        manifest = build_manifest(
+            model=model_name or "(unknown)", embedding_dim=dim,
+            created_at=_now_iso(),
+            dataset=os.path.basename(os.path.normpath(args.results_dir)),
+            n_samples=len(labels), n_pass=n_pass, n_fail=n_fail,
+            metrics={
+                "val_auc": result.get("val_auc"),
+                "train_auc": result.get("train_auc"),
+                "pass_energy_mean": result.get("pass_energy_mean"),
+                "fail_energy_mean": result.get("fail_energy_mean"),
+            },
+            normalization=locals().get("calibration") or {},
+            hyperparameters={"epochs": args.epochs},
+            seed=42, save_dir=save_dir)
+        prov_path = save_provenance(save_dir, manifest)
+        print(f"   Provenance saved:  {prov_path}")
+    except Exception as e:
+        print(f"   WARNING: provenance manifest not written: {e}")
 
     request_lens_reload()
     print("=" * 60)
