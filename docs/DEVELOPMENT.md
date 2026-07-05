@@ -123,11 +123,10 @@ This is what users on `main` get, ~30-60s per cycle.
 
 ## Other services
 
-`llama-server`, `redis`, and `sandbox` are not bind-mounted.
+`llama-server` and `sandbox` are not bind-mounted.
 
 - llama-server is a third-party binary — changes there are
   Dockerfile / model-config changes, which need a rebuild anyway.
-- redis is upstream redis with no project-side code.
 - sandbox runs read-only on purpose; the override should not
   weaken that. If you're editing the sandbox harness itself, do a
   targeted rebuild: `docker compose up -d --build sandbox`.

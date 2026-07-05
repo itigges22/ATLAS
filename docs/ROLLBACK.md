@@ -55,5 +55,6 @@ restore your own backup of the lens models dir (BACKUP_RESTORE.md).
 
 ## Learned state
 
-Redis state has no schema coupling to ATLAS versions; it rolls back
-with the volume (or keeps working across versions untouched).
+The SQLite state store has no schema coupling to ATLAS versions; it
+rolls back with the `lens-state` volume (or keeps working across
+versions untouched).

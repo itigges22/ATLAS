@@ -1,11 +1,11 @@
 """atlas doctor — comprehensive install diagnostic (PC-053).
 
-Verifies an ATLAS install is healthy end-to-end. Runs ~22 checks across
+Verifies an ATLAS install is healthy end-to-end. Runs ~20 checks across
 the host environment, the docker stack, and a live request through the
-proxy: 11 individual checks (docker, compose, nvidia, model_file,
-lens_weights, overcommit, image_skew, tier_match (PC-055),
+proxy: individual checks (docker, compose, nvidia, model_file,
+lens_weights, sqlite_state, image_skew, tier_match (PC-055),
 tier_constraints (PC-055.1), asa_steering (BiasBusters #4),
-e2e_smoke), six per-container state checks (one per service in
+e2e_smoke), five per-container state checks (one per service in
 `EXPECTED_SERVICES`), and five per-endpoint health checks. Designed to
 be the answer to "is it really working?" — both for humans (pretty
 terminal output) and for scripts (--json).
@@ -135,7 +135,7 @@ LENS_MODELS_DIR = (os.environ.get("ATLAS_LENS_MODELS")
                    or "./geometric-lens/geometric_lens/models")
 
 EXPECTED_SERVICES = [
-    "redis", "llama-server", "geometric-lens",
+    "llama-server", "geometric-lens",
     "v3-service", "sandbox", "atlas-proxy",
 ]
 
@@ -844,29 +844,41 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
     return CheckResult("asa_steering", status, message, verdict.reason)
 
 
-def check_overcommit() -> CheckResult:
-    """PC-011: Redis warns and AOF rewrite can fail without overcommit_memory=1.
+def check_sqlite_state() -> CheckResult:
+    """State store (SQLite inside the lens container) availability.
 
-    Linux-only — /proc/sys/vm/overcommit_memory doesn't exist on macOS
-    or Windows. Short-circuit on non-Linux platforms with a clean skip
-    instead of trying to read /proc and emitting a noisy 'could not
-    read' message.
+    The lens owns the state file (SQLITE_DB_PATH on the lens-state
+    volume) and reports it in its /health payload under
+    `subsystems.sqlite` — read that instead of probing the file, since
+    only the container can see it. When the store is unavailable the
+    pattern cache/router degrade to neutral and the task queue returns
+    503, so this fails loudly while scoring itself keeps answering.
     """
-    if sys.platform != "linux":
-        return CheckResult("vm.overcommit_memory", "skip",
-            f"not applicable on {sys.platform}", "")
+    ok, body = _http_get(f"{LENS_URL}/health")
+    if not ok:
+        return CheckResult("sqlite_state", "skip",
+            "lens /health unreachable (see health/lens)", body[:200])
     try:
-        with open("/proc/sys/vm/overcommit_memory") as f:
-            val = f.read().strip()
-        if val == "1":
-            return CheckResult("vm.overcommit_memory", "pass", "= 1")
-        return CheckResult("vm.overcommit_memory", "warn",
-            f"= {val} (Redis prefers 1 — see PC-011)",
-            "Fix: sudo sysctl vm.overcommit_memory=1 && "
-            "echo 'vm.overcommit_memory=1' | sudo tee /etc/sysctl.d/99-atlas.conf")
-    except OSError as e:
-        return CheckResult("vm.overcommit_memory", "skip",
-            "could not read /proc/sys", str(e))
+        subsystems = json.loads(body).get("subsystems", {})
+    except json.JSONDecodeError:
+        return CheckResult("sqlite_state", "skip",
+            "lens /health returned non-JSON")
+    st = subsystems.get("sqlite")
+    if not isinstance(st, dict):
+        return CheckResult("sqlite_state", "warn",
+            "lens /health reports no sqlite subsystem",
+            "lens image predates the SQLite state store — "
+            "docker compose up -d geometric-lens with a current image")
+    healthy = st.get("connected")
+    if healthy is None:
+        healthy = st.get("ok", st.get("available"))
+    if healthy:
+        return CheckResult("sqlite_state", "pass", "state store available",
+                           json.dumps(st)[:200])
+    return CheckResult("sqlite_state", "fail",
+        "state store unavailable — pattern cache/router run neutral, "
+        "task queue returns 503",
+        (st.get("error") or json.dumps(st))[:200])
 
 
 def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
@@ -1335,8 +1347,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # are host-side artifact checks.
     _add(check_asa_steering(atlas_root))
 
-    # 9. vm.overcommit_memory (PC-011)
-    _add(check_overcommit())
+    # 9. SQLite state store (via lens /health) — only meaningful when
+    # the lens container answered above; skips cleanly otherwise.
+    if any(r.status == "pass" for r in container_results):
+        _add(check_sqlite_state())
 
     # 10. Image-tag skew (PC-052)
     _add(check_image_skew(services))

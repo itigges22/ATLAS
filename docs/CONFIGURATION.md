@@ -387,9 +387,7 @@ Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence r
 | `LLAMA_EMBED_URL` | (falls back to `LLAMA_URL`) | Dedicated embedding endpoint. Use this if you have a separate embedding server; otherwise embeddings reuse the LLAMA_URL host. |
 | `ROUTING_ENABLED` | `true` | Master switch for the confidence-router pipeline. Setting `false` short-circuits routing and uses STANDARD for every query. |
 | `PROJECT_DATA_DIR` | `/data/projects` | Directory for project index storage |
-| `REDIS_URL` | `redis://redis:6379` | Redis connection. Outage behavior is split: the pattern cache, co-occurrence graph, and confidence router degrade gracefully (neutral routing, empty cache); the task-queue endpoints (`/v1/tasks/*`) return 503 when Redis is down. Learned state (patterns, router posteriors) is TTL-less and lives in the `redis-data` volume — volume loss resets learning. |
-| `ATLAS_REDIS_MAXMEMORY` | `512mb` | Redis `--maxmemory` (policy is `noeviction` — writes fail visibly when full rather than silently evicting learned state). |
-| `ATLAS_REDIS_MEM` | `768m` | Container memory limit for the redis service. |
+| `SQLITE_DB_PATH` | `/data/state/geometric_state.db` | SQLite state store (pattern cache, co-occurrence graph, confidence-router posteriors, task queue, metrics). Lives on the `lens-state` named volume mounted at `/data/state`. Outage behavior is split: the pattern cache, co-occurrence graph, and confidence router degrade gracefully (neutral routing, empty cache); the task-queue endpoints (`/v1/tasks/*`) return 503 when the store is unavailable. Learned state (patterns, router posteriors) is TTL-less and lives in this one file — volume loss resets learning. |
 | `SANDBOX_URL` | `http://sandbox:8020` | Sandbox endpoint used by the lens's own `sandbox_client.py` (separate from `ATLAS_SANDBOX_URL` read by atlas-proxy). |
 | `SANDBOX_TIMEOUT` | `30` | Per-request timeout (seconds) when the lens itself calls the sandbox. |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8080` | Allowed CORS origins (comma-separated) |
@@ -613,7 +611,6 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy internal port |
 | `ATLAS_V3_PORT` | `8070` | v3-service internal port |
 | `ATLAS_SANDBOX_PORT` | `8020` | sandbox internal port |
-| `ATLAS_REDIS_PORT` | `6379` | Redis internal port |
 
 ### 8.2 Storage paths
 
@@ -630,7 +627,6 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_PVC_REDIS_SIZE` | `5Gi` | Redis persistence PVC |
 | `ATLAS_PVC_PROJECTS_SIZE` | `20Gi` | `lens-projects` PVC used by the geometric-lens pod for its project index storage |
 
 ### 8.4 Model & Inference

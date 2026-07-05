@@ -28,8 +28,9 @@ signed; `sha-*` tags never move.
   bundles are per-model and identity-checked at load; an upgrade that
   changes bundle requirements surfaces as a doctor warning with the
   exact rebuild command, not a silent break.
-- **Learned state:** the `redis-data` volume (patterns, router
-  posteriors) and `lens-data` volume persist across upgrades.
+- **Learned state:** the `lens-state` volume (patterns, router
+  posteriors in `geometric_state.db`) and `lens-data` volume persist
+  across upgrades.
 
 ## Version compatibility
 

@@ -141,7 +141,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 - Hardware: ARM64 multi-arch builds ([#115](https://github.com/itigges22/ATLAS/issues/115)), multi-GPU for larger models ([#34](https://github.com/itigges22/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/itigges22/ATLAS/issues/27)).
 - Tooling: VS Code / JetBrains extension ([#35](https://github.com/itigges22/ATLAS/issues/35)).
 - Sandbox languages: Java / Kotlin ([#29](https://github.com/itigges22/ATLAS/issues/29)), Ruby / PHP ([#30](https://github.com/itigges22/ATLAS/issues/30)).
-- Architecture: model-agnostic platform ([#66](https://github.com/itigges22/ATLAS/issues/66)), SQLite over Redis ([#57](https://github.com/itigges22/ATLAS/issues/57)).
+- Architecture: model-agnostic platform ([#66](https://github.com/itigges22/ATLAS/issues/66)).
 
 ---
 

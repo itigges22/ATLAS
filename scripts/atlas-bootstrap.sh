@@ -12,10 +12,9 @@
 #        NVIDIA -> nvidia-container-toolkit (+ open-dkms driver libs on RHEL)
 #        AMD    -> verifies /dev/kfd + adds user to render/video groups
 #        (Apple Silicon / Intel Arc not yet supported — V3.1.2 roadmap)
-#   4. Sets vm.overcommit_memory=1 (PC-011 — Redis silent-write killer).
-#   5. RHEL-family: enables EPEL, warns about nouveau. (Firewalld ports are
+#   4. RHEL-family: enables EPEL, warns about nouveau. (Firewalld ports are
 #      opt-in via ATLAS_BOOTSTRAP_OPEN_FIREWALL=1 — services bind loopback.)
-#   6. Copies .env.example to .env if missing.
+#   5. Copies .env.example to .env if missing.
 #   7. Downloads model GGUFs and Lens weights from HuggingFace.
 #   8. `docker compose up -d` and waits for all services healthy.
 #      (ROCm hosts: brings up with -f docker-compose.rocm.yml override.)
@@ -34,7 +33,6 @@
 #   ATLAS_BOOTSTRAP_SKIP_NVIDIA=1     [deprecated alias for ATLAS_BOOTSTRAP_SKIP_GPU]
 #   ATLAS_BOOTSTRAP_SKIP_MODELS=1     skip model download
 #   ATLAS_BOOTSTRAP_SKIP_COMPOSE=1    skip `docker compose up`
-#   ATLAS_BOOTSTRAP_SKIP_SYSCTL=1     skip vm.overcommit_memory write (CI / unpriv. containers)
 #   ATLAS_BOOTSTRAP_SKIP_ASA=1        skip ASA steering-vector build (BiasBusters #4 — optional, ~5 min)
 #   ATLAS_BOOTSTRAP_OPEN_FIREWALL=1   open service ports in firewalld (default: off —
 #                                     compose publishes on 127.0.0.1 only, so no
@@ -710,44 +708,13 @@ compose_files_args() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 3: Kernel sysctl (PC-011)
-# ---------------------------------------------------------------------------
-
-configure_sysctl() {
-    log_step "Step 3: Kernel parameters (PC-011 — Redis overcommit)"
-
-    if [[ "${ATLAS_BOOTSTRAP_SKIP_SYSCTL:-0}" == "1" ]]; then
-        log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_SYSCTL=1)"
-        return
-    fi
-
-    local current
-    current=$(sysctl -n vm.overcommit_memory 2>/dev/null || echo "0")
-    if [[ "$current" == "1" ]]; then
-        log_ok "vm.overcommit_memory=1 already set"
-    else
-        log_info "Setting vm.overcommit_memory=1 (was $current)…"
-        if ! $SUDO sysctl -w vm.overcommit_memory=1 >/dev/null 2>&1; then
-            log_warn "sysctl write failed (unprivileged container? read-only fs?). Skipping."
-            log_warn "  Set ATLAS_BOOTSTRAP_SKIP_SYSCTL=1 to silence this and continue."
-            return
-        fi
-        # Persist via /etc/sysctl.d so it survives reboot
-        if ! $SUDO grep -q '^vm.overcommit_memory' /etc/sysctl.d/99-atlas.conf 2>/dev/null; then
-            echo "vm.overcommit_memory=1" | $SUDO tee /etc/sysctl.d/99-atlas.conf >/dev/null 2>&1 || true
-        fi
-        log_ok "vm.overcommit_memory=1 (persisted to /etc/sysctl.d/99-atlas.conf)"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Step 4: RHEL-family extras (EPEL, firewalld, nouveau)
+# Step 3: RHEL-family extras (EPEL, firewalld, nouveau)
 # ---------------------------------------------------------------------------
 
 configure_rhel_extras() {
     [[ "$DISTRO_FAMILY" != "rhel" ]] && return
 
-    log_step "Step 4: RHEL-family extras"
+    log_step "Step 3: RHEL-family extras"
 
     # EPEL — many of our dependencies come from EPEL.
     if ! rpm -q epel-release &>/dev/null; then
@@ -785,11 +752,11 @@ configure_rhel_extras() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5: Repo + .env
+# Step 4: Repo + .env
 # ---------------------------------------------------------------------------
 
 ensure_repo_and_env() {
-    log_step "Step 5: Repo, .env, and ATLAS CLI"
+    log_step "Step 4: Repo, .env, and ATLAS CLI"
 
     # If we're not in a checkout, clone to ATLAS_INSTALL_DIR
     if [[ ! -f "./docker-compose.yml" || ! -d "./proxy" ]]; then
@@ -1156,11 +1123,11 @@ build_atlas_tui() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 6: Models
+# Step 5: Models
 # ---------------------------------------------------------------------------
 
 download_models() {
-    log_step "Step 6: Selected model weights + compatible Lens artifacts"
+    log_step "Step 5: Selected model weights + compatible Lens artifacts"
 
     if [[ "${ATLAS_BOOTSTRAP_SKIP_MODELS:-0}" == "1" ]]; then
         log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_MODELS=1)"
@@ -1206,11 +1173,11 @@ download_models() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 7: docker compose up
+# Step 6: docker compose up
 # ---------------------------------------------------------------------------
 
 start_compose() {
-    log_step "Step 7: Starting services (docker compose up -d)"
+    log_step "Step 6: Starting services (docker compose up -d)"
 
     if [[ "${ATLAS_BOOTSTRAP_SKIP_COMPOSE:-0}" == "1" ]]; then
         log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_COMPOSE=1)"
@@ -1270,11 +1237,11 @@ start_compose() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 8: Wait for healthy
+# Step 7: Wait for healthy
 # ---------------------------------------------------------------------------
 
 wait_for_healthy() {
-    log_step "Step 8: Waiting for services to be healthy"
+    log_step "Step 7: Waiting for services to be healthy"
 
     if [[ "${ATLAS_BOOTSTRAP_SKIP_COMPOSE:-0}" == "1" ]]; then
         log_skip "Skipped (compose was skipped)"
@@ -1283,7 +1250,7 @@ wait_for_healthy() {
 
     local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
 
-    local services=(redis llama-server geometric-lens v3-service sandbox atlas-proxy)
+    local services=(llama-server geometric-lens v3-service sandbox atlas-proxy)
     # 450s: must exceed the llama-server healthcheck budget in
     # docker-compose.yml (start_period 120s + 10 retries × 30s ≈ 420s),
     # otherwise the wait can give up while the container is still
@@ -1340,7 +1307,7 @@ wait_for_healthy() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 9: ASA steering vector (BiasBusters #4)
+# Step 8: ASA steering vector (BiasBusters #4)
 # ---------------------------------------------------------------------------
 # Builds /models/ast_edit_steering.gguf so llama-server's
 # entrypoint-v3.1.sh appends --control-vector-scaled on every start.
@@ -1357,7 +1324,7 @@ wait_for_healthy() {
 # this step trains one locally and degrades to no steering on failure.
 
 build_asa_steering_vector() {
-    log_step "Step 9: ASA steering vector (~5 min — BiasBusters #4)"
+    log_step "Step 8: ASA steering vector (~5 min — BiasBusters #4)"
 
     if [[ "${ATLAS_BOOTSTRAP_SKIP_ASA:-0}" == "1" ]]; then
         log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_ASA=1)"
@@ -1517,11 +1484,11 @@ build_asa_steering_vector() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 10: doctor (sanity sweep)
+# Step 9: doctor (sanity sweep)
 # ---------------------------------------------------------------------------
 
 run_doctor() {
-    log_step "Step 10: atlas doctor (sanity sweep)"
+    log_step "Step 9: atlas doctor (sanity sweep)"
 
     if [[ "${ATLAS_BOOTSTRAP_SKIP_COMPOSE:-0}" == "1" ]]; then
         log_skip "Skipped (compose was skipped, no stack to check)"
@@ -1551,7 +1518,7 @@ run_doctor() {
     fi
 
     # Exit 0 may still include warnings — surface them inline so users
-    # don't miss things like vm.overcommit_memory=0 (PC-011).
+    # don't miss degraded-but-running states.
     local warn_lines
     warn_lines=$(echo "$doctor_out" | grep "WARN" || true)
     if [[ -n "$warn_lines" ]]; then
@@ -1564,7 +1531,7 @@ run_doctor() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 9: Ready banner
+# Step 8: Ready banner
 # ---------------------------------------------------------------------------
 
 print_ready_banner() {
@@ -1634,8 +1601,6 @@ main() {
     # nvidia-container-toolkit path; AMD hits the new ROCm path
     # (rocm-smi verify + group setup, no separate container runtime).
     install_gpu_runtime
-    echo
-    configure_sysctl
     echo
     configure_rhel_extras
     echo

@@ -318,15 +318,43 @@ def test_check_arch_warn_on_aarch64_linux(monkeypatch):
     assert "no rocm" in result.message
 
 
-def test_check_overcommit_skips_on_darwin(monkeypatch):
-    """vm.overcommit_memory is a Linux sysctl. macOS doesn't have
-    /proc/sys, so this check must SKIP cleanly with an OS-aware
-    message instead of the old 'could not read' confusion."""
-    monkeypatch.setattr(sys, "platform", "darwin")
-    result = doctor.check_overcommit()
+def test_check_sqlite_state_pass_when_connected(monkeypatch):
+    """A healthy `subsystems.sqlite` block in lens /health passes."""
+    body = ('{"status": "healthy", "subsystems": '
+            '{"sqlite": {"connected": true}}}')
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
+    result = doctor.check_sqlite_state()
+    assert result.status == "pass"
+
+
+def test_check_sqlite_state_fail_when_unavailable(monkeypatch):
+    """An unavailable state store fails and names the degradation
+    (neutral cache/router, 503 task queue) so the operator knows the
+    blast radius."""
+    body = ('{"status": "degraded", "subsystems": '
+            '{"sqlite": {"connected": false, "error": "disk I/O error"}}}')
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
+    result = doctor.check_sqlite_state()
+    assert result.status == "fail"
+    assert "503" in result.message
+    assert "disk I/O error" in (result.detail or "")
+
+
+def test_check_sqlite_state_warns_without_subsystem(monkeypatch):
+    """A lens image whose /health lacks the sqlite block warns rather
+    than failing — the store may still be fine, doctor just can't see it."""
+    body = '{"status": "healthy", "subsystems": {}}'
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
+    result = doctor.check_sqlite_state()
+    assert result.status == "warn"
+
+
+def test_check_sqlite_state_skips_when_unreachable(monkeypatch):
+    """Endpoint reachability is health/lens's job; this check skips."""
+    monkeypatch.setattr(doctor, "_http_get",
+                        lambda url, timeout=5: (False, "connection refused"))
+    result = doctor.check_sqlite_state()
     assert result.status == "skip"
-    assert "darwin" in result.message
-    assert "could not read" not in result.message
 
 
 def test_check_gpu_apple_silicon_returns_pass(monkeypatch):

@@ -609,7 +609,7 @@ TIERS: List[TierProfile] = [
         # 5 containers (~7 GB combined RSS) + host OS + sandbox tmpfs
         # + V3 pipeline burst memory ~= 12 GB minimum.
         min_system_ram_gb=12.0,
-        # 4 cores: 1 for proxy/redis idle, 1 for sandbox compiles,
+        # 4 cores: 1 for proxy/lens idle, 1 for sandbox compiles,
         # 1 for v3 PR-CoT repair, 1 for llama prompt processing.
         min_cpu_cores=4,
         # Model (4.4 GB) + container images (8 GB) + ~7 GB working space.

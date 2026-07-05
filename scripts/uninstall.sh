@@ -98,7 +98,11 @@ remove_atlas_services() {
 
     if [[ "$REMOVE_DATA" == true ]]; then
         log_info "Removing persistent volume claims..."
+        kubectl delete pvc -n "$ATLAS_NAMESPACE" lens-state 2>/dev/null || true
+        kubectl delete pvc -n "$ATLAS_NAMESPACE" lens-projects 2>/dev/null || true
+        # Legacy PVC names from installs that predate the SQLite state store.
         kubectl delete pvc -n "$ATLAS_NAMESPACE" redis-storage 2>/dev/null || true
+        kubectl delete pvc -n "$ATLAS_NAMESPACE" redis-data 2>/dev/null || true
     fi
 
     # Delete namespace if not default

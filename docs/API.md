@@ -773,7 +773,7 @@ curl http://localhost:8099/internal/lens/gx-score \
 
 ```bash
 curl http://localhost:8099/health
-# {"service": "geometric-lens", "status": "healthy", "subsystems": {"redis": {...}, "llama_server": {...}, "lens": {...}}}
+# {"service": "geometric-lens", "status": "healthy", "subsystems": {"sqlite": {...}, "llama_server": {...}, "lens": {...}}}
 ```
 
 Always returns 200 — the endpoint is informational. `status` is `"healthy"` or `"degraded"`; the `subsystems.lens` block carries `cost_field_loaded`, `cost_field_dim`, `embed_dim`, `gx_loaded`, `cx_calibrated`, `gx_calibrated`, and the self-test result the proxy's `/v1/calibration/status` verdict is derived from.

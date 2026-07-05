@@ -30,7 +30,7 @@ Don't see your setup? File an issue with `uname -a` output and `lspci | grep -i 
 
 ## Method 0: One-shot bootstrap
 
-Single curl command that detects your distro, installs Docker + nvidia-container-toolkit, sets sysctl knobs, downloads model weights, and brings the stack up. Idempotent — safe to re-run.
+Single curl command that detects your distro, installs Docker + nvidia-container-toolkit, downloads model weights, and brings the stack up. Idempotent — safe to re-run.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
@@ -51,7 +51,7 @@ Or, from a checkout:
 
 Other distros with `ID_LIKE` matching one of the above (e.g. Linux Mint, Pop!_OS) are accepted with a warning. Distros not in this list — Arch, openSUSE, Alpine, NixOS — aren't tested and the script will refuse to run on them.
 
-The bootstrap works around EPEL, `vm.overcommit_memory`, nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
+The bootstrap works around EPEL, nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
 
 **Model selection:** `.env.example` ships with no model selected. When the bootstrap creates `.env` and `ATLAS_MODEL_FILE` is empty, it writes the registry's default recommended model into `.env` (logged as it happens) so the one-shot flow completes without a wizard. Change the selection any time by editing `.env` or running `atlas init`. An existing non-empty selection is respected.
 
@@ -62,7 +62,7 @@ The bootstrap works around EPEL, `vm.overcommit_memory`, nouveau driver conflict
 **Run modes — both work:**
 
 ```bash
-# Run as your normal user; sudo elevates as needed (Docker install, sysctl, etc).
+# Run as your normal user; sudo elevates as needed (Docker install, etc).
 # Install ends up owned by you.
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 
@@ -81,7 +81,6 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 | `ATLAS_BOOTSTRAP_SKIP_GPU=1` | Skip the GPU runtime install (NVIDIA toolkit or ROCm setup). `ATLAS_BOOTSTRAP_SKIP_NVIDIA=1` is accepted as an alias. |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
-| `ATLAS_BOOTSTRAP_SKIP_SYSCTL=1` | Don't write `vm.overcommit_memory=1` (CI / unprivileged containers) |
 | `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built ~5 min after services come up; skipped automatically when no GPU is available) |
 | `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` | Open the service ports in firewalld (default: off — services bind loopback) |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
@@ -326,7 +325,7 @@ For Jetson, swap to `nvcr.io/nvidia/l4t-jetpack:r36.3.0` in both build args (l4t
    below.
 2. llama-server loads the 7GB model into GPU VRAM (~1-2 min)
 3. All services start health checks
-4. Once all 6 services (redis, llama-server, geometric-lens, v3-service, sandbox, atlas-proxy) report healthy, `atlas` connects and launches the Bubbletea TUI
+4. Once all 5 services (llama-server, geometric-lens, v3-service, sandbox, atlas-proxy) report healthy, `atlas` connects and launches the Bubbletea TUI
 
 Subsequent `docker compose up -d` starts are fast (seconds) since images are cached.
 
@@ -387,14 +386,14 @@ The 23 checks:
 | Host | gpu | vendor-aware GPU runtime: NVIDIA (nvidia-container-toolkit runs nvidia-smi inside Docker) or AMD (`/dev/kfd` passthrough); warns when no GPU is detected |
 | Host | vulkan | Vulkan ICDs visible inside Docker — only when `ATLAS_BACKEND=vulkan` |
 | Host | metal-native | native llama-server binary present and executable — only when `ATLAS_BACKEND=metal` (macOS hybrid) |
-| Host | vm.overcommit_memory | set to 1 (Redis AOF) |
 | Host | model_file | The `ATLAS_MODEL_FILE` selected in `.env` exists and is > 100 MB |
 | Host | lens_weights | `cost_field.pt` + G(x) artifacts present |
 | Host | asa_steering | `ast_edit_steering.gguf` present (BiasBusters #4 — warn-not-fail; ATLAS works without it, just unsteered ast_edit-vs-edit_file bias) |
 | Host | tier_match | `.env` model selection matches host hardware (warn on overshoot — OOM risk — pass on match or undershoot) |
 | Host | tier_constraints | host CPU/RAM/disk meets the recommended tier minimums (catches "16 GB GPU but 8 GB RAM" mismatches) |
-| Stack | container/redis, llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 6 running and healthy |
+| Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 5 running and healthy |
 | Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
+| Stack | sqlite_state | lens `/health` reports the SQLite state store available (`subsystems.sqlite`) |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag |
 | End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
 
@@ -632,7 +631,7 @@ K3s uses `atlas.conf` (not `.env`) for configuration. The HTTP contracts and pip
 | Service exposure | Host ports (`8090`, `8080`, `8099`, `8070`, `30820`) | NodePorts (`30080`, `32735`, `31144`, `30070`, `30820`) |
 | Project workspace | Bind mount (`ATLAS_PROJECT_DIR` → `/workspace`) | `hostPath` (`ATLAS_PROJECTS_DIR` → `/workspace` on every Pod that needs it) |
 | Model files | Bind mount (`ATLAS_MODELS_DIR` → `/models:ro`) | `hostPath` on the GPU node (`ATLAS_MODELS_DIR`, `Directory`, ro) |
-| Stateful storage | Named volumes (`redis-data`, `lens-data`) | PVCs (`redis-data` sized by `ATLAS_PVC_REDIS_SIZE`, `lens-projects` by `ATLAS_PVC_PROJECTS_SIZE`) |
+| Stateful storage | Named volumes (`lens-state`, `lens-data`) | PVCs (`lens-projects` sized by `ATLAS_PVC_PROJECTS_SIZE`) |
 | GPU allocation | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1` (requires GPU Operator or device plugin) |
 | Sandbox toolchain caches | `tmpfs` mounts per language | `emptyDir` with `sizeLimit` per language (universal pattern, same set) |
 

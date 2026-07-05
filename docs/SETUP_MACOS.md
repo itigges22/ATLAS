@@ -148,7 +148,7 @@ The macOS overlay swaps the `llama-server` service for a pinned `alpine/socat` c
 
 If port 8080 is already occupied, set `ATLAS_LLAMA_PORT` in `.env` or launch with `./scripts/atlas-llama-macos.sh --port 8081`, then bring the compose stack up with the same `ATLAS_LLAMA_PORT` value. The container-side URL remains `http://llama-server:8080`; only the native host-side port changes.
 
-First-time pull is small (~30 MB for socat + ~200 MB for redis if not cached; the v3 / lens / proxy / sandbox images come from GHCR, ~600 MB total).
+First-time pull is small (~30 MB for socat if not cached; the v3 / lens / proxy / sandbox images come from GHCR, ~600 MB total).
 
 ### Step 5: Verify
 
@@ -192,7 +192,6 @@ Your Mac
      |   |- v3-service         (Python, port 8070)
      |   |- geometric-lens     (Python, port 8099)
      |   |- sandbox            (Python, port 30820)
-     |   |- redis              (existing service)
      |   |- llama-server slot  ← socat: forwards container :8080 to host.docker.internal:${ATLAS_LLAMA_PORT:-8080}
      |
      |- (Each service connects to http://llama-server:8080 from the base

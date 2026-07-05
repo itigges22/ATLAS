@@ -40,18 +40,17 @@ TUI-side debugging: `atlas --log` writes a local TUI event log
 | ASA inactive | llama startup log prints why (missing vector / marker mismatch); `atlas asa check`, then `atlas asa build` |
 | Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show as 137/timeout in tool results |
 | GPU OOM | reduce `ATLAS_CTX_SIZE`/slots via `atlas tier fit --write`; check nothing else holds VRAM (`nvidia-smi`) |
-| Disk full | models dir is the usual consumer; `atlas model remove <name> --yes`; Redis AOF lives in the `redis-data` volume (bounded by `ATLAS_REDIS_MAXMEMORY`) |
+| Disk full | models dir is the usual consumer; `atlas model remove <name> --yes`; learned state is a single SQLite file on the `lens-state` volume (small — pattern/router state, not bulk data) |
 | Corrupt state after crash | containers are stateless except the volumes; `docker compose down && up -d` rebuilds runtime state; artifacts re-verify by hash on doctor |
 | Failed upgrade | ROLLBACK.md (pin the previous tag, restore `.env.bak`) |
 | Bad/revoked artifact | SECURITY.md § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
-| Full reset (keep models) | `docker compose down -v && docker compose up -d` — wipes learned Redis state + lens project index, keeps models/config |
+| Full reset (keep models) | `docker compose down -v && docker compose up -d` — wipes the learned SQLite state (`lens-state` volume) + lens project index, keeps models/config |
 
 ## Resource tuning
 
 All knobs in CONFIGURATION.md; the load-bearing ones: `ATLAS_CTX_SIZE`
 + `ATLAS_PARALLEL_SLOTS` (VRAM), `ATLAS_SANDBOX_MEM/CPUS/PIDS`
-(runaway-build protection), `ATLAS_REDIS_MAXMEMORY`,
-`ATLAS_V3_TIMEOUT` (interactive cap).
+(runaway-build protection), `ATLAS_V3_TIMEOUT` (interactive cap).
 
 ## Upgrades / rollback / backup
 

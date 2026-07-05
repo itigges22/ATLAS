@@ -1,6 +1,6 @@
 # ADR 0002: Keep Redis as the lens-service state store
 
-Status: accepted 2026-07 (resolves the ambiguity in GH #57)
+Status: superseded by 0007 (2026-07)
 
 ## Context
 Redis backs the pattern cache, co-occurrence graph, Thompson-sampling

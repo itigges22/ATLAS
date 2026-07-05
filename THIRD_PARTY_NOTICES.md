@@ -23,7 +23,7 @@ Charm stack — `bubbletea`, `bubbles`, `lipgloss`, `glamour`, `x/*`,
 
 ## Python dependencies (service images)
 
-`fastapi`, `uvicorn`, `pydantic`, `httpx`, `pyyaml`, `redis-py`
+`fastapi`, `uvicorn`, `pydantic`, `httpx`, `pyyaml`
 (lens/sandbox — MIT/BSD/Apache-2.0); `numpy` (BSD-3); `xgboost` /
 `xgboost-cpu` (Apache-2.0); `scikit-learn` (BSD-3); `torch` (BSD-style,
 lens image + `train` extra); `defusedxml` (PSF); `tree-sitter` +
@@ -37,8 +37,7 @@ stdlib-only by design.
 Digest-pinned in the Dockerfiles/compose: `python:3.11-slim` (PSF +
 Debian), `golang:alpine` + `alpine` (BSD/MIT), `nvidia/cuda:*-rockylinux9`
 (NVIDIA Deep Learning Container License + Rocky), `rocm/dev-ubuntu`
-(AMD/Canonical), `ubuntu` (Canonical), `redis:7-alpine` (RSALv2/SSPLv1
-dual — used unmodified as a local cache/state store; not redistributed).
+(AMD/Canonical), `ubuntu` (Canonical).
 
 ## Models
 

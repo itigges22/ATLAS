@@ -75,9 +75,8 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` passes through to llama-server unchanged. |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing |
+| **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing; owns the SQLite state store (`SQLITE_DB_PATH` on the `lens-state` volume) backing the pattern cache, co-occurrence graph, task queue, and router state |
 | **sandbox** | 30820 (host) / 8020 (container) | Python (FastAPI) | Isolated code execution, compilation, linting, test running |
-| **redis** | 6379 (internal) | C (Redis 7) | Pattern cache, co-occurrence graph, task queue, router state; backing store for geometric-lens |
 
 ---
 
@@ -495,14 +494,14 @@ graph LR
         SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
         DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
         TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
-        FB["Feedback Recorder\nRedis-backed"]
+        FB["Feedback Recorder\nSQLite-backed"]
         FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
         SIG --> DIFF --> TS --> FC
         FB --> TS
     end
 
     subgraph cache["Pattern Cache"]
-        PS["Pattern Store\nRedis: STM (100) / LTM / PERSISTENT"]
+        PS["Pattern Store\nSQLite: STM (100) / LTM / PERSISTENT"]
         PM["Pattern Matcher\nBM25 over summaries"]
         PE["Pattern Extractor\nLLM-driven"]
         PSC["Pattern Scorer\nEbbinghaus decay"]
@@ -587,13 +586,11 @@ Service dependency graph (identical across deployment modes):
 
 ```mermaid
 graph LR
-    RD["redis"] -->|"healthy"| GL["geometric-lens"]
-    LLM["llama-server"] -->|"healthy"| GL -->|"healthy"| AP["atlas-proxy"]
+    LLM["llama-server"] -->|"healthy"| GL["geometric-lens"] -->|"healthy"| AP["atlas-proxy"]
     LLM -->|"healthy"| V3["v3-service"] -->|"healthy"| AP
     GL -->|"healthy"| V3
     SB["sandbox"] -->|"healthy"| AP
 
-    style RD fill:#5c1a1a,color:#fff
     style LLM fill:#5c1a1a,color:#fff
     style GL fill:#2d5016,color:#fff
     style V3 fill:#2d5016,color:#fff
@@ -601,7 +598,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`redis`, `llama-server`, and `sandbox` start independently. `geometric-lens` waits for `redis` and `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives every mode, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across Docker Compose, bare metal, macOS hybrid-Metal, and K3s.
+`llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives every mode, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across Docker Compose, bare metal, macOS hybrid-Metal, and K3s.
 
 Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](SETUP.md); the macOS native path is in [SETUP_MACOS.md](SETUP_MACOS.md).
 

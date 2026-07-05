@@ -105,10 +105,11 @@ Last updated: 2026-07-05 (dev) — P0.7–16 landed; documented remainders close
   (verified against the live registry).
 - **Sandbox hardening** — Done: non-root, cap_drop ALL, read-only root,
   cpu/mem/pids caps, optional egress cutoff; K3s securityContext.
-- **Redis decision** — Done (ADR 0002): keep + harden (maxmemory/
-  noeviction, mem_limit, graceful queue 503s).
+- **State-store decision** — Done (ADR 0007): SQLite file on the
+  `lens-state` volume; graceful degradation (neutral cache/router,
+  queue 503s) unchanged.
 - **Governance** — Done: GOVERNANCE, MAINTAINERS, CODEOWNERS, SECURITY
-  response process, THIRD_PARTY_NOTICES, six ADRs, UPGRADE/ROLLBACK/
+  response process, THIRD_PARTY_NOTICES, seven ADRs, UPGRADE/ROLLBACK/
   BACKUP_RESTORE/OPERATIONS runbooks.
 - **Model-agnostic contract (#66)** — Done: audited, stated in
   SUPPORT_MATRIX + ADR 0003, enforced at load.
