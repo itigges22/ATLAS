@@ -115,7 +115,7 @@ func TestTrimMessagesPriorHistoryDoesNotConfusePin(t *testing.T) {
 	// trimMessages scans backwards, so it picks the current-turn user.
 	msgs := []AgentMessage{
 		{Role: "system", Content: "sys"},
-		{Role: "user", Content: "PRIOR turn ask"},      // from PriorHistory
+		{Role: "user", Content: "PRIOR turn ask"},        // from PriorHistory
 		{Role: "assistant", Content: "PRIOR turn reply"}, // from PriorHistory
 		{Role: "user", Content: "CURRENT turn ask"},
 	}
@@ -225,4 +225,3 @@ func TestClassifyParseFailureProse(t *testing.T) {
 		t.Errorf("prose response should get JSON-only nudge, got %q", got)
 	}
 }
-

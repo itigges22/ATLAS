@@ -142,4 +142,3 @@ func TestExtractModelResponseSurfacesUnmarshalError(t *testing.T) {
 		t.Errorf("error missing inner json detail: %v", err)
 	}
 }
-

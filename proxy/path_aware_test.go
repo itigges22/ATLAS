@@ -20,8 +20,8 @@ func TestExtractFailurePath(t *testing.T) {
 		{"edit_file", `{"path":"a.py","old_str":"x","new_str":"y"}`, "a.py"},
 		{"ast_edit", `{"path":"t.html","selector":"<body>","content":"..."}`, "t.html"},
 		{"delete_file", `{"path":"old.py"}`, "old.py"},
-		{"find_file", `{"pattern":".*test.*\\.py$"}`, ""},                 // no path field
-		{"find_file", `{"pattern":"x","path":"src/"}`, "src/"},            // optional path
+		{"find_file", `{"pattern":".*test.*\\.py$"}`, ""},      // no path field
+		{"find_file", `{"pattern":"x","path":"src/"}`, "src/"}, // optional path
 		{"list_directory", `{"path":"templates"}`, "templates"},
 		{"search_files", `{"pattern":"TODO","path":"src/"}`, "src/"},
 		{"run_command", `{"command":"python app.py"}`, ""}, // no path applicable

@@ -38,13 +38,13 @@ type Envelope struct {
 
 // Legal Type values. Mirror atlas.cli.events.EVENT_TYPES.
 const (
-	EvtStageStart  = "stage_start"
-	EvtStageEnd    = "stage_end"
-	EvtToolCall    = "tool_call"
-	EvtToolResult  = "tool_result"
-	EvtMetric      = "metric"
-	EvtError       = "error"
-	EvtDone        = "done"
+	EvtStageStart = "stage_start"
+	EvtStageEnd   = "stage_end"
+	EvtToolCall   = "tool_call"
+	EvtToolResult = "tool_result"
+	EvtMetric     = "metric"
+	EvtError      = "error"
+	EvtDone       = "done"
 )
 
 // NewEventID returns a short, log-readable, session-unique id. Same format

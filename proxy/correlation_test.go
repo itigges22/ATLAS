@@ -43,7 +43,7 @@ func TestWithRequestIDHonorsClientID(t *testing.T) {
 }
 
 func TestTokenTransportForwardsRequestID(t *testing.T) {
-	defer withToken(t, "")()  // token off — isolate the ID-forwarding path
+	defer withToken(t, "")() // token off — isolate the ID-forwarding path
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {

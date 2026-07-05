@@ -39,13 +39,13 @@ func TestDenyReadPathReason(t *testing.T) {
 	}
 
 	allowed := []string{
-		".env.example",          // template, documented
+		".env.example", // template, documented
 		"main.go",
 		"config.yaml",
-		"src/environment.ts",    // unrelated name
+		"src/environment.ts", // unrelated name
 		"staging.envrc.sample",
-		".ssh/id_rsa.pub",       // public half
-		"docs/kube/config.md",   // .kube parent match is exact-dir only
+		".ssh/id_rsa.pub",     // public half
+		"docs/kube/config.md", // .kube parent match is exact-dir only
 		"README.md",
 	}
 	for _, p := range allowed {

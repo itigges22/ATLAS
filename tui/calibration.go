@@ -214,4 +214,3 @@ func badgeActionHint(s *calibrationStatus) string {
 	}
 	return ""
 }
-
