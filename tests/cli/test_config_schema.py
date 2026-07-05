@@ -63,3 +63,32 @@ def test_env_example_keys_are_in_schema():
     keys = set(re.findall(r"ATLAS_[A-Z0-9_]+", text))
     unknown = sorted(k for k in keys if k not in cs.SCHEMA)
     assert not unknown, f"keys in .env.example missing from schema: {unknown}"
+
+
+def test_resolve_precedence_env_over_file_over_default():
+    env_file = {"ATLAS_CTX_SIZE": "65536"}
+    # process env wins
+    assert cs.resolve("ATLAS_CTX_SIZE", env_file, "1024",
+                      environ={"ATLAS_CTX_SIZE": "131072"}) == "131072"
+    # .env file next
+    assert cs.resolve("ATLAS_CTX_SIZE", env_file, "1024",
+                      environ={}) == "65536"
+    # default last
+    assert cs.resolve("ATLAS_CTX_SIZE", {}, "1024", environ={}) == "1024"
+
+
+def test_resolve_empty_does_not_shadow_lower_layer():
+    # empty string in the process env = 'unset', falls through to .env
+    assert cs.resolve("ATLAS_MODEL_NAME", {"ATLAS_MODEL_NAME": "gemma"},
+                      None, environ={"ATLAS_MODEL_NAME": ""}) == "gemma"
+
+
+def test_resolve_typed_coerces():
+    assert cs.resolve_typed("ATLAS_CTX_SIZE", {}, "131072", environ={}) == 131072
+    assert cs.resolve_typed("ATLAS_KEEP_LLAMA_WARM", {}, "1", environ={}) is True
+    assert cs.resolve_typed("ATLAS_KEEP_LLAMA_WARM", {}, "0", environ={}) is False
+    assert cs.resolve_typed("ATLAS_MODEL_NAME", {}, "gemma", environ={}) == "gemma"
+
+
+def test_resolve_typed_missing_is_none():
+    assert cs.resolve_typed("ATLAS_CTX_SIZE", {}, None, environ={}) is None

@@ -161,3 +161,56 @@ def migrate(env: Dict[str, str]) -> Tuple[Dict[str, str], List[str]]:
         out[key] = val
     out["ATLAS_CONFIG_SCHEMA_VERSION"] = str(CONFIG_SCHEMA_VERSION)
     return out, notes
+
+
+# ---------------------------------------------------------------------------
+# Precedence-aware resolution
+# ---------------------------------------------------------------------------
+# Documented precedence (highest first): process environment, then the
+# compose .env file, then the caller-supplied default. This is the single
+# place the layered lookup lives, so every reader agrees (previously each
+# call site hand-rolled `os.environ.get(k) or env.get(k)`).
+
+import os as _os
+
+
+def resolve(key: str, env_file: Optional[Dict[str, str]] = None,
+            default: Optional[str] = None,
+            environ: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Resolve a config key's raw string value by precedence:
+    process env > .env file > default. An empty string in a higher layer
+    does NOT shadow a lower one (empty = 'unset' by ATLAS convention)."""
+    env = environ if environ is not None else _os.environ
+    val = env.get(key)
+    if val not in (None, ""):
+        return val
+    if env_file:
+        val = env_file.get(key)
+        if val not in (None, ""):
+            return val
+    return default
+
+
+def _coerce(key: str, raw: str) -> object:
+    spec = SCHEMA.get(key)
+    if spec is None:
+        return raw
+    if spec.kind == "bool":
+        return raw.strip().lower() in ("1", "true", "yes")
+    if spec.kind in ("int", "port"):
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+    return raw
+
+
+def resolve_typed(key: str, env_file: Optional[Dict[str, str]] = None,
+                  default: Optional[str] = None,
+                  environ: Optional[Dict[str, str]] = None) -> object:
+    """Resolve + coerce to the schema's type (int/port -> int, bool ->
+    bool, else str). Unknown keys return the raw string."""
+    raw = resolve(key, env_file, default, environ)
+    if raw is None:
+        return None
+    return _coerce(key, raw)

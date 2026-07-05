@@ -21,6 +21,11 @@ of silently choosing a model family.
 
 These variables are read by `docker-compose.yml` and control host-side port mappings and model paths. Copy `.env.example` to `.env` to configure:
 
+**Precedence** (highest first): process environment → `.env` file →
+in-code default. An empty value in a higher layer is treated as unset
+and falls through. `atlas.cli.config_schema.resolve_typed()` is the
+single resolver that implements this.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_MODELS_DIR` | `./models` | Host path to directory containing GGUF model weights |
