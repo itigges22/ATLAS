@@ -148,12 +148,12 @@ SEED_PATTERNS: List[Pattern] = [
 
 
 async def load_seed_patterns():
-    """Load seed persistent patterns into Redis at startup."""
+    """Load seed persistent patterns into SQLite at startup."""
     from cache.pattern_store import get_pattern_store
 
     store = get_pattern_store()
     if not store.available:
-        logger.warning("Cannot load seed patterns: Redis unavailable")
+        logger.warning("Cannot load seed patterns: SQLite unavailable")
         return
 
     loaded = 0

@@ -196,7 +196,7 @@ main() {
     # Pod status - using actual app labels from manifests
     echo ""
     echo "Pod Status:"
-    check_pod "redis"
+
     check_pod "llama-server"
     check_pod "geometric-lens"
     check_pod "atlas-proxy"

@@ -60,18 +60,18 @@ def _safe_detail(e: Exception, op: str = "operation") -> str:
     return f"{op} failed (error_id={err_id})"
 
 
-# Initialize SQLite pool on boot
-try:
-    get_db_pool()
-except Exception as e:
-    logger.error(f"Failed to initialize SQLite pool: {e}")
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Initialize SQLite pool on boot
+try:
+    get_db_pool()
+except Exception as e:
+    logger.error(f"Failed to initialize SQLite pool: {e}")
 
 
 # Boot-time self-test cache. Populated in lifespan(); read by /health and /ready.
@@ -924,15 +924,11 @@ async def router_stats():
         return {"enabled": False, "message": "Routing is disabled (ROUTING_ENABLED=false)"}
 
     try:
-        import redis as redis_lib
         from router.route_selector import get_all_thompson_states
         from router.feedback_recorder import get_routing_stats
 
-        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-        r = redis_lib.from_url(redis_url, decode_responses=True)
-
-        thompson = get_all_thompson_states(r)
-        stats = get_routing_stats(r)
+        thompson = get_all_thompson_states()
+        stats = get_routing_stats()
 
         return {
             "enabled": True,
@@ -951,15 +947,11 @@ async def router_reset():
         return {"status": "skipped", "message": "Routing is disabled"}
 
     try:
-        import redis as redis_lib
         from router.route_selector import reset_thompson_state
         from router.feedback_recorder import reset_stats
 
-        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-        r = redis_lib.from_url(redis_url, decode_responses=True)
-
-        reset_thompson_state(r)
-        reset_stats(r)
+        reset_thompson_state()
+        reset_stats()
 
         return {"status": "reset", "message": "Thompson state and stats reset to uniform priors"}
     except Exception as e:

@@ -44,7 +44,7 @@ ATLAS_SANDBOX_NODEPORT=30820       # sandbox executor
 ATLAS_V3_NODEPORT=30070            # v3-service (cluster-internal only by default)
 
 # Internal service ports (usually don't change these)
-ATLAS_REDIS_PORT=6379
+
 ATLAS_LLAMA_PORT=8080              # llama-server internal (matches docker-compose)
 ATLAS_LENS_PORT=8099               # geometric-lens internal (matches Dockerfile EXPOSE)
 ATLAS_PROXY_PORT=8090              # atlas-proxy internal (matches docker-compose)
@@ -73,7 +73,7 @@ ATLAS_LORA_DIR="/opt/atlas/models/lora"
 #-------------------------------------------
 # Persistent Volume Sizes
 #-------------------------------------------
-ATLAS_PVC_REDIS_SIZE="5Gi"
+
 ATLAS_PVC_PROJECTS_SIZE="20Gi"     # backs lens-projects PVC in the lens deployment
 
 #-------------------------------------------

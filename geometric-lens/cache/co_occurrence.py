@@ -1,55 +1,47 @@
-"""Hebbian co-retrieval graph — directed weighted edges in Redis sorted sets."""
+"""SQLite-backed Hebbian co-retrieval graph."""
 
 import logging
 from typing import List, Tuple, Set
 
-
 from cache.pattern_store import get_pattern_store
+from sqlite_store import get_db_pool
 
 logger = logging.getLogger(__name__)
 
-# Redis key prefix for co-occurrence edges
-# pcache:cooccur:{pattern_id} -> sorted set of {linked_pattern_id: weight}
-COOCCUR_PREFIX = "pcache:cooccur:"
-
 # Max edges per pattern (prune below this to prevent hairball)
 MAX_EDGES_PER_PATTERN = 10
-
-# Min co-occurrence count before creating an edge
-MIN_COOCCUR_COUNT = 1
-
 
 class CoOccurrenceGraph:
     """Directed weighted graph of pattern co-occurrence."""
 
     def __init__(self):
-        store = get_pattern_store()
-        self._redis = store._redis
-        self._available = store.available
+        self._store = get_pattern_store()
+        self._pool = get_db_pool()
+        self._available = self._store.available
 
     def record_co_occurrence(self, pattern_ids: List[str]):
-        """
-        Record that these patterns were all active in a successful task.
-        Increments edge weights for all pairs (Hebbian: fire together, wire together).
-
-        Self-count Count(i,i) is incremented exactly once per call per pattern,
-        independent of batch size, so edge weights normalize as
-        Count(i,j) / Count(i,i) per the Memoria formulation.
-        """
-        unique_ids = list(dict.fromkeys(pattern_ids))  # de-dupe, preserve order
+        unique_ids = list(dict.fromkeys(pattern_ids))
         if not self._available or len(unique_ids) < 2:
             return
 
         try:
-            pipe = self._redis.pipeline()
-            for pid_a in unique_ids:
-                # Self-count: how many times pid_a was active. Increment once per call.
-                pipe.zincrby(f"{COOCCUR_PREFIX}{pid_a}", 1, pid_a)
-                for pid_b in unique_ids:
-                    if pid_a == pid_b:
-                        continue
-                    pipe.zincrby(f"{COOCCUR_PREFIX}{pid_a}", 1, pid_b)
-            pipe.execute()
+            with self._pool.get_connection() as conn:
+                for pid_a in unique_ids:
+                    # Self-count
+                    conn.execute("""
+                        INSERT INTO co_occurrence (source_id, target_id, count)
+                        VALUES (?, ?, 1)
+                        ON CONFLICT(source_id, target_id) DO UPDATE SET count = count + 1
+                    """, (pid_a, pid_a))
+                    
+                    for pid_b in unique_ids:
+                        if pid_a == pid_b:
+                            continue
+                        conn.execute("""
+                            INSERT INTO co_occurrence (source_id, target_id, count)
+                            VALUES (?, ?, 1)
+                            ON CONFLICT(source_id, target_id) DO UPDATE SET count = count + 1
+                        """, (pid_a, pid_b))
         except Exception as e:
             logger.error(f"Failed to record co-occurrence: {e}")
 
@@ -59,12 +51,6 @@ class CoOccurrenceGraph:
         top_k: int = 5,
         max_depth: int = 1,
     ) -> List[Tuple[str, float]]:
-        """
-        Get linked patterns via DFS traversal of co-occurrence graph.
-
-        Returns list of (pattern_id, edge_weight) tuples.
-        Edge weight = Count(i,j) / Count(i,i) per Memoria formulation.
-        """
         if not self._available:
             return []
 
@@ -73,7 +59,6 @@ class CoOccurrenceGraph:
 
         self._dfs(pattern_id, 0, max_depth, visited, results, 1.0)
 
-        # Sort by weight descending, take top_k
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
@@ -86,59 +71,49 @@ class CoOccurrenceGraph:
         results: List[Tuple[str, float]],
         parent_weight: float,
     ):
-        """DFS traversal of co-occurrence graph."""
         if depth >= max_depth:
             return
 
         try:
-            key = f"{COOCCUR_PREFIX}{current_id}"
+            with self._pool.get_connection() as conn:
+                # Get self-count
+                cur = conn.execute("SELECT count FROM co_occurrence WHERE source_id = ? AND target_id = ?", (current_id, current_id))
+                row = cur.fetchone()
+                self_count = float(row["count"]) if row else 1.0
 
-            # Get self-count for normalization
-            self_count = self._redis.zscore(key, current_id) or 1.0
+                # Get edges
+                cur = conn.execute("""
+                    SELECT target_id, count FROM co_occurrence 
+                    WHERE source_id = ? AND target_id != ?
+                    ORDER BY count DESC LIMIT ?
+                """, (current_id, current_id, MAX_EDGES_PER_PATTERN))
+                edges = cur.fetchall()
 
-            # Get all edges sorted by weight
-            edges = self._redis.zrevrange(key, 0, MAX_EDGES_PER_PATTERN - 1, withscores=True)
+            for row in edges:
+                linked_id = row["target_id"]
+                count = row["count"]
 
-            for linked_id, count in edges:
-                if linked_id == current_id:
-                    continue
                 if linked_id in visited:
                     continue
 
-                # E(i->j) = Count(i,j) / Count(i,i)
-                weight = (count / self_count) * parent_weight
+                weight = (float(count) / self_count) * parent_weight
 
-                if weight < 0.05:  # Skip weak edges
+                if weight < 0.05:
                     continue
 
                 visited.add(linked_id)
                 results.append((linked_id, weight))
 
-                # Recurse deeper
                 self._dfs(linked_id, depth + 1, max_depth, visited, results, weight)
         except Exception as e:
             logger.error(f"Co-occurrence DFS failed at {current_id}: {e}")
 
     def cleanup_pattern(self, pattern_id: str):
-        """Remove all co-occurrence edges for a deleted pattern."""
         if not self._available:
             return
 
         try:
-            # Delete outgoing edges
-            self._redis.delete(f"{COOCCUR_PREFIX}{pattern_id}")
-
-            # Remove from other patterns' edge lists (expensive but necessary)
-            cursor = 0
-            while True:
-                cursor, keys = self._redis.scan(
-                    cursor, match=f"{COOCCUR_PREFIX}*", count=50
-                )
-                pipe = self._redis.pipeline()
-                for k in keys:
-                    pipe.zrem(k, pattern_id)
-                pipe.execute()
-                if cursor == 0:
-                    break
+            with self._pool.get_connection() as conn:
+                conn.execute("DELETE FROM co_occurrence WHERE source_id = ? OR target_id = ?", (pattern_id, pattern_id))
         except Exception as e:
             logger.error(f"Failed to cleanup co-occurrence for {pattern_id}: {e}")

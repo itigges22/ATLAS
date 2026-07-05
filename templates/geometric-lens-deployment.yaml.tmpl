@@ -1,6 +1,6 @@
 # geometric-lens — C(x)/G(x) scoring + PC-207 per-token scoring + project
 # RAG store. Stateful via the projects PVC (indexed project source) and
-# depends on llama-server for embeddings and redis for cache + co-occurrence.
+# depends on llama-server for embeddings.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -37,7 +37,7 @@ spec:
         - {name: LLAMA_EMBED_URL,        value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
         - {name: GEOMETRIC_LENS_ENABLED, value: "true"}
         - {name: PROJECT_DATA_DIR,       value: "/data/projects"}
-        - {name: REDIS_URL,              value: "redis://redis:${ATLAS_REDIS_PORT}"}
+        - {name: SQLITE_DB_PATH,         value: "/data/projects/geometric_state.db"}
         volumeMounts:
         - name: projects
           mountPath: /data/projects

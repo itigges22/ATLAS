@@ -447,7 +447,6 @@ deploy_manifests() {
     # empty; without this check we'd then go straight to `kubectl apply -f
     # missing.yaml` and crash mid-deploy. Better to fail clearly up front.
     local required_manifests=(
-        "redis-deployment.yaml"
         "llama-deployment.yaml"
         "geometric-lens-deployment.yaml"
         "atlas-proxy-deployment.yaml"
@@ -470,14 +469,6 @@ deploy_manifests() {
         echo "" >&2
         exit 1
     fi
-
-    # Deploy infrastructure first (Redis is dependency)
-    log_info "Deploying infrastructure..."
-    kubectl apply -n "$ATLAS_NAMESPACE" -f "$K8S_DIR/manifests/redis-deployment.yaml"
-
-    # Wait for dependencies
-    log_info "Waiting for infrastructure services..."
-    kubectl wait --for=condition=Ready pod -l app=redis -n "$ATLAS_NAMESPACE" --timeout=120s || true
 
     # Deploy main services
     log_info "Deploying main services..."

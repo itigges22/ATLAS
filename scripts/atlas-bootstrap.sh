@@ -632,36 +632,6 @@ compose_files_args() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 3: Kernel sysctl (PC-011)
-# ---------------------------------------------------------------------------
-
-configure_sysctl() {
-    log_step "Step 3: Kernel parameters (PC-011 — Redis overcommit)"
-
-    if [[ "${ATLAS_BOOTSTRAP_SKIP_SYSCTL:-0}" == "1" ]]; then
-        log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_SYSCTL=1)"
-        return
-    fi
-
-    local current
-    current=$(sysctl -n vm.overcommit_memory 2>/dev/null || echo "0")
-    if [[ "$current" == "1" ]]; then
-        log_ok "vm.overcommit_memory=1 already set"
-    else
-        log_info "Setting vm.overcommit_memory=1 (was $current)…"
-        if ! $SUDO sysctl -w vm.overcommit_memory=1 >/dev/null 2>&1; then
-            log_warn "sysctl write failed (unprivileged container? read-only fs?). Skipping."
-            log_warn "  Set ATLAS_BOOTSTRAP_SKIP_SYSCTL=1 to silence this and continue."
-            return
-        fi
-        # Persist via /etc/sysctl.d so it survives reboot
-        if ! $SUDO grep -q '^vm.overcommit_memory' /etc/sysctl.d/99-atlas.conf 2>/dev/null; then
-            echo "vm.overcommit_memory=1" | $SUDO tee /etc/sysctl.d/99-atlas.conf >/dev/null 2>&1 || true
-        fi
-        log_ok "vm.overcommit_memory=1 (persisted to /etc/sysctl.d/99-atlas.conf)"
-    fi
-}
-
 # ---------------------------------------------------------------------------
 # Step 4: RHEL-family extras (EPEL, firewalld, nouveau)
 # ---------------------------------------------------------------------------
@@ -1122,7 +1092,7 @@ wait_for_healthy() {
 
     local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
 
-    local services=(redis llama-server geometric-lens v3-service sandbox atlas-proxy)
+    local services=(llama-server geometric-lens v3-service sandbox atlas-proxy)
     local timeout=300  # 5 min — first start can be slow while llama-server warms
     local elapsed=0
     local interval=5
@@ -1438,7 +1408,7 @@ main() {
     # (rocm-smi verify + group setup, no separate container runtime).
     install_gpu_runtime
     echo
-    configure_sysctl
+
     echo
     configure_rhel_extras
     echo

@@ -1,21 +1,4 @@
 services:
-  # --- Redis (Pattern Cache + co-occurrence graph + task queue + router state) ---
-  # Host prereq: `sudo sysctl vm.overcommit_memory=1` (and add to /etc/sysctl.conf
-  # to persist). Without it Redis logs a warning and AOF rewrites can fail
-  # under memory pressure. See ISSUES.md PC-011.
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    networks:
-      - atlas
-
   # --- LLM Inference (CUDA + grammar support) ---
   # The image's ENTRYPOINT (inference/entrypoint-v3.1-9b.sh) is what runs
   # llama-server. It does NOT consume "$@", so a compose `command:` here
@@ -90,7 +73,7 @@ services:
       - LLAMA_EMBED_URL=http://llama-server:8080
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
-      - REDIS_URL=redis://redis:6379
+      - SQLITE_DB_PATH=/data/projects/geometric_state.db
       # Auth: bearer tokens are looked up locally from /app/secrets/api-keys.json.
       # Format: {"sk-...": {"user": "alice"}, ...}. Override path with API_KEYS_PATH.
       # Until a key file is mounted, /v1/* endpoints will return 401.
@@ -103,8 +86,6 @@ services:
       - "${ATLAS_LENS_PORT:-8099}:8099"
     depends_on:
       llama-server:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
@@ -290,7 +271,6 @@ services:
 
 volumes:
   lens-data:
-  redis-data:
 
 networks:
   atlas:

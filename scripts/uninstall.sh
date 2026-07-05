@@ -81,8 +81,7 @@ remove_atlas_services() {
     kubectl delete -f "$K8S_DIR/atlas/manifests/" -n "$ATLAS_NAMESPACE" 2>/dev/null || true
     kubectl delete -f "$K8S_DIR/manifests/" -n "$ATLAS_NAMESPACE" 2>/dev/null || true
 
-    # Delete any remaining resources by label
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=redis 2>/dev/null || true
+
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=llama-server 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=geometric-lens 2>/dev/null || true
     kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=llm-proxy 2>/dev/null || true
@@ -98,7 +97,7 @@ remove_atlas_services() {
 
     if [[ "$REMOVE_DATA" == true ]]; then
         log_info "Removing persistent volume claims..."
-        kubectl delete pvc -n "$ATLAS_NAMESPACE" redis-storage 2>/dev/null || true
+
     fi
 
     # Delete namespace if not default

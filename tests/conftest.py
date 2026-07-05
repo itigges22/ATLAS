@@ -20,16 +20,11 @@ from dataclasses import dataclass
 import pytest
 
 try:
-    import redis
     import httpx
     _HAS_INFRA_DEPS = True
 except ImportError:
     _HAS_INFRA_DEPS = False
 
-# Service endpoints - using cluster IPs when running inside cluster,
-# or localhost with NodePort when running externally
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 
 # Determine if running inside cluster or externally
 IN_CLUSTER = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token")
@@ -83,27 +78,6 @@ class TestAPIKey:
 
 
 if _HAS_INFRA_DEPS:
-    @pytest.fixture(scope="session")
-    def redis_client() -> Generator:
-        """Create a Redis client for testing."""
-        try:
-            client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-            client.ping()
-            yield client
-        except redis.ConnectionError:
-            import subprocess
-            proc = subprocess.Popen(
-                ["kubectl", "port-forward", "svc/redis", "6379:6379"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            time.sleep(2)
-            try:
-                client = redis.Redis(host="localhost", port=6379, decode_responses=True)
-                client.ping()
-                yield client
-            finally:
-                proc.terminate()
-                proc.wait()
 
     @pytest.fixture(scope="session")
     def api_portal_client() -> Generator:
@@ -185,18 +159,6 @@ if _HAS_INFRA_DEPS:
                 f"/api/keys/{api_key.key_id}",
                 headers={"Authorization": f"Bearer {test_user.jwt_token}"}
             )
-
-    @pytest.fixture(scope="function")
-    def cleanup_redis_keys(redis_client) -> Generator:
-        """Track and clean up Redis keys created during tests."""
-        keys_to_cleanup = []
-        yield keys_to_cleanup
-        for key in keys_to_cleanup:
-            try:
-                redis_client.delete(key)
-            except Exception:
-                # best-effort: swallow on failure (caller continues)
-                pass
 
 
 @pytest.fixture(scope="function")

@@ -77,6 +77,34 @@ class SQLitePool:
                 )
             """)
             
+            # Pattern cache
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS patterns (
+                    id TEXT PRIMARY KEY,
+                    data TEXT,
+                    tier TEXT,
+                    score REAL
+                )
+            """)
+            
+            # Store metadata (e.g. version)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS store_metadata (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER
+                )
+            """)
+            
+            # Co-occurrence graph
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS co_occurrence (
+                    source_id TEXT,
+                    target_id TEXT,
+                    count INTEGER DEFAULT 0,
+                    PRIMARY KEY (source_id, target_id)
+                )
+            """)
+            
             conn.commit()
         finally:
             conn.close()

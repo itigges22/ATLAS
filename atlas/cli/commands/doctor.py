@@ -113,7 +113,7 @@ LENS_MODELS_DIR = os.environ.get("ATLAS_LENS_MODELS",
                                   "./geometric-lens/geometric_lens/models")
 
 EXPECTED_SERVICES = [
-    "redis", "llama-server", "geometric-lens",
+    "llama-server", "geometric-lens",
     "v3-service", "sandbox", "atlas-proxy",
 ]
 
@@ -691,30 +691,6 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
         f"ast_edit_steering.gguf ({size_mb:.1f} MB) at {path}")
 
 
-def check_overcommit() -> CheckResult:
-    """PC-011: Redis warns and AOF rewrite can fail without overcommit_memory=1.
-
-    Linux-only — /proc/sys/vm/overcommit_memory doesn't exist on macOS
-    or Windows. Short-circuit on non-Linux platforms with a clean skip
-    instead of trying to read /proc and emitting a noisy 'could not
-    read' message.
-    """
-    if sys.platform != "linux":
-        return CheckResult("vm.overcommit_memory", "skip",
-            f"not applicable on {sys.platform}", "")
-    try:
-        with open("/proc/sys/vm/overcommit_memory") as f:
-            val = f.read().strip()
-        if val == "1":
-            return CheckResult("vm.overcommit_memory", "pass", "= 1")
-        return CheckResult("vm.overcommit_memory", "warn",
-            f"= {val} (Redis prefers 1 — see PC-011)",
-            "Fix: sudo sysctl vm.overcommit_memory=1 && "
-            "echo 'vm.overcommit_memory=1' | sudo tee /etc/sysctl.d/99-atlas.conf")
-    except OSError as e:
-        return CheckResult("vm.overcommit_memory", "skip",
-            "could not read /proc/sys", str(e))
-
 
 def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
     """PC-055.1 cross-check: does the host meet the recommended tier's
@@ -1162,7 +1138,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     results.append(check_asa_steering(atlas_root))
 
     # 9. vm.overcommit_memory (PC-011)
-    results.append(check_overcommit())
+
 
     # 10. Image-tag skew (PC-052)
     results.append(check_image_skew(services))
