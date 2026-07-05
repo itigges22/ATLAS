@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = 1
@@ -72,7 +72,7 @@ def load_budgets() -> dict:
         return json.load(fh)
 
 
-def check(result: dict, budgets: Optional[dict] = None) -> Dict[str, object]:
+def check(result: dict, budgets: Optional[dict] = None) -> Dict[str, Any]:
     """Compare deterministic metrics against budgets. Returns
     {passed: bool, violations: [...]}. Missing metrics are skipped (a
     metric that couldn't be measured is not a regression)."""

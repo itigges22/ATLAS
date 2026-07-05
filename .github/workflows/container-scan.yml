@@ -1,0 +1,29 @@
+name: Container image scan
+
+# Scans the published service images for known vulnerabilities on a
+# schedule (and manually). Findings are reported; CRITICAL/HIGH in the
+# base OS/library layers should be triaged per SECURITY.md.
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox]
+    steps:
+      - name: Scan ${{ matrix.image }}:dev
+        uses: aquasecurity/trivy-action@6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5  # 0.30.0
+        with:
+          image-ref: ghcr.io/itigges22/${{ matrix.image }}:dev
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'   # report-only for now; flip to 1 to gate

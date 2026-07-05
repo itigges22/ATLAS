@@ -141,6 +141,11 @@ jobs:
           pip install ruff
           python scripts/production-readiness.py --only ruff
 
+      - name: mypy (typed modules)
+        run: |
+          pip install mypy
+          python scripts/production-readiness.py --only mypy-typed
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest

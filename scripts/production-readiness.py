@@ -176,6 +176,22 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             unavailable_reason="Go is not installed",
             env=go_env,
         ),
+        "mypy-typed": Gate(
+            "mypy-typed",
+            (
+                python, "-m", "mypy",
+                "--ignore-missing-imports", "--no-error-summary",
+                "--follow-imports=skip",
+                "atlas/cli/config_schema.py",
+                "atlas/cli/upgrade_engine.py",
+                "atlas/cli/artifact_manifest.py",
+                "benchmark/perf/harness.py",
+                "geometric-lens/geometric_lens/provenance.py",
+            ),
+            cwd=ROOT,
+            available=lambda: _module_available("mypy"),
+            unavailable_reason="mypy is not installed",
+        ),
         "go-tui-staticcheck": Gate(
             "go-tui-staticcheck",
             ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2025.1.1",
