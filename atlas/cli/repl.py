@@ -720,6 +720,7 @@ _SUBCOMMAND_HELP = [
     ("compose", "docker compose with ATLAS's compose files"),
     ("upgrade", "staged upgrade with auto-restore on failure"),
     ("rollback","return the deployment to a previous release"),
+    ("diagnostics", "collect a filtered diagnostic bundle"),
     ("tui",     "launch the terminal UI"),
 ]
 
