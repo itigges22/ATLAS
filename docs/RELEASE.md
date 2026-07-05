@@ -105,3 +105,51 @@ hash status, backend, context size, and service image digests.
   `unavailable`; it does not count as a pass.
 - A supported release cannot be qualified while a required release gate is
   failed or unavailable.
+
+## Signed release tags
+
+Release tags (`vX.Y.Z`) are SSH-signed so their provenance is
+verifiable, complementing the keyless **cosign** signatures on the
+published image digests (build-images.yml). The two cover different
+artifacts: cosign signs the container images, tag signing signs the
+git release point.
+
+Cut a release tag with the helper (it signs, verifies, and prints the
+push command — it never pushes):
+
+```bash
+scripts/release-tag.sh v1.2.0 "release notes"
+git push origin v1.2.0        # the deliberate release step
+```
+
+On push, `.github/workflows/verify-tags.yml` re-verifies the signature
+against `.github/allowed_signers` and fails the tag if it is unsigned or
+signed by an unlisted key.
+
+### One-time signing setup (per maintainer machine)
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/atlas_release_signing -C "you@example"
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/atlas_release_signing.pub
+git config gpg.ssh.allowedSignersFile .github/allowed_signers
+# append "<your-git-email> <contents of atlas_release_signing.pub>" to
+# .github/allowed_signers and commit it, then register the key so GitHub
+# shows tags as Verified:
+gh ssh-key add ~/.ssh/atlas_release_signing.pub --type signing \
+    --title "atlas release signing"
+```
+
+Verify any release tag locally:
+
+```bash
+git config gpg.ssh.allowedSignersFile .github/allowed_signers
+git verify-tag v1.2.0
+```
+
+**Status:** the signing key, git config, release script, CI verification,
+and allowed-signers file are in place and produce a verified signed tag
+today. The remaining step to get GitHub's green **Verified** badge is
+registering the public key on the maintainer's GitHub account (the
+`gh ssh-key add --type signing` line above) — an account action left to
+the maintainer.
