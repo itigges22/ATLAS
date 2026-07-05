@@ -42,7 +42,7 @@ func loadServiceToken() string {
 // authOpenPaths never require the token: health probes are headerless
 // curl in compose/K8s, and /ready gates orchestration.
 func authOpenPath(path string) bool {
-	return path == "/health" || path == "/ready"
+	return path == "/health" || path == "/ready" || path == "/version"
 }
 
 func bearerToken(r *http.Request) string {
@@ -67,9 +67,9 @@ func requireServiceToken(next http.Handler) http.Handler {
 		got := bearerToken(r)
 		if subtle.ConstantTimeCompare([]byte(got), []byte(serviceToken)) != 1 {
 			// No token material in the response or the log line.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"unauthorized","detail":"internal service auth is enabled; send Authorization: Bearer <service-token> (secrets/service-token)"}`))
+			writeError(w, http.StatusUnauthorized, ErrUnauthorized,
+				"internal service auth is enabled; send Authorization: "+
+					"Bearer <service-token> (secrets/service-token)")
 			return
 		}
 		next.ServeHTTP(w, r)

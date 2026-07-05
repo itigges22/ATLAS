@@ -281,6 +281,7 @@ func newProxyMux() *http.ServeMux {
 	mux.HandleFunc("/v1/lens/training-status", handleLensTrainingStatus) // sample counts for the "retrain available" alert
 	// PC-059: TUI calls this on connect to render a Lens/ASA compat badge.
 	mux.HandleFunc("/v1/calibration/status", handleCalibrationStatus)
+	mux.HandleFunc("/version", handleVersion)
 
 	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", handlePassthrough)
@@ -411,4 +412,3 @@ func (t Tier) String() string {
 	}
 	return "T?:unknown"
 }
-

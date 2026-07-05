@@ -1129,6 +1129,29 @@ curl http://localhost:8080/health
 
 ---
 
+## Versioning and error codes
+
+`GET /version` returns the API version, the SSE protocol version, and
+the full error-code set:
+
+```json
+{"api_version": "1.0.0", "protocol_version": 1, "error_codes": [...]}
+```
+
+`api_version` follows semver (minor = additive, major = breaking).
+Error responses use a stable envelope — **switch on `error` (a closed
+code set), never on `detail`** (the human message may change):
+
+```json
+{"error": "unauthorized", "detail": "...", "api_version": "1.0.0"}
+```
+
+Codes: `unauthorized`, `invalid_input`, `unsupported_operation`,
+`permission_denied`, `timeout`, `cancelled`, `dependency_unavailable`,
+`incompatible_artifact`, `resource_limit`, `sandbox_policy_rejected`,
+`model_failure`, `internal_error`. Machine-readable JSON Schemas for the
+error and SSE envelopes live in `docs/schemas/`.
+
 ## Building a non-TUI client
 
 A minimal client needs four things (plus one header):
