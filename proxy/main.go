@@ -348,7 +348,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           http.MaxBytesHandler(requireServiceToken(newProxyMux()), maxRequestBodyBytes),
+		Handler:           http.MaxBytesHandler(withRequestID(requireServiceToken(newProxyMux())), maxRequestBodyBytes),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,

@@ -80,9 +80,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-from geometric_lens.private_values import PrivateValueLogFilter
-for _h in logging.getLogger().handlers:
-    _h.addFilter(PrivateValueLogFilter())
+from geometric_lens.structured_log import (install as _install_logging,
+                                            set_request_id as _set_rid)
+_install_logging("geometric-lens")
 logger = logging.getLogger(__name__)
 
 
@@ -261,6 +261,18 @@ _install_urllib_opener()  # outbound: embedding extractor, identity probe
 
 if _SERVICE_TOKEN:
     api_keys[_SERVICE_TOKEN] = {"user": "atlas-internal"}
+
+@app.middleware("http")
+async def _correlation_id(request, call_next):
+    # Adopt the caller's correlation ID (or none); echo it back so the
+    # whole turn shares one id across services.
+    rid = request.headers.get("x-atlas-request-id", "")
+    _set_rid(rid)
+    response = await call_next(request)
+    if rid:
+        response.headers["X-ATLAS-Request-ID"] = rid
+    return response
+
 
 @app.middleware("http")
 async def _require_service_token(request, call_next):

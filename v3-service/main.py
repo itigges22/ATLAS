@@ -3017,6 +3017,8 @@ class V3Handler(BaseHTTPRequestHandler):
         return False
 
     def do_POST(self):
+        from structured_log import set_request_id as _set_rid
+        _set_rid(self.headers.get("X-ATLAS-Request-ID", ""))
         if not self._authorized():
             return
         if self.path == "/v3/run":
@@ -3043,6 +3045,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._json_response(404, {"error": "not found"})
 
     def do_GET(self):
+        from structured_log import set_request_id as _set_rid
+        _set_rid(self.headers.get("X-ATLAS-Request-ID", ""))
         if not self._authorized():
             return
         if self.path == "/health":
@@ -3659,6 +3663,8 @@ class _PrivateValueStream:
 if __name__ == "__main__":
     sys.stdout = _PrivateValueStream(sys.stdout)
     sys.stderr = _PrivateValueStream(sys.stderr)
+    from structured_log import install as _install_logging
+    _install_logging("v3-service")
     print(f"ATLAS V3 Pipeline Service starting on :{PORT}")
     print(f"  Inference:     {INFERENCE_URL}")
     print(f"  Geometric Lens: {LENS_URL}")

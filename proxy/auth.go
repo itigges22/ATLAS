@@ -85,6 +85,13 @@ type tokenTransport struct {
 }
 
 func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Forward the correlation ID (if the request carries one in context)
+	// so downstream service logs join the same trace.
+	if id := requestIDFromContext(req.Context()); id != "" &&
+		req.Header.Get(requestIDHeader) == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set(requestIDHeader, id)
+	}
 	if serviceToken != "" && req.Header.Get("Authorization") == "" {
 		req = req.Clone(req.Context())
 		req.Header.Set("Authorization", "Bearer "+serviceToken)
