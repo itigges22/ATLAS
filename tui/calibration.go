@@ -215,20 +215,3 @@ func badgeActionHint(s *calibrationStatus) string {
 	return ""
 }
 
-// calibrationTooltip renders the verbose hint text that the Stats pane
-// surfaces below the pipeline (when the badge shows ⚠ or ✗). Currently
-// emitted as a one-line summary; the full hint stays accessible via
-// `atlas lens check` / `atlas asa check`.
-func calibrationTooltip(s *calibrationStatus) string {
-	if s == nil {
-		return ""
-	}
-	var notes []string
-	if s.Lens.Verdict != "supported" && s.Lens.Hint != "" {
-		notes = append(notes, "Lens: "+s.Lens.Hint)
-	}
-	if s.ASA.Verdict != "supported" && s.ASA.Hint != "" {
-		notes = append(notes, "ASA: "+s.ASA.Hint)
-	}
-	return strings.Join(notes, "  |  ")
-}

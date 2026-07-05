@@ -167,6 +167,24 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             unavailable_reason="Go is not installed",
             env=go_env,
         ),
+        "go-proxy-staticcheck": Gate(
+            "go-proxy-staticcheck",
+            ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2025.1.1",
+             "./..."),
+            cwd=ROOT / "proxy",
+            available=lambda: _command_available("go"),
+            unavailable_reason="Go is not installed",
+            env=go_env,
+        ),
+        "go-tui-staticcheck": Gate(
+            "go-tui-staticcheck",
+            ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2025.1.1",
+             "./..."),
+            cwd=ROOT / "tui",
+            available=lambda: _command_available("go"),
+            unavailable_reason="Go is not installed",
+            env=go_env,
+        ),
         "ruff": Gate(
             "ruff",
             (

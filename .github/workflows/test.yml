@@ -46,6 +46,9 @@ jobs:
       - name: go vet
         run: python scripts/production-readiness.py --only go-${{ matrix.module }}-vet
 
+      - name: staticcheck
+        run: python scripts/production-readiness.py --only go-${{ matrix.module }}-staticcheck
+
   python-tests:
     name: pytest (${{ matrix.subset }})
     runs-on: ubuntu-latest

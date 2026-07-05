@@ -3678,10 +3678,7 @@ func shouldGeneratePlan(ctx *AgentContext, message string) bool {
 	// — already-running plan is still relevant; a fresh one would just
 	// re-derive it.
 	trimmed := strings.ToLower(strings.TrimSpace(message))
-	if len(trimmed) < 12 {
-		return false
-	}
-	return true
+	return len(trimmed) >= 12
 }
 
 // generatePlan hits /v3/plan with a sampled project context and the

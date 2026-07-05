@@ -305,7 +305,7 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	proxyReq.Header = r.Header.Clone()
 	resp, err := http.DefaultClient.Do(proxyReq)
 	if err != nil {
-		http.Error(w, err.Error(), 502)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()

@@ -26,7 +26,7 @@ func fakeAgentServer(t *testing.T, events []chatEvent,
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/agent", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
-			http.Error(w, "method", 405)
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -49,7 +49,7 @@ func fakeAgentServer(t *testing.T, events []chatEvent,
 	})
 	mux.HandleFunc("/cancel", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
-			http.Error(w, "method", 405)
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -154,7 +154,7 @@ func TestDemoRawSideUsesOneDirectModelRequest(t *testing.T) {
 
 func TestSendChatHandlesNon200Status(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "no llama", 503)
+		http.Error(w, "no llama", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
 	out := make(chan chatEvent, 1)

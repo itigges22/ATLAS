@@ -61,7 +61,6 @@ var (
 	okStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	failStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	runStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	idleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	chatUserStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("117")).

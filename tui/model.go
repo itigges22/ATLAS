@@ -38,12 +38,6 @@ type chatStreamMsg struct {
 	ev chatEvent
 }
 
-// chatTurnDoneMsg signals that the current /v1/agent turn finished
-// (clean [DONE] or error). err is nil on clean completion.
-type chatTurnDoneMsg struct {
-	err error
-}
-
 type chatRole int
 
 const (
@@ -231,7 +225,6 @@ type tuiModel struct {
 	chatScroll     int
 	eventsScroll   int
 	pipelineScroll int
-	lastChatTotal  int
 
 	// Hide-pane toggles. Slash commands /hide files / pipeline / events
 	// drop the corresponding pane; /show <name> brings it back.
@@ -247,7 +240,6 @@ type tuiModel struct {
 	// Spinner verb cycle — every ~3s the "thinking" word changes so
 	// long generations don't feel static. Index advances based on
 	// spinnerFrame ticks rather than a separate timer.
-	thinkingVerbIdx int
 
 	// Sidebar file tree — flat list of entries scanned from workingDir,
 	// re-scanned every fileScanInterval and after every write/edit/
@@ -2725,7 +2717,7 @@ func renderHeader(proxyURL, workingDir, mode string, busy bool,
 		Background(lipgloss.Color("63")).
 		Foreground(lipgloss.Color("231")).
 		Padding(0, 1).
-		Render(fmt.Sprintf("ATLAS TUI"))
+		Render("ATLAS TUI")
 	right := lipgloss.NewStyle().
 		Background(lipgloss.Color("236")).
 		Foreground(lipgloss.Color("251")).
