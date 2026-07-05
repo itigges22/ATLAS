@@ -18,7 +18,7 @@ supply-chain, packaging, and status-clarity foundations are in place and
 tested; several hardening items remain repository-maintenance work, and a
 short list of items is genuinely external. This file is the honest ledger.
 
-Last updated: 2026-07-05 (dev) — P0.7–16 landed.
+Last updated: 2026-07-05 (dev) — P0.7–16 landed; documented remainders closed (OpenAPI, precedence resolver, JSON logs + correlation IDs, license/mypy/container-scan).
 
 ---
 
@@ -173,12 +173,12 @@ longer blockers:
 | 4 | Reproducible dependency builds | **Done** |
 | 5 | Proxy image simplification | **Done** |
 | 6 | Non-root proxy/v3/lens | **Done** |
-| 7 | Versioned API + schemas | **Done** (version endpoint + error taxonomy + schemas) |
-| 8 | Typed config + migration | **Done** (typed schema + validate/migrate; deeper migration engine remains) |
+| 7 | Versioned API + schemas | **Done** (version endpoint, error taxonomy, OpenAPI 3.1 + route-parity) |
+| 8 | Typed config + migration | **Done** (typed schema, validate/migrate, precedence-aware resolver) |
 | 9 | Upgrade/rollback commands | **Done** (atlas upgrade/rollback, auto-restore) |
 | 10 | Signed artifact manifests | **Done** (sign/verify + snapshot/rollback) |
-| 11 | Structured logs + diagnostics | **Done** (diagnostics bundle); structured JSON logs remain |
-| 12 | Dependency/repo quality checks | **Done** (staticcheck + secret scan); container/license/SBOM scans remain |
+| 11 | Structured logs + diagnostics | **Done** (diagnostics bundle + JSON logs + cross-service correlation IDs) |
+| 12 | Dependency/repo quality checks | **Done** (staticcheck, secret scan, license check, scoped mypy, container scan); SBOM-attestation validation remains |
 | 13 | Local boundary regression tests | **Done** (matrix + trust modes) |
 | 14 | Concurrency/recovery tests | **Done** (deterministic suite) |
 | 15 | Performance harness + budgets | **Done** (versioned format + gate) |
