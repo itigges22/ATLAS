@@ -694,6 +694,38 @@ def check_internal_auth(atlas_root: str) -> List[CheckResult]:
     return results
 
 
+def check_status_dimensions() -> List[CheckResult]:
+    """Render the canonical seven-dimension lens/ASA status from the
+    proxy's /v1/calibration/status endpoint — the SAME source the TUI
+    badge reads, so doctor and the TUI cannot disagree. Emits one
+    informational result carrying all seven rows; never fails the run
+    (it's a status view, not a health gate).
+    """
+    ok, body = _http_get(f"{PROXY_URL}/v1/calibration/status", timeout=5)
+    if not ok:
+        return [CheckResult("status_dimensions", "skip",
+                            "proxy /v1/calibration/status unreachable "
+                            "(is the stack up?)")]
+    try:
+        import json as _json
+        dims = _json.loads(body).get("dimensions", [])
+    except Exception:
+        return [CheckResult("status_dimensions", "skip",
+                            "calibration status returned non-JSON")]
+    if not dims:
+        return [CheckResult("status_dimensions", "skip",
+                            "no dimensions in calibration status "
+                            "(older proxy image?)")]
+    # A disabled/uncalibrated lens is expected on a fresh install, so
+    # this is informational (pass) — the per-dimension status is the
+    # signal, printed in the detail.
+    lines = [f"{d.get('name')}: {d.get('status')} — {d.get('detail')}"
+             for d in dims]
+    return [CheckResult("status_dimensions", "pass",
+                        "lens/ASA status by dimension",
+                        detail="\n".join(lines))]
+
+
 def check_model_file(atlas_root: str) -> CheckResult:
     if not MODEL_FILE:
         return CheckResult("model_file", "fail",
@@ -1288,6 +1320,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         for item in check_health_endpoints():
             _add(item)
         for item in check_internal_auth(atlas_root):
+            _add(item)
+        for item in check_status_dimensions():
             _add(item)
 
     # 7. Model file (host-side)

@@ -27,8 +27,97 @@ import (
 // CalibrationStatus is the JSON returned by /v1/calibration/status.
 // Shape is stable: TUI and atlas doctor both key off it.
 type CalibrationStatus struct {
-	Lens LensStatus `json:"lens"`
-	ASA  ASAStatus  `json:"asa"`
+	Lens       LensStatus        `json:"lens"`
+	ASA        ASAStatus         `json:"asa"`
+	Dimensions []StatusDimension `json:"dimensions"`
+}
+
+// StatusDimension is one row of the canonical seven-dimension status
+// (SUPPORT_MATRIX § "Reference-model status dimensions"). Separating
+// these prevents the ambiguity where "the lens works" conflated model
+// runtime, raw scoring, calibration, and intervention behavior. Every
+// surface that shows lens/ASA status (this endpoint, the TUI badge,
+// atlas doctor, atlas lens check) renders the SAME rows so they cannot
+// disagree — they all read this list.
+type StatusDimension struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// buildDimensions maps the raw lens/ASA probe onto the seven named
+// dimensions. Intervention is reported "neutral" whenever calibration is
+// absent, matching the enforced runtime behavior (agent.go only applies
+// thresholds when calibratedThresholds() succeeds) — a disabled/
+// uncalibrated lens never steers using another model's cutoffs.
+func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
+	reachable := lens.Verdict != "unreachable"
+
+	modelRuntime := "supported"
+	modelDetail := "model served and reachable"
+	if !reachable {
+		modelRuntime = "unreachable"
+		modelDetail = "lens/model service not reachable"
+	}
+
+	// Identity/dimension contract.
+	identity := "supported"
+	identityDetail := "cost field matches the served model's dimension"
+	switch {
+	case !reachable:
+		identity, identityDetail = "unknown", "service unreachable"
+	case !lens.CostFieldLoaded:
+		identity, identityDetail = "no-artifacts",
+			"no cost field loaded for this model"
+	case lens.EmbedDim > 0 && lens.CostFieldDim != lens.EmbedDim:
+		identity, identityDetail = "dim-mismatch",
+			fmt.Sprintf("cost field is %d-dim, model emits %d-dim",
+				lens.CostFieldDim, lens.EmbedDim)
+	}
+
+	// Raw scoring availability.
+	scoring := "disabled"
+	scoringDetail := "cost field / G(x) not loaded"
+	if reachable && lens.CostFieldLoaded && lens.GxLoaded {
+		scoring, scoringDetail = "supported", "C(x) + G(x) scoring available"
+	} else if reachable && lens.CostFieldLoaded && !lens.GxLoaded {
+		scoring, scoringDetail = "partial", "C(x) loaded; G(x) missing"
+	}
+
+	// Calibration.
+	calibration := "disabled"
+	calDetail := "artifacts not loaded"
+	if reachable && lens.CostFieldLoaded {
+		if lens.CxCalibrated && lens.GxCalibrated {
+			calibration, calDetail = "calibrated",
+				"per-model normalization + thresholds loaded"
+		} else {
+			calibration, calDetail = "uncalibrated",
+				"loaded without this model's calibration files"
+		}
+	}
+
+	// Intervention behavior — neutral/disabled unless calibrated.
+	intervention := "disabled"
+	intDetail := "no scoring; no intervention"
+	if calibration == "calibrated" {
+		intervention, intDetail = "active",
+			"threshold interventions enabled"
+	} else if scoring != "disabled" {
+		intervention, intDetail = "neutral",
+			"raw telemetry only; no automatic intervention"
+	}
+
+	return []StatusDimension{
+		{"model_runtime", modelRuntime, modelDetail},
+		{"direct_agent", "supported",
+			"model-agnostic; independent of lens/ASA state"},
+		{"lens_identity", identity, identityDetail},
+		{"lens_scoring", scoring, scoringDetail},
+		{"lens_calibration", calibration, calDetail},
+		{"lens_intervention", intervention, intDetail},
+		{"asa", asa.Verdict, asa.Hint},
+	}
 }
 
 type LensStatus struct {
@@ -219,9 +308,12 @@ func sameModelIdentity(a, b string) bool {
 }
 
 func handleCalibrationStatus(w http.ResponseWriter, r *http.Request) {
+	lens := probeLensStatus(r.Context(), lensURL)
+	asa := probeASAStatus()
 	status := CalibrationStatus{
-		Lens: probeLensStatus(r.Context(), lensURL),
-		ASA:  probeASAStatus(),
+		Lens:       lens,
+		ASA:        asa,
+		Dimensions: buildDimensions(lens, asa),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
