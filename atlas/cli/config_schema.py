@@ -12,7 +12,7 @@ keys are ignored, new keys take their defaults). See migrate().
 """
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 CONFIG_SCHEMA_VERSION = 1
 

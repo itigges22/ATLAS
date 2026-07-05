@@ -17,7 +17,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Optional
 
 RESTORE_DIR = ".atlas-upgrade"
 RESTORE_POINT = "restore-point.json"

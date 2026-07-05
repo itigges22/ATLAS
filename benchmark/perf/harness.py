@@ -12,7 +12,6 @@ CI failure; hardware fields are recorded (nullable) for later import.
 """
 
 import json
-import os
 import subprocess
 import sys
 import time
