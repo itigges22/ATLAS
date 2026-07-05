@@ -1,4 +1,4 @@
-"""Record task outcomes to update Thompson Sampling state in Redis."""
+"""Record task outcomes to update Thompson Sampling state in SQLite."""
 
 import logging
 from models.route import Route, DifficultyBin

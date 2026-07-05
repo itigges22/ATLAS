@@ -1,4 +1,4 @@
-"""Thompson Sampling route selection with Redis-backed state."""
+"""Thompson Sampling route selection with SQLite-backed state."""
 
 import logging
 import random

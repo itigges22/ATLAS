@@ -41,7 +41,6 @@ DEP_LICENSES = {
     "pytest": "MIT",
     "python-multipart": "Apache-2.0",
     "pyyaml": "MIT",
-    "redis": "MIT",
     "requests": "Apache-2.0",
     "ruff": "MIT",
     "tiktoken": "MIT",

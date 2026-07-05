@@ -13,9 +13,9 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from enum import Enum
 
-import redis
 import httpx
 from config import config, api_keys
+from sqlite_store import get_db_pool
 from storage import project_store
 from pipeline import (
     rag_enhanced_completion, simple_completion, forward_to_llama_stream,
@@ -66,13 +66,6 @@ def _safe_detail(e: Exception, op: str = "operation") -> str:
     return f"{op} failed (error_id={err_id})"
 
 
-# Redis for task queue
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
-try:
-    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-except Exception:
-    redis_client = None
-
 # Configure logging. The private-value filter sits on the root handler
 # so every logger in the process (pipeline, cache, router) is covered
 # before serialization.
@@ -84,6 +77,15 @@ from geometric_lens.structured_log import (install as _install_logging,
                                             set_request_id as _set_rid)
 _install_logging("geometric-lens")
 logger = logging.getLogger(__name__)
+
+# Initialize the SQLite state store (patterns, router state, task queue,
+# metrics) so the schema exists before the first request. A failure here
+# leaves the store degraded: pattern cache/router fall back to neutral
+# behavior and the task-queue endpoints return 503 (see ADR 0002).
+try:
+    get_db_pool()
+except Exception as e:
+    logger.error(f"Failed to initialize SQLite state store: {e}")
 
 
 # Boot-time self-test cache. Populated in lifespan() and re-populated after a
@@ -178,14 +180,19 @@ def _run_lens_self_test() -> None:
         logger.error("Lens self-test failed: %s", _BOOT_STATE["self_test_error"])
 
 
-def _redis_state() -> Dict[str, Any]:
-    if redis_client is None:
-        return {"connected": False, "error": "client not initialised"}
+def _db_state() -> Dict[str, Any]:
+    """State of the SQLite store backing patterns, router state, and the
+    task queue. Probes with a trivial query so a broken file/volume shows
+    up as connected=False rather than only failing on first write."""
+    import sqlite_store
     try:
-        redis_client.ping()
-        return {"connected": True}
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            conn.execute("SELECT 1")
+        return {"connected": True, "path": sqlite_store.DB_PATH}
     except Exception as e:
-        return {"connected": False, "error": f"{type(e).__name__}: {e}"}
+        return {"connected": False, "path": sqlite_store.DB_PATH,
+                "error": f"{type(e).__name__}: {e}"}
 
 
 def _llama_state() -> Dict[str, Any]:
@@ -362,7 +369,7 @@ class ChatRequest(BaseModel):
 
 # Endpoints
 # Note: probe/scoring endpoints below are deliberately plain `def` — they do
-# synchronous work (redis ping, httpx sync client, urlopen to llama-server,
+# synchronous work (sqlite query, httpx sync client, urlopen to llama-server,
 # torch), so FastAPI runs them in its threadpool instead of blocking the
 # event loop.
 @app.get("/health")
@@ -372,13 +379,13 @@ def health():
     Always returns 200 — this endpoint is for *information*, not gating.
     Use /ready for liveness/scoring-functional gating.
     """
-    redis_st = _redis_state()
+    db_st = _db_state()
     llama_st = _llama_state()
     lens_ok = (
         not _BOOT_STATE["lens_enabled"] or _BOOT_STATE["self_test_pass"]
     )
     overall = (
-        redis_st["connected"]
+        db_st["connected"]
         and llama_st["reachable"]
         and lens_ok
     )
@@ -386,7 +393,7 @@ def health():
         "service": "geometric-lens",
         "status": "healthy" if overall else "degraded",
         "subsystems": {
-            "redis": redis_st,
+            "sqlite": db_st,
             "llama_server": llama_st,
             "lens": {
                 "enabled": _BOOT_STATE["lens_enabled"],
@@ -412,15 +419,15 @@ def ready():
     Use this for orchestrator probes that should pull traffic away when
     lens scoring degrades (the silent-failure mode PC-019 was filed for).
     """
-    redis_st = _redis_state()
+    db_st = _db_state()
     llama_st = _llama_state()
     lens_required = _BOOT_STATE["lens_enabled"]
     lens_ok = (not lens_required) or _BOOT_STATE["self_test_pass"]
 
-    ok = redis_st["connected"] and llama_st["reachable"] and lens_ok
+    ok = db_st["connected"] and llama_st["reachable"] and lens_ok
     payload = {
         "ready": ok,
-        "redis": redis_st["connected"],
+        "sqlite": db_st["connected"],
         "llama_server": llama_st["reachable"],
         "lens_self_test": _BOOT_STATE["self_test_pass"],
         "lens_required": lens_required,
@@ -626,29 +633,42 @@ async def delete_project(
 
 
 def log_request_metrics(request_type: str, success: bool, tokens: int = 0, model: str = ""):
-    """Log request metrics to Redis for dashboard."""
-    if not redis_client:
-        return
+    """Log request metrics to SQLite for dashboard."""
     try:
         from datetime import date
         today = date.today().isoformat()
 
-        # Increment daily counters
-        redis_client.hincrby(f"metrics:daily:{today}", "tasks_total", 1)
-        if success:
-            redis_client.hincrby(f"metrics:daily:{today}", "tasks_success", 1)
-        redis_client.hincrby(f"metrics:daily:{today}", "tokens_total", tokens)
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            # Increment daily counters
+            counters = [("tasks_total", 1), ("tokens_total", tokens)]
+            if success:
+                counters.append(("tasks_success", 1))
+            for key, delta in counters:
+                conn.execute("""
+                    INSERT INTO metrics_daily (date, key, value) VALUES (?, ?, ?)
+                    ON CONFLICT(date, key) DO UPDATE SET value = value + excluded.value
+                """, (today, key, delta))
 
-        # Add to recent tasks list
-        task_record = json.dumps({
-            "type": request_type,
-            "model": model,
-            "tokens": tokens,
-            "success": success,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-        redis_client.lpush("metrics:recent_tasks", task_record)
-        redis_client.ltrim("metrics:recent_tasks", 0, 99)  # Keep last 100
+            # Add to recent tasks list
+            task_record = json.dumps({
+                "type": request_type,
+                "model": model,
+                "tokens": tokens,
+                "success": success,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            conn.execute(
+                "INSERT INTO metrics_recent_tasks (task_record) VALUES (?)",
+                (task_record,)
+            )
+            # Keep the newest 100 records
+            conn.execute("""
+                DELETE FROM metrics_recent_tasks
+                WHERE id NOT IN (
+                    SELECT id FROM metrics_recent_tasks ORDER BY id DESC LIMIT 100
+                )
+            """)
     except Exception as e:
         logger.warning(f"Failed to log metrics: {e}")
 
@@ -770,9 +790,6 @@ async def submit_task(
     api_key: str = Depends(verify_api_key)
 ):
     """Submit a task for async processing."""
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Task queue not available")
-
     task_id = str(uuid.uuid4())
     task_data = {
         "id": task_id,
@@ -793,14 +810,17 @@ async def submit_task(
         "metrics": {}
     }
 
-    # Store task + enqueue. The client object exists even when the
-    # server is down (created without a ping at import), so a mid-flight
-    # outage surfaces here — return the same clean 503 as the
-    # client-is-None case instead of a raw connection error.
+    # Store + enqueue in one insert: a pending row in `tasks` is the queue
+    # entry (workers pull by status + priority, FIFO within a priority via
+    # created_at/rowid). A store failure returns a clean 503 instead of a
+    # raw database error.
     try:
-        redis_client.hset(f"task:{task_id}",
-                          mapping={"data": json.dumps(task_data)})
-        redis_client.rpush(f"tasks:{request.priority}", task_id)
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO tasks (id, priority, status, data) VALUES (?, ?, ?, ?)",
+                (task_id, request.priority, "pending", json.dumps(task_data))
+            )
     except Exception as e:
         logger.warning("task queue unavailable: %s", _safe_log(e))
         raise HTTPException(status_code=503,
@@ -814,14 +834,19 @@ async def get_task_status(
     api_key: str = Depends(verify_api_key)
 ):
     """Get current status of a submitted task."""
-    if not redis_client:
+    try:
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            cur = conn.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        logger.warning("task queue unavailable: %s", _safe_log(e))
         raise HTTPException(status_code=503, detail="Task queue not available")
 
-    data = redis_client.hget(f"task:{task_id}", "data")
-    if not data:
+    if not row:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    task = json.loads(data)
+    task = json.loads(row["data"])
     return {
         "id": task["id"],
         "status": task["status"],
@@ -833,18 +858,23 @@ async def get_task_status(
 @app.get("/v1/queue/stats")
 async def get_queue_stats(api_key: str = Depends(verify_api_key)):
     """Get current queue statistics."""
-    if not redis_client:
+    try:
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            cur = conn.execute(
+                "SELECT priority, COUNT(*) AS count FROM tasks "
+                "WHERE status = 'pending' GROUP BY priority"
+            )
+            counts = {row["priority"]: row["count"] for row in cur.fetchall()}
+    except Exception as e:
+        logger.warning("task queue unavailable: %s", _safe_log(e))
         raise HTTPException(status_code=503, detail="Task queue not available")
 
     return {
-        "p0_waiting": redis_client.llen("tasks:p0"),
-        "p1_waiting": redis_client.llen("tasks:p1"),
-        "p2_waiting": redis_client.llen("tasks:p2"),
-        "total_waiting": sum([
-            redis_client.llen("tasks:p0"),
-            redis_client.llen("tasks:p1"),
-            redis_client.llen("tasks:p2")
-        ])
+        "p0_waiting": counts.get("p0", 0),
+        "p1_waiting": counts.get("p1", 0),
+        "p2_waiting": counts.get("p2", 0),
+        "total_waiting": sum(counts.values())
     }
 
 
@@ -992,15 +1022,11 @@ async def router_stats():
         return {"enabled": False, "message": "Routing is disabled (ROUTING_ENABLED=false)"}
 
     try:
-        import redis as redis_lib
         from router.route_selector import get_all_thompson_states
         from router.feedback_recorder import get_routing_stats
 
-        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-        r = redis_lib.from_url(redis_url, decode_responses=True)
-
-        thompson = get_all_thompson_states(r)
-        stats = get_routing_stats(r)
+        thompson = get_all_thompson_states()
+        stats = get_routing_stats()
 
         return {
             "enabled": True,
@@ -1018,15 +1044,11 @@ async def router_reset():
         return {"status": "skipped", "message": "Routing is disabled"}
 
     try:
-        import redis as redis_lib
         from router.route_selector import reset_thompson_state
         from router.feedback_recorder import reset_stats
 
-        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-        r = redis_lib.from_url(redis_url, decode_responses=True)
-
-        reset_thompson_state(r)
-        reset_stats(r)
+        reset_thompson_state()
+        reset_stats()
 
         return {"status": "reset", "message": "Thompson state and stats reset to uniform priors"}
     except Exception as e:

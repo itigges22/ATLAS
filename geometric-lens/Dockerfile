@@ -23,18 +23,20 @@ COPY cache/ cache/
 COPY router/ router/
 COPY geometric_lens/ geometric_lens/
 
-# Create directories for config and data. /data/projects is the only
-# location the serving path writes at runtime (the project index, on the
-# lens-data volume); config + secrets are read-only at runtime and the
-# models dir is mounted read-only, so only /data/projects and the app
+# Create directories for config and data. The serving path writes to
+# /data/projects (the project index, on the lens-data volume) and
+# /data/state (the SQLite state store, on the lens-state volume);
+# config + secrets are read-only at runtime and the models dir is
+# mounted read-only, so only /data/projects, /data/state and the app
 # user's HOME need to be writable.
-RUN mkdir -p /app/config /app/secrets /data/projects
+RUN mkdir -p /app/config /app/secrets /data/projects /data/state
 
 # Non-root application account created inside this image. /app files stay
-# root-owned + world-readable (COPY default); /data/projects is chowned so
-# a freshly-created lens-data volume inherits writable ownership. HOME is a
-# writable home for library caches (numpy/torch config, tiktoken); bytecode
-# caching is disabled so Python never tries to write .pyc into /app.
+# root-owned + world-readable (COPY default); /data/projects and
+# /data/state are chowned so freshly-created lens-data/lens-state volumes
+# inherit writable ownership. HOME is a writable home for library caches
+# (numpy/torch config, tiktoken); bytecode caching is disabled so Python
+# never tries to write .pyc into /app.
 #
 # NOTE: an EXISTING lens-data volume was created root-owned by a prior
 # image; after upgrading, chown it once —
@@ -43,7 +45,7 @@ RUN mkdir -p /app/config /app/secrets /data/projects
 ENV PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --gid 1001 lens \
     && useradd --create-home --uid 1001 --gid 1001 lens \
-    && chown -R lens:lens /data/projects
+    && chown -R lens:lens /data/projects /data/state
 USER lens
 ENV HOME=/home/lens
 

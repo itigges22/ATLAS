@@ -24,7 +24,7 @@
 #   is alpine-based with no Go toolchain, so bind-mounting source won't
 #   recompile inside the container. For Go iteration, run the proxy on
 #   the host instead — see docs/DEVELOPMENT.md for the host workflow.
-# - llama-server, redis, sandbox not overridden — they don't change
+# - llama-server, sandbox not overridden — they don't change
 #   during typical dev work.
 #
 # See: docs/DEVELOPMENT.md, ISSUES.md PC-030.

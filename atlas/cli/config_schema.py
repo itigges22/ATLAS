@@ -69,8 +69,6 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES": Field("int", min=0),
     "ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED": Field("bool"),
     "ATLAS_CONTROL_VECTOR_LAYER_RANGE": Field("str"),
-    "ATLAS_REDIS_MAXMEMORY": Field("str"),
-    "ATLAS_REDIS_MEM": Field("str"),
     "ATLAS_SERVICE_TOKEN_FILE": Field("str"),
     "ATLAS_ALLOW_CREDENTIAL_READS": Field("bool"),
     "ATLAS_CONFIG_SCHEMA_VERSION": Field("int", min=1),
@@ -87,11 +85,19 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_AGENT_HISTORY_BUDGET": Field("int", min=0, max=10_000_000),
     "ATLAS_SANDBOX_MEM": Field("str"),   # "4g"/"0"/bytes — freeform
     "ATLAS_SANDBOX_CPUS": Field("str"),  # "2"/"0.5"/"0" — freeform
+    # Lens SQLite state store path (host/dev runs; compose pins the
+    # container path). Not ATLAS_-prefixed: read directly by the lens
+    # service, listed here so migrate() carries it forward.
+    "SQLITE_DB_PATH": Field("str"),
     # Removed keys: ignored on read, flagged as deprecated on validate.
     "ATLAS_ENABLE_TRAINING": Field("bool",
         deprecated="removed; training is always available"),
     "ATLAS_REGISTRY": Field("str",
         deprecated="removed; the registry is in-package"),
+    "ATLAS_REDIS_MAXMEMORY": Field("str",
+        deprecated="removed; lens state is SQLite (SQLITE_DB_PATH)"),
+    "ATLAS_REDIS_MEM": Field("str",
+        deprecated="removed; lens state is SQLite (SQLITE_DB_PATH)"),
 }
 
 

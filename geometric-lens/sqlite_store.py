@@ -5,7 +5,28 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get("SQLITE_DB_PATH", "geometric_state.db")
+
+def _resolve_db_path() -> str:
+    """Resolve the database path.
+
+    Precedence: SQLITE_DB_PATH env var, then /data/state/geometric_state.db
+    when /data/state exists (container deployments mount a volume there),
+    else geometric_state.db in the working directory (host/dev runs).
+    The parent directory is created when missing.
+    """
+    path = os.environ.get("SQLITE_DB_PATH")
+    if not path:
+        if os.path.isdir("/data/state"):
+            path = "/data/state/geometric_state.db"
+        else:
+            path = "geometric_state.db"
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    return path
+
+
+DB_PATH = _resolve_db_path()
 
 class SQLitePool:
     """A thread-safe singleton SQLite connection pool emulator using thread-local connections."""
@@ -27,7 +48,8 @@ class SQLitePool:
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
-            
+            conn.execute("PRAGMA busy_timeout=5000;")
+
             # Metrics daily
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS metrics_daily (
@@ -57,7 +79,11 @@ class SQLitePool:
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tasks_status_priority_created
+                ON tasks (status, priority, created_at)
+            """)
+
             # Thompson sampling state
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS thompson_state (
@@ -116,6 +142,7 @@ class SQLitePool:
             self._local.conn = sqlite3.connect(DB_PATH)
             self._local.conn.execute("PRAGMA journal_mode=WAL;")
             self._local.conn.execute("PRAGMA synchronous=NORMAL;")
+            self._local.conn.execute("PRAGMA busy_timeout=5000;")
             self._local.conn.row_factory = sqlite3.Row
         
         try:
