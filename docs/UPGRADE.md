@@ -56,7 +56,10 @@ The manual sequence above remains valid and is what `atlas upgrade`
 automates. To undo a *successful* upgrade later, `atlas rollback`
 (ROLLBACK.md) returns to the recorded restore point.
 
-Still roadmap: a digest-diff preview before applying, and cryptographic
-signature verification of the target images as an upgrade gate (image
-digests are cosign-signed today; the upgrade command does not yet verify
-them inline).
+`atlas upgrade` verifies each target image's keyless cosign signature
+before applying (best-effort: if cosign isn't installed it logs and
+continues; a signature that *fails* aborts the upgrade and the previous
+release stays in place). Override with `ATLAS_UPGRADE_SKIP_VERIFY=1`.
+
+Still roadmap: a digest-diff preview of exactly which layers change
+before applying.

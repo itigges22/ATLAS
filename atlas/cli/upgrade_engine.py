@@ -42,6 +42,11 @@ class Steps:
     readiness: Callable[[str], bool]
     smoke: Callable[[str], bool]
     log: Callable[[str], None] = field(default=lambda m: None)
+    # Verify target-image signatures before applying. Default no-op so an
+    # install without cosign still upgrades; the real step (cli/commands)
+    # runs `cosign verify` and raises UpgradeError on a bad signature.
+    verify_signatures: Callable[[str, str], None] = field(
+        default=lambda root, tag: None)
 
 
 def restore_dir(atlas_root: str) -> str:
@@ -155,6 +160,8 @@ def run_upgrade(atlas_root: str, target_tag: str, steps: Steps,
     steps.log("restore point recorded")
 
     try:
+        steps.log("verifying target image signatures…")
+        steps.verify_signatures(atlas_root, target_tag)
         steps.set_env_tag(atlas_root, target_tag)
         steps.log("staging images (pull)…")
         steps.pull(atlas_root)

@@ -44,11 +44,22 @@ def _validate(path: str) -> int:
     return 0
 
 
-def _migrate(path: str) -> int:
+def _migrate(path: str, dry_run: bool = False) -> int:
     env = _read_env(path)
     migrated, notes = cs.migrate(env)
     for n in notes:
         print(f"  {n}")
+    if dry_run:
+        added = [k for k in migrated if k not in env]
+        removed = [k for k in env if k not in migrated]
+        print(f"config migrate (preview): +{len(added)} -{len(removed)} keys, "
+              f"target schema v{cs.CONFIG_SCHEMA_VERSION}")
+        if removed:
+            print("  would remove: " + ", ".join(removed))
+        if added:
+            print("  would add:    " + ", ".join(added))
+        print("  (no changes written — drop --dry-run to apply)")
+        return 0
     # back up then rewrite as KEY=VALUE lines
     if os.path.isfile(path):
         import shutil
@@ -69,6 +80,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     for name in ("validate", "migrate"):
         p = sub.add_parser(name)
         p.add_argument("path", nargs="?", default=None)
+        if name == "migrate":
+            p.add_argument("--dry-run", action="store_true",
+                           help="preview changes without writing")
     args = parser.parse_args(argv)
     if args.cmd not in ("validate", "migrate"):
         parser.print_help()
@@ -77,4 +91,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not os.path.isfile(path):
         print(f"atlas config: no .env at {path}", file=sys.stderr)
         return 1
-    return {"validate": _validate, "migrate": _migrate}[args.cmd](path)
+    if args.cmd == "migrate":
+        return _migrate(path, dry_run=getattr(args, "dry_run", False))
+    return _validate(path)

@@ -3651,7 +3651,23 @@ class _PrivateValueStream:
 
     def write(self, text):
         from private_values import filter_private_values
-        self._stream.write(filter_private_values(text))
+        filtered = filter_private_values(text)
+        if os.environ.get("ATLAS_LOG_FORMAT", "").lower() == "json" \
+                and filtered.strip():
+            # Wrap each non-empty print line as a structured record so v3
+            # matches the other services' JSON logs (it logs via print()).
+            import json as _json
+            from structured_log import get_request_id as _get_rid
+            for line in filtered.splitlines():
+                if not line.strip():
+                    continue
+                rec = {"service": "v3-service", "level": "info", "msg": line}
+                rid = _get_rid()
+                if rid:
+                    rec["request_id"] = rid
+                self._stream.write(_json.dumps(rec) + "\n")
+            return
+        self._stream.write(filtered)
 
     def flush(self):
         self._stream.flush()

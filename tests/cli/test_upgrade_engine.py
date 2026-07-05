@@ -25,7 +25,7 @@ class FakeSteps:
 
     def __init__(self, fail_on=None, ready=True, smoke=True):
         self.calls = []
-        self.fail_on = fail_on          # "pull" | "up" | None
+        self.fail_on = fail_on          # "verify" | "pull" | "up" | None
         self._ready = ready
         self._smoke = smoke
         self.tag_writes = []
@@ -47,6 +47,11 @@ class FakeSteps:
             if self.fail_on == "up":
                 raise eng.UpgradeError("up failed (simulated)")
 
+        def verify(root, tag):
+            self.calls.append(("verify", tag))
+            if self.fail_on == "verify":
+                raise eng.UpgradeError("bad signature (simulated)")
+
         return eng.Steps(
             snapshot_digests=lambda root: {"atlas-proxy": "sha256:old"},
             set_env_tag=set_tag,
@@ -54,6 +59,7 @@ class FakeSteps:
             up=up,
             readiness=lambda root: self._ready,
             smoke=lambda root: self._smoke,
+            verify_signatures=verify,
             log=lambda m: self.calls.append(("log", m)),
         )
 
@@ -163,3 +169,15 @@ def test_rollback_without_point_errors(tmp_path):
     with pytest.raises(eng.UpgradeError) as ei:
         eng.run_rollback(root, fake.as_steps(root))
     assert "no restore point" in str(ei.value)
+
+
+def test_bad_signature_aborts_and_restores(tmp_path):
+    root = _root(tmp_path, "v1.0.0")
+    fake = FakeSteps(fail_on="verify")
+    with pytest.raises(eng.UpgradeError) as ei:
+        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stampV")
+    assert "Automatically restored" in str(ei.value)
+    # never advanced past verify: no pull/up of the target
+    up_target = [t for (c, t) in fake.calls if c == "up" and t == "v2.0.0"]
+    assert not up_target
+    assert eng.read_env_tag(root) == "v1.0.0"

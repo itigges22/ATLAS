@@ -26,6 +26,39 @@ def _compose(atlas_root: str, args: List[str], timeout: int = 600) -> None:
         raise eng.UpgradeError(f"`{' '.join(args[:2])}` failed (exit {rc})")
 
 
+_IMAGES = ["atlas-proxy", "atlas-v3", "atlas-lens", "atlas-sandbox"]
+_OWNER = os.environ.get("ATLAS_GHCR_OWNER", "itigges22")
+_COSIGN_IDENTITY = (
+    r"https://github.com/itigges22/ATLAS/.github/workflows/"
+    r"build-images.yml@refs/heads/.*")
+_COSIGN_ISSUER = "https://token.actions.githubusercontent.com"
+
+
+def _verify_signatures(atlas_root: str, tag: str) -> None:
+    """Verify each target image's keyless cosign signature. Best-effort:
+    if cosign isn't installed we log and continue (an install without
+    cosign still upgrades); a signature that FAILS verification raises
+    UpgradeError so the upgrade aborts + restores. Skippable with
+    ATLAS_UPGRADE_SKIP_VERIFY=1."""
+    import shutil
+    if os.environ.get("ATLAS_UPGRADE_SKIP_VERIFY") == "1":
+        return
+    if shutil.which("cosign") is None:
+        print("  (cosign not installed — skipping signature verification)")
+        return
+    for img in _IMAGES:
+        ref = f"ghcr.io/{_OWNER}/{img}:{tag}"
+        rc = subprocess.call(
+            ["cosign", "verify",
+             "--certificate-identity-regexp", _COSIGN_IDENTITY,
+             "--certificate-oidc-issuer", _COSIGN_ISSUER, ref],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if rc != 0:
+            raise eng.UpgradeError(
+                f"signature verification failed for {ref} — refusing to "
+                "upgrade (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
+
+
 def _snapshot_digests(atlas_root: str) -> Dict[str, str]:
     """Current image digests per service (best-effort; empty on failure —
     the restore point still records the tag + .env backup)."""
@@ -113,6 +146,7 @@ def _default_steps() -> eng.Steps:
         up=lambda root: _compose(root, ["up", "-d"]),
         readiness=_readiness,
         smoke=_smoke,
+        verify_signatures=_verify_signatures,
         log=lambda m: print(f"  {m}"),
     )
 

@@ -115,22 +115,22 @@ Last updated: 2026-07-05 (dev) — P0.7–16 landed; documented remainders close
 
 ---
 
-## Repository-maintenance items (remaining in-repo work)
+## Repository-maintenance items (P0.7–16) — completed
 
-These need no external resource — code/docs work not yet done or partial.
+All landed this program with tests + docs; see per-item commits.
 
-| # | Item | Status | Owner | Required changes | Tests / CI | Docs | Current state |
-|---|---|---|---|---|---|---|---|
-| P0.7 | Versioned API + machine-readable schemas | Repository-maintenance (not started) | repo | Version fields + OpenAPI/JSON-Schema for proxy/v3/lens/sandbox + SSE events; stable error codes | Contracts exist as regex drift tests; no schema/compat tests | API.md, PROTOCOL.md | Drift tests pass; no version fields |
-| P0.8 | Typed config + migration | Repository-maintenance (partial) | repo | Typed config model + validation; schema-version fields; migration preview/backup/rollback | `test_config_contract.py` (key↔reader↔doc) | CONFIGURATION.md | Additive-key tolerance exists; no typed validation or versioned migration |
-| P0.9 | Automated upgrade / rollback commands | Repository-maintenance (procedures done, commands not) | repo | `atlas upgrade` / `atlas rollback` (staged, verified, smoke-gated, auto-restore) | none yet | UPGRADE.md, ROLLBACK.md | Manual pin-based procedures documented + proven |
-| P0.10 | Signed artifact manifests + bundle rollback | Repository-maintenance (partial) | repo | Signed per-bundle manifest; `atlas artifact verify`/`rollback`; keep-previous-bundle | `test_model.py` (hash/tamper) | SECURITY.md, CALIBRATION_PROVENANCE.md | Hash-pin + identity/dim checks enforced; no signature layer, no keep-previous |
-| P0.11 | Structured logging + diagnostics bundle | Repository-maintenance (partial) | repo | Unified JSON logs + correlation IDs; `atlas diagnostics collect` | filtering covered (P0.3) | — | Filtering done; logs not uniform JSON; no diagnostics command |
-| P0.12 | Dependency/repo quality CI checks | Repository-maintenance (partial) | repo | container/secret/license scans; SBOM validation; staticcheck; typing | pinning (P0.4), CodeQL, Dependabot | — | Pinning + CodeQL + Dependabot run; scans/typing not added |
-| P0.13 | Local boundary regression tests | Repository-maintenance (partial) | repo | Symlink/TOCTOU/hardlink/limit matrix; trust-mode gating | containment/traversal/tamper/tree-kill tests exist | SECURITY.md | Core containment tested; full matrix + trust modes not built |
-| P0.14 | Concurrency / recovery tests | Repository-maintenance (not started) | repo | Multi-session/workspace, cancellation races, mid-op interruption, soak | race detector on Go suites | — | No concurrency/soak/chaos suite |
-| P0.15 | Performance harness + budgets | Repository-maintenance (not started) | repo | Versioned result format + budgets + regression gate | none | benchmark/README.md | Format not built; budgets undefined |
-| P0.16 | Lens bundle provenance manifest | Repository-maintenance (partial) | repo | Per-bundle signed provenance manifest; auto-embed | — | CALIBRATION_PROVENANCE.md | §9.5 manifest recorded for gemma; not auto-embedded per bundle |
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| P0.7 | Versioned API + schemas + error taxonomy | **Done** | `/version`, 12-code taxonomy, OpenAPI 3.1 + route-parity contract |
+| P0.8 | Typed config + validation + migration | **Done** | typed schema, `atlas config validate/migrate` (+ `--dry-run` preview, `.env.bak`), precedence-aware resolver |
+| P0.9 | Automated upgrade / rollback | **Done** | `atlas upgrade`/`rollback`, auto-restore on failure, cosign signature verification before apply |
+| P0.10 | Signed artifact manifests + rollback | **Done** | sign/verify (signature + per-file hash), `atlas artifact verify/snapshot/rollback` |
+| P0.11 | Structured logging + diagnostics | **Done** | `atlas diagnostics collect`, JSON logs + cross-service correlation IDs |
+| P0.12 | Dependency/repo quality CI | **Done** | staticcheck, secret scan, license check, scoped mypy, container scan, SBOM+provenance attestation verify |
+| P0.13 | Local boundary regression tests | **Done** | 23-case matrix (symlink/TOCTOU/limits) + trust modes + conservative sandbox defaults |
+| P0.14 | Concurrency / recovery tests | **Done** | deterministic suite; caught + fixed an atomic-write race |
+| P0.15 | Performance harness + budgets | **Done** | versioned result format + deterministic budget gate wired into CI |
+| P0.16 | Lens provenance manifest | **Done** | auto-written on retrain, completeness-gates Supported |
 
 ---
 
@@ -175,10 +175,10 @@ longer blockers:
 | 6 | Non-root proxy/v3/lens | **Done** |
 | 7 | Versioned API + schemas | **Done** (version endpoint, error taxonomy, OpenAPI 3.1 + route-parity) |
 | 8 | Typed config + migration | **Done** (typed schema, validate/migrate, precedence-aware resolver) |
-| 9 | Upgrade/rollback commands | **Done** (atlas upgrade/rollback, auto-restore) |
+| 9 | Upgrade/rollback commands | **Done** (auto-restore + cosign verify before apply) |
 | 10 | Signed artifact manifests | **Done** (sign/verify + snapshot/rollback) |
 | 11 | Structured logs + diagnostics | **Done** (diagnostics bundle + JSON logs + cross-service correlation IDs) |
-| 12 | Dependency/repo quality checks | **Done** (staticcheck, secret scan, license check, scoped mypy, container scan); SBOM-attestation validation remains |
+| 12 | Dependency/repo quality checks | **Done** (staticcheck, secret scan, license check, scoped mypy, container scan, SBOM+provenance attestation verify) |
 | 13 | Local boundary regression tests | **Done** (matrix + trust modes) |
 | 14 | Concurrency/recovery tests | **Done** (deterministic suite) |
 | 15 | Performance harness + budgets | **Done** (versioned format + gate) |
