@@ -15,6 +15,7 @@ registry. The default callables shell out to docker compose + doctor.
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
@@ -91,10 +92,17 @@ def write_restore_point(atlas_root: str, previous_tag: str, target_tag: str,
         "env_backup": os.path.relpath(env_backup, atlas_root)
         if os.path.isfile(env_backup) else None,
     }
-    tmp = restore_point_path(atlas_root) + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(point, fh, indent=2)
-    os.replace(tmp, restore_point_path(atlas_root))
+    # Unique temp in the same dir so concurrent writers don't race on a
+    # shared .tmp name; os.replace is atomic on the final path.
+    dest = restore_point_path(atlas_root)
+    fd, tmp = tempfile.mkstemp(dir=rdir, prefix=".rp-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(point, fh, indent=2)
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return env_backup
 
 

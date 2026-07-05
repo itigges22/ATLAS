@@ -68,10 +68,16 @@ def _set_env_tag(atlas_root: str, tag: str) -> None:
                     lines.append(line)
     if not found:
         lines.append(f"ATLAS_IMAGE_TAG={tag}\n")
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.writelines(lines)
-    os.replace(tmp, path)
+    import tempfile
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".env-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.writelines(lines)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def _readiness(atlas_root: str, timeout_s: int = 180) -> bool:
