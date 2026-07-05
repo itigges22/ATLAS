@@ -44,6 +44,8 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | `atlas asa check \| build \| publish` | ASA control-vector compat probe + per-model training + publish (see below). |
 | `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both. `--lens-only` / `--asa-only` delegate to the per-component flows. |
 | `atlas compose <args...>` | `docker compose` passthrough with ATLAS's compose file set (base file + the backend overlay resolved from `ATLAS_BACKEND`). E.g. `atlas compose ps`, `atlas compose logs -f atlas-proxy`. |
+| `atlas upgrade [--to TAG] [--skip-smoke] [--yes]` | Staged upgrade: records a restore point (current tag + image digests + `.env` backup), stages the target images, starts them, waits for readiness, runs a quick-doctor smoke check, and finalizes. **Any failure automatically restores the previous release.** Default target is `latest`. |
+| `atlas rollback [--to TAG] [--yes]` | Return the deployment to a working release. With no argument, restores the last upgrade's previous release from the recorded restore point; `--to <tag>` points at a specific immutable tag. See ROLLBACK.md. |
 
 `atlas --help` (or `-h`) prints the subcommand list. `atlas --version` (or `-V`) prints the CLI version. An unknown subcommand prints the same usage to stderr and exits 2.
 

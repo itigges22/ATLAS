@@ -1,5 +1,17 @@
 # Rolling back ATLAS
 
+## Automated (`atlas rollback`)
+
+```bash
+atlas rollback            # restore the last upgrade's previous release
+atlas rollback --to v1.1.0  # or target a specific immutable tag
+```
+
+With no argument it reads the restore point written by `atlas upgrade`
+(`.atlas-upgrade/restore-point.json`) and brings the previous release
+back up. The manual procedures below are the equivalent by hand and the
+fallback when no restore point exists.
+
 ## Images
 
 Every push publishes immutable `sha-<commit>` tags and releases publish

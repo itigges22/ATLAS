@@ -718,6 +718,8 @@ _SUBCOMMAND_HELP = [
     ("publish", "publish lens + ASA artifacts in one step"),
     ("bench",   "run benchmarks with live progress"),
     ("compose", "docker compose with ATLAS's compose files"),
+    ("upgrade", "staged upgrade with auto-restore on failure"),
+    ("rollback","return the deployment to a previous release"),
     ("tui",     "launch the terminal UI"),
 ]
 
