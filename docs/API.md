@@ -1149,8 +1149,10 @@ code set), never on `detail`** (the human message may change):
 Codes: `unauthorized`, `invalid_input`, `unsupported_operation`,
 `permission_denied`, `timeout`, `cancelled`, `dependency_unavailable`,
 `incompatible_artifact`, `resource_limit`, `sandbox_policy_rejected`,
-`model_failure`, `internal_error`. Machine-readable JSON Schemas for the
-error and SSE envelopes live in `docs/schemas/`.
+`model_failure`, `internal_error`. Machine-readable schemas live in `docs/schemas/`: the full
+OpenAPI 3.1 spec for this surface (`proxy_openapi.yaml`, parity-checked
+against the registered routes in CI) plus JSON Schemas for the error and
+SSE envelopes.
 
 ## Building a non-TUI client
 

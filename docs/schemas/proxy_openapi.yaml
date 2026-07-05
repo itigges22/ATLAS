@@ -1,0 +1,140 @@
+openapi: 3.1.0
+info:
+  title: ATLAS Proxy API
+  description: >
+    HTTP + SSE surface of atlas-proxy (the agent control plane). Versioned
+    by GET /version (api_version); breaking changes bump the major. Error
+    responses use the stable error envelope (see error_envelope.schema.json)
+    — clients switch on the `error` code, never the human `detail`.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8090
+    description: Local proxy (loopback only by default)
+paths:
+  /version:
+    get:
+      summary: API + protocol version and the error-code set
+      security: []
+      responses:
+        "200":
+          description: Version info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_version: {type: string}
+                  protocol_version: {type: integer}
+                  error_codes: {type: array, items: {type: string}}
+  /health:
+    get:
+      summary: Liveness (pings llama-server); headerless — auth-exempt
+      security: []
+      responses:
+        "200": {description: Proxy up}
+  /ready:
+    get:
+      summary: Readiness (llama + v3 reachable); auth-exempt
+      security: []
+      responses:
+        "200": {description: Ready}
+        "503": {description: A dependency is not ready}
+  /v1/models:
+    get:
+      summary: Forwarded model list from llama-server
+      responses:
+        "200": {description: Model list}
+  /models:
+    get:
+      summary: Alias of /v1/models
+      responses:
+        "200": {description: Model list}
+  /v1/agent:
+    post:
+      summary: Run one agent turn; streams SSE events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string}
+                working_dir: {type: string}
+                mode: {type: string, enum: [default, accept-edits, yolo]}
+                session_id: {type: string}
+      responses:
+        "200":
+          description: SSE stream of events (see sse_envelope.schema.json)
+          content:
+            text/event-stream: {schema: {type: string}}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /events:
+    get:
+      summary: Global typed-envelope SSE feed
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream: {schema: {type: string}}
+  /cancel:
+    post:
+      summary: Abort the in-flight turn for a session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {session_id: {type: string}}
+      responses:
+        "200": {description: Cancelled}
+  /v1/permission:
+    post:
+      summary: Answer a pending permission_request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, tool_call_id, decision]
+              properties:
+                session_id: {type: string}
+                tool_call_id: {type: string}
+                decision: {type: string, enum: [allow, deny]}
+                scope: {type: string, enum: [once, session]}
+      responses:
+        "200": {description: Decision delivered}
+  /feedback:
+    post:
+      summary: Per-file accept/deny + pass signals into lens samples
+      responses:
+        "200": {description: Recorded}
+  /v1/lens/training-status:
+    get:
+      summary: Labeled-sample counts for the retrain-available alert
+      responses:
+        "200": {description: Counts}
+  /v1/calibration/status:
+    get:
+      summary: Lens/ASA status incl. the seven canonical dimensions
+      responses:
+        "200": {description: Calibration status}
+components:
+  securitySchemes:
+    serviceToken:
+      type: http
+      scheme: bearer
+      description: >
+        Per-installation service token (secrets/service-token). Required on
+        all routes except /health, /ready, /version when a token is
+        configured.
+  responses:
+    Unauthorized:
+      description: Missing/invalid service token (error code `unauthorized`)
+      content:
+        application/json:
+          schema: {$ref: "./error_envelope.schema.json"}
+security:
+  - serviceToken: []
