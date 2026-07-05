@@ -68,6 +68,12 @@ package-lock.json
 .DS_Store
 Thumbs.db
 
+# Lens SQLite state from host/dev runs (containers keep it on the
+# lens-state volume; a bare `uvicorn main:app` drops it in the cwd)
+geometric_state.db
+geometric_state.db-wal
+geometric_state.db-shm
+
 # ----- Logs -----
 *.log
 logs/

@@ -24,10 +24,12 @@ The entire learned state is one file: `geometric_state.db` at
 `lens-state` volume. Two safe ways to copy it out:
 
 ```bash
-# 1. Cold copy — stop the stack first (no writers, plain file copy)
+# 1. Cold copy — stop the stack first (no writers, plain file copy).
+#    Copy the WAL/SHM siblings too: recent commits can still live in
+#    geometric_state.db-wal until SQLite checkpoints them.
 docker compose stop
 docker run --rm -v atlas_lens-state:/data/state -v "$PWD":/backup alpine \
-  cp /data/state/geometric_state.db /backup/geometric_state.db
+  sh -c 'cp /data/state/geometric_state.db* /backup/'
 docker compose start
 
 # 2. Online copy — SQLite's backup API is consistent under WAL

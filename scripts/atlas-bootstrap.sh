@@ -15,10 +15,10 @@
 #   4. RHEL-family: enables EPEL, warns about nouveau. (Firewalld ports are
 #      opt-in via ATLAS_BOOTSTRAP_OPEN_FIREWALL=1 — services bind loopback.)
 #   5. Copies .env.example to .env if missing.
-#   7. Downloads model GGUFs and Lens weights from HuggingFace.
-#   8. `docker compose up -d` and waits for all services healthy.
+#   6. Downloads model GGUFs and Lens weights from HuggingFace.
+#   7. `docker compose up -d` and waits for all services healthy.
 #      (ROCm hosts: brings up with -f docker-compose.rocm.yml override.)
-#   9. Prints a green "ATLAS ready" banner and the next-step command.
+#   8. Prints a green "ATLAS ready" banner and the next-step command.
 #
 # Idempotent — safe to re-run. Each step checks "already done" before acting.
 #

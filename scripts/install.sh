@@ -429,6 +429,11 @@ process_templates() {
     # Ensure manifests directory exists
     mkdir -p "$manifest_dir"
 
+    # An atlas.conf written before the SQLite state store existed won't
+    # define the lens-state PVC size; default it here rather than letting
+    # envsubst render an empty storage: field (kubectl rejects the PVC).
+    : "${ATLAS_PVC_LENS_STATE_SIZE:=1Gi}"
+
     # Export all ATLAS_ variables for envsubst
     export "${!ATLAS_@}"
 

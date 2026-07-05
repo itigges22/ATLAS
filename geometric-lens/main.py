@@ -182,13 +182,14 @@ def _run_lens_self_test() -> None:
 
 def _db_state() -> Dict[str, Any]:
     """State of the SQLite store backing patterns, router state, and the
-    task queue. Probes with a trivial query so a broken file/volume shows
-    up as connected=False rather than only failing on first write."""
+    task queue. Probes a real table (not SELECT 1) so a schema-less or
+    broken file/volume shows up as connected=False rather than only
+    failing on first write."""
     import sqlite_store
     try:
         pool = get_db_pool()
         with pool.get_connection() as conn:
-            conn.execute("SELECT 1")
+            conn.execute("SELECT COUNT(*) FROM store_metadata")
         return {"connected": True, "path": sqlite_store.DB_PATH}
     except Exception as e:
         return {"connected": False, "path": sqlite_store.DB_PATH,

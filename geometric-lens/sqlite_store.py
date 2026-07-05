@@ -36,9 +36,14 @@ class SQLitePool:
     def __new__(cls):
         with cls._lock:
             if cls._instance is None:
-                cls._instance = super(SQLitePool, cls).__new__(cls)
-                cls._instance._local = threading.local()
-                cls._instance._init_db()
+                # Cache the instance only after the schema init succeeds —
+                # a transient failure here (locked file, unwritable path)
+                # must surface again on the next call, not hand every
+                # caller a permanently schema-less pool.
+                instance = super(SQLitePool, cls).__new__(cls)
+                instance._local = threading.local()
+                instance._init_db()
+                cls._instance = instance
         return cls._instance
 
     def _init_db(self):

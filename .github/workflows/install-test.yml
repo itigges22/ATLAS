@@ -55,7 +55,6 @@ jobs:
             -e ATLAS_BOOTSTRAP_SKIP_NVIDIA=1 \
             -e ATLAS_BOOTSTRAP_SKIP_MODELS=1 \
             -e ATLAS_BOOTSTRAP_SKIP_COMPOSE=1 \
-            -e ATLAS_BOOTSTRAP_SKIP_SYSCTL=1 \
             ${{ matrix.distro.image }} \
             bash -c '
               set -euo pipefail
@@ -161,7 +160,6 @@ jobs:
             -e ATLAS_BOOTSTRAP_SKIP_NVIDIA=1 \
             -e ATLAS_BOOTSTRAP_SKIP_MODELS=1 \
             -e ATLAS_BOOTSTRAP_SKIP_COMPOSE=1 \
-            -e ATLAS_BOOTSTRAP_SKIP_SYSCTL=1 \
             ubuntu:24.04 \
             bash -c '
               set -euo pipefail
