@@ -13,10 +13,12 @@ documentation, and evidence. Status vocabulary:
 - **Roadmap** — deliberately deferred feature work (labeled `roadmap`).
 - **Unsupported** — explicitly out of scope.
 
-ATLAS is **not** claimed to be mature production-grade. The security,
-supply-chain, packaging, and status-clarity foundations are in place and
-tested; several hardening items remain repository-maintenance work, and a
-short list of items is genuinely external. This file is the honest ledger.
+ATLAS is **not** claimed to be mature production-grade — that bar
+includes real-model validation across the support matrix and a second
+release-capable maintainer, both external. But every repository-
+controlled P0 item (1–17) is now implemented, tested, and CI-gated; the
+only open items are the genuinely external ones below. This file is the
+honest ledger.
 
 Last updated: 2026-07-05 (dev) — P0.7–16 landed; documented remainders closed (OpenAPI, precedence resolver, JSON logs + correlation IDs, license/mypy/container-scan).
 

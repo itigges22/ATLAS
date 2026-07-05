@@ -61,5 +61,6 @@ before applying (best-effort: if cosign isn't installed it logs and
 continues; a signature that *fails* aborts the upgrade and the previous
 release stays in place). Override with `ATLAS_UPGRADE_SKIP_VERIFY=1`.
 
-Still roadmap: a digest-diff preview of exactly which layers change
-before applying.
+`atlas upgrade --to <tag> --dry-run` previews the plan (current tag +
+image digests → target, and the ordered steps) without changing
+anything.

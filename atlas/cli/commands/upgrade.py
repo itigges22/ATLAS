@@ -79,10 +79,16 @@ def _snapshot_digests(atlas_root: str) -> Dict[str, str]:
             rec = json.loads(line)
         except ValueError:
             continue
-        svc = rec.get("Service") or rec.get("Repository") or ""
-        dig = rec.get("ID") or rec.get("Digest") or ""
-        if svc and dig:
-            digests[svc] = dig
+        # `docker compose images --format json` may emit JSONL objects or
+        # a single array; only per-image dicts carry the fields we want.
+        records = rec if isinstance(rec, list) else [rec]
+        for r in records:
+            if not isinstance(r, dict):
+                continue
+            svc = r.get("Service") or r.get("Repository") or ""
+            dig = r.get("ID") or r.get("Digest") or ""
+            if svc and dig:
+                digests[svc] = dig
     return digests
 
 
@@ -166,6 +172,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="skip the post-upgrade doctor smoke check")
     parser.add_argument("--yes", action="store_true",
                         help="don't prompt before starting")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="show the upgrade plan (current tag/digests → "
+                             "target) without applying anything")
     args = parser.parse_args(argv)
 
     atlas_root = compose_config.find_atlas_root()
@@ -174,6 +183,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     previous = eng.read_env_tag(atlas_root)
+
+    if args.dry_run:
+        digests = _snapshot_digests(atlas_root)
+        print(f"upgrade plan: {previous} → {args.to}")
+        if digests:
+            print("  current image digests:")
+            for svc, dig in sorted(digests.items()):
+                print(f"    {svc}: {dig}")
+        else:
+            print("  (no running images to diff against)")
+        print("  target digests resolve on `docker compose pull` at apply.")
+        print("  steps: verify signatures → record restore point → pull → "
+              "up → readiness → smoke → finalize (auto-restore on failure).")
+        print("  (dry run — nothing changed)")
+        return 0
+
     if not args.yes and previous != args.to:
         print(f"Upgrade {previous} → {args.to}. A restore point is recorded "
               "first; a failed upgrade auto-restores the previous release.")
