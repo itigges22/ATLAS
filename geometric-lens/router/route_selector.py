@@ -4,7 +4,7 @@ import logging
 import random
 from typing import Dict, Tuple
 
-import redis as redis_lib
+from sqlite_store import get_db_pool
 
 from models.route import (
     Route, DifficultyBin, ROUTE_COSTS, ROUTE_RETRY_BUDGET,
@@ -13,73 +13,43 @@ from models.route import (
 
 logger = logging.getLogger(__name__)
 
-# Redis key prefix for Thompson state
-KEY_PREFIX = "confidence_router:thompson"
-
-
-def _key(difficulty_bin: DifficultyBin, route: Route, param: str) -> str:
-    """Build Redis key for Thompson state."""
-    return f"{KEY_PREFIX}:{difficulty_bin.value}:{route.value}:{param}"
-
-
 def _load_thompson_state(
-    r: redis_lib.Redis,
     difficulty_bin: DifficultyBin,
 ) -> Dict[Route, Tuple[float, float]]:
-    """Load (alpha, beta) for all routes in a difficulty bin from Redis.
+    """Load (alpha, beta) for all routes in a difficulty bin from SQLite.
 
-    Redis stores raw outcome counts (0-based via incrbyfloat).
     We add 1.0 as the Beta prior: alpha = successes + 1, beta = failures + 1.
     """
     states = {}
+    pool = get_db_pool()
+    with pool.get_connection() as conn:
+        cur = conn.execute(
+            "SELECT route, alpha, beta FROM thompson_state WHERE difficulty_bin = ?", 
+            (difficulty_bin.value,)
+        )
+        rows = cur.fetchall()
+        db_states = {row["route"]: (row["alpha"], row["beta"]) for row in rows}
+
     for route in Route:
-        alpha_key = _key(difficulty_bin, route, "alpha")
-        beta_key = _key(difficulty_bin, route, "beta")
-        try:
-            raw_alpha = float(r.get(alpha_key) or 0.0)
-            raw_beta = float(r.get(beta_key) or 0.0)
-        except (TypeError, ValueError):
-            raw_alpha, raw_beta = 0.0, 0.0
+        raw_alpha, raw_beta = db_states.get(route.value, (0.0, 0.0))
         # Add Beta(1,1) uniform prior
         states[route] = (raw_alpha + 1.0, raw_beta + 1.0)
     return states
 
 
-def _save_thompson_param(
-    r: redis_lib.Redis,
-    difficulty_bin: DifficultyBin,
-    route: Route,
-    alpha: float,
-    beta: float,
-):
-    """Persist Thompson (alpha, beta) to Redis."""
-    pipe = r.pipeline()
-    pipe.set(_key(difficulty_bin, route, "alpha"), str(alpha))
-    pipe.set(_key(difficulty_bin, route, "beta"), str(beta))
-    pipe.execute()
-
-
 def select_route(
-    r: redis_lib.Redis,
     signals: SignalBundle,
     difficulty: float,
     cache_hit_available: bool = False,
 ) -> RouteDecision:
     """
     Select the best route via Thompson Sampling weighted by cost efficiency.
-
-    Steps:
-      1. Bin the difficulty score
-      2. Sample from Beta(alpha, beta) posterior for each candidate route
-      3. Weight by cost efficiency: sample / route_cost
-      4. Apply difficulty-based constraints
-      5. Select route with highest cost-weighted sample
     """
     d_bin = difficulty_to_bin(difficulty)
 
-    # Load Thompson state from Redis
+    # Load Thompson state from SQLite
     try:
-        states = _load_thompson_state(r, d_bin)
+        states = _load_thompson_state(d_bin)
     except Exception as e:
         logger.warning(f"Failed to load Thompson state: {e}, defaulting to STANDARD")
         return RouteDecision(
@@ -140,19 +110,28 @@ def select_route(
     )
 
 
-def get_all_thompson_states(r: redis_lib.Redis) -> Dict[str, Dict[str, dict]]:
+def get_all_thompson_states() -> Dict[str, Dict[str, dict]]:
     """Get all Thompson states for monitoring. Returns {bin: {route: {alpha, beta, mean, samples}}}."""
     result = {}
+    try:
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            cur = conn.execute("SELECT difficulty_bin, route, alpha, beta FROM thompson_state")
+            rows = cur.fetchall()
+            
+        db_data = {}
+        for row in rows:
+            if row["difficulty_bin"] not in db_data:
+                db_data[row["difficulty_bin"]] = {}
+            db_data[row["difficulty_bin"]][row["route"]] = (row["alpha"], row["beta"])
+    except Exception as e:
+        logger.error(f"Failed to fetch thompson states: {e}")
+        db_data = {}
+
     for d_bin in DifficultyBin:
         bin_states = {}
         for route in Route:
-            alpha_key = _key(d_bin, route, "alpha")
-            beta_key = _key(d_bin, route, "beta")
-            try:
-                raw_alpha = float(r.get(alpha_key) or 0.0)
-                raw_beta = float(r.get(beta_key) or 0.0)
-            except (TypeError, ValueError):
-                raw_alpha, raw_beta = 0.0, 0.0
+            raw_alpha, raw_beta = db_data.get(d_bin.value, {}).get(route.value, (0.0, 0.0))
 
             # Add Beta(1,1) prior
             alpha = raw_alpha + 1.0
@@ -169,16 +148,16 @@ def get_all_thompson_states(r: redis_lib.Redis) -> Dict[str, Dict[str, dict]]:
     return result
 
 
-def reset_thompson_state(r: redis_lib.Redis):
+def reset_thompson_state():
     """Reset all Thompson state to uniform priors (alpha=1, beta=1).
-
     Deletes raw count keys so they read as 0.0, and the +1.0 prior offset
     restores uniform Beta(1,1).
     """
-    pipe = r.pipeline()
-    for d_bin in DifficultyBin:
-        for route in Route:
-            pipe.delete(_key(d_bin, route, "alpha"))
-            pipe.delete(_key(d_bin, route, "beta"))
-    pipe.execute()
-    logger.info("Thompson Sampling state reset to uniform priors")
+    try:
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            conn.execute("DELETE FROM thompson_state")
+        logger.info("Thompson Sampling state reset to uniform priors")
+    except Exception as e:
+        logger.error(f"Failed to reset thompson state: {e}")
+
