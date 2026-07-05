@@ -13,7 +13,8 @@
 #        AMD    -> verifies /dev/kfd + adds user to render/video groups
 #        (Apple Silicon / Intel Arc not yet supported — V3.1.2 roadmap)
 #   4. Sets vm.overcommit_memory=1 (PC-011 — Redis silent-write killer).
-#   5. RHEL-family: enables EPEL, opens firewalld ports, blacklists nouveau.
+#   5. RHEL-family: enables EPEL, warns about nouveau. (Firewalld ports are
+#      opt-in via ATLAS_BOOTSTRAP_OPEN_FIREWALL=1 — services bind loopback.)
 #   6. Copies .env.example to .env if missing.
 #   7. Downloads model GGUFs and Lens weights from HuggingFace.
 #   8. `docker compose up -d` and waits for all services healthy.
@@ -35,9 +36,13 @@
 #   ATLAS_BOOTSTRAP_SKIP_COMPOSE=1    skip `docker compose up`
 #   ATLAS_BOOTSTRAP_SKIP_SYSCTL=1     skip vm.overcommit_memory write (CI / unpriv. containers)
 #   ATLAS_BOOTSTRAP_SKIP_ASA=1        skip ASA steering-vector build (BiasBusters #4 — optional, ~5 min)
+#   ATLAS_BOOTSTRAP_OPEN_FIREWALL=1   open service ports in firewalld (default: off —
+#                                     compose publishes on 127.0.0.1 only, so no
+#                                     firewall change is needed for local use)
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
+#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.24.0)
 #
 # Exit codes:
 #   0   success
@@ -116,10 +121,68 @@ if [[ "$(id -u)" == "0" ]]; then
         TARGET_GID=0
     fi
 else
-    TARGET_USER="$USER"
+    TARGET_USER="$(id -un)"
     TARGET_UID=$(id -u)
     TARGET_GID=$(id -g)
 fi
+
+target_home_dir() {
+    if [[ "$TARGET_USER" == "root" ]]; then
+        printf '%s\n' "/root"
+        return
+    fi
+
+    local home
+    home=$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6 || true)
+    if [[ -n "$home" ]]; then
+        printf '%s\n' "$home"
+    elif [[ "$TARGET_USER" == "$(id -un)" ]]; then
+        printf '%s\n' "$HOME"
+    else
+        printf '%s\n' "/home/$TARGET_USER"
+    fi
+}
+
+# Run ownership-sensitive work as the human who will use ATLAS. When this
+# script was launched with `sudo bash`, SUDO is intentionally empty because
+# root does not need elevation; that does not mean `-u user` can be invoked on
+# its own. Keep de-escalation separate from the elevation wrapper.
+run_as_target() {
+    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
+        if command -v sudo &>/dev/null; then
+            sudo -H -u "$TARGET_USER" -- "$@"
+        elif command -v runuser &>/dev/null; then
+            runuser -u "$TARGET_USER" -- "$@"
+        else
+            log_err "Cannot run as $TARGET_USER: neither sudo nor runuser is available."
+            return 1
+        fi
+    else
+        "$@"
+    fi
+}
+
+ensure_target_profile_path() {
+    local marker="$1"
+    local export_line="$2"
+    local target_home
+    target_home=$(target_home_dir)
+
+    # .profile covers login shells and is created when absent. Also update an
+    # existing .bashrc for interactive shells, without duplicating entries on
+    # repeat installs.
+    local profile
+    for profile in "$target_home/.profile" "$target_home/.bashrc"; do
+        if [[ "$profile" == *.bashrc && ! -e "$profile" ]]; then
+            continue
+        fi
+        if ! grep -Fq "$marker" "$profile" 2>/dev/null; then
+            printf '%s\n' "$export_line" | run_as_target tee -a "$profile" >/dev/null \
+                || return 1
+            log_info "Added $marker to PATH in $profile"
+        fi
+    done
+}
 
 # ---------------------------------------------------------------------------
 # Docker invocation prefix
@@ -216,13 +279,16 @@ detect_gpu() {
             GPU_VENDOR="nvidia"
             HAS_NVIDIA=1
             GPU_NAME=$(lspci 2>/dev/null | grep -i 'nvidia' | head -1 | sed 's/.*: //')
-        # AMD GPUs identify as "Advanced Micro Devices" or "ATI"; further
+        # AMD GPUs identify as "Advanced Micro Devices" or "[AMD/ATI]"; further
         # filter to actual display/compute GPUs (skip audio controllers
-        # which also show as AMD).
-        elif lspci 2>/dev/null | grep -iE '(vga|3d|display).*(amd|ati|advanced micro devices)' | grep -qi .; then
+        # which also show as AMD). NOTE: "ati" must be word-bounded (\bati\b)
+        # — a bare "ati" matches the "ati" inside "Corporation", which every
+        # NVIDIA and Intel lspci line contains, and misdetects them as AMD
+        # (GH #129: an RTX 5090 was routed down the ROCm path and failed).
+        elif lspci 2>/dev/null | grep -iE '(vga|3d|display).*(amd|\bati\b|advanced micro devices)' | grep -qi .; then
             GPU_VENDOR="amd"
             HAS_AMD=1
-            GPU_NAME=$(lspci 2>/dev/null | grep -iE '(vga|3d|display).*(amd|ati|advanced micro devices)' | head -1 | sed 's/.*: //')
+            GPU_NAME=$(lspci 2>/dev/null | grep -iE '(vga|3d|display).*(amd|\bati\b|advanced micro devices)' | head -1 | sed 's/.*: //')
         fi
     fi
     # SMI fallbacks — useful when lspci is missing (some containers) or
@@ -387,7 +453,7 @@ install_nvidia_driver_libs() {
                         | head -1 | cut -d. -f1)
             if [[ -z "$drv_major" || "$drv_major" == "0" ]]; then
                 log_err "nvidia-smi didn't return a driver version — install the NVIDIA driver first."
-                log_err "  $SUDO $PKG install -y nvidia-driver-XXX  (where XXX is your driver branch, e.g. 570)"
+                log_err "  $SUDO $PKG install -y nvidia-driver-<branch>  (your driver branch, e.g. 570)"
                 return 1
             fi
             log_info "Installing libnvidia-compute-$drv_major to match driver $drv_major…"
@@ -555,7 +621,7 @@ install_rocm_setup() {
 
     # 3. Add docker-running user to render + video so containers can
     # read /dev/kfd and /dev/dri/* via group_add in docker-compose.rocm.yml.
-    local target_user="${SUDO_USER:-$USER}"
+    local target_user="$TARGET_USER"
     if [[ "$target_user" != "root" ]]; then
         local missing_groups=""
         for grp in render video; do
@@ -615,18 +681,30 @@ install_gpu_runtime() {
 }
 
 # Returns the docker-compose -f flags appropriate for the detected GPU
-# vendor. NVIDIA (or no GPU) uses the base file alone; AMD layers the
-# ROCm override on top. Echo result so callers can splice into command
-# lines as `$(compose_files_args)`.
+# vendor. NVIDIA uses the base file alone (CUDA image + nvidia device
+# reservation); AMD layers the ROCm override on top; no detected vendor
+# gets the Vulkan overlay (which drops the NVIDIA device reservation the
+# base file makes) so the stack can boot on GPU-less hosts via the
+# lavapipe CPU ICD — and, when /dev/dri is absent too, the CPU override
+# strips the device passthrough that would otherwise fail container
+# creation. Echo result so callers can splice into command lines as
+# `$(compose_files_args)`.
 compose_files_args() {
     case "$GPU_VENDOR" in
         amd)
             echo "-f docker-compose.yml -f docker-compose.rocm.yml"
             ;;
-        *)
+        nvidia)
             # Empty = compose uses its default discovery, which is the
             # base docker-compose.yml in the CWD.
             echo ""
+            ;;
+        *)
+            if [[ -e /dev/dri ]]; then
+                echo "-f docker-compose.yml -f docker-compose.vulkan.yml"
+            else
+                echo "-f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml"
+            fi
             ;;
     esac
 }
@@ -650,8 +728,12 @@ configure_rhel_extras() {
         log_ok "EPEL already installed"
     fi
 
-    # firewalld — open compose ports if firewalld is running
-    if systemctl is-active --quiet firewalld 2>/dev/null; then
+    # firewalld — compose publishes every service on 127.0.0.1 only, so
+    # local use needs no firewall change. Opening the ports is opt-in for
+    # deployments that also rebind the services to a routable interface.
+    if [[ "${ATLAS_BOOTSTRAP_OPEN_FIREWALL:-0}" != "1" ]]; then
+        log_skip "firewall unchanged (services bind 127.0.0.1; set ATLAS_BOOTSTRAP_OPEN_FIREWALL=1 to open ports)"
+    elif systemctl is-active --quiet firewalld 2>/dev/null; then
         log_info "firewalld is active — opening ATLAS ports (8090, 8099, 8070, 30820)…"
         for port in 8090 8099 8070 30820; do
             $SUDO firewall-cmd --permanent --add-port=${port}/tcp >/dev/null 2>&1 || true
@@ -687,7 +769,11 @@ ensure_repo_and_env() {
         log_info "Not in a checkout. Cloning $repo_url to $install_dir…"
         if [[ -d "$install_dir/.git" ]]; then
             log_info "Existing checkout at $install_dir — pulling latest"
-            (cd "$install_dir" && git pull --ff-only) || die "git pull failed in $install_dir"
+            # Pull as the checkout's owner, mirroring the clone below.
+            # Running git as root in a user-owned checkout trips git's
+            # "dubious ownership" safety check and fails the re-run.
+            run_as_target git -C "$install_dir" pull --ff-only \
+                || die "git pull failed in $install_dir"
         else
             $SUDO mkdir -p "$install_dir"
             # Pre-chown the dir so the clone goes in user-owned, then
@@ -697,7 +783,7 @@ ensure_repo_and_env() {
             if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
                 # Run the clone as the target user when bootstrapping via
                 # sudo, so .git/config, hooks, etc. get the right ownership.
-                $SUDO -u "$TARGET_USER" git clone "$repo_url" "$install_dir" \
+                run_as_target git clone "$repo_url" "$install_dir" \
                     || die "git clone failed"
             else
                 git clone "$repo_url" "$install_dir" || die "git clone failed"
@@ -754,9 +840,109 @@ ensure_repo_and_env() {
         log_ok "Created .env from .env.example (edit ATLAS_MODELS_DIR if needed)"
     fi
 
-    install_atlas_cli
-    install_go
-    build_atlas_tui
+    ensure_default_model_selected
+    persist_backend_selection
+
+    install_atlas_cli || die "ATLAS CLI installation failed."
+    install_go || die "Go installation failed; atlas-tui cannot be built."
+    build_atlas_tui || die "atlas-tui build failed."
+}
+
+# Read a key's value from ./.env (first match, raw text after `=`).
+env_file_value() {
+    # `|| true`: under `set -euo pipefail`, an absent key would otherwise
+    # exit the whole script when the result is captured in a bare
+    # assignment (grep's 1 fails the pipeline) — an absent key must read
+    # as empty, not fatal. Broke every install-matrix distro when
+    # persist_backend_selection queried the commented-out ATLAS_BACKEND.
+    grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
+# Set (or append) key=value in ./.env.
+set_env_file_value() {
+    local key="$1" value="$2"
+    if grep -qE "^${key}=" .env 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${value}|" .env
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+}
+
+ensure_default_model_selected() {
+    # .env.example ships ATLAS_MODEL_FILE / ATLAS_MODEL_NAME empty (model
+    # selection normally happens in `atlas init`). A one-shot `curl | bash`
+    # install never runs the wizard, so an empty selection would kill the
+    # model-download step — and even with ATLAS_BOOTSTRAP_SKIP_MODELS=1,
+    # compose's ${ATLAS_MODEL_FILE:?} guard. Default to the registry's
+    # recommended model (atlas/cli/commands/model_registry.py — the
+    # lens-supported development target) so the advertised fully-automatic
+    # flow actually completes. An existing non-empty selection is respected.
+    local default_model_file="Qwen3.5-9B-Q6_K.gguf"
+    local default_model_name="Qwen3.5-9B-Q6_K"
+    local default_model_display="Qwen3.5 9B (Q6_K)"
+
+    local model_file model_name
+    model_file=$(env_file_value ATLAS_MODEL_FILE)
+    model_name=$(env_file_value ATLAS_MODEL_NAME)
+
+    if [[ -z "$model_file" ]]; then
+        log_info "No model selected — defaulting to ${default_model_display}; edit .env or run \`atlas init\` to change"
+        set_env_file_value ATLAS_MODEL_FILE "$default_model_file"
+        set_env_file_value ATLAS_MODEL_NAME "$default_model_name"
+        model_file="$default_model_file"
+        model_name="$default_model_name"
+    elif [[ -z "$model_name" ]]; then
+        # Model file chosen but no identifier — derive the conventional
+        # name (filename without .gguf) rather than failing downstream.
+        model_name="${model_file%.gguf}"
+        log_info "ATLAS_MODEL_NAME empty — deriving '$model_name' from ATLAS_MODEL_FILE"
+        set_env_file_value ATLAS_MODEL_NAME "$model_name"
+    fi
+
+    # Fail early with guidance if the selection is still unusable —
+    # compose's ${ATLAS_MODEL_FILE:?} would otherwise fail much later
+    # with a terser message.
+    model_file=$(env_file_value ATLAS_MODEL_FILE)
+    if [[ -z "$model_file" ]]; then
+        die "ATLAS_MODEL_FILE is empty in .env — set it (or run \`atlas init\`) and re-run."
+    fi
+    log_ok "Model selection: $model_file (ATLAS_MODEL_NAME=$(env_file_value ATLAS_MODEL_NAME))"
+}
+
+persist_backend_selection() {
+    # Record which inference backend matches the detected hardware into .env
+    # so every post-install lifecycle command selects the SAME docker-compose
+    # overlays the bootstrap used. atlas compose, atlas doctor's start hint,
+    # the REPL's proxy recreation, and the compose resolver in atlas/cli/
+    # compose.py all read ATLAS_BACKEND; without it they fall back to the base
+    # CUDA file and fail on GPU-less hosts with "could not select device
+    # driver nvidia". Keys mirror compose_files_args + _OVERLAY_BY_BACKEND:
+    #   amd    -> rocm   (docker-compose.rocm.yml)
+    #   nvidia -> cuda   (base file only)
+    #   none + /dev/dri  -> vulkan (docker-compose.vulkan.yml)
+    #   none, no /dev/dri -> cpu   (vulkan + cpu overlays, lavapipe)
+    # An explicit ATLAS_BACKEND already present in .env is respected.
+    local existing
+    existing=$(env_file_value ATLAS_BACKEND)
+    if [[ -n "$existing" ]]; then
+        log_ok "Backend already set in .env: ATLAS_BACKEND=$existing"
+        return
+    fi
+
+    local backend
+    case "$GPU_VENDOR" in
+        amd)    backend="rocm" ;;
+        nvidia) backend="cuda" ;;
+        *)
+            if [[ -e /dev/dri ]]; then
+                backend="vulkan"
+            else
+                backend="cpu"
+            fi
+            ;;
+    esac
+    set_env_file_value ATLAS_BACKEND "$backend"
+    log_ok "Recorded ATLAS_BACKEND=$backend so later lifecycle commands pick the matching compose overlays"
 }
 
 install_atlas_cli() {
@@ -767,7 +953,7 @@ install_atlas_cli() {
     if ! command -v python3 &>/dev/null; then
         log_warn "python3 not found — skipping CLI install. \`atlas\` command will be unavailable."
         log_warn "  Install Python 3.9+ then run: pip install --user -e ."
-        return
+        return 1
     fi
 
     # pip is sometimes a separate package on RHEL minimal installs.
@@ -780,14 +966,8 @@ install_atlas_cli() {
         if ! python3 -m pip --version &>/dev/null; then
             log_warn "couldn't install pip — skipping CLI install."
             log_warn "  Install pip then run: pip install --user -e ."
-            return
+            return 1
         fi
-    fi
-
-    # Run pip as the target user so it lands in their ~/.local/bin, not root's.
-    local runner=""
-    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
-        runner="$SUDO -u $TARGET_USER -H"
     fi
 
     # Editable install needs PEP 660 support, which requires setuptools >= 64
@@ -800,18 +980,18 @@ install_atlas_cli() {
     # environment") on Debian 12 / Ubuntu 23.04+ / Fedora 38+. Older pip
     # ignores it as an unknown env var, so it's safe to always set.
     log_info "Upgrading pip + setuptools (PEP 660 editable install support)…"
-    PIP_BREAK_SYSTEM_PACKAGES=1 $runner python3 -m pip install --user --upgrade --quiet \
+    run_as_target env PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user --upgrade --quiet \
         pip setuptools wheel >>/tmp/atlas-pip.log 2>&1 \
         || log_warn "pip self-upgrade failed; continuing with system pip."
 
     log_info "Installing ATLAS Python CLI (pip install --user -e .)…"
-    if PIP_BREAK_SYSTEM_PACKAGES=1 $runner python3 -m pip install --user -e . --quiet 2>&1 | tee -a /tmp/atlas-pip.log; then
+    if run_as_target env PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user -e . --quiet 2>&1 | tee -a /tmp/atlas-pip.log; then
         log_ok "ATLAS CLI installed"
     else
         log_warn "pip install failed (exit ${PIPESTATUS[0]}). Last 20 lines: /tmp/atlas-pip.log"
         tail -20 /tmp/atlas-pip.log >&2 || true
         log_warn "  Recovery: cd $ATLAS_INSTALL_DIR && pip install --user -e ."
-        return
+        return 1
     fi
 
     # Ensure ~/.local/bin is on PATH for future shells. pip puts the
@@ -819,27 +999,18 @@ install_atlas_cli() {
     # "command not found" until the user manually adds it. Append to the
     # target user's .bashrc only if it's not already present.
     local target_home
-    if [[ "$TARGET_USER" == "root" ]]; then
-        target_home="/root"
-    else
-        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
-        [[ -z "$target_home" ]] && target_home="$HOME"
-    fi
-    local bashrc="$target_home/.bashrc"
-    if [[ -f "$bashrc" ]] && ! grep -q '\.local/bin' "$bashrc" 2>/dev/null; then
-        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
-            $SUDO -u "$TARGET_USER" sh -c "echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $bashrc"
-        else
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$bashrc"
-        fi
-        log_info "Added ~/.local/bin to PATH in $bashrc"
-        log_warn "  Run \`source ~/.bashrc\` or open a new shell for \`atlas\` to be on PATH."
-    fi
+    target_home=$(target_home_dir)
+    ensure_target_profile_path '.local/bin' 'export PATH="$HOME/.local/bin:$PATH"' \
+        || { log_warn "could not persist ~/.local/bin on PATH"; return 1; }
 
     # Quick check: can we resolve `atlas` for the target user?
     if [[ -x "$target_home/.local/bin/atlas" ]]; then
         log_ok "atlas binary at: $target_home/.local/bin/atlas"
+    else
+        log_warn "pip reported success but $target_home/.local/bin/atlas is missing."
+        return 1
     fi
+    return 0
 }
 
 install_go() {
@@ -851,16 +1022,27 @@ install_go() {
     local need_version="1.24"
     local install_version="${ATLAS_GO_VERSION:-1.24.0}"
 
-    # Already have new-enough Go?
-    if command -v go &>/dev/null; then
+    # Already have new-enough Go? A previous bootstrap may have installed it
+    # under /usr/local/go while this non-login process still lacks that PATH.
+    local go_cmd=""
+    go_cmd=$(command -v go 2>/dev/null || true)
+    if [[ -z "$go_cmd" && -x /usr/local/go/bin/go ]]; then
+        go_cmd="/usr/local/go/bin/go"
+    fi
+    if [[ -n "$go_cmd" ]]; then
         local cur
-        cur=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
+        cur=$("$go_cmd" version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
         if [[ -n "$cur" ]]; then
             # Compare major.minor only — patch is irrelevant for capability.
             local cur_mm need_mm
             cur_mm=$(echo "$cur" | awk -F. '{printf "%d.%d", $1, $2}')
             need_mm=$(echo "$need_version" | awk -F. '{printf "%d.%d", $1, $2}')
             if [[ "$(printf '%s\n%s\n' "$need_mm" "$cur_mm" | sort -V | head -1)" == "$need_mm" ]]; then
+                if [[ "$go_cmd" == /usr/local/go/bin/go ]]; then
+                    export PATH="/usr/local/go/bin:$PATH"
+                    ensure_target_profile_path '/usr/local/go/bin' 'export PATH="/usr/local/go/bin:$PATH"' \
+                        || { log_warn "could not persist /usr/local/go/bin on PATH"; return 1; }
+                fi
                 log_ok "Go $cur already installed (need $need_version+)"
                 return 0
             fi
@@ -895,22 +1077,8 @@ install_go() {
     export PATH="/usr/local/go/bin:$PATH"
 
     # Persist for the target user's future shells. Skip if already added.
-    local target_home
-    if [[ "$TARGET_USER" == "root" ]]; then
-        target_home="/root"
-    else
-        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
-        [[ -z "$target_home" ]] && target_home="$HOME"
-    fi
-    local bashrc="$target_home/.bashrc"
-    if [[ -f "$bashrc" ]] && ! grep -q '/usr/local/go/bin' "$bashrc" 2>/dev/null; then
-        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
-            $SUDO -u "$TARGET_USER" sh -c "echo 'export PATH=\"/usr/local/go/bin:\$PATH\"' >> $bashrc"
-        else
-            echo 'export PATH="/usr/local/go/bin:$PATH"' >> "$bashrc"
-        fi
-        log_info "Added /usr/local/go/bin to PATH in $bashrc"
-    fi
+    ensure_target_profile_path '/usr/local/go/bin' 'export PATH="/usr/local/go/bin:$PATH"' \
+        || { log_warn "could not persist /usr/local/go/bin on PATH"; return 1; }
 
     log_ok "Go installed: $(/usr/local/go/bin/go version | awk '{print $3}')"
     return 0
@@ -925,44 +1093,35 @@ build_atlas_tui() {
     if ! command -v go &>/dev/null && [[ ! -x /usr/local/go/bin/go ]]; then
         log_warn "Go not available — skipping atlas-tui build."
         log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o ~/.local/bin/atlas-tui ."
-        return
+        return 1
     fi
 
     local target_home
-    if [[ "$TARGET_USER" == "root" ]]; then
-        target_home="/root"
-    else
-        target_home=$(getent passwd "$TARGET_USER" | cut -d: -f6 2>/dev/null)
-        [[ -z "$target_home" ]] && target_home="$HOME"
-    fi
+    target_home=$(target_home_dir)
     local bin_dir="$target_home/.local/bin"
     local out="$bin_dir/atlas-tui"
 
     log_info "Building atlas-tui (~30s, downloads Go modules first time)…"
 
     # Ensure the bin dir exists and is owned by the target user.
-    $SUDO -u "$TARGET_USER" mkdir -p "$bin_dir" 2>/dev/null \
-        || mkdir -p "$bin_dir" 2>/dev/null
-
-    local runner=""
-    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
-        runner="$SUDO -u $TARGET_USER -H"
-    fi
+    run_as_target mkdir -p "$bin_dir" 2>/dev/null || return 1
 
     # GOTOOLCHAIN=auto (Go 1.21+ default) handles the tui's go.mod
     # requirement of Go 1.26+ — auto-downloads the newer toolchain even
     # if the installed go is 1.24. PATH includes /usr/local/go/bin from
     # install_go() above.
     set +e
-    $runner sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH='/usr/local/go/bin:\$PATH' go build -o '$out' ." 2>&1 | tee /tmp/atlas-tui-build.log
+    run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH='/usr/local/go/bin:\$PATH' go build -o '$out' ." 2>&1 | tee /tmp/atlas-tui-build.log
     local rc=${PIPESTATUS[0]}
     set -e
 
     if [[ $rc -eq 0 && -x "$out" ]]; then
         log_ok "atlas-tui built: $out"
+        return 0
     else
         log_warn "atlas-tui build failed (exit $rc). Log: /tmp/atlas-tui-build.log"
         log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o $out ."
+        return 1
     fi
 }
 
@@ -971,7 +1130,7 @@ build_atlas_tui() {
 # ---------------------------------------------------------------------------
 
 download_models() {
-    log_step "Step 6: Model weights (Qwen3.5-9B + Lens)"
+    log_step "Step 6: Selected model weights + compatible Lens artifacts"
 
     if [[ "${ATLAS_BOOTSTRAP_SKIP_MODELS:-0}" == "1" ]]; then
         log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_MODELS=1)"
@@ -986,15 +1145,11 @@ download_models() {
     log_info "Progress is shown live below; full output also saved to /tmp/atlas-models.log."
     echo
     # Run as the target user so files end up owned by the human, not root.
-    local runner=""
-    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
-        runner="$SUDO -u $TARGET_USER"
-    fi
     # Stream output live (no grep filter — that hid curl's progress bar
     # and any error messages that didn't match the [INFO]/[WARN]/[ERROR]
     # pattern). `tee` preserves the log without breaking line buffering.
     set +e
-    $runner ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log
+    run_as_target ./scripts/download-models.sh 2>&1 | tee /tmp/atlas-models.log
     local rc=${PIPESTATUS[0]}
     set -e
     echo
@@ -1005,18 +1160,17 @@ download_models() {
         die "Model download failed — check the live output above, /tmp/atlas-models.log, disk space, or network."
     fi
 
-    # Lens weights are a separate fetch — the main script's --lens
-    # subcommand drops them in geometric-lens/geometric_lens/models/.
-    # Without these, the lens service starts but returns neutral scores.
-    log_info "Fetching Geometric Lens weights…"
+    # Lens/ASA artifacts are selected per model by the registry-aware
+    # --lens path. Without compatible artifacts, scoring degrades safely.
+    log_info "Fetching model-compatible Lens/ASA artifacts…"
     set +e
-    $runner ./scripts/download-models.sh --lens 2>&1 | tee -a /tmp/atlas-models.log
+    run_as_target ./scripts/download-models.sh --lens 2>&1 | tee -a /tmp/atlas-models.log
     rc=${PIPESTATUS[0]}
     set -e
     if [[ $rc -eq 0 ]]; then
-        log_ok "Lens weights ready"
+        log_ok "Model-compatible artifacts ready"
     else
-        log_warn "Lens weight fetch failed (exit $rc) — service will run with neutral scores."
+        log_warn "Artifact fetch failed (exit $rc) — service will run with neutral scores."
         log_warn "Recovery: ./scripts/download-models.sh --lens"
     fi
 }
@@ -1044,6 +1198,13 @@ start_compose() {
     fi
     if [[ "$GPU_VENDOR" == "amd" ]]; then
         log_info "Using ROCm compose override (docker-compose.rocm.yml)"
+    elif [[ -z "$GPU_VENDOR" ]]; then
+        if [[ -e /dev/dri ]]; then
+            log_info "No GPU vendor detected — using Vulkan overlay (docker-compose.vulkan.yml)"
+        else
+            log_warn "No GPU and no /dev/dri — using the CPU override (docker-compose.cpu.yml, lavapipe)."
+            log_warn "Inference will be very slow."
+        fi
     fi
 
     # Pull images first as a separate step so the user can see the layer-by-
@@ -1093,7 +1254,11 @@ wait_for_healthy() {
     local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
 
     local services=(llama-server geometric-lens v3-service sandbox atlas-proxy)
-    local timeout=300  # 5 min — first start can be slow while llama-server warms
+    # 450s: must exceed the llama-server healthcheck budget in
+    # docker-compose.yml (start_period 120s + 10 retries × 30s ≈ 420s),
+    # otherwise the wait can give up while the container is still
+    # legitimately warming up.
+    local timeout=450
     local elapsed=0
     local interval=5
 
@@ -1148,7 +1313,7 @@ wait_for_healthy() {
 # Step 9: ASA steering vector (BiasBusters #4)
 # ---------------------------------------------------------------------------
 # Builds /models/ast_edit_steering.gguf so llama-server's
-# entrypoint-v3.1-9b.sh appends --control-vector-scaled on every start.
+# entrypoint-v3.1.sh appends --control-vector-scaled on every start.
 # Pipeline (per geometric-lens/asa_calibration/README.md):
 #   1. build_cvector_prompts.py turns contrast_pairs.jsonl into
 #      positive/negative .txt files
@@ -1156,29 +1321,10 @@ wait_for_healthy() {
 #      May 2026) extracts the residual-stream difference and writes the gguf
 #   3. We stop llama-server briefly to free the GPU, run cvector-generator
 #      in a one-shot container with a rw models mount, then restart
-# Fallback: if local build fails (no GPU? cvector-generator missing in
-# older images?), pull a prebuilt vector from the ATLAS HuggingFace
-# dataset. Final failure mode is warn-not-die — ATLAS works without it.
-
-_try_download_asa_from_hf() {
-    local out="$1"
-    local url="https://huggingface.co/datasets/itigges22/ATLAS/resolve/main/models/ast_edit_steering.gguf"
-    log_info "Attempting prebuilt download from HuggingFace…"
-    set +e
-    curl -fSL --connect-timeout 10 -o "$out" "$url" >> /tmp/atlas-asa-build.log 2>&1
-    local rc=$?
-    set -e
-    if [[ $rc -eq 0 ]] && [[ -s "$out" ]]; then
-        log_ok "Downloaded prebuilt ASA vector from HuggingFace"
-        # Make ownership match the rest of the install.
-        if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
-            $SUDO chown "$TARGET_USER:$TARGET_USER" "$out" 2>/dev/null || true
-        fi
-        return 0
-    fi
-    rm -f "$out"
-    return 1
-}
+# No cross-model fallback is safe here. ASA vectors are residual-space
+# artifacts tied to one model. If a registry entry publishes a compatible
+# vector, `atlas model install-artifacts <name>` installs it earlier; otherwise
+# this step trains one locally and degrades to no steering on failure.
 
 build_asa_steering_vector() {
     log_step "Step 9: ASA steering vector (~5 min — BiasBusters #4)"
@@ -1187,6 +1333,47 @@ build_asa_steering_vector() {
         log_skip "Skipped (ATLAS_BOOTSTRAP_SKIP_ASA=1)"
         return
     fi
+
+    # This step reads ATLAS_* keys (models dir, model file/name, ports,
+    # image tag) that live in the install's .env, not this process's
+    # environment. Load them the same way scripts/download-models.sh
+    # does: values already set in the environment win, .env fills gaps.
+    local env_file="$ATLAS_INSTALL_DIR/.env"
+    if [[ -f "$env_file" ]]; then
+        local key value
+        while IFS='=' read -r key value; do
+            [[ "$key" =~ ^ATLAS_[A-Z0-9_]+$ ]] || continue
+            # Strip surrounding quotes from value
+            value="${value%\"}"; value="${value#\"}"
+            value="${value%\'}"; value="${value#\'}"
+            if [[ -z "${!key:-}" ]]; then
+                export "$key=$value"
+            fi
+        done < <(grep -E '^[A-Z][A-Z0-9_]+=' "$env_file")
+    fi
+
+    # ASA extraction runs the model through llama-cvector-generator — a
+    # GPU job. Dispatch per detected vendor; skip cleanly when there is
+    # no GPU to run it on (CPU-only Vulkan hosts).
+    local -a gpu_run_args=()
+    local image_tag="${ATLAS_IMAGE_TAG:-latest}"
+    local ghcr_owner="${ATLAS_GHCR_OWNER:-itigges22}"
+    local image=""
+    case "$GPU_VENDOR" in
+        nvidia)
+            image="ghcr.io/${ghcr_owner}/atlas-llama:${image_tag}"
+            gpu_run_args=(--gpus all)
+            ;;
+        amd)
+            image="ghcr.io/${ghcr_owner}/atlas-llama-rocm:${image_tag}"
+            gpu_run_args=(--device=/dev/kfd --device=/dev/dri
+                          --group-add video --group-add render)
+            ;;
+        *)
+            log_skip "ASA build requires a GPU — skipping (build later with \`atlas asa build\`)"
+            return
+            ;;
+    esac
 
     local models_dir_raw="${ATLAS_MODELS_DIR:-./models}"
     local models_dir
@@ -1197,45 +1384,57 @@ build_asa_steering_vector() {
     fi
     models_dir="$(realpath "$models_dir" 2>/dev/null || echo "$models_dir")"
     local vector_path="$models_dir/ast_edit_steering.gguf"
-
-    if [[ -f "$vector_path" ]] && [[ -s "$vector_path" ]]; then
-        log_ok "ASA steering vector already present ($(du -h "$vector_path" 2>/dev/null | cut -f1)) — skipping build"
-        return
-    fi
+    local vector_build_path="$models_dir/_ast_edit_steering.new.gguf"
+    local quarantined_vector=""
 
     local asa_dir="$ATLAS_INSTALL_DIR/geometric-lens/asa_calibration"
-    if [[ ! -f "$asa_dir/contrast_pairs.jsonl" ]] || [[ ! -f "$asa_dir/build_cvector_prompts.py" ]]; then
-        log_warn "ASA calibration assets missing at $asa_dir — trying HuggingFace prebuilt fallback"
-        _try_download_asa_from_hf "$vector_path" || \
-            log_warn "ASA unavailable. ATLAS works without it (recovery: see geometric-lens/asa_calibration/README.md)."
+    if [[ ! -f "$asa_dir/build_cvector_prompts.py" ]] || [[ ! -f "$asa_dir/generate_pairs.py" ]]; then
+        log_warn "ASA calibration scripts missing at $asa_dir — steering remains disabled"
         return
     fi
 
-    local DC="$DOCKER_PREFIX docker compose"
-    local model_file="${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}"
-    local image_tag="${ATLAS_IMAGE_TAG:-latest}"
-    local ghcr_owner="${ATLAS_GHCR_OWNER:-itigges22}"
-    local image="ghcr.io/${ghcr_owner}/atlas-llama:${image_tag}"
-    local runner=""
-    if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
-        runner="$SUDO -u $TARGET_USER"
+    local DC="$DOCKER_PREFIX docker compose $(compose_files_args)"
+    local model_file="${ATLAS_MODEL_FILE:-}"
+    if [[ -z "$model_file" ]]; then
+        log_warn "ATLAS_MODEL_FILE is unset — skipping ASA build until a model is selected"
+        return
     fi
-
-    # 1. Build positive/negative prompt files on the host.
+    if [[ -f "$vector_path" ]] && [[ -s "$vector_path" ]]; then
+        if command -v atlas >/dev/null 2>&1 && \
+           ATLAS_CONTROL_VECTOR="$vector_path" atlas asa check --no-color \
+             >> /tmp/atlas-asa-build.log 2>&1; then
+            log_ok "Compatible ASA steering vector already present ($(du -h "$vector_path" 2>/dev/null | cut -f1)) — skipping build"
+            return
+        fi
+        log_warn "Existing ASA vector is unverified or incompatible with the selected model; rebuilding it"
+        quarantined_vector="$vector_path.incompatible"
+        mv -f "$vector_path" "$quarantined_vector"
+        log_warn "Preserved the prior vector at $quarantined_vector (not auto-loaded)"
+    fi
+    # 1. Generate the ignored contrast-pair corpus on demand, then render it
+    # with the loaded model's own chat template.
+    if [[ ! -s "$asa_dir/contrast_pairs.jsonl" ]]; then
+        log_info "Generating model-neutral ASA contrast pairs…"
+        if ! run_as_target python3 "$asa_dir/generate_pairs.py" \
+             --out "$asa_dir/contrast_pairs.jsonl" --n 1000 --seed 42 \
+             >> /tmp/atlas-asa-build.log 2>&1; then
+            log_warn "ASA contrast-pair generation failed — steering remains disabled"
+            return
+        fi
+    fi
     log_info "Generating ASA prompt files from $asa_dir/contrast_pairs.jsonl…"
     set +e
-    $runner python3 "$asa_dir/build_cvector_prompts.py" \
+    run_as_target python3 "$asa_dir/build_cvector_prompts.py" \
         --pairs "$asa_dir/contrast_pairs.jsonl" \
         --positive "$models_dir/_asa_positive.txt" \
         --negative "$models_dir/_asa_negative.txt" \
+        --llama-url "http://localhost:${ATLAS_LLAMA_PORT:-8080}" \
         > /tmp/atlas-asa-build.log 2>&1
     local rc=$?
     set -e
     if [[ $rc -ne 0 ]] || [[ ! -s "$models_dir/_asa_positive.txt" ]]; then
-        log_warn "Prompt file generation failed (exit $rc) — trying HuggingFace fallback"
+        log_warn "Prompt file generation failed (exit $rc) — steering remains disabled"
         rm -f "$models_dir/_asa_positive.txt" "$models_dir/_asa_negative.txt"
-        _try_download_asa_from_hf "$vector_path" || \
-            log_warn "ASA unavailable. ATLAS works without it."
         return
     fi
 
@@ -1248,7 +1447,7 @@ build_asa_steering_vector() {
     log_info "Running llama-cvector-generator — this is the slow part (~5 min)…"
     echo
     set +e
-    $DOCKER_PREFIX docker run --rm --gpus all \
+    $DOCKER_PREFIX docker run --rm "${gpu_run_args[@]}" \
         -v "$models_dir:/models:rw" \
         --entrypoint llama-cvector-generator \
         "$image" \
@@ -1256,7 +1455,7 @@ build_asa_steering_vector() {
         --positive-file /models/_asa_positive.txt \
         --negative-file /models/_asa_negative.txt \
         --method mean \
-        -o /models/ast_edit_steering.gguf \
+        -o /models/_ast_edit_steering.new.gguf \
         -ngl 99 2>&1 | tee -a /tmp/atlas-asa-build.log
     rc=${PIPESTATUS[0]}
     set -e
@@ -1270,7 +1469,9 @@ build_asa_steering_vector() {
     # 5. Cleanup intermediate prompt files.
     rm -f "$models_dir/_asa_positive.txt" "$models_dir/_asa_negative.txt"
 
-    if [[ $rc -eq 0 ]] && [[ -s "$vector_path" ]]; then
+    if [[ $rc -eq 0 ]] && [[ -s "$vector_build_path" ]]; then
+        mv -f "$vector_build_path" "$vector_path"
+        printf '%s\n' "${ATLAS_MODEL_NAME:-${model_file%.gguf}}" > "$vector_path.model"
         # Fix ownership (cvector-generator runs as root inside the container).
         if [[ "$(id -u)" == "0" && "$TARGET_USER" != "root" ]]; then
             $SUDO chown "$TARGET_USER:$TARGET_USER" "$vector_path" 2>/dev/null || true
@@ -1280,12 +1481,8 @@ build_asa_steering_vector() {
         # Bounce llama-server one more time so it picks up the new vector.
         $DC restart llama-server >> /tmp/atlas-asa-build.log 2>&1 || true
     else
-        log_warn "Local ASA build failed (exit $rc) — trying HuggingFace prebuilt fallback"
-        if _try_download_asa_from_hf "$vector_path"; then
-            $DC restart llama-server >> /tmp/atlas-asa-build.log 2>&1 || true
-        else
-            log_warn "ASA build + HF fallback both failed. ATLAS works without it. Recovery: geometric-lens/asa_calibration/README.md or rerun bootstrap. Log: /tmp/atlas-asa-build.log. Suppress with ATLAS_BOOTSTRAP_SKIP_ASA=1."
-        fi
+        rm -f "$vector_build_path"
+        log_warn "Local ASA build failed (exit $rc). ATLAS will run without steering rather than applying a vector trained for another model. Recovery: geometric-lens/asa_calibration/README.md or rerun bootstrap. Log: /tmp/atlas-asa-build.log. Suppress with ATLAS_BOOTSTRAP_SKIP_ASA=1.${quarantined_vector:+ Prior vector preserved at $quarantined_vector.}"
     fi
 }
 

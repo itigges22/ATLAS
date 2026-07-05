@@ -21,9 +21,11 @@ import pytest
 
 try:
     import httpx
-    _HAS_INFRA_DEPS = True
+    _HAS_HTTPX = True
 except ImportError:
-    _HAS_INFRA_DEPS = False
+    httpx = None
+    _HAS_HTTPX = False
+
 
 
 # Determine if running inside cluster or externally
@@ -77,8 +79,7 @@ class TestAPIKey:
     name: str
 
 
-if _HAS_INFRA_DEPS:
-
+if _HAS_HTTPX:
     @pytest.fixture(scope="session")
     def api_portal_client() -> Generator:
         """HTTP client for API Portal service."""
@@ -281,8 +282,12 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Add markers to tests based on their location."""
+    """Separate hermetic tests from suites that require running services."""
     for item in items:
-        # Add integration marker to tests in integration folder
-        if "integration" in str(item.fspath):
+        path = str(item.fspath).replace("\\", "/")
+        live_infrastructure = path.endswith((
+            "/tests/infrastructure/test_llm.py",
+            "/tests/infrastructure/test_sandbox.py",
+        ))
+        if "/tests/integration/" in path or live_infrastructure:
             item.add_marker(pytest.mark.integration)

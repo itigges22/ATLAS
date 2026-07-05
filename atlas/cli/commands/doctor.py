@@ -26,6 +26,7 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Tuple
 
+from atlas.cli import compose as compose_config
 from atlas.cli.commands import tier
 
 # ANSI color codes
@@ -64,8 +65,7 @@ DASH       = "—" if UNICODE_OK else "--"
 def _read_dotenv() -> Dict[str, str]:
     """Parse the compose .env (the Docker deployment's source of truth) by
     walking up from this file. Lets the model/dir checks reflect what's actually
-    configured instead of falling back to the bundled Qwen defaults when the
-    shell env doesn't export ATLAS_MODEL_FILE."""
+    configured when the shell env doesn't export ATLAS_MODEL_FILE."""
     cur = os.path.dirname(os.path.abspath(__file__))
     for _ in range(8):
         envp = os.path.join(cur, ".env")
@@ -80,12 +80,20 @@ def _read_dotenv() -> Dict[str, str]:
                         if line and not line.startswith("#") and "=" in line:
                             k, v = line.split("=", 1)
                             # Drop a whitespace-preceded inline comment.
-                            v = v.lstrip()
-                            head, hash_sep, _ = v.partition("#")
-                            if hash_sep and head and head[-1] in " \t":
-                                v = head
+                            stripped = v.lstrip()
+                            if stripped.startswith("#") and stripped != v:
+                                # Empty value followed by an inline comment
+                                # ("KEY= # note") parses as empty.
+                                v = ""
+                            else:
+                                v = stripped
+                                head, hash_sep, _ = v.partition("#")
+                                if hash_sep and head and head[-1] in " \t":
+                                    v = head
                             out[k.strip()] = v.strip().strip('"').strip("'")
             except OSError:
+                # An unreadable optional .env is treated as absent; doctor
+                # continues with process-environment values and diagnostics.
                 pass
             return out
         parent = os.path.dirname(cur)
@@ -97,20 +105,34 @@ def _read_dotenv() -> Dict[str, str]:
 
 _ENV = _read_dotenv()
 
-# Defaults — shell env first, then the compose .env, then a bundled fallback.
-PROXY_URL    = os.environ.get("ATLAS_PROXY_URL",     "http://localhost:8090")
-LLAMA_URL    = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-LENS_URL     = os.environ.get("ATLAS_LENS_URL",      "http://localhost:8099")
-SANDBOX_URL  = os.environ.get("ATLAS_SANDBOX_URL",   "http://localhost:30820")
-V3_URL       = os.environ.get("ATLAS_V3_URL",        "http://localhost:8070")
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name) or _ENV.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+# Defaults — shell env first, then the compose .env's port keys. Model
+# selection has no vendor fallback: the installer must choose a concrete
+# model explicitly.
+PROXY_URL    = compose_config.service_url("proxy",   values=_ENV)
+LLAMA_URL    = compose_config.service_url("llama",   values=_ENV)
+LENS_URL     = compose_config.service_url("lens",    values=_ENV)
+SANDBOX_URL  = compose_config.service_url("sandbox", values=_ENV)
+V3_URL       = compose_config.service_url("v3",      values=_ENV)
 MODEL_DIR    = os.environ.get("ATLAS_MODELS_DIR")  or _ENV.get("ATLAS_MODELS_DIR", "./models")
-MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE")  or _ENV.get("ATLAS_MODEL_FILE", "Qwen3.5-9B-Q6_K.gguf")
-MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME")  or _ENV.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE")  or _ENV.get("ATLAS_MODEL_FILE", "")
+MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME")  or _ENV.get("ATLAS_MODEL_NAME", "local-model")
+LLAMA_PORT   = _env_int("ATLAS_LLAMA_PORT", 8080)
 # Match docker-compose.yml's `${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}`
 # host-side bind-mount source so doctor checks the same directory the
 # container will actually receive.
-LENS_MODELS_DIR = os.environ.get("ATLAS_LENS_MODELS",
-                                  "./geometric-lens/geometric_lens/models")
+LENS_MODELS_DIR = (os.environ.get("ATLAS_LENS_MODELS")
+                   or _ENV.get("ATLAS_LENS_MODELS")
+                   or "./geometric-lens/geometric_lens/models")
 
 EXPECTED_SERVICES = [
     "llama-server", "geometric-lens",
@@ -426,7 +448,7 @@ def _check_vulkan_via_docker() -> CheckResult:
     return CheckResult("vulkan", "pass", f"[vulkan] {len(devices)} ICD(s): {summary}")
 
 
-def _check_metal_native() -> CheckResult:
+def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
     """Verify the macOS hybrid path (#32) is wired correctly: the native
     llama-server binary exists where the setup script puts it, and the
     docker stack is configured to forward to it via host.docker.internal.
@@ -447,7 +469,11 @@ def _check_metal_native() -> CheckResult:
 
     # Expected setup-script output location. Keep aligned with
     # scripts/atlas-setup-macos.sh DEFAULT_PREFIX.
-    prefix = os.path.expanduser("~/.atlas/macos")
+    values = compose_config.read_env_file(atlas_root) if atlas_root else _ENV
+    prefix = (os.environ.get("ATLAS_MACOS_PREFIX")
+              or values.get("ATLAS_MACOS_PREFIX")
+              or "~/.atlas/macos")
+    prefix = os.path.expanduser(prefix)
     binary = os.path.join(prefix, "bin", "llama-server-metal")
 
     if not os.path.isfile(binary):
@@ -484,15 +510,15 @@ def _check_metal_native() -> CheckResult:
     # (not fail) — they may just not be ready yet. Use a small Python
     # socket probe instead of `nc` since macOS / BSD nc has different
     # flags than GNU nc and may not be on PATH at all.
-    if not _port_listening("127.0.0.1", 8080, timeout=2):
+    if not _port_listening("127.0.0.1", LLAMA_PORT, timeout=2):
         return CheckResult("metal-native", "warn",
             f"native llama-server installed at {binary} but nothing "
-            f"listening on :8080 — start it with scripts/atlas-llama-macos.sh",
+            f"listening on :{LLAMA_PORT} — start it with scripts/atlas-llama-macos.sh",
             "Open a separate terminal and run the launcher; this check "
             "will turn green once the server is up and serving.")
 
     return CheckResult("metal-native", "pass",
-        f"native llama-server up at {binary}, listening on :8080")
+        f"native llama-server up at {binary}, listening on :{LLAMA_PORT}")
 
 
 def _compose_ps(project_dir: str) -> List[Dict]:
@@ -502,10 +528,12 @@ def _compose_ps(project_dir: str) -> List[Dict]:
     Without this, `atlas doctor` invoked from outside the repo sees
     "no containers" even when the stack is fully healthy.
     """
-    rc, out, err = _run(
-        ["docker", "compose", "ps", "--all", "--format", "json"],
-        cwd=project_dir,
-    )
+    try:
+        cmd = compose_config.command(
+            project_dir, ["ps", "--all", "--format", "json"])
+    except FileNotFoundError:
+        return []
+    rc, out, err = _run(cmd, cwd=project_dir)
     if rc != 0 or not out.strip():
         return []
     services: List[Dict] = []
@@ -525,10 +553,11 @@ def _compose_ps(project_dir: str) -> List[Dict]:
     return services
 
 
-def check_containers(services: List[Dict]) -> List[CheckResult]:
+def check_containers(services: List[Dict], start_hint: str = "docker compose up -d"
+                     ) -> List[CheckResult]:
     if not services:
         return [CheckResult("containers", "fail",
-            "no containers found — run `docker compose up -d` first",
+            f"no containers found — run `{start_hint}` first",
             "compose ps returned empty")]
 
     found = {s.get("Service", s.get("Name", "")): s for s in services}
@@ -583,11 +612,23 @@ def check_health_endpoints() -> List[CheckResult]:
             status = data.get("status", "ok")
         except json.JSONDecodeError:
             status = "ok (non-json)"
-        results.append(CheckResult(f"health/{name}", "pass", status, body[:200]))
+        normalized = str(status).strip().lower()
+        result_status = (
+            "pass" if normalized in {"ok", "healthy", "ready",
+                                      "ok (non-json)"}
+            else "warn"
+        )
+        results.append(CheckResult(f"health/{name}", result_status,
+                                   str(status), body[:200]))
     return results
 
 
 def check_model_file(atlas_root: str) -> CheckResult:
+    if not MODEL_FILE:
+        return CheckResult("model_file", "fail",
+            "ATLAS_MODEL_FILE is not configured",
+            "Run `atlas init` to select a registry model, or set "
+            "ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in .env for a BYO GGUF.")
     # MODEL_DIR is typically `./models` (relative to the compose cwd).
     # Resolve relative paths against atlas_root, not the doctor's cwd.
     base = MODEL_DIR if os.path.isabs(MODEL_DIR) else os.path.join(atlas_root, MODEL_DIR)
@@ -595,8 +636,8 @@ def check_model_file(atlas_root: str) -> CheckResult:
     if not os.path.exists(path):
         return CheckResult("model_file", "fail",
             f"missing: {path}",
-            "Default model? run scripts/download-models.sh. "
-            "Your own model? place the .gguf in ATLAS_MODELS_DIR "
+            "Registry model? run `atlas model install <name>`. "
+            "BYO model? place the .gguf in ATLAS_MODELS_DIR "
             f"({MODEL_DIR}) and set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in "
             ".env — see docs/CONFIGURATION.md \"Adding your own model\", "
             "or run `atlas model install --url <hf-url>` / `atlas onboard`.")
@@ -604,30 +645,71 @@ def check_model_file(atlas_root: str) -> CheckResult:
     if size < 100 * 1024 * 1024:  # < 100 MB
         return CheckResult("model_file", "warn",
             f"{path} exists but only {size} bytes — likely truncated",
-            "expected > 1 GB for a typical GGUF; re-download "
-            "(scripts/download-models.sh for the default model, or re-fetch "
-            f"your own .gguf into {MODEL_DIR}).")
+            "expected > 1 GB for a typical GGUF; re-download the selected "
+            f"registry model or re-fetch your own .gguf into {MODEL_DIR}.")
     gb = size / (1024 * 1024 * 1024)
     return CheckResult("model_file", "pass", f"{MODEL_FILE} ({gb:.1f} GB)")
 
 
 def check_lens_weights(atlas_root: str) -> CheckResult:
-    # LENS_MODELS_DIR is typically the relative default; absolute paths
-    # come from users overriding ATLAS_LENS_MODELS to mount weights from
-    # outside the repo (e.g., a shared NFS mount). Resolve relative paths
-    # against atlas_root, not the doctor's cwd.
-    weights_dir = (LENS_MODELS_DIR if os.path.isabs(LENS_MODELS_DIR)
-                   else os.path.normpath(os.path.join(atlas_root, LENS_MODELS_DIR)))
-    required = ["cost_field.pt", "metric_tensor.pt"]
-    missing = [f for f in required if not os.path.exists(
-        os.path.join(weights_dir, f))]
+    """Report the selected model's real Lens capability.
+
+    Published legacy weights remain useful inputs for rebuilding, but the
+    current runtime deliberately disables interventions until model identity,
+    C(x) normalization, and G(x) thresholds are present and valid.
+    """
+    try:
+        from atlas.cli.commands import lens as lens_cmd, model_registry
+    except ImportError as exc:
+        return CheckResult("lens_weights", "skip",
+                           "Lens validation unavailable", str(exc))
+
+    selected = model_registry.by_name(MODEL_NAME)
+    if selected is None and MODEL_FILE:
+        selected = model_registry.by_name(
+            os.path.basename(MODEL_FILE).rsplit(".", 1)[0])
+
+    weights_dir = (model_registry.lens_artifact_dir_for(selected, atlas_root)
+                   if selected is not None else None)
+    if not weights_dir:
+        configured = (os.environ.get("ATLAS_LENS_MODELS")
+                      or compose_config.read_env_file(atlas_root).get(
+                          "ATLAS_LENS_MODELS")
+                      or LENS_MODELS_DIR)
+        weights_dir = (configured if os.path.isabs(configured)
+                       else os.path.normpath(os.path.join(atlas_root,
+                                                          configured)))
+
+    expected = (list(selected.lens_artifact_files)
+                if selected is not None else ["cost_field.pt"])
+    missing = [name for name in expected
+               if not os.path.isfile(os.path.join(weights_dir, name))]
     if missing:
-        return CheckResult("lens_weights", "fail",
-            f"missing: {', '.join(missing)}",
-            f"expected in {weights_dir} — fetch from HuggingFace per README "
-            f"(or set ATLAS_LENS_MODELS to point at your weights dir)")
+        status = ("fail" if selected is not None
+                  and selected.lens_status == "supported" else "warn")
+        return CheckResult(
+            "lens_weights", status, f"missing: {', '.join(missing)}",
+            f"expected in {weights_dir}; run `atlas lens build` for the "
+            "selected model or point ATLAS_LENS_MODELS at its bundle")
+
+    runtime_missing = lens_cmd._missing_runtime_artifacts(weights_dir)
+    if runtime_missing:
+        return CheckResult(
+            "lens_weights", "warn",
+            "legacy Lens weights present; calibrated interventions disabled",
+            f"{weights_dir} is missing {', '.join(runtime_missing)}. "
+            "Run `atlas lens build` for this model before claiming calibrated "
+            "C(x)/G(x) support.")
+
+    invalid = lens_cmd._invalid_runtime_artifacts(
+        weights_dir, MODEL_NAME, 0)
+    if invalid:
+        return CheckResult(
+            "lens_weights", "fail", "Lens calibration is invalid",
+            "; ".join(invalid))
+
     return CheckResult("lens_weights", "pass",
-        f"cost_field.pt + metric_tensor.pt in {weights_dir}")
+                       f"calibrated model bundle in {weights_dir}")
 
 
 def check_asa_steering(atlas_root: str) -> CheckResult:
@@ -635,7 +717,7 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
 
     Warn-not-fail: ATLAS works without it. When present, llama-server
     auto-applies it on startup via `--control-vector-scaled` (see
-    `inference/entrypoint-v3.1-9b.sh`). When absent, the
+    `inference/entrypoint-v3.1.sh`). When absent, the
     `ast_edit`-vs-`edit_file` proposal bias is unsteered and we lean
     entirely on the grammar gate downstream.
 
@@ -643,52 +725,20 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
     — or just re-run `./scripts/atlas-bootstrap.sh` which builds it as
     part of install (with HuggingFace prebuilt fallback).
     """
-    # Match the entrypoint's default path so doctor and the inference
-    # entrypoint check the same location.
-    base = MODEL_DIR if os.path.isabs(MODEL_DIR) else os.path.join(atlas_root, MODEL_DIR)
-    path = os.path.normpath(os.path.join(base, "ast_edit_steering.gguf"))
-    override = os.environ.get("ATLAS_CONTROL_VECTOR", "")
-    if override:
-        path = override
-    if not os.path.exists(path):
-        return CheckResult("asa_steering", "warn",
-            "ast_edit_steering.gguf not present",
-            f"expected at {path} — build it via "
-            f"`atlas asa build` (PC-061, runs in the lens container, "
-            f"~25 min for the full 1000-pair training) or use the "
-            f"manual workflow in `geometric-lens/asa_calibration/README.md`. "
-            f"ATLAS continues to work without it; the ast_edit-vs-edit_file "
-            f"proposal bias is just unsteered.")
-    try:
-        size_mb = os.path.getsize(path) / (1024 * 1024)
-    except OSError:
-        size_mb = 0.0
-
-    # PC-061 round-2 fix: when llama-server is reachable, run the deeper
-    # dim-compat probe so doctor surfaces the same dim-mismatch verdict
-    # `atlas asa check` would. Without this hook, doctor reports "pass"
-    # even on a stale vector trained for a different model — the exact
-    # failure mode PC-061 was supposed to surface. Best-effort: if the
-    # asa module or its deps aren't importable, fall back to the
-    # file-presence pass below.
     try:
         from atlas.cli.commands import asa as _asa
         verdict = _asa._check_asa(atlas_root)
-        if verdict.verdict == "needs-build" and "Dim mismatch" in (verdict.reason or ""):
-            return CheckResult("asa_steering", "fail",
-                f"control vector dim mismatch",
-                f"vector at {path} was trained for a different model "
-                f"(dim {verdict.vector_dim}) than llama-server has loaded "
-                f"(dim {verdict.probe.embedding_dim}). Run `atlas asa build` "
-                f"to retrain for the current model.")
-    except Exception:
-        # Doctor keeps running even if the deeper probe fails — asa
-        # isn't a hard dep of doctor, and a check shouldn't crash the
-        # whole diagnostic.
-        pass
+    except Exception as exc:
+        return CheckResult("asa_steering", "warn",
+                           "ASA validation unavailable", str(exc))
 
-    return CheckResult("asa_steering", "pass",
-        f"ast_edit_steering.gguf ({size_mb:.1f} MB) at {path}")
+    if verdict.verdict != "compat":
+        return CheckResult("asa_steering", "warn",
+                           "ASA steering disabled", verdict.reason)
+    status = "warn" if verdict.unverified else "pass"
+    message = ("ASA vector present but dimension unverified"
+               if verdict.unverified else "ASA vector matches selected model")
+    return CheckResult("asa_steering", status, message, verdict.reason)
 
 
 
@@ -746,15 +796,15 @@ def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
 def check_tier_match() -> CheckResult:
     """PC-055 cross-check: warn if .env settings overshoot the host's tier.
 
-    Example: user on tier-small (8 GB GPU) running with the medium-tier
-    default `Qwen3.5-9B-Q6_K.gguf` will OOM. Doctor flags this as a
+    Example: a user on tier-small selecting a model above that tier's
+    memory budget may OOM. Doctor flags this as a
     warning so the user knows to either downgrade the model or upgrade
     the GPU. We never hard-fail on tier mismatch — sometimes the user
     knows better than the heuristic (e.g., they pre-allocated VRAM
     elsewhere and want a smaller-than-recommended model).
     """
     try:
-        from atlas.cli.commands import tier, model_recommendations
+        from atlas.cli.commands import tier, model_registry
     except ImportError as e:
         return CheckResult("tier_match", "skip",
             "tier module unavailable", str(e))
@@ -763,7 +813,7 @@ def check_tier_match() -> CheckResult:
         return CheckResult("tier_match", "skip",
             "no GPU detected (cpu tier)")
     recommended = tier.classify(p)
-    rec_model = model_recommendations.for_tier(recommended.tier)
+    rec_model = model_registry.for_tier(recommended.tier)
     actual_model = MODEL_FILE
     if rec_model is not None and actual_model == rec_model.model_file:
         # PC-056.1: even on exact tier match, cross-check that the
@@ -796,7 +846,7 @@ def check_tier_match() -> CheckResult:
             f"({rec_model.model_display})")
     # Mismatch — figure out direction. Reverse-lookup which tier owns
     # the configured model, then compare.
-    actual_tier_name = model_recommendations.tier_for_model(actual_model)
+    actual_tier_name = model_registry.tier_for_model(actual_model)
     if actual_tier_name is None:
         return CheckResult("tier_match", "warn",
             f"configured model `{actual_model}` is not in any tier preset",
@@ -887,30 +937,29 @@ def check_image_skew(services: List[Dict]) -> CheckResult:
 
 
 def check_e2e_smoke() -> CheckResult:
-    """End-to-end POST to llama-server — verifies the model loads and generates.
+    """Generate through the public proxy passthrough.
 
-    Targets llama-server directly (not the proxy). The proxy's `/v1/agent`
-    endpoint runs the full agent loop (tier classifier + V3 pipeline),
-    which would add ~30s and frequently consume all `max_tokens` in
-    routing/planning before producing visible content. Hitting llama
-    directly answers the question we care about: "is the GGUF actually
-    loaded and inferring?" The proxy's reachability is already covered
-    by `health/proxy`. (`/v1/chat/completions` on the proxy itself is a
-    raw passthrough to llama-server — no agent loop — but the smoke test
-    skips the extra hop anyway.)
+    `/v1/chat/completions` is intentionally a raw passthrough, so this checks
+    the complete client -> proxy -> inference path without paying the cost of
+    the orchestration loop on `/v1/agent`. This distinction matters on the
+    macOS hybrid deployment, where the request also crosses the Docker-to-host
+    bridge before reaching native Metal inference.
     """
     body = {
         "messages": [{"role": "user", "content": "Reply with the single word: ATLAS"}],
-        # Qwen3.5 with thinking enabled emits 100-200 tokens of
-        # reasoning_content (not surfaced as content) before the visible
-        # answer. Anything < ~250 risks finish=length with empty content.
+        # Reasoning-capable templates may emit internal reasoning before the
+        # visible answer. Leave enough budget that the smoke test does not
+        # mistake a truncated reasoning preamble for failed inference.
         "max_tokens": 300,
         "temperature": 0,
         "stream": False,
+        # llama.cpp ignores unsupported template kwargs. Reasoning-aware
+        # templates use this to keep a smoke test short and deterministic.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     data = json.dumps(body).encode()
     req = urllib.request.Request(
-        f"{LLAMA_URL}/v1/chat/completions",
+        f"{PROXY_URL}/v1/chat/completions",
         data=data,
         headers={"Content-Type": "application/json"},
     )
@@ -919,18 +968,18 @@ def check_e2e_smoke() -> CheckResult:
             payload = json.loads(resp.read().decode())
     except Exception as e:
         return CheckResult("e2e_smoke", "fail",
-            f"llama-server POST failed: {type(e).__name__}", str(e)[:300])
+            f"proxy completion POST failed: {type(e).__name__}", str(e)[:300])
     choices = payload.get("choices", [])
     if not choices:
         return CheckResult("e2e_smoke", "fail",
-            "llama-server returned no choices",
+            "proxy completion returned no choices",
             json.dumps(payload)[:300])
     msg = choices[0].get("message", {})
     content = (msg.get("content", "") or "").strip()
     finish = choices[0].get("finish_reason", "")
     if not content:
         return CheckResult("e2e_smoke", "fail",
-            f"llama-server returned an empty completion (finish={finish})",
+            f"proxy completion returned an empty completion (finish={finish})",
             json.dumps(payload)[:400])
     return CheckResult("e2e_smoke", "pass",
         f"model produced {len(content)} chars (finish={finish})",
@@ -988,7 +1037,8 @@ def _print_result(r: CheckResult, verbose: bool, color: bool) -> None:
             _safe_print(f"      {DIM if color else ''}{line}{RESET if color else ''}")
 
 
-def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool) -> int:
+def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool,
+          already_printed: bool = False) -> int:
     n_pass = sum(1 for r in results if r.status == "pass")
     n_warn = sum(1 for r in results if r.status == "warn")
     n_fail = sum(1 for r in results if r.status == "fail")
@@ -1011,8 +1061,9 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool) -> 
             sys.stdout.buffer.write(b"\n")
         return 1 if n_fail else 0
 
-    for r in results:
-        _print_result(r, args.verbose, color)
+    if not already_printed:
+        for r in results:
+            _print_result(r, args.verbose, color)
     _safe_print()
     parts = [f"{n_pass} passed"]
     if n_warn:
@@ -1067,28 +1118,36 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     results: List[CheckResult] = []
 
+    def _add(r: CheckResult) -> None:
+        """Record a result and, in human mode, print it immediately so a
+        long run (GPU image pulls, e2e smoke) shows progress as it goes.
+        JSON mode keeps buffering for one machine-readable document."""
+        results.append(r)
+        if not args.json:
+            _print_result(r, args.verbose, color)
+
     # 1. Docker
     docker = check_docker()
-    results.append(docker)
+    _add(docker)
     if docker.status == "fail":
         # Without docker, every subsequent check is meaningless.
-        results.append(CheckResult("compose", "skip",
+        _add(CheckResult("compose", "skip",
             "skipped (docker unreachable)"))
-        return _emit(results, args, color)
+        return _emit(results, args, color, already_printed=not args.json)
 
     # 2. Docker compose v2
-    results.append(check_compose())
+    _add(check_compose())
 
     # 2.5. CPU architecture (#115) — surface aarch64 + the backend
     # availability matrix for arm64 hosts before the GPU check, so
     # users see why rocm gets steered to vulkan on DGX Spark / Snapdragon
     # X Elite / Apple Silicon / Jetson / Pi 5.
-    results.append(check_arch())
+    _add(check_arch())
 
     # 3. GPU runtime — vendor-aware (NVIDIA: nvidia-container-toolkit;
     # AMD: /dev/kfd passthrough). Slow on first run since each vendor
     # branch pulls a small base image (~500 MB CUDA, ~2 GB ROCm).
-    results.append(check_gpu())
+    _add(check_gpu())
 
     # Resolve which backend the user has configured. Reads shell env
     # first, then .env in atlas_root. Without the .env fallback, the
@@ -1103,15 +1162,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     # vulkan-tools step inside the check container would add ~30s for
     # no signal.
     if backend == "vulkan":
-        results.append(_check_vulkan_via_docker())
+        _add(_check_vulkan_via_docker())
 
     # 3.6. macOS hybrid path (#32) — verify native llama-server binary
     # exists at the setup-script's install prefix, is executable, and
-    # is listening on :8080 (so the socat compose forward will succeed).
+    # is listening on ATLAS_LLAMA_PORT (so the socat compose forward
+    # will succeed).
     # Only fires when backend == metal so it's noise-free on
     # cuda/rocm/vulkan hosts.
     if backend == "metal":
-        results.append(_check_metal_native())
+        _add(_check_metal_native(atlas_root))
 
     # 4. Compose stack — pass atlas_root as cwd so compose finds
     # docker-compose.yml even when doctor is invoked from elsewhere
@@ -1119,49 +1179,56 @@ def main(argv: Optional[List[str]] = None) -> int:
     services = _compose_ps(atlas_root)
 
     # 5. Per-container state
-    container_results = check_containers(services)
-    results.extend(container_results)
+    try:
+        start_hint = compose_config.format_command(atlas_root, ["up", "-d"])
+    except FileNotFoundError as exc:
+        _add(CheckResult("compose/backend", "fail", str(exc)))
+        start_hint = "docker compose up -d"
+    container_results = check_containers(services, start_hint=start_hint)
+    for item in container_results:
+        _add(item)
 
     # 6. Endpoint health (only if at least one container is running)
     if any(r.status == "pass" for r in container_results):
-        results.extend(check_health_endpoints())
+        for item in check_health_endpoints():
+            _add(item)
 
     # 7. Model file (host-side)
-    results.append(check_model_file(atlas_root))
+    _add(check_model_file(atlas_root))
 
     # 8. Lens weights (host-side)
-    results.append(check_lens_weights(atlas_root))
+    _add(check_lens_weights(atlas_root))
 
     # 8.5. ASA steering vector (BiasBusters #4 — warn-not-fail). Optional
     # but on by default when present; sits next to lens_weights since both
     # are host-side artifact checks.
-    results.append(check_asa_steering(atlas_root))
+    _add(check_asa_steering(atlas_root))
 
     # 9. vm.overcommit_memory (PC-011)
 
 
     # 10. Image-tag skew (PC-052)
-    results.append(check_image_skew(services))
+    _add(check_image_skew(services))
 
     # 10.5. Tier match (PC-055) — soft cross-check that .env model
     # matches host hardware. Warn on overshoot (OOM risk), pass on
     # match or undershoot.
-    results.append(check_tier_match())
+    _add(check_tier_match())
 
     # 10.6. Tier constraints (PC-055.1) — does the host meet the
     # recommended tier's CPU/RAM/disk minimums? Catches "16 GB GPU
     # but 8 GB RAM" cases where llama fits but host OOMs under V3.
     # Pass atlas_root so disk check measures the right partition.
-    results.append(check_tier_constraints(atlas_root))
+    _add(check_tier_constraints(atlas_root))
 
     # 11. End-to-end smoke
     if args.quick:
-        results.append(CheckResult("e2e_smoke", "skip",
+        _add(CheckResult("e2e_smoke", "skip",
             "skipped (--quick)"))
     else:
-        results.append(check_e2e_smoke())
+        _add(check_e2e_smoke())
 
-    return _emit(results, args, color)
+    return _emit(results, args, color, already_printed=not args.json)
 
 
 if __name__ == "__main__":

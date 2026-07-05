@@ -1,6 +1,8 @@
 services:
+
+
   # --- LLM Inference (CUDA + grammar support) ---
-  # The image's ENTRYPOINT (inference/entrypoint-v3.1-9b.sh) is what runs
+  # The image's ENTRYPOINT (inference/entrypoint-v3.1.sh) is what runs
   # llama-server. It does NOT consume "$@", so a compose `command:` here
   # would be silently ignored. Configure the server via the environment
   # variables the entrypoint actually reads:
@@ -13,6 +15,7 @@ services:
     # locally for dev, run: docker compose build llama-server
     # Tag is overridable via ATLAS_IMAGE_TAG (default: latest from main).
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-llama:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./inference
       dockerfile: Dockerfile.v31
@@ -30,9 +33,9 @@ services:
       # bakes in the same script at /entrypoint.sh — this just shadows
       # it during dev. Production GHCR pulls work fine without this
       # mount (the COPY'd entrypoint stands on its own).
-      - ./inference/entrypoint-v3.1-9b.sh:/entrypoint.sh:ro
+      - ./inference/entrypoint-v3.1.sh:/entrypoint.sh:ro
     ports:
-      - "${ATLAS_LLAMA_PORT:-8080}:8080"
+      - "127.0.0.1:${ATLAS_LLAMA_PORT:-8080}:8080"
     ulimits:
       memlock: -1
       stack: 67108864
@@ -45,7 +48,8 @@ services:
     networks:
       - atlas
     environment:
-      - MODEL_PATH=/models/${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}
+      - MODEL_PATH=/models/${ATLAS_MODEL_FILE:?Set ATLAS_MODEL_FILE in .env or run atlas init}
+      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - PORT=8080
       # Context length is TOTAL across all slots. llama-server divides it
       # by PARALLEL_SLOTS for per-slot n_ctx_seq. The compose default of
@@ -53,24 +57,38 @@ services:
       # behavior; the entrypoint comments confirm --parallel 4 at 40k
       # per slot fits within budget on a 16 GB card.
       - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-131072}
-      - PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-4}
+      # Canonical ATLAS_* names take precedence; the nested legacy fallback
+      # keeps .env files generated before the rename working during upgrade.
+      - PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}
       # Model-aware runtime sizing (PC-208). `atlas tier fit --write`
       # derives these from the GGUF header + GPU VRAM; the defaults
       # match a 16 GB card. The entrypoint runs with --fit off, so a
       # config that doesn't fit fails fast instead of spilling to CPU.
-      - KV_CACHE_TYPE_K=${ATLAS_KV_TYPE_K:-f16}
-      - KV_CACHE_TYPE_V=${ATLAS_KV_TYPE_V:-f16}
+      - KV_CACHE_TYPE_K=${ATLAS_KV_TYPE_K:-${KV_CACHE_TYPE_K:-f16}}
+      - KV_CACHE_TYPE_V=${ATLAS_KV_TYPE_V:-${KV_CACHE_TYPE_V:-f16}}
       - UBATCH_SIZE=${ATLAS_UBATCH:-1024}
-      - BATCH_SIZE=${ATLAS_BATCH:-2048}
+      - BATCH_SIZE=${ATLAS_BATCH:-1024}
+      # GPU selection on multi-GPU hosts. The entrypoint maps this to
+      # CUDA_VISIBLE_DEVICES (or the HIP/Vulkan equivalent) and skips
+      # the export when empty, so the default is "all GPUs visible".
+      - ATLAS_GPU_INDEX=${ATLAS_GPU_INDEX:-}
+      # ASA control-vector knobs (read by entrypoint-v3.1.sh; without the
+      # passthrough the documented .env knobs only work on the macOS
+      # native launcher). Empty values keep the entrypoint defaults.
+      - ATLAS_CONTROL_VECTOR_SCALE=${ATLAS_CONTROL_VECTOR_SCALE:-}
+      - ATLAS_CONTROL_VECTOR_LAYER_RANGE=${ATLAS_CONTROL_VECTOR_LAYER_RANGE:-}
+      - ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED=${ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED:-}
 
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./geometric-lens
     environment:
       - LLAMA_URL=http://llama-server:8080
       - LLAMA_EMBED_URL=http://llama-server:8080
+      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
       - SQLITE_DB_PATH=/data/projects/geometric_state.db
@@ -83,10 +101,11 @@ services:
       # Uncomment and point ATLAS_SECRETS_DIR at a host directory containing api-keys.json:
       # - ${ATLAS_SECRETS_DIR:-./secrets}:/app/secrets:ro
     ports:
-      - "${ATLAS_LENS_PORT:-8099}:8099"
+      - "127.0.0.1:${ATLAS_LENS_PORT:-8099}:8099"
     depends_on:
       llama-server:
         condition: service_healthy
+
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
       interval: 15s
@@ -94,10 +113,12 @@ services:
       retries: 5
     networks:
       - atlas
+      - sandbox-net
 
   # --- V3 Pipeline Service ---
   v3-service:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: .
       dockerfile: v3-service/Dockerfile
@@ -105,12 +126,15 @@ services:
       - ATLAS_INFERENCE_URL=http://llama-server:8080
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
-      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       # Structural call-graph reasoning (#39, experimental, default off). Read by
       # call_graph_enabled() inside this process, so it must be forwarded here.
       - ATLAS_CALL_GRAPH=${ATLAS_CALL_GRAPH:-0}
+      # Plan-generation thinking mode (read inside this process — must be
+      # forwarded here or setting it in .env has no effect).
+      - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-}
     ports:
-      - "${ATLAS_V3_PORT:-8070}:8070"
+      - "127.0.0.1:${ATLAS_V3_PORT:-8070}:8070"
     depends_on:
       llama-server:
         condition: service_healthy
@@ -123,12 +147,32 @@ services:
       retries: 5
     networks:
       - atlas
+      - sandbox-net
 
   # --- Sandbox (isolated code execution) ---
   sandbox:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./sandbox
+    environment:
+      # Per-call execution ceiling inside the executor (executor_server.py
+      # clamps request timeouts to MAX_EXECUTION_TIME). Default matches the
+      # proxy's 300s run_command cap so long builds/tests aren't cut off
+      # by the executor's internal 60s default.
+      - MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}
+      # Workspace-snapshot caps for overlay-file runs (executor_server.py
+      # reads these; without the passthrough the documented .env knobs
+      # would be silently ignored in container deployments).
+      - ATLAS_SHELL_SNAPSHOT_MAX_FILES=${ATLAS_SHELL_SNAPSHOT_MAX_FILES:-20000}
+      - ATLAS_SHELL_SNAPSHOT_MAX_BYTES=${ATLAS_SHELL_SNAPSHOT_MAX_BYTES:-268435456}
+      - ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES=${ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES:-16777216}
+      # Non-root runtime: the uid may be overridden below to match the
+      # host user, and an overridden uid has no passwd entry — HOME and
+      # the toolchain write-roots must come from the environment.
+      - HOME=/home/sandbox
+      - CARGO_HOME=/home/sandbox/.cargo
+      - GOPATH=/home/sandbox/go
     # Writable mounts for language toolchains. The container fs is
     # read_only=true for hardening, so every install/cache target a
     # toolchain wants to write to needs an explicit tmpfs. One per
@@ -140,18 +184,19 @@ services:
     # against the user's lockfile without any of these tmpfs at all.
     tmpfs:
       - /tmp:size=1G                 # /tmp itself (pip download dir, mktemp targets, /tmp/sandbox lives inside)
-      - /root/.local:size=256M       # Python: pip install --user
-      - /root/.cache:size=256M       # generic cache root (pip wheel cache, ruff, mypy)
-      - /root/.npm:size=256M         # Node: npm cache
-      - /root/.cargo/registry:size=512M # Rust: crate downloads
-      - /root/go:size=512M           # Go: module cache + bin
-      - /root/.m2:size=512M          # Java: Maven local repo
-      - /root/.gradle:size=512M      # Java/Kotlin: Gradle caches
-      - /root/.bundle:size=256M      # Ruby: bundler --path
-      - /root/.gem:size=256M         # Ruby: gem install --user-install
-      - /root/.composer:size=256M    # PHP: composer global
-      - /root/.nuget:size=256M       # .NET: NuGet packages
-      - /root/.pub-cache:size=256M   # Dart: pub packages
+      - /home/sandbox:size=128M      # dotfiles + misc config the toolchains scatter
+      - /home/sandbox/.local:size=256M   # Python: pip install --user
+      - /home/sandbox/.cache:size=256M   # generic cache root (pip wheel cache, ruff, mypy)
+      - /home/sandbox/.npm:size=256M     # Node: npm cache
+      - /home/sandbox/.cargo:size=512M   # Rust: crate downloads (CARGO_HOME; toolchain stays read-only in /opt)
+      - /home/sandbox/go:size=512M       # Go: module cache + bin (GOPATH)
+      - /home/sandbox/.m2:size=512M      # Java: Maven local repo
+      - /home/sandbox/.gradle:size=512M  # Java/Kotlin: Gradle caches
+      - /home/sandbox/.bundle:size=256M  # Ruby: bundler --path
+      - /home/sandbox/.gem:size=256M     # Ruby: gem install --user-install
+      - /home/sandbox/.composer:size=256M # PHP: composer global
+      - /home/sandbox/.nuget:size=256M   # .NET: NuGet packages
+      - /home/sandbox/.pub-cache:size=256M # Dart: pub packages
     # The container fs stays read-only (hardening). The user's project
     # is bind-mounted at /workspace — same path the proxy sees — so the
     # /shell endpoint can run pip install, python app.py, etc. against
@@ -161,6 +206,13 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
+    # Non-root + zero capabilities. The uid/gid default to 1000 and are
+    # overridden by `atlas init` to match the host user, so /workspace
+    # writes keep the right owner without CAP_DAC_OVERRIDE (which is why
+    # cap_drop ALL is safe — nothing in the executor needs a capability).
+    user: "${ATLAS_SANDBOX_UID:-1000}:${ATLAS_SANDBOX_GID:-1000}"
+    cap_drop:
+      - ALL
     # Resource caps. run_command runs untrusted model-authored shell in
     # here, so the container — not a regex — is the real backstop against
     # resource exhaustion. pids_limit is a hard fork-bomb stop at the
@@ -173,6 +225,10 @@ services:
     # uncapped on memory until reconfigured.
     pids_limit: ${ATLAS_SANDBOX_PIDS:-1024}
     mem_limit: ${ATLAS_SANDBOX_MEM:-0}
+    # CPU quota so a runaway build can't starve the latency-sensitive
+    # llama-server. Same pattern as mem_limit: `atlas init` writes ~75%
+    # of host cores; 0 = unlimited on a raw compose up.
+    cpus: ${ATLAS_SANDBOX_CPUS:-0}
     # Don't override working_dir — the image uses WORKDIR=/app for
     # executor_server.py. The /shell endpoint defaults its cwd to
     # /workspace at request time, which is the bind-mounted user
@@ -180,14 +236,22 @@ services:
     volumes:
       - ${ATLAS_PROJECT_DIR:-.}:/workspace
     ports:
-      - "${ATLAS_SANDBOX_PORT:-30820}:8020"
+      - "127.0.0.1:${ATLAS_SANDBOX_PORT:-30820}:8020"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8020/health"]
       interval: 15s
       timeout: 5s
       retries: 3
+    # The sandbox lives on its own network so egress can be cut without
+    # touching the rest of the stack: ATLAS_SANDBOX_NET_INTERNAL=true
+    # makes sandbox-net internal (no default route — executed code loses
+    # all egress; service-to-service HTTP from proxy/v3/lens still
+    # works). Caveats of internal mode: the 127.0.0.1:30820 host publish
+    # above goes dead (atlas doctor probes the sandbox via docker exec
+    # fallback), and pip/npm installs inside verification runs will fail
+    # by design. Default false = unrestricted egress (documented).
     networks:
-      - atlas
+      - sandbox-net
 
   # --- ATLAS Proxy (agent loop + grammar + structured tool calls) ---
   # The proxy needs access to your project files for read_file, write_file, etc.
@@ -200,6 +264,7 @@ services:
   # the stack up — the bind mount is fixed for the container's lifetime.
   atlas-proxy:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
+    restart: unless-stopped
     build:
       context: ./proxy
     environment:
@@ -210,13 +275,13 @@ services:
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_V3_URL=http://v3-service:8070
-      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       # Context budget for conversation trimming (PC-216). Same
       # values the llama-server gets; the proxy trims history to a
       # token budget derived from per-slot context instead of a
       # blind message count, so a just-read file isn't dropped.
       - ATLAS_CTX_SIZE=${ATLAS_CTX_SIZE:-131072}
-      - ATLAS_PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-4}
+      - ATLAS_PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}
       # Redundant-read short-circuit: when "1" (default), a re-read of an
       # unchanged file already in context returns a compact pointer instead
       # of re-injecting the file. Set "0" to always serve the full re-read
@@ -238,6 +303,21 @@ services:
       # the absolute hard wall (200). Useful for "fix the entire app"
       # prompts that legitimately need more turns.
       - ATLAS_MAX_TURNS=${ATLAS_MAX_TURNS:-}
+      # Documented tuning knobs (docs/CONFIGURATION.md). Empty passthrough =
+      # the in-code default applies; setting the key in .env reaches the
+      # container without a compose edit.
+      # V3 bridge call timeout in seconds (0 disables the cap).
+      - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
+      # Per-turn generation ceiling (tokens).
+      - ATLAS_MAX_TOKENS=${ATLAS_MAX_TOKENS:-}
+      # Conversation-history token budget override.
+      - ATLAS_AGENT_HISTORY_BUDGET=${ATLAS_AGENT_HISTORY_BUDGET:-}
+      # Labeled-sample count at which the "retrain available" prompt fires.
+      - ATLAS_LENS_RETRAIN_MIN=${ATLAS_LENS_RETRAIN_MIN:-}
+      # Set 0 to disable the 45s llama-server keep-warm ping (PC-035).
+      - ATLAS_KEEP_LLAMA_WARM=${ATLAS_KEEP_LLAMA_WARM:-}
+      # Set 0 to reuse KV slots across sessions instead of erasing (PC-045).
+      - ATLAS_FRESH_SLOT_PER_SESSION=${ATLAS_FRESH_SLOT_PER_SESSION:-}
       # Pins the proxy's "where to write files" target. Must match the
       # working_dir below and the right-hand side of the volume mount.
       - ATLAS_WORKSPACE_DIR=/workspace
@@ -251,7 +331,7 @@ services:
       - ${ATLAS_LENS_HOST_DIR:-./lens_training}:/data/lens_training
     working_dir: /workspace
     ports:
-      - "${ATLAS_PROXY_PORT:-8090}:8090"
+      - "127.0.0.1:${ATLAS_PROXY_PORT:-8090}:8090"
     depends_on:
       llama-server:
         condition: service_healthy
@@ -268,10 +348,18 @@ services:
       retries: 5
     networks:
       - atlas
+      - sandbox-net
 
 volumes:
   lens-data:
 
+
 networks:
   atlas:
     driver: bridge
+  # Dedicated sandbox network so egress can be cut independently:
+  # internal:true removes the default route (executed code loses all
+  # egress) while service-to-service HTTP on this network keeps working.
+  sandbox-net:
+    driver: bridge
+    internal: ${ATLAS_SANDBOX_NET_INTERNAL:-false}
