@@ -53,9 +53,11 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
-          # 1.24 floor for proxy. tui requires 1.26+ via go.mod;
-          # GOTOOLCHAIN=auto auto-fetches the newer toolchain.
-          go-version: '1.24'
+          # 1.26 covers both modules (tui requires 1.26+ via go.mod;
+          # proxy's 1.24 floor builds fine on it). setup-go v6 pins
+          # GOTOOLCHAIN=local, so the version here must satisfy every
+          # module — no auto-fetch.
+          go-version: '1.26'
 
       - name: build go modules
         # CodeQL needs to observe a real compile to extract dataflow.
