@@ -1,5 +1,5 @@
 # nvidia/cuda:12.9.0-devel-rockylinux9 — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/nvidia/cuda:12.9.0-devel-rockylinux9@sha256:7c290c736a183f91b1e90cd62e90ff9fb760102d6ace39292c43a567c0f5b24e AS builder
+FROM docker.io/nvidia/cuda:12.9.2-devel-rockylinux9@sha256:7edd399cf796b6603a33ca5b3946dc8695c5d14f158abe4fea6dfb12012035b2 AS builder
 RUN dnf install -y git cmake gcc-c++ && dnf clean all
 # Pin llama.cpp to a known-good SHA so the PC-202 patch applies cleanly.
 # Keep aligned with Dockerfile.v31 / Dockerfile.rocm / Dockerfile.vulkan.
@@ -20,7 +20,7 @@ RUN git init /llama.cpp && \
     cmake --build build --config Release -j$(nproc)
 
 # nvidia/cuda:12.9.0-runtime-rockylinux9 — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9@sha256:b58050e1787e4ace37bdda12b097a2c6ca30df3d563f3356238029cb49cf7201
+FROM docker.io/nvidia/cuda:12.9.2-runtime-rockylinux9@sha256:663416e2b4c199399ead053e3250bdbab3f124db696a7d01f26e215d18ecbd44
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 RUN mkdir -p /models
