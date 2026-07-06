@@ -10,7 +10,7 @@ COPY requirements.txt .
 # Lens runs on CPU; all model inference stays in llama-server. Install torch
 # from the CPU-only index first so pip cannot choose PyPI's CUDA/NCCL wheel on
 # Linux arm64, then resolve the ordinary application dependencies from PyPI.
-RUN pip install --no-cache-dir torch==2.10.0 \
+RUN pip install --no-cache-dir torch==2.12.1 \
         --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
