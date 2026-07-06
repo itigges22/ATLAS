@@ -21,11 +21,13 @@
 
 ## 🌎 What is ATLAS?
 
-ATLAS is a local coding agent for open models. It runs on your own hardware and works inside real repositories: reading files, editing code, running commands, and checking the result in an isolated sandbox.
+ATLAS is an open harness that makes small local models viable for real coding work by putting the intelligence in the infrastructure: planning, candidate verification, sandboxed repair, and a quality scorer you retrain on your own workloads.
 
-Loading a model locally is only half the problem. Getting a compact open model to stay on task across a real code change is harder. ATLAS puts an agent loop around the model that can plan, generate alternatives, enforce tool calls, run tests, and repair failures. Simple edits take the short path; harder tasks get more compute and verification.
+A compact open model on its own loses the thread partway through a real code change. ATLAS wraps it in an agent loop that plans the change, generates and scores alternative candidates, enforces valid tool calls, runs the result in an isolated sandbox, and repairs what fails. Simple edits take the short path; harder tasks get more compute and more verification.
 
-`atlas init` selects a compatible registry model for the machine, or you can bring another GGUF and build the matching Lens and ASA artifacts locally. Model identity and context sizing are runtime configuration, not baked-in family assumptions. There is no hosted API or per-token bill, and your source code and prompts stay on the machine running ATLAS.
+The quality scorer (the Geometric Lens) is trained per model — and retrained per user. Passes you rate in the TUI become weighted training samples, and `atlas lens retrain` updates the scorer on your own codebase and patterns. The longer you use ATLAS, the better your instance gets at your work, and that improvement lives on your disk, not in someone else's dataset.
+
+`atlas init` selects a compatible registry model for the machine, or bring any GGUF and build the matching Lens and ASA artifacts locally. Model identity and context sizing are runtime configuration, not baked-in family assumptions. Inference, scoring, sandbox runs, and learned state all stay on the machine running ATLAS; there is no hosted API or per-token bill.
 
 The published 74.6% LiveCodeBench result belongs to the frozen 14B reference build. Formal results for the current registry models are still in progress.
 
