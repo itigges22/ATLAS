@@ -1,5 +1,5 @@
 # golang:1.24-alpine — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS builder
+FROM docker.io/golang:1.26-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS builder
 WORKDIR /build
 COPY go.mod ./
 COPY *.go ./
@@ -7,7 +7,7 @@ COPY *.go ./
 RUN go build -o atlas-proxy-v2 .
 
 # alpine:3.20 — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+FROM docker.io/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 # Runtime packages, version-pinned for reproducible builds. Only two are
 # needed:
 #   curl — the compose/K8s healthcheck (curl -sf localhost:8090/health)
@@ -24,8 +24,8 @@ FROM docker.io/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be
 # collects superseded -rN builds; a pin may need bumping when Alpine ships
 # a patch (the digest-pinned base keeps the rest of the toolchain fixed).
 RUN apk add --no-cache \
-        curl=8.14.1-r2 \
-        bash=5.2.26-r0
+        curl=8.21.0-r0 \
+        bash=5.3.9-r1
 
 # Non-root application account created inside this image. The proxy reads
 # config from env/mounts and writes nothing to the container fs at runtime
