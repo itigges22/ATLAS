@@ -27,6 +27,15 @@ It is built on a simple idea: the intelligence of a coding agent can live in the
 
 The result is a coding agent that can work through real software tasks, verify its own output, and run entirely on your hardware—without sending your code to a hosted model or paying per token.
 
+## Why ATLAS?
+
+* **Get more from smaller models.** ATLAS adds planning, candidate selection, verification, and repair around the model instead of depending on a single generation.
+* **Verify before accepting.** Generated code can be compiled, tested, and corrected inside an isolated execution environment.
+* **Spend compute where it matters.** Straightforward edits take a shorter path, while harder tasks receive more candidates, reasoning, and validation.
+* **Run your own model.** Use a compatible GGUF model on NVIDIA, AMD, Apple Silicon, Vulkan, or CPU-supported hardware.
+* **Keep everything local.** Your repository, inference, test execution, and learned artifacts stay on your machine.
+* **Own the full stack.** ATLAS is open source, self-hosted, and has no required hosted API or per-token fee.
+
 ---
 
 ## Latest News
