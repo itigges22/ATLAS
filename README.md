@@ -21,9 +21,11 @@
 
 ## 🌎 What is ATLAS?
 
-ATLAS is a local-first coding agent that makes compact open models capable of real software work.
+**ATLAS is a local coding agent that brings frontier-style reasoning and verification to compact open models.**
 
-It is built on a simple bet: the intelligence of a coding agent can live in the system around the model instead of in the model itself. Take a small open model, one that fits on the GPU you already own, and surround it with the machinery the frontier labs keep behind their APIs: structured planning, diverse candidate generation, an energy-based scorer that reads the model's own embeddings to predict which attempt will survive testing, and a sandbox that verifies and repairs code before it ever touches your repository.
+It is built on a simple idea: the intelligence of a coding agent can live in the system around the model—not only in the model itself. ATLAS takes an open model that fits on the GPU you already own and surrounds it with structured planning, diverse candidate generation, quality scoring, sandboxed testing, and iterative repair.
+
+The result is a coding agent that can work through real software tasks, verify its own output, and run entirely on your hardware—without sending your code to a hosted model or paying per token.
 
 ---
 
