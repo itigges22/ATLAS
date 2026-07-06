@@ -44,3 +44,11 @@ updates:
     groups:
       docker:
         patterns: ["*"]
+    # Base-image majors are deliberate migrations, not routine bumps:
+    # a CUDA major must match the host driver ceiling and rebuild the
+    # llama image against the pinned llama.cpp patches, and a Python
+    # major moves the lens/sandbox interpreter under pinned torch
+    # wheels. Digest and minor/patch updates still flow.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
