@@ -21,7 +21,7 @@
 
 ## 🌎 What is ATLAS?
 
-**ATLAS is a local coding agent that brings frontier-style reasoning and verification to compact open models.** It puts more intelligence in the system around the model—planning, candidate generation, quality scoring, sandboxed testing, and repair—so smaller models can tackle real software work entirely on your own hardware, without a hosted API or per-token fees.
+**ATLAS is a local coding agent that brings frontier-style reasoning and verification to compact open models.** It puts more intelligence in the system around the model (planning, candidate generation, quality scoring, sandboxed testing, and repair) so smaller models can tackle real software work entirely on your own hardware, without a hosted API or per-token fees.
 
 ## 💡 Why ATLAS?
 
@@ -39,7 +39,7 @@
 - **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads, and an agent-reliability pass
 - **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
 - **2026-03-26** - [Hacker News front page](https://news.ycombinator.com/item?id=47533297) - 489 points, 285 comments
-- **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B (pass@1 with k=3 generated candidates, Lens selection, and repair — not single-generation pass@1; [methodology](docs/reports/V3_ABLATION_STUDY.md))
+- **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B (pass@1 with k=3 generated candidates, Lens selection, and repair - not single-generation pass@1; [methodology](docs/reports/V3_ABLATION_STUDY.md))
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
 
 ## ⭐ Star History
@@ -87,7 +87,7 @@
    - Runs both generated and existing test suites
 
 6. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on one consumer GPU.
-   - GPU-accelerated quantized inference (Q6_K / Q4_K_M) — NVIDIA CUDA, AMD ROCm, Apple Metal (macOS hybrid), and Vulkan; Intel SYCL on the roadmap
+   - GPU-accelerated quantized inference (Q6_K / Q4_K_M) - NVIDIA CUDA, AMD ROCm, Apple Metal (macOS hybrid), and Vulkan; Intel SYCL on the roadmap
    - Grammar-constrained decoding at the token level
    - Self-embeddings, so the lens doesn't need a second model
 
@@ -114,7 +114,7 @@ Then in any project directory, run `atlas`.
 | Python | 3.9+ |
 | Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |
 
-Apple Silicon runs natively through the macOS hybrid Metal path (native llama-server + Docker for the rest — see **[SETUP_MACOS.md](docs/SETUP_MACOS.md)**); Intel Arc (SYCL) is on the roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
+Apple Silicon runs natively through the macOS hybrid Metal path (native llama-server + Docker for the rest - see **[SETUP_MACOS.md](docs/SETUP_MACOS.md)**); Intel Arc (SYCL) is on the roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
 
 ---
 
@@ -131,16 +131,16 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 **V3.1.2 "Maia"** - Current release. Broader hardware reach, bring-your-own-model training, and an agent-reliability pass on top of the V3.1.0 base (TUI, one-command install, streaming Lens + ASA).
 - Hardware reach: AMD ROCm via llama.cpp incl. RDNA4 / RX 9070 (gfx1200/gfx1201) ([#26](https://github.com/itigges22/ATLAS/issues/26)); Apple Silicon native macOS hybrid Metal path ([#32](https://github.com/itigges22/ATLAS/issues/32), see [SETUP_MACOS.md](docs/SETUP_MACOS.md)); Vulkan universal fallback covering AMD / Intel / Snapdragon / Apple-via-MoltenVK / CPU ([#114](https://github.com/itigges22/ATLAS/issues/114)).
-- Bring-your-own-model: local Lens training pipeline (`atlas lens build` / `retrain`, [#100](https://github.com/itigges22/ATLAS/issues/100)) and ASA per-model calibration parity (`atlas asa check/build/publish`, [#113](https://github.com/itigges22/ATLAS/issues/113)) — train Lens + ASA artifacts for additional GGUFs, with per-model operating thresholds that ship with the lens.
+- Bring-your-own-model: local Lens training pipeline (`atlas lens build` / `retrain`, [#100](https://github.com/itigges22/ATLAS/issues/100)) and ASA per-model calibration parity (`atlas asa check/build/publish`, [#113](https://github.com/itigges22/ATLAS/issues/113)) - train Lens + ASA artifacts for additional GGUFs, with per-model operating thresholds that ship with the lens.
 - In-the-loop lens training: rate passes in the TUI (`/good` · `/bad` · `/review` · `/deny`) → collected, weighted samples → `atlas lens retrain` on your own workloads.
 - Agent reliability: tool-result visibility fix, read-dedup, traceback → directed-edit, `move_file`, pip-install / case-mismatch steers, sandbox shell policy + host-sized cgroup limits.
 - Structural call-graph reasoning ([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125), thanks [@yogthos](https://github.com/yogthos)); ARCHITECTURE.md translated to zh-CN / ja / ko ([#25](https://github.com/itigges22/ATLAS/issues/25)).
 
 **V3.2** - Next milestone: deeper code reasoning and planning.
-- Architecture-first planning phase — RPG-style plan-then-fill: plan at module scope, then implement at function scope ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)).
-- Structural code reasoning (tail) — solver-backed reachability + syntax-agnostic wavelet decomposition for multi-resolution "which files matter" retrieval ([#39](https://github.com/itigges22/ATLAS/issues/39)).
-- Reasoning with sampling — efficiency and quality gains ([#9](https://github.com/itigges22/ATLAS/issues/9)).
-- Deferred infra: automated HuggingFace submission pipeline ([#102](https://github.com/itigges22/ATLAS/issues/102)); ROCm on K3s / Kubernetes; formal registry-model benchmarks — LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28)).
+- Architecture-first planning phase - RPG-style plan-then-fill: plan at module scope, then implement at function scope ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)).
+- Structural code reasoning (tail) - solver-backed reachability + syntax-agnostic wavelet decomposition for multi-resolution "which files matter" retrieval ([#39](https://github.com/itigges22/ATLAS/issues/39)).
+- Reasoning with sampling - efficiency and quality gains ([#9](https://github.com/itigges22/ATLAS/issues/9)).
+- Deferred infra: automated HuggingFace submission pipeline ([#102](https://github.com/itigges22/ATLAS/issues/102)); ROCm on K3s / Kubernetes; formal registry-model benchmarks - LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28)).
 
 **Backlog / help wanted**
 - Hardware: ARM64 multi-arch builds ([#115](https://github.com/itigges22/ATLAS/issues/115)), multi-GPU for larger models ([#34](https://github.com/itigges22/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/itigges22/ATLAS/issues/27)).
@@ -156,10 +156,10 @@ ATLAS is built by a single college student in his free time on a single consumer
 
 Sponsorship directly funds:
 
-- **Compute & hardware** — more GPUs for faster benchmark iteration, access to architectures the maintainer can't afford (AMD ROCm, higher VRAM cards, cloud rentals for larger-model experiments).
-- **Contributor bounties** — meaningful compensation for external contributors who put real time into substantive PRs, so ATLAS can grow faster than a single-person pace allows.
-- **Research** — continued academic engagement around the architecture, from future workshop and conference submissions to paper writing and collaborations that validate and extend the approach.
-- **Community** — continued support for the community and platforms ATLAS runs on, including documentation, user-facing channels, and educational content that help ATLAS reach more developers and better serve the ones already using it.
+- **Compute & hardware** - more GPUs for faster benchmark iteration, access to architectures the maintainer can't afford (AMD ROCm, higher VRAM cards, cloud rentals for larger-model experiments).
+- **Contributor bounties** - meaningful compensation for external contributors who put real time into substantive PRs, so ATLAS can grow faster than a single-person pace allows.
+- **Research** - continued academic engagement around the architecture, from future workshop and conference submissions to paper writing and collaborations that validate and extend the approach.
+- **Community** - continued support for the community and platforms ATLAS runs on, including documentation, user-facing channels, and educational content that help ATLAS reach more developers and better serve the ones already using it.
 
 Every sponsor is credited in the release notes of the version they helped fund.
 
