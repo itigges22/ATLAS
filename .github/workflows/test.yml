@@ -112,7 +112,7 @@ jobs:
         # service requirements. xgboost tests importorskip if absent, but
         # requirements.txt pins xgboost-cpu so they run here.
         run: |
-          pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.12.1 --index-url https://download.pytorch.org/whl/cpu
           pip install -r geometric-lens/requirements.txt
 
       - name: pytest

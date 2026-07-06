@@ -49,7 +49,7 @@ addopts = "-m 'not integration'"
 [build-system]
 # >=77 because the SPDX-string `license` form (PEP 639) fails the build
 # on older setuptools ("license should be a table").
-requires = ["setuptools>=83.0.0"]
+requires = ["setuptools>=77"]  # floor stays py3.9-compatible: RHEL9-family hosts (bootstrap) run python 3.9; setuptools 83+ needs >=3.10
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
