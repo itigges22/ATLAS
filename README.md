@@ -27,7 +27,7 @@ It is built on a simple idea: the intelligence of a coding agent can live in the
 
 The result is a coding agent that can work through real software tasks, verify its own output, and run entirely on your hardware—without sending your code to a hosted model or paying per token.
 
-## Why ATLAS?
+## 💡 Why ATLAS?
 
 * **Get more from smaller models.** ATLAS adds planning, candidate selection, verification, and repair around the model instead of depending on a single generation.
 * **Verify before accepting.** Generated code can be compiled, tested, and corrected inside an isolated execution environment.
@@ -38,7 +38,7 @@ The result is a coding agent that can work through real software tasks, verify i
 
 ---
 
-## Latest News
+## 📰 Latest News
 
 - **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads, and an agent-reliability pass
 - **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
@@ -46,7 +46,7 @@ The result is a coding agent that can work through real software tasks, verify i
 - **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B (pass@1 with k=3 generated candidates, Lens selection, and repair — not single-generation pass@1; [methodology](docs/reports/V3_ABLATION_STUDY.md))
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
 
-## Star History
+## ⭐ Star History
 
 <a href="https://www.star-history.com/?type=date&repos=itigges22%2Fatlas">
  <picture>
@@ -154,7 +154,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ---
 
-## Support ATLAS
+## ❤️ Support ATLAS
 
 ATLAS is built by a single college student in his free time on a single consumer GPU ([the story behind ATLAS](docs/STORY.md)). If the project has been useful to you and you want to help keep it sustainable, please consider **[sponsoring on GitHub](https://github.com/sponsors/itigges22)**.
 
