@@ -52,3 +52,9 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # Docker tags aren't semver: the python interpreter version rides
+      # the MINOR component (3.11 -> 3.14), and moving it is the same
+      # deliberate migration as a major (pinned torch wheels, lens/
+      # sandbox interpreter). Patch + digest updates still flow.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-minor"]
