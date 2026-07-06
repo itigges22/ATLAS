@@ -170,7 +170,7 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
         ),
         "go-proxy-staticcheck": Gate(
             "go-proxy-staticcheck",
-            ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2025.1.1",
+            ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
              "./..."),
             cwd=ROOT / "proxy",
             available=lambda: _command_available("go"),
@@ -195,7 +195,7 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
         ),
         "go-tui-staticcheck": Gate(
             "go-tui-staticcheck",
-            ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2025.1.1",
+            ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
              "./..."),
             cwd=ROOT / "tui",
             available=lambda: _command_available("go"),
