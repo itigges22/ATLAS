@@ -71,7 +71,7 @@ atlas doctor             # verify: services healthy, model/artifacts intact
 ```
 
 Pin instead of tracking `latest` for production use: set
-`ATLAS_IMAGE_TAG=v3.1.2` (or an exact `sha-<commit>`) in `.env` before
+`ATLAS_IMAGE_TAG=3.1.3` (or an exact `sha-<commit>`) in `.env` before
 `docker compose pull`. Every published digest is immutable and cosign-
 signed; `sha-*` tags never move.
 
@@ -98,7 +98,7 @@ within a minor version (SUPPORT_MATRIX.md § compatibility policy).
 ## Automated upgrade (`atlas upgrade`)
 
 ```bash
-atlas upgrade --to v1.2.0      # or --to latest (default)
+atlas upgrade --to 3.1.3       # or --to latest (default); a leading v is accepted and stripped
 ```
 
 This records a restore point (current tag + image digests + a `.env`
@@ -144,7 +144,7 @@ anything.
 
 ```bash
 atlas rollback            # restore the last upgrade's previous release
-atlas rollback --to v1.1.0  # or target a specific immutable tag
+atlas rollback --to 3.1.2   # or target a specific immutable tag
 ```
 
 With no argument it reads the restore point written by `atlas upgrade`
@@ -163,7 +163,7 @@ semver tags; none are ever repointed. To roll back:
 # 1. Find the last-good tag (release tag, or a sha-* from
 #    `docker compose images` / the GHCR package page)
 # 2. Pin it:
-sed -i 's/^ATLAS_IMAGE_TAG=.*/ATLAS_IMAGE_TAG=v3.1.1/' .env   # or sha-abc1234
+sed -i 's/^ATLAS_IMAGE_TAG=.*/ATLAS_IMAGE_TAG=3.1.2/' .env   # or sha-abc1234 — registry semver tags carry no leading v
 docker compose pull
 docker compose up -d
 atlas doctor

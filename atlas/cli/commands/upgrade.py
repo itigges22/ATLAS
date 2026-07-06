@@ -241,6 +241,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "target) without applying anything")
     args = parser.parse_args(argv)
 
+    normalized = eng.normalize_image_tag(args.to)
+    if normalized != args.to:
+        print(f"(image tags carry no leading v — using {normalized})")
+        args.to = normalized
+
     atlas_root = compose_config.find_atlas_root()
     if not os.path.isfile(os.path.join(atlas_root, "docker-compose.yml")):
         print("atlas upgrade: run from an ATLAS checkout.", file=sys.stderr)

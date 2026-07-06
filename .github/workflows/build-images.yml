@@ -58,6 +58,15 @@ on:
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
+    inputs:
+      alias_tag:
+        description: >
+          Registry-side tag alias, "SRC=DST" (e.g. "3.1.3=v3.1.3"):
+          points atlas-*:DST at the existing atlas-*:SRC manifests for
+          all six services. No builds. Leave empty for a normal
+          sha-only dispatch build.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -111,9 +120,42 @@ jobs:
           # so a PR can't poison or thrash the 10 GB GHA cache budget.
           provenance: false
 
+  # Registry-side tag alias (workflow_dispatch with alias_tag): no
+  # builds — repoints atlas-*:DST at the existing atlas-*:SRC manifests
+  # for all six services via imagetools create.
+  alias:
+    name: alias image tag
+    if: github.event_name == 'workflow_dispatch' && inputs.alias_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create alias
+        env:
+          ALIAS: ${{ inputs.alias_tag }}
+        run: |
+          set -euo pipefail
+          SRC="${ALIAS%%=*}"; DST="${ALIAS##*=}"
+          if [[ -z "$SRC" || -z "$DST" || "$SRC" == "$DST" || "$ALIAS" != *"="* ]]; then
+            echo "::error::alias_tag must be SRC=DST (got '$ALIAS')"; exit 1
+          fi
+          for svc in proxy v3 lens sandbox llama llama-vulkan; do
+            echo "  atlas-${svc}:${DST} <- atlas-${svc}:${SRC}"
+            docker buildx imagetools create \
+              -t "${REGISTRY}/${OWNER}/atlas-${svc}:${DST}" \
+              "${REGISTRY}/${OWNER}/atlas-${svc}:${SRC}"
+          done
+
   build:
     name: ${{ matrix.service.name }}
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.alias_tag == '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -359,7 +401,10 @@ jobs:
             refs/heads/dev)  TAGS="dev" ;;
             refs/tags/v*)
               VERSION="${GITHUB_REF#refs/tags/v}"
-              TAGS="${VERSION}"
+              # Both forms: :X.Y.Z and :vX.Y.Z. The git tag carries the v,
+              # so docs/pins that quote the tag verbatim (ATLAS_BOOTSTRAP_REF,
+              # ATLAS_IMAGE_TAG) resolve without callers stripping it.
+              TAGS="${VERSION} v${VERSION}"
               if [[ "${VERSION}" != *-* ]]; then
                 TAGS="${TAGS} ${VERSION%.*}"
               fi

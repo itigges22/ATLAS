@@ -257,3 +257,22 @@ def test_real_set_env_tag_appends_newline_first(tmp_path):
     assert "ATLAS_CTX_SIZE=131072\n" in content
     assert "ATLAS_IMAGE_TAG=v2.0.0\n" in content
     assert eng.read_env_tag(root) == "v2.0.0"
+
+
+def test_normalize_image_tag_strips_v_from_semver():
+    # Registry semver tags carry no leading v (git tag v3.1.3 publishes
+    # atlas-*:3.1.3).
+    assert eng.normalize_image_tag("v3.1.3") == "3.1.3"
+    assert eng.normalize_image_tag("v3.1.3-rc.1") == "3.1.3-rc.1"
+    assert eng.normalize_image_tag("3.1.3") == "3.1.3"
+    assert eng.normalize_image_tag("latest") == "latest"
+    assert eng.normalize_image_tag("dev") == "dev"
+    assert eng.normalize_image_tag("sha-abc1234") == "sha-abc1234"
+
+
+def test_unprefixed_semver_is_immutable():
+    # The form the registry actually serves must be treated as a release
+    # tag, or same-tag re-runs would refresh instead of noop.
+    assert not eng.tag_is_mutable("3.1.3")
+    assert not eng.tag_is_mutable("v3.1.3")
+    assert eng.tag_is_mutable("latest")

@@ -39,7 +39,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         target = point["previous_tag"]
     else:
-        target = args.to
+        target = eng.normalize_image_tag(args.to)
+        if target != args.to:
+            print(f"(image tags carry no leading v — using {target})")
 
     if not args.yes:
         current = eng.read_env_tag(atlas_root)

@@ -170,10 +170,20 @@ def _restore_or_flag(atlas_root: str, steps: Steps, cause: str,
         f"({previous_tag}).")
 
 
+def normalize_image_tag(tag: str) -> str:
+    """Registry semver tags carry no leading v (git tag v3.1.3 publishes
+    atlas-*:3.1.3), so a v-prefixed semver from the user is mapped to
+    the tag that actually exists."""
+    if re.fullmatch(r"v\d+(\.\d+)*([.-].*)?", tag):
+        return tag[1:]
+    return tag
+
+
 def tag_is_mutable(tag: str) -> bool:
-    """Release tags (vX.Y.Z…) are treated as immutable; anything else
-    (latest, dev, branch tags) can move between pulls."""
-    return re.fullmatch(r"v\d+(\.\d+)*([.-].*)?", tag) is None
+    """Release tags (X.Y.Z…, with or without a v prefix) are treated as
+    immutable; anything else (latest, dev, branch tags) can move
+    between pulls."""
+    return re.fullmatch(r"v?\d+(\.\d+)*([.-].*)?", tag) is None
 
 
 def run_upgrade(atlas_root: str, target_tag: str, steps: Steps,

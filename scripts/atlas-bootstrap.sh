@@ -863,11 +863,14 @@ ensure_repo_and_env() {
 
     # A release-pinned install (ATLAS_BOOTSTRAP_REF=vX.Y.Z) pins the
     # images to the same release, so checkout and containers match.
-    # Only when .env doesn't already carry an explicit tag.
+    # Registry semver tags carry no leading v (git tag v3.1.3 publishes
+    # atlas-*:3.1.3), so the v is stripped for the image tag. Only when
+    # .env doesn't already carry an explicit tag.
     if [[ "${ATLAS_BOOTSTRAP_REF:-}" =~ ^v[0-9] ]] \
         && ! grep -q "^ATLAS_IMAGE_TAG=" .env; then
-        echo "ATLAS_IMAGE_TAG=${ATLAS_BOOTSTRAP_REF}" >> .env
-        log_ok "Pinned ATLAS_IMAGE_TAG=${ATLAS_BOOTSTRAP_REF} in .env"
+        image_tag="${ATLAS_BOOTSTRAP_REF#v}"
+        echo "ATLAS_IMAGE_TAG=${image_tag}" >> .env
+        log_ok "Pinned ATLAS_IMAGE_TAG=${image_tag} in .env"
     fi
 
     ensure_default_model_selected
