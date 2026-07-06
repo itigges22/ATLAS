@@ -27,10 +27,10 @@ Roadmap items are tracked in GitHub and are not release claims.
 | Lens compatibility check, build, and retrain | Supported for registry entries with compatible artifacts | Hermetic tests and hardware integration |
 | Lens and ASA artifact publishing | Experimental | Hermetic CLI tests plus maintainer review workflow |
 | ASA compatibility check and build | Experimental | Hermetic tests and hardware integration |
-| CUDA backend | Supported | Hardware integration |
-| ROCm backend | Supported | Hardware integration |
-| Apple Metal backend | Supported | Hardware integration |
-| Vulkan backend | Supported | Hardware integration |
+| CUDA backend | Supported | Hardware integration (maintainer hardware) |
+| ROCm backend | Community-tested | Community hardware validation (SUPPORT_MATRIX § inference backends) |
+| Apple Metal backend | Supported | Maintainer hardware (macOS hybrid) |
+| Vulkan backend | Preview | Smoke-tested (lavapipe boot path); no real-GPU validation yet |
 | Intel SYCL and multi-GPU backends | Roadmap | None until implemented |
 | Browser or visual verification | Roadmap | None until implemented |
 

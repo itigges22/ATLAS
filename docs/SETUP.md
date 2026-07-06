@@ -73,6 +73,22 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 # no human user on the box (CI runner, container, etc).
 ```
 
+**Cautious-install variants** (same script; for anyone who'd rather not
+pipe a moving `main` script into bash):
+
+```bash
+# Pinned to a release: fetch the script AT the tag and install that tag.
+# The checkout is pinned to the (SSH-signed) tag and ATLAS_IMAGE_TAG is
+# pinned to the matching cosign-signed images.
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
+
+# Review before running: download, read, then execute the same bytes.
+curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh
+less atlas-bootstrap.sh
+bash atlas-bootstrap.sh
+```
+
 **Configuration env vars:**
 
 | Flag | Effect |
@@ -84,6 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 | `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built ~5 min after services come up; skipped automatically when no GPU is available) |
 | `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` | Open the service ports in firewalld (default: off — services bind loopback) |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
+| `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | Pin the install to a git tag/sha instead of tracking `main`; a `vX.Y.Z` value also pins `ATLAS_IMAGE_TAG` to the matching images |
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
 | `ATLAS_GO_VERSION=1.24.0` | Go toolchain version installed for the TUI build |

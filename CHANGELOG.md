@@ -2,14 +2,38 @@
 
 > This changelog is maintained as a best-effort summary; for line-level detail and any gaps, see the commit history (`git log`) or the GitHub PR list.
 
-## [Unreleased]
+## [3.1.3] - 2026-07-06 — Maia
+
+### Upgrade, rollback, and diagnostics
+- `atlas upgrade [--to TAG] [--dry-run]`: staged upgrade with a recorded restore point (tag + image digests + `.env` backup), cosign signature verification of the target images (unpublished backend images are skipped, not fatal), readiness wait, quick-doctor smoke check, and automatic restore of the previous release on any failure (restore never re-pulls — a moved mutable tag can't replace the cached known-good images). Same-tag release tags no-op; mutable tags (`latest`, `dev`) run a full refresh. `atlas rollback [--to TAG]` returns to the restore point, and a failed `--to` reverts `.env` to the previously deployed tag.
+- `atlas diagnostics collect`: a shareable support bundle (doctor output, service health, compose config, recent logs) with private values filtered.
+- `atlas config validate | migrate`: typed schema over `.env` (types/ranges/enums, unknown and deprecated keys), forward migration with a `.bak` and a schema-version stamp, `--dry-run` preview.
+- Signed artifact manifests: `atlas artifact verify | snapshot | rollback` — SSH-signed provenance manifests over lens/ASA bundles (verified against `.github/allowed_signers` + per-file SHA-256), one-generation bundle snapshot/rollback, and lens retrains auto-write a provenance manifest.
+
+### Observability
+- Structured JSON logs behind `ATLAS_LOG_FORMAT=json` across proxy, v3, lens, and sandbox, with `X-ATLAS-Request-ID` correlation: the proxy assigns/echoes the ID, forwards it on every outbound service call (with or without internal auth configured), v3 propagates it to lens/sandbox calls, and 401 responses carry the echo. All log paths pass the private-value filter, including exception tracebacks; the assignment filter also masks single-quoted values and Python dict reprs.
+- Stable error-code taxonomy on the proxy API (`GET /version` lists codes; errors return the documented JSON envelope) and an OpenAPI 3.1 spec for the proxy surface with route-parity contract tests.
+- Command-execution trust modes (`ATLAS_TRUST_MODE`): `untrusted` refuses command execution (both `run_command` and `run_background`), `trusted` (default) forces sandbox execution, `fully-trusted` permits host execution.
+- Performance budget gate in CI: versioned measurement schema (CLI import time, proxy binary size) checked against `benchmark/perf/budgets.json`; a result matching zero budgeted metrics or a failed import fails the gate instead of passing vacuously.
+
+### Adversarial review passes
+- Two loop-until-clean adversarial reviews over the release window fixed 33 confirmed bugs, including: a trust-mode bypass via `run_background`; correlation-ID forwarding dead on token-less installs; `.env` corruption on files without a trailing newline; upgrade signature verification skipping the llama image; artifact verification only working on the signer's machine; bundle snapshot/rollback producing mixed-generation bundles; a default `atlas upgrade` that could never fetch a moved `latest`; restore paths that masked the original failure; sandbox/v3 images missing `structured_log.py` (startup crash on next build); CI gates that could never fail (attestation checks, OpenAPI parity, perf vacuous-pass); and a K3s lens PVC that rendered empty on upgraded installs.
+
+### Dependency updates
+- Grouped Dependabot updates merged: GitHub Actions majors (with `go-version: 1.26` — setup-go v6 pins GOTOOLCHAIN=local), Go tui deps, the Python group (fastapi 0.139 / uvicorn 0.50 / pydantic 2.13 / xgboost 3.2 / torch 2.12.1, with the torch pin synced across Dockerfile/CI/guard tests), and Docker digests (CUDA 12.9.2, golang 1.26-alpine, alpine 3.24). Base-image majors (CUDA 13, Python 3.14) are deliberate migrations and now ignored by Dependabot config, as are setuptools bumps past the RHEL9 python3.9 floor; staticcheck bumped to 2026.1 (go1.26 stdlib).
+
+### Installer trust
+- Release-pinned install: `ATLAS_BOOTSTRAP_REF=vX.Y.Z` pins the cloned checkout to the (SSH-signed) tag and `ATLAS_IMAGE_TAG` to the matching cosign-signed images; README/SETUP document the pinned and review-before-running variants beside the one-shot `curl | bash`.
+
+### Docs & repo
+- Ops docs consolidated: UPGRADE/ROLLBACK/BACKUP_RESTORE merged into OPERATIONS.md; README opens with the project definition and a Why ATLAS section; star-history chart moved to the working endpoint; `.mailmap` maps contributor identities for git tooling.
 
 ### Production-platform pass (support, supply chain, governance, ops)
 - `SUPPORT_MATRIX.md`: every OS/backend/model/deployment/language/feature path classified (Supported/Preview/Experimental/Community-tested/Research-only/Unsupported) with validation provenance; N/N-1 compatibility policy; the model contract stated plainly (direct-mode agnostic, per-model bundles for V3/Lens/ASA).
 - Supply chain: all Docker bases digest-pinned (Dependabot-maintained); every pushed image carries SLSA provenance + SPDX SBOM attestations and a keyless cosign signature over its digest.
 - Sandbox: non-root runtime (uid-mapped to the host user by `atlas init`), cap_drop ALL, CPU quota, toolchains relocated out of /root, K3s securityContext with seccomp RuntimeDefault, and an optional egress cutoff (`ATLAS_SANDBOX_NET_INTERNAL`) — verified on a local hardened-profile run.
-- Redis resolved (ADR 0002, GH #57): kept + hardened — bounded maxmemory with explicit noeviction (learned TTL-less state fails visibly instead of silently evicting), mem_limit, graceful task-queue 503s, honest outage docs.
-- Governance: GOVERNANCE/MAINTAINERS/CODEOWNERS; SECURITY.md severities, response targets, embargo/CVE, backports, artifact revocation; THIRD_PARTY_NOTICES; six ADRs; UPGRADE/ROLLBACK/BACKUP_RESTORE/OPERATIONS runbooks; `PRODUCTION_READINESS.md` per-item tracker (honest statuses — production maturity is NOT claimed).
+- Lens state store is SQLite (ADR 0007, GH #57, core implementation from #128 by @HarshalPatel1972): pattern cache, co-occurrence graph, Thompson-sampling router posteriors, task queue, and metrics live in one WAL-mode `geometric_state.db` on the `lens-state` volume. The redis service, redis-data volume, and `REDIS_URL`/`ATLAS_REDIS_*` config are removed (`atlas config migrate` drops them); degradation semantics unchanged (cache/router go neutral on store failure, task queue 503s). One less external dependency; state backup is a single file.
+- Governance: GOVERNANCE/MAINTAINERS/CODEOWNERS; SECURITY.md severities, response targets, embargo/CVE, backports, artifact revocation; THIRD_PARTY_NOTICES; seven ADRs; a single OPERATIONS.md runbook (health, logs, runbooks, upgrade, rollback, backup). Planning/status trackers are kept out of the repo.
 - Tracker hygiene: label vocabulary created + applied to all open issues; #39 closed with evidence; fresh-audit status on #66/#115/#27; #124/#126/#128 marked blocked with exact conformance lists.
 
 ### V3/Lens pipeline acceptance test

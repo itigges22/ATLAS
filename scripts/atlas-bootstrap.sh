@@ -24,10 +24,15 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+#   # pinned to a release (script AND checkout at the same tag):
+#   curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/vX.Y.Z/scripts/atlas-bootstrap.sh \
+#     | ATLAS_BOOTSTRAP_REF=vX.Y.Z bash
 #   # or, from a checkout:
 #   ./scripts/atlas-bootstrap.sh
 #
 # Flags (env vars):
+#   ATLAS_BOOTSTRAP_REF=...           git tag/sha to install (checkout pinned to this
+#                                     ref instead of tracking main)
 #   ATLAS_BOOTSTRAP_SKIP_DOCKER=1     skip Docker install (already managed)
 #   ATLAS_BOOTSTRAP_SKIP_GPU=1        skip GPU runtime install (NVIDIA toolkit or ROCm setup)
 #   ATLAS_BOOTSTRAP_SKIP_NVIDIA=1     [deprecated alias for ATLAS_BOOTSTRAP_SKIP_GPU]
@@ -763,14 +768,28 @@ ensure_repo_and_env() {
         local install_dir="${ATLAS_INSTALL_DIR:-/opt/atlas}"
         local repo_url="${ATLAS_REPO_URL:-https://github.com/itigges22/ATLAS.git}"
 
+        local pin_ref="${ATLAS_BOOTSTRAP_REF:-}"
         log_info "Not in a checkout. Cloning $repo_url to $install_dir…"
         if [[ -d "$install_dir/.git" ]]; then
-            log_info "Existing checkout at $install_dir — pulling latest"
-            # Pull as the checkout's owner, mirroring the clone below.
-            # Running git as root in a user-owned checkout trips git's
-            # "dubious ownership" safety check and fails the re-run.
-            run_as_target git -C "$install_dir" pull --ff-only \
-                || die "git pull failed in $install_dir"
+            # Git commands run as the checkout's owner, mirroring the
+            # clone below. Running git as root in a user-owned checkout
+            # trips git's "dubious ownership" safety check and fails
+            # the re-run.
+            if [[ -n "$pin_ref" ]]; then
+                log_info "Existing checkout at $install_dir — pinning to $pin_ref"
+                run_as_target git -C "$install_dir" fetch --tags origin \
+                    || die "git fetch failed in $install_dir"
+                run_as_target git -C "$install_dir" checkout --detach "$pin_ref" \
+                    || die "git checkout $pin_ref failed in $install_dir"
+            elif run_as_target git -C "$install_dir" symbolic-ref -q HEAD >/dev/null; then
+                log_info "Existing checkout at $install_dir — pulling latest"
+                run_as_target git -C "$install_dir" pull --ff-only \
+                    || die "git pull failed in $install_dir"
+            else
+                # Detached HEAD from a previous pinned install: `pull`
+                # would fail. Stay put and say so.
+                log_info "Existing checkout at $install_dir is pinned ($(run_as_target git -C "$install_dir" describe --tags --always)); keeping it. Set ATLAS_BOOTSTRAP_REF to move, or 'git checkout main' to track latest."
+            fi
         else
             $SUDO mkdir -p "$install_dir"
             # Pre-chown the dir so the clone goes in user-owned, then
@@ -784,6 +803,11 @@ ensure_repo_and_env() {
                     || die "git clone failed"
             else
                 git clone "$repo_url" "$install_dir" || die "git clone failed"
+            fi
+            if [[ -n "$pin_ref" ]]; then
+                run_as_target git -C "$install_dir" checkout --detach "$pin_ref" \
+                    || die "git checkout $pin_ref failed (no such tag/sha?)"
+                log_ok "Checkout pinned to $pin_ref"
             fi
             $SUDO chown -R "$TARGET_UID:$TARGET_GID" "$install_dir"
         fi
@@ -835,6 +859,15 @@ ensure_repo_and_env() {
         fi
         cp .env.example .env
         log_ok "Created .env from .env.example (edit ATLAS_MODELS_DIR if needed)"
+    fi
+
+    # A release-pinned install (ATLAS_BOOTSTRAP_REF=vX.Y.Z) pins the
+    # images to the same release, so checkout and containers match.
+    # Only when .env doesn't already carry an explicit tag.
+    if [[ "${ATLAS_BOOTSTRAP_REF:-}" =~ ^v[0-9] ]] \
+        && ! grep -q "^ATLAS_IMAGE_TAG=" .env; then
+        echo "ATLAS_IMAGE_TAG=${ATLAS_BOOTSTRAP_REF}" >> .env
+        log_ok "Pinned ATLAS_IMAGE_TAG=${ATLAS_BOOTSTRAP_REF} in .env"
     fi
 
     ensure_default_model_selected

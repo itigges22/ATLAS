@@ -7,7 +7,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.1.2-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.3-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="Model-agnostic"/>
 </p>
@@ -36,6 +36,7 @@
 
 ## 📰 Latest News
 
+- **2026-07-06** - **[V3.1.3 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.3)** - production-platform pass: staged upgrade/rollback with auto-restore, SQLite state store (no more Redis), signed artifact manifests, structured logs + correlation IDs, interactive permissions, session resume, and two adversarial bug-fix sweeps
 - **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads, and an agent-reliability pass
 - **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
 - **2026-03-26** - [Hacker News front page](https://news.ycombinator.com/item?id=47533297) - 489 points, 285 comments
@@ -101,6 +102,19 @@ One-shot install:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
+
+Prefer not to pipe a moving script into bash? Same installer, two more careful ways to run it:
+```bash
+# Pinned to a release: script, checkout, and images all at the signed tag
+curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
+
+# Review before running
+curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh
+less atlas-bootstrap.sh
+bash atlas-bootstrap.sh
+```
+
 The script detects your distro (Ubuntu, Debian, RHEL, Fedora, Rocky, Alma) and your GPU vendor (NVIDIA → nvidia-container-toolkit; AMD → ROCm device passthrough), installs the appropriate runtime, downloads the model weights, builds the ASA steering vector, and starts the stack. Expect 10-30 minutes; the model download is the bottleneck.
 
 Then in any project directory, run `atlas`.
@@ -129,7 +143,9 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## 🗺️ Roadmap
 
-**V3.1.2 "Maia"** - Current release. Broader hardware reach, bring-your-own-model training, and an agent-reliability pass on top of the V3.1.0 base (TUI, one-command install, streaming Lens + ASA).
+**V3.1.3 "Maia"** - Current release. Production-platform pass on top of V3.1.2: staged `atlas upgrade`/`rollback` with automatic restore, SQLite state store replacing Redis ([ADR 0007](docs/adr/0007-sqlite-state-store.md)), signed artifact manifests, structured JSON logs with cross-service correlation IDs, interactive permission prompts, session resume, typed config validation/migration, and two adversarial bug-fix sweeps (33 confirmed fixes).
+
+**V3.1.2 "Maia"** - Broader hardware reach, bring-your-own-model training, and an agent-reliability pass on top of the V3.1.0 base (TUI, one-command install, streaming Lens + ASA).
 - Hardware reach: AMD ROCm via llama.cpp incl. RDNA4 / RX 9070 (gfx1200/gfx1201) ([#26](https://github.com/itigges22/ATLAS/issues/26)); Apple Silicon native macOS hybrid Metal path ([#32](https://github.com/itigges22/ATLAS/issues/32), see [SETUP_MACOS.md](docs/SETUP_MACOS.md)); Vulkan universal fallback covering AMD / Intel / Snapdragon / Apple-via-MoltenVK / CPU ([#114](https://github.com/itigges22/ATLAS/issues/114)).
 - Bring-your-own-model: local Lens training pipeline (`atlas lens build` / `retrain`, [#100](https://github.com/itigges22/ATLAS/issues/100)) and ASA per-model calibration parity (`atlas asa check/build/publish`, [#113](https://github.com/itigges22/ATLAS/issues/113)) - train Lens + ASA artifacts for additional GGUFs, with per-model operating thresholds that ship with the lens.
 - In-the-loop lens training: rate passes in the TUI (`/good` · `/bad` · `/review` · `/deny`) → collected, weighted samples → `atlas lens retrain` on your own workloads.
