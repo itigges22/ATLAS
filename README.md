@@ -39,14 +39,14 @@ The published 74.6% LiveCodeBench result belongs to the frozen 14B reference bui
 - **2026-03-05** - **[V3.0 released](docs/reports/V3_ABLATION_STUDY.md)** - 74.6% LiveCodeBench pass@1-v(k=3) on frozen Qwen3-14B (pass@1 with k=3 generated candidates, Lens selection, and repair — not single-generation pass@1; [methodology](docs/reports/V3_ABLATION_STUDY.md))
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
 
-<!-- Lowercase repo in the API URLs: star-history 301s uppercase forms,
-     and GitHub's camo image proxy doesn't follow redirects. -->
-<a href="https://star-history.com/#itigges22/atlas&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=itigges22/atlas&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=itigges22/atlas&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=itigges22/atlas&type=Date" width="100%" />
-  </picture>
+## Star History
+
+<a href="https://www.star-history.com/?type=date&repos=itigges22%2Fatlas">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
+ </picture>
 </a>
 
 ---

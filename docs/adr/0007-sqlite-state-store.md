@@ -25,5 +25,5 @@ they reported "redis".
 ## Consequences
 Single-writer WAL semantics — only the lens container writes the file,
 which fits its role as the store's sole consumer. State backup is one
-file (see BACKUP_RESTORE.md). The redis-data volume is no longer used;
+file (see OPERATIONS.md § Backup and restore). The redis-data volume is no longer used;
 existing installs can reclaim it with `docker volume rm`.

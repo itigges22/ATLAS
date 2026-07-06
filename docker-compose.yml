@@ -95,7 +95,7 @@ services:
       # SQLite state store (pattern cache, co-occurrence graph, Thompson
       # router posteriors, task queue, metrics). Learned TTL-less state —
       # lives on the lens-state volume; losing the volume resets learning
-      # (documented in BACKUP_RESTORE.md).
+      # (documented in docs/OPERATIONS.md).
       - SQLITE_DB_PATH=/data/state/geometric_state.db
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
       # Auth: bearer tokens are looked up locally from /app/secrets/api-keys.json.

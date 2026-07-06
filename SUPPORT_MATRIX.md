@@ -47,8 +47,8 @@ Supported row cites its validation.
 
 `lens=supported` means published weights exist; **calibrated** requires
 per-model `cx_normalization.json` + `gx_thresholds.json` (see
-`atlas lens check`). Quality-validation status is per the acceptance
-matrix in `docs/reports/COMPLETION_WIRING_2026-07.md`.
+`atlas lens check`). Quality-validation status is what `atlas doctor`
+and `atlas lens check` report against the installed bundle.
 
 | Registry ID | Level | Lens | ASA | Notes |
 |---|---|---|---|---|
