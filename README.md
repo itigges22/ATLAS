@@ -21,15 +21,9 @@
 
 ## 🌎 What is ATLAS?
 
-ATLAS is an open harness that makes small local models viable for real coding work by putting the intelligence in the infrastructure: planning, candidate verification, sandboxed repair, and a quality scorer you retrain on your own workloads.
+ATLAS is a local-first coding agent that makes compact open models capable of real software work.
 
-A compact open model on its own loses the thread partway through a real code change. ATLAS wraps it in an agent loop that plans the change, generates and scores alternative candidates, enforces valid tool calls, runs the result in an isolated sandbox, and repairs what fails. Simple edits take the short path; harder tasks get more compute and more verification.
-
-The quality scorer (the Geometric Lens) is trained per model — and retrained per user. Passes you rate in the TUI become weighted training samples, and `atlas lens retrain` updates the scorer on your own codebase and patterns. The longer you use ATLAS, the better your instance gets at your work, and that improvement lives on your disk, not in someone else's dataset.
-
-`atlas init` selects a compatible registry model for the machine, or bring any GGUF and build the matching Lens and ASA artifacts locally. Model identity and context sizing are runtime configuration, not baked-in family assumptions. Inference, scoring, sandbox runs, and learned state all stay on the machine running ATLAS; there is no hosted API or per-token bill.
-
-The published 74.6% LiveCodeBench result belongs to the frozen 14B reference build. Formal results for the current registry models are still in progress.
+It is built on a simple bet: the intelligence of a coding agent can live in the system around the model instead of in the model itself. Take a small open model, one that fits on the GPU you already own, and surround it with the machinery the frontier labs keep behind their APIs: structured planning, diverse candidate generation, an energy-based scorer that reads the model's own embeddings to predict which attempt will survive testing, and a sandbox that verifies and repairs code before it ever touches your repository.
 
 ---
 
