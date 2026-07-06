@@ -15,6 +15,11 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      # setuptools >=83 requires python >=3.10, but RHEL9-family hosts
+      # (a supported bootstrap target) build the CLI from pyproject on
+      # system python 3.9. Revisit when the py3.9 floor is dropped.
+      - dependency-name: "setuptools" 
 
   - package-ecosystem: gomod
     directory: /proxy
