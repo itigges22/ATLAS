@@ -53,11 +53,15 @@
 
 ## ⭐ Star History
 
-<a href="https://www.star-history.com/?type=date&repos=itigges22%2Fatlas">
+<!-- Self-hosted chart: rendered weekly by .github/workflows/star-chart.yml
+     onto the `star-history` asset branch (scripts/star-history-chart.py).
+     Replaces the star-history.com embed, whose shared token pool
+     rate-limits unpredictably. -->
+<a href="https://github.com/itigges22/ATLAS/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" />
+   <img alt="Star history chart" src="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" width="100%" />
  </picture>
 </a>
 
