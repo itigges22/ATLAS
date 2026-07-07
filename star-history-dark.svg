@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 280" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<rect width="800" height="280" rx="6" fill="#0d1117"/>
 <text x="52" y="20" font-size="13" font-weight="600" fill="#ffffff">GitHub stars — itigges22/ATLAS</text>
 <line x1="52" y1="174.0" x2="716" y2="174.0" stroke="#30363d" stroke-width="1"/>
 <text x="44" y="178.0" font-size="11" text-anchor="end" fill="#c3c2b7">1,000</text>
