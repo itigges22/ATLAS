@@ -1,6 +1,6 @@
 # ATLAS Support Matrix
 
-Applies to: **V3.1.2 and the current `dev` branch.** This document is
+Applies to: **V3.1.3 and the current `dev` branch.** This document is
 versioned with the repo — the matrix for a release is the file at that
 release's tag.
 
@@ -14,6 +14,11 @@ Support levels used throughout:
 | **Community-tested** | Works per a community report we link to; not on maintainer hardware. |
 | **Research-only** | Exists for the benchmark/ablation pipeline; not part of the product runtime. |
 | **Unsupported** | Not wired, not tested, or explicitly rejected; failure is expected and should be clear. |
+| **Roadmap** | Planned but not wired; tracked in an issue. No support claims until it ships. |
+
+**Internal** marks *audience* (a surface meant for the stack itself,
+not end users), not maturity — it composes with a level, e.g.
+"Experimental (Internal)".
 
 Nothing below is marked Supported solely because code exists — each
 Supported row cites its validation.
@@ -35,12 +40,13 @@ Supported row cites its validation.
 
 | Backend | Level | Tested device | Validation |
 |---|---|---|---|
-| CUDA (NVIDIA) | Supported | RTX 5060 Ti 16GB | Primary dev hardware; release smoke tests |
+| CUDA (NVIDIA, Blackwell — RTX 50xx / B100 / GB10) | Supported | RTX 5060 Ti 16GB | Primary dev hardware; release smoke tests. Published image is compiled for compute capability 12.0/12.1 only |
+| CUDA (NVIDIA, pre-Blackwell — RTX 20xx–40xx, GTX 10xx, T4/L4/V100/A100/H100) | Preview (local rebuild required) | — | Published image fails with `no kernel image`; rebuild with `--build-arg CUDA_ARCH=<cc>` per SETUP.md. Upstream llama.cpp supports these; no maintainer validation on ATLAS |
 | ROCm (AMD, x86_64) | Community-tested | RX 7900 XTX | [GH #26](https://github.com/itigges22/ATLAS/issues/26) |
 | Metal (Apple Silicon hybrid) | Supported | M2 Pro 32GB | Maintainer-verified; native llama-server + Docker services |
 | Vulkan (universal) | Preview | lavapipe (CPU ICD) boot path | Smoke-tested; the designated fallback for Intel/others |
 | CPU (lavapipe via Vulkan image) | Preview | CI-adjacent smoke | Functional but slow by design |
-| Intel SYCL | Unsupported (roadmap) | — | Vulkan is the supported Intel path today |
+| Intel SYCL | Roadmap | — | Vulkan is the Intel path today |
 | Multi-GPU | Unsupported | — | `ATLAS_GPU_INDEX` selects ONE GPU; splitting across GPUs is untested (GH #34 is roadmap) |
 
 ## Models (registry)
@@ -53,7 +59,7 @@ and `atlas lens check` report against the installed bundle.
 | Registry ID | Level | Lens | ASA | Notes |
 |---|---|---|---|---|
 | Qwen3.5-9B-Q6_K | Supported | supported (uncalibrated legacy bundle) | supported (A/B-validated May 2026) | Reference model; hash-pinned public download |
-| gemma-4-12b-it-Q4_K_M | Preview | supported; calibration **derived + verified** on maintainer hardware (val AUC 0.73, 287 LCB samples) — live lens reports `cx_calibrated: true`. The published HF bundle is still the uncalibrated one; re-publishing the calibrated bundle is a maintainer decision (moderate AUC, shared artifact) | Preview — vector built, published, hash-pinned; **off by default** (no `.model` marker) pending an A/B measurement. Opt in with `atlas asa build`. Not Supported until §9.6 A/B + quality bounds exist | Manual GGUF download (Gemma ToU); artifacts hash-pinned |
+| gemma-4-12b-it-Q4_K_M | Preview | supported; calibration **derived + verified** on maintainer hardware (val AUC 0.73, 287 LCB samples) — live lens reports `cx_calibrated: true`. The published HF bundle is still the uncalibrated one; re-publishing the calibrated bundle is a maintainer decision (moderate AUC, shared artifact) | Preview — vector built, published, hash-pinned; **off by default** (no `.model` marker) pending an A/B measurement. Opt in with `atlas asa build`. Not Supported until an A/B effect measurement + quality-regression bounds exist (see § Feature paths — ASA steering) | Manual GGUF download (Gemma ToU); artifacts hash-pinned |
 | Qwen3.5-9B-Q4_K_M / Q8_0 | Preview | unverified (same-family artifacts, combo unvalidated) | unverified | Hash-pinned public downloads |
 | Qwen3.5-7B / 14B / 32B | Preview | no-artifacts | no-artifacts | HF-gated upstream (HF_TOKEN required; no anonymous hash) |
 | Bring-your-own GGUF | Preview | Requires `atlas lens build` (per-model bundle) | Requires `atlas asa build` | Direct agent mode works model-agnostically; V3 scoring/steering need the per-model bundle — see § Model contract |
@@ -95,8 +101,8 @@ supported (A/B-validated). The gemma reference install additionally has
 
 ### Lens bundle provenance
 
-A retrained lens bundle now auto-writes `provenance.json` (SUPPORT_MATRIX
-§9.5): backbone + dim + quant + layer, dataset, training commit,
+A retrained lens bundle auto-writes `provenance.json`:
+backbone + dim + quant + layer, dataset, training commit,
 hyperparameters, seed, train/val split, validation metrics,
 normalization + thresholds, creation time, and SHA-256 of every artifact
 file. `geometric_lens.provenance.is_complete()` gates Supported
@@ -126,7 +132,7 @@ locally-built bundle.
 | K3s (generated manifests) | Preview | Templates validated + rendered in CI; no automated live-cluster test |
 | Bare metal | Preview | Documented (SETUP.md Method 2); manual validation only |
 | Offline / air-gapped | Unsupported | Model + artifact downloads require network; no offline bundle exists |
-| Rootless Docker / Docker Desktop | Unsupported | Untested; no claims made |
+| Rootless Docker / Docker Desktop (Linux) | Unsupported | Untested; no claims made. (Docker Desktop **on macOS** is part of the Supported hybrid path — it hosts the four non-inference services only) |
 
 ## Sandbox languages
 
@@ -142,7 +148,7 @@ timeouts/output caps; **syntax** = compile/parse check only.
 | C / C++ | executed (gcc/g++) | Supported |
 | Bash / sh | executed | Supported |
 | HTML / XML / JSON / YAML | syntax | Supported |
-| Java / Kotlin / Ruby / PHP | — | Unsupported (roadmap; will ship as separate toolchain images, not in the default sandbox) |
+| Java / Kotlin / Ruby / PHP | — | Roadmap (will ship as separate toolchain images, not in the default sandbox) |
 
 ## Feature paths
 

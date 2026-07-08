@@ -135,7 +135,7 @@ Then in any project directory, run `atlas`.
 
 | | |
 |---|---|
-| GPU | 16 GB+ VRAM. NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (Metal, macOS hybrid); Vulkan covers most other GPUs. See [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
+| GPU | 16 GB+ VRAM. NVIDIA (CUDA, Supported), AMD (ROCm, Community-tested), or Apple Silicon (Metal, macOS hybrid, Supported); Vulkan (Preview) covers most other GPUs. The prebuilt CUDA image targets Blackwell (RTX 50xx); older NVIDIA GPUs need a one-time local rebuild (see [SETUP.md § CUDA Compute Capability](docs/SETUP.md#cuda-compute-capability-dockerfilev31)). Levels: [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md); GPU list: [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
 | Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) or Podman |
 | Python | 3.9+ |
 | Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |
@@ -146,7 +146,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## ⚠️ Known Limitations
 
-- **Linux Docker stack, plus a native macOS path.** NVIDIA, AMD ROCm, and Vulkan Docker paths ship today; Apple Silicon runs via the native macOS hybrid Metal path ([#32](https://github.com/itigges22/ATLAS/issues/32)). Intel Arc / SYCL is on the roadmap.
+- **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/itigges22/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md).
 - **Current registry models are not formally benchmarked yet.** The canonical 74.6% LiveCodeBench score is from the frozen 14B reference build. New model-specific numbers are tracked in [#28](https://github.com/itigges22/ATLAS/issues/28). The reference methodology and ablations live in [`docs/reports/V3_ABLATION_STUDY.md`](docs/reports/V3_ABLATION_STUDY.md); raw traces are on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 - **Complex feature additions can be inconsistent.** Compact models sometimes spend agent turns exploring an unfamiliar codebase before writing code. Reliability has improved through the V3.1.2 agent-reliability pass; fresh model-specific numbers are tracked in [#28](https://github.com/itigges22/ATLAS/issues/28).
 - **Grammar-constrained decoding is slow.** Around 51 tok/s on llama-server.

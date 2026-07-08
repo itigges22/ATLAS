@@ -8,21 +8,22 @@ Four deployment methods: **one-shot bootstrap** (recommended for new installs), 
 
 The install steps depend on your hardware + OS. Find the row that matches your setup, then jump to the linked section.
 
-| Your hardware | OS | Recommended path |
-|---|---|---|
-| NVIDIA GPU (RTX 20/30/40/50, datacenter) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap) (auto-detects) or [Method 1: Docker](#method-1-docker-compose-recommended) |
-| NVIDIA GPU | Windows (WSL2) | [Method 1: Docker — NVIDIA section](#method-1-docker-compose-recommended) |
-| AMD GPU (RX 6000/7000, MI200+) | Linux | [Method 1: Docker — AMD ROCm](#amd-rocm--whats-different) |
-| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](SETUP_MACOS.md)** (dedicated guide — hybrid native Metal + Docker) |
-| Intel Arc / Iris Xe | Linux/Windows | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) |
-| Snapdragon X Elite (laptops) | Windows on ARM / Linux | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) + [arm64 section](#arm64) |
-| Older AMD GPU (Vega, RDNA1, no ROCm 6.x support) | Linux | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) |
-| NVIDIA on ARM64 (DGX Spark, Jetson) | Linux | [Method 1: Docker — arm64 section](#arm64) (CUDA via sbsa/l4t base swap) |
-| Raspberry Pi 5 | Linux | [Method 1: Docker — Vulkan + arm64](#arm64) (expect CPU-tier perf) |
-| Intel Mac (pre-2020) | macOS | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) (Metal is Apple-Silicon-only) |
-| CPU only, no GPU | any | [Method 1: Docker — Vulkan + lavapipe](#vulkan--cross-vendor-fallback) (slow, smoke-test only) |
-| Kubernetes cluster | Linux | [Method 3: K3s](#method-3-k3s) |
-| Bare-metal / development | Linux | [Method 2: Bare Metal](#method-2-bare-metal) |
+| Your hardware | OS | Recommended path | Support level ([matrix](../SUPPORT_MATRIX.md)) |
+|---|---|---|---|
+| NVIDIA RTX 50-series / Blackwell (B100, GB10) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap) or [Method 1: Docker](#method-1-docker-compose-recommended) | Supported — published CUDA image targets Blackwell |
+| NVIDIA RTX 20/30/40, GTX 10xx, datacenter (V100/A100/H100/T4/L4) | Linux | [Method 1: Docker](#method-1-docker-compose-recommended) + one-time [local rebuild](#cuda-compute-capability-dockerfilev31) | Preview — local rebuild required |
+| NVIDIA GPU | Windows (WSL2) | [Method 1: Docker — NVIDIA section](#method-1-docker-compose-recommended) | Unsupported — untested, no claims made; reports welcome |
+| AMD GPU (RX 6000/7000, MI200+) | Linux | [Method 1: Docker — AMD ROCm](#amd-rocm--whats-different) | Community-tested ([GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](SETUP_MACOS.md)** (dedicated guide — hybrid native Metal + Docker) | Supported (maintainer-verified, M2 Pro) |
+| Intel Arc / Iris Xe | Linux | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) | Preview — Vulkan is smoke-tested on lavapipe only; no real-GPU validation yet |
+| Snapdragon X Elite (laptops) | Linux | [Vulkan](#vulkan--cross-vendor-fallback) + [arm64 section](#arm64) | Preview (Linux arm64). Windows on ARM is Unsupported |
+| Older AMD GPU (Vega, RDNA1, no ROCm 6.x) | Linux | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) | Preview |
+| NVIDIA on ARM64 (DGX Spark, Jetson) | Linux | [arm64 section](#arm64) (CUDA via sbsa/l4t base swap) | Preview — build recipes provided, no device validated end-to-end yet (#115) |
+| Raspberry Pi 5 | Linux | [Vulkan + arm64](#arm64) | Preview — expect CPU-tier perf |
+| Intel Mac (pre-2020) | macOS | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) | Unsupported — requires Docker Desktop (untested); Metal is Apple-Silicon-only |
+| CPU only, no GPU | any | [CPU-only install](#cpu-only) | Preview — smoke-test only, very slow |
+| Kubernetes cluster | Linux | [Method 3: K3s](#method-3-k3s) | Preview — templates CI-validated; no automated live-cluster test |
+| Bare-metal / development | Linux | [Method 2: Bare Metal](#method-2-bare-metal) | Preview — manual validation only |
 
 Don't see your setup? File an issue with `uname -a` output and `lspci | grep -i vga` (Linux) / `system_profiler SPDisplaysDataType` (Mac) and we'll add a row.
 
@@ -31,6 +32,21 @@ Don't see your setup? File an issue with `uname -a` output and `lspci | grep -i 
 ## Method 0: One-shot bootstrap
 
 Single curl command that detects your distro, installs Docker + nvidia-container-toolkit, downloads model weights, and brings the stack up. Idempotent — safe to re-run.
+
+> **NVIDIA pre-Blackwell GPUs (RTX 20/30/40-series, GTX 10xx, V100/A100/T4/L4/H100): read this first.**
+> The published `atlas-llama` CUDA image is compiled for compute capability
+> `120;121` (Blackwell — RTX 50xx, B100, GB10) **only**. On older NVIDIA GPUs
+> llama-server will fail at startup with
+> `no kernel image is available for execution on the device`.
+> Rebuild the inference image once for your GPU's architecture:
+>
+> ```bash
+> # find your arch (drop the dot: 8.6 -> 86)
+> nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+> docker compose build --build-arg CUDA_ARCH=86 llama-server   # example: RTX 30xx
+> docker compose up -d --no-deps llama-server
+> ```
+> Full arch table: [CUDA Compute Capability](#cuda-compute-capability-dockerfilev31).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
@@ -55,7 +71,28 @@ The bootstrap works around EPEL, nouveau driver conflicts, the missing-libnvidia
 
 **Model selection:** `.env.example` ships with no model selected. When the bootstrap creates `.env` and `ATLAS_MODEL_FILE` is empty, it writes the registry's default recommended model into `.env` (logged as it happens) so the one-shot flow completes without a wizard. Change the selection any time by editing `.env` or running `atlas init`. An existing non-empty selection is respected.
 
-**CPU-only / no-GPU hosts:** when no GPU vendor is detected, the bootstrap layers `docker-compose.vulkan.yml` on the base file so the stack boots via the Vulkan lavapipe CPU fallback. When `/dev/dri` is absent too (headless VMs, pure CPU boxes), it also layers `docker-compose.cpu.yml`, which strips the `/dev/dri` device requirement entirely. Inference works but is very slow.
+<a id="cpu-only"></a>
+**CPU-only / no-GPU hosts (Preview — smoke-test only).** ATLAS boots without a
+GPU via the Vulkan image's lavapipe CPU rasterizer, but inference is very
+slow; use this to verify the stack works, not for real coding sessions.
+
+1. **The bootstrap refuses no-GPU hosts unless you opt in:**
+   `ATLAS_BOOTSTRAP_SKIP_GPU=1 ./scripts/atlas-bootstrap.sh`
+   It layers `docker-compose.vulkan.yml` (+ `docker-compose.cpu.yml` when
+   `/dev/dri` is absent), writes the model selection and
+   `ATLAS_BACKEND=vulkan|cpu` into `.env` itself, and skips the ASA build.
+2. **Do not run `atlas init` on a GPU-less host** — the wizard intentionally
+   refuses (exit 1) rather than write a `.env` it can't size. The bootstrap
+   handles model selection; change models later via `atlas model install`.
+
+Manual equivalent:
+
+```bash
+cp .env.example .env    # set ATLAS_MODEL_FILE / ATLAS_MODEL_NAME
+atlas model install Qwen3.5-9B-Q6_K
+docker compose -f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml up -d
+atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
+```
 
 **Firewall:** the Compose stack publishes every service on `127.0.0.1` only, so local use needs no firewall change and the bootstrap leaves firewalld alone by default. Set `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` to open the service ports (8090, 8099, 8070, 30820) for deployments that rebind services to a routable interface.
 
@@ -103,7 +140,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | Pin the install to a git tag/sha instead of tracking `main`; a `vX.Y.Z` value also pins `ATLAS_IMAGE_TAG` to the matching images |
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
-| `ATLAS_GO_VERSION=1.24.0` | Go toolchain version installed for the TUI build |
+| `ATLAS_GO_VERSION=1.26.2` | Go toolchain version installed for the TUI build (the TUI needs 1.26.2+; older installed toolchains auto-fetch it) |
 
 **Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, survives `$HOME` cleanup, and lets multiple users on the same box share one install. If you'd rather it land in your home dir:
 
@@ -122,7 +159,7 @@ If you'd rather do each step manually, use Method 1 below.
 
 | Requirement | Details |
 |-------------|---------|
-| **GPU** | 16 GB+ VRAM. NVIDIA (CUDA) is the canonical path; AMD (ROCm) and Apple Silicon (Metal, macOS hybrid — see [SETUP_MACOS.md](SETUP_MACOS.md)) are both supported; Vulkan is the cross-vendor fallback; Intel Arc (SYCL) is roadmap. See [§ Supported GPUs](#supported-gpus). |
+| **GPU** | 16 GB+ VRAM. NVIDIA (CUDA, Supported — the published image targets Blackwell; older cards need a one-time [local rebuild](#cuda-compute-capability-dockerfilev31)); AMD (ROCm, Community-tested); Apple Silicon (Metal, macOS hybrid, Supported — see [SETUP_MACOS.md](SETUP_MACOS.md)); Vulkan (Preview) is the cross-vendor fallback; Intel Arc (SYCL) is Roadmap. See [§ Supported GPUs](#supported-gpus). |
 | **GPU drivers** | NVIDIA: proprietary drivers (`nvidia-smi` should show your GPU). AMD: `amdgpu-dkms` kernel driver (`/dev/kfd` must exist; `rocm-smi` should show your GPU). |
 | **Python 3.9+** | With pip |
 | **curl** | For downloading model weights |
@@ -283,7 +320,8 @@ What's different from CUDA/ROCm:
 
 If you hit `vulkaninfo` showing only the `llvmpipe` CPU device when you expected a GPU, the kernel-side device passthrough failed — verify `/dev/dri/renderD*` exists on the host and your user is in the `video` + `render` groups (same as the ROCm requirement above).
 
-#### arm64 hosts (#115) {#arm64}
+<a id="arm64"></a>
+#### arm64 hosts (#115)
 
 ATLAS targets two CPU architectures: `x86_64` (default, all backends available) and `aarch64` (a subset of backends). Verify with `atlas doctor` — the `arch` check surfaces your architecture and which backends are available before the GPU check fires.
 
@@ -381,9 +419,11 @@ in `.env`.
 
 ### Verify Installation
 
-The fastest way is **`atlas doctor`** — runs 23 checks across the host
-environment, the docker stack, and a live model inference, printing each
+The fastest way is **`atlas doctor`** — checks the host environment (GPU
+runtime, model and lens artifacts), the docker stack (containers, health
+endpoints, auth, state), and a live model inference, printing each
 result as it completes and returning exit 0 (healthy) / 1 (failures).
+The exact number of checks varies with backend, stack state, and flags.
 This is also what `atlas-bootstrap.sh` runs at the end of install.
 
 ```bash
@@ -393,7 +433,7 @@ atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON d
 atlas doctor -v           # verbose: show detail for each check
 ```
 
-The 23 checks:
+The checks:
 
 | Group | Check | What it confirms |
 |---|---|---|
@@ -410,11 +450,13 @@ The 23 checks:
 | Host | tier_constraints | host CPU/RAM/disk meets the recommended tier minimums (catches "16 GB GPU but 8 GB RAM" mismatches) |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 5 running and healthy |
 | Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
+| Stack | internal_auth | internal service auth: token file present with tight permissions, and live enforcement probed both ways (wrong token → 401, valid token accepted); warns when auth is disabled (no `secrets/service-token`) |
+| Stack | status_dimensions | informational: the seven lens/ASA status dimensions from the proxy `/v1/calibration/status` (the same source the TUI badge reads); never fails the run |
 | Stack | sqlite_state | lens `/health` reports the SQLite state store available (`subsystems.sqlite`) |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag |
 | End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
 
-The `vulkan` and `metal-native` rows are conditional on the configured backend; the other checks always run.
+The `vulkan` and `metal-native` rows are conditional on the configured backend; the health, `internal_auth`, `status_dimensions`, and `sqlite_state` rows run only when at least one container is up; `e2e_smoke` is skipped by `--quick`. The remaining checks always run.
 
 If you'd rather check by hand:
 
@@ -493,7 +535,7 @@ Run all services as local processes without containers. Useful for development o
 
 | Requirement | Details |
 |-------------|---------|
-| **Go 1.24+** | For building atlas-proxy |
+| **Go 1.26.2+** | For building atlas-proxy and the atlas-tui client (older Go toolchains auto-fetch it) |
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
@@ -583,7 +625,7 @@ atlas    # Checks atlas-proxy is reachable, then launches the TUI
 
 ## Method 3: K3s
 
-For production Kubernetes deployment with GPU scheduling, health probes, and resource limits.
+Kubernetes deployment with GPU scheduling, health probes, and resource limits. Preview — templates are validated and rendered in CI; there is no automated live-cluster test.
 
 ### Additional Prerequisites
 
@@ -682,7 +724,7 @@ which tier your hardware lands in and the exact `.env` values to use.
 
 | Tier | VRAM | Recommended model | Context | Slots | Example GPUs |
 |------|------|-------------------|--------:|------:|--------------|
-| **cpu** | n/a | not supported in v1 | n/a | n/a | (no CUDA GPU) |
+| **cpu** | n/a | [CPU-only install](#cpu-only) — Preview, smoke-test only | n/a | n/a | (no GPU) |
 | **small** | 8–12 GB | Qwen3.5 7B Q4_K_M (4.4 GB) | 8K | 1 | RTX 3060/4060 8GB, T4 |
 | **medium** | 12–20 GB | Qwen3.5 9B Q6_K (6.9 GB) | 32K | 1 | RTX 4060/5060 Ti 16GB, 3080 Ti, 4070 Ti Super |
 | **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090, 4090, 5090 24GB |
@@ -727,25 +769,35 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 
 | Vendor | Backend | Status | Build path | Tested cards |
 |---|---|---|---|---|
-| NVIDIA | CUDA | Shipping | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
-| AMD | ROCm / HIP | Shipping | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
-| Apple Silicon | Metal | Shipping (macOS hybrid: native llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
-| Intel Arc | SYCL | Roadmap | TBD | Arc A770 16GB (target) |
+| NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | Supported (published image) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
+| NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (upstream llama.cpp supports these; no maintainer validation on ATLAS) |
+| AMD | ROCm / HIP | Community-tested | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
+| Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
+| Any (cross-vendor fallback) | Vulkan | Preview | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) smoke-tested; no real-GPU validation yet |
+| Intel Arc | SYCL | Roadmap — Intel Arc uses Vulkan today | TBD | Arc A770 16GB (target) |
 
 `atlas tier` auto-detects across vendors and picks the largest-VRAM GPU. Override with `ATLAS_GPU_VENDOR=amd` or `ATLAS_GPU_INDEX=1` if you have multiple GPUs and want a specific one.
 
 #### CUDA Compute Capability (Dockerfile.v31)
 
-`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default is `120;121` (Blackwell, RTX 50xx). If you see build failures like `nvcc fatal: unsupported gpu architecture` or runtime errors like `no kernel image available for execution`, your GPU needs a different arch.
+`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default — and what the published `atlas-llama` image on GHCR is built with — is `120;121` (Blackwell: RTX 50xx, B100, GB10) **only**. The published image contains no kernels for earlier GPUs, and its embedded PTX cannot be JIT-compiled downward, so on RTX 20/30/40-series, GTX 10xx, and pre-Blackwell datacenter cards (V100/A100/H100/T4/L4) llama-server fails at startup with `no kernel image is available for execution on the device`. You must rebuild the inference image once for your architecture. (A local build with the wrong arch value fails earlier, with `nvcc fatal: unsupported gpu architecture`.)
 
-Override at build time with `--build-arg CUDA_ARCH=<value>`:
+Find your GPU's arch, then rebuild with `--build-arg CUDA_ARCH=<value>`:
 
 ```bash
-# Single arch — RTX 4060/4070/4080/4090 (Ada Lovelace)
+# Your GPU's compute capability (drop the dot: 8.9 -> 89)
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+
+# Compose-native rebuild — only llama-server is rebuilt, the other
+# services keep using the GHCR images (~30-75 min, one time):
+docker compose build --build-arg CUDA_ARCH=89 llama-server
+docker compose up -d --no-deps llama-server
+
+# Or build the image directly:
 podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
 
 # Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
-podman build --build-arg CUDA_ARCH="86;89;90" -f inference/Dockerfile.v31 -t llama-server:local inference/
+docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 ```
 
 Common values:
@@ -759,8 +811,6 @@ Common values:
 | `89` | Ada Lovelace | RTX 40xx, L4 |
 | `90` | Hopper | H100 |
 | `100`, `120`, `121` | Blackwell | B100, RTX 50xx |
-
-Your GPU's compute capability: `nvidia-smi --query-gpu=compute_cap --format=csv` (drop the dot — `8.9` → `89`).
 
 #### AMD GPU Targets (Dockerfile.rocm)
 
