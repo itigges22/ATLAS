@@ -11,9 +11,10 @@ depth, follow the link.
 
 ATLAS is a local coding agent: a model running on your own GPU, wrapped in
 machinery that plans changes, verifies generated code in an isolated sandbox,
-and repairs what fails. Everything — inference, scoring, test execution, and
-learned state — stays on your machine. It is not a hosted service, there is
-no API key, and nothing is billed per token.
+and repairs what fails. ATLAS runs locally and does not require a hosted model
+or third-party model-provider API key. It creates a local per-installation
+service token for communication between ATLAS services, and nothing is billed
+per token.
 
 One expectation to set: a compact local model with verification is a
 different experience from a frontier hosted model. It shines on bounded,
@@ -48,10 +49,13 @@ roughly 20 GB of disk. Everything it changes is listed in
 pinned-release and review-before-running variants if you'd rather not pipe a
 script into bash.
 
-One security fact worth knowing before your first task: the agent executes
-model-authored shell commands inside a locked-down sandbox container (not on
-your host), and your code never leaves the machine — but generated code is
-still code; review diffs before you commit them.
+One security fact worth knowing before your first task: ATLAS does not
+intentionally upload your repository or prompts to a hosted model or
+ATLAS-operated service. Model-authored shell commands run inside a locked-down
+sandbox container rather than on your host, but sandbox commands have outbound
+network access by default so toolchains can fetch dependencies. Set
+`ATLAS_SANDBOX_NET_INTERNAL=true` to disable sandbox egress. Review generated
+code, commands, and diffs before you commit them.
 
 ## Install
 

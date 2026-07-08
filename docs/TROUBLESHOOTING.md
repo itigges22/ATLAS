@@ -6,18 +6,28 @@ Common issues and solutions, organized by service.
 
 ## Quick Diagnostics
 
-Run these first to identify where the problem is:
+Start with `atlas doctor`, then use Compose status and logs to identify where
+the problem is:
 
 ```bash
-# Docker Compose — check all services at once
+atlas doctor
 docker compose ps
-
-# GPU status
-nvidia-smi
-
-# Docker Compose logs (last 50 lines per service)
 docker compose logs --tail 50
 ```
+
+`atlas doctor` is the preferred first diagnostic because it checks the host,
+configuration, and service health together. `docker compose ps` identifies
+services that failed to start, and the logs provide the next level of detail.
+Use a hardware-specific check only when the first results point to the
+inference backend:
+
+| Backend | Diagnostic command or check |
+|---|---|
+| NVIDIA CUDA | `nvidia-smi` |
+| AMD ROCm | Run `rocm-smi` and verify `/dev/kfd` exists. |
+| Apple Silicon / Metal | Run `atlas doctor`; if the native server is not listening, start `./scripts/atlas-llama-macos.sh` and inspect its foreground launcher output as described in [SETUP_MACOS.md](SETUP_MACOS.md#troubleshooting). |
+| Vulkan | Verify `/dev/dri` exists, then run `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`. |
+| CPU-only | Confirm the `docker-compose.vulkan.yml` and `docker-compose.cpu.yml` overlays are active. `atlas doctor` should warn and exit successfully rather than fail solely because no GPU exists. |
 
 For the per-service health-check curls, see [SETUP.md § Verify Installation](SETUP.md#verify-installation). The atlas-proxy health endpoint is the most useful for triage — it reports the status of all upstream services:
 ```json

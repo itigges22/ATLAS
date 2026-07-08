@@ -37,8 +37,8 @@
 * **Verify before accepting.** Generated code can be compiled, tested, and corrected inside an isolated execution environment.
 * **Spend compute where it matters.** Straightforward edits take a shorter path, while harder tasks receive more candidates, reasoning, and validation.
 * **Run your own model.** Use a compatible GGUF model on NVIDIA, AMD, Apple Silicon, Vulkan, or CPU-supported hardware.
-* **Keep everything local.** Your repository, inference, test execution, and learned artifacts stay on your machine.
-* **Own the full stack.** ATLAS is open source, self-hosted, and has no required hosted API or per-token fee.
+* **Keep control local.** ATLAS does not intentionally upload your repository or prompts to a hosted model or ATLAS-operated service. Sandbox commands have outbound network access by default; set `ATLAS_SANDBOX_NET_INTERNAL=true` to disable it.
+* **Own the full stack.** ATLAS is open source and self-hosted. It requires no hosted model or third-party model-provider API key; a local per-installation service token authenticates ATLAS services.
 
 ---
 
@@ -76,7 +76,7 @@
 
 2. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
    - [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
-   - [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas keep JSON output valid
+   - [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas strongly steer output toward the expected JSON shapes, with proxy-side recovery for malformed or truncated output
    - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `ast_edit` for structural code edits
    - [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
 

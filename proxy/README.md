@@ -25,9 +25,10 @@ Each user message drives an agent loop that runs until the model emits
    called to seed an explicit step list. 3 candidates sampled, scored
    heuristically, best plan pinned. The active step is injected into
    the system prompt every turn (`plan_reminder.go`).
-2. **Grammar-constrained generation** — `llama-server` produces a JSON
-   envelope: `tool_call`, `text`, or `done`. GBNF + `response_format:
-   json_object` makes invalid output unrepresentable.
+2. **Grammar-constrained generation** — `llama-server` is strongly steered
+   toward a JSON envelope: `tool_call`, `text`, or `done`. GBNF +
+   `response_format: json_object` constrains decoding, while the proxy recovers
+   malformed or truncated output and treats parsing as fallible.
 3. **Tool dispatch + validation** — 14 tools (`read_file`,
    `outline_file`, `search_files`, `list_directory`, `find_file`,
    `write_file`, `edit_file`, `ast_edit`, `delete_file`, `move_file`,

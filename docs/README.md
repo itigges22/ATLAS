@@ -119,8 +119,9 @@ whole first hour; keep [TROUBLESHOOTING.md](TROUBLESHOOTING.md) open in a tab.
 - **V3 pipeline / inner layer** — multi-candidate generation, scoring,
   sandbox verification, and repair for non-trivial files
   ([ARCHITECTURE.md](ARCHITECTURE.md), [reports/V3_ABLATION_STUDY.md](reports/V3_ABLATION_STUDY.md)).
-- **Tiers (T0–T2)** — per-message and per-file complexity classification;
-  T1 writes directly, T2 runs V3 ([ARCHITECTURE.md](ARCHITECTURE.md)).
+- **Tiers (T0–T3)** — per-message and per-file complexity classification;
+  T0 is conversational, T1 writes directly, and T2/T3 use the V3 pipeline
+  ([ARCHITECTURE.md](ARCHITECTURE.md)).
 - **Geometric Lens, C(x) / G(x)** — energy-based candidate scoring over the
   model's own embeddings; per-model trained bundle
   ([ARCHITECTURE.md](ARCHITECTURE.md), [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)).
@@ -128,8 +129,9 @@ whole first hour; keep [TROUBLESHOOTING.md](TROUBLESHOOTING.md) open in a tab.
   per-model, opt-in until validated ([CLI.md](CLI.md), [PUBLISHING.md](PUBLISHING.md)).
 - **Sandbox** — isolated multi-language execution used for verification
   ([ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md)).
-- **GBNF grammar enforcement** — token-level constrained decoding that keeps
-  tool calls valid JSON ([ARCHITECTURE.md](ARCHITECTURE.md)).
+- **GBNF grammar enforcement** — token-level constrained decoding that strongly
+  steers tool calls toward the expected JSON schema, with proxy-side recovery
+  for malformed or truncated output ([ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ---
 
