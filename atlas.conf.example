@@ -17,7 +17,7 @@
 #   vim atlas.conf  # edit as needed
 #   ./scripts/install.sh
 #
-# May 2026: trimmed from 114 to 55 vars. The removed entries were
+# May 2026: trimmed from 114 to ~50 vars. The removed entries were
 # scaffolding for features that were planned, removed, or never wired
 # up (RAG knob injection, Ralph training loop, LoRA model retraining,
 # cache manager daemon, JWT auth scheme, V3 phase-component toggles,
@@ -41,7 +41,9 @@ ATLAS_PROXY_NODEPORT=30080         # atlas-proxy
 ATLAS_LENS_NODEPORT=31144          # geometric-lens
 ATLAS_LLAMA_NODEPORT=32735         # llama-server
 ATLAS_SANDBOX_NODEPORT=30820       # sandbox executor
-ATLAS_V3_NODEPORT=30070            # v3-service (cluster-internal only by default)
+ATLAS_V3_NODEPORT=30070            # v3-service (exposed by default; delete the type/nodePort
+                                   # lines in templates/atlas-v3-deployment.yaml.tmpl to
+                                   # keep it cluster-internal)
 
 # Internal service ports (usually don't change these)
 ATLAS_LLAMA_PORT=8080              # llama-server internal (matches docker-compose)
