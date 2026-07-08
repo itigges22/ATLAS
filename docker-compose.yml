@@ -90,6 +90,7 @@ services:
       - LLAMA_URL=http://llama-server:8080
       - LLAMA_EMBED_URL=http://llama-server:8080
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
+      - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
       # SQLite state store (pattern cache, co-occurrence graph, Thompson
@@ -134,6 +135,7 @@ services:
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
+      - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       # Structural call-graph reasoning (#39, experimental, default off). Read by
       # call_graph_enabled() inside this process, so it must be forwarded here.
       - ATLAS_CALL_GRAPH=${ATLAS_CALL_GRAPH:-0}
@@ -171,6 +173,7 @@ services:
       # proxy's 300s run_command cap so long builds/tests aren't cut off
       # by the executor's internal 60s default.
       - MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}
+      - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       # Workspace-snapshot caps for overlay-file runs (executor_server.py
       # reads these; without the passthrough the documented .env knobs
       # would be silently ignored in container deployments).
@@ -284,6 +287,13 @@ services:
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_V3_URL=http://v3-service:8070
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
+      # Security + observability knobs read in-container; without these
+      # passthroughs a .env setting silently does nothing (doc-audit fix).
+      - ATLAS_TRUST_MODE=${ATLAS_TRUST_MODE:-}
+      - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
+      - ATLAS_ALLOW_CREDENTIAL_READS=${ATLAS_ALLOW_CREDENTIAL_READS:-}
+      - ATLAS_PERMISSION_TIMEOUT_SEC=${ATLAS_PERMISSION_TIMEOUT_SEC:-}
+      - ATLAS_REASONING_BUDGET=${ATLAS_REASONING_BUDGET:-}
       # Context budget for conversation trimming (PC-216). Same
       # values the llama-server gets; the proxy trims history to a
       # token budget derived from per-slot context instead of a
@@ -306,9 +316,9 @@ services:
       # proxy can only see its own container fs). Per-project override
       # via /workspace/.atlas/config.toml [execution] target=host.
       - ATLAS_VERIFY_IN=${ATLAS_VERIFY_IN:-sandbox}
-      # PC-200: turn cap override. Defaults to tier-based caps
-      # (T2:60, T3:100). Set a positive int to override, or 0 to use
-      # the absolute hard wall (200). Useful for "fix the entire app"
+      # PC-200: turn cap override. Tier defaults: T0=5, T1-T3 uncapped
+      # (the error-loop breaker and done-gates bound runaway turns). Set
+      # a positive int to cap every tier. Useful for "fix the entire app"
       # prompts that legitimately need more turns.
       - ATLAS_MAX_TURNS=${ATLAS_MAX_TURNS:-}
       # Documented tuning knobs (docs/CONFIGURATION.md). Empty passthrough =

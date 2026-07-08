@@ -6,7 +6,7 @@ COPY *.go ./
 
 RUN go build -o atlas-proxy-v2 .
 
-# alpine:3.20 — digest-pinned for reproducible builds (Dependabot maintains)
+# alpine:3.24 — digest-pinned for reproducible builds (Dependabot maintains)
 FROM docker.io/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 # Runtime packages, version-pinned for reproducible builds. Only two are
 # needed:
@@ -20,7 +20,7 @@ FROM docker.io/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db8691
 # without changing the verification workflow — sandbox routing is
 # unchanged and there is no local execution fallback in the default mode.
 #
-# NOTE: alpine version pins track the live v3.20 repo, which garbage-
+# NOTE: alpine version pins track the live Alpine v3.24 repo, which garbage-
 # collects superseded -rN builds; a pin may need bumping when Alpine ships
 # a patch (the digest-pinned base keeps the rest of the toolchain fixed).
 RUN apk add --no-cache \

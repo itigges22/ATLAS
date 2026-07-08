@@ -925,7 +925,7 @@ def main(argv=None):
     p_pub.add_argument("--dry-run", action="store_true",
         help="don't upload, don't open PR")
     p_pub.add_argument("--skip-pr", action="store_true",
-        help="upload to HF but don't try gh pr create")
+        help="upload to HF but skip the registry PR")
     p_pub.add_argument("--no-color", action="store_true")
 
     args = parser.parse_args(argv)

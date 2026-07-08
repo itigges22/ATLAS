@@ -166,7 +166,9 @@ def make_event(type: str, stage: str, payload: Optional[Dict[str, Any]] = None,
 # ---------------------------------------------------------------------------
 
 _REQUIRED = ("event_id", "timestamp", "type", "stage", "payload")
-_LEGACY_KEYS = {"stage", "detail"}
+# v3-service legacy frames are {stage, detail} plus an optional "data" key
+# when structured data rides along (v3-service/main.py emit()).
+_LEGACY_KEYS = {"stage", "detail", "data"}
 
 
 def parse_envelope(blob: Any) -> Event:
@@ -184,11 +186,11 @@ def parse_envelope(blob: Any) -> Event:
     if not isinstance(blob, dict):
         raise SchemaError(f"envelope must be a JSON object, got {type(blob).__name__}")
 
-    # Legacy detection: exactly the legacy keyset, no envelope keys.
+    # Legacy detection: a subset of the legacy keyset containing "stage",
+    # with no envelope keys.
     keys = set(blob.keys())
-    if keys == _LEGACY_KEYS or (keys <= _LEGACY_KEYS and "stage" in keys
-                                  and "type" not in keys
-                                  and "event_id" not in keys):
+    if (keys <= _LEGACY_KEYS and "stage" in keys
+            and "type" not in keys and "event_id" not in keys):
         raise LegacyEventError(
             f"blob is the legacy {{stage, detail}} shape, not an envelope: "
             f"{blob!r}. Opt into v2 events via the "
@@ -267,7 +269,10 @@ def iter_events(url: str, timeout: float = 30.0,
     req = urllib.request.Request(url, headers=req_headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         for data in iter_sse_lines(resp):
-            if data == "[DONE]" or data.startswith("done: ") or data == "":
+            if (data == "[DONE]" or data.startswith("done: ")
+                    or data.startswith("result: ") or data == ""):
+                # done/result are stream-control frames (the v3 legacy
+                # terminal frame rides `event: result`), not envelopes.
                 continue
             try:
                 yield parse_envelope(data)

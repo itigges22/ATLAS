@@ -56,7 +56,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         result = eng.run_rollback(atlas_root, _default_steps(),
-                                  target_tag=args.to)
+                                  target_tag=target)
     except eng.UpgradeError as e:
         print(f"atlas rollback: {e}", file=sys.stderr)
         return 1

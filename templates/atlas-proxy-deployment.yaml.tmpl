@@ -36,6 +36,8 @@ spec:
         - {name: ATLAS_SANDBOX_URL,    value: "http://sandbox:${ATLAS_SANDBOX_PORT}"}
         - {name: ATLAS_V3_URL,         value: "http://v3-service:${ATLAS_V3_PORT}"}
         - {name: ATLAS_MODEL_NAME,     value: "${ATLAS_MAIN_MODEL}"}
+        - {name: ATLAS_TRUST_MODE,       value: "${ATLAS_TRUST_MODE}"}
+        - {name: ATLAS_LOG_FORMAT,       value: "${ATLAS_LOG_FORMAT}"}
         # Context budget for conversation trimming (PC-216). Must match
         # what llama-server actually runs with (llama-deployment.yaml.tmpl
         # passes the same two values as CONTEXT_LENGTH / PARALLEL_SLOTS),

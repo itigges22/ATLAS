@@ -523,14 +523,15 @@ def _check_model(arg: Optional[str], atlas_root: str) -> CheckVerdict:
             artifact_dim=artifact_dim, matched_model=matched_name,
         )
 
-    # Dim matches. PC-202 hidden-states patch is nice-to-have for G(x)
-    # metric tensor work but not required for C(x) scoring; report it
+    # Dim matches. PC-202 hidden-states patch is nice-to-have for lens
+    # training embeddings but not required for C(x) scoring; report it
     # as a warning surface rather than a hard failure.
     note = ""
     if not probe.has_hidden_states_patch:
         note = (" Note: PC-202 hidden-states patch not detected on llama-server. "
-                "C(x) works fine; G(x) metric-tensor training would need a "
-                "patched build (inference/Dockerfile.v31).")
+                "C(x) works fine; lens training embeddings (hidden-states "
+                "extraction for the C(x)+G(x) retrain) would need a patched "
+                "build (inference/Dockerfile.v31).")
     return CheckVerdict(
         verdict="compat",
         reason=(f"Model emits {probe.embedding_dim}-dim embeddings; "
@@ -1811,7 +1812,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
       2. Compute SHA256 for the registry entry
       3. (Unless --dry-run) upload artifacts + auto-generated model card to HF
       4. Render the registry-PR markdown
-      5. (Unless --skip-pr) try `gh pr create`; otherwise print body
+      5. (Unless --skip-pr) open the registry PR via `gh api`; otherwise print body
     """
     if not publish_preflight("lens", dry_run=args.dry_run, color=color):
         return 1
@@ -2124,7 +2125,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_pub.add_argument("--dry-run", action="store_true",
         help="don't upload, don't open PR — just print the body")
     p_pub.add_argument("--skip-pr", action="store_true",
-        help="upload to HF but don't try gh pr create (print body)")
+        help="upload to HF but skip the registry PR (print the body)")
     p_pub.add_argument("--no-color", action="store_true")
 
     args = parser.parse_args(argv)

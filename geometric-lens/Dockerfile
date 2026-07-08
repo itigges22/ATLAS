@@ -40,7 +40,7 @@ RUN mkdir -p /app/config /app/secrets /data/projects /data/state
 #
 # NOTE: an EXISTING lens-data volume was created root-owned by a prior
 # image; after upgrading, chown it once —
-#   docker compose run --rm --user root geometric-lens chown -R lens:lens /data/projects
+#   docker compose run --rm --user root geometric-lens chown -R lens:lens /data/projects /data/state
 # — or recreate the volume. Fresh installs need nothing.
 ENV PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --gid 1001 lens \

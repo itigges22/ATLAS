@@ -45,7 +45,7 @@
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
-#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.24.0)
+#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.26.2)
 #
 # Exit codes:
 #   0   success
@@ -300,6 +300,23 @@ detect_gpu() {
         GPU_VENDOR="nvidia"
         HAS_NVIDIA=1
         GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "NVIDIA GPU")
+    fi
+
+    # The published atlas-llama CUDA image is compiled for Blackwell
+    # (compute capability 12.x) only. Warn pre-Blackwell users up front —
+    # otherwise the install "succeeds" and llama-server dies at first
+    # kernel launch with "no kernel image is available for execution".
+    if [[ "$GPU_VENDOR" == "nvidia" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+        local cc
+        cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 || true)
+        if [[ -n "$cc" ]] && [[ "${cc%%.*}" =~ ^[0-9]+$ ]] && (( ${cc%%.*} < 12 )); then
+            log_warn "GPU compute capability $cc detected — the published CUDA image targets"
+            log_warn "  Blackwell (12.x) only and will NOT run on this GPU. After the install,"
+            log_warn "  rebuild the inference image once for your architecture:"
+            log_warn "    docker compose build --build-arg CUDA_ARCH=${cc/./} llama-server"
+            log_warn "    docker compose up -d --no-deps llama-server"
+            log_warn "  See docs/SETUP.md 'CUDA Compute Capability' for the arch table."
+        fi
     fi
     if [[ -z "$GPU_VENDOR" ]] && command -v rocm-smi &>/dev/null; then
         GPU_VENDOR="amd"
@@ -1053,7 +1070,7 @@ install_go() {
     # toolchain when building tui. We pick 1.24 as the install target
     # since it's the proven floor and the smallest stable download.
     local need_version="1.24"
-    local install_version="${ATLAS_GO_VERSION:-1.24.0}"
+    local install_version="${ATLAS_GO_VERSION:-1.26.2}"
 
     # Already have new-enough Go? A previous bootstrap may have installed it
     # under /usr/local/go while this non-login process still lacks that PATH.
