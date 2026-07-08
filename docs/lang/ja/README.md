@@ -1,3 +1,4 @@
+<!-- source: README.md synced-through: WORKING-TREE-2026-07-08 -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **日本語** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -12,6 +13,14 @@
   <img src="https://img.shields.io/badge/version-V3.1.3-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="Model-agnostic"/>
+</p>
+
+<p align="center">
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/test.yml?branch=main&label=tests" alt="Tests"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/install-test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/install-test.yml?branch=main&label=install%20matrix" alt="Install matrix"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/codeql.yml?branch=main&label=codeql" alt="CodeQL"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/container-scan.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/container-scan.yml?label=container%20scan" alt="Container scan"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/verify-tags.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/verify-tags.yml?label=release%20signature" alt="Release signature"/></a>
 </p>
 
 
@@ -41,11 +50,15 @@
 
 ## ⭐ Star History
 
-<a href="https://www.star-history.com/?type=date&repos=itigges22%2Fatlas">
+<!-- Self-hosted chart: rendered weekly by .github/workflows/star-chart.yml
+     onto the `star-history` asset branch (scripts/star-history-chart.py).
+     Replaces the star-history.com embed, whose shared token pool
+     rate-limits unpredictably. -->
+<a href="https://github.com/itigges22/ATLAS/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" />
+   <img alt="Star history chart" src="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" width="100%" />
  </picture>
 </a>
 
@@ -119,7 +132,7 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | VRAM 16GB 以上。NVIDIA (CUDA)、AMD (ROCm)、または Apple Silicon (Metal、macOS ハイブリッド)。その他大半の GPU は Vulkan でカバー。[SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus) を参照。特定のモデルがお使いのカードに収まるかは [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照。 |
+| GPU | VRAM 16GB 以上。NVIDIA (CUDA、サポート対象 (Supported))、AMD (ROCm、コミュニティ検証済み (Community-tested))、または Apple Silicon (Metal、macOS ハイブリッド、サポート対象)。その他大半の GPU は Vulkan (プレビュー (Preview)) でカバー。プレビルドの CUDA イメージは Blackwell (RTX 50xx) を対象としており、それより古い NVIDIA GPU は一度だけのローカル再ビルドが必要です ([SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31) を参照)。レベルの定義: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。GPU 一覧: [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。特定のモデルがお使いのカードに収まるかは [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照。 |
 | ランタイム | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 単体の Docker で十分) または Podman |
 | Python | 3.9 以上 |
 | ディスク | 約 20GB CUDA / 約 22GB ROCm (モデル重み + コンテナイメージ) |
@@ -130,7 +143,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 ## ⚠️ 既知の制限事項
 
-- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA、AMD ROCm、Vulkan の Docker パスは現在提供中です。Apple Silicon はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/itigges22/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ上の項目です。
+- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/itigges22/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
 - **現行のレジストリモデルはまだ正式にベンチマークされていません。** 公式の 74.6% LiveCodeBench スコアは凍結された 14B リファレンスビルドのものです。モデル別の新しい数値は [#28](https://github.com/itigges22/ATLAS/issues/28) で追跡しています。リファレンスの手法とアブレーションは [`docs/reports/V3_ABLATION_STUDY.md`](../../reports/V3_ABLATION_STUDY.md) に、生トレースは [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) に公開しています。
 - **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。信頼性は V3.1.2 のエージェント信頼性強化で改善しています。モデル別の最新の数値は [#28](https://github.com/itigges22/ATLAS/issues/28) で追跡しています。
 - **文法制約デコーディングは遅め。** llama-server で約 51 tok/s。

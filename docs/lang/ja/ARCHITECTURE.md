@@ -1,3 +1,4 @@
+<!-- source: docs/ARCHITECTURE.md synced-through: WORKING-TREE-2026-07-08 -->
 > **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS アーキテクチャ
@@ -46,20 +47,21 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 
 | バックエンド | ステータス (V3.1.x) | イメージ / ビルドパス | Compose オーバーライド | 検証済みカード |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | V3.1.0 以降提供中 | `inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）、RTX 30xx/40xx/50xx |
-| **ROCm / HIP** (AMD) | V3.1.1 提供中 | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `docker-compose.rocm.yml` | RX 7900 XTX（コミュニティによるスモークテスト、GH #26） |
-| **Metal** (Apple Silicon) | 提供中 ([#32](https://github.com/itigges22/ATLAS/issues/32)) | ハイブリッド: ネイティブ llama-server (Metal) + 残りは Docker（macOS は GPU をコンテナにパススルーできないため） | `docker-compose.macos.yml` | M シリーズ; 16 GB 以下では Q4_K_M、24 GB 以上のユニファイドメモリでは Q6_K |
-| **SYCL** (Intel Arc) | ロードマップ | 未定 | 未定 | Arc A770 16 GB（ターゲット） |
+| **CUDA** (NVIDIA) | サポート対象 (Supported)（V3.1.0 以降） | `inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）。公開イメージは Blackwell（compute capability 12.0/12.1）のみを対象にコンパイルされており、それより前の世代はローカル再ビルドが必要 — [SETUP.md](./SETUP.md) を参照 |
+| **ROCm / HIP** (AMD) | コミュニティ検証済み (Community-tested)（V3.1.1 以降） | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `docker-compose.rocm.yml` | RX 7900 XTX（コミュニティによるスモークテスト、GH #26） |
+| **Metal** (Apple Silicon) | サポート対象 ([#32](https://github.com/itigges22/ATLAS/issues/32)) | ハイブリッド: ネイティブ llama-server (Metal) + 残りは Docker（macOS は GPU をコンテナにパススルーできないため） | `docker-compose.macos.yml` | M シリーズ; 16 GB 以下では Q4_K_M、24 GB 以上のユニファイドメモリでは Q6_K |
+| **Vulkan**（クロスベンダーフォールバック） | プレビュー (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `docker-compose.vulkan.yml` | lavapipe の CPU 起動パス（スモークテスト済み）。実 GPU での検証はまだなし |
+| **SYCL** (Intel Arc) | ロードマップ (Roadmap) — Intel Arc は現在 `vulkan` を使用 | 未定 | 未定 | — |
 
-**バックエンドの選択は実行時ではなくインストール時に行われます。** `atlas init` は `tier.detect_gpu()`（`atlas/cli/commands/tier.py` を参照）を実行し、検出されたすべてのベンダーの中から VRAM が最大の GPU を選び（`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` でオーバーライド可能）、`.env` に `ATLAS_BACKEND={cuda|rocm|metal|sycl}` を書き込みます。各バックエンドにはそれぞれ事前ビルド済みのイメージがあります。ユーザーがすべてのバックエンドのライブラリを同梱した肥大化したイメージを実行することはありません。ウィザードは、起動しない `.env` を書き込む代わりに、未対応バックエンドのホストでは拒否します。
+**バックエンドの選択は実行時ではなくインストール時に行われます。** `atlas init` は `tier.detect_gpu()`（`atlas/cli/commands/tier.py` を参照）を実行し、検出されたすべてのベンダーの中から VRAM が最大の GPU を選び（`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` でオーバーライド可能）、`.env` に `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` を書き込みます。パッケージ済みのネイティブバックエンドが存在する場合、検出はそれに解決されます: NVIDIA には CUDA、x86_64 上の AMD には ROCm、macOS にはハイブリッド Metal パス。ホスト向けのネイティブバックエンドがパッケージされていない場合（Intel Arc、arm64 上の AMD、未認識のベンダー）、ウィザードは Vulkan ユニバーサルフォールバックを提案します（デフォルトは yes）: 1 つのイメージで AMD、Intel、Adreno、MoltenVK、lavapipe CPU ラスタライザをカバーし、性能はチューニング済みのネイティブバックエンドよりおおよそ 20〜40% 低くなります。起動しない `.env` を書き込む代わりに拒否するのは、使えるものが何も存在しない場合だけです。各バックエンドにはそれぞれ事前ビルド済みのイメージがあります。ユーザーがすべてのバックエンドのライブラリを同梱した肥大化したイメージを実行することはありません。
 
-**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい `cost_field.pt` アーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。レジストリへの書き戻しと HuggingFace 経由の配布が、このループを閉じるフォローアップです。
+**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
 
 **ベンダー非依存な要素**（すべてのバックエンドで動作）: 文法制約付き JSON、セルフ埋め込み（`/embedding`）、レイヤーごとの隠れ状態、ASA 制御ベクトル（バックエンドを問わず llama.cpp の `control_vector_load` でロードされる）、KV キャッシュ量子化、外側のエージェントループ全体、V3 パイプライン、Geometric Lens、サンドボックス。
 
 **バックエンドごとに異なる要素:**
-- **Flash attention。** CUDA + ROCm: 完全サポート。Metal: 限定的（llama.cpp の Metal バックエンドは一部のヘッドサイズで flash-attn をサポート。未対応の場合はデフォルトでオフ）。SYCL: 未定。
-- **ピン留めホストメモリ。** `GGML_CUDA_NO_PINNED` は CUDA + ROCm に適用されます（HIP は GGML 互換レイヤーで CUDA のパスをミラーします）。Metal/SYCL はピン留めを使いません。
+- **Flash attention。** CUDA + ROCm: 完全サポート。Metal: 限定的（llama.cpp の Metal バックエンドは一部のヘッドサイズで flash-attn をサポート。未対応の場合はデフォルトでオフ）。Vulkan: ドライバ依存。
+- **ピン留めホストメモリ。** `GGML_CUDA_NO_PINNED` は CUDA + ROCm に適用されます（HIP は GGML 互換レイヤーで CUDA のパスをミラーします）。Metal/Vulkan は CUDA/HIP のピン留めパスを使いません。
 - **マルチ GPU + テンソル並列。** V1 はすべてのバックエンドでシングル GPU のみをサポートします。マルチ GPU は GH #34 で、特定のベンダーに紐づいてはいません。
 - **Apple ユニファイドメモリ。** macOS は GPU とシステムメモリを共有します。「VRAM」の計算は実際には「合計 16 GB から OS + アプリを引いたもの」です。§7 を参照してください。
 
@@ -120,7 +122,7 @@ flowchart LR
     Result --> Budget{"Budget?"}
     Budget -->|"< 4"| Call
     Budget -->|"4"| Warn["Nudge: write now"] --> Call
-    Budget -->|"5+"| Skip["Skip read"] --> Call
+    Budget -->|"5+"| Esc["Escalated nudge"] --> Call
 
     Route -->|"text"| Stream["Stream"] --> Call
     Route -->|"done"| Done["End"]
@@ -132,7 +134,7 @@ flowchart LR
 
 ### 文法強制
 
-llama-server の `response_format: {"type": "json_object"}` は、すべてのモデル出力を3つの有効な JSON 形状のいずれか1つに強制します:
+すべてのモデル出力は、3つの有効な JSON 形状のいずれか1つへと制約されます:
 
 ```json
 {"type": "tool_call", "name": "<tool_name>", "args": {...}}
@@ -140,7 +142,7 @@ llama-server の `response_format: {"type": "json_object"}` は、すべての�
 {"type": "done", "summary": "<summary>"}
 ```
 
-JSON スキーマは `oneOf` と `additionalProperties: false` を用い、ツール名をレジストリから列挙します。モデルが不正な JSON を生成することはできません — トークン生成は llama-server レベルで文法制約されています。
+デフォルトの `strict` モードでは、プロキシは完全な JSON スキーマ — `oneOf` と `additionalProperties: false` を用い、ツール名をレジストリから列挙したもの — を送信し、llama-server がそれをトークン生成中の文法として強制します。文法制約は不正な出力を稀にしますが、不可能にはしません: `ATLAS_GRAMMAR_MODE=loose` は `{"type":"json_object"}` のみを送信し（有効な JSON にはなるが形状は強制されない — 一部のモデルはこれを必要とします）、応答トークンの上限が JSON の途中で切り詰めることもあります。プロキシはパースを失敗し得るものとして扱います — 散文や `reasoning_content` から JSON を回復し、切り詰められたツール引数を実行前に検出し、的を絞ったパース失敗の説明をフィードバックし、3連続失敗でループを打ち切ります。
 
 ### ツール
 
@@ -203,7 +205,7 @@ JSON スキーマは `oneOf` と `additionalProperties: false` を用い、ツ�
 - `hasLogicIndicators(content)` が true を返す — 関数/メソッド定義、制御フロー、エラー処理、Flask/FastAPI/Django ルーティング、Express/Node API、React の state/data、バリデーション、データベース呼び出し、JSX/React コンポーネントパターン、インポートをカバーするパターンファミリーにまたがる**2件以上の一致**（トークンの実リストは `proxy/tools.go:hasLogicIndicators` にあります）
 - または、ファイルが認識されたソースコード / マークアップの拡張子（`.py`、`.go`、`.rs`、`.ts`、`.tsx`、`.js`、`.jsx`、`.html`、`.htm` など）を持ち、ロジック指標が発火しなかった場合 — T2 で疑わしきは罰せずの扱いを受ける（12行のコンポーネントの骨組みのような、最小だが本物のファイルをカバーする）
 
-**T3（難しい）** — 現状、分類器が単独で T3 を発行することはありません。サイクロマティック複雑度のリファイナー（GH #39 のポイント2の `/internal/cyclomatic_complexity` 経由の `refineTierWithCC`）は、McCabe CC が実際の分岐密度を示すときに T2 → T3 へ*エスカレート*できます。決してダウングレードはしません。
+**T3（難しい）** — 現状、分類器が単独で T3 を発行することはありません。サイクロマティック複雑度のリファイナー（GH #39 のポイント2の `/internal/cyclomatic_complexity` 経由の `refineTierWithCC`）は McCabe CC に基づいて*エスカレート*します: CC ≥ 8 で T2 へ（T1 からも）、CC ≥ 16 で T3 へ。決してダウングレードはしません。
 
 ### プランモード（ターンごとの事前準備）
 
@@ -225,7 +227,7 @@ JSON スキーマは `oneOf` と `additionalProperties: false` を用い、ツ�
 | 疑わしい縮小ガード | `oldSize >= 100B` かつ `newSize < 64B` のとき `ast_edit`/`edit_file` を拒否（`proxy/guardrails.go::validateNotSuspiciouslyShrunk`） | 破壊的なスタブ書き換えがディスクに到達する前に捕捉する |
 | ast_edit の暴走コンテンツガード | `content` > 8 KB かつファイルサイズの > 4倍のとき拒否 | 置換ノードとして発行された推論リーク blob を捕捉する |
 | エラーループブレーカー | 3連続失敗 | 暴走する失敗サイクルを停止 |
-| 探索予算 | 4連続の読み取り専用呼び出しで警告; 5回以上で読み取りをスキップ | 際限なく探索する代わりに書くようモデルを押す |
+| 探索予算 | 4連続の読み取り専用呼び出しでナッジ; 5回以上でより強いナッジ。読み取りは常に実行されます — ナッジは*次の*ターンを書き込みへ誘導します | 際限なく探索する代わりに書くようモデルを押す |
 | コマンド出力の切り詰め | stdout 8,000 文字、stderr 4,000 文字 | コンテキストの氾濫を防ぐ |
 | 検索結果 | 最大200件; ファイル検索は 1 MB 超のファイルをスキップ | 検索コストを抑える |
 | 切り詰め検出 | ツール引数の JSON パースチェック | 切り詰められたモデル出力を捕捉 |
@@ -281,7 +283,7 @@ flowchart LR
 
 ### フェーズの詳細
 
-**フェーズ0: Probe** は段階的な予算リトライ（light → standard → direct-response）で単一のベースライン候補を生成します。選択中のモデルの C(x)/G(x) アーティファクトでスコア化され、サンドボックスでテストされます。合格すれば、パイプラインは即座に離脱します。
+**フェーズ0: Probe** は段階的な予算リトライ（light → standard → nothink）で単一のベースライン候補を生成します。選択中のモデルの C(x)/G(x) アーティファクトでスコア化され、サンドボックスでテストされます。合格すれば、パイプラインは即座に離脱します。
 
 **フェーズ1: 制約駆動の生成**
 
@@ -301,7 +303,7 @@ Wait 注入は、より長い推論パスを要求するために「Wait, let me
 
 **フェーズ2: 検証と選択**
 
-- **ビルド検証**: Python（`py_compile`）、TypeScript（`tsc --noEmit`）、JavaScript（`node --check`）、Go（`go build`）、Rust（`cargo check`）、C/C++（`gcc/g++ -fsyntax-only`）、Shell（`bash -n`）。Next.js、React、Flask、Django、Express 向けのフレームワークオーバーライド。
+- **ビルド検証**: Python（`py_compile`）、TypeScript（`tsc --noEmit`）、JavaScript（`node --check`）、Go（`go build`）、Rust（サンドボックスの `/execute` パスでは `rustc`。`Cargo.toml` のあるプロジェクトは検出されて `cargo build`、`cargo check` はビルドコマンドの許可リスト経由でのみ受理される）、C/C++（`/execute` では `-Wall` 付きの完全な `gcc`/`g++` コンパイル。`-fsyntax-only` が適用されるのは `/syntax-check` ルートのみ）、Shell（`bash -n`）。Next.js、React、Flask、Django、Express 向けのフレームワークオーバーライド。
 - **S\* タイブレーク**（2件以上の合格）: エッジケース入力を生成し、両候補を実行し、多数決で勝者を決める
 - **Lens 選択**（1件合格またはフォールバック）: C(x) エネルギーでソートし、最低が勝つ
 
@@ -423,7 +425,7 @@ graph LR
 
 C(x) の正規化は `sigmoid(steepness × (energy - midpoint))` です。両方の値は選択中のモデルの `cx_normalization.json` が供給します。`atlas lens build` は、そのモデルのラベル付き PASS/FAIL 候補からこれらを導出します。同様に、G(x) の判定閾値は `gx_thresholds.json` に由来します。どちらのキャリブレーションもない場合、正規化された判定はリファレンスアーティファクトのスケールを借りるのではなく、中立/未キャリブレーションに留まります。
 
-現行のすべての Lens バンドルには `model_identity.json` も含まれます。サービスはそのモデル名が `ATLAS_MODEL_NAME` と一致することを要求します。埋め込み幅の一致だけでは、2つの異なるモデル間の互換性を立証できないからです。
+現行のすべての Lens バンドルには `model_identity.json` も含まれます。サービスはそのモデル名が、llama-server の `/v1/models` が報告する提供モデル id（プローブが失敗した場合のフォールバックは `ATLAS_MODEL_NAME`）と一致することを要求します。埋め込み幅の一致だけでは、2つの異なるモデル間の互換性を立証できないからです。
 
 > **注:** モデルの重み（.pt、.pkl ファイル）はリポジトリにコミットされていません — トレーニング中にビルドされ、コンテナイメージに焼き込まれるか、実行時にマウントされます。モデルファイルが存在しない場合、サービスは緩やかにデグレードします: C(x) は中立エネルギーを返し、G(x) は `gx_score: 0.5` と `verdict: "unavailable"` を返します。トレーニングデータと重みは [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) で公開しています。
 
@@ -511,7 +513,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-受け付ける言語エイリアス: `py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`rs`（Rust）、`c++`（C++）、`sh`/`shell`（Bash）。最大実行時間: Docker デプロイでは300秒（compose がプロキシの `run_command` の5分上限に合わせて `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` を設定します; 素のコードのデフォルトは60秒）。最大メモリ: 512 MB。2つのワークスペースパス: **`/execute`**（V3 候補テストパス）は `/tmp/sandbox`（tmpfs）下の一時的なスクラッチディレクトリを使用; **`/shell`**（エージェントの `run_command` ルート、加えてバックグラウンドプロセス向けの `/jobs/*`）は `/workspace` — `ATLAS_PROJECT_DIR`（Docker）または hostPath `${ATLAS_PROJECTS_DIR}`（K3s）からバインドマウントされたプロジェクトルートで、プロキシが見るのと同じパス — に対して実行します。
+受け付ける言語エイリアス: `py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`rs`（Rust）、`c++`（C++）、`sh`/`shell`（Bash）。最大実行時間: Docker デプロイでは300秒（compose がプロキシの `run_command` の5分上限に合わせて `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` を設定します; 素のコードのデフォルトは60秒）。メモリ、CPU、プロセス数の上限はコンテナレベルです: compose が `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`、`cpus ${ATLAS_SANDBOX_CPUS:-2}`、`pids_limit ${ATLAS_SANDBOX_PIDS:-1024}` を設定し、`atlas init` はホストに応じた値（RAM とコア数の約 75%）を `.env` に書き込みます。2つのワークスペースパス: **`/execute`**（V3 候補テストパス）は `/tmp/sandbox`（tmpfs）下の一時的なスクラッチディレクトリを使用; **`/shell`**（エージェントの `run_command` ルート、加えてバックグラウンドプロセス向けの `/jobs/*`）は `/workspace` — `ATLAS_PROJECT_DIR`（Docker）または hostPath `${ATLAS_PROJECTS_DIR}`（K3s）からバインドマウントされたプロジェクトルートで、プロキシが見るのと同じパス — に対して実行します。
 
 ---
 
@@ -540,8 +542,9 @@ llama-server 以外のすべての計算は CPU 上で動作します。GPU は 
 |---|---|---|---|
 | **CUDA**（専用 VRAM） | ハードウェアスペック（標準構成の 5060 Ti では 16 GB） | スペックの約95%（ドライバが約 500 MB を予約） | 上の表の数値がそのまま適用される。 |
 | **ROCm**（専用 VRAM） | ハードウェアスペック | スペックの約90〜95%（HIP ランタイムは CUDA よりわずかに重い） | RX 7900 XTX（24 GB）→ 14B Q5 + 32K コンテキストを2並列スロットで余裕をもって実行。 |
-| **Metal**（Apple ユニファイド） | システム RAM 合計 | システム RAM の**約70%** | OS + ブラウザ + IDE が約30%を消費する。16 GB の MBP は*現実的に* 11 GB の予算 — Qwen3.5-9B Q6_K（7.5 GB + 2〜4 GB の KV キャッシュ）には厳しすぎる。16 GB 以下では Q4_K_M（5 GB）を使う; Q6_K は 24 GB 以上のユニファイドメモリが必要。 |
-| **SYCL**（Intel Arc） | ハードウェアスペック | 不明 — 出荷時に未定 | A770（16 GB）ターゲットは NVIDIA 16 GB と保守的に同等。 |
+| **Metal**（Apple ユニファイド） | システム RAM 合計 | システム RAM の**約70%** | OS + ブラウザ + IDE が約30%を消費する。16 GB の MBP は*現実的に* 11 GB の予算 — macOS 自身の GPU ワーキングセットが同じメモリに載ることを考えると、Qwen3.5-9B Q6_K（§7 より、重み約 6.9 GB + 32K で KV 約 1.3 GB）にはほとんど余裕がない。16 GB 以下では Q4_K_M（5 GB）を使う; Q6_K は 24 GB 以上のユニファイドメモリが必要。 |
+| **Vulkan**（クロスベンダー） | ハードウェアスペック | 計測済みのデプロイはまだなし（プレビュー — lavapipe の CPU パスでのみ検証） | 同じカード上でも、チューニング済みのネイティブバックエンドより約 20〜40% 低い性能を想定。 |
+| **SYCL**（Intel Arc） | ハードウェアスペック | ロードマップ — Intel Arc は現在 Vulkan を使用 | A770（16 GB）ターゲットは NVIDIA 16 GB と保守的に同等。 |
 
 ---
 
@@ -563,7 +566,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` と `sandbox` は独立して起動します。`geometric-lens` は `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。すべてのモードを同じ `inference/entrypoint-v3.1.sh` が駆動するため、コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock は環境変数で制御され、挙動は Docker Compose、ベアメタル、macOS ハイブリッド Metal、K3s をまたいで同一です。
+`llama-server` と `sandbox` は独立して起動します。`geometric-lens` は `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。同じ `inference/entrypoint-v3.1.sh` が Docker Compose、ベアメタル、K3s を駆動するため、コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock は環境変数で制御され、挙動はこれらのモード間で同一です。macOS ハイブリッドパスは `scripts/atlas-llama-macos.sh` 経由でネイティブ llama-server を起動し、このスクリプトはエントリーポイントのフラグをミラーします。
 
 インストールとモード別の立ち上げ手順（NVIDIA / ROCm オーバーライド、ベアメタル、macOS ハイブリッド Metal、K3s マニフェスト）は [SETUP.md](./SETUP.md) に、macOS ネイティブパスは [SETUP_MACOS.md](../../SETUP_MACOS.md) にあります。
 
@@ -637,7 +640,7 @@ sequenceDiagram
     A-->>U: File created
 ```
 
-最低3回の llama-server 呼び出し（probe 生成1回 + セルフテスト生成1回 + 埋め込み抽出1回）。フェーズ3の修復がすべての戦略を発動させると最大30回以上。
+アルゴリズム的なタスクでは最低3回の llama-server 呼び出し（probe 生成1回 + セルフテスト生成1回 + 埋め込み抽出1回）。インタラクティブなタスク（ゲーム、UI、フレームワークコード）はセルフテスト生成をスキップするため、最低は2回です。フェーズ3の修復がすべての戦略を発動させると最大30回以上。
 
 ### 既存コードの編集
 

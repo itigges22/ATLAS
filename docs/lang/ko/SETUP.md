@@ -1,3 +1,4 @@
+<!-- source: docs/SETUP.md synced-through: WORKING-TREE-2026-07-08 -->
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
 
 > ℹ️ 영어 원본([SETUP.md](../../SETUP.md))의 번역본입니다. ATLAS에는 고정 기본 모델이 없습니다 — `atlas init`으로 레지스트리 모델을 선택하거나 호환 GGUF를 지정하십시오. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
@@ -13,21 +14,22 @@
 
 설치 절차는 하드웨어와 OS에 따라 다릅니다. 본인 환경에 맞는 행을 찾아 링크된 섹션으로 이동하세요.
 
-| 하드웨어 | OS | 권장 경로 |
-|---|---|---|
-| NVIDIA GPU (RTX 20/30/40/50, 데이터센터) | Linux | [방법 0: 부트스트랩](#방법-0-원샷-부트스트랩) (자동 감지) 또는 [방법 1: Docker](#방법-1-docker-compose-권장) |
-| NVIDIA GPU | Windows (WSL2) | [방법 1: Docker — NVIDIA 섹션](#방법-1-docker-compose-권장) |
-| AMD GPU (RX 6000/7000, MI200+) | Linux | [방법 1: Docker — AMD ROCm](#amd-rocm--무엇이-다른가) |
-| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)** (전용 가이드 — 하이브리드 네이티브 Metal + Docker) |
-| Intel Arc / Iris Xe | Linux/Windows | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) |
-| Snapdragon X Elite (노트북) | Windows on ARM / Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) + [arm64 섹션](#arm64) |
-| 구형 AMD GPU (Vega, RDNA1, ROCm 6.x 미지원) | Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) |
-| ARM64 위의 NVIDIA (DGX Spark, Jetson) | Linux | [방법 1: Docker — arm64 섹션](#arm64) (sbsa/l4t 베이스 교체로 CUDA) |
-| Raspberry Pi 5 | Linux | [방법 1: Docker — Vulkan + arm64](#arm64) (CPU급 성능 예상) |
-| Intel Mac (2020년 이전) | macOS | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) (Metal은 Apple Silicon 전용) |
-| GPU 없는 CPU 전용 | 무관 | [방법 1: Docker — Vulkan + lavapipe](#vulkan--크로스-벤더-폴백) (느림, 스모크 테스트 용도) |
-| Kubernetes 클러스터 | Linux | [방법 3: K3s](#방법-3-k3s) |
-| 베어메탈 / 개발 | Linux | [방법 2: 베어메탈](#방법-2-베어메탈) |
+| 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../../SUPPORT_MATRIX.md)) |
+|---|---|---|---|
+| NVIDIA RTX 50 시리즈 / Blackwell (B100, GB10) | Linux | [방법 0: 부트스트랩](#방법-0-원샷-부트스트랩) 또는 [방법 1: Docker](#방법-1-docker-compose-권장) | 지원(Supported) — 게시된 CUDA 이미지는 Blackwell 대상 |
+| NVIDIA RTX 20/30/40, GTX 10xx, 데이터센터 (V100/A100/H100/T4/L4) | Linux | [방법 1: Docker](#방법-1-docker-compose-권장) + 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | 프리뷰(Preview) — 로컬 재빌드 필요 |
+| NVIDIA GPU | Windows (WSL2) | [방법 1: Docker — NVIDIA 섹션](#방법-1-docker-compose-권장) | 미지원(Unsupported) — 테스트되지 않았고 아무 주장도 하지 않음; 리포트 환영 |
+| AMD GPU (RX 6000/7000, MI200+) | Linux | [방법 1: Docker — AMD ROCm](#amd-rocm--무엇이-다른가) | 커뮤니티 검증(Community-tested) ([GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)** (전용 가이드 — 하이브리드 네이티브 Metal + Docker) | 지원 (메인테이너 검증, M2 Pro) |
+| Intel Arc / Iris Xe | Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) | 프리뷰 — Vulkan은 lavapipe에서만 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
+| Snapdragon X Elite (노트북) | Linux | [Vulkan](#vulkan--크로스-벤더-폴백) + [arm64 섹션](#arm64) | 프리뷰 (Linux arm64). Windows on ARM은 미지원 |
+| 구형 AMD GPU (Vega, RDNA1, ROCm 6.x 없음) | Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) | 프리뷰 |
+| ARM64 위의 NVIDIA (DGX Spark, Jetson) | Linux | [arm64 섹션](#arm64) (sbsa/l4t 베이스 교체로 CUDA) | 프리뷰 — 빌드 레시피는 제공되나 엔드투엔드로 검증된 디바이스는 아직 없음 (#115) |
+| Raspberry Pi 5 | Linux | [Vulkan + arm64](#arm64) | 프리뷰 — CPU급 성능 예상 |
+| Intel Mac (2020년 이전) | macOS | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) | 미지원 — Docker Desktop 필요(테스트되지 않음); Metal은 Apple Silicon 전용 |
+| GPU 없는 CPU 전용 | 무관 | [CPU 전용 설치](#cpu-only) | 프리뷰 — 스모크 테스트 전용, 매우 느림 |
+| Kubernetes 클러스터 | Linux | [방법 3: K3s](#방법-3-k3s) | 프리뷰 — 템플릿은 CI 검증됨; 자동화된 라이브 클러스터 테스트 없음 |
+| 베어메탈 / 개발 | Linux | [방법 2: 베어메탈](#방법-2-베어메탈) | 프리뷰 — 수동 검증만 |
 
 본인 환경이 없나요? `uname -a` 출력과 `lspci | grep -i vga`(Linux) / `system_profiler SPDisplaysDataType`(Mac)을 첨부해 이슈를 열어 주시면 행을 추가하겠습니다.
 
@@ -36,6 +38,22 @@
 ## 방법 0: 원샷 부트스트랩
 
 curl 명령 하나로 배포판을 감지하고 Docker + nvidia-container-toolkit을 설치하며, 모델 가중치를 다운로드하고 스택을 기동합니다. 멱등적이어서 다시 실행해도 안전합니다.
+
+> **NVIDIA Blackwell 이전 GPU(RTX 20/30/40 시리즈, GTX 10xx, V100/A100/T4/L4/H100) 사용자는 이것부터 읽으세요.**
+> 게시된 `atlas-llama` CUDA 이미지는 컴퓨트 캐퍼빌리티 `120;121`(Blackwell —
+> RTX 50xx, B100, GB10) **전용**으로 컴파일되어 있습니다. 구형 NVIDIA GPU에서는
+> llama-server가 시작 시
+> `no kernel image is available for execution on the device`
+> 오류로 실패합니다.
+> 본인 GPU 아키텍처에 맞춰 추론 이미지를 한 번 재빌드하세요:
+>
+> ```bash
+> # find your arch (drop the dot: 8.6 -> 86)
+> nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+> docker compose build --build-arg CUDA_ARCH=86 llama-server   # example: RTX 30xx
+> docker compose up -d --no-deps llama-server
+> ```
+> 전체 아치 표: [CUDA 컴퓨트 캐퍼빌리티](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
@@ -60,7 +78,26 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 
 **모델 선택:** `.env.example`에는 선택된 모델이 없습니다. 부트스트랩이 `.env`를 생성했는데 `ATLAS_MODEL_FILE`이 비어 있으면, 레지스트리의 기본 권장 모델을 `.env`에 기록하여(그 과정이 로그로 남습니다) 마법사 없이도 원샷 설치가 완료되게 합니다. 선택은 `.env`를 편집하거나 `atlas init`을 실행해 언제든 바꿀 수 있습니다. 이미 비어 있지 않은 선택은 그대로 존중됩니다.
 
-**CPU 전용 / GPU 없는 호스트:** GPU 벤더가 감지되지 않으면 부트스트랩은 베이스 파일 위에 `docker-compose.vulkan.yml`을 겹쳐 Vulkan lavapipe CPU 폴백으로 스택을 부팅합니다. `/dev/dri`까지 없는 경우(헤드리스 VM, 순수 CPU 머신)에는 `/dev/dri` 디바이스 요구를 완전히 제거하는 `docker-compose.cpu.yml`도 함께 겹칩니다. 추론은 동작하지만 매우 느립니다.
+<a id="cpu-only"></a>
+**CPU 전용 / GPU 없는 호스트 (프리뷰(Preview) — 스모크 테스트 전용).** ATLAS는 Vulkan 이미지의 lavapipe CPU 래스터라이저를 통해 GPU 없이도 부팅되지만, 추론이 매우 느립니다. 스택이 동작하는지 확인하는 용도로 쓰고, 실제 코딩 세션 용도로는 쓰지 마세요.
+
+1. **부트스트랩은 옵트인하지 않는 한 GPU 없는 호스트를 거부합니다:**
+   `ATLAS_BOOTSTRAP_SKIP_GPU=1 ./scripts/atlas-bootstrap.sh`
+   이렇게 하면 부트스트랩이 `docker-compose.vulkan.yml`을 겹치고(`/dev/dri`가
+   없으면 `docker-compose.cpu.yml`도 함께), 모델 선택과
+   `ATLAS_BACKEND=vulkan|cpu`를 직접 `.env`에 기록하며, ASA 빌드를 건너뜁니다.
+2. **GPU 없는 호스트에서 `atlas init`을 실행하지 마세요** — 마법사는 크기를
+   정할 수 없는 `.env`를 쓰는 대신 의도적으로 거부(exit 1)합니다. 모델 선택은
+   부트스트랩이 처리하며, 이후 모델 변경은 `atlas model install`로 하세요.
+
+수동 등가 절차:
+
+```bash
+cp .env.example .env    # set ATLAS_MODEL_FILE / ATLAS_MODEL_NAME
+atlas model install Qwen3.5-9B-Q6_K
+docker compose -f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml up -d
+atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
+```
 
 **방화벽:** Compose 스택은 모든 서비스를 `127.0.0.1`에만 게시하므로, 로컬 사용에는 방화벽 변경이 필요 없으며 부트스트랩은 기본적으로 firewalld를 건드리지 않습니다. 서비스를 라우팅 가능한 인터페이스에 다시 바인딩하는 배포를 위해 서비스 포트(8090, 8099, 8070, 30820)를 열려면 `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1`을 설정하세요.
 
@@ -107,7 +144,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | `main`을 추적하는 대신 git 태그/sha에 설치를 고정; `vX.Y.Z` 값은 `ATLAS_IMAGE_TAG`도 대응 이미지에 고정합니다 |
 | `ATLAS_INSTALL_DIR=/path` | 클론 위치(기본 `/opt/atlas` — 아래 참고) |
 | `ATLAS_REPO_URL=https://...` | 대체 저장소 URL |
-| `ATLAS_GO_VERSION=1.24.0` | TUI 빌드에 설치되는 Go 툴체인 버전 |
+| `ATLAS_GO_VERSION=1.26.2` | TUI 빌드에 설치되는 Go 툴체인 버전 (TUI는 1.26.2+가 필요하며, 구형 툴체인이 설치되어 있으면 자동으로 이를 가져옵니다) |
 
 **왜 `/opt/atlas`인가?** 시스템 전역 서드파티 소프트웨어의 표준 FHS 접두사이고, `$HOME` 정리에도 살아남으며, 같은 머신의 여러 사용자가 하나의 설치를 공유할 수 있기 때문입니다. 홈 디렉토리에 설치하고 싶다면:
 
@@ -126,7 +163,7 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 
 | 요구 사항 | 세부 내용 |
 |-------------|---------|
-| **GPU** | VRAM 16GB 이상. NVIDIA (CUDA)가 정식 경로이며, AMD (ROCm)와 Apple Silicon (Metal, macOS 하이브리드 — [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고) 모두 지원됩니다. Vulkan은 크로스 벤더 폴백이고, Intel Arc (SYCL)는 로드맵입니다. [§ 지원 GPU](#지원-gpu) 참고. |
+| **GPU** | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported) — 게시된 이미지는 Blackwell 대상이며, 구형 카드는 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) 필요); AMD (ROCm, 커뮤니티 검증(Community-tested)); Apple Silicon (Metal, macOS 하이브리드, 지원 — [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고); Vulkan(프리뷰(Preview))은 크로스 벤더 폴백이고, Intel Arc (SYCL)는 로드맵(Roadmap)입니다. [§ 지원 GPU](#지원-gpu) 참고. |
 | **GPU 드라이버** | NVIDIA: 전용 드라이버(`nvidia-smi`에서 GPU가 보여야 함). AMD: `amdgpu-dkms` 커널 드라이버(`/dev/kfd`가 존재해야 하며, `rocm-smi`에서 GPU가 보여야 함). |
 | **Python 3.9+** | pip 포함 |
 | **curl** | 모델 가중치 다운로드용 |
@@ -287,7 +324,8 @@ CUDA/ROCm과 다른 점:
 
 GPU를 기대했는데 `vulkaninfo`에 `llvmpipe` CPU 디바이스만 보인다면 커널 측 디바이스 패스스루가 실패한 것입니다 — 호스트에 `/dev/dri/renderD*`가 존재하는지, 사용자가 `video` + `render` 그룹에 있는지 확인하세요(위 ROCm 요구 사항과 동일).
 
-#### arm64 호스트 (#115) {#arm64}
+<a id="arm64"></a>
+#### arm64 호스트 (#115)
 
 ATLAS는 두 CPU 아키텍처를 대상으로 합니다: `x86_64`(기본, 모든 백엔드 사용 가능)와 `aarch64`(백엔드 일부만). `atlas doctor`로 확인하세요 — `arch` 점검이 GPU 점검 전에 아키텍처와 사용 가능한 백엔드를 표시합니다.
 
@@ -371,7 +409,7 @@ ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 
 ### 설치 확인
 
-가장 빠른 방법은 **`atlas doctor`**입니다 — 호스트 환경, docker 스택, 라이브 모델 추론에 걸친 23개 점검을 실행하며, 각 결과를 완료되는 대로 출력하고 종료 코드 0(정상) / 1(실패)을 반환합니다. `atlas-bootstrap.sh`가 설치 마지막에 실행하는 것도 이것입니다.
+가장 빠른 방법은 **`atlas doctor`**입니다 — 호스트 환경(GPU 런타임, 모델·lens 아티팩트), docker 스택(컨테이너, 헬스 엔드포인트, 인증, 상태), 그리고 라이브 모델 추론을 점검하며, 각 결과를 완료되는 대로 출력하고 종료 코드 0(정상) / 1(실패)을 반환합니다. 정확한 점검 개수는 백엔드, 스택 상태, 플래그에 따라 달라집니다. `atlas-bootstrap.sh`가 설치 마지막에 실행하는 것도 이것입니다.
 
 ```bash
 atlas doctor              # full check (~5–10s)
@@ -380,7 +418,7 @@ atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON d
 atlas doctor -v           # verbose: show detail for each check
 ```
 
-23개 점검:
+점검 항목:
 
 | 그룹 | 점검 | 확인 내용 |
 |---|---|---|
@@ -397,11 +435,13 @@ atlas doctor -v           # verbose: show detail for each check
 | Host | tier_constraints | 호스트 CPU/RAM/디스크가 권장 등급 최소치를 충족("16GB GPU인데 RAM 8GB" 같은 불일치를 포착) |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5개 모두 실행 중이고 healthy |
 | Stack | health/llama, lens, v3, sandbox, proxy | 5개 `/health` 엔드포인트 모두 ok 반환 |
+| Stack | internal_auth | 내부 서비스 인증: 토큰 파일이 엄격한 권한과 함께 존재하고, 실제 강제 여부를 양방향으로 탐침(잘못된 토큰 → 401, 유효한 토큰은 수락); 인증이 비활성화된 경우(`secrets/service-token` 없음) 경고 |
+| Stack | status_dimensions | 정보성: 프록시 `/v1/calibration/status`가 보고하는 lens/ASA 상태 7개 차원(TUI 배지가 읽는 것과 동일한 소스); 실행을 실패시키지 않음 |
 | Stack | sqlite_state | lens `/health`가 SQLite 상태 저장소 사용 가능을 보고 (`subsystems.sqlite`) |
 | Stack | image_skew | `atlas-*` 이미지 5개가 모두 같은 태그 |
 | End-to-end | e2e_smoke | llama-server로의 라이브 `/v1/chat/completions` 왕복 (`--quick`으로 건너뜀) |
 
-`vulkan`과 `metal-native` 행은 구성된 백엔드에 따라 조건부이고, 나머지 점검은 항상 실행됩니다.
+`vulkan`과 `metal-native` 행은 구성된 백엔드에 따라 조건부입니다. health, `internal_auth`, `status_dimensions`, `sqlite_state` 행은 컨테이너가 하나 이상 떠 있을 때만 실행되고, `e2e_smoke`는 `--quick`으로 건너뜁니다. 나머지 점검은 항상 실행됩니다.
 
 직접 확인하고 싶다면:
 
@@ -479,7 +519,7 @@ K3s 설치는 대신 `scripts/uninstall.sh`를 사용합니다. 이 스크립트
 
 | 요구 사항 | 세부 내용 |
 |-------------|---------|
-| **Go 1.24+** | atlas-proxy 빌드용 |
+| **Go 1.26.2+** | atlas-proxy와 atlas-tui 클라이언트 빌드용 (구형 Go 툴체인은 자동으로 이를 가져옵니다) |
 | **llama.cpp** | CUDA로 소스 빌드 ([llama.cpp 빌드 안내](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) 참고) |
 | **Node.js 20+** | 샌드박스의 JavaScript/TypeScript 실행에 필요 |
 | **Rust** | 샌드박스의 Rust 실행에 필요 |
@@ -569,7 +609,7 @@ atlas    # Checks atlas-proxy is reachable, then launches the TUI
 
 ## 방법 3: K3s
 
-GPU 스케줄링, 헬스 프로브, 리소스 제한을 갖춘 프로덕션 Kubernetes 배포입니다.
+GPU 스케줄링, 헬스 프로브, 리소스 제한을 갖춘 Kubernetes 배포입니다. 프리뷰(Preview) — 템플릿은 CI에서 검증·렌더링되며, 자동화된 라이브 클러스터 테스트는 없습니다.
 
 ### 추가 사전 요구 사항
 
@@ -665,7 +705,7 @@ ATLAS는 GPU를 5개 등급으로 분류하고 등급별로 레지스트리 모�
 
 | 등급 | VRAM | 권장 모델 | 컨텍스트 | 슬롯 | GPU 예시 |
 |------|------|-------------------|--------:|------:|--------------|
-| **cpu** | 해당 없음 | v1에서는 미지원 | 해당 없음 | 해당 없음 | (CUDA GPU 없음) |
+| **cpu** | 해당 없음 | [CPU 전용 설치](#cpu-only) — 프리뷰(Preview), 스모크 테스트 전용 | 해당 없음 | 해당 없음 | (GPU 없음) |
 | **small** | 8–12 GB | Qwen3.5 7B Q4_K_M (4.4 GB) | 8K | 1 | RTX 3060/4060 8GB, T4 |
 | **medium** | 12–20 GB | Qwen3.5 9B Q6_K (6.9 GB) | 32K | 1 | RTX 4060/5060 Ti 16GB, 3080 Ti, 4070 Ti Super |
 | **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090, 4090, 5090 24GB |
@@ -696,25 +736,35 @@ VRAM 8GB 이상에 llama.cpp가 지원하는 백엔드를 갖춘 모든 GPU:
 
 | 벤더 | 백엔드 | 상태 | 빌드 경로 | 테스트된 카드 |
 |---|---|---|---|---|
-| NVIDIA | CUDA | 제공 중 | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
-| AMD | ROCm / HIP | 제공 중 | `inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
-| Apple Silicon | Metal | 제공 중 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
-| Intel Arc | SYCL | 로드맵 | 미정 | Arc A770 16GB (목표) |
+| NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
+| NVIDIA (Blackwell 이전 — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | 프리뷰(Preview) — 일회성 [로컬 재빌드 필요](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (업스트림 llama.cpp는 이들을 지원; ATLAS에서의 메인테이너 검증은 없음) |
+| AMD | ROCm / HIP | 커뮤니티 검증(Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
+| Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
+| 모든 벤더 (크로스 벤더 폴백) | Vulkan | 프리뷰 | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
+| Intel Arc | SYCL | 로드맵(Roadmap) — Intel Arc는 현재 Vulkan 사용 | 미정 | Arc A770 16GB (목표) |
 
 `atlas tier`는 벤더 전반을 자동 감지해 VRAM이 가장 큰 GPU를 고릅니다. GPU가 여러 장이고 특정 GPU를 원하면 `ATLAS_GPU_VENDOR=amd` 또는 `ATLAS_GPU_INDEX=1`로 재정의하세요.
 
 #### CUDA 컴퓨트 캐퍼빌리티 (Dockerfile.v31)
 
-`inference/Dockerfile.v31`은 특정 CUDA 컴퓨트 캐퍼빌리티에 맞춰 llama.cpp를 컴파일합니다. 기본값은 `120;121`(Blackwell, RTX 50xx)입니다. `nvcc fatal: unsupported gpu architecture` 같은 빌드 실패나 `no kernel image available for execution` 같은 런타임 오류가 보이면, 본인 GPU에는 다른 아치가 필요합니다.
+`inference/Dockerfile.v31`은 특정 CUDA 컴퓨트 캐퍼빌리티에 맞춰 llama.cpp를 컴파일합니다. 기본값 — 그리고 GHCR에 게시된 `atlas-llama` 이미지가 빌드된 값 — 은 `120;121`(Blackwell: RTX 50xx, B100, GB10) **전용**입니다. 게시된 이미지에는 그보다 이전 GPU용 커널이 없고, 내장된 PTX도 하위 방향으로 JIT 컴파일될 수 없으므로, RTX 20/30/40 시리즈, GTX 10xx, Blackwell 이전 데이터센터 카드(V100/A100/H100/T4/L4)에서는 llama-server가 시작 시 `no kernel image is available for execution on the device`로 실패합니다. 본인 아키텍처에 맞춰 추론 이미지를 한 번 재빌드해야 합니다. (잘못된 아치 값으로 로컬 빌드하면 그보다 이른 시점에 `nvcc fatal: unsupported gpu architecture`로 실패합니다.)
 
-빌드 시 `--build-arg CUDA_ARCH=<value>`로 재정의하세요:
+본인 GPU의 아치를 확인한 뒤 `--build-arg CUDA_ARCH=<value>`로 재빌드하세요:
 
 ```bash
-# Single arch — RTX 4060/4070/4080/4090 (Ada Lovelace)
+# Your GPU's compute capability (drop the dot: 8.9 -> 89)
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+
+# Compose-native rebuild — only llama-server is rebuilt, the other
+# services keep using the GHCR images (~30-75 min, one time):
+docker compose build --build-arg CUDA_ARCH=89 llama-server
+docker compose up -d --no-deps llama-server
+
+# Or build the image directly:
 podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
 
 # Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
-podman build --build-arg CUDA_ARCH="86;89;90" -f inference/Dockerfile.v31 -t llama-server:local inference/
+docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 ```
 
 일반적인 값:
@@ -728,8 +778,6 @@ podman build --build-arg CUDA_ARCH="86;89;90" -f inference/Dockerfile.v31 -t lla
 | `89` | Ada Lovelace | RTX 40xx, L4 |
 | `90` | Hopper | H100 |
 | `100`, `120`, `121` | Blackwell | B100, RTX 50xx |
-
-본인 GPU의 컴퓨트 캐퍼빌리티: `nvidia-smi --query-gpu=compute_cap --format=csv` (점을 제거하세요 — `8.9` → `89`).
 
 #### AMD GPU 타깃 (Dockerfile.rocm)
 

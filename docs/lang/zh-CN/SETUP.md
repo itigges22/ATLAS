@@ -1,3 +1,4 @@
+<!-- source: docs/SETUP.md synced-through: WORKING-TREE-2026-07-08 -->
 > **[English](../../SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
 
 > ℹ️ **译者注：** ATLAS 没有固定的默认模型 —— 请通过 `atlas init` 选择注册表模型，或自带兼容的 GGUF。若本译文与英文原版 ([SETUP.md](../../SETUP.md)) 有出入，以英文原版为准。
@@ -13,21 +14,22 @@
 
 安装步骤取决于你的硬件 + 操作系统。找到匹配你环境的那一行，然后跳到对应的章节。
 
-| 你的硬件 | 操作系统 | 推荐路径 |
-|---|---|---|
-| NVIDIA GPU（RTX 20/30/40/50、数据中心卡） | Linux | [方式 0：bootstrap](#方式-0一键-bootstrap)（自动检测）或[方式 1：Docker](#方式-1docker-compose推荐) |
-| NVIDIA GPU | Windows (WSL2) | [方式 1：Docker - NVIDIA 部分](#方式-1docker-compose推荐) |
-| AMD GPU（RX 6000/7000、MI200+） | Linux | [方式 1：Docker - AMD ROCm](#amd-rocm-的差异) |
-| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)**（专门指南 - 原生 Metal + Docker 混合方案） |
-| Intel Arc / Iris Xe | Linux/Windows | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) |
-| Snapdragon X Elite（笔记本） | Windows on ARM / Linux | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) + [arm64 部分](#arm64) |
-| 较老的 AMD GPU（Vega、RDNA1，无 ROCm 6.x 支持） | Linux | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) |
-| ARM64 上的 NVIDIA（DGX Spark、Jetson） | Linux | [方式 1：Docker - arm64 部分](#arm64)（通过 sbsa/l4t 基础镜像替换启用 CUDA） |
-| Raspberry Pi 5 | Linux | [方式 1：Docker - Vulkan + arm64](#arm64)（预期只有 CPU 级性能） |
-| Intel Mac（2020 年前） | macOS | [方式 1：Docker - Vulkan](#vulkan跨厂商回退)（Metal 仅限 Apple Silicon） |
-| 仅 CPU、无 GPU | 任意 | [方式 1：Docker - Vulkan + lavapipe](#vulkan跨厂商回退)（很慢，仅用于冒烟测试） |
-| Kubernetes 集群 | Linux | [方式 3：K3s](#方式-3k3s) |
-| 裸机 / 开发环境 | Linux | [方式 2：裸机](#方式-2裸机) |
+| 你的硬件 | 操作系统 | 推荐路径 | 支持级别（[矩阵](../../../SUPPORT_MATRIX.md)） |
+|---|---|---|---|
+| NVIDIA RTX 50 系列 / Blackwell（B100、GB10） | Linux | [方式 0：bootstrap](#方式-0一键-bootstrap) 或[方式 1：Docker](#方式-1docker-compose推荐) | 支持 (Supported) —— 发布的 CUDA 镜像面向 Blackwell |
+| NVIDIA RTX 20/30/40、GTX 10xx、数据中心卡（V100/A100/H100/T4/L4） | Linux | [方式 1：Docker](#方式-1docker-compose推荐) + 一次性[本地重建](#cuda-计算能力-dockerfilev31) | 预览 (Preview) —— 需要本地重建 |
+| NVIDIA GPU | Windows (WSL2) | [方式 1：Docker - NVIDIA 部分](#方式-1docker-compose推荐) | 不支持 (Unsupported) —— 未测试，不做任何承诺；欢迎反馈报告 |
+| AMD GPU（RX 6000/7000、MI200+） | Linux | [方式 1：Docker - AMD ROCm](#amd-rocm-的差异) | 社区验证 (Community-tested)（[GH #26](https://github.com/itigges22/ATLAS/issues/26)） |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)**（专门指南 - 原生 Metal + Docker 混合方案） | 支持（维护者已验证，M2 Pro） |
+| Intel Arc / Iris Xe | Linux | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) | 预览 —— Vulkan 仅在 lavapipe 上做过冒烟测试；尚无真实 GPU 验证 |
+| Snapdragon X Elite（笔记本） | Linux | [Vulkan](#vulkan跨厂商回退) + [arm64 部分](#arm64) | 预览（Linux arm64）。Windows on ARM 为不支持 |
+| 较老的 AMD GPU（Vega、RDNA1，无 ROCm 6.x） | Linux | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) | 预览 |
+| ARM64 上的 NVIDIA（DGX Spark、Jetson） | Linux | [arm64 部分](#arm64)（通过 sbsa/l4t 基础镜像替换启用 CUDA） | 预览 —— 提供了构建配方，尚无设备完成端到端验证 (#115) |
+| Raspberry Pi 5 | Linux | [Vulkan + arm64](#arm64) | 预览 —— 预期只有 CPU 级性能 |
+| Intel Mac（2020 年前） | macOS | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) | 不支持 —— 需要 Docker Desktop（未测试）；Metal 仅限 Apple Silicon |
+| 仅 CPU、无 GPU | 任意 | [仅 CPU 安装](#cpu-only) | 预览 —— 仅用于冒烟测试，非常慢 |
+| Kubernetes 集群 | Linux | [方式 3：K3s](#方式-3k3s) | 预览 —— 模板经 CI 校验；没有自动化的真实集群测试 |
+| 裸机 / 开发环境 | Linux | [方式 2：裸机](#方式-2裸机) | 预览 —— 仅手动验证 |
 
 没有找到你的环境？请附上 `uname -a` 输出和 `lspci | grep -i vga`（Linux）/ `system_profiler SPDisplaysDataType`（Mac）提交一个 issue，我们会补上对应的行。
 
@@ -36,6 +38,21 @@
 ## 方式 0：一键 bootstrap
 
 一条 curl 命令即可检测发行版、安装 Docker + nvidia-container-toolkit、下载模型权重并拉起整个栈。幂等 —— 可以安全地重复运行。
+
+> **NVIDIA 前 Blackwell GPU（RTX 20/30/40 系列、GTX 10xx、V100/A100/T4/L4/H100）：请先读这里。**
+> 发布的 `atlas-llama` CUDA 镜像**只**针对计算能力
+> `120;121`（Blackwell —— RTX 50xx、B100、GB10）编译。在更早的 NVIDIA GPU 上，
+> llama-server 启动时会失败并报
+> `no kernel image is available for execution on the device`。
+> 请针对你 GPU 的架构一次性重建推理镜像：
+>
+> ```bash
+> # find your arch (drop the dot: 8.6 -> 86)
+> nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+> docker compose build --build-arg CUDA_ARCH=86 llama-server   # example: RTX 30xx
+> docker compose up -d --no-deps llama-server
+> ```
+> 完整架构表：[CUDA 计算能力](#cuda-计算能力-dockerfilev31)。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
@@ -60,7 +77,26 @@ bootstrap 会绕过这些坑：EPEL、nouveau 驱动冲突、libnvidia-ml.so.1 �
 
 **模型选择：** `.env.example` 出厂时不预选任何模型。当 bootstrap 创建 `.env` 且 `ATLAS_MODEL_FILE` 为空时，它会把注册表默认推荐的模型写入 `.env`（写入时会打日志），使一键安装流程无需向导即可完成。之后可随时通过编辑 `.env` 或运行 `atlas init` 更改选择。已有的非空选择会被尊重。
 
-**仅 CPU / 无 GPU 主机：** 未检测到 GPU 厂商时，bootstrap 会在基础文件之上叠加 `docker-compose.vulkan.yml`，让整个栈通过 Vulkan 的 lavapipe CPU 回退启动。当 `/dev/dri` 也不存在时（无头虚拟机、纯 CPU 机器），还会叠加 `docker-compose.cpu.yml`，彻底去掉对 `/dev/dri` 设备的要求。推理可以工作，但非常慢。
+<a id="cpu-only"></a>
+**仅 CPU / 无 GPU 主机（预览 (Preview) —— 仅用于冒烟测试）。** ATLAS 可以在没有 GPU 的情况下通过 Vulkan 镜像的 lavapipe CPU 光栅化器启动，但推理非常慢；请把它用来验证栈能否工作，而不是用于真实的编码会话。
+
+1. **bootstrap 会拒绝无 GPU 的主机，除非你显式选择加入：**
+   `ATLAS_BOOTSTRAP_SKIP_GPU=1 ./scripts/atlas-bootstrap.sh`
+   它会叠加 `docker-compose.vulkan.yml`（当 `/dev/dri` 不存在时再叠加
+   `docker-compose.cpu.yml`），自行把模型选择和
+   `ATLAS_BACKEND=vulkan|cpu` 写入 `.env`，并跳过 ASA 构建。
+2. **不要在无 GPU 的主机上运行 `atlas init`** —— 向导会有意拒绝（退出码 1），
+   而不是写出一份它无法定容的 `.env`。模型选择由 bootstrap 处理；之后可通过
+   `atlas model install` 更换模型。
+
+手动等价操作：
+
+```bash
+cp .env.example .env    # set ATLAS_MODEL_FILE / ATLAS_MODEL_NAME
+atlas model install Qwen3.5-9B-Q6_K
+docker compose -f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml up -d
+atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
+```
 
 **防火墙：** Compose 栈把所有服务只发布在 `127.0.0.1` 上，因此本地使用不需要任何防火墙改动，bootstrap 默认不碰 firewalld。设置 `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` 可为把服务重新绑定到可路由接口的部署打开服务端口（8090、8099、8070、30820）。
 
@@ -107,7 +143,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | 把安装固定到某个 git 标签/sha 而不是跟踪 `main`；`vX.Y.Z` 形式的值还会把 `ATLAS_IMAGE_TAG` 固定到对应的镜像 |
 | `ATLAS_INSTALL_DIR=/path` | 克隆到哪里（默认 `/opt/atlas` —— 见下文） |
 | `ATLAS_REPO_URL=https://...` | 替代的仓库 URL |
-| `ATLAS_GO_VERSION=1.24.0` | 为构建 TUI 安装的 Go 工具链版本 |
+| `ATLAS_GO_VERSION=1.26.2` | 为构建 TUI 安装的 Go 工具链版本（TUI 需要 1.26.2+；已安装的更老工具链会自动拉取它） |
 
 **为什么是 `/opt/atlas`？** 它是系统级第三方软件的标准 FHS 前缀，不会被 `$HOME` 清理波及，还能让同一台机器上的多个用户共享一份安装。如果你更希望装进自己的家目录：
 
@@ -126,7 +162,7 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 
 | 要求 | 详情 |
 |-------------|---------|
-| **GPU** | 16 GB+ 显存。NVIDIA (CUDA) 是标准路径；AMD (ROCm) 和 Apple Silicon（Metal，macOS 混合方案 —— 见 [SETUP_MACOS.md](../../SETUP_MACOS.md)）均受支持；Vulkan 是跨厂商回退方案；Intel Arc (SYCL) 在路线图上。参见 [§ 支持的 GPU](#支持的-gpu)。 |
+| **GPU** | 16 GB+ 显存。NVIDIA（CUDA，支持 (Supported) —— 发布的镜像面向 Blackwell；更早的显卡需要一次性[本地重建](#cuda-计算能力-dockerfilev31)）；AMD（ROCm，社区验证 (Community-tested)）；Apple Silicon（Metal，macOS 混合方案，支持 —— 见 [SETUP_MACOS.md](../../SETUP_MACOS.md)）；Vulkan（预览 (Preview)）是跨厂商回退方案；Intel Arc（SYCL）为路线图 (Roadmap) 级别。参见 [§ 支持的 GPU](#支持的-gpu)。 |
 | **GPU 驱动** | NVIDIA：专有驱动（`nvidia-smi` 应能显示你的 GPU）。AMD：`amdgpu-dkms` 内核驱动（`/dev/kfd` 必须存在；`rocm-smi` 应能显示你的 GPU）。 |
 | **Python 3.9+** | 含 pip |
 | **curl** | 用于下载模型权重 |
@@ -287,7 +323,8 @@ docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
 
 如果 `vulkaninfo` 在你预期有 GPU 时只显示 `llvmpipe` CPU 设备，说明内核侧设备直通失败了 —— 确认主机上存在 `/dev/dri/renderD*`，且你的用户在 `video` + `render` 组中（与上面的 ROCm 要求相同）。
 
-#### arm64 主机 (#115) {#arm64}
+<a id="arm64"></a>
+#### arm64 主机 (#115)
 
 ATLAS 面向两种 CPU 架构：`x86_64`（默认，所有后端可用）和 `aarch64`（后端子集）。用 `atlas doctor` 验证 —— `arch` 检查会在 GPU 检查触发之前给出你的架构以及其上可用的后端。
 
@@ -371,7 +408,7 @@ ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 
 ### 验证安装
 
-最快的方式是 **`atlas doctor`** —— 跨主机环境、docker 栈和一次真实模型推理运行 23 项检查，每项结果完成即打印，健康时返回退出码 0，有失败时返回 1。`atlas-bootstrap.sh` 在安装结束时运行的也是它。
+最快的方式是 **`atlas doctor`** —— 检查主机环境（GPU 运行时、模型与 lens 工件）、docker 栈（容器、健康端点、认证、状态）以及一次真实模型推理，每项结果完成即打印，健康时返回退出码 0，有失败时返回 1。具体检查项数量随后端、栈状态和标志而变化。`atlas-bootstrap.sh` 在安装结束时运行的也是它。
 
 ```bash
 atlas doctor              # full check (~5–10s)
@@ -380,7 +417,7 @@ atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON d
 atlas doctor -v           # verbose: show detail for each check
 ```
 
-23 项检查：
+各项检查：
 
 | 分组 | 检查 | 确认内容 |
 |---|---|---|
@@ -397,11 +434,13 @@ atlas doctor -v           # verbose: show detail for each check
 | Host | tier_constraints | 主机 CPU/RAM/磁盘满足推荐 tier 的最低要求（抓住"16 GB GPU 却只有 8 GB RAM"的错配） |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 全部 5 个都在运行且健康 |
 | Stack | health/llama, lens, v3, sandbox, proxy | 全部 5 个 `/health` 端点返回 ok |
+| Stack | internal_auth | 内部服务认证：token 文件存在且权限收紧，并从两个方向实际探测在线校验（错误 token → 401，有效 token 被接受）；认证被禁用时（没有 `secrets/service-token`）给出警告 |
+| Stack | status_dimensions | 信息性检查：来自代理 `/v1/calibration/status` 的七个 lens/ASA 状态维度（与 TUI 徽标读取的是同一来源）；从不导致运行失败 |
 | Stack | sqlite_state | lens 的 `/health` 报告 SQLite 状态存储可用（`subsystems.sqlite`） |
 | Stack | image_skew | 全部 5 个 `atlas-*` 镜像在同一标签上 |
 | End-to-end | e2e_smoke | 到 llama-server 的一次真实 `/v1/chat/completions` 往返（`--quick` 可跳过） |
 
-`vulkan` 和 `metal-native` 两行依赖于所配置的后端；其余检查始终运行。
+`vulkan` 和 `metal-native` 两行依赖于所配置的后端；health、`internal_auth`、`status_dimensions` 和 `sqlite_state` 各行仅在至少有一个容器运行时才执行；`e2e_smoke` 会被 `--quick` 跳过。其余检查始终运行。
 
 如果你更想手动检查：
 
@@ -479,7 +518,7 @@ K3s 安装改用 `scripts/uninstall.sh`，它会拆除清单文件并（可选�
 
 | 要求 | 详情 |
 |-------------|---------|
-| **Go 1.24+** | 用于构建 atlas-proxy |
+| **Go 1.26.2+** | 用于构建 atlas-proxy 和 atlas-tui 客户端（更老的 Go 工具链会自动拉取它） |
 | **llama.cpp** | 从源码编译并启用 CUDA（参见 [llama.cpp 构建说明](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)） |
 | **Node.js 20+** | 沙箱执行 JavaScript/TypeScript 所需 |
 | **Rust** | 沙箱执行 Rust 所需 |
@@ -569,7 +608,7 @@ atlas    # Checks atlas-proxy is reachable, then launches the TUI
 
 ## 方式 3：K3s
 
-用于生产环境的 Kubernetes 部署，支持 GPU 调度、健康探针和资源限制。
+支持 GPU 调度、健康探针和资源限制的 Kubernetes 部署。预览 (Preview) 级别 —— 模板在 CI 中校验并渲染；没有自动化的真实集群测试。
 
 ### 额外前置要求
 
@@ -665,7 +704,7 @@ ATLAS 把 GPU 划分为 5 个 tier，并为每个 tier 推荐一个注册表模�
 
 | Tier | 显存 | 推荐模型 | 上下文 | Slot 数 | 示例 GPU |
 |------|------|-------------------|--------:|------:|--------------|
-| **cpu** | 不适用 | v1 不支持 | 不适用 | 不适用 | （无 CUDA GPU） |
+| **cpu** | 不适用 | [仅 CPU 安装](#cpu-only) —— 预览 (Preview)，仅用于冒烟测试 | 不适用 | 不适用 | （无 GPU） |
 | **small** | 8–12 GB | Qwen3.5 7B Q4_K_M (4.4 GB) | 8K | 1 | RTX 3060/4060 8GB、T4 |
 | **medium** | 12–20 GB | Qwen3.5 9B Q6_K (6.9 GB) | 32K | 1 | RTX 4060/5060 Ti 16GB、3080 Ti、4070 Ti Super |
 | **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090、4090、5090 24GB |
@@ -696,25 +735,35 @@ medium tier 是 ATLAS 的开发目标 —— `atlas-bootstrap.sh` 默认使用�
 
 | 厂商 | 后端 | 状态 | 构建路径 | 已测试显卡 |
 |---|---|---|---|---|
-| NVIDIA | CUDA | 已发布 | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要开发用） |
-| AMD | ROCm / HIP | 已发布 | `inference/Dockerfile.rocm` | RX 7900 XTX（社区冒烟测试，[GH #26](https://github.com/itigges22/ATLAS/issues/26)） |
-| Apple Silicon | Metal | 已发布（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/itigges22/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
-| Intel Arc | SYCL | 路线图 | 待定 | Arc A770 16GB（目标） |
+| NVIDIA（Blackwell —— RTX 50xx、B100、GB10） | CUDA | 支持 (Supported)（已发布镜像） | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要开发用） |
+| NVIDIA（前 Blackwell —— RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4） | CUDA | 预览 (Preview) —— 需要一次性[本地重建](#cuda-计算能力-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上游 llama.cpp 支持这些卡；维护者未在 ATLAS 上验证） |
+| AMD | ROCm / HIP | 社区验证 (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（社区冒烟测试，[GH #26](https://github.com/itigges22/ATLAS/issues/26)） |
+| Apple Silicon | Metal | 支持（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/itigges22/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
+| 任意（跨厂商回退） | Vulkan | 预览 | `inference/Dockerfile.vulkan` | lavapipe（CPU ICD）已冒烟测试；尚无真实 GPU 验证 |
+| Intel Arc | SYCL | 路线图 (Roadmap) —— Intel Arc 目前走 Vulkan | 待定 | Arc A770 16GB（目标） |
 
 `atlas tier` 跨厂商自动检测并挑选显存最大的 GPU。如果有多块 GPU 而你想指定某一块，用 `ATLAS_GPU_VENDOR=amd` 或 `ATLAS_GPU_INDEX=1` 覆盖。
 
 #### CUDA 计算能力 (Dockerfile.v31)
 
-`inference/Dockerfile.v31` 针对特定的 CUDA 计算能力编译 llama.cpp。默认值为 `120;121`（Blackwell，RTX 50xx）。如果你遇到 `nvcc fatal: unsupported gpu architecture` 之类的构建失败，或 `no kernel image available for execution` 之类的运行时错误，说明你的 GPU 需要不同的架构值。
+`inference/Dockerfile.v31` 针对特定的 CUDA 计算能力编译 llama.cpp。默认值 —— 也是 GHCR 上发布的 `atlas-llama` 镜像所使用的值 —— **只有** `120;121`（Blackwell：RTX 50xx、B100、GB10）。发布的镜像不包含更早 GPU 的内核，其内嵌的 PTX 也无法向下 JIT 编译，因此在 RTX 20/30/40 系列、GTX 10xx 和前 Blackwell 数据中心卡（V100/A100/H100/T4/L4）上，llama-server 启动时会失败并报 `no kernel image is available for execution on the device`。你必须针对自己的架构一次性重建推理镜像。（本地构建若用了错误的架构值，会更早失败，报 `nvcc fatal: unsupported gpu architecture`。）
 
-构建时用 `--build-arg CUDA_ARCH=<value>` 覆盖：
+先查出你 GPU 的架构值，再用 `--build-arg CUDA_ARCH=<value>` 重建：
 
 ```bash
-# Single arch — RTX 4060/4070/4080/4090 (Ada Lovelace)
+# Your GPU's compute capability (drop the dot: 8.9 -> 89)
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+
+# Compose-native rebuild — only llama-server is rebuilt, the other
+# services keep using the GHCR images (~30-75 min, one time):
+docker compose build --build-arg CUDA_ARCH=89 llama-server
+docker compose up -d --no-deps llama-server
+
+# Or build the image directly:
 podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
 
 # Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
-podman build --build-arg CUDA_ARCH="86;89;90" -f inference/Dockerfile.v31 -t llama-server:local inference/
+docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 ```
 
 常见取值：
@@ -728,8 +777,6 @@ podman build --build-arg CUDA_ARCH="86;89;90" -f inference/Dockerfile.v31 -t lla
 | `89` | Ada Lovelace | RTX 40xx、L4 |
 | `90` | Hopper | H100 |
 | `100`, `120`, `121` | Blackwell | B100、RTX 50xx |
-
-查询你 GPU 的计算能力：`nvidia-smi --query-gpu=compute_cap --format=csv`（去掉小数点 —— `8.9` → `89`）。
 
 #### AMD GPU 目标 (Dockerfile.rocm)
 

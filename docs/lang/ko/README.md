@@ -1,3 +1,4 @@
+<!-- source: README.md synced-through: WORKING-TREE-2026-07-08 -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[日本語](../ja/README.md)** | **한국어**
 
 <p align="center">
@@ -12,6 +13,14 @@
   <img src="https://img.shields.io/badge/version-V3.1.3-blue" alt="버전"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="라이선스"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="모델 독립적"/>
+</p>
+
+<p align="center">
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/test.yml?branch=main&label=tests" alt="테스트"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/install-test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/install-test.yml?branch=main&label=install%20matrix" alt="설치 매트릭스"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/codeql.yml?branch=main&label=codeql" alt="CodeQL"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/container-scan.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/container-scan.yml?label=container%20scan" alt="컨테이너 스캔"/></a>
+  <a href="https://github.com/itigges22/ATLAS/actions/workflows/verify-tags.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/verify-tags.yml?label=release%20signature" alt="릴리스 서명"/></a>
 </p>
 
 
@@ -41,11 +50,15 @@
 
 ## ⭐ Star History
 
-<a href="https://www.star-history.com/?type=date&repos=itigges22%2Fatlas">
+<!-- Self-hosted chart: rendered weekly by .github/workflows/star-chart.yml
+     onto the `star-history` asset branch (scripts/star-history-chart.py).
+     Replaces the star-history.com embed, whose shared token pool
+     rate-limits unpredictably. -->
+<a href="https://github.com/itigges22/ATLAS/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=itigges22/atlas&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" />
+   <img alt="Star history chart" src="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" width="100%" />
  </picture>
 </a>
 
@@ -119,7 +132,7 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | VRAM 16GB 이상. NVIDIA (CUDA), AMD (ROCm), 또는 Apple Silicon (Metal, macOS 하이브리드); 그 외 대부분의 GPU는 Vulkan으로 커버됩니다. [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus) 참고. 특정 모델이 본인 카드에 맞는지 가늠하려면 [내 GPU에는 무엇이 들어가는가?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)를 참고하세요. |
+| GPU | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported)), AMD (ROCm, 커뮤니티 검증(Community-tested)), 또는 Apple Silicon (Metal, macOS 하이브리드, 지원); 그 외 대부분의 GPU는 Vulkan(프리뷰(Preview))으로 커버됩니다. 사전 빌드된 CUDA 이미지는 Blackwell(RTX 50xx)을 대상으로 하며, 구형 NVIDIA GPU는 일회성 로컬 재빌드가 필요합니다([SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31) 참고). 지원 수준: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md); GPU 목록: [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus). 특정 모델이 본인 카드에 맞는지 가늠하려면 [내 GPU에는 무엇이 들어가는가?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)를 참고하세요. |
 | 런타임 | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 단독 Docker로 충분) 또는 Podman |
 | Python | 3.9 이상 |
 | 디스크 | 약 20GB CUDA / 약 22GB ROCm (모델 가중치 + 컨테이너 이미지) |
@@ -130,7 +143,7 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 ## ⚠️ 알려진 제한 사항
 
-- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA, AMD ROCm, Vulkan Docker 경로는 현재 제공됩니다. Apple Silicon은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/itigges22/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵에 있습니다.
+- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/itigges22/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md).
 - **현재 레지스트리 모델은 아직 공식 벤치마크 전입니다.** 대표 수치인 74.6% LiveCodeBench 점수는 동결된 14B 레퍼런스 빌드 기준입니다. 새로운 모델별 수치는 [#28](https://github.com/itigges22/ATLAS/issues/28)에서 추적합니다. 레퍼런스 방법론과 어블레이션은 [`docs/reports/V3_ABLATION_STUDY.md`](../../reports/V3_ABLATION_STUDY.md)에, 원시 트레이스는 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)에 있습니다.
 - **복잡한 기능 추가는 일관성이 떨어질 수 있습니다.** 콤팩트 모델은 코드를 쓰기 전에 낯선 코드베이스 탐색으로 에이전트 턴을 소비하기도 합니다. V3.1.2의 에이전트 신뢰성 정비로 안정성이 개선되었으며, 최신 모델별 수치는 [#28](https://github.com/itigges22/ATLAS/issues/28)에서 추적합니다.
 - **문법 제약 디코딩이 느립니다.** llama-server에서 약 51 tok/s.

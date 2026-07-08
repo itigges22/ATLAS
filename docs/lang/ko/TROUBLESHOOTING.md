@@ -1,3 +1,4 @@
+<!-- source: docs/TROUBLESHOOTING.md synced-through: WORKING-TREE-2026-07-08 -->
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
 
 > ℹ️ 영어 원본([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
@@ -33,11 +34,68 @@ docker compose logs --tail 50
   "lens_ready": true,
   "sandbox": true,
   "port": "8090",
+  "capabilities": ["demo_raw_completion_v1"],
   "stats": { "requests": 0, "repairs": 0, "sandbox_passes": 0, "sandbox_fails": 0 }
 }
 ```
 
 어떤 필드라도 `false`이면 해당 서비스가 문제입니다. `inference`, `lens`, `lens_ready`, `sandbox` 중 하나라도 false이면 `status`가 `"degraded"`로 바뀝니다. `lens`와 `lens_ready`의 구분 덕분에 "Lens 프로세스는 떠 있지만 `/ready` 게이트가 실패 중 — 보통 가중치 누락이나 임베딩 차원 불일치"인 경우와 "Lens HTTP에 아예 접근 불가"인 경우를 구별할 수 있습니다.
+
+---
+
+## 오류로 찾기
+
+정확한 오류 문자열과 증상을 해당 항목에 매핑했습니다.
+
+| 보이는 증상 | 이동 |
+|---|---|
+| `no kernel image is available for execution on the device` — NVIDIA GPU | [`no kernel image is available for execution on the device` (CUDA)](#no-kernel-image-is-available-for-execution-on-the-device-cuda) |
+| `no kernel image is available for execution on the device` — AMD GPU | [ROCm이 "미지원"이라는 AMD GPU에서…](#rocm이-미지원이라는-amd-gpu에서-그래도-시도해-보고-싶을-때-rocm의-no-kernel-image) |
+| `invalid device function` 또는 `nvcc fatal: unsupported gpu architecture` | [`no kernel image…` (CUDA)](#no-kernel-image-is-available-for-execution-on-the-device-cuda) |
+| `libnvidia-ml.so.1: cannot open shared object file` | [libnvidia-ml.so.1 항목](#libnvidia-mlso1-cannot-open-shared-object-file) |
+| 컨테이너에서 GPU가 보이지 않음; 모델이 CPU에서 실행됨 | [컨테이너에서 GPU가 감지되지 않음](#컨테이너에서-gpu가-감지되지-않음) |
+| `/dev/kfd: no such file or directory` | [AMD GPU가 감지되지 않음 (ROCm)](#amd-gpu가-감지되지-않음-rocm) |
+| `/dev/kfd`에 대한 `Permission denied` | [AMD GPU는 감지되는데 Docker가 접근하지 못함](#amd-gpu는-감지되는데-docker가-접근하지-못함) |
+| `error: AMDGPU target 'gfx1201' is not supported` | [RDNA4 — ROCm 7.x 필요](#rdna4-rx-9070--9070-xt-gfx1200--gfx1201--rocm-7x-필요) |
+| ROCm 이미지 pull이 타임아웃 / 속도 제한에 걸림 | [ROCm 컨테이너가 `rocm/rocm-terminal`을 pull하지 못함](#rocm-컨테이너가-rocmrocm-terminal을-pull하지-못함) |
+| `docker compose build`가 CUDA 오류로 실패 | [첫 빌드 실패 (CUDA를 찾을 수 없음)](#첫-빌드-실패-cuda를-찾을-수-없음) |
+| `RPC failed; curl 56` / `early EOF` / `fetch-pack: invalid index-pack output` | [llama.cpp 클론 타임아웃](#llamacpp-클론-타임아웃) |
+| `error loading model: unknown (model) architecture '…'` | [llama.cpp 재빌드](#llamacpp-재빌드-새-모델-아키텍처-또는-패치-드리프트) |
+| `error: patch failed:` / `patch does not apply` | [llama.cpp 재빌드](#llamacpp-재빌드-새-모델-아키텍처-또는-패치-드리프트) |
+| 마운트된 볼륨 / 모델 파일에 대한 권한 거부 (Fedora/RHEL) | [SELinux가 컨테이너 접근을 차단함](#selinux가-컨테이너-접근을-차단함-fedorarhel) |
+| 프록시 헬스에 `"sandbox": false` (수동 컨테이너 설정) | [Sandbox에 연결할 수 없음](#sandbox에-연결할-수-없음) |
+| 프록시 헬스에 `"sandbox": false` (Compose 스택) | [Sandbox에 연결할 수 없음 (헬스 체크)](#sandbox에-연결할-수-없음-헬스-체크) |
+| 시작 시 `address already in use` | [포트 충돌](#포트-충돌) |
+| "fitting params to device memory" 이후 CUDA 할당 오류 | [모델 + KV 캐시가 GPU에 들어가지 않음](#모델--kv-캐시가-gpu에-들어가지-않음-시작-실패-또는-생성이-5배-느림) |
+| 생성이 ~2 tok/s, llama-server가 CPU 코어를 소모 | [모델 + KV 캐시가 GPU에 들어가지 않음](#모델--kv-캐시가-gpu에-들어가지-않음-시작-실패-또는-생성이-5배-느림) / [느린 생성 속도](#느린-생성-속도-2-toks) |
+| 다운로드 전 모델 사이징 | [내 GPU에는 무엇이 들어가는가?](#내-gpu에는-무엇이-들어가는가) |
+| 시작 시 `failed to load model` | [모델 파일을 찾을 수 없음](#모델-파일을-찾을-수-없음) |
+| llama-server 크래시 / OOMKilled, VRAM이 거의 100% | [VRAM 부족](#vram-부족) |
+| 모델이 JSON 도구 호출 대신 `<think>` 태그나 산문을 출력 | [문법이 강제되지 않음](#문법이-강제되지-않음-모델이-사고-블록을-출력함) |
+| Gemma가 아무것도 하지 않고 `done`만 반복 방출 | [문법이 강제되지 않음](#문법이-강제되지-않음-모델이-사고-블록을-출력함) |
+| 도구 호출에서 `unexpected end of JSON` | [컨텍스트 윈도우가 너무 작음](#컨텍스트-윈도우가-너무-작음) / [잘림 오류](#잘림-오류-write_file이-반복적으로-실패) |
+| 도구 호출도 V3도 없음 — 요청이 그대로 통과 | [에이전트 루프가 활성화되지 않음](#에이전트-루프가-활성화되지-않음) |
+| 쓰기/편집이 V3 단계를 전혀 유발하지 않음 | [V3 파이프라인이 기능 파일에서 실행되지 않음](#v3-파이프라인이-기능-파일에서-실행되지-않음) |
+| `Your output was truncated — the content is too long for a single tool call` | [잘림 오류](#잘림-오류-write_file이-반복적으로-실패) |
+| `Tool call was truncated (output too long for context window)` | [잘림 오류](#잘림-오류-write_file이-반복적으로-실패) |
+| 도구 결과와 다음 동작 사이 ~30초의 공백 | [도구 결과와 다음 동작 사이의 긴 정지](#도구-결과와-다음-동작-사이의-긴-정지) |
+| 수정이 검증된 후에도 에이전트가 계속 편집함 | [V3가 이미 수정을 확인했는데 모델이 계속 편집함](#v3가-이미-수정을-확인했는데-모델이-계속-편집함) |
+| 첫 도구 호출이 여기 존재하지 않는 파일을 읽음 | [모델이 이전 세션의 파일명을 환각함](#모델이-이전-세션의-파일명을-환각함) |
+| V3 검증 중에만 `ModuleNotFoundError` | [다중 파일 프로젝트: 샌드박스 `ModuleNotFoundError`](#다중-파일-프로젝트-샌드박스-modulenotfounderror) |
+| `_curses.error: addwstr() returned ERR` | [Curses 하단 행 `addwstr() returned ERR`](#curses-하단-행-addwstr-returned-err) |
+| HTML/CSS/JSON 파일 작성 시 ~5분의 정지 | [비 Python 파일에서 V3가 수 분간 멈춤](#비-python-파일에서-v3가-수-분간-멈춤) |
+| 짧은 후속 요청("ok", "yes")이 동작 대신 채팅을 받음 | ["다시 고쳐줘" 프롬프트에서 V3 파이프라인이 실행되지 않음](#다시-고쳐줘-프롬프트에서-v3-파이프라인이-실행되지-않음) |
+| `file not read yet — use read_file first before editing` | [편집 전에 파일을 읽지 않음](#편집-전에-파일을-읽지-않음) |
+| `file modified since last read — read it again before editing` | [외부에서 파일이 수정됨](#외부에서-파일이-수정됨) |
+| `You have full project context in the system prompt. Do not read more files.` | [탐색 예산 경고](#탐색-예산-경고) |
+| `"lens": false` / "Lens unavailable — verification disabled" | [Lens가 로드되지 않음 / 사용 불가](#lens가-로드되지-않음--사용-불가) |
+| 모든 후보가 `cx_energy: 0.0`, `gx_score: 0.5`를 받음 | [모든 점수가 0.5 부근](#모든-점수가-05-부근) |
+| lens 로그에 "embedding extraction failed" | [임베딩 추출 실패](#임베딩-추출-실패) |
+| 재학습 시 503 `models directory is mounted read-only` | [`/internal/lens/retrain`이 503을 반환](#internallensretrain이-503-models-directory-is-mounted-read-only를-반환) |
+| 샌드박스가 `"error_type": "Timeout"`을 반환 | [코드 실행 타임아웃](#코드-실행-타임아웃) |
+| 특정 언어에서 샌드박스 오류 | [지원되지 않는 언어](#지원되지-않는-언어) |
+| `--tasks`보다 작은 `LIMITED MODE: running N tasks` | [bench가 요청보다 적은 태스크만 실행함](#bench가-요청보다-적은-태스크만-실행함-limited-mode-running-n-tasks의-n이---tasks보다-작음) |
+| 시스템이 느려지고 서비스가 OOMKilled됨 | [높은 RAM 사용량](#높은-ram-사용량) |
 
 ---
 
@@ -188,9 +246,9 @@ id -nG | grep -E 'render.*video|video.*render'
 atlas doctor
 ```
 
-### ROCm이 "미지원"이라는 AMD GPU에서 그래도 시도해 보고 싶을 때
+### ROCm이 "미지원"이라는 AMD GPU에서 그래도 시도해 보고 싶을 때 (ROCm의 `no kernel image`)
 
-**증상:** `rocm-smi`는 GPU를 보고하지만 `rocminfo`는 보고하지 않거나, HIP 커널이 "no kernel image is available for execution on the device"로 실패합니다.
+**증상:** `rocm-smi`는 GPU를 보고하지만 `rocminfo`는 보고하지 않거나, HIP 커널이 "no kernel image is available for execution on the device"로 실패합니다. (NVIDIA에서 같은 오류가 나는 경우는 [CUDA 항목](#no-kernel-image-is-available-for-execution-on-the-device-cuda)을 참고하세요.)
 
 **의미:** llama.cpp의 HIP 커널이 본인 GPU를 포함하지 않는 `gfx` 타깃으로 컴파일되었습니다. ROCm은 구형 소비자용 GPU를 공식 지원에서 제외하면서도 적절한 오버라이드로는 여전히 동작하게 두는 패턴이 오래됐습니다.
 
@@ -242,18 +300,24 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 
 **의미:** ROCm 이미지는 크고(~2GB) Docker Hub는 익명 pull에 속도 제한을 겁니다.
 
-**해결:** 인증하거나(무료 Docker Hub 계정도 더 높은 제한 허용), 한산한 시간대에 pull하거나, `.env`에서 특정 태그에 고정하세요:
+**해결:** 인증한 뒤(무료 Docker Hub 계정도 더 높은 제한 허용) doctor의 점검 이미지를 미리 pull하거나, 한산한 시간대에 재시도하세요:
 
 ```bash
 docker login
-ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f docker-compose.rocm.yml pull
+docker pull rocm/rocm-terminal:latest
+```
+
+doctor의 ROCm 점검은 항상 `rocm/rocm-terminal:latest`를 사용합니다. `ATLAS_ROCM_TAG`는 doctor의 점검 이미지가 아니라 llama-server ROCm 빌드의 *빌드 베이스* 이미지(`rocm/dev-ubuntu-*`)를 고정합니다:
+
+```bash
+ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
 ```
 
 ### 첫 빌드 실패 (CUDA를 찾을 수 없음)
 
 **증상:** llama-server 컴파일 중 `docker compose build`가 CUDA 관련 오류로 실패합니다.
 
-**해결:** llama-server Dockerfile은 `nvidia/cuda:12.8.0-devel` 베이스 이미지 안에서 llama.cpp를 빌드하므로, 호스트 GPU 접근 없이도 빌드 시 CUDA 헤더를 사용할 수 있습니다. 빌드 실패의 일반적인 원인:
+**해결:** llama-server Dockerfile은 `nvidia/cuda:12.9.0-devel` 베이스 이미지(`inference/Dockerfile.v31`에 다이제스트 고정) 안에서 llama.cpp를 빌드하므로, 호스트 GPU 접근 없이도 빌드 시 CUDA 헤더를 사용할 수 있습니다. 빌드 실패의 일반적인 원인:
 1. 디스크 공간 부족 (빌드 아티팩트에 약 5GB 필요)
 2. CUDA 베이스 이미지 다운로드 또는 llama.cpp 클론 시 네트워크 문제
 3. Podman rootless 빌드가 권한 문제로 실패할 수 있음 — `podman-compose build`에 `--podman-build-args="--format docker"`를 추가해 보세요
@@ -268,15 +332,18 @@ fatal: early EOF
 fatal: fetch-pack: invalid index-pack output
 ```
 
-**원인:** llama.cpp의 전체 git 이력은 크고(~1GB) 클론은 불안정하거나 느린 회선에 민감합니다. 순간적인 정체가 SSL read 타임아웃을 유발해 전체 전송이 중단됩니다.
+**원인:** llama.cpp의 전체 git 이력은 크고(~1GB) fetch는 불안정하거나 느린 회선에 민감합니다. 순간적인 정체가 SSL read 타임아웃을 유발해 전체 전송이 중단됩니다.
 
-**해결:** `inference/Dockerfile.v31`은 `git clone --depth 1 --single-branch`에 `http.postBuffer=524288000`과 `http.lowSpeedLimit/Time`을 함께 사용해 죽은 연결에서 빠르게 실패합니다. 구형 Dockerfile을 쓰고 있거나 문제가 재발하면:
+**해결:** `inference/Dockerfile.v31`은 `git init` + 고정된 단일 리비전(`LLAMA_CPP_REV`)의 `--depth 1` fetch를 사용해 ~1GB의 전체 이력 전송을 회피하며, `http.postBuffer=524288000`과 `http.lowSpeedLimit/Time`으로 죽은 연결에서 빠르게 실패합니다. 문제가 재발하면:
 
 1. 빌드를 재시도하세요 — 특히 가정용 회선에서는 일시적 네트워크 문제가 흔합니다.
-2. 재시도가 계속 실패하면 호스트에서 저장소를 미리 받아 빌드 컨텍스트에 바인드 마운트하세요. 간단한 레시피:
+2. 재시도가 계속 실패하면 호스트에서 고정된 리비전을 미리 받아 Dockerfile이 COPY하도록 수정하세요. 간단한 레시피:
    ```bash
-   git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
-   # then edit Dockerfile.v31 to COPY from /tmp/llama.cpp instead of cloning
+   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' inference/Dockerfile.v31 | cut -d= -f2)
+   git init /tmp/llama.cpp && cd /tmp/llama.cpp
+   git remote add origin https://github.com/ggml-org/llama.cpp
+   git fetch --depth 1 origin "$REV" && git checkout FETCH_HEAD
+   # then edit Dockerfile.v31 to COPY from /tmp/llama.cpp instead of fetching
    ```
 3. GHCR의 사전 빌드된 llama-server 이미지는 이 단계를 완전히 건너뜁니다 — 빌드 대신 pull하세요.
 
@@ -301,7 +368,7 @@ fatal: fetch-pack: invalid index-pack output
    ```
    (`git apply`되는 것은 이 패치뿐입니다. spec-decode 임베딩 수정은 Dockerfile의 `sed`이며, 대상 줄이 없으면 no-op입니다.)
 2. **깔끔하게 적용되면:** 네 Dockerfile 모두에서 `LLAMA_CPP_REV`를 새 SHA로 올리세요. CI 스모크 테스트가 이들이 일치하는지 검증합니다.
-3. **실패하면:** `git apply --reject …`로 깔끔한 헝크를 적용하고, 각 `*.rej` 헝크를 옮겨진 앵커 위치에 다시 삽입한 뒤(주변 코드의 업스트림 이름 변경에 주의 — 예: `model` → `model_tgt` — 패치의 추가 줄도 갱신), `git diff > $REPO/inference/patches/expose-hidden-states.patch`를 실행하세요. 1단계를 다시 실행하세요. 긴 CUDA 빌드 전에 멤버/타입 오류를 잡으려면 변경된 파일만 CPU 전용으로 컴파일하세요: `cmake -B build-cpu -DGGML_CUDA=OFF && make -C build-cpu server-context`.
+3. **실패하면:** `git apply --reject …`로 깔끔한 헝크를 적용하고, 각 `*.rej` 헝크를 옮겨진 앵커 위치에 다시 삽입한 뒤(주변 코드의 업스트림 이름 변경에 주의 — 예: `model` → `model_tgt` — 패치의 추가 줄도 갱신), `git diff > $REPO/inference/patches/expose-hidden-states.patch`를 실행하세요. 1단계를 다시 실행하세요. 긴 CUDA 빌드 전에 멤버/타입 오류를 잡으려면 서버 타깃만 CPU 전용으로 컴파일하세요: `cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`.
 4. 재빌드 후 기동:
    ```bash
    docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server
@@ -353,13 +420,64 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 
 ## llama-server 문제
 
+### `no kernel image is available for execution on the device` (CUDA)
+
+**해당 대상:** 사전 빌드된 `ghcr.io/itigges22/atlas-llama` 이미지를 실행하는,
+Blackwell보다 오래된 NVIDIA GPU — RTX 40xx (Ada), RTX 30xx (Ampere),
+RTX 20xx / T4 (Turing), GTX 10xx (Pascal), V100/A100/H100/L4.
+형제 오류인 `invalid device function`(런타임)과
+`nvcc fatal: unsupported gpu architecture`(로컬 빌드)도 원인이 같습니다.
+(AMD에서 같은 오류가 나는 경우는 [ROCm 항목](#rocm이-미지원이라는-amd-gpu에서-그래도-시도해-보고-싶을-때-rocm의-no-kernel-image)을 참고하세요.)
+
+**의미:** 게시된 CUDA 이미지는 컴퓨트 캐퍼빌리티 `120;121`(Blackwell 전용)로
+컴파일되어 있습니다. llama-server 바이너리에는 이전 아키텍처용 GPU 커널이
+없고, 내장된 PTX(`compute_121`)는 하위 방향으로 JIT 컴파일될 수 없으므로,
+첫 CUDA 커널 실행이 실패합니다. 드라이버나 VRAM 문제가 아니라 이미지/GPU
+불일치입니다.
+
+**먼저 확인:**
+```bash
+# Your GPU's compute capability (8.9 = Ada, 8.6 = Ampere, 7.5 = Turing, 12.0 = Blackwell)
+nvidia-smi --query-gpu=name,compute_cap --format=csv
+# What the image was built for (Blackwell-only image prints sm_120/sm_121)
+docker run --rm --entrypoint bash ghcr.io/itigges22/atlas-llama:latest \
+  -c 'grep -ao "sm_[0-9]*" /usr/local/bin/llama-server | sort -u'
+```
+본인 컴퓨트 캐퍼빌리티가 12.0 미만이고 이미지가 `sm_120`/`sm_121`만
+나열한다면 이 항목이 해당합니다.
+
+**해결 — 본인 아키텍처에 맞춰 추론 이미지를 재빌드하세요** (일회성,
+~30-75분; llama-server만 재빌드되고 다른 서비스는 GHCR 이미지를 계속
+사용합니다). 컴퓨트 캐퍼빌리티에서 점을 제거하세요(`8.6` -> `86`):
+```bash
+docker compose build --build-arg CUDA_ARCH=86 llama-server
+docker compose up -d --no-deps llama-server
+```
+GPU가 여러 종류이거나 이식성이 필요하면 세미콜론 목록을 전달하세요. 예:
+`--build-arg CUDA_ARCH="75;86;89"`. 전체 아치 표:
+[SETUP.md § CUDA 컴퓨트 캐퍼빌리티](../ko/SETUP.md#cuda-컴퓨트-캐퍼빌리티-dockerfilev31).
+
+**확인:**
+```bash
+docker compose logs llama-server | tail -20   # model loads, no CUDA errors
+curl -s localhost:8080/health                  # {"status":"ok"}
+```
+
+**여전히 실패한다면:** 컨테이너가 실제로 재빌드한 이미지를 실행 중인지
+확인하세요(`docker compose images llama-server` — `docker compose pull`이
+덮어썼을 수 있습니다; `ATLAS_IMAGE_TAG`를 고정하거나 빌드를 다시
+실행하세요). Pascal(`60`/`61`) 및 그 이전은 업스트림 llama.cpp CUDA 지원의
+제약을 받습니다 — 폴백은 Vulkan 이미지(`docker-compose.vulkan.yml`)입니다.
+그래도 안 되면 `nvidia-smi` 출력과 llama-server 로그 첫 50줄을 첨부해
+이슈를 열어 주세요.
+
 ### 모델이 GPU 대신 CPU에서 로드됨
 
 **증상:** 약 50 tok/s 대신 약 2 tok/s로 생성됩니다. `nvidia-smi`에 llama-server가 GPU 사용 프로세스로 보이지 않습니다.
 
-**해결:** `--n-gpu-layers 99`가 설정되어 있는지 확인하세요(모든 레이어를 GPU로 오프로드). Docker Compose에서는 기본값입니다. 베어메탈이라면 명령을 확인하세요:
+**해결:** `-ngl 99`(`--n-gpu-layers`)가 설정되어 있는지 확인하세요(모든 레이어를 GPU로 오프로드). Docker Compose에서는 엔트리포인트가 기본으로 설정합니다. 베어메탈이라면 명령을 확인하세요:
 ```bash
-ps aux | grep llama-server | grep 'n-gpu-layers'
+ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 Docker를 사용 중이라면 NVIDIA 컨테이너 런타임이 설정되어 있는지 확인하세요(위의 GPU 섹션 참고).
@@ -413,7 +531,7 @@ HuggingFace 모델 페이지에는 양자화별 파일 크기가 표시됩니다
 # Docker Compose — model must be in ATLAS_MODELS_DIR (default: ./models/)
 ls -la "models/$ATLAS_MODEL_FILE"
 
-# Bare metal — check ATLAS_MODEL_PATH
+# Bare metal — check ATLAS_MODELS_DIR + ATLAS_MODEL_FILE
 ls -la "$ATLAS_MODELS_DIR/$ATLAS_MODEL_FILE"
 ```
 
@@ -437,7 +555,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **증상:** 모델이 JSON 도구 호출 대신 `<think>` 태그나 일반 텍스트를 출력합니다.
 
-**해결:** 프록시는 `/v1/agent` 에이전트 루프 핸들러 안에서 자동으로 `response_format: {"type": "json_object"}`를 설정합니다 — 무조건적이며 환경 변수 토글이 없습니다. llama-server를 `/v1/chat/completions`나 `/v1/completions`로 직접 호출하는 경우에는 파라미터를 직접 포함해야 합니다:
+**해결:** 프록시는 `/v1/agent` 에이전트 루프 핸들러 안에서 자동으로 `response_format`을 설정합니다. 그 형태는 `ATLAS_GRAMMAR_MODE`가 결정합니다: 기본값 `strict`는 `{"type":"json_object","schema":<full tool-call schema>}`를 전송해 llama-server의 GBNF 샘플러가 tool_call/text/done 유니언만 방출할 수 있게 하고, `ATLAS_GRAMMAR_MODE=loose`는 `{"type":"json_object"}`만 전송합니다(유효한 JSON이되 형태는 강제하지 않음) — 스키마→GBNF 변환을 잘 다루지 못하는 모델을 위한 탈출구입니다(Gemma 계열 모델은 `loose`가 필요합니다 — strict 모드에서는 done만 반복 방출합니다). llama-server를 `/v1/chat/completions`나 `/v1/completions`로 직접 호출하는 경우에는 파라미터를 직접 포함해야 합니다:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -453,7 +571,7 @@ JSON 대신 일반 텍스트가 반환되면 llama.cpp 빌드가 `response_forma
 
 ### 컨텍스트 윈도우가 너무 작음
 
-**증상:** 도구 호출 인자가 잘립니다. `write_file`이 "unexpected end of JSON"으로 실패하거나 프록시 로그에 "truncation detected"가 표시됩니다.
+**증상:** 도구 호출 인자가 잘립니다. 도구 결과에 "Tool call was truncated (output too long for context window)" / "Your output was truncated — the content is too long for a single tool call"이 실리거나, 프록시 로그에 `truncated args detected for <tool> at turn N`이 표시됩니다.
 
 **해결:** 슬롯당 컨텍스트(`ATLAS_CTX_SIZE` ÷ `ATLAS_PARALLEL_SLOTS`; compose 기본값 131072 ÷ 4 = 슬롯당 32k)가 작업에 비해 너무 작을 수 있습니다. `atlas tier fit`이 GPU가 지원하는 최대 예산을 보여줍니다. 확인:
 ```bash
@@ -544,7 +662,7 @@ docker compose restart atlas-proxy llama-server
 
 **무슨 일인가:** llama.cpp의 KV 슬롯은 캐시를 따뜻하게 유지하기 위해 챗 컴플리션 사이에 유지됩니다. 세션을 넘어, 이전 세션 토큰의 잔여 어텐션 편향이 조작된 파일명 같은 저엔트로피 출력으로 샐 수 있습니다.
 
-**할 일:** 모든 사용자 턴은 llama 슬롯 0을 지우는 것으로 시작해, 다음 컴플리션이 시스템 프롬프트를 새로 인코딩하게 합니다(따뜻한 GPU에서 ~1-2초). 캐시를 완전히 따뜻하게 유지하고 싶어 세션별 삭제를 끄려면:
+**할 일:** 모든 사용자 턴은 llama KV 슬롯 **전체**를 지우는 것으로 시작해(`--parallel` > 1이면 세션이 어느 슬롯에나 배정될 수 있으므로), 다음 컴플리션이 시스템 프롬프트를 새로 인코딩하게 합니다(따뜻한 GPU에서 ~1-2초). 캐시를 완전히 따뜻하게 유지하고 싶어 세션별 삭제를 끄려면:
 ```bash
 # .env
 ATLAS_FRESH_SLOT_PER_SESSION=0
@@ -661,21 +779,21 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **증상:** Lens 로그에 "embedding extraction failed" 같은 오류나 타임아웃이 표시됩니다.
 
-**원인:** Lens는 llama-server의 `/v1/embeddings` 엔드포인트를 호출합니다. llama-server에 과부하가 걸리거나 엔드포인트가 활성화되지 않으면 실패합니다.
+**원인:** Lens는 llama-server의 네이티브 `/embedding` 엔드포인트를 호출합니다. llama-server에 과부하가 걸리거나 임베딩이 활성화되지 않으면 실패합니다.
 
 **해결:**
 ```bash
-# Test embedding endpoint directly
-curl -s http://localhost:8080/v1/embeddings \
+# Test the native embedding endpoint directly
+curl -s http://localhost:8080/embedding \
   -H "Content-Type: application/json" \
-  -d '{"input": "test"}' | python3 -m json.tool
+  -d '{"content": "test"}' | python3 -m json.tool
 ```
 
-`/v1/embeddings` 엔드포인트는 생성 모델의 셀프 임베딩에 대해 특별한 플래그 없이 llama.cpp에서 사용 가능합니다. K3s에서는 전체 임베딩 지원을 위해 엔트리포인트에 `--embeddings` 플래그가 명시적으로 설정됩니다.
+`--embeddings` 플래그는 모든 배포 모드(Compose, 베어메탈, K3s)에서 llama-server 엔트리포인트가 설정합니다 — Geometric Lens가 셀프 임베딩에 의존하므로 항상 켜져 있습니다. 레이어별 hidden-states 확장을 실어 나르는 것도 네이티브 `/embedding` 경로입니다(`/v1/embeddings`가 아님).
 
 ### `/internal/lens/retrain`이 503 "models directory is mounted read-only"를 반환
 
-**증상:** lens 서비스에 `/internal/lens/retrain`을 POST하면 `"reason": "models directory is mounted read-only; run host-side retrain via atlas lens retrain"`과 함께 HTTP 503이 반환됩니다.
+**증상:** lens 서비스에 `/internal/lens/retrain`을 POST하면 ``"reason": "models directory is mounted read-only; run host-side retrain via `atlas lens retrain`"``과 함께 HTTP 503이 반환됩니다.
 
 **원인:** 표준 Compose 배포는 lens 모델 디렉토리를 읽기 전용(`:ro`)으로 컨테이너에 마운트하므로, 서비스 내 재학습 엔드포인트가 새 가중치를 쓸 수 없습니다. 엔드포인트는 학습 전에 쓰기 가능 여부를 탐침하고, 학습 실행을 낭비하는 대신 처음부터 거부합니다.
 
@@ -685,7 +803,7 @@ curl -s http://localhost:8080/v1/embeddings \
 
 ## Sandbox 문제
 
-### Sandbox에 연결할 수 없음
+### Sandbox에 연결할 수 없음 (헬스 체크)
 
 **증상:** 코드가 전혀 테스트되지 않습니다. 프록시 헬스에 `"sandbox": false`가 표시됩니다.
 
@@ -715,7 +833,7 @@ docker compose logs sandbox
 
 **증상:** 특정 언어에 대해 샌드박스가 오류를 반환합니다.
 
-**지원 언어:** Python, JavaScript, TypeScript, Go, Rust, C, C++, Bash.
+**지원 언어(실행):** Python, JavaScript, TypeScript, Go, Rust, C, C++, Bash. 구문 전용 검사(`/syntax-check`, V3 스모크 체크)는 HTML, XML, JSON, YAML도 추가로 커버합니다.
 
 사용 가능한 런타임 확인:
 ```bash
@@ -728,7 +846,7 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 
 ### bench가 요청보다 적은 태스크만 실행함 (`LIMITED MODE: running N tasks`의 N이 `--tasks`보다 작음)
 
-**증상:** `atlas bench --tasks 200`이 `LIMITED MODE: running 100 tasks`(또는 요청보다 적은 수)를 보고하거나, 재개한 실행이 `Resuming: N/N complete, 0 remaining`을 출력하고 즉시 종료됩니다.
+**증상:** `atlas bench --tasks 200`이 `LIMITED MODE: running 100 tasks`(또는 요청보다 적은 수)를 보고하거나, 재개한 실행이 `Resuming: N/N tasks already done, 0 remaining`을 출력하고 즉시 종료됩니다.
 
 **원인:** LiveCodeBench 데이터셋 캐시(`benchmark/datasets/.cache/livecodebench_v5.jsonl`)가 부분 다운로드 상태입니다. HuggingFace rows API는 페이지네이션 도중 실패할 수 있으며, 이전 버전은 받은 만큼만 캐시하고 그 파일을 영구히 신뢰했습니다. release_v5의 전체 세트는 약 880개 태스크입니다.
 
@@ -745,7 +863,7 @@ atlas bench --run-id <your-run-id> --tasks 200
 
 모델이 GPU 대신 CPU에서 실행되고 있습니다. 확인:
 1. `nvidia-smi` — llama-server가 GPU 프로세스로 표시되는지
-2. `--n-gpu-layers 99` — 모든 레이어가 오프로드되었는지
+2. `-ngl 99`(`--n-gpu-layers`) — 모든 레이어가 오프로드되었는지
 3. NVIDIA Container Toolkit — 컨테이너 런타임이 GPU 접근용으로 설정되었는지
 
 **예상 성능:** RTX 5060 Ti 16GB에서 문법 강제 시 약 51 tok/s.
