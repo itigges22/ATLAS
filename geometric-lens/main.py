@@ -176,8 +176,11 @@ def _run_lens_self_test() -> None:
             cf_dim, len(emb), raw, norm, _BOOT_STATE["lens_gx_type"],
         )
     except Exception as e:
-        _BOOT_STATE["self_test_error"] = f"{type(e).__name__}: {e}"
-        logger.error("Lens self-test failed: %s", _BOOT_STATE["self_test_error"])
+        # _safe_detail logs the full exception (with correlation ID); the
+        # cached value that /health and /ready expose stays generic.
+        _BOOT_STATE["self_test_error"] = (
+            f"{type(e).__name__}: {_safe_detail(e, 'lens self-test')}"
+        )
 
 
 def _db_state() -> Dict[str, Any]:
@@ -185,15 +188,18 @@ def _db_state() -> Dict[str, Any]:
     task queue. Probes a real table (not SELECT 1) so a schema-less or
     broken file/volume shows up as connected=False rather than only
     failing on first write."""
-    import sqlite_store
+    from sqlite_store import DB_PATH
     try:
         pool = get_db_pool()
         with pool.get_connection() as conn:
             conn.execute("SELECT COUNT(*) FROM store_metadata")
-        return {"connected": True, "path": sqlite_store.DB_PATH}
+        return {"connected": True, "path": DB_PATH}
     except Exception as e:
-        return {"connected": False, "path": sqlite_store.DB_PATH,
-                "error": f"{type(e).__name__}: {e}"}
+        # Full exception goes to the service log via _safe_detail; the
+        # response keeps the connected/path/error keys (atlas doctor keys
+        # on `connected`) with a generic error value.
+        return {"connected": False, "path": DB_PATH,
+                "error": f"{type(e).__name__}: {_safe_detail(e, 'sqlite state probe')}"}
 
 
 def _llama_state() -> Dict[str, Any]:
@@ -203,7 +209,12 @@ def _llama_state() -> Dict[str, Any]:
             r = client.get(url)
         return {"reachable": r.status_code == 200, "status_code": r.status_code}
     except Exception as e:
-        return {"reachable": False, "error": f"{type(e).__name__}: {e}"}
+        # Routine while llama-server is down — log at warning without a
+        # traceback, and keep exception text out of the response.
+        logger.warning("llama-server health probe failed: %s: %s",
+                       type(e).__name__, _safe_log(e))
+        return {"reachable": False,
+                "error": f"{type(e).__name__}: llama-server unreachable"}
 
 
 @asynccontextmanager
@@ -1027,7 +1038,23 @@ async def router_stats():
         from router.feedback_recorder import get_routing_stats
 
         thompson = get_all_thompson_states()
-        stats = get_routing_stats()
+        raw_stats = get_routing_stats()
+
+        # get_routing_stats() returns {"error": str(e)} on failure (it logs
+        # the full detail itself). Rebuild the payload from known keys so
+        # raw exception text never reaches the HTTP response.
+        if "error" in raw_stats:
+            stats: Dict[str, Any] = {
+                "error": "routing stats unavailable (see service log)",
+            }
+        else:
+            stats = {
+                "total_decisions": raw_stats.get("total_decisions"),
+                "total_successes": raw_stats.get("total_successes"),
+                "success_rate": raw_stats.get("success_rate"),
+                "route_distribution": raw_stats.get("route_distribution"),
+                "difficulty_distribution": raw_stats.get("difficulty_distribution"),
+            }
 
         return {
             "enabled": True,

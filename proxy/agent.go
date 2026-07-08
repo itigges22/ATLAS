@@ -931,8 +931,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// logs atlas-proxy` without having to attach a debugger.
 			// PC-039 follow-up.
 			if !result.Success {
-				log.Printf("[agent] turn=%d tool=%s FAIL: %s", turn,
-					safeLogField(parsed.Name, 64), safeLogField(result.Error, 240))
+				log.Printf("[agent] turn=%d tool=%q FAIL: %q", turn,
+					truncateStr(parsed.Name, 64), truncateStr(result.Error, 240))
 			}
 
 			// Force-stop after destructive operations that shouldn't have

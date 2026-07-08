@@ -45,8 +45,10 @@ class PatternStore:
                         VALUES ('version', 1)
                         ON CONFLICT(key) DO UPDATE SET value = value + 1
                     """)
-            except Exception:
-                pass
+            except Exception as e:
+                # Version bump is advisory (cache invalidation hint) — a
+                # failed write shouldn't fail the pattern operation.
+                logger.debug(f"Version bump failed: {e}")
 
     def store_pattern(self, pattern: Pattern, score: float = 0.0) -> bool:
         if not self._available:
@@ -217,8 +219,10 @@ class PatternStore:
                         VALUES (?, 1)
                         ON CONFLICT(key) DO UPDATE SET value = value + 1
                     """, (key,))
-            except Exception:
-                pass
+            except Exception as e:
+                # Stats counters are best-effort; never let bookkeeping
+                # break the cache path.
+                logger.debug(f"Stat increment '{key}' failed: {e}")
 
     def record_hit(self):
         self._incr_stat("hits")

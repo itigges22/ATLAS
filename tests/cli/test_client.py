@@ -77,9 +77,9 @@ def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
     the solve pipeline keeps one thinking-detection path."""
     events = [
         b'data: {"choices":[{"delta":{"reasoning_content":"pondering"},'
-        b'"finish_reason":null}]}\n',
+        + b'"finish_reason":null}]}\n',
         b'data: {"choices":[{"delta":{"content":"print(42)"},'
-        b'"finish_reason":null}]}\n',
+        + b'"finish_reason":null}]}\n',
         b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
         b'data: [DONE]\n',
     ]

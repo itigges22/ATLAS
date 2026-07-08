@@ -2720,14 +2720,14 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 		// Logged only when some other entry exists (first read of a file
 		// is the normal case and not worth a line).
 		if cacheEntries > 0 {
-			log.Printf("[read-dedup] no cache entry for %s (have %d entries) — serving real read", safeLogField(path, 240), cacheEntries)
+			log.Printf("[read-dedup] no cache entry for %q (have %d entries) — serving real read", truncateStr(path, 240), cacheEntries)
 		}
 		return nil
 	}
 	data, _, err := readWorkspaceFile(ctx, input.Path)
 	if err != nil || string(data) != prev {
 		if err == nil {
-			log.Printf("[read-dedup] %s changed on disk since last read (%dB -> %dB) — serving real read", safeLogField(path, 240), len(prev), len(data))
+			log.Printf("[read-dedup] %q changed on disk since last read (%dB -> %dB) — serving real read", truncateStr(path, 240), len(prev), len(data))
 		}
 		return nil // changed or unreadable — let the real read run
 	}
@@ -2740,7 +2740,7 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 	// function:count_items / old_str="return len(items)" against a file
 	// containing neither, reasoning "I don't see the file content."
 	if !fileContentInContext(ctx, prev) {
-		log.Printf("[read-dedup] %s content was trimmed from context — re-serving full read", safeLogField(path, 240))
+		log.Printf("[read-dedup] %q content was trimmed from context — re-serving full read", truncateStr(path, 240))
 		return nil
 	}
 	out := ReadFileOutput{

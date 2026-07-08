@@ -1,5 +1,6 @@
 """HTTP client for llama-server, geometric-lens, and sandbox. Pure urllib, no dependencies."""
 
+import contextlib
 import json
 import os
 import urllib.request
@@ -42,15 +43,15 @@ def check_llama() -> Tuple[bool, str]:
         _get(f"{INFERENCE_URL}/health")
     except Exception as e:
         return False, str(e)
-    try:
+    # Best-effort: /v1/models failing doesn't make the server unhealthy,
+    # it just leaves the model id unknown.
+    with contextlib.suppress(Exception):
         d = _get(f"{INFERENCE_URL}/v1/models")
         entries = d.get("data") or d.get("models") or []
         if entries:
             raw = entries[0].get("id") or entries[0].get("name") or ""
             if raw:
                 return True, os.path.basename(str(raw))
-    except Exception:
-        pass
     return True, "unknown"
 
 

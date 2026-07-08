@@ -136,7 +136,7 @@ func handlePermission(w http.ResponseWriter, r *http.Request) {
 	}
 	// Buffered channel (cap 1) + LoadAndDelete guarantees exactly one send.
 	entry.decision <- permDecision{allow: req.Decision == "allow", scope: req.Scope}
-	log.Printf("[permission] %s %s for session %q (scope %s)",
+	log.Printf("[permission] %q %q for session %q (scope %q)",
 		req.ToolCallID, req.Decision, req.SessionID, req.Scope)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"delivered": true})
 }

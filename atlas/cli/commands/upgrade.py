@@ -8,6 +8,7 @@ the orchestration; this module supplies the real Docker/health steps.
 """
 
 import argparse
+import contextlib
 import os
 import subprocess
 import sys
@@ -50,7 +51,7 @@ def _target_images(atlas_root: str, tag: str) -> List[str]:
     target tag. Falls back to the static list if compose can't answer."""
     refs: List[str] = []
     prefix = f"ghcr.io/{_OWNER}/"
-    try:
+    with contextlib.suppress(subprocess.SubprocessError, OSError):
         cmd = compose_config.command(atlas_root, ["config", "--images"])
         out = subprocess.check_output(cmd, cwd=atlas_root, text=True,
                                       timeout=60)
@@ -59,8 +60,6 @@ def _target_images(atlas_root: str, tag: str) -> List[str]:
             if line.startswith(prefix):
                 name = line[len(prefix):].split(":", 1)[0]
                 refs.append(f"{prefix}{name}:{tag}")
-    except (subprocess.SubprocessError, OSError):
-        pass
     return refs or [f"{prefix}{img}:{tag}" for img in _IMAGES]
 
 
@@ -179,12 +178,11 @@ def _readiness(atlas_root: str, timeout_s: int = 180) -> bool:
     url = compose_config.service_url("proxy") + "/ready"
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        try:
+        # Not ready yet (connection refused, 5xx, ...) — poll again.
+        with contextlib.suppress(Exception):
             with urllib.request.urlopen(url, timeout=5) as resp:
                 if resp.status == 200:
                     return True
-        except Exception:
-            pass
         time.sleep(3)
     return False
 

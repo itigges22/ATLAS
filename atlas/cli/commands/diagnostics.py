@@ -12,6 +12,7 @@ attach to an issue.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import platform
@@ -41,7 +42,8 @@ def _run(cmd: List[str], cwd: Optional[str] = None, timeout: int = 30) -> str:
 def _filtered_env(atlas_root: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
     path = os.path.join(atlas_root, ".env")
-    try:
+    # No .env (or unreadable) just means an empty env section.
+    with contextlib.suppress(OSError):
         with open(path) as fh:
             for line in fh:
                 line = line.strip()
@@ -54,8 +56,6 @@ def _filtered_env(atlas_root: str) -> Dict[str, str]:
                 if any(s in k.upper() for s in _SECRET_KEYS) and v:
                     v = "[MASKED]"
                 out[k] = redact.filter_private_values(v)
-    except OSError:
-        pass
     return out
 
 
@@ -83,12 +83,12 @@ def _service_health(atlas_root: str) -> Dict[str, object]:
             out["proxy_ready"] = r.status
     except Exception as e:
         out["proxy_ready"] = f"unreachable ({type(e).__name__})"
-    try:
+    # Calibration status is a bonus dimension — omit the key when the
+    # endpoint is unreachable or returns non-JSON.
+    with contextlib.suppress(Exception):
         with urllib.request.urlopen(
                 services["proxy"] + "/v1/calibration/status", timeout=5) as r:
             out["calibration"] = json.loads(r.read().decode())
-    except Exception:
-        pass
     return out
 
 
@@ -106,13 +106,12 @@ def _doctor_json(atlas_root: str) -> object:
     """Embed the doctor report (already private-value-safe)."""
     from atlas.cli.commands import doctor
     import io
-    import contextlib
     buf = io.StringIO()
-    try:
+    # doctor.main exits via SystemExit on failure; the report on stdout is
+    # still what we want either way.
+    with contextlib.suppress(SystemExit):
         with contextlib.redirect_stdout(buf):
             doctor.main(["--quick", "--json"])
-    except SystemExit:
-        pass
     try:
         return json.loads(buf.getvalue() or "{}")
     except ValueError:

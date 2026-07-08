@@ -5,6 +5,7 @@ All tokens are synthetic fixtures.
 
 import os
 import stat
+from pathlib import Path
 
 from atlas.cli import token as token_mod
 
@@ -60,19 +61,20 @@ def test_init_step_generates_and_keeps_token(tmp_path):
     assert os.path.isfile(path)
     mode = stat.S_IMODE(os.stat(path).st_mode)
     assert mode == 0o600, oct(mode)
-    first = open(path).read().strip()
+    first = Path(path).read_text().strip()
     assert first.startswith("atlas-st-")
 
     # Re-run keeps the existing token (live stack keeps working)
     init_mod._step_write_service_token(str(tmp_path), Args(), False)
-    assert open(path).read().strip() == first
+    kept = Path(path).read_text().strip()
+    assert kept == first
 
     # --rotate-token regenerates
     class Rotate(Args):
         rotate_token = True
 
     init_mod._step_write_service_token(str(tmp_path), Rotate(), False)
-    second = open(path).read().strip()
+    second = Path(path).read_text().strip()
     assert second != first
     assert second.startswith("atlas-st-")
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600

@@ -16,7 +16,7 @@ EXPECTED_TABLES = {
 
 def _reset_singletons():
     import sqlite_store
-    import cache.pattern_store as pattern_store_mod
+    from cache import pattern_store as pattern_store_mod
 
     sqlite_store.SQLitePool._instance = None
     pattern_store_mod._store = None

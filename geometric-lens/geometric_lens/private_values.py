@@ -21,13 +21,13 @@ import re
 PLACEHOLDER = "[FILTERED]"
 
 _ASSIGNMENT = re.compile(
-    r'(?i)([A-Z0-9_.-]*(?:api[_-]?key|apikey|token|secret|password'
-    r'|passwd|credential|access[_-]?key)[A-Z0-9_.-]*["\']?\s*[=:]\s*["\']?)'
+    r'(?i)([A-Z0-9_.-]{0,64}(?:api[_-]?key|apikey|token|secret|password'
+    r'|passwd|credential|access[_-]?key)[A-Z0-9_.-]{0,64}["\']?\s*[=:]\s*["\']?)'
     r'([^\s"\',;&]+)')
 _BEARER = re.compile(r'(?i)(bearer\s+)([A-Za-z0-9._~+/=-]+)')
-_URL_PASSWORD = re.compile(r'(://[^/:@\s]*:)([^@\s]+)(@)')
+_URL_PASSWORD = re.compile(r'(://[^/:@\s]{0,64}:)([^@\s]{1,256})(@)')
 _PRIVATE_KEY_BLOCK = re.compile(
-    r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----',
+    r'-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----.*?-----END [A-Z ]{0,40}PRIVATE KEY-----',
     re.S)
 
 

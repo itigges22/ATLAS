@@ -9,8 +9,8 @@ import json
 
 import pytest
 
-from .conftest import (SERVICE_TOKEN, free_port, request_status,
-                       sandbox_deps_available, start_proxy, wait_for_port)
+from .conftest import (SERVICE_TOKEN, request_status,
+                       sandbox_deps_available, start_proxy)
 
 pytestmark = pytest.mark.skipif(
     not sandbox_deps_available(),

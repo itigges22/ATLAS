@@ -12,6 +12,7 @@ user.signingkey); no new key material. Signing needs the private key
 (maintainer machine); verification needs only allowed_signers.
 """
 
+import contextlib
 import hashlib
 import os
 import subprocess
@@ -71,7 +72,7 @@ def _signature_principals(sig_path: str) -> List[str]:
     signed by the maintainer), so ask ssh-keygen which allowed_signers
     principals match the signature, falling back to every principal
     listed in the file."""
-    try:
+    with contextlib.suppress(subprocess.SubprocessError, OSError):
         out = subprocess.check_output(
             ["ssh-keygen", "-Y", "find-principals",
              "-f", _allowed_signers(), "-s", sig_path],
@@ -79,10 +80,8 @@ def _signature_principals(sig_path: str) -> List[str]:
         principals = [ln.strip() for ln in out.splitlines() if ln.strip()]
         if principals:
             return principals
-    except (subprocess.SubprocessError, OSError):
-        pass
     principals = []
-    try:
+    with contextlib.suppress(OSError):
         with open(_allowed_signers()) as fh:
             for line in fh:
                 line = line.strip()
@@ -90,8 +89,6 @@ def _signature_principals(sig_path: str) -> List[str]:
                     # The principal field may hold a comma-separated list
                     # (sshsig allowed_signers format).
                     principals.extend(line.split()[0].split(","))
-    except OSError:
-        pass
     return principals
 
 

@@ -9,6 +9,7 @@ Config: [lens_feedback] in atlas.conf
 Telemetry: telemetry/lens_feedback_events.jsonl
 """
 
+import contextlib
 import json
 import urllib.error
 import urllib.request
@@ -117,14 +118,14 @@ class LensFeedbackCollector:
             # _all_data, so clearing the buffer here loses nothing and stops
             # the next task from re-POSTing the same payload.
             reason = ""
-            try:
+            # An unreadable/non-JSON error body just leaves reason empty.
+            with contextlib.suppress(OSError, json.JSONDecodeError,
+                                     UnicodeDecodeError):
                 detail = json.loads(e.read().decode("utf-8"))
                 if isinstance(detail, dict):
                     inner = detail.get("detail", detail)
                     if isinstance(inner, dict):
                         reason = inner.get("reason") or inner.get("error") or ""
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                pass
             self._log_event({
                 "type": "retrain_error",
                 "error": f"HTTP {e.code}" + (f": {reason}" if reason else ""),

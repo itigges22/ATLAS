@@ -424,7 +424,8 @@ class _MalformedV3Handler(http.server.BaseHTTPRequestHandler):
 class _StallingV3Handler(_MalformedV3Handler):
     def do_POST(self):
         if self.path.startswith("/internal/cyclomatic_complexity"):
-            return super().do_POST()
+            super().do_POST()
+            return
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
         self.send_response(200)

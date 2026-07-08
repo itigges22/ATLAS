@@ -5,7 +5,6 @@ stage, plus a temp ATLAS root with a .env. No Docker, no registry, no
 network — the orchestration and restore path are exercised directly.
 """
 
-import json
 import os
 
 import pytest
@@ -253,7 +252,8 @@ def test_real_set_env_tag_appends_newline_first(tmp_path):
     with open(env, "w") as fh:
         fh.write("ATLAS_CTX_SIZE=131072")  # no trailing newline, no tag
     _set_env_tag(root, "v2.0.0")
-    content = open(env).read()
+    with open(env) as fh:
+        content = fh.read()
     assert "ATLAS_CTX_SIZE=131072\n" in content
     assert "ATLAS_IMAGE_TAG=v2.0.0\n" in content
     assert eng.read_env_tag(root) == "v2.0.0"

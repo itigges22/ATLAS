@@ -5,8 +5,6 @@ secret-ish values, and runs values through the private-value filter.
 No services required (the collectors are unit-tested in isolation).
 """
 
-import os
-
 from atlas.cli.commands import diagnostics
 
 

@@ -25,6 +25,7 @@ Flags:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json as jsonlib
 import os
 import secrets as secrets_mod
@@ -773,15 +774,15 @@ def _step_write_service_token(atlas_root: str, args: argparse.Namespace,
         with os.fdopen(fd, "w") as fh:
             fh.write(token + "\n")
     except Exception:
-        try:
+        # fdopen failing before it takes ownership leaves fd open; a
+        # double-close after fdopen succeeded raises OSError — ignore it.
+        with contextlib.suppress(OSError):
             os.close(fd)
-        except OSError:
-            pass
         raise
-    try:
+    # Re-assert the mode in case a pre-existing file kept looser bits;
+    # some filesystems (e.g. certain network mounts) refuse chmod.
+    with contextlib.suppress(PermissionError):
         os.chmod(tok_path, 0o600)
-    except PermissionError:
-        pass
     action = "Rotated" if getattr(args, "rotate_token", False) else "Wrote"
     _safe_print(f"  {action} {tok_path} (mode 0600) — internal service auth")
     if getattr(args, "rotate_token", False):

@@ -127,8 +127,14 @@ def _verify_model_identity(models_dir: str, embedding_dim: int = 0) -> bool:
         _artifact_model_identity = identity
         return True
     except Exception as exc:
-        _model_identity_error = str(exc)
-        logger.error("Lens artifact identity check failed: %s", exc)
+        logger.error("Lens artifact identity check failed: %s", exc,
+                     exc_info=True)
+        # get_model_info() surfaces this string over HTTP — keep the
+        # exception type but not its text (full detail is in the log above).
+        _model_identity_error = (
+            f"{type(exc).__name__}: artifact identity check failed "
+            "(see service log)"
+        )
         return False
 
 
@@ -317,7 +323,7 @@ def _load_gx_models(models_dir: str) -> None:
 
 def _ensure_models_loaded():
     """Lazy-load C(x) cost field and G(x) models (XGBoost preferred, metric tensor legacy) on first use."""
-    global _cost_field, _models_loaded, _load_attempted
+    global _load_attempted
 
     if _models_loaded or _load_attempted:
         return _models_loaded
@@ -380,13 +386,10 @@ def reload_weights(model_dir: str = None) -> dict:
     """Reload C(x) and G(x) weights from disk without restarting the process.
 
     Used after retraining to hot-swap model weights.
-    """
-    global _cost_field, _gx_xgboost, _gx_pca_components
-    global _gx_pca_mean, _gx_top_dims, _models_loaded, _load_attempted
-    global _cx_normalization, _gx_thresholds
-    global _artifact_model_identity, _model_identity_error
-    global _served_model_id, _served_model_probed
 
+    All global mutation happens in _reload_weights_locked(), which declares
+    the globals it assigns; this wrapper only takes the lock.
+    """
     # Hold the lock across the whole reset+load so scoring never observes the
     # nulled-then-repopulated globals of an in-progress swap. This is the write
     # critical section; the artifact loads here are not scoring forward passes.
@@ -439,9 +442,14 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
                 "gx_loaded": _gx_xgboost is not None,
             }
         except Exception as e:
-            logger.error(f"Failed to reload models from {model_dir}: {e}")
+            logger.error(f"Failed to reload models from {model_dir}: {e}",
+                         exc_info=True)
             _load_attempted = True
-            return {"status": "error", "message": str(e)}
+            # The message reaches /internal/lens/reload and /retrain HTTP
+            # responses — full detail stays in the log above.
+            return {"status": "error",
+                    "message": f"{type(e).__name__}: reload failed "
+                               "(see service log)"}
     else:
         success = _ensure_models_loaded()
         return {
@@ -613,8 +621,10 @@ def evaluate_gx(query: str) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"G(x) evaluation failed: {e}")
-        return {"gx_score": 0.5, "verdict": "error", "gx_available": False, "error": str(e)}
+        logger.error(f"G(x) evaluation failed: {e}", exc_info=True)
+        return {"gx_score": 0.5, "verdict": "error", "gx_available": False,
+                "error": f"{type(e).__name__}: G(x) evaluation failed "
+                         "(see service log)"}
 
 
 def evaluate_combined(query: str) -> dict:
@@ -682,12 +692,14 @@ def evaluate_combined(query: str) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"Combined evaluation failed: {e}")
+        logger.error(f"Combined evaluation failed: {e}", exc_info=True)
         return {
             "cx_energy": 0.0, "cx_normalized": 0.5,
             "cx_calibrated": False,
             "gx_score": 0.5, "verdict": "error",
-            "enabled": True, "gx_available": False, "error": str(e),
+            "enabled": True, "gx_available": False,
+            "error": f"{type(e).__name__}: combined evaluation failed "
+                     "(see service log)",
         }
 
 
@@ -837,9 +849,10 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"per-step evaluation failed: {e}")
+        logger.error(f"per-step evaluation failed: {e}", exc_info=True)
         return {
             "enabled": True, "gx_available": False,
             "per_step": [], "aggregate": {}, "n_tokens": 0,
-            "error": str(e),
+            "error": f"{type(e).__name__}: per-step evaluation failed "
+                     "(see service log)",
         }

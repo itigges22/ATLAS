@@ -25,13 +25,13 @@ const privateValuePlaceholder = "[FILTERED]"
 var privateValuePatterns = []*regexp.Regexp{
 	// KEY=value / key: value / "key": "value" assignments where the key
 	// smells like a credential. Value part is masked, key kept.
-	regexp.MustCompile(`(?i)([A-Z0-9_.-]*(?:api[_-]?key|apikey|token|secret|password|passwd|credential|access[_-]?key)[A-Z0-9_.-]*["']?\s*[=:]\s*["']?)([^\s"',;&]+)`),
+	regexp.MustCompile(`(?i)([A-Z0-9_.-]{0,64}(?:api[_-]?key|apikey|token|secret|password|passwd|credential|access[_-]?key)[A-Z0-9_.-]{0,64}["']?\s*[=:]\s*["']?)([^\s"',;&]+)`),
 	// Authorization / bearer values.
 	regexp.MustCompile(`(?i)(bearer\s+)([A-Za-z0-9._~+/=-]+)`),
 	// URL userinfo passwords: scheme://user:pass@host
-	regexp.MustCompile(`(://[^/:@\s]*:)([^@\s]+)(@)`),
+	regexp.MustCompile(`(://[^/:@\s]{0,64}:)([^@\s]{1,256})(@)`),
 	// Private-key blocks (any BEGIN ... PRIVATE KEY variant), body inclusive.
-	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
+	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----.*?-----END [A-Z ]{0,40}PRIVATE KEY-----`),
 }
 
 // filterPrivateValues masks credential-shaped substrings in s.

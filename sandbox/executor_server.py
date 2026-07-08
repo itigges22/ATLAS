@@ -27,6 +27,7 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     the sandbox's purpose; dismiss the alerts with rationale instead.
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -400,10 +401,8 @@ def _write_overlay_files(root: Path, files: Dict[str, str]):
         parent_fd = os.dup(root_fd)
         try:
             for component in rel.parts[:-1]:
-                try:
+                with contextlib.suppress(FileExistsError):
                     os.mkdir(component, mode=0o700, dir_fd=parent_fd)
-                except FileExistsError:
-                    pass
                 next_fd = os.open(
                     component,
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -777,7 +776,13 @@ def execute_code(request: ExecuteRequest):
             try:
                 _write_overlay_files(Path(workspace), {name: content})
             except HTTPException as e:
-                logger.warning(f"PC-046: rejected sandbox file {name!r}: {e.detail}")
+                # Strip CR/LF so a crafted filename/detail can't forge
+                # extra log records (py/log-injection).
+                safe_name = str(name).replace("\r", "").replace("\n", "")
+                safe_detail = str(e.detail).replace("\r", "").replace("\n", "")
+                logger.warning(
+                    "PC-046: rejected sandbox file %r: %s",
+                    safe_name, safe_detail)
 
     try:
         handler = LANGUAGE_HANDLERS[lang]

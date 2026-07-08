@@ -5,7 +5,6 @@ crash-recovery properties that must hold under concurrent access. The Go
 services carry their own `-race` coverage; these cover the Python side.
 """
 
-import json
 import threading
 
 from atlas.cli import upgrade_engine as eng

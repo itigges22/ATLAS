@@ -1,5 +1,6 @@
 """Bench command — run benchmarks with live progress."""
 
+import contextlib
 import json
 import os
 import sys
@@ -87,12 +88,11 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
                 if "PASS" in line:
                     pass_count += 1
                 # The runner emits "[done/total] <task>: ..." — take the
-                # dataset size from the line rather than pinning it.
-                try:
+                # dataset size from the line rather than pinning it; a
+                # malformed prefix just keeps the previous total.
+                with contextlib.suppress(IndexError, ValueError):
                     dataset_total = int(
                         line[1:].split("]", 1)[0].split("/", 1)[1].strip())
-                except (IndexError, ValueError):
-                    pass
                 total = max_tasks if max_tasks > 0 else \
                     (dataset_total or task_count)
                 display.progress_bar(task_count, total, pass_count, line.split("]")[-1].strip()[:40])

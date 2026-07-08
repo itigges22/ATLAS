@@ -12,6 +12,7 @@ restore-on-failure) is deterministically testable without Docker or a
 registry. The default callables shell out to docker compose + doctor.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -65,15 +66,14 @@ def _env_path(atlas_root: str) -> str:
 def read_env_tag(atlas_root: str, default: str = "latest") -> str:
     """Current ATLAS_IMAGE_TAG from .env (the deployed release marker)."""
     path = _env_path(atlas_root)
-    try:
+    # A missing/unreadable .env means the default tag is in effect.
+    with contextlib.suppress(OSError):
         with open(path) as fh:
             for line in fh:
                 line = line.strip()
                 if line.startswith("ATLAS_IMAGE_TAG="):
                     val = line.split("=", 1)[1].strip().strip('"').strip("'")
                     return val or default
-    except OSError:
-        pass
     return default
 
 
