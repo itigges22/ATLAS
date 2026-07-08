@@ -39,16 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
-      - name: init codeql (${{ matrix.language }})
-        uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a  # v4.36.3
-        with:
-          languages: ${{ matrix.language }}
-          # security-and-quality runs the broader pack — catches both
-          # security bugs and general correctness issues. Default
-          # security-extended is also fine; we pick the wider one
-          # because we already gate Pyflakes via ruff.
-          queries: security-and-quality
-
+      # setup-go must run BEFORE codeql init: init injects a traced go
+      # wrapper into PATH, and a later setup-go would repoint PATH at the
+      # toolcache go, bypassing CodeQL's build tracing.
       - name: setup go
         if: matrix.language == 'go'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
@@ -58,6 +51,21 @@ jobs:
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
           go-version: '1.26'
+          # The modules live in proxy/ and tui/ (no root go.mod); without
+          # this the default cache lookup warns and never caches.
+          cache-dependency-path: |
+            proxy/go.sum
+            tui/go.sum
+
+      - name: init codeql (${{ matrix.language }})
+        uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a  # v4.36.3
+        with:
+          languages: ${{ matrix.language }}
+          # security-and-quality runs the broader pack — catches both
+          # security bugs and general correctness issues. Default
+          # security-extended is also fine; we pick the wider one
+          # because we already gate Pyflakes via ruff.
+          queries: security-and-quality
 
       - name: build go modules
         # CodeQL needs to observe a real compile to extract dataflow.
