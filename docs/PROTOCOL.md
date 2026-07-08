@@ -23,7 +23,7 @@ The protocol uses three SSE comment / control patterns. None are envelope events
 |---|---|---|
 | `: connected\n\n` | First body byte after a successful `/events` connection (atlas-proxy only) | Forces the response headers + first body chunk to leave the server immediately. Without it, Go buffers the response until the first envelope or 15s heartbeat fires, and clients with short connect timeouts see "no response received". |
 | `: heartbeat\n\n` | Every 15s during quiet stretches (atlas-proxy only) | Keeps proxies / load balancers from idling out the connection. |
-| `event: result\ndata: {...}\n\n` | Right before stream end on `/v3/run` (v3-service only) | Carries the final pipeline `result` dict. The proxy bridge consumes it to build the tool result; envelope subscribers on `/events` never see it. |
+| `event: result\ndata: {...}\n\n` | Right before stream end on v3-service's `/v3/run`, `/v3/generate`, and `/v3/plan` | Carries the final `result` dict (pipeline result or plan). The proxy bridge consumes it to build the tool result / plan; envelope subscribers on `/events` never see it. |
 
 The Python `iter_sse_lines` helper already filters comment lines (any line starting with `:`) automatically. Named-event lines (`event: result`) come through prefixed (`result: <data>`) so the caller can distinguish them.
 
@@ -49,7 +49,7 @@ Every event is a JSON object with this shape:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `event_id` | string | yes | Format: `evt_` + 8 hex chars (uuid4 truncated). Session-unique. |
+| `event_id` | string | yes | Format: `evt_` + 8 hex chars. Session-unique. The Go producer draws the 4 bytes from `crypto/rand` (`proxy/events.go`); the Python helper truncates a uuid4. |
 | `timestamp` | number | yes | Unix seconds with microsecond precision. Producers MUST emit in monotonically non-decreasing order. |
 | `type` | string | yes | One of the seven legal values listed below. |
 | `stage` | string | yes | Logical pipeline stage (`agent`, `llm`, `tool`, `v3:<stage>`, etc.). The proxy's v3 bridge prefixes the v3-service stage name with `v3:` and passes it through verbatim — suffixes like `_pass`/`_done`/`_failed` are kept (e.g. `v3:sandbox_pass`). |
@@ -92,7 +92,7 @@ A logical stage finished. `success` is required so consumers can distinguish com
 
 ### `tool_call`
 
-The agent is invoking a tool. Always followed by exactly one `tool_result` for the same tool name within the same stage (typically a few hundred ms later).
+The agent is invoking a tool. When the tool executes, a `tool_result` for the same tool name follows within the same stage (typically a few hundred ms later). Pre-execution rejections — permission denial, truncated-args detection, workspace-boundary violation — emit no `tool_result`, so consumers must tolerate an unpaired `tool_call`.
 
 ```json
 {
@@ -173,13 +173,13 @@ Closes one agent pass. The `/events` broker is a persistent stream — it keeps 
 | Service | Endpoint | Notes |
 |---|---|---|
 | atlas-proxy | `GET /events` | Broadcasts all envelope events from any active session to every connected subscriber. Heartbeat every 15s to defeat proxy idle timeouts. |
-| v3-service | `POST /v3/run` | Emits legacy `{stage, detail}` frames only — no envelopes (see below). |
+| v3-service | `POST /v3/run`, `POST /v3/generate`, `POST /v3/plan` | Emit legacy `{stage, detail}` frames plus a terminal `event: result` control frame — no envelopes (see below). |
 
-## `/v3/run` and typed events
+## v3-service streams and typed events
 
-v3-service's `/v3/run` emits the `{stage, detail}` shape only. Envelope consumers subscribe to atlas-proxy's `GET /events` instead — the proxy's v3 bridge translates the `{stage, detail}` frames it receives from v3-service into envelopes.
+v3-service's endpoints emit the legacy `{stage, detail}` shape (with an optional `data` key when structured data rides along). Envelope consumers subscribe to atlas-proxy's `GET /events` instead — the proxy's v3 bridge translates the `{stage, detail}` frames it receives from v3-service into envelopes.
 
-Consumers reading a mixed stream must filter the `{stage, detail}` frames — the Python helper `atlas.cli.events.iter_events()` does this automatically (skips frames that raise `LegacyEventError`).
+Consumers reading a mixed stream must filter the non-envelope frames — the Python helper `atlas.cli.events.iter_events()` does this automatically: `{stage, detail}` frames (with or without `data`) raise `LegacyEventError` and are skipped, and `result:`/`done:` control frames are skipped as stream control rather than parsed as envelopes.
 
 ## Consumer library: `atlas/cli/events.py`
 
@@ -209,4 +209,4 @@ This document describes **v1** of the protocol. Future schema changes:
 
 ## Test contract
 
-The schema is pinned by `tests/cli/test_events.py` (Python consumer) and `proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. v3-service's emitter is tested in `tests/v3-service/test_event_emission.py`.
+The schema is pinned by `tests/cli/test_events.py` (Python consumer) and `proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/test_event_contract.py`.

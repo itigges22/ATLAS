@@ -46,20 +46,21 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 | Backend | Status (V3.1.x) | Image / build path | Compose override | Tested cards |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | Shipping since V3.1.0 | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical), RTX 30xx/40xx/50xx |
-| **ROCm / HIP** (AMD) | Shipping V3.1.1 | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
-| **Metal** (Apple Silicon) | Shipping ([#32](https://github.com/itigges22/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
-| **SYCL** (Intel Arc) | Roadmap | TBD | TBD | Arc A770 16 GB (target) |
+| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](SETUP.md) |
+| **ROCm / HIP** (AMD) | Community-tested (since V3.1.1) | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
+| **Metal** (Apple Silicon) | Supported ([#32](https://github.com/itigges22/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
+| **Vulkan** (cross-vendor fallback) | Preview | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
+| **SYCL** (Intel Arc) | Roadmap — Intel Arc uses `vulkan` today | TBD | TBD | — |
 
-**Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/cli/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|sycl}` into `.env`. Each backend has its own pre-built image; users don't run a fat image that ships every backend's libraries. The wizard refuses on unsupported-backend hosts rather than writing a `.env` that won't boot.
+**Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/cli/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` into `.env`. Detection resolves to the packaged native backend when one exists: CUDA for NVIDIA, ROCm for AMD on x86_64, the hybrid Metal path on macOS. When no native backend is packaged for the host (Intel Arc, AMD on arm64, unrecognized vendors), the wizard offers the Vulkan universal fallback (default-yes): one image covers AMD, Intel, Adreno, MoltenVK, and the lavapipe CPU rasterizer, at roughly 20–40% below a tuned native backend. It refuses — rather than writing a `.env` that won't boot — only when nothing usable exists. Each backend has its own pre-built image; users don't run a fat image that ships every backend's libraries.
 
-**Bring-your-own-model surface (V3.1.1).** `atlas lens check` is a cheap pre-flight against a running llama-server that reports whether the loaded model is Lens-compatible. `atlas lens build --samples <path>` wraps `geometric-lens/geometric_lens/training.py` to train fresh `cost_field.pt` artifacts at the model's native embedding dim. Together they let users swap in non-default GGUFs without forking the lens code — the C(x) constructor accepts arbitrary `input_dim`, so the only thing that changes per-model is the trained weights. See [CLI.md § atlas lens](CLI.md#atlas-lens) for the user-facing flow; registry write-back and HuggingFace distribution are the follow-ons that close the loop.
+**Bring-your-own-model surface (V3.1.1).** `atlas lens check` is a cheap pre-flight against a running llama-server that reports whether the loaded model is Lens-compatible. `atlas lens build --samples <path>` wraps `geometric-lens/geometric_lens/training.py` to train fresh C(x) (`cost_field.pt`) **and** G(x) (XGBoost) artifacts at the model's native embedding dim. Together they let users swap in non-default GGUFs without forking the lens code — the C(x) constructor accepts arbitrary `input_dim`, so the only thing that changes per-model is the trained weights. See [CLI.md § atlas lens](CLI.md#atlas-lens) for the user-facing flow; `atlas lens publish` (or the combined `atlas publish`) uploads the artifacts to HuggingFace and opens the registry PR that pins their hashes.
 
 **What's vendor-agnostic** (works on every backend): grammar-constrained JSON, self-embeddings (`/embedding`), per-layer hidden states, ASA control vectors (loaded by llama.cpp's `control_vector_load` regardless of backend), KV cache quantization, the entire outer agent loop, V3 pipeline, Geometric Lens, and sandbox.
 
 **What differs per backend:**
-- **Flash attention.** CUDA + ROCm: full support. Metal: limited (llama.cpp Metal backend supports flash-attn for some head sizes; defaults to off if unsupported). SYCL: TBD.
-- **Pinned host memory.** `GGML_CUDA_NO_PINNED` applies to CUDA + ROCm (HIP mirrors the CUDA path at the GGML compat layer). Metal/SYCL don't use pinning.
+- **Flash attention.** CUDA + ROCm: full support. Metal: limited (llama.cpp Metal backend supports flash-attn for some head sizes; defaults to off if unsupported). Vulkan: driver-dependent.
+- **Pinned host memory.** `GGML_CUDA_NO_PINNED` applies to CUDA + ROCm (HIP mirrors the CUDA path at the GGML compat layer). Metal/Vulkan don't use the CUDA/HIP pinning path.
 - **Multi-GPU + tensor parallelism.** V1 supports single-GPU only on every backend; multi-GPU is GH #34, not bound to a specific vendor.
 - **Apple unified memory.** macOS shares GPU+system memory; "VRAM" math is actually "16 GB total minus OS + apps." See §7.
 
@@ -120,7 +121,7 @@ flowchart LR
     Result --> Budget{"Budget?"}
     Budget -->|"< 4"| Call
     Budget -->|"4"| Warn["Nudge: write now"] --> Call
-    Budget -->|"5+"| Skip["Skip read"] --> Call
+    Budget -->|"5+"| Esc["Escalated nudge"] --> Call
 
     Route -->|"text"| Stream["Stream"] --> Call
     Route -->|"done"| Done["End"]
@@ -132,7 +133,7 @@ flowchart LR
 
 ### Grammar Enforcement
 
-llama-server's `response_format: {"type": "json_object"}` forces every model output to be exactly one of three valid JSON shapes:
+Every model output is constrained toward one of three valid JSON shapes:
 
 ```json
 {"type": "tool_call", "name": "<tool_name>", "args": {...}}
@@ -140,7 +141,7 @@ llama-server's `response_format: {"type": "json_object"}` forces every model out
 {"type": "done", "summary": "<summary>"}
 ```
 
-The JSON schema uses `oneOf` with `additionalProperties: false` and enumerates tool names from the registry. The model cannot produce invalid JSON — token generation is grammar-constrained at the llama-server level.
+In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with `additionalProperties: false`, tool names enumerated from the registry — which llama-server enforces as a grammar during token generation. Grammar constraints make malformed output rare, not impossible: `ATLAS_GRAMMAR_MODE=loose` sends `{"type":"json_object"}` only (valid JSON, no shape enforcement — some models require it), and the response token cap can truncate mid-JSON. The proxy treats parsing as fallible — it recovers JSON from prose/`reasoning_content`, detects truncated tool args before execution, feeds targeted parse-failure descriptions back, and breaks the loop after three consecutive failures.
 
 ### Tools
 
@@ -230,7 +231,7 @@ The exact config-file list and extension sets live in `proxy/tools.go:classifyFi
 - `hasLogicIndicators(content)` returns true — **2+ matches** across pattern families covering function/method definitions, control flow, error handling, Flask/FastAPI/Django routing, Express/Node API, React state/data, validation, database calls, JSX/React component patterns, and imports (the literal token list is in `proxy/tools.go:hasLogicIndicators`)
 - OR the file has a recognized source-code / markup extension (`.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.html`, `.htm`, …) and no logic indicators fired — gets the benefit of the doubt at T2 (covers minimal-but-real files like a 12-line component shell)
 
-**T3 (Hard)** — currently classifier never emits T3 by itself; the cyclomatic-complexity refiner (`refineTierWithCC` via GH #39 point 2's `/internal/cyclomatic_complexity`) can *escalate* T2 → T3 when McCabe CC indicates real branching density. Never downgrades.
+**T3 (Hard)** — currently classifier never emits T3 by itself; the cyclomatic-complexity refiner (`refineTierWithCC` via GH #39 point 2's `/internal/cyclomatic_complexity`) *escalates* on McCabe CC: to T2 at CC ≥ 8 (including from T1) and to T3 at CC ≥ 16. Never downgrades.
 
 ### Plan Mode (per-turn pre-flight)
 
@@ -252,7 +253,7 @@ Operator-facing limits and the knobs that tune them. Internal steering guards (t
 | Suspicious-shrinkage guard | Reject `ast_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
 | ast_edit runaway-content guard | Reject when `content` > 8 KB AND > 4× the file size | Catch reasoning-leak blobs emitted as the replacement node |
 | Error loop breaker | 3 consecutive failures | Stop runaway failure cycles |
-| Exploration budget | Warn at 4 consecutive read-only calls; skip the read at 5+ | Push the model to write instead of exploring indefinitely |
+| Exploration budget | Nudge at 4 consecutive read-only calls; escalated nudge at 5+. Reads always execute — the nudge steers the *next* turn toward a write | Push the model to write instead of exploring indefinitely |
 | Command output truncation | stdout 8,000 chars, stderr 4,000 chars | Prevent context flooding |
 | Search results | 200 matches max; file search skips files > 1 MB | Bound search cost |
 | Truncation detection | JSON parse check on tool args | Catch truncated model output |
@@ -308,7 +309,7 @@ Legend: blue = generation, green = verification/selection, brown = repair.
 
 ### Phase Details
 
-**Phase 0: Probe** generates a single baseline candidate with progressive budget retry (light → standard → direct-response). It is scored with the selected model's C(x)/G(x) artifacts and tested in the sandbox. If it passes, the pipeline exits immediately.
+**Phase 0: Probe** generates a single baseline candidate with progressive budget retry (light → standard → nothink). It is scored with the selected model's C(x)/G(x) artifacts and tested in the sandbox. If it passes, the pipeline exits immediately.
 
 **Phase 1: Constraint-Driven Generation**
 
@@ -328,7 +329,7 @@ Wait injection appends "Wait, let me reconsider.\n" to request a longer reasonin
 
 **Phase 2: Verification and Selection**
 
-- **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Rust (`cargo check`), C/C++ (`gcc/g++ -fsyntax-only`), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
+- **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Rust (`rustc` on the sandbox `/execute` path; `Cargo.toml` projects are detected with `cargo build`, and `cargo check` is accepted only via the build-command allowlist), C/C++ (full `gcc`/`g++` compile with `-Wall` on `/execute`; `-fsyntax-only` applies only to the `/syntax-check` route), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
 - **S* Tiebreaking** (2+ passing): generates edge-case inputs, runs both candidates, majority wins
 - **Lens Selection** (1 passing or fallback): sort by C(x) energy, lowest wins
 
@@ -457,8 +458,10 @@ calibration, normalized decisions stay neutral/uncalibrated rather than
 borrowing the reference artifact's scale.
 
 Every current Lens bundle also contains `model_identity.json`. The service
-requires its model name to match `ATLAS_MODEL_NAME`; embedding-width equality
-alone cannot establish compatibility between two different models.
+requires its model name to match the served-model id reported by
+llama-server's `/v1/models` (with `ATLAS_MODEL_NAME` as the fallback when the
+probe fails); embedding-width equality alone cannot establish compatibility
+between two different models.
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, the service degrades gracefully: C(x) returns neutral energy, G(x) returns `gx_score: 0.5` and `verdict: "unavailable"`. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
@@ -546,7 +549,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Max memory: 512 MB. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
+Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Memory, CPU, and process caps are container-level: compose sets `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, and `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`; `atlas init` writes host-appropriate values (~75% of RAM and cores) into `.env`. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
 
 ---
 
@@ -575,8 +578,9 @@ The 8.2 GB / 7.8 GB-free split above is an example, not an ATLAS model default. 
 |---|---|---|---|
 | **CUDA** (dedicated VRAM) | Hardware spec (16 GB on the canonical 5060 Ti) | ~95% of spec (driver reserves ~500 MB) | The numbers in the table above apply directly. |
 | **ROCm** (dedicated VRAM) | Hardware spec | ~90–95% of spec (HIP runtime slightly heavier than CUDA's) | RX 7900 XTX (24 GB) → comfortably runs 14B Q5 + 32K context with 2 parallel slots. |
-| **Metal** (Apple unified) | Total system RAM | **~70%** of system RAM | OS + browser + IDE eat ~30%. A 16 GB MBP has a *realistic* 11 GB budget — too tight for Qwen3.5-9B Q6_K (7.5 GB + 2-4 GB KV cache). Use Q4_K_M (5 GB) on ≤16 GB; Q6_K wants ≥24 GB unified. |
-| **SYCL** (Intel Arc) | Hardware spec | Unknown — TBD when shipped | A770 (16 GB) target is conservative-equivalent to NVIDIA 16 GB. |
+| **Metal** (Apple unified) | Total system RAM | **~70%** of system RAM | OS + browser + IDE eat ~30%. A 16 GB MBP has a *realistic* 11 GB budget — little headroom for Qwen3.5-9B Q6_K (~6.9 GB weights + ~1.3 GB KV at 32K, per §7) once macOS's own GPU working set is on the same memory. Use Q4_K_M (5 GB) on ≤16 GB; Q6_K wants ≥24 GB unified. |
+| **Vulkan** (cross-vendor) | Hardware spec | No measured deployment yet (Preview — validated on the lavapipe CPU path only) | Expect ~20–40% below a tuned native backend on the same card. |
+| **SYCL** (Intel Arc) | Hardware spec | Roadmap — Intel Arc uses Vulkan today | A770 (16 GB) target is conservative-equivalent to NVIDIA 16 GB. |
 
 ---
 
@@ -598,7 +602,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives every mode, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across Docker Compose, bare metal, macOS hybrid-Metal, and K3s.
+`llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives Docker Compose, bare metal, and K3s, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across those modes; the macOS hybrid path launches native llama-server via `scripts/atlas-llama-macos.sh`, which mirrors the entrypoint's flags.
 
 Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](SETUP.md); the macOS native path is in [SETUP_MACOS.md](SETUP_MACOS.md).
 
@@ -672,7 +676,7 @@ sequenceDiagram
     A-->>U: File created
 ```
 
-Minimum 3 llama-server calls (1 probe generation + 1 self-test generation + 1 embedding extraction). Maximum 30+ if Phase 3 repair engages all strategies.
+Minimum 3 llama-server calls for algorithmic tasks (1 probe generation + 1 self-test generation + 1 embedding extraction); interactive tasks (games, UIs, framework code) skip self-test generation, so their minimum is 2. Maximum 30+ if Phase 3 repair engages all strategies.
 
 ### Edit Existing Code
 

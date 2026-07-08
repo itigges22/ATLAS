@@ -6,10 +6,12 @@ Roadmap items are tracked in GitHub and are not release claims.
 
 ## Status definitions
 
-- **Supported:** part of the release contract and covered by a required gate.
-- **Experimental:** usable behind an explicit option; compatibility may change.
+Status terms follow the support-level taxonomy defined in
+[SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) (Supported, Preview, Experimental,
+Community-tested, Research-only, Unsupported, Roadmap). One term used here
+marks *audience* rather than maturity and composes with a level:
+
 - **Internal:** service-to-service contract, not a public client API.
-- **Roadmap:** proposed or incomplete; not a release capability.
 
 ## User-facing capabilities
 
@@ -40,10 +42,10 @@ Roadmap items are tracked in GitHub and are not release claims.
 |---|---|---|
 | Sandbox health, languages, execute, syntax-check, shell, and background jobs | Internal | Called by proxy and V3; direct host use is a developer workflow |
 | V3 generate, run, plan, and health | Internal | `/v3/generate` is the proxy integration path |
-| V3 AST edit, symbol index, and complexity endpoints | Experimental internal | Tree-sitter availability determines capability |
-| Geometric Lens `/v1/*` endpoints | Supported authenticated API | Requires configured local API keys |
+| V3 AST edit, symbol index, and complexity endpoints | Experimental (Internal) | Tree-sitter availability determines capability |
+| Geometric Lens `/v1/*` endpoints | Supported (requires configured local API keys) | Local authenticated API |
 | Geometric Lens `/internal/*` endpoints | Internal | Intended only for the ATLAS service network |
-| llama-server inference, completion, embedding, and health | Upstream contract | Qualified against the pinned llama.cpp revision |
+| llama-server inference, completion, embedding, and health | Internal (upstream llama.cpp contract, qualified against the pinned revision) | — |
 
 A feature is not promoted to Supported until its required verification level is
 automated and passing on representative hardware where applicable.
@@ -105,6 +107,13 @@ hash status, backend, context size, and service image digests.
   `unavailable`; it does not count as a pass.
 - A supported release cannot be qualified while a required release gate is
   failed or unavailable.
+
+## Release checklist
+
+- Bump the "Applies to" line at the top of
+  [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) to the release version.
+- Qualify the release per the verification levels above.
+- Cut and push the signed release tag (next section).
 
 ## Signed release tags
 
