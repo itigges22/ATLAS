@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: fe64417 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2 -->
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 # ATLAS トラブルシューティングガイド
@@ -9,18 +9,23 @@
 
 ## クイック診断
 
-まず以下を実行して、問題の箇所を特定してください:
+まず `atlas doctor` を実行し、次に Compose の状態とログから問題箇所を特定してください:
 
 ```bash
-# Docker Compose — check all services at once
+atlas doctor
 docker compose ps
-
-# GPU status
-nvidia-smi
-
-# Docker Compose logs (last 50 lines per service)
 docker compose logs --tail 50
 ```
+
+`atlas doctor` はホスト、設定、サービスのヘルスをまとめて確認するため、最初に使う診断コマンドです。`docker compose ps` は起動に失敗したサービスを特定し、ログは次の段階の詳細を示します。最初の結果が推論バックエンドを指している場合にのみ、ハードウェア固有の確認を行ってください:
+
+| バックエンド | 診断コマンドまたは確認項目 |
+|---|---|
+| NVIDIA CUDA | `nvidia-smi` |
+| AMD ROCm | `rocm-smi` を実行し、`/dev/kfd` が存在することを確認します。 |
+| Apple Silicon / Metal | `atlas doctor` を実行します。ネイティブサーバーが待ち受けていない場合は、[SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) の説明に従って `./scripts/atlas-llama-macos.sh` を起動し、フォアグラウンドのランチャー出力を確認します。 |
+| Vulkan | `/dev/dri` が存在することを確認し、`docker compose -f docker-compose.yml -f docker-compose.vulkan.yml exec llama-server vulkaninfo --summary` を実行します。 |
+| CPU のみ | `docker-compose.vulkan.yml` と `docker-compose.cpu.yml` のオーバーレイが有効であることを確認します。GPU がないことだけを理由に `atlas doctor` が失敗するのではなく、警告を出して正常終了するはずです。 |
 
 サービスごとのヘルスチェック curl は [SETUP.md § インストールの確認](./SETUP.md#インストールの確認) を参照してください。トリアージには atlas-proxy のヘルスエンドポイントがもっとも有用です — すべての上流サービスのステータスを報告します:
 ```json

@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: fe64417 -->
+<!-- source: README.md synced-through: 175f5a2 -->
 > **[English](../../../README.md)** | **简体中文** | **[日本語](../ja/README.md)** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -34,8 +34,8 @@
 * **先验证，再接受。** 生成的代码可以在隔离的执行环境中编译、测试并修正。
 * **把算力花在刀刃上。** 简单的编辑走更短的路径，更难的任务则获得更多候选、推理与验证。
 * **运行你自己的模型。** 在 NVIDIA、AMD、Apple Silicon、Vulkan 或支持 CPU 的硬件上使用兼容的 GGUF 模型。
-* **一切留在本地。** 你的仓库、推理、测试执行和习得的工件都留在你的机器上。
-* **掌控完整技术栈。** ATLAS 开源、自托管，没有必需的托管 API，也没有按 token 的费用。
+* **在本地掌控数据。** ATLAS 不会有意把你的仓库或提示上传到托管模型或 ATLAS 运营的服务。沙箱命令默认可以访问外部网络；设置 `ATLAS_SANDBOX_NET_INTERNAL=true` 可禁用该访问。
+* **掌控完整技术栈。** ATLAS 开源且自托管，不需要托管模型或第三方模型提供商 API 密钥；ATLAS 服务之间使用本地的逐安装服务令牌进行认证。
 
 ---
 
@@ -73,7 +73,7 @@
 
 2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 基于 Go 的 agent 循环，负责编排整个系统。
    - [工具调用路由](../../ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
-   - [语法强制执行](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 模式保证 JSON 输出有效
+   - [语法强制执行](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 模式强力引导输出符合预期 JSON 结构，并由代理恢复格式错误或截断的输出
    - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 四道组合的缓解措施（描述、语法禁用、系统提示、ASA 操控），把模型推向用 `ast_edit` 做结构性代码编辑
    - [安全限制](../../ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
 

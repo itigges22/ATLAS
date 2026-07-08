@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: fe64417 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2 -->
 > **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) 有出入，以英文原版为准。
@@ -12,18 +12,23 @@
 
 ## 快速诊断
 
-遇到问题时，请先运行以下命令确定问题所在：
+先运行 `atlas doctor`，再使用 Compose 状态和日志定位问题：
 
 ```bash
-# Docker Compose — check all services at once
+atlas doctor
 docker compose ps
-
-# GPU status
-nvidia-smi
-
-# Docker Compose logs (last 50 lines per service)
 docker compose logs --tail 50
 ```
+
+`atlas doctor` 会同时检查主机、配置和服务健康状况，因此是首选的第一项诊断。`docker compose ps` 用于识别启动失败的服务，日志则提供下一层细节。只有当初步结果指向推理后端时，才使用硬件专用检查：
+
+| 后端 | 诊断命令或检查项 |
+|---|---|
+| NVIDIA CUDA | `nvidia-smi` |
+| AMD ROCm | 运行 `rocm-smi` 并确认 `/dev/kfd` 存在。 |
+| Apple Silicon / Metal | 运行 `atlas doctor`；如果原生服务器未监听，请按照 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) 中的说明启动 `./scripts/atlas-llama-macos.sh`，并检查其前台启动器输出。 |
+| Vulkan | 确认 `/dev/dri` 存在，然后运行 `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`。 |
+| 纯 CPU | 确认 `docker-compose.vulkan.yml` 和 `docker-compose.cpu.yml` 覆盖层已启用。`atlas doctor` 不应仅因没有 GPU 而失败，而应发出警告并成功退出。 |
 
 逐服务的健康检查 curl 命令见 [SETUP.md § 验证安装](SETUP.md#验证安装)。atlas-proxy 的健康检查端点对分诊最有用 —— 它会报告所有上游服务的状态：
 ```json

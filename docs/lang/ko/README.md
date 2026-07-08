@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: fe64417 -->
+<!-- source: README.md synced-through: 175f5a2 -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[日本語](../ja/README.md)** | **한국어**
 
 <p align="center">
@@ -34,8 +34,8 @@
 * **받아들이기 전에 검증합니다.** 생성된 코드는 격리된 실행 환경 안에서 컴파일·테스트·수정될 수 있습니다.
 * **연산을 필요한 곳에 씁니다.** 단순한 편집은 짧은 경로를 타고, 어려운 작업일수록 더 많은 후보·추론·검증을 받습니다.
 * **본인 모델을 돌립니다.** NVIDIA, AMD, Apple Silicon, Vulkan, CPU 지원 하드웨어에서 호환 GGUF 모델을 사용할 수 있습니다.
-* **모든 것을 로컬에 둡니다.** 저장소, 추론, 테스트 실행, 학습된 아티팩트가 전부 본인 머신에 남습니다.
-* **스택 전체를 소유합니다.** ATLAS는 오픈 소스이고 셀프 호스팅이며, 필수 호스팅 API나 토큰당 과금이 없습니다.
+* **로컬에서 관리합니다.** ATLAS는 저장소나 프롬프트를 호스팅 모델 또는 ATLAS 운영 서비스에 의도적으로 업로드하지 않습니다. 샌드박스 명령은 기본적으로 외부 네트워크에 접근할 수 있으며, `ATLAS_SANDBOX_NET_INTERNAL=true`로 비활성화할 수 있습니다.
+* **스택 전체를 소유합니다.** ATLAS는 오픈 소스이며 셀프 호스팅됩니다. 호스팅 모델이나 타사 모델 제공업체 API 키는 필요하지 않으며, 로컬 설치별 서비스 토큰이 ATLAS 서비스 간 통신을 인증합니다.
 
 ---
 
@@ -73,7 +73,7 @@
 
 2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 시스템을 오케스트레이션하는 Go 에이전트 루프.
    - [도구 호출 라우팅](../../ARCHITECTURE.md#tools) - 파일 작업을 복잡도 등급별로 분류
-   - [문법 강제](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 스키마로 JSON 출력의 유효성을 보장
+   - [문법 강제](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 스키마로 출력을 예상 JSON 형식 쪽으로 강하게 유도하고, 잘못되거나 잘린 출력은 프록시에서 복구
    - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 구조적 코드 편집에서 모델을 `ast_edit` 쪽으로 밀어주는 네 가지 결합 완화책(설명, 문법 금지, 시스템 노트, ASA 스티어링)
    - [안전 제한](../../ARCHITECTURE.md#safety-limits) - 턴 상한, 토큰 예산, 타임아웃
 

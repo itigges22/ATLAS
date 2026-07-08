@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: fe64417 -->
+<!-- source: README.md synced-through: 175f5a2 -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **日本語** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -34,8 +34,8 @@
 * **受け入れる前に検証する。** 生成されたコードは、分離された実行環境の中でコンパイル・テスト・修正できます。
 * **計算資源を要所に集中させる。** 単純な編集は短いパスで済ませ、難しいタスクにはより多くの候補・推論・検証を割り当てます。
 * **自分のモデルを動かす。** NVIDIA、AMD、Apple Silicon、Vulkan、あるいは CPU 対応ハードウェア上で、互換性のある GGUF モデルを使えます。
-* **すべてをローカルに保つ。** リポジトリ、推論、テスト実行、学習済みアーティファクトはあなたのマシンから出ません。
-* **スタック全体を所有する。** ATLAS はオープンソースかつセルフホストで、必須のホスト型 API もトークン課金もありません。
+* **ローカルで管理する。** ATLAS は、リポジトリやプロンプトをホスト型モデルまたは ATLAS 運営サービスへ意図的にアップロードしません。サンドボックスコマンドはデフォルトで外部ネットワークへアクセスできます。無効にするには `ATLAS_SANDBOX_NET_INTERNAL=true` を設定してください。
+* **スタック全体を所有する。** ATLAS はオープンソースかつセルフホストです。ホスト型モデルやサードパーティのモデルプロバイダー API キーは不要で、ローカルのインストール単位のサービストークンが ATLAS サービス間を認証します。
 
 ---
 
@@ -73,7 +73,7 @@
 
 2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - システム全体を統括する Go 製エージェントループ。
    - [ツールコールルーティング](../../ARCHITECTURE.md#tools) - ファイル操作を複雑度ティアで分類
-   - [文法強制](../../ARCHITECTURE.md#grammar-enforcement) - GBNF スキーマで JSON 出力の妥当性を担保
+   - [文法強制](../../ARCHITECTURE.md#grammar-enforcement) - GBNF スキーマで期待される JSON 形式へ強く誘導し、不正または切り詰められた出力はプロキシ側で回復
    - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 構造的なコード編集でモデルを `ast_edit` へ誘導する4つの複合的な緩和策（説明文、文法禁則、システムノート、ASA ステアリング）
    - [安全制限](../../ARCHITECTURE.md#safety-limits) - ターン上限、トークン予算、タイムアウト
 
