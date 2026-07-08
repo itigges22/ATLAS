@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: WORKING-TREE-2026-07-08 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: fe64417 -->
 > **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) 有出入，以英文原版为准。

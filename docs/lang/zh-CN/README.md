@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: WORKING-TREE-2026-07-08 -->
+<!-- source: README.md synced-through: fe64417 -->
 > **[English](../../../README.md)** | **简体中文** | **[日本語](../ja/README.md)** | **[한국어](../ko/README.md)**
 
 <p align="center">

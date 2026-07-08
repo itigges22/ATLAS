@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: WORKING-TREE-2026-07-08 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: fe64417 -->
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 # ATLAS トラブルシューティングガイド

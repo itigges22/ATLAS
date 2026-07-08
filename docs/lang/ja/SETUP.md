@@ -1,4 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: WORKING-TREE-2026-07-08 -->
+<!-- source: docs/SETUP.md synced-through: fe64417 -->
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
 
 # ATLAS セットアップガイド

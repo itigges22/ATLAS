@@ -1,4 +1,4 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: WORKING-TREE-2026-07-08 -->
+<!-- source: docs/ARCHITECTURE.md synced-through: fe64417 -->
 > **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **[日本語](../ja/ARCHITECTURE.md)** | **한국어**
 
 # ATLAS 아키텍처

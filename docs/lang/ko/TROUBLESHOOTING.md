@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: WORKING-TREE-2026-07-08 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: fe64417 -->
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
 
 > ℹ️ 영어 원본([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.

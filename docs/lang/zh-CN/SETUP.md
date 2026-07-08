@@ -1,4 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: WORKING-TREE-2026-07-08 -->
+<!-- source: docs/SETUP.md synced-through: fe64417 -->
 > **[English](../../SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
 
 > ℹ️ **译者注：** ATLAS 没有固定的默认模型 —— 请通过 `atlas init` 选择注册表模型，或自带兼容的 GGUF。若本译文与英文原版 ([SETUP.md](../../SETUP.md)) 有出入，以英文原版为准。
