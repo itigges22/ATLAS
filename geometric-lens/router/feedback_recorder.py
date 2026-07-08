@@ -85,8 +85,10 @@ def get_routing_stats() -> dict:
             "difficulty_distribution": bin_dist,
         }
     except Exception as e:
-        logger.error(f"Failed to get routing stats: {e}")
-        return {"error": str(e)}
+        logger.error("Failed to get routing stats", exc_info=True)
+        # Generic message only: this dict flows into an HTTP response
+        # (/internal/router/stats); the full detail is in the log above.
+        return {"error": f"{type(e).__name__}: routing stats unavailable"}
 
 
 def reset_stats():

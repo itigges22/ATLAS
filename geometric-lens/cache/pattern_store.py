@@ -207,8 +207,11 @@ class PatternStore:
                 "hit_rate": round(hit_rate, 4),
             }
         except Exception as e:
-            logger.error(f"Failed to get stats: {e}")
-            return {"available": True, "error": str(e)}
+            logger.error("Failed to get stats", exc_info=True)
+            # Generic message only: stats dicts can flow into HTTP
+            # responses; the full detail is in the log above.
+            return {"available": True,
+                    "error": f"{type(e).__name__}: stats unavailable"}
 
     def _incr_stat(self, key: str):
         if self._available:
