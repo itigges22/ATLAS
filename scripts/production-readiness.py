@@ -26,7 +26,7 @@ PYTHON_TARGETS = (
     "sandbox",
 )
 PYTEST_PATHS = ("tests/v3", "tests/v3-service", "tests/cli",
-                "tests/concurrency", "tests/perf")
+                "tests/concurrency", "tests/perf", "tests/contracts")
 
 
 @dataclass(frozen=True)
