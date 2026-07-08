@@ -24,4 +24,5 @@ one without. A future SQLite migration remains possible but must move
 ALL consumers (pattern store, co-occurrence, router, queue, metrics,
 compose, doctor, uninstall) in one change — the #128 shape is rejected.
 Learned state resets if the redis-data volume is lost; backup guidance
-lives in BACKUP_RESTORE.md.
+lives in BACKUP_RESTORE.md. [Ed.: backup guidance now lives in
+docs/OPERATIONS.md § Backup and restore.]

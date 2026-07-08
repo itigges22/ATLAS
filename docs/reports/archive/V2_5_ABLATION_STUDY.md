@@ -173,7 +173,7 @@ During the ablation study, we discovered that llama.cpp's `--embeddings` flag fo
 - **Server A** (port 8000): Qwen3-14B + draft, spec decode ON, embeddings OFF (~100 tok/s)
 - **Server B** (port 8001): nomic-embed-text-v1.5, embeddings ON, 768-dim output (~26ms per request)
 
-Both containers share a single GPU in the same K3s pod. The embed sidecar adds only ~300 MiB VRAM. See [V2_TO_V2_5_MIGRATION.md](V2_TO_V2_5_MIGRATION.md) for full details.
+Both containers share a single GPU in the same K3s pod. The embed sidecar adds only ~300 MiB VRAM. The migration notes previously lived in V2_TO_V2_5_MIGRATION.md (retired; see [CHANGELOG.md](../../../CHANGELOG.md) for the release record).
 
 ---
 
@@ -195,7 +195,8 @@ Both containers share a single GPU in the same K3s pod. The embed sidecar adds o
 - **Router for benchmarks**: All routing signals are logged but don't affect candidate generation flow in the current benchmark.
 - **Spec decode + self-embeddings**: `--embeddings` flag still breaks spec decode. V3 must solve this engineering challenge to get both 87.8% selection accuracy AND ~100 tok/s throughput.
 
-### V2.5.1 Confirmation Results (completed 2026-02-23) {#v251-confirmation-results}
+<a id="v251-confirmation-results"></a>
+### V2.5.1 Confirmation Results (completed 2026-02-23)
 
 V2.5.1 ran a focused confirmation ablation to test the **Embedding Source Hypothesis**: that C(x) ≈ random was an artifact of the V2→V2.5 embedding source switch, not a fundamental Lens failure.
 

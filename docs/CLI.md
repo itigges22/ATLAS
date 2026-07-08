@@ -44,9 +44,9 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | `atlas asa check \| build \| publish` | ASA control-vector compat probe + per-model training + publish (see below). |
 | `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both. `--lens-only` / `--asa-only` delegate to the per-component flows. |
 | `atlas compose <args...>` | `docker compose` passthrough with ATLAS's compose file set (base file + the backend overlay resolved from `ATLAS_BACKEND`). E.g. `atlas compose ps`, `atlas compose logs -f atlas-proxy`. |
-| `atlas upgrade [--to TAG] [--dry-run] [--skip-smoke] [--yes]` | Staged upgrade: records a restore point (current tag + image digests + `.env` backup), stages the target images, starts them, waits for readiness, runs a quick-doctor smoke check, and finalizes. **Any failure automatically restores the previous release.** Default target is `latest`. `--dry-run` previews the plan without applying; the target images cosign signatures are verified before apply. |
-| `atlas diagnostics collect [--output FILE] [--log-lines N]` | Write a shareable JSON diagnostic bundle: versions, platform, filtered config (secret-ish values masked, service token dropped), service health + the seven status dimensions, image digests, resource limits, recent logs (private-value-filtered), and the doctor report. Source code is excluded; safe to attach to an issue after review. |
-| `atlas config validate \| migrate [.env]` | Typed `.env` validation (type/range/enum checks, unknown-key + deprecated-key warnings) so misconfiguration fails before startup; `migrate` forward-migrates to the current config schema version (drops deprecated keys, stamps `ATLAS_CONFIG_SCHEMA_VERSION`, backs up `.env.bak`). |
+| `atlas upgrade [--to TAG] [--dry-run] [--skip-smoke] [--yes]` | Staged upgrade: records a restore point (current tag + image digests + `.env` backup), stages the target images, starts them, waits for readiness, runs a quick-doctor smoke check, and finalizes. **Any failure automatically restores the previous release.** Default target is `latest`. `--dry-run` previews the plan without applying. Cosign signature verification of the target images is best-effort: it is skipped when `cosign` isn't installed or `ATLAS_UPGRADE_SKIP_VERIFY=1` is set, and a signature that fails verification aborts the upgrade and restores the previous release. |
+| `atlas diagnostics collect [--output FILE] [--log-lines N]` | Write a shareable JSON diagnostic bundle: versions, platform, filtered config (secret-ish values masked, service token dropped), per-service health plus proxy readiness and calibration status, `docker compose images` output, recent logs (private-value-filtered), and the doctor report. Source code is excluded; safe to attach to an issue after review. |
+| `atlas config validate \| migrate [.env] [--dry-run]` | Typed `.env` validation (type/range/enum checks, unknown-key + deprecated-key warnings) so misconfiguration fails before startup; `migrate` forward-migrates to the current config schema version (drops deprecated keys, stamps `ATLAS_CONFIG_SCHEMA_VERSION`, backs up `.env.bak`). `migrate --dry-run` previews the changes without writing. |
 | `atlas artifact verify \| snapshot \| rollback [DIR]` | Verify a lens/ASA bundle's manifest signature + per-file SHA-256 (tamper-detection), keep a previous-bundle snapshot before activating a new one, or restore it. Default DIR is the lens models dir. |
 | `atlas rollback [--to TAG] [--yes]` | Return the deployment to a working release. With no argument, restores the last upgrade's previous release from the recorded restore point; `--to <tag>` points at a specific immutable tag. See OPERATIONS.md § Rolling back. |
 
@@ -55,8 +55,10 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 `atlas` performs these startup steps:
 
 1. **Locates the `atlas-tui` binary** on `$PATH` or in `~/.local/bin`.
-2. **Builds from source** in `tui/` if the binary is missing and Go
-   1.24+ is available. (~10 s on first run.)
+2. **Builds from source** in `tui/` when `go` is on `PATH` and the
+   binary is missing or stale (older than the TUI sources). `tui/go.mod`
+   requires Go 1.26.2+; older toolchains auto-fetch the required
+   version. (~10 s on first run.)
 3. **Ensures atlas-proxy is running** via `_ensure_proxy()`. If the
    proxy's `/workspace` bind-mount doesn't already cover your current
    directory, the wrapper force-recreates the proxy container with the
@@ -190,7 +192,7 @@ the last message; pass an integer for the last N messages).
 | `/hide <pane>` | Hide a pane: `files`, `pipeline`, `events`, or `all` |
 | `/show <pane>` | Show a pane (or `all`) |
 | `/mouse on\|off` | Toggle mouse capture (off lets you copy text) |
-| `/copy [N]` | Copy the last N chat messages (default 1) to clipboard via OSC52 |
+| `/copy [N]` | Copy the last N chat messages (default 1) to the clipboard — native clipboard tool first (`wl-copy`/`xclip`/`xsel`/`pbcopy`), OSC52 escape as the fallback (covers SSH) |
 | `/yank [N]` | Alias for `/copy` |
 | `/demo [short\|medium\|long]` | Exit to the split-pane recording demo: base agent vs V3, same proxy/model (default `medium`) |
 | `/quit` | Exit (same as `Ctrl+D`) |
@@ -202,7 +204,8 @@ them on demand. No file content is sent eagerly.
 
 `/good` and `/bad` rate the most recently completed pass. The proxy turns
 that pass's writes into labeled, weighted lens-training samples (collected
-under `ATLAS_LENS_DATA_DIR`). For finer control, `/review` lists the pass's
+in the proxy container under `ATLAS_LENS_DATA_DIR`, bind-mounted from the
+host path `ATLAS_LENS_HOST_DIR`, default `./lens_training`). For finer control, `/review` lists the pass's
 files and `/deny <path>` marks individual ones bad — so a thumbs-up pass with
 one denied file banks the good files as positives and the denied one as a
 confident negative (the per-file verdict overrides the pass thumbs). `/redo`
@@ -220,11 +223,13 @@ shows a one-time **"🧠 Lens retrain available"** banner with the command to ru
 Workspace tree to depth 2. Skips noisy directories (`.git`,
 `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`,
 `target`, `.next`, `.nuxt`, `.idea`, `.vscode`, `.cache`,
-`.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `__MACOSX`). Capped at
-500 entries — overflow renders as `(+N more)`. Files modified by the
-agent during the session are highlighted bold orange with a `●` prefix;
-folders are bold cyan with `▸`. Re-scans every 4 s and immediately
-after every `write_file`/`edit_file`/`delete_file` tool result.
+`.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `__MACOSX`). The scan is capped at
+500 entries; separately, when the tree is taller than the pane the
+bottom row shows a `(+N more)` overflow hint (scrollable). Files
+modified by the agent during the session are highlighted bold orange
+with a `●` prefix; folders are bold cyan with `▸`. Re-scans every 4 s,
+and a `write_file`/`edit_file`/`delete_file` tool call expires that
+debounce so the next ~100 ms UI tick rescans immediately.
 
 ### Pipeline
 
@@ -250,11 +255,11 @@ streaming. Visual hierarchy:
 - **Bright** (outputs the user cares about): user messages (`you`),
   finished assistant text (`agent`), executed tool calls (`→ tool`)
   and their results (`✓ tool` / `✗ tool` with elapsed time).
-- **Dim grey italic** (machine internals): turn separators
-  (`── turn N · ctx=K msgs ──`), LLM-call rows (`· llm · …`), V3
-  internal LLM rows (`· v3 · …`, violet tint), planner rows
-  (`plan` meta — see below), and other system metadata (mode
-  changes, errors, V3 stage progress).
+- **Purple bold**: turn separators (`── turn N · ctx=K msgs ──`).
+- **Dim / tinted** (machine internals): LLM-call rows (`· llm · …`,
+  cyan italic), V3 internal LLM rows (`· v3 · …`, violet tint),
+  planner rows (`plan` meta — see below), and other system metadata
+  (mode changes, errors, V3 stage progress) in dim grey italic.
 
 Plan-mode rows (when the planner ran for this turn — see
 [ARCHITECTURE.md § Plan Mode](ARCHITECTURE.md#plan-mode-per-turn-pre-flight)
@@ -324,9 +329,10 @@ When a destructive tool needs approval, the turn pauses and a bordered
 prompt appears above the input box showing the tool and what it will do:
 
 ```
-● run_command wants to run:
-    npm install
-  [y] allow once   [a] allow for session   [n] deny
+⚠ Permission required
+tool · run_command
+Run command: npm install
+[y] allow once   [a] allow for session   [n] deny
 ```
 
 - **`y`** — allow this one call.
@@ -406,7 +412,7 @@ cwd to re-align.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ATLAS_TUI_LOG` | `~/.cache/atlas-tui/debug.log` | TUI debug log path; set `off` to disable |
+| `ATLAS_TUI_LOG` | _(unset — logging off in the raw binary)_ | TUI debug log path; set `off` to disable. The `atlas` Python wrapper injects `--log ~/.cache/atlas-tui/debug.log` when neither `--log` nor `ATLAS_TUI_LOG` is set, so wrapper-launched sessions log there by default. |
 | `ATLAS_TUI_STARTUP_NOTE` | _(unset)_ | Initial system message inserted at startup (used by the Python wrapper to surface workspace warnings) |
 | `ATLAS_TUI_MOUSE` | `on` | Mouse capture at startup; `off` skips `WithMouseCellMotion` so native terminal select works without modifiers. Mid-session toggle via `/mouse on\|off`. Also exposed as the `--mouse` flag. |
 | `GLAMOUR_STYLE` | `dark` | Markdown rendering style for assistant text |
@@ -654,7 +660,7 @@ After a successful build:
 
 ### `atlas lens retrain`
 
-Retrains the lens on samples collected from your own agent use — the `/good`/`/bad` pass verdicts and per-file `/deny` marks banked under `ATLAS_LENS_DATA_DIR` (see [Slash commands](#slash-commands)). This is `build` sourced from the collected corpus: the same pipeline (embed → C(x)+G(x) → calibrated thresholds → save), always replacing the current artifacts.
+Retrains the lens on samples collected from your own agent use — the `/good`/`/bad` pass verdicts and per-file `/deny` marks banked in the host-side corpus dir (`ATLAS_LENS_HOST_DIR`, default `./lens_training` — the host side of the proxy's lens-training bind mount; see [Slash commands](#slash-commands)). This is `build` sourced from the collected corpus: the same pipeline (embed → C(x)+G(x) → calibrated thresholds → save), always replacing the current artifacts.
 
 ```bash
 atlas lens retrain                     # retrain on the collected corpus
@@ -689,9 +695,9 @@ atlas lens publish <model> --skip-pr            # upload to HF, print PR body fo
 
 **Pipeline:**
 1. SHA-256 + size of `cost_field.pt` for the PR's verification checklist.
-2. `huggingface_hub` `create_repo` (idempotent) + uploads `cost_field.pt` + `metric_tensor.pt` if present + an auto-generated `README.md` model card.
+2. `huggingface_hub` `create_repo` (idempotent) + uploads the full artifact bundle: `cost_field.pt`, `model_identity.json`, `cx_normalization.json`, `cost_field.safetensors` (when at least as fresh as the `.pt`), `gx_xgboost.json`, `gx_weights.json`, `gx_thresholds.json` (when present), and an auto-generated `README.md` model card.
 3. Renders a registry-PR markdown body with a verification checklist + suggested Python diff for `atlas/cli/commands/model_registry.py`.
-4. Tries `gh pr create --repo itigges22/ATLAS` if `gh` is installed + authenticated; otherwise prints the body for manual paste.
+4. Opens the registry PR through the GitHub API (`gh api` — resolve base branch, fork if needed, branch, commit, open PR; no local git checkout) if `gh` is installed + authenticated; otherwise prints the body for manual paste.
 
 **Requirements:**
 - `HF_TOKEN` env var (write-scope) — get one at https://huggingface.co/settings/tokens.
@@ -723,7 +729,7 @@ Verdict + exit code:
 | `needs-build` | 1 | No vector, or dim mismatched (vector was trained for a different model). |
 | `incompatible` | 2 | llama-server unreachable. |
 
-Reports the vector's dim, layer count (from GGUF metadata), and the `model_hint` baked in by `build_steering_vector.py`. Resolves container-relative paths (`/models/x.gguf` on llama-server) to host-visible paths by trying `<atlas_root>/models/` and `$ATLAS_MODELS_DIR` in turn — running `atlas asa check` on the host needs no manual path translation.
+Reports the vector's dim, layer count (from GGUF metadata), and the `model_hint` baked in by `build_steering_vector.py`. Resolves container-relative paths (`/models/x.gguf` on llama-server) to host-visible paths by trying `$ATLAS_MODELS_DIR` (shell env, then the Docker `.env`) and then `<atlas_root>/models/` — running `atlas asa check` on the host needs no manual path translation.
 
 Requires the `gguf` Python pkg on the host (`pip install gguf`) for the dim probe. Without it the verdict falls back to `compat: unverified` rather than failing — llama-server will refuse to load an incompatible vector at boot anyway, so the worst case is a clear error in container logs.
 
@@ -758,7 +764,7 @@ atlas asa publish --dry-run                      # render PR body, no upload
 atlas asa publish --vector path/to/v.gguf        # custom vector path
 ```
 
-Required: `HF_TOKEN` env var (same as `atlas lens publish`). PR body documents the residual dim, layer the vector was trained at, GGUF model hint, and the suggested registry diff for adding `asa_status="supported"` to the model entry.
+Required: `HF_TOKEN` env var (same as `atlas lens publish`). PR body documents the residual dim, the layer the vector was trained at, the vector's SHA-256, and the suggested registry diff for adding `asa_status="supported"` to the model entry.
 
 ### TUI calibration badge
 
@@ -772,7 +778,7 @@ When you launch `atlas` (the TUI), the Pipeline pane title gets a compact Lens/A
 
 ### Prereqs
 
-Both subcommands require a running `llama-server`. `atlas lens check` reuses the same URL resolution as the lens service (`ATLAS_LLAMA_URL` → `LLAMA_EMBED_URL` → `LLAMA_URL` → `http://localhost:8080`). The hidden-states patch (baked into `inference/Dockerfile.v31` and `Dockerfile.rocm`) is required for G(x) metric-tensor training but not for C(x) — `check` reports its presence as informational.
+Both subcommands require a running `llama-server`. `atlas lens check` reuses the same URL resolution as the lens service (`ATLAS_LLAMA_URL` → `LLAMA_EMBED_URL` → `LLAMA_URL` → the compose deployment's llama service URL resolved from the Docker `.env`). The hidden-states patch (baked into `inference/Dockerfile.v31` and `Dockerfile.rocm`) is required for lens training embeddings (hidden-states extraction) but not for C(x) scoring — `check` reports its presence as informational.
 
 ---
 
@@ -796,7 +802,8 @@ auto-realigns on launch.
 
 ### "atlas-tui binary not found and Go is not available"
 
-Install Go 1.24+ from [https://go.dev/dl/](https://go.dev/dl/), or
+Install Go 1.26.2+ from [https://go.dev/dl/](https://go.dev/dl/)
+(older installed toolchains auto-fetch the required version), or
 build manually:
 
 ```bash

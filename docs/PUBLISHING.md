@@ -46,7 +46,7 @@ The CLI also reads `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` if you'v
 Every publish command runs the same sequence; only the artifact and the
 registry field it sets differ:
 
-1. **Pre-flight** — checks credentials and tooling: `HF_TOKEN` set, `huggingface_hub` installed, `gh` present or not. It then verifies the artifact files exist and the calibration JSONs are complete and valid. The torch checkpoint itself is not loaded as a gate — a failed dim probe warns and continues.
+1. **Pre-flight** — checks credentials and tooling: `HF_TOKEN` set, `huggingface_hub` installed, `gh` present or not. It then verifies the artifact: the lens flow checks the artifact files exist and the calibration JSONs are complete and valid; the ASA flow validates the `.gguf` and its model marker instead. The torch checkpoint itself is not loaded as a gate — a failed dim probe warns and continues.
 2. **Hash** — SHA-256s the artifact so the PR carries a tamper-detectable fingerprint.
 3. **Upload to HF** — creates the repo (idempotent), uploads the artifact files, and generates a model card README with license + base-model badge.
 4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested diff for `atlas/cli/commands/model_registry.py`.
@@ -89,8 +89,10 @@ atlas lens publish <model-name> \
 ```
 
 `--repo` is the HuggingFace destination (created if it doesn't exist);
-`atlas-lens-<model-slug>` is the naming convention. The upload includes C(x),
-G(x), `model_identity.json`, `cx_normalization.json`, and `gx_thresholds.json`.
+`atlas-lens-<model-slug>` is the naming convention. The upload includes C(x)
+(`cost_field.pt`, plus `cost_field.safetensors` when it is at least as fresh as
+the `.pt`), G(x) (`gx_xgboost.json`, `gx_weights.json`), `model_identity.json`,
+`cx_normalization.json`, and `gx_thresholds.json`.
 
 After any re-publish, update the `lens_artifact_sha256` / `asa_artifact_sha256`
 entries for the model in `atlas/cli/commands/model_registry.py` — the installer
@@ -160,7 +162,7 @@ Run `pip install huggingface_hub`. The lens container has it baked in, but the h
 
 Either install `gh` from https://cli.github.com, or use `--skip-pr` — the CLI will print the PR body and you paste it into github.com/itigges22/ATLAS/compare manually. Both paths produce the same review outcome. (With `gh` present, no git checkout is required — the PR is created entirely through the GitHub API, including the fork for non-maintainers.)
 
-### `Artifact input dim (0)` in the PR body
+### `Artifact input dim (unverified)` in the PR body
 
 The dim probe needs `torch` installed on the host (`pip install torch`). Without it, the PR body shows "unverified" and the maintainer will probe the dim on their side. Not a blocker — the upload still happens.
 

@@ -28,11 +28,68 @@ For the per-service health-check curls, see [SETUP.md § Verify Installation](SE
   "lens_ready": true,
   "sandbox": true,
   "port": "8090",
+  "capabilities": ["demo_raw_completion_v1"],
   "stats": { "requests": 0, "repairs": 0, "sandbox_passes": 0, "sandbox_fails": 0 }
 }
 ```
 
 If any field is `false`, that service is the problem. `status` flips to `"degraded"` whenever any of `inference`, `lens`, `lens_ready`, or `sandbox` is false. The split between `lens` and `lens_ready` lets you tell "Lens process is up but its `/ready` gate is failing — usually missing weights or embedding-dim mismatch" apart from "Lens HTTP is unreachable."
+
+---
+
+## Find your error
+
+Exact error strings and symptoms, mapped to their entries.
+
+| You're seeing | Go to |
+|---|---|
+| `no kernel image is available for execution on the device` — NVIDIA GPU | [`no kernel image is available for execution on the device` (CUDA)](#no-kernel-image-is-available-for-execution-on-the-device-cuda) |
+| `no kernel image is available for execution on the device` — AMD GPU | [AMD GPU is "unsupported" by ROCm…](#amd-gpu-is-unsupported-by-rocm-but-you-want-to-try-anyway-no-kernel-image-on-rocm) |
+| `invalid device function` or `nvcc fatal: unsupported gpu architecture` | [`no kernel image…` (CUDA)](#no-kernel-image-is-available-for-execution-on-the-device-cuda) |
+| `libnvidia-ml.so.1: cannot open shared object file` | [libnvidia-ml.so.1 entry](#libnvidia-mlso1-cannot-open-shared-object-file) |
+| Container can't see the GPU; model runs on CPU | [GPU Not Detected in Container](#gpu-not-detected-in-container) |
+| `/dev/kfd: no such file or directory` | [AMD GPU not detected (ROCm)](#amd-gpu-not-detected-rocm) |
+| `Permission denied` on `/dev/kfd` | [AMD GPU detected but Docker can't reach it](#amd-gpu-detected-but-docker-cant-reach-it) |
+| `error: AMDGPU target 'gfx1201' is not supported` | [RDNA4 — ROCm 7.x required](#rdna4-rx-9070--9070-xt-gfx1200--gfx1201--rocm-7x-required) |
+| ROCm image pull times out / rate-limited | [ROCm container can't pull `rocm/rocm-terminal`](#rocm-container-cant-pull-rocmrocm-terminal) |
+| `docker compose build` fails with CUDA errors | [First Build Fails (CUDA Not Found)](#first-build-fails-cuda-not-found) |
+| `RPC failed; curl 56` / `early EOF` / `fetch-pack: invalid index-pack output` | [llama.cpp Clone Times Out](#llamacpp-clone-times-out) |
+| `error loading model: unknown (model) architecture '…'` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
+| `error: patch failed:` / `patch does not apply` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
+| Permission denied on mounted volumes / model files (Fedora/RHEL) | [SELinux Blocking Container Access](#selinux-blocking-container-access-fedorarhel) |
+| `"sandbox": false` in proxy health (manual container setup) | [Sandbox Unreachable](#sandbox-unreachable) |
+| `"sandbox": false` in proxy health (Compose stack) | [Sandbox Unreachable (health check)](#sandbox-unreachable-health-check) |
+| `address already in use` on startup | [Port Conflicts](#port-conflicts) |
+| CUDA allocation error after "fitting params to device memory" | [Model + KV cache don't fit on the GPU](#model--kv-cache-dont-fit-on-the-gpu-startup-fails-or-generation-is-5-slow) |
+| Generation at ~2 tok/s, llama-server burning CPU cores | [Model + KV cache don't fit on the GPU](#model--kv-cache-dont-fit-on-the-gpu-startup-fails-or-generation-is-5-slow) / [Slow Generation](#slow-generation-2-toks) |
+| Sizing a model before download | [What fits on my GPU?](#what-fits-on-my-gpu) |
+| `failed to load model` at startup | [Model File Not Found](#model-file-not-found) |
+| llama-server crashes / OOMKilled, VRAM near 100% | [Out of VRAM](#out-of-vram) |
+| Model outputs `<think>` tags or prose instead of JSON tool calls | [Grammar Not Enforced](#grammar-not-enforced-model-outputs-thinking-blocks) |
+| Gemma keeps emitting `done` without doing anything | [Grammar Not Enforced](#grammar-not-enforced-model-outputs-thinking-blocks) |
+| `unexpected end of JSON` on tool calls | [Context Window Too Small](#context-window-too-small) / [Truncation Errors](#truncation-errors-write_file-fails-repeatedly) |
+| No tool calls, no V3 — requests pass straight through | [Agent Loop Not Activating](#agent-loop-not-activating) |
+| Writes/edits never trigger V3 stages | [V3 Pipeline Not Firing on Feature Files](#v3-pipeline-not-firing-on-feature-files) |
+| `Your output was truncated — the content is too long for a single tool call` | [Truncation Errors](#truncation-errors-write_file-fails-repeatedly) |
+| `Tool call was truncated (output too long for context window)` | [Truncation Errors](#truncation-errors-write_file-fails-repeatedly) |
+| ~30 s idle between a tool result and the next action | [Long Pause Between Tool Result and Next Action](#long-pause-between-tool-result-and-next-action) |
+| Agent keeps editing after the fix was verified | [Model Keeps Editing After V3 Already Confirmed the Fix](#model-keeps-editing-after-v3-already-confirmed-the-fix) |
+| First tool call reads a file that doesn't exist here | [Model Hallucinates Filenames From Previous Sessions](#model-hallucinates-filenames-from-previous-sessions) |
+| `ModuleNotFoundError` during V3 verification only | [Multi-File Project: Sandbox `ModuleNotFoundError`](#multi-file-project-sandbox-modulenotfounderror) |
+| `_curses.error: addwstr() returned ERR` | [Curses Bottom-Row `addwstr() returned ERR`](#curses-bottom-row-addwstr-returned-err) |
+| ~5-minute pause writing HTML/CSS/JSON files | [V3 Hangs for Several Minutes on Non-Python Files](#v3-hangs-for-several-minutes-on-non-python-files) |
+| Terse follow-up ("ok", "yes") gets chat instead of action | [V3 Pipeline Doesn't Fire on "Fix It Again" Prompts](#v3-pipeline-doesnt-fire-on-fix-it-again-prompts) |
+| `file not read yet — use read_file first before editing` | [File Not Read Before Editing](#file-not-read-before-editing) |
+| `file modified since last read — read it again before editing` | [File Modified Externally](#file-modified-externally) |
+| `You have full project context in the system prompt. Do not read more files.` | [Exploration Budget Warning](#exploration-budget-warning) |
+| `"lens": false` / "Lens unavailable — verification disabled" | [Lens Not Loaded / Unavailable](#lens-not-loaded--unavailable) |
+| Every candidate scores `cx_energy: 0.0`, `gx_score: 0.5` | [All Scores Near 0.5](#all-scores-near-05) |
+| "embedding extraction failed" in lens logs | [Embedding Extraction Fails](#embedding-extraction-fails) |
+| 503 `models directory is mounted read-only` on retrain | [`/internal/lens/retrain` Returns 503](#internallensretrain-returns-503-models-directory-is-mounted-read-only) |
+| Sandbox returns `"error_type": "Timeout"` | [Code Execution Timeout](#code-execution-timeout) |
+| Sandbox errors on a specific language | [Language Not Supported](#language-not-supported) |
+| `LIMITED MODE: running N tasks` below `--tasks` | [Bench runs fewer tasks than requested](#bench-runs-fewer-tasks-than-requested-limited-mode-running-n-tasks-with-n-below---tasks) |
+| System sluggish, services OOMKilled | [High RAM Usage](#high-ram-usage) |
 
 ---
 
@@ -183,9 +240,9 @@ id -nG | grep -E 'render.*video|video.*render'
 atlas doctor
 ```
 
-### AMD GPU is "unsupported" by ROCm but you want to try anyway
+### AMD GPU is "unsupported" by ROCm but you want to try anyway (`no kernel image` on ROCm)
 
-**Symptom:** `rocm-smi` reports your GPU, but `rocminfo` doesn't, or HIP kernels fail with "no kernel image is available for execution on the device."
+**Symptom:** `rocm-smi` reports your GPU, but `rocminfo` doesn't, or HIP kernels fail with "no kernel image is available for execution on the device." (For the same error on NVIDIA, see [the CUDA entry](#no-kernel-image-is-available-for-execution-on-the-device-cuda).)
 
 **What it means:** llama.cpp's HIP kernels were compiled for `gfx` targets that don't include your GPU. ROCm has a long-standing pattern of dropping older consumer GPUs from official support while still letting them work with the right override.
 
@@ -237,18 +294,24 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 
 **What it means:** ROCm images are large (~2 GB) and Docker Hub rate-limits anonymous pulls.
 
-**Fix:** authenticate (free Docker Hub account allows higher rate limits), or pull during off-peak hours, or pin to a specific tag in `.env`:
+**Fix:** authenticate (a free Docker Hub account allows higher rate limits) and pre-pull the doctor's check image, or retry during off-peak hours:
 
 ```bash
 docker login
-ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f docker-compose.rocm.yml pull
+docker pull rocm/rocm-terminal:latest
+```
+
+The doctor's ROCm check always uses `rocm/rocm-terminal:latest`. `ATLAS_ROCM_TAG` pins the *build base* image for the llama-server ROCm build (`rocm/dev-ubuntu-*`), not the doctor's check image:
+
+```bash
+ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
 ```
 
 ### First Build Fails (CUDA Not Found)
 
 **Symptom:** `docker compose build` fails with CUDA-related errors during llama-server compilation.
 
-**Fix:** The llama-server Dockerfile builds llama.cpp inside a `nvidia/cuda:12.8.0-devel` base image, so CUDA headers are available during build without host GPU access. Common causes of build failure:
+**Fix:** The llama-server Dockerfile builds llama.cpp inside a `nvidia/cuda:12.9.0-devel` base image (digest-pinned in `inference/Dockerfile.v31`), so CUDA headers are available during build without host GPU access. Common causes of build failure:
 1. Insufficient disk space (~5GB needed for build artifacts)
 2. Network issues downloading the CUDA base image or cloning llama.cpp
 3. Podman rootless builds may fail with permission issues — try `podman-compose build` with `--podman-build-args="--format docker"`
@@ -263,15 +326,18 @@ fatal: early EOF
 fatal: fetch-pack: invalid index-pack output
 ```
 
-**Cause:** The full llama.cpp git history is large (~1 GB) and the clone is sensitive to flaky/slow connections. A momentary stall causes the SSL read to time out and the whole transfer to abort.
+**Cause:** The full llama.cpp git history is large (~1 GB) and the fetch is sensitive to flaky/slow connections. A momentary stall causes the SSL read to time out and the whole transfer to abort.
 
-**Fix:** `inference/Dockerfile.v31` uses `git clone --depth 1 --single-branch` with `http.postBuffer=524288000` and `http.lowSpeedLimit/Time` to fail-fast on dead connections. If you have an older Dockerfile or the issue recurs:
+**Fix:** `inference/Dockerfile.v31` uses `git init` + a `--depth 1` fetch of the single pinned revision (`LLAMA_CPP_REV`), which avoids the ~1 GB full-history transfer, with `http.postBuffer=524288000` and `http.lowSpeedLimit/Time` to fail-fast on dead connections. If the issue recurs:
 
 1. Retry the build — transient network blips happen, especially on residential connections.
-2. If retries keep failing, pre-pull the repo on the host and bind-mount it into the build context. Quick recipe:
+2. If retries keep failing, pre-fetch the pinned revision on the host and adjust the Dockerfile to COPY it. Quick recipe:
    ```bash
-   git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
-   # then edit Dockerfile.v31 to COPY from /tmp/llama.cpp instead of cloning
+   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' inference/Dockerfile.v31 | cut -d= -f2)
+   git init /tmp/llama.cpp && cd /tmp/llama.cpp
+   git remote add origin https://github.com/ggml-org/llama.cpp
+   git fetch --depth 1 origin "$REV" && git checkout FETCH_HEAD
+   # then edit Dockerfile.v31 to COPY from /tmp/llama.cpp instead of fetching
    ```
 3. Prebuilt llama-server images on GHCR skip this step entirely — pull instead of building.
 
@@ -296,7 +362,7 @@ The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfil
    ```
    (Only this patch is `git apply`-ed. The spec-decode embeddings fix is a `sed` in the Dockerfiles, a no-op when its target line is absent.)
 2. **If it applies cleanly:** bump `LLAMA_CPP_REV` in all four Dockerfiles to the new SHA. The CI smoke test verifies they agree.
-3. **If it fails:** `git apply --reject …` to land the clean hunks, re-insert each `*.rej` hunk at its moved anchor (watch for upstream renames in surrounding code, e.g. `model` → `model_tgt`, and update the patch's added lines), then `git diff > $REPO/inference/patches/expose-hidden-states.patch`. Re-run step 1. Compile just the touched file CPU-only to catch member/type errors before the long CUDA build: `cmake -B build-cpu -DGGML_CUDA=OFF && make -C build-cpu server-context`.
+3. **If it fails:** `git apply --reject …` to land the clean hunks, re-insert each `*.rej` hunk at its moved anchor (watch for upstream renames in surrounding code, e.g. `model` → `model_tgt`, and update the patch's added lines), then `git diff > $REPO/inference/patches/expose-hidden-states.patch`. Re-run step 1. Compile just the server target CPU-only to catch member/type errors before the long CUDA build: `cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`.
 4. Rebuild and bring up:
    ```bash
    docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server
@@ -348,13 +414,63 @@ All ports are configurable via `.env`. See [CONFIGURATION.md](CONFIGURATION.md).
 
 ## llama-server Issues
 
+### `no kernel image is available for execution on the device` (CUDA)
+
+**Applies to:** NVIDIA GPUs older than Blackwell — RTX 40xx (Ada), RTX 30xx
+(Ampere), RTX 20xx / T4 (Turing), GTX 10xx (Pascal), V100/A100/H100/L4 —
+running the prebuilt `ghcr.io/itigges22/atlas-llama` image. The sibling
+errors `invalid device function` (runtime) and
+`nvcc fatal: unsupported gpu architecture` (local build) have the same cause.
+(For the same error on AMD, see [the ROCm entry](#amd-gpu-is-unsupported-by-rocm-but-you-want-to-try-anyway-no-kernel-image-on-rocm).)
+
+**What it means:** the published CUDA image is compiled for compute
+capability `120;121` (Blackwell only). The llama-server binary contains no
+GPU kernels for earlier architectures, and its embedded PTX (`compute_121`)
+cannot be JIT-compiled downward, so the first CUDA kernel launch fails.
+This is an image/GPU mismatch, not a driver or VRAM problem.
+
+**Check first:**
+```bash
+# Your GPU's compute capability (8.9 = Ada, 8.6 = Ampere, 7.5 = Turing, 12.0 = Blackwell)
+nvidia-smi --query-gpu=name,compute_cap --format=csv
+# What the image was built for (Blackwell-only image prints sm_120/sm_121)
+docker run --rm --entrypoint bash ghcr.io/itigges22/atlas-llama:latest \
+  -c 'grep -ao "sm_[0-9]*" /usr/local/bin/llama-server | sort -u'
+```
+If your compute capability is below 12.0 and the image only lists
+`sm_120`/`sm_121`, this entry applies.
+
+**Fix — rebuild the inference image for your architecture** (one-time,
+~30-75 min; only llama-server is rebuilt, other services keep using GHCR
+images). Drop the dot from your compute capability (`8.6` -> `86`):
+```bash
+docker compose build --build-arg CUDA_ARCH=86 llama-server
+docker compose up -d --no-deps llama-server
+```
+Multiple GPUs / portability: pass a semicolon list, e.g.
+`--build-arg CUDA_ARCH="75;86;89"`. Full arch table:
+[SETUP.md § CUDA Compute Capability](SETUP.md#cuda-compute-capability-dockerfilev31).
+
+**Verify:**
+```bash
+docker compose logs llama-server | tail -20   # model loads, no CUDA errors
+curl -s localhost:8080/health                  # {"status":"ok"}
+```
+
+**Still failing:** confirm the container is actually running your rebuilt
+image (`docker compose images llama-server` — a `docker compose pull` may
+have overwritten it; pin `ATLAS_IMAGE_TAG` or re-run the build). Pascal
+(`60`/`61`) and older are limited by upstream llama.cpp CUDA support — the
+Vulkan image (`docker-compose.vulkan.yml`) is the fallback. Otherwise file
+an issue with `nvidia-smi` output and the first 50 llama-server log lines.
+
 ### Model Loading on CPU Instead of GPU
 
 **Symptom:** Generation at ~2 tok/s instead of ~50 tok/s. `nvidia-smi` doesn't show llama-server using the GPU.
 
-**Fix:** Ensure `--n-gpu-layers 99` is set (offloads all layers to GPU). In Docker Compose this is the default. For bare metal, check the command:
+**Fix:** Ensure `-ngl 99` (`--n-gpu-layers`) is set (offloads all layers to GPU). In Docker Compose the entrypoint sets it by default. For bare metal, check the command:
 ```bash
-ps aux | grep llama-server | grep 'n-gpu-layers'
+ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 If using Docker, ensure the NVIDIA container runtime is configured (see GPU section above).
@@ -433,7 +549,7 @@ in either direction), and `atlas onboard` prints the same fit automatically.
 # Docker Compose — model must be in ATLAS_MODELS_DIR (default: ./models/)
 ls -la "models/$ATLAS_MODEL_FILE"
 
-# Bare metal — check ATLAS_MODEL_PATH
+# Bare metal — check ATLAS_MODELS_DIR + ATLAS_MODEL_FILE
 ls -la "$ATLAS_MODELS_DIR/$ATLAS_MODEL_FILE"
 ```
 
@@ -457,7 +573,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 
 **Symptom:** Model outputs `<think>` tags or raw text instead of JSON tool calls.
 
-**Fix:** The proxy sets `response_format: {"type": "json_object"}` automatically inside the `/v1/agent` agent-loop handler — this is unconditional (no env-var toggle). If you're hitting llama-server directly via `/v1/chat/completions` or `/v1/completions`, you have to include the parameter yourself:
+**Fix:** The proxy sets a `response_format` automatically inside the `/v1/agent` agent-loop handler. `ATLAS_GRAMMAR_MODE` picks the shape: the default `strict` sends `{"type":"json_object","schema":<full tool-call schema>}` so llama-server's GBNF sampler can only emit the tool_call/text/done union; `ATLAS_GRAMMAR_MODE=loose` sends `{"type":"json_object"}` only (valid JSON, shape not enforced) — the escape hatch for models that handle the schema-to-GBNF conversion poorly (Gemma-family models need `loose` — strict mode makes them done-spam). If you're hitting llama-server directly via `/v1/chat/completions` or `/v1/completions`, you have to include the parameter yourself:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -473,7 +589,7 @@ If this returns raw text instead of JSON, your llama.cpp build doesn't support `
 
 ### Context Window Too Small
 
-**Symptom:** Tool call arguments get truncated. `write_file` fails with "unexpected end of JSON" or proxy logs show "truncation detected".
+**Symptom:** Tool call arguments get truncated. Tool results carry "Tool call was truncated (output too long for context window)" / "Your output was truncated — the content is too long for a single tool call", or proxy logs show `truncated args detected for <tool> at turn N`.
 
 **Fix:** Per-slot context (`ATLAS_CTX_SIZE` ÷ `ATLAS_PARALLEL_SLOTS`; compose default 131072 ÷ 4 = 32k per slot) may be too small for the task. `atlas tier fit` shows the largest budget your GPU supports. Check:
 ```bash
@@ -564,7 +680,7 @@ Check `docker compose logs atlas-proxy | grep -E "empty LLM|raw_len=0"` — `raw
 
 **What's happening:** llama.cpp's KV slot persists between chat completions to keep the cache warm. Across sessions, residual attention bias from the previous session's tokens can leak into low-entropy outputs like fabricated filenames.
 
-**What to do:** Every user turn starts by erasing llama slot 0 so the next completion re-encodes the system prompt fresh (~1-2s on warm GPU). To disable the per-session erase if you'd rather keep the cache fully warm:
+**What to do:** Every user turn starts by erasing **all** llama KV slots (with `--parallel` > 1 a session can land on any slot) so the next completion re-encodes the system prompt fresh (~1-2s on warm GPU). To disable the per-session erase if you'd rather keep the cache fully warm:
 ```bash
 # .env
 ATLAS_FRESH_SLOT_PER_SESSION=0
@@ -681,21 +797,21 @@ If `enabled: false` or `cx_energy: 0.0`, the models aren't loaded. This is expec
 
 **Symptom:** Lens logs show errors like "embedding extraction failed" or timeouts.
 
-**Cause:** Lens calls llama-server's `/v1/embeddings` endpoint. If llama-server is overloaded or the endpoint isn't enabled, this fails.
+**Cause:** Lens calls llama-server's native `/embedding` endpoint. If llama-server is overloaded or embeddings aren't enabled, this fails.
 
 **Fix:**
 ```bash
-# Test embedding endpoint directly
-curl -s http://localhost:8080/v1/embeddings \
+# Test the native embedding endpoint directly
+curl -s http://localhost:8080/embedding \
   -H "Content-Type: application/json" \
-  -d '{"input": "test"}' | python3 -m json.tool
+  -d '{"content": "test"}' | python3 -m json.tool
 ```
 
-The `/v1/embeddings` endpoint is available in llama.cpp without special flags for self-embeddings from generation models. In K3s, the `--embeddings` flag is set explicitly in the entrypoint for full embedding support.
+The `--embeddings` flag is set by the llama-server entrypoint in every deployment mode (Compose, bare metal, K3s) — self-embeddings are always on because the Geometric Lens depends on them. The native `/embedding` path (not `/v1/embeddings`) also carries the per-layer hidden-states extension.
 
 ### `/internal/lens/retrain` Returns 503 "models directory is mounted read-only"
 
-**Symptom:** POSTing `/internal/lens/retrain` on the lens service returns HTTP 503 with `"reason": "models directory is mounted read-only; run host-side retrain via atlas lens retrain"`.
+**Symptom:** POSTing `/internal/lens/retrain` on the lens service returns HTTP 503 with ``"reason": "models directory is mounted read-only; run host-side retrain via `atlas lens retrain`"``.
 
 **Cause:** The standard Compose deployment mounts the lens models directory into the container read-only (`:ro`), so the in-service retrain endpoint cannot write new weights. The endpoint probes writability before training and refuses up front rather than burning a training run.
 
@@ -705,7 +821,7 @@ The `/v1/embeddings` endpoint is available in llama.cpp without special flags fo
 
 ## Sandbox Issues
 
-### Sandbox Unreachable
+### Sandbox Unreachable (health check)
 
 **Symptom:** Code is never tested. Proxy health shows `"sandbox": false`.
 
@@ -735,7 +851,7 @@ docker compose logs sandbox
 
 **Symptom:** Sandbox returns an error for a specific language.
 
-**Supported languages:** Python, JavaScript, TypeScript, Go, Rust, C, C++, Bash.
+**Supported languages (execution):** Python, JavaScript, TypeScript, Go, Rust, C, C++, Bash. Syntax-only checks (`/syntax-check`, V3 smoke check) additionally cover HTML, XML, JSON, and YAML.
 
 Check available runtimes:
 ```bash
@@ -750,7 +866,7 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 
 **Symptom:** `atlas bench --tasks 200` reports `LIMITED MODE: running 100
 tasks` (or any count below what you asked for), or a resumed run prints
-`Resuming: N/N complete, 0 remaining` and exits immediately.
+`Resuming: N/N tasks already done, 0 remaining` and exits immediately.
 
 **Cause:** the LiveCodeBench dataset cache
 (`benchmark/datasets/.cache/livecodebench_v5.jsonl`) holds a partial
@@ -776,7 +892,7 @@ the identical `atlas bench` command.
 
 The model is running on CPU instead of GPU. Check:
 1. `nvidia-smi` — is llama-server listed as a GPU process?
-2. `--n-gpu-layers 99` — are all layers offloaded?
+2. `-ngl 99` (`--n-gpu-layers`) — are all layers offloaded?
 3. NVIDIA Container Toolkit — is the container runtime configured for GPU access?
 
 **Expected performance:** ~51 tok/s on RTX 5060 Ti 16GB with grammar enforcement.

@@ -22,7 +22,7 @@ disabled. V3 candidate selection degrades to neutral-score ordering.
 The same principle governs ASA activation: the `.model` marker gates
 steering at boot on model *identity*, but Supported status additionally
 requires a measured A/B effect + bounded quality regression
-(SUPPORT_MATRIX §9.6). A structurally-correct vector whose effect is
+(SUPPORT_MATRIX § Feature paths). A structurally-correct vector whose effect is
 unmeasured on a given model stays **off by default** (marker withheld)
 — activating an unvalidated steering vector by default is the
 "default-on without measured value" anti-pattern. Reference model

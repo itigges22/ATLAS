@@ -59,7 +59,7 @@ Config: See `config.py` for parameters.
 - **LiveCodeBench v5** (primary): Coding problem-solving, 599 tasks, stdin/stdout evaluation
 - **GPQA Diamond**: Knowledge reasoning, 198 multiple-choice questions
 - **IFBench**: Instruction following, 300 tasks. **Note:** IFBench evaluation is incomplete -- evaluate_ifbench_loose() defaults to True for ~11/15 instruction categories. IFBench is excluded from headline results pending proper implementation.
-- **SciCode**: Scientific coding, ~80 multi-step problems
+- **SciCode**: Scientific coding, ~80 multi-step problems (341 sub-problems)
 - **Custom**: Real-world coding tasks, 100 problems from `benchmark/custom/tasks.json`
 
 ## V2 Results Summary
@@ -97,7 +97,7 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 | `custom/` | 100 custom benchmark tasks + validator |
 | **V3 pipeline (active)** | |
 | `v3_runner.py` | V3 benchmark runner entry point (PlanSearch + DivSampling + PR-CoT, ablation conditions A–F) |
-| `v3/` | 19 V3 pipeline modules (plan_search.py, div_sampling.py, budget_forcing.py, pr_cot.py, refinement_loop.py, etc.) |
+| `v3/` | 18 V3 pipeline modules (plan_search.py, div_sampling.py, budget_forcing.py, pr_cot.py, refinement_loop.py, etc.) |
 | **V2 (historical)** | |
 | `v2_runner.py` | V2 benchmark orchestrator (phases 0–6, telemetry, Mode A/B) |
 | `v2_report.py` | V2 result analysis and reporting |

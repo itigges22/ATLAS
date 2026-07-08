@@ -26,18 +26,23 @@ Charm stack — `bubbletea`, `bubbles`, `lipgloss`, `glamour`, `x/*`,
 `fastapi`, `uvicorn`, `pydantic`, `httpx`, `pyyaml`
 (lens/sandbox — MIT/BSD/Apache-2.0); `numpy` (BSD-3); `xgboost` /
 `xgboost-cpu` (Apache-2.0); `scikit-learn` (BSD-3); `torch` (BSD-style,
-lens image + `train` extra); `defusedxml` (PSF); `tree-sitter` +
-grammar packages (MIT); `pytest`, `ruff`, `mypy`, `requests` (sandbox
-verify helpers — MIT/Apache-2.0). Pinned in the per-service
+lens + v3-service images and the `train` extra); `defusedxml` (PSF);
+`tree-sitter` + grammar packages (MIT); `python-multipart`
+(Apache-2.0); `tiktoken` (MIT); `gguf` (MIT); `huggingface_hub`
+(Apache-2.0); `psutil` (BSD-3); `pytest`, `ruff`, `mypy`, `requests`
+(sandbox verify helpers — MIT/Apache-2.0). Pinned in the per-service
 `requirements*.txt` files and `pyproject.toml` extras. The core CLI is
 stdlib-only by design.
 
 ## Infrastructure images
 
-Digest-pinned in the Dockerfiles/compose: `python:3.11-slim` (PSF +
+Pinned in the Dockerfiles/compose — digest-pinned except the ROCm/Vulkan
+community-backend bases, which are tag-pinned: `python:3.11-slim` (PSF +
 Debian), `golang:alpine` + `alpine` (BSD/MIT), `nvidia/cuda:*-rockylinux9`
 (NVIDIA Deep Learning Container License + Rocky), `rocm/dev-ubuntu`
-(AMD/Canonical), `ubuntu` (Canonical).
+(AMD/Canonical, tag-pinned), `ubuntu` (Canonical, tag-pinned for the
+Vulkan build), `alpine/socat` (GPL-2.0 — macOS compose overlay only,
+where it stands in for the containerized llama-server slot).
 
 ## Models
 

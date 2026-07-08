@@ -2,14 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/itigges22/ATLAS/docs/schemas/sse_envelope.schema.json",
   "title": "ATLAS SSE event envelope",
-  "description": "Machine-readable contract for events on GET /events and the /v1/agent stream. protocol_version pins the shape; consumers tolerate unknown additive event types.",
+  "description": "Machine-readable contract for events on the POST /v1/agent chat stream only. protocol_version pins the shape; consumers tolerate unknown additive event types. The GET /events broker uses a different envelope ({event_id, timestamp, type, stage, payload, ...}) — see docs/PROTOCOL.md.",
   "type": "object",
   "required": ["type", "data"],
   "properties": {
     "type": {"type": "string", "description": "Event type (see docs/PROTOCOL.md EVENT_TYPES)."},
-    "data": {"type": "object", "description": "Type-specific payload."},
-    "session_id": {"type": "string"},
-    "tool_call_id": {"type": "string"}
+    "data": {"type": "object", "description": "Type-specific payload. For permission_request events it carries tool_call_id."}
   },
   "additionalProperties": true
 }

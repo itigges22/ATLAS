@@ -1,6 +1,6 @@
 # Lens Calibration Provenance
 
-Per SUPPORT_MATRIX §9.5. One record per calibration run. The C(x)
+Per SUPPORT_MATRIX § Models (registry) — calibration requirements. One record per calibration run. The C(x)
 cost field and its `cx_normalization.json` are bound together (the
 normalization sigmoid is fit to that cost field's energy scale) — a
 calibration file is only valid with the cost field it was derived from.

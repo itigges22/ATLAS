@@ -22,7 +22,7 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 
 **This is the public client surface.** The canonical client is [atlas-tui](CLI.md), but the contract below is stable and other front-ends (web UIs, editor plugins, CI bots, custom CLIs) can use it directly.
 
-There are three primary endpoints for building a client:
+**Public client API** — the endpoints a front-end drives. The three a minimal client must implement are `/v1/agent`, `/cancel`, and `/v1/permission`; the rest are optional enrichments.
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -34,14 +34,22 @@ There are three primary endpoints for building a client:
 | `/feedback` | POST | Record a pass's human verdict (per-file accept/deny and/or pass-level thumbs) as weighted lens training samples |
 | `/v1/lens/training-status` | GET | Collected lens-sample counts for the loaded model plus a retrain-available flag |
 
-Plus the OpenAI-compat and utility endpoints:
+**OpenAI compatibility:**
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/v1/chat/completions` | POST | OpenAI-compatible chat completions — a direct passthrough to llama-server for SDK compatibility |
-| `/v1/models` | GET | List available models (OpenAI-compatible) |
+| `/v1/models` | GET | List available models (OpenAI-compatible). `/models` (no `/v1/` prefix) is an alias. |
+
+**Diagnostics:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
 | `/health` | GET | Liveness + counters — always 200, `status` reports `"ok"` or `"degraded"` |
 | `/ready` | GET | Readiness probe — 200 only when inference, lens scoring (`lens/ready`), the sandbox, and v3-service are all healthy; 503 otherwise. Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
+| `/version` | GET | API version, SSE protocol version, and the full error-code set — see [Versioning and error codes](#versioning-and-error-codes) |
+
+**Catch-all:** any unmatched path is proxied directly to llama-server.
 
 ---
 
@@ -63,7 +71,7 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 |-------|------|---------|-------------|
 | `message` | string | (required) | The user's request |
 | `working_dir` | string | `"."` | Host-side working directory. Inside the proxy container this is overridden to `ATLAS_WORKSPACE_DIR` (the bind-mount target — `/workspace` by default). The startup wrapper aligns the bind mount to the user's cwd, so writes land in the right place. |
-| `mode` | string | `"default"` | Permission mode: `"default"` (prompt for destructive ops), `"accept-edits"` (auto-approve write/edit, prompt for delete/run), `"yolo"` (auto-approve everything) |
+| `mode` | string | `"default"` | Permission mode: `"default"` (prompt for destructive ops), `"accept-edits"` (auto-approve `write_file`/`edit_file`/`ast_edit`/`move_file`, prompt for delete/run), `"yolo"` (auto-approve everything) |
 | `session_id` | string | `""` | Required for `/cancel` and for the interactive permission prompt (`/v1/permission`). The proxy keys the cancel handle and pending permission requests by this id while the turn is running. **Without a session_id, destructive tool calls in `default`/`accept-edits` mode are denied** (there is no channel to answer the prompt) — unattended clients use `mode:"yolo"` or pre-approve tools via `session_allowed_tools`. |
 | `history` | array | `[]` | Optional. Prior-turn `{role, content}` messages (`"user"` / `"assistant"`) the client wants replayed into the conversation before the new message. Capped at the most recent 40 entries. Omit for a single-turn request. |
 | `session_allowed_tools` | array | `[]` | Optional. Tool names the user has approved for the whole session (e.g. from an "allow for session" choice). The proxy skips the interactive permission prompt for these. The client re-sends the current list on each turn. |
@@ -84,7 +92,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `llm_prompt_progress` | Every ~100 ms while llama-server is in prompt-eval (before any decoded token). Real prompt-eval counters come from llama-server's `/slots` endpoint; when `/slots` returns 404/501 the poller keeps emitting with `processed=0` and the chars/4 estimate as `total` — the elapsed timer is still the useful signal. | `processed` (int), `total` (int), `pct` (0–1 float), `elapsed_ms` (int). Stops as soon as `llm_first_token` fires. |
 | `llm_first_token` | First streamed delta from llama-server | `prompt_ms` (time-to-first-token in milliseconds) |
 | `llm_token` | Each streamed delta | `text` (the delta string — typically a token or two) |
-| `llm_call_end` | LLM call finished | `turn`, `tokens` (this call), `total_tokens` (cumulative for the turn), `ms`, `chars`. On error: `error` instead of `tokens`/`chars`. |
+| `llm_call_end` | LLM call finished | `turn`, `tokens` (this call), `total_tokens` (cumulative for the turn), `ms`, `chars`. On error: `error` is added, `chars` is absent, and `tokens` is `0`. |
 | `tool_call` | Model emitted a `{"type":"tool_call",...}` JSON | `name` (string), `args` (raw JSON), `turn` |
 | `permission_request` | A destructive tool call is awaiting approval in `default`/`accept-edits` mode. The turn pauses until the client answers via `POST /v1/permission` (or the client disconnects/cancels, or the fail-safe timeout denies). | `tool_name` (string), `args` (raw JSON), `message` (human-readable description), `tool_call_id` (string — echo back on `/v1/permission`) |
 | `permission_denied` | The pending tool call was denied (by the client, a disconnect/cancel, or the timeout) | `tool` (the tool name) |
@@ -98,7 +106,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_plansearch` | PlanSearch step (`plansearch`, `plansearch_done`, `plansearch_error`) | `stage`, `detail`, `plans` (int), `candidates` (int, on `_done`), `tokens` (int, on `_done`) |
 | `v3_divsampling` | DivSampling step (`divsampling`, `divsampling_done`, `divsampling_error`) | `stage`, `detail`, `slots` (int), `total` (int, on `_done`) |
 | `v3_sandbox` | Per-candidate sandbox test (`sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`) | `stage`, `detail`, `index` (int), `elapsed_ms` (int), `energy` (float, on `_pass`), `stderr` (string, first 120 chars on `_fail`), `passed` / `total` (on `_done`) |
-| `v3_select` | Candidate selection (`s_star`, `s_star_winner`, `selected`) | `stage`, `detail`, `index` (int), `energy` (float) |
+| `v3_select` | Candidate selection (`s_star`, `s_star_winner`, `s_star_error`, `selected`) | `stage`, `detail`, `index` (int), `energy` (float) |
 | `v3_lens_per_step` | Per-token lens scoring of a generated candidate. Fires once per candidate. | `stage`, `detail`, `index` (int, candidate index), `source` (`plansearch`\|`divsampling`), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `cx_norm_max` (float), `n_tokens` (int) |
 | `v3_lens_veto` | A sandbox-passing candidate was rejected because its `gx_min` fell below the model's severe-quality threshold. Absent when the Lens is uncalibrated. | `stage`, `detail`, `index` (int, candidate index), `gx_score_min` (float), `first_off_rails_idx` (int, -1 if none) |
 | `v3_structural_veto` | A sandbox-passing candidate was rejected because tree-sitter found direct-identifier calls resolving to no local def, import, builtin, or project symbol. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
@@ -112,11 +120,11 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `reasoning_budget_cut` | The `reasoning_content` stream exceeded the reasoning budget with no content emitted — the proxy cuts the stream and re-prompts. | `reasoning_chars` (int — reasoning chars accumulated when cut) |
 | `content_loop_cut` | The proxy detected a verbatim repeating tail in the content stream (the model restating itself in a loop) and cut the stream. | `chars` (int — content chars accumulated when cut) |
 | `v3_repair` | Phase 3 repair strategy (`phase3`, `pr_cot*`, `refinement*`, `derivation*`, `fallback`) | `stage`, `detail`, `strategy` (string: `pr_cot` / `refinement` / `derivation`), `failing` (int), `iterations` (int, on `refinement_pass`), `tokens` (int, on `_pass`) |
-| `v3_probe` | Probe phase events (`probe`, `probe_light`, `probe_retry`, `probe_failed`, `probe_scored`, `probe_sandbox`, `probe_pass`) | `stage`, `detail` |
+| `v3_probe` | Probe phase events (`probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `probe_scored`, `probe_sandbox`, `probe_pass`) | `stage`, `detail` |
 | `v3_self_test` | Self-test generation/verify events (`self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip`, `self_test_verify`) | `stage`, `detail` |
 | `v3_plan` | Plan-pipeline progress (`plan_start`, `plan_candidate`, `plan_candidate_scored`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_selected`, `plan_failed`). Per-token `token`/`llm_start`/`llm_end` events are filtered out at the proxy. | `stage`, `detail`, `index` (int, per-candidate), `score` (float, on `_scored`/`_selected`), `revision` (int, set when fired during a revise) |
 | `plan_loaded` | A winning plan has been generated. Fires once after initial generation and again after each revision. Carries the full step list. | `steps` (array of `{id, action, target, why}`), `verify_step` (string id), `rationale` (string), `winning_score` (float), `revision` (int — 0 for initial plan, 1+ for revisions) |
-| `plan_adherence` | Emitted after each tool call, indicating whether the call satisfied an outstanding plan step. Off-plan calls (`matched=false`) accumulate into the off-streak counter that drives auto-revise. | On match: `matched=true`, `step_index`, `step_id`, `step_action`, `satisfied` (steps satisfied so far), `total`. On miss: `matched=false`, `tool`, `off_streak` (consecutive off-plan calls), `satisfied`, `total`. |
+| `plan_adherence` | Emitted after each tool call, indicating whether the call satisfied an outstanding plan step. Off-plan calls (`matched=false`, no `neutral`) accumulate into the off-streak counter that drives auto-revise. | On match: `matched=true`, `step_index`, `step_id`, `step_action`, `satisfied` (steps satisfied so far), `total`. On miss: `matched=false`, `tool`, `off_streak` (consecutive off-plan calls), `satisfied`, `total`. Recon tools (`read_file`, `list_directory`, `find_file`, `search_files`) emit the miss shape plus `neutral=true` — they don't satisfy steps but leave `off_streak` unchanged. |
 | `plan_revise` | The off-streak crossed `planAutoReviseThreshold` (5) — a fresh plan is being generated. The next `plan_loaded` (with `revision>0`) supersedes the prior plan; `Satisfied` flags reset. | `reason` (string), `revision` (int, 1-indexed) |
 | `done` | Agent loop ended cleanly | `summary` (string — empty for a `text`-shaped turn) |
 | `error` | LLM/parse/turn-cap error | `error` (string) |
@@ -213,7 +221,7 @@ The correlation key is `session_id` + `tool_call_id`, so multiple destructive ca
 
 Subscribe to the **global typed-envelope broker**. Unlike `/v1/agent` (per-request stream of one turn), `/events` is a long-lived pub/sub feed of structured envelopes from across the proxy: agent loop boundaries, tool calls, V3 stage transitions, metrics. Multiple clients can subscribe simultaneously; slow consumers drop events rather than blocking producers.
 
-**Envelope wire format** (matches `atlas/cli/events.py` exactly). A `stage_start` example (`parent_id` is reserved but never set by current producers; `duration_ms` is only set on `stage_end` / `tool_result`):
+**Envelope wire format** (matches `atlas/cli/events.py` exactly). A `stage_start` example (`parent_id` is reserved but never set by current producers; `duration_ms` is only set on `stage_end` / `tool_result` and the final `done`):
 ```json
 {
   "event_id": "evt_a1b2c3d4",
@@ -265,6 +273,22 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
 ```
 
 `cost_field_dim` / `embed_dim` reflect the loaded model's hidden dimension — the values differ per model.
+
+The payload also carries a `dimensions` array — the seven status dimensions the TUI and `atlas doctor` render, each `{name, status, detail}`:
+
+```json
+{
+  "dimensions": [
+    {"name": "model_runtime", "status": "supported", "detail": "model served and reachable"},
+    {"name": "direct_agent", "status": "supported", "detail": "model-agnostic; independent of lens/ASA state"},
+    {"name": "lens_identity", "status": "supported", "detail": "cost field matches the served model's dimension"},
+    {"name": "lens_scoring", "status": "supported", "detail": "C(x) + G(x) scoring available"},
+    {"name": "lens_calibration", "status": "calibrated", "detail": "per-model normalization + thresholds loaded"},
+    {"name": "lens_intervention", "status": "active", "detail": "threshold interventions enabled"},
+    {"name": "asa", "status": "unverified", "detail": "control vector present without a matching model marker; run `atlas asa build`"}
+  ]
+}
+```
 
 **Verdict values:**
 
@@ -369,7 +393,7 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
 | `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Cheaper than `read_file` for orienting in a large file. |
-| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go:657-728`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
+| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
 | `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. The wrong tool for >10 lines of change — switch to `ast_edit`. |
 | `ast_edit` | Surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. |
 | `delete_file` | Remove a file (or an empty directory) from the workspace |
@@ -476,7 +500,7 @@ data: {"stage": "token", "detail": "merge_sort("}
 data: {"stage": "llm_end", "detail": "245 tok · 1820ms", "data": {"call": 4, "tokens": 245, "elapsed_ms": 1820}}
 
 event: result
-data: {"code": "...", "passed": true, "phase_solved": "phase1", "candidates_tested": 3, "winning_score": 0.85, "total_tokens": 12500, "total_time_ms": 4200.0}
+data: {"code": "...", "passed": true, "phase_solved": "phase1", "candidates_tested": 3, "winning_score": 0.85, "total_tokens": 12500, "total_time_ms": 4200.0, "verification_evidence": []}
 
 data: [DONE]
 ```
@@ -492,10 +516,12 @@ The pipeline emits stages as it progresses. Not all stages appear in every run �
 
 | Phase | Stages |
 |-------|--------|
-| **Probe (Phase 0)** | `probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `self_test_gen`, `self_test_done`, `self_test_error`, `self_test_verify`, `probe_scored`, `probe_sandbox`, `probe_pass` |
+| **Setup / classification** | `task_type` (interactive/batch classification of the request) |
+| **Probe (Phase 0)** | `probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip` (interactive task — compile smoke-test instead), `self_test_verify`, `smoke_check`, `interactive_lint`, `probe_scored`, `probe_sandbox`, `probe_pass` |
 | **Generation (Phase 1)** | `phase1`, `phase2` (allocation), `phase2_allocated`, `plansearch`, `plansearch_done`, `plansearch_error`, `divsampling`, `divsampling_done`, `divsampling_error` |
-| **Testing (Phase 2)** | `sandbox_test`, `sandbox_pass`, `sandbox_done`, `s_star`, `s_star_winner`, `s_star_error`, `selected` |
-| **Repair (Phase 3)** | `phase3`, `pr_cot`, `pr_cot_pass`, `pr_cot_failed`, `pr_cot_error`, `refinement`, `refinement_pass`, `refinement_failed`, `refinement_error`, `derivation`, `derivation_pass`, `derivation_failed`, `derivation_error`, `fallback` |
+| **Testing / selection (Phase 2)** | `sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`, `lens_per_step`, `lens_veto`, `structural_veto`, `call_graph_veto`, `s_star`, `s_star_winner`, `s_star_error`, `selected` |
+| **Repair (Phase 3)** | `phase3`, `pr_cot`, `pr_cot_pass`, `pr_cot_failed`, `pr_cot_error`, `refinement`, `refinement_pass`, `refinement_failed`, `refinement_error`, `refinement_verify_failed`, `derivation`, `derivation_pass`, `derivation_failed`, `derivation_error`, `call_chain_context`, `fallback` |
+| **Verification** | `build_verify_unavailable` (build-command verification skipped — runner unreachable or command not allowed by policy) |
 | **LLM streaming** | `llm_start`, `token`, `llm_end` (one bracketed group per internal LLM call — planner, candidate generation, repair, etc.) |
 
 </details>
@@ -597,7 +623,7 @@ Friendly-selector AST node replacement. Stateless transform: caller provides the
 
 **Response (failure):**
 ```json
-{"success": false, "error": "selector 'function:foo' matched 0 nodes in app.py. Verify the symbol exists — read the file first if unsure."}
+{"success": false, "error": "selector 'function:foo' matched 0 nodes in app.py — that symbol does not exist in this file. This file defines: function:dashboard, class:UserModel. Use one of these exact selectors, or read the file to confirm."}
 ```
 
 Hard rule: selector must match exactly one node. Ambiguous selectors fail with a clear error so the caller can be more specific instead of silently rewriting the wrong function.
@@ -724,7 +750,7 @@ curl http://localhost:8070/health
 
 Energy-based code scoring using C(x) cost field and G(x) quality prediction. Also serves as the RAG API for project indexing and retrieval.
 
-> **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile:26`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
+> **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
 
 ### POST /internal/lens/gx-score
 
@@ -784,42 +810,41 @@ Always returns 200 — the endpoint is informational. `status` is `"healthy"` or
 curl http://localhost:8099/ready
 ```
 
-Readiness probe (`geometric-lens/main.py:352`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
+Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
 
-<details>
-<summary><b>Additional internal endpoints</b></summary>
+### Additional endpoints
 
-These are used internally by other ATLAS services. They are stable but not part of the public API.
+These are not part of the public API. **Internal** rows are consumed by other ATLAS services in-stack; **Experimental** rows have no in-stack consumer today and may change or be removed without notice.
 
 The `/v1/*` endpoints below require `Authorization: Bearer <key>`, validated against the locally-loaded `api-keys.json` (plus the installation's service token, which is auto-accepted); requests without a valid key get 401. The `/internal/*` endpoints require the service token when one is configured (`secrets/service-token`, see CONFIGURATION.md `ATLAS_SERVICE_TOKEN_FILE`) and are open otherwise.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/projects/sync` | POST | Sync/index a project codebase |
-| `/v1/projects/{id}/status` | GET | Get project index status |
-| `/v1/projects` | GET | List indexed projects |
-| `/v1/projects/{id}` | DELETE | Delete a project index |
-| `/v1/chat/completions` | POST | RAG-augmented chat completions |
-| `/v1/models` | GET | List available models |
-| `/v1/tasks/submit` | POST | Submit async task |
-| `/v1/tasks/{id}/status` | GET | Get task status |
-| `/v1/queue/stats` | GET | Task queue statistics |
-| `/v1/patterns/write` | POST | Write pattern data |
-| `/internal/cache/stats` | GET | Cache statistics |
-| `/internal/cache/flush` | POST | Flush cache |
-| `/internal/cache/consolidate` | POST | Consolidate cache entries |
-| `/internal/router/stats` | GET | Confidence router statistics |
-| `/internal/router/reset` | POST | Reset router posteriors |
-| `/internal/router/feedback` | POST | Record routing feedback |
-| `/internal/lens/stats` | GET | Lens model statistics |
-| `/internal/lens/evaluate` | GET/POST | Evaluate text through Lens |
-| `/internal/lens/score-text` | POST | Score text (C(x) only) |
-| `/internal/lens/retrain` | POST | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
-| `/internal/lens/reload` | POST | Reload model weights (refreshes the `/ready` state) |
-| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
-| `/internal/sandbox/analyze` | POST | Sandbox result analysis |
-
-</details>
+| Endpoint | Method | Status | Description |
+|----------|--------|--------|-------------|
+| `/` | GET | Internal | Service banner — name, version, a few endpoint pointers |
+| `/v1/projects/sync` | POST | Experimental | Sync/index a project codebase |
+| `/v1/projects/{id}/status` | GET | Experimental | Get project index status |
+| `/v1/projects` | GET | Experimental | List indexed projects |
+| `/v1/projects/{id}` | DELETE | Experimental | Delete a project index |
+| `/v1/chat/completions` | POST | Experimental | RAG-augmented chat completions |
+| `/v1/models` | GET | Experimental | List available models |
+| `/v1/tasks/submit` | POST | Experimental | Submit async task |
+| `/v1/tasks/{id}/status` | GET | Experimental | Get task status |
+| `/v1/queue/stats` | GET | Experimental | Task queue statistics |
+| `/v1/patterns/write` | POST | Experimental | Write pattern data (bearer-token variant of `/internal/patterns/write`) |
+| `/internal/patterns/write` | POST | Internal | Write pattern data — unauthenticated in-stack path used by v3-service; mirrors `/v1/patterns/write` |
+| `/internal/cache/stats` | GET | Internal | Cache statistics |
+| `/internal/cache/flush` | POST | Internal | Flush cache |
+| `/internal/cache/consolidate` | POST | Internal | Consolidate cache entries |
+| `/internal/router/stats` | GET | Internal | Confidence router statistics |
+| `/internal/router/reset` | POST | Internal | Reset router posteriors |
+| `/internal/router/feedback` | POST | Internal | Record routing feedback |
+| `/internal/lens/stats` | GET | Internal | Lens model statistics |
+| `/internal/lens/evaluate` | GET/POST | Internal | Evaluate text through Lens (C(x) energy; testing aid) |
+| `/internal/lens/score-text` | POST | Internal | Score text (C(x) only) |
+| `/internal/lens/retrain` | POST | Internal | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
+| `/internal/lens/reload` | POST | Internal | Reload model weights (refreshes the `/ready` state) |
+| `/internal/lens/score-per-step` | POST | Internal | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
+| `/internal/sandbox/analyze` | POST | Internal | Sandbox result analysis |
 
 ---
 
@@ -905,7 +930,7 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
 
 `success` is `exit_code == 0`. Stdout is truncated to its last 4000 chars and stderr to its last 2000 server-side; the proxy's `run_command` bridge applies its own caps (stdout 8000 / stderr 4000) on top. State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
 
-The container's destructive-verb gate (`validateShellCommand` in the proxy) blocks `rm`/`mv`/`cp`/`find -delete`/`bash -c` bypass etc. *before* the call ever reaches `/shell`. This endpoint is the executor, not the gate.
+The proxy's destructive-verb gate (`validateShellCommand`) blocks catastrophic commands — fork bombs, `rm -rf /`-class whole-project wipes, `find … -delete` / `-exec rm` from a search root, `dd`/`mkfs`/`wipefs` against block devices — and unwraps one `bash -c "…"` / `eval "…"` layer so the inner command is checked too, *before* the call ever reaches `/shell`. Ordinary `mv`, `cp`, and targeted `rm` of specific files are allowed. This endpoint is the executor, not the gate.
 
 ### POST /execute
 
@@ -1161,8 +1186,9 @@ A minimal client needs four things (plus one header):
 0. **Send the service token** on every request when the installation
    has one (`secrets/service-token`, generated by `atlas init`):
    `Authorization: Bearer <token>`. Without it, all proxy routes except
-   `/health` and `/ready` return 401 on token-bearing installs. Reading
-   the file at startup is enough — rotation restarts the stack.
+   `/health`, `/ready`, and `/version` return 401 on token-bearing
+   installs. Reading the file at startup is enough — rotation restarts
+   the stack.
 
 1. **POST `/v1/agent`** with `{message, working_dir, mode, session_id}` and parse the SSE stream. See the Python example above.
 2. **Answer `permission_request` events.** In `default`/`accept-edits` mode the turn pauses on destructive tools until you **POST `/v1/permission`** with `{session_id, tool_call_id, decision:"allow"|"deny", scope:"once"|"session"}` (echo `tool_call_id` from the event). Unanswered requests deny after `ATLAS_PERMISSION_TIMEOUT_SEC` (default 600s). Unattended clients skip this by using `mode:"yolo"` or pre-approving tools via `session_allowed_tools`.
