@@ -24,6 +24,12 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN go version
 
+# Install Java 21 (JDK headless — javac + java, no GUI libs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-21-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+RUN java --version && javac --version
+
 # Install Rust (rustup, stable toolchain) under /opt so the runtime
 # user (non-root) can read it. RUSTUP_HOME stays /opt/rustup at runtime
 # (read-only toolchain); CARGO_HOME is repointed to the user's tmpfs

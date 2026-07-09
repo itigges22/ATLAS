@@ -1,7 +1,7 @@
 """
 Multi-language sandbox execution server.
 
-Supports: Python, JavaScript/TypeScript, Go, Rust, C/C++, Bash/Shell
+Supports: Python, JavaScript/TypeScript, Go, Java, Rust, C/C++, Bash/Shell
 Provides isolated code execution with resource limits and structured error reporting.
 
 Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
@@ -117,6 +117,7 @@ SUPPORTED_LANGUAGES = {
     "xml",
     "json",
     "yaml", "yml",
+    "java",
 }
 
 def normalize_language(lang: str) -> str:
@@ -145,6 +146,8 @@ def normalize_language(lang: str) -> str:
         return "json"
     if lang in ("yaml", "yml"):
         return "yaml"
+    if lang in ("java",):
+        return "java"
     return lang
 
 
@@ -194,6 +197,7 @@ def list_languages():
         "javascript": ["node", "--version"],
         "typescript": ["tsc", "--version"],
         "go": ["go", "version"],
+        "java": ["javac", "--version"],
         "rust": ["rustc", "--version"],
         "c": ["gcc", "--version"],
         "cpp": ["g++", "--version"],
@@ -755,10 +759,10 @@ def execute_code(request: ExecuteRequest):
     """Execute code in isolated environment."""
     lang = normalize_language(request.language)
 
-    if lang not in ("python", "javascript", "typescript", "go", "rust", "c", "cpp", "bash"):
+    if lang not in ("python", "javascript", "typescript", "go", "java", "rust", "c", "cpp", "bash"):
         raise HTTPException(
             status_code=400,
-            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, rust, c, cpp, bash"
+            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, java, rust, c, cpp, bash"
         )
 
     workspace = tempfile.mkdtemp(dir=WORKSPACE_BASE)
@@ -853,6 +857,13 @@ def syntax_check(request: SyntaxCheckRequest):
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+def _extract_java_classname(code: str) -> str:
+    """Extract public class name from Java source, defaulting to 'Main'. """   
+    match = re.search(r'\bpublic\s+class\s+(\w+)', code)
+    class_name = match.group(1) if match else "Main"
+    return class_name
+
+
 def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional[str] = None) -> List[str]:
     """Language-specific syntax checking. Returns list of error strings."""
     errors = []
@@ -901,6 +912,24 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 line = line.strip()
                 if line:
                     errors.append(line)
+
+    elif lang == "java":
+        class_name = _extract_java_classname(code)
+        fpath = workspace / (filename or f"{class_name}.java")
+        fpath.write_text(code)
+        # Ignoring warnings, filtered for "error: "
+        # Using javac here for syntax check, as javac -proc:only ignores actual errors
+        result = _run_cmd(
+            ["javac", "-d", str(workspace), str(fpath)],
+            timeout=10, cwd=workspace
+        )
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                if "error:" in line:
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "rust":
         fpath = workspace / (filename or "check.rs")
@@ -1242,6 +1271,35 @@ def execute_go(code, test_code, workspace, timeout, stdin=None, **_):
     )
 
 
+# --- Java ---
+def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    class_name = _extract_java_classname(code)
+    main_file = workspace / f"{class_name}.java"
+    main_file.write_text(code)
+
+    # Compile
+    r = _run_cmd(["javac", str(main_file)], 30, cwd=workspace)
+    if not r["success"]:
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0,
+            stdout="", stderr=r["stderr"],
+            error_type="CompileError", error_message=r["stderr"][:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    r = _run_cmd(["java", "-cp", str(workspace), class_name], timeout, cwd=workspace, stdin=stdin)
+
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
+        error_message=r["stderr"][:500] if not r["success"] else None,
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
 # --- Rust ---
 
 def execute_rust(code, test_code, workspace, timeout, stdin=None, **_):
@@ -1376,6 +1434,7 @@ LANGUAGE_HANDLERS = {
     "c": execute_c,
     "cpp": execute_cpp,
     "bash": execute_bash,
+    "java": execute_java,
 }
 
 
