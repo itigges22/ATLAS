@@ -24,7 +24,7 @@ classifiers = [
 # the G(x) training step. Lower bounds only — the CLI has no reason to
 # pin exact versions.
 train = [
-    "torch>=2.12.1",
+    "torch>=2.13.0",
     "numpy>=1.24",
     "gguf",
     "huggingface_hub",
