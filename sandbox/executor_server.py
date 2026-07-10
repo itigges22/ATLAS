@@ -27,8 +27,6 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     the sandbox's purpose; dismiss the alerts with rationale instead.
 """
 
-from sys import stdin
-from asyncio import timeout
 import contextlib
 import json
 import os
@@ -944,8 +942,8 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                     errors.append(line)
 
     elif lang == "java":
-        class_name = _extract_java_classname(code); 
-        package = _extract_java_package(code); 
+        class_name = _extract_java_classname(code) 
+        package = _extract_java_package(code) 
 
         if package: 
             # com.exampe => com/example
@@ -953,10 +951,8 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
             source_dir = workspace / pkg_path
             source_dir.mkdir(parents=True, exist_ok=True)
             fpath = source_dir / f"{class_name}.java"
-            fully_qualified_name = f"{package}.{class_name}"
         else:
             fpath = workspace / f"{class_name}.java"
-            fully_qualified_name = class_name
 
         fpath.write_text(code)
         result = _run_cmd(
@@ -1314,8 +1310,8 @@ def execute_go(code, test_code, workspace, timeout, stdin=None, **_):
 # --- Java ---
 def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
-    class_name = _extract_java_classname(code); 
-    package = _extract_java_package(code); 
+    class_name = _extract_java_classname(code) 
+    package = _extract_java_package(code) 
 
     if package: 
         # com.exampe => com/example
