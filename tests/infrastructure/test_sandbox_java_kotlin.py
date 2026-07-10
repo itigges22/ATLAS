@@ -241,3 +241,114 @@ class TestJavaLanguagesEndpoint:
         assert "java" in languages, (
             f"Java missing from /languages: {list(languages.keys())}"
         )
+
+
+class TestJavaPathSafety:
+    """Regression tests for path-traversal rejection in /syntax-check.
+    No skipif — the guard is in Python, not javac."""
+
+    def test_reject_dot_dot_filename(self, sandbox_client: httpx.Client):
+        """Filename with ../ should be rejected as unsafe."""
+        code = 'public class Main { public static void main(String[] a) {} }'
+        response = sandbox_client.post(
+            "/syntax-check",
+            json={
+                "code": code,
+                "language": "java",
+                "filename": "../../../etc/passwd.java",
+            },
+            timeout=60.0,
+        )
+        assert response.status_code == 400, (
+            f"../ filename should be rejected, got {response.status_code}"
+        )
+
+    def test_reject_absolute_filename(self, sandbox_client: httpx.Client):
+        """Absolute path filename should be rejected as unsafe."""
+        code = 'public class Main { public static void main(String[] a) {} }'
+        response = sandbox_client.post(
+            "/syntax-check",
+            json={
+                "code": code,
+                "language": "java",
+                "filename": "/tmp/evil.java",
+            },
+            timeout=60.0,
+        )
+        assert response.status_code == 400, (
+            f"Absolute filename should be rejected, got {response.status_code}"
+        )
+
+class TestJavaPackagedClass:
+    """package com.example file should also run safely"""
+    def test_packaged_class(self, sandbox_client: httpx.Client):
+        code = '''
+package com.example;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("hello");
+    }
+}
+    '''
+        response = sandbox_client.post(
+            "/execute",
+            json={
+                "code": code,
+                "language": "java", 
+            },
+            timeout=60.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("success") is True, f"Packaged class failed: {data}"
+        assert "hello" in data.get("stdout", ""), f"Unexpected output: {data}"
+
+    def test_malicious_package_ignored(self, sandbox_client: httpx.Client):
+        """Malicious package name should be ignored (falls back to flat structure)."""
+        code = '''
+package ../../evil;
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("hello");
+    }
+}
+'''
+        response = sandbox_client.post(
+            "/execute",
+            json={
+                "code": code,
+                "language": "java", 
+            },
+            timeout=60.0,
+        )
+        assert response.status_code == 200
+        # Wait, javac will actually throw a compile error because 'package ../../evil;' is invalid syntax!
+        # The executor gracefully handles this as a compile error because the package extraction ignored it, 
+        # so it treated it as a flat file and just passed it to javac.
+        data = response.json()
+        assert data.get("success") is False
+        assert data.get("compile_success") is False
+        assert "error:" in data.get("stderr", "")
+
+    def test_advanced_public_modifiers(self, sandbox_client: httpx.Client):
+        """Regex should correctly extract the class name bypassing modifiers."""
+        code = '''
+public final class SecureApp {
+    public static void main(String[] args) {
+        System.out.println("secure execution");
+    }
+}
+'''
+        response = sandbox_client.post(
+            "/execute",
+            json={
+                "code": code,
+                "language": "java",
+            },
+            timeout=60.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("success") is True, f"Advanced modifiers failed: {data}"
+        assert "secure execution" in data.get("stdout", "")

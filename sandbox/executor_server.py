@@ -27,6 +27,8 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     the sandbox's purpose; dismiss the alerts with rationale instead.
 """
 
+from sys import stdin
+from asyncio import timeout
 import contextlib
 import json
 import os
@@ -845,6 +847,8 @@ def syntax_check(request: SyntaxCheckRequest):
             language=lang,
             check_time_ms=elapsed,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         elapsed = int((time.time() - start) * 1000)
         return SyntaxCheckResponse(
@@ -856,16 +860,42 @@ def syntax_check(request: SyntaxCheckRequest):
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
+def _extract_java_package(code: str) -> str | None:
+    """Extract package name from Java source, return None if no package decl."""
+    match = re.search(r'^\s*package\s+([\w.$]+)\s*;', code, re.MULTILINE)
+    if not match:
+        return None
+    package_name = match.group(1)
+    
+    # VALIDATE: each dot-segment must be safe Java identifier
+    segments = package_name.split('.')
+    for seg in segments:
+        if not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]*', seg):
+            return None  # malformed/malicious package name, ignore it
+    
+    return package_name
 
 def _extract_java_classname(code: str) -> str:
-    """Extract public class name from Java source, defaulting to 'Main'. """   
-    match = re.search(r'\bpublic\s+class\s+(\w+)', code)
-    class_name = match.group(1) if match else "Main"
-    return class_name
+    """
+    Extracts the public class, interface, enum, or record name from Java code.
+    Defaults to 'Main' if no public type is found.
+    """
+
+    pattern = r"\bpublic\s+(?:(?:abstract|final|strictfp|sealed|non-sealed|@[A-Za-z0-9_$.]+)\s+)*(?:class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)"
+    
+    match = re.search(pattern, code)
+    if match:
+        return match.group(1)
+    
+    return "Main"
 
 
 def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional[str] = None) -> List[str]:
     """Language-specific syntax checking. Returns list of error strings."""
+    # Reject path-traversal filenames (absolute, .., backslash escapes)
+    # before any language branch can write outside the workspace.
+    if filename:
+        _safe_overlay_path(filename)
     errors = []
 
     if lang == "python":
@@ -914,11 +944,21 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                     errors.append(line)
 
     elif lang == "java":
-        class_name = _extract_java_classname(code)
-        fpath = workspace / (filename or f"{class_name}.java")
+        class_name = _extract_java_classname(code); 
+        package = _extract_java_package(code); 
+
+        if package: 
+            # com.exampe => com/example
+            pkg_path = Path(*package.split('.'))
+            source_dir = workspace / pkg_path
+            source_dir.mkdir(parents=True, exist_ok=True)
+            fpath = source_dir / f"{class_name}.java"
+            fully_qualified_name = f"{package}.{class_name}"
+        else:
+            fpath = workspace / f"{class_name}.java"
+            fully_qualified_name = class_name
+
         fpath.write_text(code)
-        # Ignoring warnings, filtered for "error: "
-        # Using javac here for syntax check, as javac -proc:only ignores actual errors
         result = _run_cmd(
             ["javac", "-d", str(workspace), str(fpath)],
             timeout=10, cwd=workspace
@@ -1274,12 +1314,24 @@ def execute_go(code, test_code, workspace, timeout, stdin=None, **_):
 # --- Java ---
 def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
     start = time.time()
-    class_name = _extract_java_classname(code)
-    main_file = workspace / f"{class_name}.java"
-    main_file.write_text(code)
+    class_name = _extract_java_classname(code); 
+    package = _extract_java_package(code); 
 
-    # Compile
-    r = _run_cmd(["javac", str(main_file)], 30, cwd=workspace)
+    if package: 
+        # com.exampe => com/example
+        pkg_path = Path(*package.split('.'))
+        source_dir = workspace / pkg_path
+        source_dir.mkdir(parents=True, exist_ok=True)
+        fpath = source_dir / f"{class_name}.java"
+        fully_qualified_name = f"{package}.{class_name}"
+    else:
+        fpath = workspace / f"{class_name}.java"
+        fully_qualified_name = class_name
+
+    fpath.write_text(code)
+
+    # Compile with -d workspace so .class appears in matching package dir
+    r = _run_cmd(["javac", "-d", str(workspace), str(fpath)], 30, cwd=workspace)
     if not r["success"]:
         return ExecuteResponse(
             success=False, compile_success=False,
@@ -1289,8 +1341,8 @@ def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
-    r = _run_cmd(["java", "-cp", str(workspace), class_name], timeout, cwd=workspace, stdin=stdin)
-
+    # Run 
+    r = _run_cmd(["java", "-cp", str(workspace), fully_qualified_name], timeout, cwd=workspace, stdin=stdin)
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
