@@ -4,7 +4,7 @@ numpy==2.4.6
 xgboost-cpu==3.2.0; sys_platform == "linux"
 xgboost==3.2.0; sys_platform != "linux"
 fastapi==0.139.0
-uvicorn==0.50.0
+uvicorn==0.51.0
 pydantic==2.13.4
 httpx==0.28.1
 pyyaml==6.0.3
@@ -20,4 +20,4 @@ gguf==0.19.0
 # Dockerfile installs this pinned version from PyTorch's CPU-only index before
 # resolving the rest of this file. Keeping the requirement here documents the
 # runtime contract and lets pip verify the preinstalled wheel satisfies it.
-torch==2.12.1
+torch==2.13.0
