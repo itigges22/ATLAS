@@ -329,7 +329,7 @@ Wait injection appends "Wait, let me reconsider.\n" to request a longer reasonin
 
 **Phase 2: Verification and Selection**
 
-- **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Java (`javac`), Rust (`rustc` on the sandbox `/execute` path; `Cargo.toml` projects are detected with `cargo build`, and `cargo check` is accepted only via the build-command allowlist), C/C++ (full `gcc`/`g++` compile with `-Wall` on `/execute`; `-fsyntax-only` applies only to the `/syntax-check` route), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
+- **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Java (`javac`), Kotlin (`kotlinc`), Rust (`rustc` on the sandbox `/execute` path; `Cargo.toml` projects are detected with `cargo build`, and `cargo check` is accepted only via the build-command allowlist), C/C++ (full `gcc`/`g++` compile with `-Wall` on `/execute`; `-fsyntax-only` applies only to the `/syntax-check` route), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
 - **S* Tiebreaking** (2+ passing): generates edge-case inputs, runs both candidates, majority wins
 - **Lens Selection** (1 passing or fallback): sort by C(x) energy, lowest wins
 
@@ -535,6 +535,7 @@ graph LR
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
+        Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
         C["C / C++\ngcc/g++ -Wall"]
         Bash["Bash\nbash -n + run"]
@@ -550,7 +551,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Memory, CPU, and process caps are container-level: compose sets `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, and `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`; `atlas init` writes host-appropriate values (~75% of RAM and cores) into `.env`. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
+Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `kt`/`kts` (Kotlin), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Memory, CPU, and process caps are container-level: compose sets `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, and `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`; `atlas init` writes host-appropriate values (~75% of RAM and cores) into `.env`. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
 
 ---
 

@@ -149,7 +149,8 @@ timeouts/output caps; **syntax** = compile/parse check only.
 | Bash / sh | executed | Supported |
 | HTML / XML / JSON / YAML | syntax | Supported |
 | Java | executed | Preview (installed in default sandbox; CI smoke test containerized; host-runner tests skipif-gated) |
-| Kotlin / Ruby / PHP | — | Roadmap (will ship as separate toolchain images, not in the default sandbox) |
+| Kotlin | executed | Preview (installed in default sandbox; CI smoke test containerized; host-runner tests skipif-gated) |
+| Ruby / PHP | — | Roadmap (will ship as separate toolchain images, not in the default sandbox) |
 
 ## Feature paths
 
