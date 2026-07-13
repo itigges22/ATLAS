@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: 175f5a2 -->
+<!-- source: README.md synced-through: 53daf3b -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **日本語** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -61,6 +61,8 @@
    <img alt="Star history chart" src="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" width="100%" />
  </picture>
 </a>
+
+<sub>毎週月曜日に GitHub Actions で更新されます。</sub>
 
 ---
 
