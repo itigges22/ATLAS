@@ -65,6 +65,8 @@
  </picture>
 </a>
 
+<sub>Updated weekly (Mondays, via GitHub Actions).</sub>
+
 ---
 
 ## 🧱 What ATLAS Does

@@ -2,23 +2,37 @@
 """Render the repository's star-history chart as static SVGs.
 
 Self-hosted replacement for the star-history.com embed (their shared
-API-token pool rate-limits unpredictably). Fetches stargazer timestamps
-from the GitHub API and writes one SVG per color scheme; the README's
-<picture> element picks the right one. Stdlib only.
+API-token pool rate-limits unpredictably). Writes one SVG per color
+scheme; the README's <picture> element picks the right one. Stdlib only.
 
     GH_TOKEN=$(gh auth token) python3 scripts/star-history-chart.py [outdir]
 
-In CI the workflow token is enough (public repo, read-only).
+Data sources, in order of preference:
+
+  1. Per-star timestamps from /repos/{repo}/stargazers. Since July 2026
+     GitHub limits this endpoint to repository admins and collaborators,
+     so it works with a maintainer token but not with the workflow token
+     in CI.
+  2. The current stargazers_count from /repos/{repo} (readable with any
+     token), appended as a dated sample to star-history.json alongside
+     the SVGs.
+
+Both paths persist the cumulative series to star-history.json and render
+from it: a maintainer-token run rewrites the series at per-day
+resolution, and the weekly CI run keeps it current by appending one
+sample per run.
 """
 
 import json
 import math
 import os
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "itigges22/ATLAS")
+SERIES_FILE = "star-history.json"
 
 # Chart tokens per color scheme. Each SVG carries its own surface rect
 # (GitHub's light/dark page colors) so it renders correctly anywhere,
@@ -35,21 +49,24 @@ W, H = 800, 280
 M_LEFT, M_RIGHT, M_TOP, M_BOT = 52, 84, 34, 36
 
 
-def fetch_star_times():
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+def _api_json(url, token, accept="application/vnd.github+json"):
+    req = urllib.request.Request(url, headers={
+        "Accept": accept,
+        "X-GitHub-Api-Version": "2022-11-28",
+        **({"Authorization": f"Bearer {token}"} if token else {}),
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.load(resp)
+
+
+def fetch_star_times(token):
     times = []
     page = 1
     while True:
-        req = urllib.request.Request(
+        batch = _api_json(
             f"https://api.github.com/repos/{REPO}/stargazers"
             f"?per_page=100&page={page}",
-            headers={
-                "Accept": "application/vnd.github.star+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                **({"Authorization": f"Bearer {token}"} if token else {}),
-            })
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            batch = json.load(resp)
+            token, accept="application/vnd.github.star+json")
         if not batch:
             break
         times.extend(
@@ -60,6 +77,26 @@ def fetch_star_times():
         page += 1
     times.sort()
     return times
+
+
+def daily_series(times):
+    """Collapse per-star timestamps to one cumulative sample per day."""
+    series = []
+    for i, t in enumerate(times):
+        day = t.strftime("%Y-%m-%d")
+        if series and series[-1][0] == day:
+            series[-1][1] = i + 1
+        else:
+            series.append([day, i + 1])
+    return series
+
+
+def load_series(outdir):
+    try:
+        with open(os.path.join(outdir, SERIES_FILE)) as fh:
+            return [[str(day), int(n)] for day, n in json.load(fh)]
+    except FileNotFoundError:
+        return []
 
 
 def nice_step(span, target_ticks=4):
@@ -84,10 +121,10 @@ def month_ticks(t0, t1, max_ticks=7):
     return months[::step]
 
 
-def render(times, mode):
+def render(points, mode):
     c = MODES[mode]
-    t0, t1 = times[0], times[-1]
-    total = len(times)
+    t0, t1 = points[0][0], points[-1][0]
+    total = points[-1][1]
     span_s = max((t1 - t0).total_seconds(), 1)
 
     def x(t):
@@ -101,7 +138,7 @@ def render(times, mode):
     def y(v):
         return H - M_BOT - (H - M_TOP - M_BOT) * (v / y_top)
 
-    pts = [(x(t), y(i + 1)) for i, t in enumerate(times)]
+    pts = [(x(t), y(n)) for t, n in points]
     # Thin the path: one point per pixel column is plenty.
     thinned, last_px = [], None
     for px, py in pts:
@@ -153,16 +190,36 @@ def render(times, mode):
 
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "."
-    times = fetch_star_times()
-    if not times:
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    os.makedirs(outdir, exist_ok=True)
+
+    try:
+        series = daily_series(fetch_star_times(token))
+        source = "stargazer timestamps"
+    except urllib.error.HTTPError as err:
+        detail = err.read()[:200].decode("utf-8", "replace")
+        print(f"stargazers listing unavailable (HTTP {err.code}: {detail}); "
+              f"sampling stargazers_count instead", file=sys.stderr)
+        count = _api_json(
+            f"https://api.github.com/repos/{REPO}", token)["stargazers_count"]
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        series = [s for s in load_series(outdir) if s[0] < today]
+        series.append([today, count])
+        source = "stargazers_count sample"
+
+    if not series:
         print("no stargazer data returned", file=sys.stderr)
         return 1
-    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, SERIES_FILE), "w") as fh:
+        json.dump(series, fh)
+        fh.write("\n")
+    points = [(datetime.fromisoformat(day).replace(tzinfo=timezone.utc), n)
+              for day, n in series]
     for mode in MODES:
         path = os.path.join(outdir, f"star-history-{mode}.svg")
         with open(path, "w") as fh:
-            fh.write(render(times, mode))
-        print(f"wrote {path} ({len(times):,} stars)")
+            fh.write(render(points, mode))
+        print(f"wrote {path} ({series[-1][1]:,} stars, from {source})")
     return 0
 
 

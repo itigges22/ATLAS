@@ -5,6 +5,12 @@ name: Star history chart
 # the star-history.com embed, whose shared API-token pool rate-limits
 # unpredictably; this uses the workflow's own token and serves the chart
 # from the repo.
+#
+# The workflow token cannot list per-star timestamps (GitHub limits the
+# stargazers endpoints to admins/collaborators as of July 2026), so each
+# run appends the current stargazers_count to star-history.json on the
+# asset branch and renders from that series. A maintainer-token run of
+# the script rebuilds the series at per-day resolution.
 on:
   schedule:
     - cron: '0 5 * * 1'   # weekly, Monday 05:00 UTC
@@ -33,7 +39,7 @@ jobs:
       - name: Commit if changed
         working-directory: chart-branch
         run: |
-          git add star-history-light.svg star-history-dark.svg
+          git add star-history-light.svg star-history-dark.svg star-history.json
           if git diff --cached --quiet; then
             echo "no change (no new stars this week)"
             exit 0
