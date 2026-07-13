@@ -22,6 +22,12 @@ _requires_javac = pytest.mark.skipif(
     reason="javac not available",
 )
 
+#Reusable skipif marker for all classes that need kotlinc.
+_requires_kotlinc = pytest.mark.skipif(
+    shutil.which("kotlinc") is None,
+    reason="kotlinc not available",
+)
+
 
 @_requires_javac
 class TestJavaExecution:
@@ -352,3 +358,197 @@ public final class SecureApp {
         data = response.json()
         assert data.get("success") is True, f"Advanced modifiers failed: {data}"
         assert "secure execution" in data.get("stdout", "")
+
+
+# Kotlin has no filename-class-match rule (unlike Java's public class Foo ->
+# Foo.java) and no package-directory requirement, so there are no class-name
+# or package-structure tests below — those cases don't exist for Kotlin.
+# Compile output is a single fat jar run via `java -jar`.
+
+@_requires_kotlinc
+class TestKotlinExecution:
+    """Test Kotlin code execution in sandbox."""
+
+    def test_hello_world(self, sandbox_client: httpx.Client):
+        """Basic kotlinc -> java -jar pipeline: compile and run."""
+        code = """\
+fun main() {
+    println("hello world")
+}
+"""
+        response = sandbox_client.post(
+            "/execute",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("success") is True, f"Hello world should succeed: {data}"
+        assert data.get("compile_success") is True
+        assert "hello world" in data.get("stdout", "")
+
+    def test_computed_values(self, sandbox_client: httpx.Client):
+        """Code that computes values should capture output."""
+        code = """\
+fun main() {
+    val a = 2
+    val b = 3
+    println("Result: ${a + b}")
+}
+"""
+        response = sandbox_client.post(
+            "/execute",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("success") is True
+        assert "Result: 5" in data.get("stdout", "")
+
+    def test_compile_error(self, sandbox_client: httpx.Client):
+        """Unterminated string literal should fail compilation."""
+        code = """\
+fun main() {
+    println("unterminated
+}
+"""
+        response = sandbox_client.post(
+            "/execute",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("compile_success") is False
+        assert data.get("success") is False
+        error_msg = data.get("stderr", "") + data.get("error_message", "")
+        assert "error" in error_msg.lower(), (
+            f"Compile error not reported: {error_msg}"
+        )
+
+    def test_runtime_error_npe(self, sandbox_client: httpx.Client):
+        """Null-assertion (!!) on null should throw NullPointerException."""
+        code = """\
+fun main() {
+    val s: String? = null
+    println(s!!.length)
+}
+"""
+        response = sandbox_client.post(
+            "/execute",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("compile_success") is True
+        assert data.get("success") is False
+        error_msg = data.get("stderr", "") + data.get("error_message", "")
+        assert "NullPointerException" in error_msg, (
+            f"NPE not reported: {error_msg}"
+        )
+
+    def test_runtime_error_division_by_zero(self, sandbox_client: httpx.Client):
+        """Integer division by zero throws ArithmeticException at runtime.
+
+        The divisor is a variable, not a literal — kotlinc rejects a literal
+        `1 / 0` at compile time, so a var defers the failure to runtime.
+        """
+        code = """\
+fun main() {
+    val zero = 0
+    println(1 / zero)
+}
+"""
+        response = sandbox_client.post(
+            "/execute",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("compile_success") is True
+        assert data.get("success") is False
+        error_msg = data.get("stderr", "") + data.get("error_message", "")
+        assert (
+            "ArithmeticException" in error_msg
+            or "/ by zero" in error_msg
+        )
+
+
+@_requires_kotlinc
+class TestKotlinSyntaxCheck:
+    """Test /syntax-check endpoint for Kotlin."""
+
+    def test_valid_kotlin(self, sandbox_client: httpx.Client):
+        """Well-formed Kotlin should pass syntax check."""
+        code = """\
+fun main() {
+    println("ok")
+}
+"""
+        response = sandbox_client.post(
+            "/syntax-check",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("valid") is True, f"Valid Kotlin rejected: {data}"
+        assert data.get("errors") == [] or data.get("errors") is None
+
+    def test_invalid_kotlin(self, sandbox_client: httpx.Client):
+        """Broken Kotlin should fail syntax check with error details."""
+        code = """\
+fun main() {
+    val x: Int =
+}
+"""
+        response = sandbox_client.post(
+            "/syntax-check",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("valid") is False
+        errors = data.get("errors", [])
+        assert len(errors) > 0, "Should report at least one error"
+
+    def test_warning_only_is_valid(self, sandbox_client: httpx.Client):
+        """Warning-only code must pass — a kotlinc `w:` warning line that
+        merely mentions 'error' must not be mis-parsed as a real error.
+        Regression guard for the syntax-check error-matching fix."""
+        code = """\
+fun main() {
+    val unused = 42
+    println("ok")
+}
+"""
+        response = sandbox_client.post(
+            "/syntax-check",
+            json={"code": code, "language": "kotlin"},
+            timeout=90.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("valid") is True, (
+            f"Warning-only Kotlin should be valid: {data}"
+        )
+
+
+class TestKotlinLanguagesEndpoint:
+    """Test /languages reports Kotlin — no skipif needed, endpoint
+    returns 'not installed' gracefully when kotlinc is absent."""
+
+    def test_kotlin_in_languages(self, sandbox_client: httpx.Client):
+        """Kotlin should appear in the /languages response."""
+        response = sandbox_client.get("/languages")
+        assert response.status_code == 200
+        data = response.json()
+        languages = data.get("languages", {})
+        assert "kotlin" in languages, (
+            f"Kotlin missing from /languages: {list(languages.keys())}"
+        )
+

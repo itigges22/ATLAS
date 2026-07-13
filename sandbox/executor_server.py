@@ -1,7 +1,7 @@
 """
 Multi-language sandbox execution server.
 
-Supports: Python, JavaScript/TypeScript, Go, Java, Rust, C/C++, Bash/Shell
+Supports: Python, JavaScript/TypeScript, Go, Java, Kotlin, Rust, C/C++, Bash/Shell
 Provides isolated code execution with resource limits and structured error reporting.
 
 Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
@@ -118,6 +118,7 @@ SUPPORTED_LANGUAGES = {
     "json",
     "yaml", "yml",
     "java",
+    "kotlin", "kt", "kts",
 }
 
 def normalize_language(lang: str) -> str:
@@ -148,6 +149,8 @@ def normalize_language(lang: str) -> str:
         return "yaml"
     if lang in ("java",):
         return "java"
+    if lang in ("kotlin", "kt", "kts",):
+        return "kotlin"
     return lang
 
 
@@ -198,6 +201,7 @@ def list_languages():
         "typescript": ["tsc", "--version"],
         "go": ["go", "version"],
         "java": ["javac", "--version"],
+        "kotlin": ["kotlinc", "-version"],
         "rust": ["rustc", "--version"],
         "c": ["gcc", "--version"],
         "cpp": ["g++", "--version"],
@@ -759,10 +763,10 @@ def execute_code(request: ExecuteRequest):
     """Execute code in isolated environment."""
     lang = normalize_language(request.language)
 
-    if lang not in ("python", "javascript", "typescript", "go", "java", "rust", "c", "cpp", "bash"):
+    if lang not in ("python", "javascript", "typescript", "go", "java", "kotlin", "rust", "c", "cpp", "bash"):
         raise HTTPException(
             status_code=400,
-            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, java, rust, c, cpp, bash"
+            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, java, kotlin, rust, c, cpp, bash"
         )
 
     workspace = tempfile.mkdtemp(dir=WORKSPACE_BASE)
@@ -967,6 +971,31 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
             if not errors and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
 
+    elif lang == "kotlin":
+        fpath = workspace / (filename or "Source.kt")
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        fpath.write_text(code)
+        classes_dir = workspace / "synccheck_out"
+        classes_dir.mkdir(exist_ok=True)
+
+        # No syntax-only check in kotlinc. Full compile to temp
+        # output dir is the check, same approach as Java
+        result = _run_cmd(
+            ["kotlinc", "-d", str(classes_dir), str(fpath)],
+            timeout=30, cwd=workspace
+        )
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                # kotlinc emits errors as either an `e:`-prefixed line or a
+                # `file.kt:L:C: error:` line. Match both — but NOT a bare
+                # "error" substring, which also hits `w:` warning lines that
+                # merely mention the word (false-positive syntax failures).
+                if line.strip().startswith("e:") or ": error:" in line:
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
+        
     elif lang == "rust":
         fpath = workspace / (filename or "check.rs")
         fpath.write_text(code)
@@ -1348,6 +1377,40 @@ def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
+# --- Kotlin --- 
+
+def execute_kotlin(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    fpath = workspace / "Source.kt"
+    fpath.write_text(code)
+    jar_path = workspace / "output.jar"
+    
+    # Compile
+    r = _run_cmd(
+        ["kotlinc", "-include-runtime", "-d", str(jar_path), str(fpath)],
+        60, cwd=workspace
+    )
+
+    if not r["success"]:
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0, 
+            stdout="", stderr=r["stderr"],
+            error_type="CompileError", error_message=r["stderr"][:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    # Run
+    r = _run_cmd(["java", "-jar", str(jar_path)], timeout, cwd=workspace, stdin=stdin)
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None, 
+        error_message=r["stderr"][:500] if not r["success"] else None, 
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
 # --- Rust ---
 
 def execute_rust(code, test_code, workspace, timeout, stdin=None, **_):
@@ -1483,6 +1546,7 @@ LANGUAGE_HANDLERS = {
     "cpp": execute_cpp,
     "bash": execute_bash,
     "java": execute_java,
+    "kotlin": execute_kotlin,
 }
 
 

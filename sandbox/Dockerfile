@@ -30,6 +30,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN java --version && javac --version
 
+# Install Kotlin 2.4.0 (JVM target — requires Java, installed above)
+ARG KOTLIN_VERSION=2.4.0
+ARG KOTLIN_SHA256=ba1b9e6eb6ddc3275079224f2e9ea4a2b02eef7d59ce2d38404f04b22613c20a
+
+RUN curl -fsSL -o /tmp/kotlin.zip \
+    "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" \
+    && echo "${KOTLIN_SHA256}  /tmp/kotlin.zip" | sha256sum -c - \
+    && unzip -q /tmp/kotlin.zip -d /opt \
+    && rm /tmp/kotlin.zip \
+    && /opt/kotlinc/bin/kotlinc -version
+
+ENV PATH="/opt/kotlinc/bin:${PATH}"
+
 # Install Rust (rustup, stable toolchain) under /opt so the runtime
 # user (non-root) can read it. RUSTUP_HOME stays /opt/rustup at runtime
 # (read-only toolchain); CARGO_HOME is repointed to the user's tmpfs
