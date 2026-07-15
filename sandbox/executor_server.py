@@ -19,12 +19,18 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     user-controlled paths inside the workspace, or treat agent-supplied
     code as untrusted — that's the container's job.
 
-    CodeQL routinely flags `py/command-line-injection` and
-    `py/path-injection` here. Those alerts are by-design false positives:
-    accepting + executing user-controlled commands is the requirement,
-    and the cmd-list form (no shell=True at the Python layer) prevents
-    Python-level injection. Don't add input validation that would break
-    the sandbox's purpose; dismiss the alerts with rationale instead.
+    CodeQL flags `py/command-line-injection` here. Those alerts are
+    by-design false positives: accepting + executing user-controlled
+    commands is the requirement, and the cmd-list form (no shell=True at
+    the Python layer) prevents Python-level injection. Don't add input
+    validation that would break the sandbox's purpose; dismiss the
+    alerts with rationale instead.
+
+    `py/path-injection` is handled differently: every workspace path
+    derived from request data goes through _contained_path(), whose
+    normpath + prefix check is the sanitizer form CodeQL recognizes.
+    Route any new request-derived file write through it and the query
+    stays quiet without per-PR dismissals.
 """
 
 import contextlib
@@ -400,6 +406,23 @@ def _safe_overlay_path(name: str) -> Path:
     if rel.is_absolute() or name.startswith("\\") or ".." in rel.parts:
         raise HTTPException(status_code=400, detail=f"unsafe overlay file path: {name!r}")
     return rel
+
+
+def _contained_path(base: Path, *parts: str) -> Path:
+    """Join parts under base, enforcing containment.
+
+    The inputs are already constrained (request filenames pass
+    _safe_overlay_path; Java class/package names come from restrictive
+    regexes), but those guards raise instead of transforming the value,
+    which CodeQL's py/path-injection taint tracking cannot follow. This
+    normpath + prefix check is the sanitizer form the query recognizes,
+    so new language branches stop accruing one alert per PR.
+    """
+    resolved = os.path.normpath(os.path.join(str(base), *parts))
+    if not resolved.startswith(str(base) + os.sep):
+        raise HTTPException(status_code=400,
+                            detail=f"unsafe file path: {'/'.join(parts)!r}")
+    return Path(resolved)
 
 
 def _write_overlay_files(root: Path, files: Dict[str, str]):
@@ -910,7 +933,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 
     if lang == "python":
         # Use py_compile for fast AST parse
-        fpath = workspace / (filename or "check.py")
+        fpath = _contained_path(workspace, filename or "check.py")
         fpath.write_text(code)
         result = _run_cmd(["python3", "-m", "py_compile", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
@@ -924,14 +947,14 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "javascript":
-        fpath = workspace / (filename or "check.js")
+        fpath = _contained_path(workspace, filename or "check.js")
         fpath.write_text(code)
         result = _run_cmd(["node", "--check", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
             errors.append(result.get("stderr", "").strip())
 
     elif lang == "typescript":
-        fpath = workspace / (filename or "check.ts")
+        fpath = _contained_path(workspace, filename or "check.ts")
         fpath.write_text(code)
         # tsc --noEmit for type checking; fall back to tsx parse
         result = _run_cmd(["tsc", "--noEmit", "--strict", str(fpath)], timeout=10, cwd=workspace)
@@ -942,7 +965,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                     errors.append(line)
 
     elif lang == "go":
-        fpath = workspace / (filename or "main.go")
+        fpath = _contained_path(workspace, filename or "main.go")
         fpath.write_text(code)
         # Use gofmt -e for fast syntax-only checking (no compilation, no go.mod needed)
         result = _run_cmd(["gofmt", "-e", str(fpath)], timeout=5, cwd=workspace)
@@ -957,14 +980,13 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
         class_name = _extract_java_classname(code) 
         package = _extract_java_package(code) 
 
-        if package: 
+        if package:
             # com.exampe => com/example
-            pkg_path = Path(*package.split('.'))
-            source_dir = workspace / pkg_path
-            source_dir.mkdir(parents=True, exist_ok=True)
-            fpath = source_dir / f"{class_name}.java"
+            fpath = _contained_path(workspace, *package.split('.'),
+                                    f"{class_name}.java")
+            fpath.parent.mkdir(parents=True, exist_ok=True)
         else:
-            fpath = workspace / f"{class_name}.java"
+            fpath = _contained_path(workspace, f"{class_name}.java")
 
         fpath.write_text(code)
         result = _run_cmd(
@@ -980,7 +1002,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "kotlin":
-        fpath = workspace / (filename or "Source.kt")
+        fpath = _contained_path(workspace, filename or "Source.kt")
         fpath.parent.mkdir(parents=True, exist_ok=True)
         fpath.write_text(code)
         classes_dir = workspace / "synccheck_out"
@@ -1005,7 +1027,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "rust":
-        fpath = workspace / (filename or "check.rs")
+        fpath = _contained_path(workspace, filename or "check.rs")
         fpath.write_text(code)
         # rustc --edition 2021 with no codegen for syntax-only
         result = _run_cmd(
@@ -1022,7 +1044,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 
     elif lang in ("c", "cpp"):
         ext = ".c" if lang == "c" else ".cpp"
-        fpath = workspace / (filename or f"check{ext}")
+        fpath = _contained_path(workspace, filename or f"check{ext}")
         fpath.write_text(code)
         compiler = "gcc" if lang == "c" else "g++"
         flags = ["-std=c17"] if lang == "c" else ["-std=c++17"]
@@ -1040,7 +1062,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "ruby":
-        fpath = workspace / (filename or "main.rb")
+        fpath = _contained_path(workspace, filename or "main.rb")
         fpath.write_text(code)
         # Use ruby -c for syntax-only checking (no execution)
         result = _run_cmd(["ruby", "-c", str(fpath)], timeout=5, cwd=workspace)
@@ -1053,7 +1075,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "php":
-        fpath = workspace / (filename or "main.php")
+        fpath = _contained_path(workspace, filename or "main.php")
         fpath.write_text(code)
         # Use php -l for lint/syntax-only checking (no execution)
         result = _run_cmd(["php", "-l", str(fpath)], timeout=5, cwd=workspace)
@@ -1074,7 +1096,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 errors.append(output.split("\n")[-1])
 
     elif lang == "bash":
-        fpath = workspace / (filename or "check.sh")
+        fpath = _contained_path(workspace, filename or "check.sh")
         fpath.write_text(code)
         result = _run_cmd(["bash", "-n", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
@@ -1384,15 +1406,14 @@ def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
     class_name = _extract_java_classname(code) 
     package = _extract_java_package(code) 
 
-    if package: 
+    if package:
         # com.exampe => com/example
-        pkg_path = Path(*package.split('.'))
-        source_dir = workspace / pkg_path
-        source_dir.mkdir(parents=True, exist_ok=True)
-        fpath = source_dir / f"{class_name}.java"
+        fpath = _contained_path(workspace, *package.split('.'),
+                                f"{class_name}.java")
+        fpath.parent.mkdir(parents=True, exist_ok=True)
         fully_qualified_name = f"{package}.{class_name}"
     else:
-        fpath = workspace / f"{class_name}.java"
+        fpath = _contained_path(workspace, f"{class_name}.java")
         fully_qualified_name = class_name
 
     fpath.write_text(code)
