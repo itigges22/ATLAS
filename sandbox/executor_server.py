@@ -1004,6 +1004,22 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
             if not errors and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
 
+    elif lang == "rust":
+        fpath = workspace / (filename or "check.rs")
+        fpath.write_text(code)
+        # rustc --edition 2021 with no codegen for syntax-only
+        result = _run_cmd(
+            ["rustc", "--edition", "2021", "--crate-type", "bin", str(fpath), "-o", "/dev/null"],
+            timeout=10, cwd=workspace
+        )
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                if "error" in line.lower():
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
+
     elif lang in ("c", "cpp"):
         ext = ".c" if lang == "c" else ".cpp"
         fpath = workspace / (filename or f"check{ext}")
