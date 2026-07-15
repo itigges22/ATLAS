@@ -1,5 +1,5 @@
 """
-Tests for Java (and later Kotlin) sandbox executor support.
+Tests for Java and Kotlin sandbox executor support.
 
 Validates code execution, syntax checking, class name extraction,
 compile errors, and runtime errors for JVM languages.

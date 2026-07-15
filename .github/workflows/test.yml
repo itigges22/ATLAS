@@ -407,3 +407,57 @@ jobs:
       - name: cleanup
         if: always()
         run: docker rm -f sandbox-test || true
+
+  ruby-container-smoke:
+    name: ruby sandbox smoke (containerized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: build sandbox image
+        run: docker build -t atlas-sandbox-test ./sandbox
+      - name: start sandbox
+        run: |
+          docker run -d --name sandbox-test -p 8020:8020 atlas-sandbox-test
+          sleep 5
+      - name: smoke test /execute
+        run: |
+          curl -sf -X POST http://localhost:8020/execute \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"puts \"ok\"","language":"ruby"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['success'], d; print('PASS: /execute')"
+      - name: smoke test /syntax-check
+        run: |
+          curl -sf -X POST http://localhost:8020/syntax-check \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"puts \"ok\"","language":"ruby"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['valid'], d; print('PASS: /syntax-check')"
+      - name: cleanup
+        if: always()
+        run: docker rm -f sandbox-test || true
+
+  php-container-smoke:
+    name: php sandbox smoke (containerized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: build sandbox image
+        run: docker build -t atlas-sandbox-test ./sandbox
+      - name: start sandbox
+        run: |
+          docker run -d --name sandbox-test -p 8020:8020 atlas-sandbox-test
+          sleep 5
+      - name: smoke test /execute
+        run: |
+          curl -sf -X POST http://localhost:8020/execute \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"<?php echo \"ok\";","language":"php"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['success'], d; print('PASS: /execute')"
+      - name: smoke test /syntax-check
+        run: |
+          curl -sf -X POST http://localhost:8020/syntax-check \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"<?php echo \"ok\";","language":"php"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['valid'], d; print('PASS: /syntax-check')"
+      - name: cleanup
+        if: always()
+        run: docker rm -f sandbox-test || true
