@@ -1,7 +1,7 @@
 """
 Multi-language sandbox execution server.
 
-Supports: Python, JavaScript/TypeScript, Go, Java, Kotlin, Rust, C/C++, Bash/Shell
+Supports: Python, JavaScript/TypeScript, Go, Java, Kotlin, Rust, C/C++, Ruby, PHP, Bash/Shell
 Provides isolated code execution with resource limits and structured error reporting.
 
 Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
@@ -119,6 +119,8 @@ SUPPORTED_LANGUAGES = {
     "yaml", "yml",
     "java",
     "kotlin", "kt", "kts",
+    "ruby", "rb",
+    "php",
 }
 
 def normalize_language(lang: str) -> str:
@@ -151,6 +153,10 @@ def normalize_language(lang: str) -> str:
         return "java"
     if lang in ("kotlin", "kt", "kts",):
         return "kotlin"
+    if lang in ("ruby", "rb"):
+        return "ruby"
+    if lang in ("php",):
+        return "php"
     return lang
 
 
@@ -202,6 +208,8 @@ def list_languages():
         "go": ["go", "version"],
         "java": ["javac", "--version"],
         "kotlin": ["kotlinc", "-version"],
+        "ruby": ["ruby", "--version"],
+        "php": ["php", "--version"],
         "rust": ["rustc", "--version"],
         "c": ["gcc", "--version"],
         "cpp": ["g++", "--version"],
@@ -763,10 +771,10 @@ def execute_code(request: ExecuteRequest):
     """Execute code in isolated environment."""
     lang = normalize_language(request.language)
 
-    if lang not in ("python", "javascript", "typescript", "go", "java", "kotlin", "rust", "c", "cpp", "bash"):
+    if lang not in ("python", "javascript", "typescript", "go", "java", "kotlin", "rust", "c", "cpp", "ruby", "php", "bash"):
         raise HTTPException(
             status_code=400,
-            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, java, kotlin, rust, c, cpp, bash"
+            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, java, kotlin, rust, c, cpp, ruby, php, bash"
         )
 
     workspace = tempfile.mkdtemp(dir=WORKSPACE_BASE)
@@ -995,22 +1003,6 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                     errors.append(line.strip())
             if not errors and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
-        
-    elif lang == "rust":
-        fpath = workspace / (filename or "check.rs")
-        fpath.write_text(code)
-        # rustc --edition 2021 with no codegen for syntax-only
-        result = _run_cmd(
-            ["rustc", "--edition", "2021", "--crate-type", "bin", str(fpath), "-o", "/dev/null"],
-            timeout=10, cwd=workspace
-        )
-        if result["returncode"] != 0:
-            stderr = result.get("stderr", "")
-            for line in stderr.splitlines():
-                if "error" in line.lower():
-                    errors.append(line.strip())
-            if not errors and stderr.strip():
-                errors.append(stderr.strip().split("\n")[-1])
 
     elif lang in ("c", "cpp"):
         ext = ".c" if lang == "c" else ".cpp"
@@ -1030,6 +1022,40 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                     errors.append(line.strip())
             if not errors and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
+
+    elif lang == "ruby":
+        fpath = workspace / (filename or "main.rb")
+        fpath.write_text(code)
+        # Use ruby -c for syntax-only checking (no execution)
+        result = _run_cmd(["ruby", "-c", str(fpath)], timeout=5, cwd=workspace)
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                if "syntax error" in line or "error" in line.lower():
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
+
+    elif lang == "php":
+        fpath = workspace / (filename or "main.php")
+        fpath.write_text(code)
+        # Use php -l for lint/syntax-only checking (no execution)
+        result = _run_cmd(["php", "-l", str(fpath)], timeout=5, cwd=workspace)
+        if result["returncode"] != 0:
+            # The real "PHP Parse error: ..." detail goes to stderr (with
+            # display_errors=Off, the Debian CLI default); stdout carries
+            # only the generic "Errors parsing main.php" summary. Scan both
+            # so builds that route the message to stdout still work.
+            output = (result.get("stderr", "") + "\n" + result.get("stdout", "")).strip()
+            for line in output.splitlines():
+                line = line.strip()
+                # PHP explicitly tags syntax issues as "Parse error" or "Fatal error"
+                if "parse error" in line.lower() or "error" in line.lower():
+                    # Filter out PHP's generic summary line "Errors parsing main.php"
+                    if not line.startswith("Errors parsing"):
+                        errors.append(line)
+            if not errors and output:
+                errors.append(output.split("\n")[-1])
 
     elif lang == "bash":
         fpath = workspace / (filename or "check.sh")
@@ -1503,6 +1529,70 @@ def execute_cpp(code, test_code, workspace, timeout, stdin=None, **_):
     )
 
 
+# --- Ruby ---
+
+def execute_ruby(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    main_file = workspace / "main.rb"
+    main_file.write_text(code)
+
+    # Syntax check (no compile step for Ruby)
+    r = _run_cmd(["ruby", "-c", str(main_file)], 15)
+    if not r["success"]:
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0,
+            stdout="", stderr=r["stderr"],
+            error_type="SyntaxError", error_message=r["stderr"][:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    # Run
+    r = _run_cmd(["ruby", str(main_file)], timeout, cwd=workspace, stdin=stdin)
+
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
+        error_message=r["stderr"][:500] if not r["success"] else None,
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
+
+# --- PHP ---
+
+def execute_php(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    main_file = workspace / "main.php"
+    main_file.write_text(code)
+
+    # Lint check (no compile step for PHP)
+    r = _run_cmd(["php", "-l", str(main_file)], 15)
+    if not r["success"]:
+        # Real parse error lives in stderr; stdout only has generic summary line
+        error_output = r["stderr"] or r["stdout"]
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0,
+            stdout="", stderr=error_output,
+            error_type="SyntaxError", error_message=error_output[:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    # Run
+    r = _run_cmd(["php", str(main_file)], timeout, cwd=workspace, stdin=stdin)
+
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
+        error_message=r["stderr"][:500] if not r["success"] else None,
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
+
 # --- Bash ---
 
 def execute_bash(code, test_code, workspace, timeout, stdin=None, **_):
@@ -1547,6 +1637,8 @@ LANGUAGE_HANDLERS = {
     "bash": execute_bash,
     "java": execute_java,
     "kotlin": execute_kotlin,
+    "ruby": execute_ruby,
+    "php": execute_php,
 }
 
 

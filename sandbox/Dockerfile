@@ -43,6 +43,18 @@ RUN curl -fsSL -o /tmp/kotlin.zip \
 
 ENV PATH="/opt/kotlinc/bin:${PATH}"
 
+# Install Ruby (interpreter, no compile step)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ruby \
+    && rm -rf /var/lib/apt/lists/*
+RUN ruby --version
+
+# Install PHP (CLI, no compile step)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    php-cli \
+    && rm -rf /var/lib/apt/lists/*
+RUN php --version
+
 # Install Rust (rustup, stable toolchain) under /opt so the runtime
 # user (non-root) can read it. RUSTUP_HOME stays /opt/rustup at runtime
 # (read-only toolchain); CARGO_HOME is repointed to the user's tmpfs

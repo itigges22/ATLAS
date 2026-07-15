@@ -653,7 +653,7 @@ def smoke_compile_check(code: str, sandbox, language: str = "python") -> Tuple[b
 
     verified_languages = {
         "python", "py", "javascript", "typescript", "go", "java", "kotlin",
-        "rust", "c", "cpp", "bash", "html", "htm", "xml", "json", "yaml", "yml",
+        "rust", "c", "cpp", "ruby", "php", "bash", "html", "htm", "xml", "json", "yaml", "yml",
     }
     if hasattr(sandbox, "syntax_check") and lang in verified_languages:
         normalized = {
@@ -1113,6 +1113,8 @@ class V3PipelineService:
             ".java": "java",
             ".kt": "kotlin",
             ".rs": "rust",
+            ".rb": "ruby",
+            ".php": "php",
         }
         smoke_language = _ext_to_lang.get(_ext, "python")
 
