@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+.vscode-test/
+*.vsix
+
+# Root .gitignore ignores these repo-wide; the extension needs them committed.
+!package-lock.json
+!.vscode/

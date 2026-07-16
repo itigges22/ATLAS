@@ -1,0 +1,106 @@
+{
+  "name": "atlas-vscode",
+  "displayName": "ATLAS",
+  "description": "VS Code client for the ATLAS agent proxy — chat, tool calls, permission gating, and diff review over the proxy HTTP API.",
+  "version": "0.0.1",
+  "publisher": "atlas",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itigges22/ATLAS.git",
+    "directory": "extensions/vscode"
+  },
+  "engines": {
+    "vscode": "^1.100.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "atlas.openChat",
+        "title": "ATLAS: Open Chat"
+      },
+      {
+        "command": "atlas.cancelTurn",
+        "title": "ATLAS: Cancel Current Turn"
+      },
+      {
+        "command": "atlas.setToken",
+        "title": "ATLAS: Set Service Token"
+      },
+      {
+        "command": "atlas.newConversation",
+        "title": "ATLAS: New Conversation"
+      }
+    ],
+    "configuration": {
+      "title": "ATLAS",
+      "properties": {
+        "atlas.proxyUrl": {
+          "type": "string",
+          "default": "http://localhost:8090",
+          "description": "Base URL of the ATLAS proxy server."
+        },
+        "atlas.serviceToken": {
+          "type": "string",
+          "default": "",
+          "description": "Dev-override bearer token for the ATLAS proxy. Prefer the 'ATLAS: Set Service Token' command (stores in SecretStorage) — this field is plaintext in settings.json."
+        },
+        "atlas.permissionMode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "accept-edits",
+            "yolo"
+          ],
+          "default": "default",
+          "enumDescriptions": [
+            "Pause and prompt for every file-write tool call.",
+            "Auto-allow edit/write tools, still prompt for other sensitive actions.",
+            "Auto-allow everything. Use with caution."
+          ],
+          "description": "Controls how ATLAS permission requests are handled."
+        },
+        "atlas.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show ATLAS connection status in the status bar."
+        },
+        "atlas.statusBar.pollIntervalSec": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "description": "How often (seconds) to poll /ready for status bar state."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.100.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1",
+    "vitest": "^3.2.0"
+  }
+}

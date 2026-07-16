@@ -46,6 +46,7 @@ htmlcov/
 .hypothesis/
 *.egg-info/
 dist/
+out/
 build/
 eggs/
 *.egg
