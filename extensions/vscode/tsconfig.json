@@ -10,7 +10,10 @@
         ],
         "sourceMap": true,
         "strict": true,
-        "noEmit": true
+        "noEmit": true,
+        // vitest's bundled .d.ts references DOM WebSocket types absent from
+        // lib ES2022 — skip type-checking declaration files in node_modules.
+        "skipLibCheck": true
     },
     "include": [
         "src",
