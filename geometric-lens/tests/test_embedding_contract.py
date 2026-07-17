@@ -104,6 +104,49 @@ def test_no_contract_accepts_both_shapes(monkeypatch):
     assert ee.extract_embedding("x") == [2.0, 3.0]  # mean-pooled
 
 
+def test_single_row_nested_is_pooled_not_per_token(monkeypatch):
+    """The pinned llama-server encodes pooled embeddings as [[...]] (one
+    nested row) under --pooling mean. That must satisfy a flat contract
+    and unwrap to the vector — not raise as per-token."""
+    ee.set_embedding_contract({"pooling": "mean", "response_shape": "flat",
+                               "normalized": True, "norm_tolerance": 0.05})
+    _install_response(monkeypatch, [_flat(norm=1.0)])
+    out = ee.extract_embedding("x")
+    assert len(out) == 8 and not isinstance(out[0], list)
+
+
+def test_normalized_contract_requests_embd_normalize(monkeypatch):
+    """Under a normalized contract the request must carry embd_normalize=2
+    (server defaults vary across llama.cpp revisions)."""
+    seen = {}
+
+    def _spy(text, layers=None, timeout=120, embd_normalize=None):
+        seen["embd_normalize"] = embd_normalize
+        return {"embedding": _flat(norm=1.0)}
+
+    monkeypatch.setattr(ee, "_post_embedding", _spy)
+    ee.set_embedding_contract({"pooling": "mean", "response_shape": "flat",
+                               "normalized": True, "norm_tolerance": 0.05})
+    ee.extract_embedding("x")
+    assert seen["embd_normalize"] == 2
+
+    ee.set_embedding_contract(None)
+    ee.extract_embedding("x")
+    assert seen["embd_normalize"] is None
+
+
+def test_extract_per_token_rejects_pooled_encodings(monkeypatch):
+    _install_response(monkeypatch, _flat(norm=1.0))
+    with pytest.raises(ValueError):
+        ee.extract_per_token("x")
+    _install_response(monkeypatch, [_flat(norm=1.0)])  # single nested row
+    with pytest.raises(ValueError):
+        ee.extract_per_token("x")
+    _install_response(monkeypatch, [[1.0, 2.0], [3.0, 4.0]])
+    vecs, dim = ee.extract_per_token("x")
+    assert len(vecs) == 2 and dim == 2
+
+
 def test_observe_convention_reports_flat_normalized(monkeypatch):
     _install_response(monkeypatch, _flat(norm=1.0))
     c = ee.observe_embedding_convention("x")

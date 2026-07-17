@@ -114,7 +114,7 @@ def check_fingerprint(models_dir: str,
                 f"expected {expected:.2f} ±{fp['tolerance_pct']:g}%. The "
                 f"serving stack no longer matches what the lens artifacts "
                 f"were trained on — check the embed server's `--pooling "
-                f"mean --embd-normalize 2` flags and the loaded model."
+                f"mean` flag and the loaded model."
             )
     return True, True, ""
 

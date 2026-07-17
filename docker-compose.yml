@@ -57,13 +57,13 @@ services:
       # behavior; the entrypoint comments confirm --parallel 4 at 40k
       # per slot fits within budget on a 16 GB card.
       - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-131072}
-      # Embedding convention for the Geometric Lens. Defaults match what
-      # the shipped C(x)/G(x) artifacts are trained on and what the lens
-      # enforces via model_identity.json's embedding_contract. Pinned so a
-      # rebuilt serving stack can't silently switch pooling/normalization
-      # and invalidate every score (the 2026-07-15 bench incident).
+      # Embedding pooling for the Geometric Lens (`--pooling`). Pinned so
+      # a rebuilt serving stack can't silently switch convention and
+      # invalidate every score (the 2026-07-15 bench incident). L2
+      # normalization is requested per-call by the lens (`embd_normalize`
+      # in the /embedding body); the lens enforces both via
+      # model_identity.json's embedding_contract.
       - ATLAS_EMBED_POOLING=${ATLAS_EMBED_POOLING:-mean}
-      - ATLAS_EMBED_NORMALIZE=${ATLAS_EMBED_NORMALIZE:-2}
       # Canonical ATLAS_* names take precedence; the nested legacy fallback
       # keeps .env files generated before the rename working during upgrade.
       - PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}

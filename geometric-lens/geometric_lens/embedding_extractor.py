@@ -44,6 +44,28 @@ def _l2_norm(vec: List[float]) -> float:
     return math.sqrt(sum(v * v for v in vec))
 
 
+def _classify_response(raw) -> str:
+    """Classify an /embedding response's shape.
+
+    llama-server encodes pooled embeddings either as a flat list or as a
+    single-row nested list ([[...]] — observed on the pinned build with
+    --pooling mean), so one nested row still means "pooled". Only a
+    multi-row nested response is genuinely per-token. (A one-token input
+    under --pooling none is indistinguishable from a pooled row; lens
+    inputs are code snippets, never a single token.)
+    """
+    if bool(raw) and isinstance(raw[0], list) and len(raw) > 1:
+        return "per_token"
+    return "flat"
+
+
+def _unwrap(raw) -> List[float]:
+    """Return the pooled vector from either encoding (flat or [1][dim])."""
+    if bool(raw) and isinstance(raw[0], list):
+        return raw[0]
+    return raw
+
+
 def _get_embed_url() -> str:
     """Return the URL for the embedding server.
 
@@ -55,17 +77,24 @@ def _get_embed_url() -> str:
     )
 
 
-def _post_embedding(text: str, layers: Optional[List[int]] = None, timeout: float = 120) -> dict:
+def _post_embedding(text: str, layers: Optional[List[int]] = None,
+                    timeout: float = 120,
+                    embd_normalize: Optional[int] = None) -> dict:
     """POST to /embedding and return the parsed first item.
 
-    Sends the optional PC-202 `layers` extension when provided. Returns the
-    raw response dict so callers can read both `embedding` and (if layers
-    were requested) `hidden_states` + the shape metadata.
+    Sends the optional PC-202 `layers` extension when provided, and the
+    per-request `embd_normalize` mode when set (llama-server has no
+    `--embd-normalize` server flag; normalization is a request field on
+    the native endpoint). Returns the raw response dict so callers can
+    read both `embedding` and (if layers were requested) `hidden_states`
+    + the shape metadata.
     """
     url = f"{_get_embed_url()}/embedding"
     body: Dict = {"content": text}
     if layers:
         body["layers"] = layers
+    if embd_normalize is not None:
+        body["embd_normalize"] = embd_normalize
     payload = json.dumps(body).encode()
     req = Request(url, data=payload, headers={"Content-Type": "application/json"})
     with urlopen(req, timeout=timeout) as resp:
@@ -89,22 +118,26 @@ def extract_embedding(text: str) -> List[float]:
         List of floats with model-native dimensionality.
     """
     global _legacy_shape_warned
-    item = _post_embedding(text)
-    raw = item["embedding"]
     contract = _EMBEDDING_CONTRACT
-    is_per_token = bool(raw) and isinstance(raw[0], list)
+    # Under a normalized contract, request L2 normalization explicitly —
+    # server defaults vary across llama.cpp revisions.
+    item = _post_embedding(
+        text,
+        embd_normalize=2 if contract and contract.get("normalized") else None)
+    raw = item["embedding"]
+    got = _classify_response(raw)
+    is_per_token = got == "per_token"
 
     if contract:
         expected = contract.get("response_shape", "flat")
-        got = "per_token" if is_per_token else "flat"
         if got != expected:
             raise EmbeddingContractError(
                 f"embed server returned a {got} /embedding response but the "
                 f"loaded lens artifacts were trained on {expected}. "
                 f"Scores computed from the wrong convention are invalid. "
-                f"Start the embed server with `--pooling mean "
-                f"--embd-normalize 2` (see inference/entrypoint-v3.1.sh) "
-                f"or reload artifacts trained for this convention."
+                f"Start the embed server with `--pooling mean` (see "
+                f"inference/entrypoint-v3.1.sh) or reload artifacts "
+                f"trained for this convention."
             )
 
     if is_per_token:
@@ -135,7 +168,7 @@ def extract_embedding(text: str) -> List[float]:
             pooled[i] /= n_tokens
         vec = pooled
     else:
-        vec = raw
+        vec = _unwrap(raw)
 
     if contract and contract.get("normalized"):
         norm = _l2_norm(vec)
@@ -144,8 +177,8 @@ def extract_embedding(text: str) -> List[float]:
             raise EmbeddingContractError(
                 f"embedding norm ‖v‖={norm:.3f} but the loaded lens "
                 f"artifacts expect L2-normalized vectors (1±{tol:g}). "
-                f"The embed server is likely running without "
-                f"`--embd-normalize 2` — scores from unnormalized "
+                f"The embed server ignored the requested "
+                f"`embd_normalize: 2` — scores from unnormalized "
                 f"embeddings are invalid at this scale."
             )
 
@@ -162,10 +195,10 @@ def observe_embedding_convention(
     """
     item = _post_embedding(text)
     raw = item["embedding"]
-    if bool(raw) and isinstance(raw[0], list):
+    if _classify_response(raw) == "per_token":
         return {"pooling": "none", "response_shape": "per_token",
                 "normalized": False, "norm_tolerance": 0.05}
-    norm = _l2_norm(raw)
+    norm = _l2_norm(_unwrap(raw))
     return {"pooling": "mean", "response_shape": "flat",
             "normalized": abs(norm - 1.0) <= 0.05,
             "norm_tolerance": 0.05}
@@ -194,7 +227,10 @@ def extract_per_token(text: str) -> Tuple[List[List[float]], int]:
     """
     item = _post_embedding(text)
     raw = item["embedding"]
-    if not isinstance(raw[0], list):
+    # A flat response is pooled; so is a single nested row (the pinned
+    # build's pooled encoding under --pooling mean). Genuine per-token
+    # output for a code snippet always has multiple rows.
+    if _classify_response(raw) != "per_token":
         raise ValueError(
             "extract_per_token needs per-token embeddings; "
             "llama-server appears to be pooling. Start it with --pooling none."

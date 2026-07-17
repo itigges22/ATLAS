@@ -38,14 +38,14 @@ spec:
         # entrypoint already adds it. ASA control vector at
         # /models/ast_edit_steering.gguf is picked up automatically by
         # the entrypoint when present.
-        # Embedding convention for the Geometric Lens. The entrypoint
-        # defaults to pooling=mean, normalize=2 — the convention the
+        # Embedding pooling for the Geometric Lens — the convention the
         # shipped C(x)/G(x) artifacts are trained on, and what the lens
         # enforces via model_identity.json's embedding_contract. Pinned
         # here so a rebuilt serving stack can't silently switch pooling
         # and invalidate every score (the 2026-07-15 bench incident).
-        - {name: ATLAS_EMBED_POOLING,   value: "mean"}
-        - {name: ATLAS_EMBED_NORMALIZE, value: "2"}
+        # L2 normalization is requested per-call by the lens
+        # (`embd_normalize` in the /embedding body).
+        - {name: ATLAS_EMBED_POOLING, value: "mean"}
         volumeMounts:
         - name: models
           mountPath: /models

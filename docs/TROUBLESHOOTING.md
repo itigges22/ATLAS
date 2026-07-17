@@ -808,7 +808,7 @@ If `enabled: false` or `cx_energy: 0.0`, the models aren't loaded. This is expec
 
 **Symptom:** Everything reports healthy — pods `Ready`, `/health` 200, `gx-score` returns in-range-looking `gx_score` with a `likely_correct` verdict — but `cx_energy` is orders of magnitude off its calibrated range (e.g. ~600 when the model's pass/fail means are ~20-30). A gated benchmark launched in this state produces a complete, plausible, entirely invalid result.
 
-**Cause:** The embed server is serving a different `/embedding` convention than the one the Geometric Lens `C(x)`/`G(x)` artifacts were trained on — typically per-token instead of pooled, or unnormalized instead of L2-normalized (‖v‖≈60 instead of ~1). Same dimensionality, wrong distribution; the cost-field MLP extrapolates to a huge energy and `cx_normalized` saturates. This happens after rebuilding the serving stack without `--pooling mean --embd-normalize 2`.
+**Cause:** The embed server is serving a different `/embedding` convention than the one the Geometric Lens `C(x)`/`G(x)` artifacts were trained on — typically per-token instead of pooled, or unnormalized instead of L2-normalized (‖v‖≈60 instead of ~1). Same dimensionality, wrong distribution; the cost-field MLP extrapolates to a huge energy and `cx_normalized` saturates. This happens after rebuilding the serving stack without `--pooling mean` (llama-server has no `--embd-normalize` server flag; the lens requests L2 normalization per-call via `embd_normalize` in the `/embedding` body).
 
 **Verify:** the lens re-scores a stored fingerprint at boot and on every reload/retrain. Check `/ready` and `/health`:
 ```bash
@@ -823,7 +823,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    `shape per_token` or `norm` far from 1.0 means the server is misconfigured.
-2. Set `ATLAS_EMBED_POOLING=mean` and `ATLAS_EMBED_NORMALIZE=2` (the defaults; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags.
+2. Set `ATLAS_EMBED_POOLING=mean` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags.
 3. After the server serves the correct convention, the boot self-test's fingerprint check passes and `/ready` returns 200. If the artifacts predate the fingerprint, a retrain (`atlas lens retrain`) writes one and stamps the `embedding_contract` into `model_identity.json`.
 
 ### Embedding Extraction Fails
