@@ -378,6 +378,11 @@ def _emit_check(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  model marker: {v.vector_model_marker or '(missing)'}")
     _safe_print("")
     _safe_print(f"  {v.reason}")
+    if v.verdict != "compat":
+        _safe_print("")
+        _safe_print("  This is the ASA-only view. `atlas doctor` runs the "
+                    "full stack diagnosis (service health, auth, disk, "
+                    "lens/ASA state) if the fix above isn't enough.")
     return v.exit_code
 
 
