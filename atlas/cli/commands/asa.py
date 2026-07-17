@@ -120,6 +120,26 @@ def _atlas_root() -> str:
     return lens_module._atlas_root()
 
 
+def _gguf_block_count(path: str) -> int:
+    """Model depth from the GGUF header (`<arch>.block_count`), 0 on any
+    failure. Fallback for llama-server builds whose /props carries no
+    n_layer. Keyed off general.architecture, so any GGUF works."""
+    import struct
+    try:
+        from atlas.cli.commands.fit import _read_gguf_kv
+        found = {}
+        with open(path, "rb") as f:
+            for key, val in _read_gguf_kv(f):
+                if key == "general.architecture" or key.endswith(".block_count"):
+                    found[key] = val
+                arch = found.get("general.architecture")
+                if arch and f"{arch}.block_count" in found:
+                    return int(found[f"{arch}.block_count"])
+    except (OSError, ValueError, struct.error):
+        return 0
+    return 0
+
+
 def _canonical_model_identity(value: Optional[str]) -> str:
     text = str(value or "").strip().replace("\\", "/")
     name = text.rsplit("/", 1)[-1]
@@ -439,12 +459,24 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                 f"container running")
     layer = args.layer
     if layer is None:
-        if not probe.n_layers:
+        n_layers = probe.n_layers
+        if not n_layers and probe.model_name:
+            # Some llama-server builds omit n_layer from /props; read
+            # <arch>.block_count from the model's GGUF header instead.
+            model_host = _host_resolve_vector_path(probe.model_name, atlas_root)
+            if os.path.isfile(model_host):
+                n_layers = _gguf_block_count(model_host)
+                if n_layers:
+                    _safe_print(f"  model depth {n_layers} read from GGUF "
+                                f"header ({os.path.basename(model_host)})")
+        if not n_layers:
             _safe_print(f"  {RED if color else ''}can't derive an ASA layer: "
-                        f"llama-server did not report model depth. Pass "
-                        f"--layer explicitly.{RESET if color else ''}")
+                        f"llama-server did not report model depth and the "
+                        f"model GGUF was not readable on this host. Pass "
+                        f"--layer explicitly (e.g. --layer 36 for a 48-layer "
+                        f"model: depth × 0.75).{RESET if color else ''}")
             return 2
-        layer = max(1, round(probe.n_layers * 0.75))
+        layer = max(1, round(n_layers * 0.75))
     if (args.model and probe.model_name
             and _canonical_model_identity(args.model)
             != _canonical_model_identity(probe.model_name)):

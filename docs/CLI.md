@@ -747,6 +747,8 @@ atlas asa build --container atlas-geometric-lens-1   # override container name
 atlas asa build --dry-run                        # stage but don't run
 ```
 
+Model depth comes from llama-server's `/props` (`n_layer`); llama-server builds that omit it fall back to `<arch>.block_count` read from the model GGUF's header on the host. `--layer` is only needed when neither source is available (e.g. the model file isn't host-visible).
+
 Full 1000-pair training run takes ~25 min on the canonical RTX 5060 Ti. Smoke-test (`--limit 50`) is the fast path for validating the build pipeline works end-to-end before committing to the full run.
 
 After build:
