@@ -259,6 +259,42 @@ def test_model_marker_value_strips_loaded_model_path():
     assert asa._model_marker_value("/models/Example-Model.gguf") == "Example-Model"
 
 
+def test_check_needs_build_points_at_published_artifacts(monkeypatch, tmp_path):
+    """When the loaded model has a registry entry with downloadable ASA
+    artifacts, the needs-build reason must offer the download path — not
+    only the local retrain."""
+    vp = tmp_path / "v.gguf"
+    vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
+    monkeypatch.setattr(
+        lens_module, "probe_llama",
+        lambda *a, **kw: _probe(
+            model_name="/models/gemma-4-12b-it-Q4_K_M.gguf"))
+    monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
+        "present": True, "size_bytes": 104, "dim": 4096,
+        "layer_count": None, "model_hint": None, "error": "",
+    })
+    verdict = asa._check_asa(str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "atlas model install-artifacts gemma-4-12b-it-Q4_K_M" \
+        in verdict.reason
+
+
+def test_check_needs_build_no_hint_for_unregistered_model(monkeypatch,
+                                                          tmp_path):
+    vp = tmp_path / "v.gguf"
+    vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
+    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
+        "present": True, "size_bytes": 104, "dim": 4096,
+        "layer_count": None, "model_hint": None, "error": "",
+    })
+    verdict = asa._check_asa(str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "install-artifacts" not in verdict.reason
+
+
 def test_check_json_output_shape(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         lens_module, "probe_llama",

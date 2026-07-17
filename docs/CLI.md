@@ -603,7 +603,7 @@ Verdict + exit code:
 | Verdict | Exit | Meaning |
 |---|---|---|
 | `compat` | 0 | Artifacts exist and accept this model's embedding dim. Ready to score. |
-| `needs-build` | 1 | Model loads but no cost_field.pt at the right dim. Run `atlas lens build`. |
+| `needs-build` | 1 | Model loads but no cost_field.pt at the right dim. The reason offers `atlas model install-artifacts <name>` when the registry has published artifacts for the loaded model; otherwise run `atlas lens build`. |
 | `incompatible` | 2 | Can't probe — llama-server unreachable, `/embedding` silent, etc. |
 
 Reports the model's embedding dim, layer count, hidden-states-patch status, the artifact dir it checked, and the artifact's own input dim. JSON mode produces a stable shape (`verdict`, `reason`, `probe.*`, `artifact_dir`, `artifact_dim`, `matched_model`, `exit_code`).
@@ -726,7 +726,7 @@ Verdict + exit code:
 | Verdict | Exit | Meaning |
 |---|---|---|
 | `compat` | 0 | Vector present + dim matches model. Ready for `--control-vector-scaled`. |
-| `needs-build` | 1 | No vector, or dim mismatched (vector was trained for a different model). |
+| `needs-build` | 1 | No vector, missing/mismatched `.model` marker, or dim mismatch. The reason offers `atlas model install-artifacts <name>` when the registry has a published vector for the loaded model; otherwise run `atlas asa build`. |
 | `incompatible` | 2 | llama-server unreachable. |
 
 Reports the vector's dim, layer count (from GGUF metadata), and the `model_hint` baked in by `build_steering_vector.py`. Resolves container-relative paths (`/models/x.gguf` on llama-server) to host-visible paths by trying `$ATLAS_MODELS_DIR` (shell env, then the Docker `.env`) and then `<atlas_root>/models/` — running `atlas asa check` on the host needs no manual path translation.

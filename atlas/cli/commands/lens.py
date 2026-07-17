@@ -390,6 +390,17 @@ def _configured_lens_models_dir(atlas_root: str) -> Optional[str]:
 
 
 def _check_model(arg: Optional[str], atlas_root: str) -> CheckVerdict:
+    """Probe + verdict, with the registry download hint appended to any
+    needs-build reason — when published lens artifacts exist for the
+    loaded model, downloading beats retraining."""
+    v = _check_model_inner(arg, atlas_root)
+    if v.verdict == "needs-build":
+        v.reason += model_registry.artifact_download_hint(
+            v.probe.model_name, "lens")
+    return v
+
+
+def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
     """The actual probe + verdict logic. Pure function for testability."""
     probe = probe_llama()
     if not probe.reachable:

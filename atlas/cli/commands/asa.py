@@ -47,6 +47,7 @@ from typing import List, Optional
 
 from atlas.cli import compose as compose_config
 from atlas.cli.commands import lens as lens_module  # for shared helpers
+from atlas.cli.commands import model_registry
 
 
 # Output primitives — mirror lens.py for cross-module UX consistency.
@@ -277,6 +278,9 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
     configured = _configured_vector_path(atlas_root)
     vpath = _host_resolve_vector_path(configured, atlas_root)
     meta = _read_cvector_meta(vpath)
+    # Appended to every needs-build reason: when the registry has a
+    # published vector for the loaded model, downloading beats retraining.
+    dl_hint = model_registry.artifact_download_hint(probe.model_name, "asa")
     v = ASACheckVerdict(
         verdict="needs-build",
         reason=meta["error"] or "no control vector at " + vpath,
@@ -291,7 +295,8 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
 
     if not meta["present"]:
         v.reason = (f"no control vector at {vpath}. Run `atlas asa build` "
-                    f"to train one, or drop a pre-built .gguf at the path.")
+                    f"to train one, or drop a pre-built .gguf at the path."
+                    f"{dl_hint}")
         return v
 
     marker_path = vpath + ".model"
@@ -304,13 +309,15 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
     if not v.vector_model_marker:
         v.reason = (f"control vector is present but {marker_path} is missing. "
                     "The inference entrypoint will keep it disabled; run "
-                    "`atlas asa build` to create a verified vector and marker.")
+                    "`atlas asa build` to create a verified vector and marker."
+                    f"{dl_hint}")
         return v
     if (selected_model and _canonical_model_identity(v.vector_model_marker)
             != _canonical_model_identity(selected_model)):
         v.reason = (f"control vector is marked for {v.vector_model_marker!r}, "
                     f"but llama-server has {selected_model!r} loaded. The "
-                    "entrypoint will keep it disabled; run `atlas asa build`.")
+                    "entrypoint will keep it disabled; run `atlas asa build`."
+                    f"{dl_hint}")
         return v
 
     if meta["dim"] is None:
@@ -332,7 +339,7 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
         v.reason = (f"Dim mismatch: control vector at {vpath} is "
                     f"{meta['dim']}-dim, but model emits {probe.embedding_dim}-dim "
                     f"residuals. Vector was trained for a different model; "
-                    f"run `atlas asa build` to retrain.")
+                    f"run `atlas asa build` to retrain.{dl_hint}")
         return v
 
     v.verdict = "compat"
