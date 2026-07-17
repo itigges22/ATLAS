@@ -106,6 +106,11 @@ _BOOT_STATE_DEFAULTS: Dict[str, Any] = {
     "embed_dim": None,
     "self_test_pass": False,
     "self_test_error": None,
+    # Drift fingerprint (drift_fingerprint.json next to the artifacts):
+    # present=False → nothing to enforce; ok=None until checked.
+    "fingerprint_present": False,
+    "fingerprint_ok": None,
+    "fingerprint_error": None,
 }
 _BOOT_STATE: Dict[str, Any] = dict(_BOOT_STATE_DEFAULTS)
 
@@ -113,6 +118,25 @@ _BOOT_STATE: Dict[str, Any] = dict(_BOOT_STATE_DEFAULTS)
 # other — both mutate the geometric_lens.service module globals and (for
 # retrain) the on-disk artifacts.
 _lens_weights_lock = threading.Lock()
+
+
+def _lens_drifted() -> bool:
+    """True when the drift fingerprint check failed — scoring responses
+    must not claim calibration in this state."""
+    return _BOOT_STATE.get("fingerprint_ok") is False
+
+
+def _apply_drift_flags(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Stamp a scoring response with the drift state. On drift, calibration
+    claims are withdrawn so a caller that ignores /ready still can't read
+    the numbers as trustworthy."""
+    drifted = _lens_drifted()
+    result["drifted"] = drifted
+    if drifted:
+        for key in ("calibrated", "cx_calibrated", "gx_calibrated"):
+            if key in result:
+                result[key] = False
+    return result
 
 
 def _run_lens_self_test() -> None:
@@ -169,6 +193,23 @@ def _run_lens_self_test() -> None:
         if raw == 0.0 and norm == 0.0:
             _BOOT_STATE["self_test_error"] = "C(x) evaluation returned zeros"
             return
+
+        # Drift fingerprint: re-score the reference texts written at
+        # training time. A deviation means the serving stack no longer
+        # matches what the artifacts were trained on (wrong pooling /
+        # normalization / model) even though every request "works" —
+        # the failure mode of the 2026-07-15 bench incident.
+        from geometric_lens.drift import check_fingerprint
+        fp_dir = lens_service.active_models_dir()
+        if fp_dir:
+            present, fp_ok, fp_detail = check_fingerprint(
+                fp_dir, lambda t: lens_service.evaluate_energy(t)[0])
+            _BOOT_STATE["fingerprint_present"] = present
+            _BOOT_STATE["fingerprint_ok"] = fp_ok if present else None
+            _BOOT_STATE["fingerprint_error"] = fp_detail or None
+            if present and not fp_ok:
+                _BOOT_STATE["self_test_error"] = fp_detail
+                return
 
         _BOOT_STATE["self_test_pass"] = True
         logger.info(
@@ -419,6 +460,9 @@ def health():
                 "artifact_model": _BOOT_STATE["lens_artifact_model"],
                 "self_test_pass": _BOOT_STATE["self_test_pass"],
                 "self_test_error": _BOOT_STATE["self_test_error"],
+                "fingerprint_present": _BOOT_STATE["fingerprint_present"],
+                "fingerprint_ok": _BOOT_STATE["fingerprint_ok"],
+                "fingerprint_error": _BOOT_STATE["fingerprint_error"],
             },
         },
     }
@@ -443,6 +487,7 @@ def ready():
         "llama_server": llama_st["reachable"],
         "lens_self_test": _BOOT_STATE["self_test_pass"],
         "lens_required": lens_required,
+        "fingerprint_ok": _BOOT_STATE["fingerprint_ok"],
         "reason": _BOOT_STATE["self_test_error"] if not lens_ok else None,
     }
     if not ok:
@@ -1140,11 +1185,11 @@ def lens_evaluate(request: Request, query: str = None,
 
         raw_energy, normalized = evaluate_energy(query)
 
-        return {
+        return _apply_drift_flags({
             "enabled": True,
             "energy": raw_energy,
             "energy_normalized": normalized,
-        }
+        })
     except Exception as e:
         return {"error": _safe_detail(e, "lens evaluate")}
 
@@ -1184,12 +1229,12 @@ def lens_score_text(request: LensScoreTextRequest):
 
         normalized = lens_service._normalize_cx_energy(energy)
 
-        return {
+        return _apply_drift_flags({
             "energy": energy,
             "normalized": normalized,
             "calibrated": lens_service._cx_normalization is not None,
             "enabled": True,
-        }
+        })
     except Exception as e:
         return {
             "energy": 0.0,
@@ -1298,8 +1343,23 @@ def lens_retrain(request: LensRetrainRequest):
                 served = _probe_served_model() or os.environ.get(
                     "ATLAS_MODEL_NAME", "").strip()
                 if served and embeddings:
+                    # Record the embedding convention the training data was
+                    # extracted under — the caller embedded via this same
+                    # server, so the live convention IS the trained one.
+                    from geometric_lens.embedding_extractor import (
+                        observe_embedding_convention,
+                    )
+                    try:
+                        contract = observe_embedding_convention()
+                    except Exception as exc:
+                        logger.warning(
+                            "retrain: embedding-convention probe failed "
+                            "(%s) — identity written without a contract",
+                            exc)
+                        contract = None
                     save_model_identity(models_dir, served,
-                                        len(embeddings[0]))
+                                        len(embeddings[0]),
+                                        embedding_contract=contract)
                     metrics["model_identity"] = served
                 else:
                     logger.warning(
@@ -1329,6 +1389,24 @@ def lens_retrain(request: LensRetrainRequest):
                 # Refresh the boot-state cache so /ready reflects the
                 # freshly-retrained weights instead of the boot snapshot.
                 if reload_result.get("status") == "reloaded":
+                    # Write the fingerprint BEFORE the self-test re-runs:
+                    # the retrain moved the energies, so the previous
+                    # fingerprint would (correctly) flag the new weights
+                    # as drifted and wedge /ready.
+                    try:
+                        import geometric_lens.service as _svc
+                        from geometric_lens.drift import write_fingerprint
+                        write_fingerprint(
+                            models_dir,
+                            lambda t: _svc.evaluate_energy(t)[0],
+                            note=f"/internal/lens/retrain for "
+                                 f"{served or 'unknown model'}")
+                        metrics["fingerprint_written"] = True
+                    except Exception as exc:
+                        logger.warning(
+                            "drift fingerprint write failed after "
+                            "retrain: %s", exc)
+                        metrics["fingerprint_written"] = False
                     _run_lens_self_test()
 
             return {"status": "ok", "metrics": metrics}
@@ -1382,7 +1460,10 @@ def lens_gx_score(request: LensScoreTextRequest):
                 "enabled": False, "gx_available": False,
             }
 
-        return evaluate_combined(request.text)
+        result = evaluate_combined(request.text)
+        if isinstance(result, dict):
+            result = _apply_drift_flags(result)
+        return result
     except Exception as e:
         return {
             "cx_energy": 0.0, "cx_normalized": 0.5,

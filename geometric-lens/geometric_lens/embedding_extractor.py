@@ -3,12 +3,45 @@
 import base64
 import json
 import logging
+import math
 import os
 import struct
 from typing import Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
+
+
+class EmbeddingContractError(RuntimeError):
+    """The embed server's response violates the loaded artifact's
+    embedding contract (wrong response shape or vector norm). Raised
+    instead of silently adapting — the two conventions produce vectors
+    from different distributions and only one matches the trained
+    weights."""
+
+
+# Contract of the currently loaded artifacts, installed by
+# service._verify_model_identity() at weight load. None = no contract
+# declared (legacy artifacts): both response shapes are accepted with a
+# warning, matching pre-contract behavior.
+_EMBEDDING_CONTRACT: Optional[dict] = None
+_legacy_shape_warned = False
+
+
+def set_embedding_contract(contract: Optional[dict]) -> None:
+    """Install (or clear) the embedding contract enforced by
+    extract_embedding(). Called on weight load/reload."""
+    global _EMBEDDING_CONTRACT, _legacy_shape_warned
+    _EMBEDDING_CONTRACT = dict(contract) if contract else None
+    _legacy_shape_warned = False
+
+
+def get_embedding_contract() -> Optional[dict]:
+    return dict(_EMBEDDING_CONTRACT) if _EMBEDDING_CONTRACT else None
+
+
+def _l2_norm(vec: List[float]) -> float:
+    return math.sqrt(sum(v * v for v in vec))
 
 
 def _get_embed_url() -> str:
@@ -45,36 +78,97 @@ def _post_embedding(text: str, layers: Optional[List[int]] = None, timeout: floa
 def extract_embedding(text: str) -> List[float]:
     """Extract an embedding vector from llama-server.
 
-    Handles both pooled responses (flat list) from self-embedding endpoints
-    and per-token responses (nested list) that need mean pooling.
+    When the loaded artifacts declare an embedding_contract
+    (model_identity.json), the response is validated against it: a shape
+    or norm mismatch raises EmbeddingContractError instead of silently
+    adapting. Without a contract (legacy artifacts) both pooled (flat)
+    and per-token (nested, mean-pooled here) responses are accepted, with
+    a one-time warning on the per-token path.
 
     Returns:
         List of floats with model-native dimensionality.
     """
+    global _legacy_shape_warned
     item = _post_embedding(text)
     raw = item["embedding"]
+    contract = _EMBEDDING_CONTRACT
+    is_per_token = bool(raw) and isinstance(raw[0], list)
 
-    # Pooled: flat list of floats (e.g. llama-server self-embeddings)
-    if not isinstance(raw[0], list):
-        return raw
+    if contract:
+        expected = contract.get("response_shape", "flat")
+        got = "per_token" if is_per_token else "flat"
+        if got != expected:
+            raise EmbeddingContractError(
+                f"embed server returned a {got} /embedding response but the "
+                f"loaded lens artifacts were trained on {expected}. "
+                f"Scores computed from the wrong convention are invalid. "
+                f"Start the embed server with `--pooling mean "
+                f"--embd-normalize 2` (see inference/entrypoint-v3.1.sh) "
+                f"or reload artifacts trained for this convention."
+            )
 
-    # Per-token: mean-pool across tokens
-    per_token = raw
-    n_tokens = len(per_token)
+    if is_per_token:
+        # Per-token: mean-pool across tokens
+        per_token = raw
+        n_tokens = len(per_token)
 
-    if n_tokens == 0:
-        raise ValueError("No token embeddings returned")
+        if n_tokens == 0:
+            raise ValueError("No token embeddings returned")
 
-    dim = len(per_token[0])
+        if contract is None and not _legacy_shape_warned:
+            _legacy_shape_warned = True
+            logger.warning(
+                "per-token /embedding response mean-pooled without a "
+                "declared embedding_contract — if the loaded artifacts "
+                "were trained on pooled+normalized embeddings, every "
+                "score is off-distribution. Retrain or add "
+                "embedding_contract to model_identity.json."
+            )
 
-    pooled = [0.0] * dim
-    for tok_emb in per_token:
-        for i, v in enumerate(tok_emb):
-            pooled[i] += v
-    for i in range(dim):
-        pooled[i] /= n_tokens
+        dim = len(per_token[0])
 
-    return pooled
+        pooled = [0.0] * dim
+        for tok_emb in per_token:
+            for i, v in enumerate(tok_emb):
+                pooled[i] += v
+        for i in range(dim):
+            pooled[i] /= n_tokens
+        vec = pooled
+    else:
+        vec = raw
+
+    if contract and contract.get("normalized"):
+        norm = _l2_norm(vec)
+        tol = float(contract.get("norm_tolerance", 0.05))
+        if abs(norm - 1.0) > tol:
+            raise EmbeddingContractError(
+                f"embedding norm ‖v‖={norm:.3f} but the loaded lens "
+                f"artifacts expect L2-normalized vectors (1±{tol:g}). "
+                f"The embed server is likely running without "
+                f"`--embd-normalize 2` — scores from unnormalized "
+                f"embeddings are invalid at this scale."
+            )
+
+    return vec
+
+
+def observe_embedding_convention(
+        text: str = "def add(a, b):\n    return a + b") -> dict:
+    """Probe the embed server once and describe the convention it serves.
+
+    Used at training time to record what the training embeddings were
+    actually built from, so the resulting artifacts carry an accurate
+    embedding_contract.
+    """
+    item = _post_embedding(text)
+    raw = item["embedding"]
+    if bool(raw) and isinstance(raw[0], list):
+        return {"pooling": "none", "response_shape": "per_token",
+                "normalized": False, "norm_tolerance": 0.05}
+    norm = _l2_norm(raw)
+    return {"pooling": "mean", "response_shape": "flat",
+            "normalized": abs(norm - 1.0) <= 0.05,
+            "norm_tolerance": 0.05}
 
 
 def extract_embeddings_batch(texts: List[str]) -> List[List[float]]:

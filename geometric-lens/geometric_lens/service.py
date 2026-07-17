@@ -34,6 +34,9 @@ _models_loaded = False
 _load_attempted = False
 _artifact_model_identity = None
 _model_identity_error = ""
+# Directory the current C(x)/G(x) artifacts were loaded from; the drift
+# fingerprint check reads drift_fingerprint.json from here.
+_active_models_dir = None
 
 # Cached llama-server /v1/models probe. The lens artifact must match the
 # model the server is actually serving, not just whatever ATLAS_MODEL_NAME
@@ -125,10 +128,25 @@ def _verify_model_identity(models_dir: str, embedding_dim: int = 0) -> bool:
                 f"identity declares embedding_dim {identity['embedding_dim']}"
             )
         _artifact_model_identity = identity
+        # Install the artifact's embedding contract so extract_embedding()
+        # rejects wrong-convention responses instead of silently adapting.
+        from geometric_lens.embedding_extractor import set_embedding_contract
+        contract = identity.get("embedding_contract")
+        set_embedding_contract(contract)
+        if contract:
+            logger.info("Embedding contract active: %s", contract)
+        else:
+            logger.warning(
+                "model_identity.json declares no embedding_contract — "
+                "extract_embedding() accepts any response convention; a "
+                "server-side pooling/normalization change will shift scores "
+                "silently. Retrain to record one.")
         return True
     except Exception as exc:
         logger.error("Lens artifact identity check failed: %s", exc,
                      exc_info=True)
+        from geometric_lens.embedding_extractor import set_embedding_contract
+        set_embedding_contract(None)
         # get_model_info() surfaces this string over HTTP — keep the
         # exception type but not its text (full detail is in the log above).
         _model_identity_error = (
@@ -136,6 +154,13 @@ def _verify_model_identity(models_dir: str, embedding_dim: int = 0) -> bool:
             "(see service log)"
         )
         return False
+
+
+def active_models_dir():
+    """Directory the current artifacts were loaded from (None before the
+    first successful load). The drift-fingerprint check reads
+    drift_fingerprint.json from here."""
+    return _active_models_dir
 
 
 def _load_cx_normalization(models_dir: str) -> None:
@@ -362,6 +387,9 @@ def _do_load_models() -> bool:
         if not _verify_model_identity(models_dir, embedding_dim=dim):
             return False
 
+        global _active_models_dir
+        _active_models_dir = models_dir
+
         # Per-model calibration ships alongside the lens artifact.
         _load_cx_normalization(models_dir)
         _load_gx_thresholds(models_dir)
@@ -403,7 +431,7 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
     global _gx_pca_mean, _gx_top_dims, _models_loaded, _load_attempted
     global _cx_normalization, _gx_thresholds
     global _artifact_model_identity, _model_identity_error
-    global _served_model_id, _served_model_probed
+    global _served_model_id, _served_model_probed, _active_models_dir
 
     _models_loaded = False
     _load_attempted = False
@@ -416,6 +444,9 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
     _gx_thresholds = None
     _artifact_model_identity = None
     _model_identity_error = ""
+    _active_models_dir = None
+    from geometric_lens.embedding_extractor import set_embedding_contract
+    set_embedding_contract(None)
     # Re-probe llama-server on reload — the served model may have changed.
     _served_model_id = None
     _served_model_probed = False
@@ -430,6 +461,7 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
             if not _verify_model_identity(model_dir, embedding_dim=int(dim)):
                 raise ValueError(_model_identity_error)
             _cost_field = cost_field
+            _active_models_dir = model_dir
             _load_cx_normalization(model_dir)
             _load_gx_thresholds(model_dir)
             _load_gx_models(model_dir)

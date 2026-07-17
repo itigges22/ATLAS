@@ -94,6 +94,7 @@ Exact error strings and symptoms, mapped to their entries.
 | `You have full project context in the system prompt. Do not read more files.` | [Exploration Budget Warning](#exploration-budget-warning) |
 | `"lens": false` / "Lens unavailable — verification disabled" | [Lens Not Loaded / Unavailable](#lens-not-loaded--unavailable) |
 | Every candidate scores `cx_energy: 0.0`, `gx_score: 0.5` | [All Scores Near 0.5](#all-scores-near-05) |
+| Scores plausible but off-scale; `fingerprint_ok: false` / `drifted: true` | [Embedding-convention drift](#scores-look-plausible-but-are-wildly-off-scale-embedding-convention-drift) |
 | "embedding extraction failed" in lens logs | [Embedding Extraction Fails](#embedding-extraction-fails) |
 | 503 `models directory is mounted read-only` on retrain | [`/internal/lens/retrain` Returns 503](#internallensretrain-returns-503-models-directory-is-mounted-read-only) |
 | Sandbox returns `"error_type": "Timeout"` | [Code Execution Timeout](#code-execution-timeout) |
@@ -802,6 +803,28 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 ```
 
 If `enabled: false` or `cx_energy: 0.0`, the models aren't loaded. This is expected for a fresh install — model weights are not included in the repository and must be trained or downloaded from [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+
+### Scores Look Plausible but Are Wildly Off-Scale (embedding-convention drift)
+
+**Symptom:** Everything reports healthy — pods `Ready`, `/health` 200, `gx-score` returns in-range-looking `gx_score` with a `likely_correct` verdict — but `cx_energy` is orders of magnitude off its calibrated range (e.g. ~600 when the model's pass/fail means are ~20-30). A gated benchmark launched in this state produces a complete, plausible, entirely invalid result.
+
+**Cause:** The embed server is serving a different `/embedding` convention than the one the Geometric Lens `C(x)`/`G(x)` artifacts were trained on — typically per-token instead of pooled, or unnormalized instead of L2-normalized (‖v‖≈60 instead of ~1). Same dimensionality, wrong distribution; the cost-field MLP extrapolates to a huge energy and `cx_normalized` saturates. This happens after rebuilding the serving stack without `--pooling mean --embd-normalize 2`.
+
+**Verify:** the lens re-scores a stored fingerprint at boot and on every reload/retrain. Check `/ready` and `/health`:
+```bash
+curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
+```
+`fingerprint_ok: false` with a `fingerprint_error` naming expected-vs-observed energy is the drift signal — `/ready` returns 503 and scored responses carry `"drifted": true` with all `calibrated` flags forced false, so nothing downstream can mistake them for trustworthy.
+
+**Fix:**
+1. Confirm the embed server's convention. A pooled+normalized server returns a flat vector with ‖v‖≈1:
+   ```bash
+   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+   ```
+   `shape per_token` or `norm` far from 1.0 means the server is misconfigured.
+2. Set `ATLAS_EMBED_POOLING=mean` and `ATLAS_EMBED_NORMALIZE=2` (the defaults; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags.
+3. After the server serves the correct convention, the boot self-test's fingerprint check passes and `/ready` returns 200. If the artifacts predate the fingerprint, a retrain (`atlas lens retrain`) writes one and stamps the `embedding_contract` into `model_identity.json`.
 
 ### Embedding Extraction Fails
 
