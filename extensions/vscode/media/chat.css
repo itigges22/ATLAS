@@ -101,6 +101,56 @@ body {
 	white-space: pre-wrap;
 }
 
+.permission-card {
+	align-self: stretch;
+	padding: 8px 10px;
+	border-radius: 4px;
+	border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground, #cca700));
+	background: var(--vscode-inputValidation-warningBackground, transparent);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.permission-card.resolved {
+	opacity: 0.75;
+	border-color: var(--vscode-widget-border, var(--vscode-input-border, transparent));
+	background: transparent;
+}
+
+.permission-title {
+	font-weight: 600;
+}
+
+.permission-message {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.permission-args {
+	font-family: var(--vscode-editor-font-family);
+	font-size: 0.9em;
+	opacity: 0.8;
+	overflow-wrap: anywhere;
+}
+
+.permission-actions {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.permission-actions .deny {
+	background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+}
+
+.permission-outcome {
+	font-style: italic;
+	font-size: 0.9em;
+	opacity: 0.85;
+}
+
 #composer {
 	display: flex;
 	flex-direction: column;

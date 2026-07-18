@@ -7,12 +7,19 @@ import * as vscode from 'vscode';
 import { AtlasApiError, AtlasClient } from '../client/atlasClient';
 import type {
 	ErrorEventData,
+	PermissionDeniedEventData,
 	PermissionMode,
 	PermissionRequestEventData,
 	TextEventData,
 	ToolCallEventData,
 	ToolResultEventData,
 } from '../client/types';
+import {
+	PendingPermission,
+	PermissionFlow,
+	type DismissReason,
+	type PermissionChoice,
+} from '../session/permissionFlow';
 import { TurnManager } from '../session/turnManager';
 
 /** SecretStorage key for the service token ('ATLAS: Set Service Token'). */
@@ -25,13 +32,19 @@ type OutboundMessage =
 	| { type: 'toolCall'; name: string; detail: string }
 	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string }
 	| { type: 'note'; text: string }
+	| { type: 'permissionPrompt'; id: number; tool: string; detail: string; message: string }
+	| { type: 'permissionResolved'; id: number; outcome: string }
 	| { type: 'turnDone' }
 	| { type: 'turnError'; message: string }
 	| { type: 'reset' }
 	| { type: 'busy'; value: boolean };
 
 /** Messages the webview posts back to the extension. */
-type InboundMessage = { type: 'ready' } | { type: 'submit'; text: string } | { type: 'cancel' };
+type InboundMessage =
+	| { type: 'ready' }
+	| { type: 'submit'; text: string }
+	| { type: 'cancel' }
+	| { type: 'permissionAnswer'; id: number; choice: PermissionChoice };
 
 /** Condense tool args to a single short line for the tool chip. */
 function condenseArgs(args: unknown): string {
@@ -55,6 +68,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * excluded. */
 	private transcript: OutboundMessage[] = [];
 	private readonly turns = new TurnManager();
+	private readonly permissions: PermissionFlow;
 	private readonly output: vscode.OutputChannel;
 
 	constructor(
@@ -62,6 +76,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		private readonly secrets: vscode.SecretStorage,
 	) {
 		this.output = vscode.window.createOutputChannel('ATLAS');
+		this.permissions = new PermissionFlow(this.turns.sessionAllowedTools, {
+			onPrompt: (pending) => this.showPermissionPrompt(pending),
+			onDismiss: (pending, reason) => this.resolvePermissionPrompt(pending, reason),
+			onAutoAllow: (toolName) => this.post({ type: 'note', text: `'${toolName}' auto-allowed (approved for this session).` }),
+			onPostError: (toolName, error) => this.log(`permission decision POST failed for '${toolName}'`, error),
+		});
 	}
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -81,6 +101,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'cancel':
 					this.cancelTurn();
+					break;
+				case 'permissionAnswer':
+					// Stale/settled ids are no-ops inside the flow (first answer wins).
+					this.permissions.settleById(message.id, message.choice);
 					break;
 			}
 		});
@@ -124,6 +148,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		} catch (error) {
 			this.handleTurnFailure(error);
 		} finally {
+			// Any prompt still open has nothing left to answer — the proxy
+			// resolves pending requests when the turn ends.
+			this.permissions.endTurn();
 			this.postTransient({ type: 'busy', value: false });
 		}
 	}
@@ -154,22 +181,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 			case 'permission_request': {
-				// Interim commit-3 behavior: deny immediately and say so, so
-				// the turn never sits on the 600s server-side timeout. The
-				// real approve/deny flow lands in the next commit.
 				const payload = data as PermissionRequestEventData;
-				this.post({
-					type: 'note',
-					text: `Permission request for '${payload.tool_name}' auto-denied — the approval UI lands in an upcoming commit.`,
-				});
-				void client
-					.postPermissionDecision({
-						session_id: this.turns.sessionId,
-						tool_call_id: payload.tool_call_id,
-						decision: 'deny',
-						scope: 'once',
-					})
-					.catch((error: unknown) => this.log('permission deny failed', error));
+				this.permissions.handleRequest(client, this.turns.sessionId, payload);
+				break;
+			}
+			case 'permission_denied': {
+				// Proxy-side resolution (timeout/cancel) — may arrive while our
+				// prompt is still up; the flow dismisses it by tool name. The
+				// denied row itself renders here (TUI convention: the local deny
+				// path renders NO row to avoid duplicating this event).
+				const payload = data as PermissionDeniedEventData;
+				this.permissions.handleDenied(payload.tool);
+				this.post({ type: 'note', text: `Permission denied for '${payload.tool}'.` });
 				break;
 			}
 			case 'error': {
@@ -208,7 +231,58 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'turnError', message: `Could not reach the ATLAS proxy: ${message}` });
 	}
 
-	/** Post to the webview and record for replay. */
+	/** Show a permission prompt on both surfaces: an inline webview card
+	 * (buttons post permissionAnswer back) and a native notification. First
+	 * answer wins — PendingPermission.settle() ignores the loser. */
+	private showPermissionPrompt(pending: PendingPermission): void {
+		this.post({
+			type: 'permissionPrompt',
+			id: pending.id,
+			tool: pending.request.tool_name,
+			detail: condenseArgs(pending.request.args),
+			message: pending.request.message || '',
+		});
+		const label = pending.request.message || `ATLAS wants to run '${pending.request.tool_name}'.`;
+		void vscode.window
+			.showInformationMessage(label, 'Allow Once', 'Allow for Session', 'Deny')
+			.then((choice) => {
+				if (choice === undefined) {
+					return; // dismissed — the card (or the timeout) decides
+				}
+				const map: Record<string, PermissionChoice> = {
+					'Allow Once': 'allow-once',
+					'Allow for Session': 'allow-session',
+					Deny: 'deny',
+				};
+				pending.settle(map[choice]);
+			});
+	}
+
+	/** Collapse the prompt card into its outcome line. A user deny renders no
+	 * extra row — the proxy's permission_denied event carries that (TUI
+	 * convention, avoids the duplicate). */
+	private resolvePermissionPrompt(pending: PendingPermission, reason: DismissReason): void {
+		let outcome: string;
+		switch (reason) {
+			case 'answered':
+				outcome =
+					pending.choice === 'allow-session'
+						? 'allowed for session'
+						: pending.choice === 'allow-once'
+							? 'allowed once'
+							: 'denied';
+				break;
+			case 'denied-remote':
+				outcome = 'resolved by proxy';
+				break;
+			case 'turn-ended':
+				outcome = 'turn ended';
+				break;
+		}
+		this.post({ type: 'permissionResolved', id: pending.id, outcome });
+	}
+
+
 	private post(message: OutboundMessage): void {
 		this.transcript.push(message);
 		void this.view?.webview.postMessage(message);

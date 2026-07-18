@@ -19,6 +19,8 @@
 	let openAssistantEl = null;
 	/** Tool chips awaiting a tool_result, keyed by tool name (FIFO per name). */
 	const pendingChips = new Map();
+	/** Open permission cards keyed by prompt id. */
+	const permissionCards = new Map();
 
 	function scrollToBottom() {
 		messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -92,6 +94,73 @@
 		}
 	}
 
+	function addPermissionCard(id, tool, detail, message) {
+		const card = document.createElement('div');
+		card.className = 'permission-card';
+
+		const title = document.createElement('div');
+		title.className = 'permission-title';
+		title.textContent = 'Permission: ' + tool;
+		card.appendChild(title);
+
+		if (message) {
+			const body = document.createElement('div');
+			body.className = 'permission-message';
+			body.textContent = message;
+			card.appendChild(body);
+		}
+		if (detail) {
+			const args = document.createElement('div');
+			args.className = 'permission-args';
+			args.textContent = detail;
+			card.appendChild(args);
+		}
+
+		const actions = document.createElement('div');
+		actions.className = 'permission-actions';
+		const buttons = [
+			['Allow Once', 'allow-once'],
+			['Allow for Session', 'allow-session'],
+			['Deny', 'deny'],
+		];
+		for (const pair of buttons) {
+			const button = document.createElement('button');
+			button.type = 'button';
+			button.textContent = pair[0];
+			if (pair[1] === 'deny') {
+				button.className = 'deny';
+			}
+			button.addEventListener('click', () => {
+				vscode.postMessage({ type: 'permissionAnswer', id: id, choice: pair[1] });
+			});
+			actions.appendChild(button);
+		}
+		card.appendChild(actions);
+
+		messagesEl.appendChild(card);
+		permissionCards.set(id, card);
+		scrollToBottom();
+	}
+
+	function resolvePermissionCard(id, outcome) {
+		const card = permissionCards.get(id);
+		permissionCards.delete(id);
+		if (!card) {
+			// Replay path: the prompt message was recorded before its resolution —
+			// both replay in order, so a missing card only means a pruned DOM.
+			return;
+		}
+		const actions = card.querySelector('.permission-actions');
+		if (actions) {
+			actions.remove();
+		}
+		const result = document.createElement('div');
+		result.className = 'permission-outcome';
+		result.textContent = outcome;
+		card.classList.add('resolved');
+		card.appendChild(result);
+	}
+
 	function setBusy(busy) {
 		sendEl.hidden = busy;
 		stopEl.hidden = !busy;
@@ -101,6 +170,7 @@
 	function resetAll() {
 		messagesEl.textContent = '';
 		pendingChips.clear();
+		permissionCards.clear();
 		openAssistantEl = null;
 	}
 
@@ -125,6 +195,13 @@
 			case 'note':
 				closeAssistantBubble();
 				appendBlock('note', message.text);
+				break;
+			case 'permissionPrompt':
+				closeAssistantBubble();
+				addPermissionCard(message.id, message.tool, message.detail, message.message);
+				break;
+			case 'permissionResolved':
+				resolvePermissionCard(message.id, message.outcome);
 				break;
 			case 'turnDone':
 				closeAssistantBubble();
