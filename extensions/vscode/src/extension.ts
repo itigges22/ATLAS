@@ -1,18 +1,45 @@
 import * as vscode from 'vscode';
-
-// Command IDs contributed in package.json. Real implementations land with the
-// chat view (atlas.openChat / atlas.newConversation), turn manager
-// (atlas.cancelTurn), and client auth (atlas.setToken) in upcoming commits.
-const COMMANDS = ['atlas.openChat', 'atlas.cancelTurn', 'atlas.setToken', 'atlas.newConversation'] as const;
+import { ChatViewProvider, TOKEN_SECRET_KEY } from './ui/chatView';
 
 export function activate(context: vscode.ExtensionContext) {
-	for (const command of COMMANDS) {
-		context.subscriptions.push(
-			vscode.commands.registerCommand(command, () => {
-				void vscode.window.showInformationMessage(`ATLAS: '${command}' is not implemented yet (scaffold).`);
-			}),
-		);
-	}
+	const chat = new ChatViewProvider(context.extensionUri, context.secrets);
+
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chat, {
+			webviewOptions: { retainContextWhenHidden: true },
+		}),
+
+		vscode.commands.registerCommand('atlas.openChat', () => {
+			void vscode.commands.executeCommand(`${ChatViewProvider.viewType}.focus`);
+		}),
+
+		vscode.commands.registerCommand('atlas.cancelTurn', () => {
+			chat.cancelTurn();
+		}),
+
+		vscode.commands.registerCommand('atlas.newConversation', () => {
+			chat.newConversation();
+		}),
+
+		vscode.commands.registerCommand('atlas.setToken', async () => {
+			const token = await vscode.window.showInputBox({
+				title: 'ATLAS: Set Service Token',
+				prompt: 'Bearer token for the ATLAS proxy (leave empty to clear).',
+				password: true,
+				ignoreFocusOut: true,
+			});
+			if (token === undefined) {
+				return; // dismissed
+			}
+			if (token === '') {
+				await context.secrets.delete(TOKEN_SECRET_KEY);
+				void vscode.window.showInformationMessage('ATLAS: service token cleared.');
+			} else {
+				await context.secrets.store(TOKEN_SECRET_KEY, token);
+				void vscode.window.showInformationMessage('ATLAS: service token saved to Secret Storage.');
+			}
+		}),
+	);
 }
 
 export function deactivate() {}

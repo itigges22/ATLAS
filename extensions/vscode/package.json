@@ -39,6 +39,24 @@
         "title": "ATLAS: New Conversation"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "atlas",
+          "title": "ATLAS",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "atlas": [
+        {
+          "type": "webview",
+          "id": "atlas.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
     "configuration": {
       "title": "ATLAS",
       "properties": {
