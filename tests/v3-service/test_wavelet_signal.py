@@ -246,3 +246,49 @@ class TestJavaAnnotations:
         a = compute_signal(["public @Nullable String foo() {}"], java)[0]
         b = compute_signal(["public String foo() {}"], java)[0]
         assert a > b
+
+
+class TestCommentTerminatorMasking:
+    """Regressions for the terminator-swallowing class: string masking must
+    never run over comment interiors (an apostrophe in prose swallowed the
+    close delimiter and zeroed the rest of the file's signal)."""
+
+    def test_block_comment_apostrophe_does_not_swallow_terminator(self):
+        from wavelet.language import detect_language
+        from wavelet.signal import compute_signal
+        js = detect_language("a.js")
+        sig = compute_signal(
+            ["/* Don't use this directly */", "", "function go() {", "}"], js)
+        assert sig[0] == 0.0
+        assert sig[2] > 0.0, "function after a prose comment must score"
+
+    def test_docstring_closer_with_apostrophe(self):
+        from wavelet.language import detect_language
+        from wavelet.signal import compute_signal
+        py = detect_language("a.py")
+        sig = compute_signal(
+            ['def f():', '    """Doc.', "    Returns the user's data.\"\"\"",
+             '    return 1', '', 'def g():', '    pass'], py)
+        assert sig[5] > 0.0, "def g must score after the docstring closes"
+
+    def test_hash_comment_with_odd_triple_quotes(self):
+        from wavelet.language import detect_language
+        from wavelet.signal import compute_signal
+        py = detect_language("a.py")
+        sig = compute_signal(['# see """ usage', 'def foo():', '    return 1'], py)
+        assert sig[1] > 0.0, "a comment must not flip the docstring state"
+
+    def test_python_backtick_is_not_a_string_delimiter(self):
+        from wavelet.language import detect_language
+        from wavelet.signal import compute_signal
+        py = detect_language("a.py")
+        sig = compute_signal(['x = 1  # `code` sample', 'def h():', '    pass'], py)
+        assert sig[1] > 0.0
+
+    def test_string_containing_comment_start_does_not_open_comment(self):
+        from wavelet.language import detect_language
+        from wavelet.signal import compute_signal
+        js = detect_language("a.js")
+        sig = compute_signal(
+            ['var s = "/* not a comment */";', 'function ok() {', '}'], js)
+        assert sig[1] > 0.0

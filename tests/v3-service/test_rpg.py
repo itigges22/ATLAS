@@ -380,8 +380,31 @@ class TestPlannedSignatureExtraction:
         assert missing_planned_signatures(code, planned, "m.py") == ["def run(rows)"]
 
     def test_no_veto_when_code_opaque(self):
-        # No parseable defs → don't veto (conservative).
-        assert missing_planned_signatures("x = 1", ["def f()"], "m.py") == []
+        # Opaque = structure NOT confidently extractable (regex path found
+        # nothing) → don't veto. A JS script with no recognizable
+        # definitions may just use an unsupported syntax style.
+        assert missing_planned_signatures(
+            "console.log(1)", ["function f()"], "a.js") == []
+
+    def test_parsed_but_empty_python_is_enforced(self):
+        # A Python file that parses and defines nothing genuinely misses
+        # every planned def — the old escape here kept an all-wrong
+        # candidate while vetoing a half-right one.
+        assert missing_planned_signatures(
+            "x = 1", ["def f()"], "m.py") == ["def f()"]
+        # And the half-right candidate reports only its real gap.
+        assert missing_planned_signatures(
+            "def f(): pass", ["def f()", "def g()"], "m.py") == ["def g()"]
+
+    def test_modifier_led_signatures_extract_real_name(self):
+        # Java/C++/JS-arrow signature styles must not report modifiers as
+        # the function name (each false miss costs a full V3 regen).
+        java = "public class Main { public static void main(String[] a) { } }"
+        assert missing_planned_signatures(
+            java, ["public static void main(String[] a)"], "Main.java") == []
+        js = "class App {}\nconst handleClick = () => {};"
+        assert missing_planned_signatures(
+            js, ["function handleClick()"], "app.js") == []
 
 
 class TestVerifyNodeRealization:

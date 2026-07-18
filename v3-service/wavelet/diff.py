@@ -127,6 +127,15 @@ def diff_contents(
 ) -> FileDiffResult:
     """Convenience: build FileContexts for two file contents and diff their
     important positions. The drift entry point for RPG node verification."""
+    from .project import MAX_FILE_BYTES
+
+    # Same cap as the project walk: the pure-Python CWT makes an uncapped
+    # input a multi-minute stall. Oversized content degrades to "no drift
+    # information" rather than blocking the pipeline.
+    if len(before_text) > MAX_FILE_BYTES:
+        before_text = before_text[:MAX_FILE_BYTES]
+    if len(after_text) > MAX_FILE_BYTES:
+        after_text = after_text[:MAX_FILE_BYTES]
     before_ctx = FileContext(filename, before_text)
     after_ctx = FileContext(filename, after_text)
     return diff_file_context(

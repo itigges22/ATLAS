@@ -29,12 +29,17 @@ def _mask_string_literals(line: str, lang: LanguageConfig) -> str:
     # In Rust `'a` is a lifetime and in Clojure `'` is the quote reader macro —
     # neither delimits a string, so treating `'` as one would mask real code.
     single_quote_is_string = lang.name not in ("rust", "clojure")
+    # Backtick delimits strings/templates in JS/TS/Go/shell, but in Python
+    # and Clojure it is not a string delimiter — a stray backtick there would
+    # mask the rest of the line and feed the terminator-swallowing class of
+    # bug.
+    backtick_is_string = lang.name not in ("python", "clojure")
     chars = list(line)
     i = 0
     n = len(chars)
     while i < n:
         c = chars[i]
-        if c == '"' or c == "`" or (single_quote_is_string and c == "'"):
+        if c == '"' or (backtick_is_string and c == "`") or (single_quote_is_string and c == "'"):
             quote = c
             j = i + 1
             while j < n:
@@ -134,11 +139,15 @@ def compute_signal(lines: List[str], lang: LanguageConfig) -> List[float]:
         masked = _mask_string_literals(stripped, lang)
 
         # ── Continuation of multiline comments / docstrings ──
+        # Terminator scanning runs on the UNMASKED text: comment interiors
+        # are prose, and masking them treats an apostrophe in "Don't" as a
+        # string opener that swallows the `*/` (or `\"\"\"`) terminator —
+        # permanently zeroing the rest of the file's signal.
         if in_block_comment:
             if lang.block_comment_uses_paren_depth:
                 depth = block_comment_depth
                 close_idx = -1
-                for ci, mc in enumerate(masked):
+                for ci, mc in enumerate(stripped):
                     if mc == "(":
                         depth += 1
                     elif mc == ")":
@@ -155,7 +164,7 @@ def compute_signal(lines: List[str], lang: LanguageConfig) -> List[float]:
                     block_comment_depth = depth
                     signal[i] = 0.0
             else:
-                end_idx = masked.find(lang.block_comment_end)
+                end_idx = stripped.find(lang.block_comment_end)
                 if end_idx != -1:
                     in_block_comment = False
                     after = stripped[end_idx + len(lang.block_comment_end):]
@@ -165,7 +174,7 @@ def compute_signal(lines: List[str], lang: LanguageConfig) -> List[float]:
             continue
 
         if in_doc_string:
-            end_idx = masked.find(doc_string_delim)
+            end_idx = stripped.find(doc_string_delim)
             if end_idx != -1:
                 in_doc_string = False
                 doc_string_delim = None
@@ -179,17 +188,22 @@ def compute_signal(lines: List[str], lang: LanguageConfig) -> List[float]:
         # Scanned on the unmasked stripped line because _mask_string_literals
         # would have consumed them as regular strings.
         if lang.name == "python":
-            dq = stripped.find('"""')
-            sq = stripped.find("'''")
+            # Cut at a line comment first (found on the masked text so a `#`
+            # inside a real string doesn't cut): a comment like
+            # `# see """ usage` must not flip the docstring state machine.
+            hash_pos = masked.find("#")
+            doc_scan = stripped if hash_pos == -1 else stripped[:hash_pos]
+            dq = doc_scan.find('"""')
+            sq = doc_scan.find("'''")
             dq_idx = min(
                 dq if dq != -1 else math.inf,
                 sq if sq != -1 else math.inf,
             )
             if math.isfinite(dq_idx):
                 dq_idx = int(dq_idx)
-                delim = stripped[dq_idx:dq_idx + 3]
-                before = stripped[:dq_idx].strip()
-                after = stripped[dq_idx + 3:]
+                delim = doc_scan[dq_idx:dq_idx + 3]
+                before = doc_scan[:dq_idx].strip()
+                after = doc_scan[dq_idx + 3:]
                 has_closing = delim in after
 
                 if has_closing:
@@ -207,11 +221,22 @@ def compute_signal(lines: List[str], lang: LanguageConfig) -> List[float]:
         if lang.block_comment_at_line_start:
             bc_start_idx = 0 if masked.startswith(lang.block_comment_start) else -1
         else:
-            bc_start_idx = masked.find(lang.block_comment_start)
+            bc_scan = masked
+            if lang.name == "python":
+                # Same comment cut as the docstring branch: a `"""` after a
+                # line comment (`# see """ usage`) must not open python's
+                # redundant block-comment path either.
+                hp = masked.find("#")
+                if hp != -1:
+                    bc_scan = masked[:hp]
+            bc_start_idx = bc_scan.find(lang.block_comment_start)
         if bc_start_idx != -1:
             before = stripped[:bc_start_idx].strip()
-            after_delim = masked[bc_start_idx + len(lang.block_comment_start):]
-            after_delim_raw = stripped[bc_start_idx + len(lang.block_comment_start):]
+            # Close-scan on the RAW interior: the comment's contents are
+            # prose, and masking them lets an apostrophe swallow the
+            # terminator (`/* Don't use */` would never close).
+            after_delim = stripped[bc_start_idx + len(lang.block_comment_start):]
+            after_delim_raw = after_delim
 
             end_idx = -1
             if lang.block_comment_uses_paren_depth:

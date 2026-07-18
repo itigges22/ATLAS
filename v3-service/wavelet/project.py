@@ -65,7 +65,23 @@ def _compile_glob(pat: str) -> "re.Pattern[str]":
         elif c == "?":
             regex += "[^/]"
             i += 1
-        elif c in ".+()[]{}^$|\\":
+        elif c == "[":
+            # Character class: pass through to the regex (gitignore classes
+            # are regex-compatible modulo `!` negation). Escaping the
+            # brackets instead made `[ab].py` silently never match, so files
+            # git ignores were indexed. Unterminated `[` falls back to a
+            # literal bracket.
+            close = body.find("]", i + 2)  # +2: "[]" would be empty
+            if close != -1:
+                cls = body[i + 1:close]
+                if cls.startswith("!"):
+                    cls = "^" + cls[1:]
+                regex += "[" + cls + "]"
+                i = close + 1
+            else:
+                regex += "\\["
+                i += 1
+        elif c in ".+(){}^$|\\" or c == "]":
             regex += "\\" + c
             i += 1
         else:
@@ -73,7 +89,12 @@ def _compile_glob(pat: str) -> "re.Pattern[str]":
             i += 1
 
     prefix = "^" if anchored else "(^|/)"
-    return re.compile(f"{prefix}{regex}(/|$)")
+    try:
+        return re.compile(f"{prefix}{regex}(/|$)")
+    except re.error:
+        # A class body that isn't valid regex (e.g. `[z-a]`) degrades to a
+        # fully-escaped literal match rather than crashing the walk.
+        return re.compile(f"{prefix}{re.escape(body)}(/|$)")
 
 
 def _load_gitignore(root: str) -> List[_GitignoreRule]:
@@ -142,9 +163,16 @@ def _discover_files(root: str) -> Tuple[List[ProjectFile], bool]:
     truncated = False
     pending: List[str] = []
 
-    def walk(directory: str) -> None:
+    def walk(directory: str, depth: int = 0) -> None:
         nonlocal truncated
         if truncated:
+            return
+        # Depth guard: recursion is one Python frame per directory level, so
+        # a pathologically deep tree (>1000 levels) would raise an uncaught
+        # RecursionError out of decompose_project. No real project nests
+        # this deep; treat it like the file-count cap.
+        if depth > 64:
+            truncated = True
             return
         try:
             entries = os.listdir(directory)
@@ -175,9 +203,14 @@ def _discover_files(root: str) -> Tuple[List[ProjectFile], bool]:
                     continue
 
             if statmod.S_ISDIR(st.st_mode):
-                if entry in _SKIP_DIRS:
-                    continue
-                if _is_ignored(rel_path, True, gitignore):
+                # Register pruned dirs' realpaths too: a symlink alias to a
+                # skipped/ignored dir must not resurrect its contents under
+                # the alias path.
+                if entry in _SKIP_DIRS or _is_ignored(rel_path, True, gitignore):
+                    try:
+                        visited_real.add(os.path.realpath(full_path))
+                    except OSError:
+                        pass
                     continue
                 try:
                     dir_real = os.path.realpath(full_path)
@@ -186,7 +219,7 @@ def _discover_files(root: str) -> Tuple[List[ProjectFile], bool]:
                 if dir_real in visited_real:
                     continue
                 visited_real.add(dir_real)
-                walk(full_path)
+                walk(full_path, depth + 1)
             elif statmod.S_ISREG(st.st_mode):
                 if _is_ignored(rel_path, False, gitignore):
                     continue
@@ -292,8 +325,14 @@ def decompose_file_map(
     ProjectIndex.get_important_positions: top `limit` positions by |coefficient|,
     labels suffixed with the relative path."""
     top: List[ImportantPosition] = []
-    for rel, content in file_map.items():
-        if not content:
+    for i, (rel, content) in enumerate(file_map.items()):
+        # Same bounds as the disk path: the pure-Python CWT is ~0.5s per
+        # 1,000 lines, so an uncapped in-memory map would let one huge
+        # supplied file (or thousands of entries) stall the planner for
+        # minutes. MAX_FILE_BYTES/MAX_FILES mirror _discover_files.
+        if i >= MAX_FILES:
+            break
+        if not content or len(content) > MAX_FILE_BYTES:
             continue
         ctx = FileContext(os.path.basename(rel), content)
         peaks = ctx.get_important_positions(min_coefficient, max(limit, 30))

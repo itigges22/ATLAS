@@ -104,9 +104,18 @@ def extract_json_object(raw: str) -> Optional[dict]:
         return None
     import re
 
+    # Prefer the first fenced block, but fall back to the full text when it
+    # doesn't parse — a fenced non-JSON example in the model's preamble must
+    # not mask an unfenced JSON object after it.
     fence = re.search(r"```(?:json)?\s*\n(.*?)\n```", raw, re.DOTALL)
     if fence:
-        raw = fence.group(1)
+        fenced = _extract_json_from(fence.group(1))
+        if fenced is not None:
+            return fenced
+    return _extract_json_from(raw)
+
+
+def _extract_json_from(raw: str) -> Optional[dict]:
     start = raw.find("{")
     if start < 0:
         return None
@@ -423,6 +432,25 @@ def flatten_to_plan(rpg: RPG) -> dict:
 _DECL_KEYWORDS = frozenset({
     "def", "func", "function", "fn", "fun", "class", "struct",
     "interface", "trait", "type", "async", "impl", "object",
+    # Modifiers and type-ish tokens that lead non-Python/Go signatures
+    # ("public static void main(...)", "const handleClick = ...",
+    # "virtual int run() override"). The bare-name fallback must never
+    # return these as the "function name" — a wrong name here makes every
+    # candidate look drifted forever, and each false drift costs a full
+    # V3 regeneration.
+    "public", "private", "protected", "static", "final", "abstract",
+    "virtual", "override", "const", "let", "var", "export", "extern",
+    "inline", "unsigned", "signed", "void", "int", "float", "double",
+    "bool", "boolean", "string", "char", "long", "short", "auto", "new",
+    "return", "if", "for", "while", "switch", "catch", "else", "elif",
+})
+
+# Control-flow keywords that look like `name(...)` call sites in C-style
+# code; never function names.
+_CALLISH_NON_NAMES = frozenset({
+    "if", "for", "while", "switch", "catch", "return", "throw", "with",
+    "assert", "elif", "except", "sizeof", "typeof", "new", "delete",
+    "super", "print",
 })
 
 
@@ -444,8 +472,21 @@ def _function_name_from_signature(sig: str) -> str:
     m = re.search(r"\b(?:async\s+)?(?:def|func|function|fn|fun|class|struct|interface|trait|type)\s+([A-Za-z_]\w*)", s)
     if m:
         return m.group(1)
-    # Bare "name" / "name(args)", but never a lone declaration keyword.
-    m = re.match(r"\s*([A-Za-z_]\w*)", s)
+    # JS/TS arrow or function-expression assignment:
+    # `handleClick = () =>`, `handleClick = async function`, `handleClick: (x) =>`.
+    m = re.search(r"\b([A-Za-z_]\w*)\s*[:=]\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_]\w*\s*=>)", s)
+    if m and m.group(1) not in _DECL_KEYWORDS:
+        return m.group(1)
+    # C-style `modifiers type name(args)`: the name is the token directly
+    # attached to the parameter list, so scan for `name(` and take the first
+    # hit that isn't a keyword ("public static void main(String[] a)" → main).
+    for cm in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", s):
+        if cm.group(1) not in _DECL_KEYWORDS and cm.group(1) not in _CALLISH_NON_NAMES:
+            return cm.group(1)
+    # Bare "name", but never a lone declaration keyword or modifier —
+    # returning "" makes the caller skip enforcement rather than hunt for a
+    # function literally named "public".
+    m = re.match(r"\s*([A-Za-z_]\w*)\s*$", s)
     if m and m.group(1) not in _DECL_KEYWORDS:
         return m.group(1)
     return ""
@@ -456,6 +497,17 @@ def defined_names(code: str, filename: str) -> set:
     (precise, methods included); other languages use a keyword+name regex.
     Returns an empty set when nothing parses — callers treat that as "unknown,"
     not "missing.\""""
+    names, _ = _defined_names_ex(code, filename)
+    return names
+
+
+def _defined_names_ex(code: str, filename: str) -> tuple:
+    """(names, confident) — `confident` means the extraction actually saw the
+    file's structure: a successful Python AST parse is confident even when it
+    defines nothing (a script that defines nothing genuinely misses every
+    planned def), while the regex path is confident only when it found
+    definitions (an empty regex result may just mean an unsupported syntax
+    style, so enforcement must not fire on it)."""
     import re
 
     names: set = set()
@@ -470,7 +522,7 @@ def defined_names(code: str, filename: str) -> set:
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     names.add(node.name)
-            return names
+            return names, True
         # fall through to regex on unparseable Python
     for m in re.finditer(
         r"\b(?:def|func|function|fn|fun|class|struct|interface|trait|type)\s+([A-Za-z_][\w]*)",
@@ -480,7 +532,23 @@ def defined_names(code: str, filename: str) -> set:
     # Go-style receiver methods: `func (r *T) Name(...)`.
     for m in re.finditer(r"\bfunc\s*\([^)]*\)\s*([A-Za-z_]\w*)", code):
         names.add(m.group(1))
-    return names
+    # JS/TS arrow functions and function expressions bound to a name:
+    # `const handleClick = () => ...`, `handleClick = async function ...`,
+    # `handleClick: (x) => ...` (object-literal methods).
+    for m in re.finditer(
+        r"\b([A-Za-z_]\w*)\s*[:=]\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_]\w*\s*=>)",
+        code,
+    ):
+        if m.group(1) not in _DECL_KEYWORDS:
+            names.add(m.group(1))
+    # C-style / class-method definitions: `name(args) {` at definition
+    # position (Java/C/C++/C#, JS method shorthand). Control-flow keywords
+    # that look call-shaped are excluded.
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\([^;{})]*\)\s*\{", code):
+        if (m.group(1) not in _CALLISH_NON_NAMES
+                and m.group(1) not in _DECL_KEYWORDS):
+            names.add(m.group(1))
+    return names, bool(names)
 
 
 def planned_signatures_from_constraints(constraints: List[str]) -> List[str]:
@@ -500,13 +568,17 @@ def planned_signatures_from_constraints(constraints: List[str]) -> List[str]:
 def missing_planned_signatures(code: str, planned: List[str], filename: str) -> List[str]:
     """Planned signatures whose declared name is NOT defined in `code`.
 
-    Conservative: if `code` yields no parseable definitions at all (empty
-    `defined_names`), returns [] — we don't veto when we can't see structure.
+    Conservative in exactly one direction: when the extraction was not
+    confident about the file's structure (see _defined_names_ex), returns []
+    — we don't veto what we can't see. A confidently-parsed file that defines
+    nothing is NOT the escape case: such a candidate genuinely misses every
+    planned signature, and exempting it would veto a half-right candidate
+    while keeping an all-wrong one.
     """
     if not planned:
         return []
-    defined = defined_names(code, filename)
-    if not defined:
+    defined, confident = _defined_names_ex(code, filename)
+    if not confident:
         return []
     missing: List[str] = []
     for sig in planned:

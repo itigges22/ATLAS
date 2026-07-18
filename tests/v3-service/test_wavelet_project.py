@@ -147,3 +147,41 @@ class TestDecomposeFileMap:
 
     def test_limit_caps(self):
         assert len(decompose_file_map({"a.py": PY_A, "b.py": PY_B}, limit=2)) <= 2
+
+
+class TestWalkHardening:
+    def test_deep_tree_truncates_instead_of_recursion_error(self, tmp_path):
+        from wavelet.project import _discover_files
+        d = tmp_path
+        for _ in range(80):
+            d = d / "x"
+            d.mkdir()
+        (d / "deep.py").write_text("def f(): pass\n")
+        files, truncated = _discover_files(str(tmp_path))
+        assert truncated is True
+
+    def test_gitignore_character_class_matches(self, tmp_path):
+        from wavelet.project import _discover_files
+        (tmp_path / ".gitignore").write_text("[ab].py\n")
+        for n in ("a.py", "b.py", "c.py"):
+            (tmp_path / n).write_text("def f(): pass\n")
+        files, _ = _discover_files(str(tmp_path))
+        assert sorted(f.filename for f in files) == ["c.py"]
+
+    def test_symlink_alias_cannot_resurrect_ignored_dir(self, tmp_path):
+        import os
+        from wavelet.project import _discover_files
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "s.py").write_text("def s(): pass\n")
+        (tmp_path / ".gitignore").write_text("sub/\n")
+        os.symlink(str(sub), str(tmp_path / "link_sub"))
+        files, _ = _discover_files(str(tmp_path))
+        assert files == []
+
+    def test_file_map_skips_oversized_entries(self):
+        from wavelet.project import decompose_file_map, MAX_FILE_BYTES
+        huge = "x = 1\n" * (MAX_FILE_BYTES // 6 + 10)
+        assert len(huge) > MAX_FILE_BYTES
+        out = decompose_file_map({"huge.py": huge, "ok.py": "def f(): pass\n"})
+        assert all(p.filename == "ok.py" for p in out)

@@ -133,7 +133,10 @@ def detect_peaks(
         n = len(coeffs)
         for pos in range(n):
             mag = abs(coeffs[pos])
-            if mag < threshold:
+            # Zero magnitude is never a peak, even at threshold 0.0 — an
+            # all-zero signal (blank or comment-only file) must not emit a
+            # spurious flat "peak" per scale.
+            if mag <= 0.0 or mag < threshold:
                 continue
             left_ok = pos == 0 or mag >= abs(coeffs[pos - 1])
             right_ok = pos == n - 1 or mag > abs(coeffs[pos + 1])

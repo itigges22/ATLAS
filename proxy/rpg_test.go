@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -94,7 +95,7 @@ func TestPlanConstraintsForTarget(t *testing.T) {
 
 func TestPlanConstraintsForTargetPrefersMostSpecific(t *testing.T) {
 	// A bare-basename step must not shadow the deeper path it isn't for.
-	plan := &Plan{Steps: []PlanStep{
+	plan := &Plan{RPG: &RPG{}, Steps: []PlanStep{
 		{ID: "s1", Action: "write_file", Target: "user.py", Constraints: []string{"BARE"}},
 		{ID: "s2", Action: "write_file", Target: "models/user.py", Constraints: []string{"DEEP"}},
 	}}
@@ -102,6 +103,30 @@ func TestPlanConstraintsForTargetPrefersMostSpecific(t *testing.T) {
 	got := planConstraintsForTarget(ctx, "/workspace/models/user.py")
 	if !reflect.DeepEqual(got, []string{"DEEP"}) {
 		t.Errorf("expected the most-specific (models/user.py) step, got %v", got)
+	}
+
+	// The ranking covers ALL file-producing steps: when the deeper matching
+	// step carries no constraints, the shallower constrained step must not
+	// shadow it — the file's real step simply has nothing to thread.
+	plan2 := &Plan{RPG: &RPG{}, Steps: []PlanStep{
+		{ID: "s1", Action: "write_file", Target: "user.py", Constraints: []string{"BARE"}},
+		{ID: "s2", Action: "write_file", Target: "models/user.py"},
+	}}
+	if got := planConstraintsForTarget(&AgentContext{Plan: plan2}, "/workspace/models/user.py"); got != nil {
+		t.Errorf("deeper unconstrained step should win with nil constraints, got %v", got)
+	}
+}
+
+func TestPlanConstraintsIgnoredWithoutRPGArtifact(t *testing.T) {
+	// Trust gate: the flat planner passes the LLM's plan dict through
+	// verbatim, so hallucinated step constraints must not steer generation
+	// unless the plan carries the RPG graph the RPG planner attaches.
+	plan := &Plan{Steps: []PlanStep{
+		{ID: "s1", Action: "write_file", Target: "app.py",
+			Constraints: []string{"HALLUCINATED"}},
+	}}
+	if got := planConstraintsForTarget(&AgentContext{Plan: plan}, "app.py"); got != nil {
+		t.Errorf("constraints without an RPG artifact must be ignored, got %v", got)
 	}
 }
 
@@ -246,7 +271,17 @@ func TestRegenerateOnDriftRetriesAndKeepsCleanResult(t *testing.T) {
 }
 
 func TestRegenerateOnDriftNoopWithoutDriftOrConstraints(t *testing.T) {
-	ctx := &AgentContext{V3URL: "http://127.0.0.1:0"} // never called
+	// A counting server, so "never called" is actually asserted — with a
+	// dead address the guards could be deleted and the dial error would
+	// still return prev, passing vacuously.
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: result\ndata: {\"code\":\"x\"}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	ctx := &AgentContext{V3URL: srv.URL}
 	clean := &V3GenerateResponse{Code: "ok"}
 	// No drift → returned unchanged, server never hit.
 	if got := regenerateOnDrift(ctx, V3GenerateRequest{Constraints: []string{"x"}}, clean); got != clean {
@@ -256,6 +291,28 @@ func TestRegenerateOnDriftNoopWithoutDriftOrConstraints(t *testing.T) {
 	drift := &V3GenerateResponse{RPGSignatureMissing: []string{"def f()"}}
 	if got := regenerateOnDrift(ctx, V3GenerateRequest{}, drift); got != drift {
 		t.Error("no-constraints drift should be returned unchanged")
+	}
+	// Nil ctx → no-op, no panic.
+	if got := regenerateOnDrift(nil, V3GenerateRequest{Constraints: []string{"x"}}, drift); got != drift {
+		t.Error("nil ctx should return prev unchanged")
+	}
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Errorf("guarded no-op paths must never call the server; got %d calls", n)
+	}
+}
+
+func TestRegenerateOnDriftRejectsWorseTotalDrift(t *testing.T) {
+	// prev missed [A,B]; the retry resolves A but comes back missing
+	// [B,C,D]. Accepting it would trade 2 misses for 3 — the total-drift
+	// ceiling must keep prev even though a targeted signature resolved.
+	srv := generateServer(t,
+		`{"code": "def A(): pass", "rpg_signature_missing": ["def B()", "def C()", "def D()"]}`, nil)
+	defer srv.Close()
+	ctx := &AgentContext{V3URL: srv.URL}
+	req := V3GenerateRequest{FilePath: "m.py", Constraints: []string{"c"}}
+	prev := &V3GenerateResponse{Code: "old", RPGSignatureMissing: []string{"def A()", "def B()"}}
+	if got := regenerateOnDrift(ctx, req, prev); got != prev {
+		t.Errorf("retry with worse total drift must be rejected, got %+v", got)
 	}
 }
 
@@ -287,6 +344,10 @@ func TestCountOverlap(t *testing.T) {
 	}
 	if got := countOverlap(nil, []string{"a"}); got != 0 {
 		t.Errorf("countOverlap(nil) = %d, want 0", got)
+	}
+	// Distinct semantics: duplicate service entries must not double-count.
+	if got := countOverlap([]string{"a", "a"}, []string{"a", "b"}); got != 1 {
+		t.Errorf("countOverlap with duplicates = %d, want 1", got)
 	}
 }
 

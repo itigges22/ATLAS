@@ -1595,8 +1595,7 @@ class V3PipelineService:
                 if cg_kept:  # only prune when at least one candidate survives
                     passing = cg_kept
 
-
-                # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
+        # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
         # When the RPG planner is active, the request constraints carry the
         # node's planned signatures. Extend the #39-pt-1 veto from "imports
         # survive" to "the planned interface exists": reject sandbox-passing
@@ -1619,21 +1618,35 @@ class V3PipelineService:
                     planned_sigs = []
                 if planned_sigs:
                     sig_kept = []
+                    vetoed = []  # (candidate, missing) — emitted only if the prune applies
                     for c in passing:
-                        missing = _rpgmod.missing_planned_signatures(
-                            c.get("code", ""), planned_sigs, file_path)
+                        # Guarded per-candidate like the call-graph veto: an
+                        # unexpected parser error must skip the veto for that
+                        # candidate, not fail the whole /v3/generate request.
+                        try:
+                            missing = _rpgmod.missing_planned_signatures(
+                                c.get("code", ""), planned_sigs, file_path)
+                        except Exception as ve:
+                            print(f"  [rpg] signature check failed on cand "
+                                  f"{c.get('index')}: {ve} — keeping candidate",
+                                  flush=True)
+                            missing = []
                         if missing:
+                            vetoed.append((c, missing))
+                            continue
+                        sig_kept.append(c)
+                    # Only prune when at least one candidate realizes the plan
+                    # — and only announce vetoes that actually took effect
+                    # (when every candidate drifts, all of them survive).
+                    if sig_kept:
+                        passing = sig_kept
+                        for c, missing in vetoed:
                             emit("rpg_signature_veto",
                                  f"Candidate {c['index']} sandbox-passed but missing "
                                  f"planned signature(s): {', '.join(missing[:3])}",
                                  index=c["index"], missing=missing[:5])
                             print(f"  [rpg] vetoed cand {c['index']} — missing: {missing[:5]}",
                                   flush=True)
-                            continue
-                        sig_kept.append(c)
-                    # Only prune when at least one candidate realizes the plan.
-                    if sig_kept:
-                        passing = sig_kept
 
         # ===== CANDIDATE SELECTION =====
         if passing:

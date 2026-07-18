@@ -192,3 +192,11 @@ class TestGoldenFixture:
             (16, -0.28708949, 2),
             (24, -0.28708949, 2),
         ]
+
+
+def test_zero_signal_emits_no_peaks():
+    # An all-zero signal (blank or comment-only file) must not produce
+    # spurious zero-magnitude "peaks" at threshold 0.0.
+    from wavelet.cwt import compute_cwt, detect_peaks
+    coeffs = compute_cwt([0.0] * 40)
+    assert detect_peaks(coeffs, 0.0) == []

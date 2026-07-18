@@ -27,15 +27,25 @@ func planConstraintsForTarget(ctx *AgentContext, path string) []string {
 	if ctx == nil || ctx.Plan == nil {
 		return nil
 	}
+	// Trust gate: constraints are honored only when the plan carries the RPG
+	// graph artifact the RPG planner always attaches. The flat planner returns
+	// the LLM's plan dict as-is, so a model that hallucinates a "constraints"
+	// array on a step must not steer generation while ATLAS_RPG_PLANNING is
+	// off — without this check that leak was the only flag gating proxy-side.
+	if ctx.Plan.RPG == nil {
+		return nil
+	}
 	// Pick the most specific overlapping step rather than the first. With
 	// suffix-based matching a bare-basename step (e.g. target "user.py") would
 	// otherwise shadow the deeper "models/user.py" step it isn't really for, so
-	// prefer the longest matching Target.
+	// prefer the longest matching Target. Ranked over ALL file-producing steps
+	// (not only constraint-bearing ones) so a deeper unconstrained step wins
+	// over a shallower constrained one instead of being shadowed by it.
 	best := -1
 	bestLen := -1
 	for i := range ctx.Plan.Steps {
 		step := &ctx.Plan.Steps[i]
-		if len(step.Constraints) == 0 || !isFileProducingAction(step.Action) {
+		if !isFileProducingAction(step.Action) {
 			continue
 		}
 		if targetsOverlap(step.Target, path) && len(step.Target) > bestLen {
@@ -43,7 +53,7 @@ func planConstraintsForTarget(ctx *AgentContext, path string) []string {
 			bestLen = len(step.Target)
 		}
 	}
-	if best < 0 {
+	if best < 0 || len(ctx.Plan.Steps[best].Constraints) == 0 {
 		return nil
 	}
 	// Copy so callers can append without mutating the plan.
@@ -87,6 +97,12 @@ func affectedDownstream(plan *Plan, fileID string) []string {
 	}
 	adj := map[string][]string{}
 	for _, e := range plan.RPG.Edges {
+		// Data-flow edges only, as documented: "order" edges express build
+		// sequencing, not dependence on the drifted interface. Empty kind
+		// defaults to data_flow, matching rpg.py's serialization default.
+		if e.Kind != "" && e.Kind != "data_flow" {
+			continue
+		}
 		adj[e.From] = append(adj[e.From], e.To)
 	}
 	pathByID := map[string]string{}
@@ -119,7 +135,7 @@ func affectedDownstream(plan *Plan, fileID string) []string {
 // best-effort node-local self-repair, not a loop. No-op unless the request
 // carried RPG constraints and the previous result actually drifted.
 func regenerateOnDrift(ctx *AgentContext, req V3GenerateRequest, prev *V3GenerateResponse) *V3GenerateResponse {
-	if prev == nil || len(prev.RPGSignatureMissing) == 0 || len(req.Constraints) == 0 {
+	if ctx == nil || prev == nil || len(prev.RPGSignatureMissing) == 0 || len(req.Constraints) == 0 {
 		return prev
 	}
 
@@ -152,32 +168,52 @@ func regenerateOnDrift(ctx *AgentContext, req V3GenerateRequest, prev *V3Generat
 				})
 			}
 		})
+	accepted := false
+	defer func() {
+		Emit(NewEnvelope(EvtStageEnd, "rpg_regen", map[string]interface{}{
+			"file":     req.FilePath,
+			"accepted": accepted,
+		}))
+	}()
 	if err != nil || retried == nil || retried.Code == "" {
 		return prev
 	}
 	// Accept the retry when it resolves at least one of the signatures we were
-	// correcting for, even if it traded in a different miss (so the count is
-	// unchanged). A plain count comparison would discard a retry that fixed the
-	// targeted gap but reshaped the code elsewhere. Falling back to total count
-	// covers the case where the targeted set is somehow unchanged.
+	// correcting for — even a trade for a different miss, as long as the TOTAL
+	// drift did not grow. (Resolving one targeted signature while introducing
+	// two new misses is a net loss; without the total ceiling the corrective's
+	// tunnel-vision prompt could adopt a strictly worse result.) Falling back
+	// to total count covers the case where the targeted set is unchanged but
+	// the retry still realized more of the plan overall.
 	stillMissingTargeted := countOverlap(retried.RPGSignatureMissing, prev.RPGSignatureMissing)
-	if stillMissingTargeted < len(prev.RPGSignatureMissing) {
+	if stillMissingTargeted < len(prev.RPGSignatureMissing) &&
+		len(retried.RPGSignatureMissing) <= len(prev.RPGSignatureMissing) {
+		accepted = true
 		return retried
 	}
 	if len(retried.RPGSignatureMissing) < len(prev.RPGSignatureMissing) {
+		accepted = true
 		return retried
 	}
 	return prev
 }
 
-// countOverlap returns how many elements of `subset` appear in `of`.
+// countOverlap returns how many DISTINCT elements of `subset` appear in `of`.
+// Distinct, because the acceptance rule compares it against len(of the
+// targeted set): duplicate entries in a service response must not count a
+// resolved signature as still-missing twice.
 func countOverlap(subset, of []string) int {
 	set := make(map[string]struct{}, len(of))
 	for _, s := range of {
 		set[s] = struct{}{}
 	}
+	seen := make(map[string]struct{}, len(subset))
 	n := 0
 	for _, s := range subset {
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
 		if _, ok := set[s]; ok {
 			n++
 		}
@@ -197,7 +233,9 @@ func reportRPGDrift(ctx *AgentContext, path string, missing []string) {
 	fileID := rpgFileIDForPath(ctx.Plan, path)
 	downstream := affectedDownstream(ctx.Plan, fileID)
 
-	Emit(NewEnvelope(EvtStageStart, "rpg_drift", map[string]interface{}{
+	// Point event, not a stage — EvtMetric doesn't leave an unclosed
+	// stage open in the pipeline pane.
+	Emit(NewEnvelope(EvtMetric, "rpg_drift", map[string]interface{}{
 		"file":       path,
 		"missing":    missing,
 		"downstream": downstream,
