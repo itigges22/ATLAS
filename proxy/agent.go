@@ -1194,6 +1194,35 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
+			// Cross-file coherence signals after a successful mutation:
+			// the session file manifest (so later files reference earlier
+			// ones instead of re-creating them) and the asset-graph lint
+			// (orphaned templates/static files, dangling refs). Both are
+			// advisory [system note]s — never blockers.
+			if result.Success &&
+				(parsed.Name == "write_file" || parsed.Name == "edit_file" ||
+					parsed.Name == "ast_edit" || parsed.Name == "move_file" ||
+					parsed.Name == "delete_file") {
+				if note := sessionManifestNote(ctx); note != "" {
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:    "user",
+						Content: "[system note]: " + note,
+					})
+					log.Printf("[agent] session manifest announced (%d files)", len(ctx.SessionWrites))
+				}
+				if note := assetLintNote(ctx); note != "" {
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:    "user",
+						Content: "[system note]: " + note,
+					})
+					ctx.Stream("asset_lint", map[string]interface{}{
+						"turn":   turn,
+						"detail": note,
+					})
+					log.Printf("[agent] asset lint: %s", truncateStr(note, 160))
+				}
+			}
+
 			// PC-044: Trust V3-verified edits — strongly nudge toward done.
 			// When V3 ran the edit through its sandbox/probe pipeline and
 			// the result came back successful (V3Used && PhaseSolved

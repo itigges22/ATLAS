@@ -453,6 +453,15 @@ type AgentContext struct {
 	// stemmed from the guard refusing the model's self-correction).
 	SessionWrites map[string]bool
 
+	// ManifestAnnounced tracks which SessionWrites paths have been named
+	// in a session-file-manifest note (session_manifest.go) so each file
+	// is announced to the model once.
+	ManifestAnnounced map[string]bool
+
+	// AssetLintSeen dedupes asset-graph lint findings (asset_lint.go) so
+	// a persistent orphan is mentioned once, not after every write.
+	AssetLintSeen map[string]bool
+
 	// PassWrites records the model-authored content of each write this pass
 	// (write_file / edit_file / ast_edit), for lens training-data collection.
 	// On pass completion the writes are stashed by session id; a later

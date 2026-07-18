@@ -764,6 +764,35 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 	}
 
+	// Files this session WROTE are project context too — previously only
+	// files the model had read were included, so written-but-never-read
+	// siblings were invisible to candidate generation (2026-07-18: V3
+	// generated an app.py blind to the session's own templates/index.html
+	// and static/game.js, and the winner inlined its page, orphaning
+	// both). Disk content wins over any stale read snapshot: the on-disk
+	// version is what verification produced.
+	for rel := range ctx.SessionWrites {
+		if rel == "" {
+			continue
+		}
+		abs := resolveAgentPath(ctx, rel)
+		if abs == path {
+			continue // the file being generated is the baseline, not context
+		}
+		data, rerr := os.ReadFile(abs)
+		if rerr != nil {
+			continue
+		}
+		content := string(data)
+		if len(content) > 4000 {
+			content = content[:4000] + "\n... (truncated)"
+		}
+		if req.ProjectContext == nil {
+			req.ProjectContext = make(map[string]string)
+		}
+		req.ProjectContext[rel] = content
+	}
+
 	// Add project info if available
 	if ctx.Project != nil {
 		req.Framework = ctx.Project.Framework
