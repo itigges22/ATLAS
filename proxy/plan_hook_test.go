@@ -190,6 +190,13 @@ func TestShouldGeneratePlanGates(t *testing.T) {
 	}
 }
 
+func TestShouldGeneratePlanV3BypassDisablesPlanner(t *testing.T) {
+	ctx := &AgentContext{Tier: Tier3Hard, BypassV3: true}
+	if shouldGeneratePlan(ctx, "Build and verify a multi-file service") {
+		t.Fatal("V3-bypassed baseline request must not run the pre-flight planner")
+	}
+}
+
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

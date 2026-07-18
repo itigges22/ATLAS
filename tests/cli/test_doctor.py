@@ -12,9 +12,100 @@ real CI runs. These tests cover the new check_metal_native() added in
      for non-Mac users
 """
 
+import json
 import sys
 
 from atlas.cli.commands import doctor
+
+
+def test_e2e_smoke_uses_public_proxy_path(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "choices": [{
+                    "message": {"content": "ATLAS"},
+                    "finish_reason": "stop",
+                }],
+            }).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(doctor, "PROXY_URL", "http://proxy.test:8090")
+    monkeypatch.setattr(doctor.urllib.request, "urlopen", fake_urlopen)
+
+    result = doctor.check_e2e_smoke()
+
+    assert result.status == "pass"
+    assert captured["url"] == "http://proxy.test:8090/v1/chat/completions"
+    assert captured["body"]["chat_template_kwargs"]["enable_thinking"] is False
+    assert captured["timeout"] == 60
+
+
+def test_health_endpoint_reports_degraded_as_warning(monkeypatch):
+    def fake_get(url, timeout=3):
+        status = "degraded" if url.endswith(":8099/health") else "ok"
+        return True, json.dumps({"status": status})
+
+    monkeypatch.setattr(doctor, "_http_get", fake_get)
+
+    results = {item.name: item for item in doctor.check_health_endpoints()}
+
+    assert results["health/lens"].status == "warn"
+    assert results["health/lens"].message == "degraded"
+    assert results["health/proxy"].status == "pass"
+
+
+def test_check_model_file_requires_explicit_selection(monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor, "MODEL_FILE", "")
+    result = doctor.check_model_file(str(tmp_path))
+    assert result.status == "fail"
+    assert "ATLAS_MODEL_FILE is not configured" in result.message
+    assert "atlas init" in result.detail
+
+
+def test_lens_weights_report_legacy_bundle_as_uncalibrated(
+    monkeypatch, tmp_path
+):
+    artifact_dir = tmp_path / "lens"
+    artifact_dir.mkdir()
+    (artifact_dir / "cost_field.pt").write_bytes(b"legacy")
+    (artifact_dir / "model_identity.json").write_text('{"model": "Qwen3.5-9B-Q6_K", "embedding_dim": 4096}')
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(artifact_dir))
+    monkeypatch.setattr(doctor, "MODEL_NAME", "Qwen3.5-9B-Q6_K")
+    monkeypatch.setattr(doctor, "MODEL_FILE", "Qwen3.5-9B-Q6_K.gguf")
+
+    result = doctor.check_lens_weights(str(tmp_path))
+    assert result.status == "warn"
+    assert "calibrated interventions disabled" in result.message
+    assert "cx_normalization.json" in result.detail
+
+
+def test_doctor_does_not_pass_unmarked_asa_vector(monkeypatch, tmp_path):
+    from atlas.cli.commands import asa
+
+    verdict = asa.ASACheckVerdict(
+        verdict="needs-build",
+        reason="control vector marker is missing; entrypoint keeps it disabled",
+        vector_path=str(tmp_path / "ast_edit_steering.gguf"),
+        vector_present=True,
+    )
+    monkeypatch.setattr(asa, "_check_asa", lambda root: verdict)
+    result = doctor.check_asa_steering(str(tmp_path))
+    assert result.status == "warn"
+    assert "disabled" in result.message.lower()
+    assert "marker" in result.detail
 
 
 def test_check_metal_native_skips_on_non_darwin(monkeypatch):
@@ -116,6 +207,27 @@ def test_check_metal_native_pass_when_everything_healthy(monkeypatch, tmp_path):
     assert "listening on :8080" in result.message
 
 
+def test_check_metal_native_honors_custom_prefix(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    prefix = tmp_path / "custom-native"
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    binary = bin_dir / "llama-server-metal"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / ".env").write_text(f"ATLAS_MACOS_PREFIX={prefix}\n")
+    monkeypatch.setattr(doctor, "_run",
+                        lambda argv, *args, **kwargs: (0, "", ""))
+    monkeypatch.setattr(doctor, "_port_listening",
+                        lambda host, port, timeout=2.0: True)
+
+    result = doctor._check_metal_native(str(root))
+    assert result.status == "pass"
+    assert str(binary) in result.message
+
+
 def test_check_metal_native_pass_when_llama_help_exits_nonzero(monkeypatch, tmp_path):
     """Regression for the lead's M3 install: llama-server's --help
     treats the flag as a parse failure and exits 1. The check must NOT
@@ -206,15 +318,43 @@ def test_check_arch_warn_on_aarch64_linux(monkeypatch):
     assert "no rocm" in result.message
 
 
-def test_check_overcommit_skips_on_darwin(monkeypatch):
-    """vm.overcommit_memory is a Linux sysctl. macOS doesn't have
-    /proc/sys, so this check must SKIP cleanly with an OS-aware
-    message instead of the old 'could not read' confusion."""
-    monkeypatch.setattr(sys, "platform", "darwin")
-    result = doctor.check_overcommit()
+def test_check_sqlite_state_pass_when_connected(monkeypatch):
+    """A healthy `subsystems.sqlite` block in lens /health passes."""
+    body = ('{"status": "healthy", "subsystems": '
+            '{"sqlite": {"connected": true}}}')
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
+    result = doctor.check_sqlite_state()
+    assert result.status == "pass"
+
+
+def test_check_sqlite_state_fail_when_unavailable(monkeypatch):
+    """An unavailable state store fails and names the degradation
+    (neutral cache/router, 503 task queue) so the operator knows the
+    blast radius."""
+    body = ('{"status": "degraded", "subsystems": '
+            '{"sqlite": {"connected": false, "error": "disk I/O error"}}}')
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
+    result = doctor.check_sqlite_state()
+    assert result.status == "fail"
+    assert "503" in result.message
+    assert "disk I/O error" in (result.detail or "")
+
+
+def test_check_sqlite_state_warns_without_subsystem(monkeypatch):
+    """A lens image whose /health lacks the sqlite block warns rather
+    than failing — the store may still be fine, doctor just can't see it."""
+    body = '{"status": "healthy", "subsystems": {}}'
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
+    result = doctor.check_sqlite_state()
+    assert result.status == "warn"
+
+
+def test_check_sqlite_state_skips_when_unreachable(monkeypatch):
+    """Endpoint reachability is health/lens's job; this check skips."""
+    monkeypatch.setattr(doctor, "_http_get",
+                        lambda url, timeout=5: (False, "connection refused"))
+    result = doctor.check_sqlite_state()
     assert result.status == "skip"
-    assert "darwin" in result.message
-    assert "could not read" not in result.message
 
 
 def test_check_gpu_apple_silicon_returns_pass(monkeypatch):

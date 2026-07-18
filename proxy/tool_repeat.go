@@ -59,6 +59,16 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 	if count < toolRepeatThreshold {
 		return "", false
 	}
+	if toolName == "write_file" {
+		if p := writeFilePath(args); p != "" {
+			return fmt.Sprintf(
+				"⚠ You have fully rewritten `%s` %d times in the last %d tool calls. Each write_file replaces the "+
+					"whole file, and the on-disk version is the verified result of your previous write — rewriting it "+
+					"from memory just loops. Read the file to see what is actually there, then either make one targeted "+
+					"change with edit_file or ast_edit, or respond with done if the request is satisfied.",
+				p, count, toolRepeatWindow), true
+		}
+	}
 	return fmt.Sprintf(
 		"⚠ Tool-call repetition detected: you've called `%s` with these exact arguments %d times in the last %d turns. "+
 			"The same call won't produce a different result. Try a different approach: (a) use different arguments to "+
@@ -69,12 +79,40 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 		toolName, count, toolRepeatWindow), true
 }
 
+// writeFilePath extracts the path argument from write_file args ("" on
+// any parse failure).
+func writeFilePath(args json.RawMessage) string {
+	var wf struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(args, &wf) != nil {
+		return ""
+	}
+	return wf.Path
+}
+
 // toolCallSignature computes a stable hash of a (tool_name, args)
 // tuple. Re-marshals args through encoding/json to canonicalize key
 // order and whitespace — important because the model sometimes emits
 // the same logical call with slightly different JSON formatting that
 // would defeat naive string-equality detection.
+//
+// write_file signatures are keyed on the target path alone: a
+// write_file is a whole-file replacement, so rewriting the SAME path
+// repeatedly is structural repetition even when each attempt's content
+// differs slightly. (Observed 2026-07-18: the model reasserted its
+// ~25-line app.py draft five times while V3 kept writing the verified
+// expansion — every attempt hashed differently, so the full-args
+// signature never matched and the detector slept through the loop.)
+// edit_file/ast_edit keep full-args signatures: distinct surgical
+// edits to one file in close succession are legitimate iteration.
 func toolCallSignature(toolName string, args json.RawMessage) string {
+	if toolName == "write_file" {
+		if p := writeFilePath(args); p != "" {
+			h := sha1.Sum([]byte(toolName + "|path:" + p))
+			return hex.EncodeToString(h[:])
+		}
+	}
 	var v interface{}
 	canonical := []byte(args)
 	if err := json.Unmarshal(args, &v); err == nil {

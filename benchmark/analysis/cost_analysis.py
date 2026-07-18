@@ -294,7 +294,7 @@ class CostAnalyzer:
         min_ratio = min(metrics.cost_ratio.values()) if metrics.cost_ratio else 0
         lines.extend([
             "",
-            f"**Cost Efficiency Target: ≥30x cheaper than cloud APIs**",
+            "**Cost Efficiency Target: ≥30x cheaper than cloud APIs**",
         ])
         if min_ratio >= 30:
             lines.append(f"**Status: ✓ TARGET MET** (minimum ratio: {min_ratio:.1f}x)")

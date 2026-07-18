@@ -1,0 +1,44 @@
+[
+  {
+    "prompt": "Build a single-file terminal snake game in Python. Save it to snake.py. Use the curses module from the standard library — no external dependencies. Requirements: arrow keys (or WASD) for direction, snake grows by one when it eats food, game ends on wall OR self collision, food never spawns on the snake body, the direction cannot immediately reverse (pressing left while moving right is ignored), display the current score in a status line, press q to quit cleanly. The terminal must be restored to a usable state on exit.",
+    "difficulty": "short",
+    "expected_baseline_failure": "The first-pass base agent may miss direction reversal, food placement, growth, clean curses teardown, or non-blocking input.",
+    "expected_v3_repair": "V3's sandbox can verify that the file imports cleanly and that the curses setup compiles; plan/repair review should catch the gameplay invariants.",
+    "notes": "Single file, fast feedback, and playable output on both sides. Actual failures depend on the configured model; the demo must not promise that the baseline will fail."
+  },
+  {
+    "prompt": "Write a Python CLI that takes a directory and outputs a tree view to stdout, similar to the `tree` command. Save to tree.py. Requirements: argparse with a positional directory argument and a `--max-depth N` flag (default 10), uses ├── and └── for branching, sorts entries alphabetically with directories first, gracefully skips files it can't read (permission errors), exits 0 on success and 1 on error.",
+    "difficulty": "short",
+    "expected_baseline_failure": "The first-pass base agent may miss directories-first sorting, permission handling, max depth, or correct box drawing.",
+    "expected_v3_repair": "V3 generates a permission-denied test, catches the crash, wraps the os.listdir/scandir in try/except; the box-drawing fix usually comes from PR-CoT with the well-known correct unicode pattern",
+    "notes": "Fast (single file, ~80 lines), visible failure on the tree output."
+  },
+  {
+    "prompt": "Build a Python CLI for managing a TODO list backed by a local JSON file (~/.todos.json). Save to todo.py. Subcommands via argparse: `add <task>`, `list` (numbered with status mark [x] / [ ]), `done <id>`, `rm <id>`, `clear` (with confirmation). The JSON file format is a list of {\"id\": int, \"text\": str, \"done\": bool}. IDs are 1-indexed and stable across operations.",
+    "difficulty": "short",
+    "expected_baseline_failure": "The first-pass base agent may re-number IDs after removal, fail to create the file on first run, omit clear confirmation, or write non-atomically.",
+    "expected_v3_repair": "V3 catches the file-missing case via verification; ID stability bug shows up if the prompt's test sequence is run; repair uses max(id)+1 instead of len(list)+1",
+    "notes": "Realistic small project shape. Fast iteration, with file-I/O semantics that often expose weaknesses in smaller local models."
+  },
+  {
+    "prompt": "Build a Flask TODO list web app. Files: app.py (Flask routes), models.py (SQLAlchemy Todo model with id/title/done columns), schema.sql (CREATE TABLE statement matching the model). Routes: GET /todos returns JSON list, POST /todos with JSON {title} creates and returns the new todo, DELETE /todos/<int:id> removes one. Initialize the DB on startup. Run on port 5000.",
+    "difficulty": "long",
+    "expected_baseline_failure": "The first-pass base agent may forget database initialization, return unserializable ORM objects, or let schema.sql drift from the model.",
+    "expected_v3_repair": "V3's verification step catches the missing init or the serialization TypeError; PR-CoT adds db.create_all() inside a with app.app_context() and writes a to_dict() helper",
+    "notes": "Real-world Flask + SQLAlchemy. Three files = cross-file consistency check is meaningful. Long because V3 per-file overhead × 3 ≈ 30-60 min."
+  },
+  {
+    "prompt": "Build a FastAPI URL shortener. Files: main.py (FastAPI app), db.py (sqlite3 wrapper with init_db, create_short, resolve), models.py (Pydantic ShortenRequest with `url: HttpUrl` and ShortenResponse with `short_code: str`). Endpoints: POST /shorten returns a 6-char alphanumeric code, GET /{code} returns 302 redirect to the original URL or 404 if not found. Generate codes with secrets.token_urlsafe trimmed to 6 chars.",
+    "difficulty": "long",
+    "expected_baseline_failure": "The first-pass base agent may use a non-cryptographic RNG, omit collision handling, return 200 instead of a 302 redirect, or mishandle async database access.",
+    "expected_v3_repair": "V3 generates collision and redirect tests; repair adds the retry loop and switches to RedirectResponse(status_code=302)",
+    "notes": "Three files, async, two endpoints with distinct semantics."
+  },
+  {
+    "prompt": "Build a Flask markdown blog. Files: app.py (Flask routes), render.py (read posts/*.md from disk, parse front-matter `--- title: X date: Y ---`, render body with the `markdown` library), templates/index.html (Jinja list of post titles linking to /post/<slug>), templates/post.html (renders one post's title + HTML body). The slug is the .md filename without extension. Sort the index by date desc.",
+    "difficulty": "long",
+    "expected_baseline_failure": "The first-pass base agent may omit template inheritance, hardcode routes instead of using url_for, read files on every request, or crash when front matter is absent.",
+    "expected_v3_repair": "V3 catches the no-frontmatter crash via a generated empty-post test; repair guards the parse with a default {}",
+    "notes": "Templates + cross-file routing. Real Jinja patterns."
+  }
+]

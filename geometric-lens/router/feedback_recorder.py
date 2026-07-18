@@ -1,51 +1,54 @@
-"""Record task outcomes to update Thompson Sampling state in Redis."""
+"""Record task outcomes to update Thompson Sampling state in SQLite."""
 
 import logging
-
-import redis as redis_lib
-
 from models.route import Route, DifficultyBin
+from sqlite_store import get_db_pool
 
 logger = logging.getLogger(__name__)
 
-KEY_PREFIX = "confidence_router:thompson"
-STATS_PREFIX = "confidence_router:stats"
-
-
 def record_outcome(
-    r: redis_lib.Redis,
     difficulty_bin: DifficultyBin,
     route: Route,
     success: bool,
 ):
     """
     Record a task outcome to update Thompson alpha/beta.
-
     On success: alpha += 1
     On failure: beta += 1
     """
-    alpha_key = f"{KEY_PREFIX}:{difficulty_bin.value}:{route.value}:alpha"
-    beta_key = f"{KEY_PREFIX}:{difficulty_bin.value}:{route.value}:beta"
-
     try:
-        pipe = r.pipeline()
-        if success:
-            pipe.incrbyfloat(alpha_key, 1.0)
-        else:
-            pipe.incrbyfloat(beta_key, 1.0)
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            # Update Thompson State
+            if success:
+                conn.execute("""
+                    INSERT INTO thompson_state (difficulty_bin, route, alpha, beta)
+                    VALUES (?, ?, 1.0, 0.0)
+                    ON CONFLICT(difficulty_bin, route) DO UPDATE SET alpha = alpha + 1.0
+                """, (difficulty_bin.value, route.value))
+            else:
+                conn.execute("""
+                    INSERT INTO thompson_state (difficulty_bin, route, alpha, beta)
+                    VALUES (?, ?, 0.0, 1.0)
+                    ON CONFLICT(difficulty_bin, route) DO UPDATE SET beta = beta + 1.0
+                """, (difficulty_bin.value, route.value))
 
-        # Track aggregate stats
-        pipe.incr(f"{STATS_PREFIX}:total_decisions")
-        if success:
-            pipe.incr(f"{STATS_PREFIX}:total_successes")
-        pipe.incr(f"{STATS_PREFIX}:route:{route.value}")
-        pipe.incr(f"{STATS_PREFIX}:bin:{difficulty_bin.value}")
+            # Track aggregate stats
+            stats_keys = [
+                "total_decisions",
+                f"route:{route.value}",
+                f"bin:{difficulty_bin.value}"
+            ]
+            if success:
+                stats_keys.append("total_successes")
+                
+            for key in stats_keys:
+                conn.execute("""
+                    INSERT INTO routing_stats (key, value)
+                    VALUES (?, 1)
+                    ON CONFLICT(key) DO UPDATE SET value = value + 1
+                """, (key,))
 
-        pipe.execute()
-
-        # !r on enum.value (constrained set, but CodeQL doesn't track
-        # the Enum constraint across the import boundary) — escapes any
-        # control chars for py/log-injection compliance.
         logger.info(
             f"Outcome recorded: bin={difficulty_bin.value!r} "
             f"route={route.value!r} success={success}"
@@ -54,21 +57,25 @@ def record_outcome(
         logger.error(f"Failed to record outcome: {e}")
 
 
-def get_routing_stats(r: redis_lib.Redis) -> dict:
-    """Get aggregate routing statistics from Redis."""
+def get_routing_stats() -> dict:
+    """Get aggregate routing statistics from SQLite."""
     try:
-        total = int(r.get(f"{STATS_PREFIX}:total_decisions") or 0)
-        successes = int(r.get(f"{STATS_PREFIX}:total_successes") or 0)
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            cur = conn.execute("SELECT key, value FROM routing_stats")
+            rows = cur.fetchall()
+            stats_map = {row["key"]: row["value"] for row in rows}
+            
+        total = stats_map.get("total_decisions", 0)
+        successes = stats_map.get("total_successes", 0)
 
         route_dist = {}
         for route in Route:
-            count = int(r.get(f"{STATS_PREFIX}:route:{route.value}") or 0)
-            route_dist[route.value] = count
+            route_dist[route.value] = stats_map.get(f"route:{route.value}", 0)
 
         bin_dist = {}
         for d_bin in DifficultyBin:
-            count = int(r.get(f"{STATS_PREFIX}:bin:{d_bin.value}") or 0)
-            bin_dist[d_bin.value] = count
+            bin_dist[d_bin.value] = stats_map.get(f"bin:{d_bin.value}", 0)
 
         return {
             "total_decisions": total,
@@ -78,22 +85,19 @@ def get_routing_stats(r: redis_lib.Redis) -> dict:
             "difficulty_distribution": bin_dist,
         }
     except Exception as e:
-        logger.error(f"Failed to get routing stats: {e}")
-        return {"error": str(e)}
+        logger.error("Failed to get routing stats", exc_info=True)
+        # Generic message only: this dict flows into an HTTP response
+        # (/internal/router/stats); the full detail is in the log above.
+        return {"error": f"{type(e).__name__}: routing stats unavailable"}
 
 
-def reset_stats(r: redis_lib.Redis):
+def reset_stats():
     """Reset aggregate routing statistics."""
     try:
-        keys = []
-        keys.append(f"{STATS_PREFIX}:total_decisions")
-        keys.append(f"{STATS_PREFIX}:total_successes")
-        for route in Route:
-            keys.append(f"{STATS_PREFIX}:route:{route.value}")
-        for d_bin in DifficultyBin:
-            keys.append(f"{STATS_PREFIX}:bin:{d_bin.value}")
-        if keys:
-            r.delete(*keys)
+        pool = get_db_pool()
+        with pool.get_connection() as conn:
+            conn.execute("DELETE FROM routing_stats")
         logger.info("Routing stats reset")
     except Exception as e:
         logger.error(f"Failed to reset stats: {e}")
+

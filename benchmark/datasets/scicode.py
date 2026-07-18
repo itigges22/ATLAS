@@ -186,7 +186,7 @@ class SciCodeDataset(BaseDataset):
         if filepath.exists():
             return filepath
 
-        print(f"Downloading SciCode dataset from HuggingFace...")
+        print("Downloading SciCode dataset from HuggingFace...")
         all_rows = []
 
         for split in ("test", "validation"):

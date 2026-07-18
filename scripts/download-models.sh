@@ -58,9 +58,9 @@ load_env_defaults() {
 
 load_env_defaults
 
-# v3.1 defaults — used when neither .env nor caller env sets these.
+# Runtime paths. Model selection is required and comes from .env / atlas init.
 : "${ATLAS_MODELS_DIR:=$REPO_ROOT/models}"
-: "${ATLAS_MODEL_FILE:=Qwen3.5-9B-Q6_K.gguf}"
+: "${ATLAS_MODEL_FILE:=}"
 : "${ATLAS_MAIN_MODEL:=$ATLAS_MODEL_FILE}"
 : "${ATLAS_DRAFT_MODEL:=}"
 : "${ATLAS_ENABLE_SPECULATIVE:=false}"
@@ -73,19 +73,6 @@ QWEN3_14B_Q4_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-
 QWEN3_14B_Q6_URL="https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q6_K.gguf"
 QWEN3_0_6B_URL="https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"
 
-# Lens weights (cost_field, gx_xgboost, metric_tensor) — published in the
-# user's HuggingFace dataset alongside the Qwen3.5-9B 4096-dim training run.
-ATLAS_LENS_HF_BASE="https://huggingface.co/datasets/itigges22/ATLAS/resolve/main/models"
-LENS_FILES=(
-    "cost_field.pt"
-    "cost_field.safetensors"
-    "gx_weights.json"
-    "gx_xgboost.json"
-    "gx_xgboost.pkl"
-    "metric_tensor.pt"
-    "metric_tensor.safetensors"
-)
-
 # Manifest of model files we know how to fetch automatically.
 # Add an entry here when a new model file becomes publicly available.
 declare -A KNOWN_MODEL_URLS=(
@@ -96,6 +83,25 @@ declare -A KNOWN_MODEL_URLS=(
     ["Qwen3-14B-Q6_K.gguf"]="$QWEN3_14B_Q6_URL"
     ["Qwen3-0.6B-Q8_0.gguf"]="$QWEN3_0_6B_URL"
 )
+
+# SHA-256 per model file, mirroring the `sha256` fields in
+# atlas/cli/commands/model_registry.py (HF x-linked-etag values). The
+# Python installer (`atlas model install`) already verifies these; this
+# map closes the same gap on the shell path. Files without an entry get
+# the size sanity check only — add the hash when a new model lands in
+# the registry.
+declare -A KNOWN_MODEL_SHA256=(
+    ["Qwen3.5-9B-Q6_K.gguf"]="91898433cf5ce0a8f45516a4cc3e9343b6e01d052d01f684309098c66a326c59"
+)
+
+sha256_of() {
+    # sha256sum on Linux, shasum on macOS.
+    if command -v sha256sum &>/dev/null; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
 
 download_model() {
     local url="$1"
@@ -122,6 +128,25 @@ download_model() {
         log_error "Recovery: re-run this script (curl resumes from .tmp)."
         return 1
     fi
+
+    local expected="${KNOWN_MODEL_SHA256[$filename]:-}"
+    if [[ -n "$expected" ]]; then
+        log_info "Verifying SHA-256 of $filename (multi-GB file — this takes a moment)"
+        local actual
+        actual=$(sha256_of "$filepath.tmp")
+        if [[ "$actual" != "$expected" ]]; then
+            log_error "SHA-256 mismatch for $filename:"
+            log_error "  expected $expected"
+            log_error "  got      $actual"
+            log_error "The download is corrupt or the upstream file changed."
+            log_error "Removing the partial file; re-run to download fresh."
+            rm -f "$filepath.tmp"
+            return 1
+        fi
+        log_info "SHA-256 verified"
+    else
+        log_warn "No pinned SHA-256 for $filename — size check only"
+    fi
     mv "$filepath.tmp" "$filepath"
 
     log_info "$filename downloaded successfully"
@@ -145,27 +170,17 @@ verify_model() {
 }
 
 download_lens_weights() {
-    # Fetch the Geometric Lens weights from the ATLAS HF dataset.
-    # Idempotent: skips files that are already present.
-    local lens_dir
-    lens_dir="$(cd "$SCRIPT_DIR/.." && pwd)/geometric-lens/geometric_lens/models"
-    mkdir -p "$lens_dir"
-    log_info "Lens weights directory: $lens_dir"
-    for fname in "${LENS_FILES[@]}"; do
-        local dest="$lens_dir/$fname"
-        if [[ -f "$dest" ]]; then
-            log_info "  $fname already present, skipping"
-            continue
-        fi
-        log_info "  downloading $fname"
-        if ! curl -fL -# -C - -o "$dest.tmp" "$ATLAS_LENS_HF_BASE/$fname"; then
-            log_warn "  $fname download failed (skipping — lens will degrade gracefully)"
-            rm -f "$dest.tmp"
-            continue
-        fi
-        mv "$dest.tmp" "$dest"
-    done
-    log_info "Lens weights ready"
+    # Artifacts are coupled to the selected model. Delegate to the registry
+    # installer rather than downloading one architecture's bundle globally.
+    local selected="${ATLAS_MODEL_NAME:-${ATLAS_MODEL_FILE%.gguf}}"
+    if [[ -z "$selected" ]]; then
+        log_error "No model selected. Set ATLAS_MODEL_NAME or run atlas init."
+        return 1
+    fi
+    log_info "Installing compatible Lens/ASA artifacts for $selected"
+    PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m atlas.cli model install-artifacts "$selected" \
+        --models-dir "$ATLAS_MODELS_DIR" --no-color
 }
 
 resolve_model_url() {
@@ -201,20 +216,8 @@ main() {
         exit 0
     fi
 
-    # Check for huggingface-cli (optional, for faster downloads)
-    if command -v huggingface-cli &> /dev/null; then
-        log_info "HuggingFace CLI found, using for downloads"
-        HF_CLI=true
-    else
-        log_info "Using curl for downloads (install huggingface-cli for faster downloads)"
-        HF_CLI=false
-    fi
-
-    # Pick which model file to fetch.
-    # Priority: ATLAS_MODEL_FILE env > ATLAS_MAIN_MODEL config > V3.1 default.
-    # The VRAM-based autoselect was a V3.0 (Qwen3-14B) artifact — V3.1 ships
-    # Qwen3.5-9B-Q6_K as the canonical model and tier-specific overrides
-    # come from .env (or `atlas tier` recommendations).
+    # Pick the explicitly selected model file. Registry/tier recommendation
+    # belongs to `atlas init`; this low-level downloader never guesses.
     if [[ -n "${ATLAS_MODEL_FILE:-}" ]]; then
         MAIN_MODEL_FILE="$ATLAS_MODEL_FILE"
         log_info "Using ATLAS_MODEL_FILE=$MAIN_MODEL_FILE"
@@ -222,8 +225,8 @@ main() {
         MAIN_MODEL_FILE="$ATLAS_MAIN_MODEL"
         log_info "Using ATLAS_MAIN_MODEL=$MAIN_MODEL_FILE"
     else
-        MAIN_MODEL_FILE="Qwen3.5-9B-Q6_K.gguf"
-        log_info "Using V3.1 default: $MAIN_MODEL_FILE"
+        log_error "No model selected. Set ATLAS_MODEL_FILE in .env or run atlas init."
+        exit 1
     fi
 
     # Resolve URL via manifest. Fail loudly if unknown rather than silently
@@ -240,11 +243,8 @@ main() {
             log_error "       - $known"
         done
         log_error ""
-        log_error "Note: Qwen3.5-9B-Q6_K.gguf is the V3.1 default but is not"
-        log_error "publicly hosted at a URL we know about. The Geometric Lens"
-        log_error "weights in the ATLAS HF dataset were trained on its 4096-dim"
-        log_error "embeddings; using a different model family will silently"
-        log_error "produce wrong scores (4096-dim weights vs 5120-dim embeddings)."
+        log_error "Lens and ASA artifacts are model-specific. Use a registry entry"
+        log_error "with compatible artifacts or build them for this model."
         exit 1
     fi
 
@@ -253,7 +253,11 @@ main() {
 
     # Download draft model for speculative decoding (if enabled)
     if [[ "$ATLAS_ENABLE_SPECULATIVE" == "true" ]] && [[ -n "$ATLAS_DRAFT_MODEL" ]]; then
-        download_model "$QWEN3_0_6B_URL" "Qwen3-0.6B-Q8_0.gguf"
+        if ! DRAFT_MODEL_URL="$(resolve_model_url "$ATLAS_DRAFT_MODEL")"; then
+            log_error "No download URL known for selected draft model $ATLAS_DRAFT_MODEL"
+            exit 1
+        fi
+        download_model "$DRAFT_MODEL_URL" "$ATLAS_DRAFT_MODEL"
     else
         log_info "Speculative decoding disabled, skipping draft model"
     fi
@@ -262,7 +266,7 @@ main() {
     echo ""
     log_info "Verifying downloads..."
 
-    if verify_model "$ATLAS_MODELS_DIR/$MAIN_MODEL_FILE" 5000000000; then
+    if verify_model "$ATLAS_MODELS_DIR/$MAIN_MODEL_FILE" 100000000; then
         log_info "Main model verified: $MAIN_MODEL_FILE"
     else
         log_error "Main model verification failed"
@@ -270,16 +274,18 @@ main() {
     fi
 
     if [[ "$ATLAS_ENABLE_SPECULATIVE" == "true" ]] && [[ -n "$ATLAS_DRAFT_MODEL" ]]; then
-        # Qwen3-0.6B-Q8_0 is ~639MB
-        if verify_model "$ATLAS_MODELS_DIR/$ATLAS_DRAFT_MODEL" 500000000; then
+        if verify_model "$ATLAS_MODELS_DIR/$ATLAS_DRAFT_MODEL" 100000000; then
             log_info "Draft model verified: $ATLAS_DRAFT_MODEL"
         else
             log_warn "Draft model verification failed (speculative decoding may not work)"
         fi
     fi
 
-    # Create symlink for default model
-    ln -sf "$ATLAS_MODELS_DIR/$MAIN_MODEL_FILE" "$ATLAS_MODELS_DIR/default.gguf"
+    # Create symlink for default model. Relative target (both live in
+    # ATLAS_MODELS_DIR) so the link survives the directory being reached
+    # via a different path — e.g. a container mount at /models, or a
+    # relative ATLAS_MODELS_DIR resolved from another CWD.
+    ln -sf "$MAIN_MODEL_FILE" "$ATLAS_MODELS_DIR/default.gguf"
 
     # Create LoRA adapter directory
     mkdir -p "$ATLAS_LORA_DIR"

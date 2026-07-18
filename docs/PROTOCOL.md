@@ -1,22 +1,10 @@
-# ATLAS Event Protocol (PC-061)
+# ATLAS Event Protocol
 
-ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). This document is the wire-format spec — every producer (v3-service Python, atlas-proxy Go) implements it identically, and every consumer (TUI, tests, future web dashboard, bench CLI) reads it through `atlas/cli/events.py`.
-
-This protocol is the foundation for Phase 1's UI/UX work. The Bubbletea TUI, live decode streaming, per-stage spinners, and compute budget visualizer all consume these events.
-
-## Why this exists
-
-Before PC-061, ATLAS had three different progress mechanisms:
-
-- **v3-service** spoke SSE but with an opaque `{"stage": <str>, "detail": <str>}` shape — consumers had to string-parse to know what kind of event they got.
-- **atlas-proxy** emitted bracket-tagged stdout lines (`[agent] turn=N type=X name=Y args=Z`) — pseudo-structured but not parseable as data.
-- **The benchmark runners** had their own progress format.
-
-A TUI that wants to render "current stage" / "elapsed time" / "tool calls so far" had to triple-implement parsing for all three. PC-061 unifies them into one schema with explicit event types and a consumer library so the TUI is one parser, not three.
+ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). This document is the wire-format spec — atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/consumer.go`); `atlas/cli/events.py` is the canonical Python implementation, used by the test suite.
 
 ## Transport
 
-**Server-Sent Events (SSE)** — `text/event-stream`, server-push only. Cancellation is out of scope for this protocol; clients cancel via a separate POST endpoint (TBD when the TUI lands).
+**Server-Sent Events (SSE)** — `text/event-stream`, server-push only. Cancellation is out of scope for this protocol; clients cancel via [`POST /cancel`](API.md#post-cancel).
 
 Each event arrives as one SSE frame:
 
@@ -33,22 +21,15 @@ The protocol uses three SSE comment / control patterns. None are envelope events
 
 | Frame | When | Why |
 |---|---|---|
-| `: connected\n\n` | First body byte after a successful `/events` connection (atlas-proxy only) | Forces the response headers + first body chunk to leave the server immediately. Without it, Go buffers the response until the first envelope or 15s heartbeat fires, and clients with short connect timeouts see "no response received" (PC-061 follow-up). |
+| `: connected\n\n` | First body byte after a successful `/events` connection (atlas-proxy only) | Forces the response headers + first body chunk to leave the server immediately. Without it, Go buffers the response until the first envelope or 15s heartbeat fires, and clients with short connect timeouts see "no response received". |
 | `: heartbeat\n\n` | Every 15s during quiet stretches (atlas-proxy only) | Keeps proxies / load balancers from idling out the connection. |
-| `event: result\ndata: {...}\n\n` | Right before stream end on `/v3/run` (v3-service only, legacy) | Carries the final pipeline `result` dict in the legacy back-compat shape. v2 envelope consumers should ignore this and watch for the `done` envelope instead. |
+| `event: result\ndata: {...}\n\n` | Right before stream end on v3-service's `/v3/run`, `/v3/generate`, and `/v3/plan` | Carries the final `result` dict (pipeline result or plan). The proxy bridge consumes it to build the tool result / plan; envelope subscribers on `/events` never see it. |
 
 The Python `iter_sse_lines` helper already filters comment lines (any line starting with `:`) automatically. Named-event lines (`event: result`) come through prefixed (`result: <data>`) so the caller can distinguish them.
 
 ## Single-session broadcast model (current limitation)
 
-atlas-proxy's `/events` endpoint **broadcasts every envelope event from every concurrent agent session to every connected subscriber.** There is no `session_id` field in the envelope, and no per-session `?session_id=X` filtering on the endpoint.
-
-For Phase 1's single-user TUI consumer, this is fine — most users run one ATLAS at a time, so the broadcast model degenerates to "you see your own session." If multi-user / multi-session use cases emerge:
-
-1. Add a `session_id` field to the envelope (back-compatible — consumers that don't recognize it ignore it)
-2. Add a `?session_id=X` filter to `/events` that drops envelopes whose session doesn't match
-
-Documented as a known scope-defining choice rather than a bug. v3-service's `/v3/run` endpoint is per-request streaming, so session interleaving is not an issue there.
+atlas-proxy's `/events` endpoint broadcasts every envelope from every concurrent agent session to every connected subscriber — there is no `session_id` field in the envelope and no `?session_id=X` filter on the endpoint. With one ATLAS running at a time, a subscriber sees only its own session. v3-service's `/v3/run` is per-request streaming, so no interleaving occurs there.
 
 ## Envelope
 
@@ -60,7 +41,7 @@ Every event is a JSON object with this shape:
   "timestamp":   1714600000.123,
   "type":        "stage_start" | "stage_end" | "tool_call" | "tool_result" | "metric" | "error" | "done",
   "stage":       "<pipeline stage name>",
-  "parent_id":   "evt_<8 hex chars>",   // optional — pairs end-events to start-events
+  "parent_id":   "evt_<8 hex chars>",   // reserved — never set by current producers
   "duration_ms": 4523,                  // optional — set on stage_end / tool_result
   "payload":     { ... type-specific ... }
 }
@@ -68,13 +49,13 @@ Every event is a JSON object with this shape:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `event_id` | string | yes | Format: `evt_` + 8 hex chars (uuid4 truncated). Session-unique. |
+| `event_id` | string | yes | Format: `evt_` + 8 hex chars. Session-unique. The Go producer draws the 4 bytes from `crypto/rand` (`proxy/events.go`); the Python helper truncates a uuid4. |
 | `timestamp` | number | yes | Unix seconds with microsecond precision. Producers MUST emit in monotonically non-decreasing order. |
 | `type` | string | yes | One of the seven legal values listed below. |
-| `stage` | string | yes | Logical pipeline stage (`probe`, `phase2`, `pr_cot`, `agent`, etc.). Suffixes like `_pass`/`_done`/`_failed` are stripped before placing in this field. |
+| `stage` | string | yes | Logical pipeline stage (`agent`, `llm`, `tool`, `v3:<stage>`, etc.). The proxy's v3 bridge prefixes the v3-service stage name with `v3:` and passes it through verbatim — suffixes like `_pass`/`_done`/`_failed` are kept (e.g. `v3:sandbox_pass`). |
 | `payload` | object | yes | Type-specific. Always an object, never null. |
-| `parent_id` | string | optional | Set on `stage_end` to point at the matching `stage_start`. Lets consumers compute durations and nest UI elements. |
-| `duration_ms` | int | optional | Set on `stage_end` and `tool_result`. Convenience — equivalent to `(this.timestamp - parent.timestamp) * 1000`. |
+| `parent_id` | string | optional | Reserved for pairing a `stage_end` to its `stage_start`; never set by current producers. |
+| `duration_ms` | int | optional | Set on `stage_end` and `tool_result` — wall-clock duration of the stage / tool execution. |
 
 ## Event types
 
@@ -85,7 +66,7 @@ A logical stage has begun. Pairs with a later `stage_end` event (typically — l
 ```json
 {
   "type": "stage_start",
-  "stage": "phase2",
+  "stage": "v3:phase2",
   "payload": {
     "detail": "allocating candidates"   // optional human-readable
   }
@@ -99,8 +80,7 @@ A logical stage finished. `success` is required so consumers can distinguish com
 ```json
 {
   "type": "stage_end",
-  "stage": "phase2",
-  "parent_id": "evt_aabb1122",
+  "stage": "v3:phase2",
   "duration_ms": 4523,
   "payload": {
     "success": true,
@@ -112,15 +92,15 @@ A logical stage finished. `success` is required so consumers can distinguish com
 
 ### `tool_call`
 
-The agent is invoking a tool. Always followed by exactly one `tool_result` for the same tool name within the same stage (typically a few hundred ms later).
+The agent is invoking a tool. When the tool executes, a `tool_result` for the same tool name follows within the same stage (typically a few hundred ms later). Pre-execution rejections — permission denial, truncated-args detection, workspace-boundary violation — emit no `tool_result`, so consumers must tolerate an unpaired `tool_call`.
 
 ```json
 {
   "type": "tool_call",
-  "stage": "agent",
+  "stage": "tool",
   "payload": {
     "name": "edit_file",
-    "args_summary": "src/snake.py: replace render() body",   // truncated to ~200 chars
+    "args_summary": "src/snake.py: replace render() body",   // truncated to 80 chars
     "turn": 3
   }
 }
@@ -131,51 +111,50 @@ The agent is invoking a tool. Always followed by exactly one `tool_result` for t
 ```json
 {
   "type": "tool_result",
-  "stage": "agent",
+  "stage": "tool",
   "duration_ms": 487,
   "payload": {
     "name": "edit_file",
     "success": true,
-    "summary": "..."
+    "error": ""   // failure detail, truncated to 120 chars; empty on success
   }
 }
 ```
 
 ### `metric`
 
-A measured value worth surfacing. Used for `gx_score`, `candidates_generated`, `tokens_used`, etc.
+A measured value worth surfacing. `value` is loosely typed — a number (e.g. `{"name": "total_tokens", "value": 12500}` on the `llm` stage) or a string. The v3 bridge emits repeated frames within one v3 stage as progress metrics whose `value` is the human-readable detail line:
 
 ```json
 {
   "type": "metric",
-  "stage": "lens",
+  "stage": "v3:sandbox_test",
   "payload": {
-    "name": "gx_score",
-    "value": 0.83,
-    "unit": "score"   // optional
+    "name": "progress",
+    "value": "Testing 3 candidates..."
   }
 }
 ```
 
+`unit` (string) is an optional third payload field.
+
 ### `error`
 
-Something went wrong. `recoverable: true` means the pipeline continues (the model retries, the stage reruns); `false` means the run is about to terminate with a `done` event reporting `success: false`.
+Something went wrong. The payload carries `message` only; the envelope's top-level `stage` says where.
 
 ```json
 {
   "type": "error",
-  "stage": "pr_cot",
+  "stage": "llm",
   "payload": {
-    "stage": "pr_cot",
-    "message": "model output was empty",
-    "recoverable": true
+    "message": "model output was empty"
   }
 }
 ```
 
 ### `done`
 
-Always the last event in a stream. Consumers that detect EOF without a `done` event should treat the stream as truncated (network drop, server crash, etc.).
+Closes one agent pass. The `/events` broker is a persistent stream — it keeps heartbeating after a `done`, emitting one per pass — so EOF-without-`done` indicates truncation (network drop, server crash) only for consumers reading a single pass.
 
 ```json
 {
@@ -194,25 +173,13 @@ Always the last event in a stream. Consumers that detect EOF without a `done` ev
 | Service | Endpoint | Notes |
 |---|---|---|
 | atlas-proxy | `GET /events` | Broadcasts all envelope events from any active session to every connected subscriber. Heartbeat every 15s to defeat proxy idle timeouts. |
-| v3-service | `POST /v3/run` (existing) | Dual-emits: legacy `{stage, detail}` always; envelope additionally when client opts in via `Accept: application/json+envelope` or `?event_format=v2`. |
+| v3-service | `POST /v3/run`, `POST /v3/generate`, `POST /v3/plan` | Emit legacy `{stage, detail}` frames plus a terminal `event: result` control frame — no envelopes (see below). |
 
-## Opting into typed events
+## v3-service streams and typed events
 
-For back-compat, v3-service's `/v3/run` keeps emitting the legacy `{stage, detail}` shape unconditionally. Clients that want envelopes opt in via either:
+v3-service's endpoints emit the legacy `{stage, detail}` shape (with an optional `data` key when structured data rides along). Envelope consumers subscribe to atlas-proxy's `GET /events` instead — the proxy's v3 bridge translates the `{stage, detail}` frames it receives from v3-service into envelopes.
 
-```
-Accept: application/json+envelope
-```
-
-or appending to the URL:
-
-```
-?event_format=v2
-```
-
-When the opt-in is present, v3-service emits both shapes (legacy first, then envelope). Consumers that opt in must filter the legacy frames — the Python helper `atlas.cli.events.iter_events()` does this automatically (skips frames that raise `LegacyEventError`).
-
-The dual-emission window stays open for one release after PC-061. Removal of the legacy shape is a separate ticket once downstream consumers (Aider integration, current bench runners) have all migrated.
+Consumers reading a mixed stream must filter the non-envelope frames — the Python helper `atlas.cli.events.iter_events()` does this automatically: `{stage, detail}` frames (with or without `data`) raise `LegacyEventError` and are skipped, and `result:`/`done:` control frames are skipped as stream control rather than parsed as envelopes.
 
 ## Consumer library: `atlas/cli/events.py`
 
@@ -227,23 +194,11 @@ for ev in iter_events("http://localhost:8090/events"):
         break
 ```
 
-`iter_events(url)` yields `Event` dataclass objects with typed fields. `parse_envelope(blob)` parses one frame; raises `LegacyEventError` if the blob is the v3-service legacy shape, `SchemaError` if it's malformed.
+`iter_events(url)` yields `Event` dataclass objects with typed fields. `parse_envelope(blob)` parses one frame; raises `LegacyEventError` if the blob is the v3-service `{stage, detail}` shape, `SchemaError` if it's malformed.
 
-## Stage-name suffix conventions (v3-service)
+## Stage names from v3-service
 
-v3-service uses these suffix conventions to derive envelope `type` from the existing 46 stage names without hand-mapping each one:
-
-| Suffix | Envelope type | Notes |
-|---|---|---|
-| `_error` | `error` | Wrapped with `recoverable: true` by default. |
-| `_failed` | `stage_end` | `payload.success = false`. |
-| `_pass` | `stage_end` | `payload.success = true`. |
-| `_done` | `stage_end` | `payload.success = true`. |
-| `_skip` | `stage_end` | `payload.success = true` (skipped is success in flow). |
-| `_retry` | `stage_start` | A re-attempt of the same logical stage. |
-| (no suffix) | `stage_start` | Fresh stage entry. |
-
-Suffixes are stripped from the `stage` field, so `stage_start("phase2")` and `stage_end("phase2")` share the same logical name. This lets consumers pair them via `parent_id`.
+The proxy's v3 bridge emits `v3:` + the v3-service stage name verbatim, suffixes included (`v3:sandbox_pass`). A stage-name change closes the previous stage (`stage_end`, `success: true`) and opens the new one (`stage_start`); a repeated stage name emits a `metric` (`name: "progress"`).
 
 ## Schema versioning
 
@@ -254,4 +209,4 @@ This document describes **v1** of the protocol. Future schema changes:
 
 ## Test contract
 
-The schema is pinned by `tests/cli/test_events.py` (Python consumer) and `atlas-proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. v3-service's emitter is tested in `tests/v3-service/test_event_emission.py`.
+The schema is pinned by `tests/cli/test_events.py` (Python consumer) and `proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/test_event_contract.py`.

@@ -100,14 +100,6 @@ func buildToolCallSchemaJSON() string {
 	return string(b)
 }
 
-// buildToolCallSchemaJSONForTools returns the JSON-encoded schema with the
-// listed tools excluded from the tool-name enum.
-func buildToolCallSchemaJSONForTools(excluded []string) string {
-	schema := buildToolCallSchemaForTools(excluded)
-	b, _ := json.Marshal(schema)
-	return string(b)
-}
-
 // buildResponseFormat picks the response_format payload to send to
 // llama-server based on ATLAS_GRAMMAR_MODE (#33).
 //
@@ -143,14 +135,8 @@ func buildResponseFormat() interface{} {
 // GBNF Grammar fallback
 // ---------------------------------------------------------------------------
 
-// buildGBNFGrammar generates a GBNF grammar string that constrains output
-// to the same tool_call/text/done union. Currently unused; kept as
-// reference in case json_object mode needs to be replaced with GBNF.
-func buildGBNFGrammar() string {
-	return buildGBNFGrammarForTools(nil)
-}
-
-// buildGBNFGrammarForTools is buildGBNFGrammar with the listed tools
+// buildGBNFGrammarForTools generates a GBNF grammar string constraining
+// output to the tool_call/text/done union, with the listed tools
 // removed from the tool-name production. May 2026 BiasBusters #2: when
 // the next step must NOT use edit_file (e.g. write_file just got rejected
 // on a .py/.html file >5 lines), llama-server enforces the restriction
@@ -207,7 +193,12 @@ func buildGBNFGrammarForTools(excluded []string) string {
 	sb.WriteString("json-value ::= json-string | json-number | json-object | json-array | \"true\" | \"false\" | \"null\"\n")
 	sb.WriteString(`json-string ::= "\"" json-char* "\""` + "\n")
 	sb.WriteString(`json-char ::= [^"\\] | "\\" ["\\/bfnrt] | "\\u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]` + "\n")
-	sb.WriteString("json-number ::= \"-\"? [0-9]+ (\".\" [0-9]+)? ([eE] [\"+\\-\"]? [0-9]+)?\n")
+	// Exponent sign is an optional + or -. The class must be [-+] (literal
+	// minus, no escape) — the previous [\"+\\-\"] emitted `["+\-"]`, whose
+	// `\-` is an illegal GBNF escape and crashed grammar parsing whenever this
+	// rule was included (surfaced when banning run tools left a number-bearing
+	// tool in the enum). GBNF needs no quotes inside a character class.
+	sb.WriteString("json-number ::= \"-\"? [0-9]+ (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n")
 	sb.WriteString("ws ::= [ \\t\\n]*\n")
 
 	return sb.String()
@@ -216,11 +207,6 @@ func buildGBNFGrammarForTools(excluded []string) string {
 // ---------------------------------------------------------------------------
 // System prompt: tool descriptions for the model
 // ---------------------------------------------------------------------------
-
-// buildToolDescriptions generates the tool documentation section of the system prompt.
-func buildToolDescriptions() string {
-	return buildToolDescriptionsExcluding(nil)
-}
 
 // buildToolDescriptionsExcluding generates the tool documentation section
 // with the listed tools removed entirely. Used for the per-step nudge
@@ -262,6 +248,8 @@ func generateInputExample(toolName string) string {
 	switch toolName {
 	case "read_file":
 		return `{"path": "src/main.py", "offset": 0, "limit": 100}`
+	case "outline_file":
+		return `{"path": "src/main.py"}`
 	case "write_file":
 		return `{"path": "src/main.py", "content": "#!/usr/bin/env python3\n..."}`
 	case "edit_file":
@@ -285,8 +273,6 @@ func generateInputExample(toolName string) string {
 		return `{"pattern": "def main", "path": "src/", "glob": "*.py"}`
 	case "list_directory":
 		return `{"path": "."}`
-	case "plan_tasks":
-		return `{"tasks": [{"id": "config", "description": "Create config files", "files": ["package.json"], "depends_on": []}]}`
 	default:
 		return `{}`
 	}

@@ -1,0 +1,99 @@
+# llama-server — GPU-bound inference. Pulls model files from ATLAS_MODELS_DIR
+# on the node (hostPath, read-only). Single-replica because each Pod holds
+# the full model in VRAM; horizontal scaling is via additional GPUs/nodes
+# not additional replicas on the same GPU.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-server
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate                # GPU is exclusive — no overlap during update.
+  selector:
+    matchLabels: {app: llama-server}
+  template:
+    metadata:
+      labels: {app: llama-server}
+    spec:
+      # nvidia GPU Operator / device plugin schedules onto a node that
+      # advertises nvidia.com/gpu.
+      containers:
+      - name: llama
+        image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-llama:${ATLAS_IMAGE_TAG}
+        ports:
+        - containerPort: ${ATLAS_LLAMA_PORT}
+          name: http
+        env:
+        # The image's ENTRYPOINT (inference/entrypoint-v3.1.sh) reads
+        # MODEL_PATH/PORT/CONTEXT_LENGTH/PARALLEL_SLOTS — never `command:`.
+        - {name: MODEL_PATH,      value: "/models/${ATLAS_MAIN_MODEL}"}
+        - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
+        - {name: PORT,            value: "${ATLAS_LLAMA_PORT}"}
+        - {name: CONTEXT_LENGTH,  value: "${ATLAS_CONTEXT_LENGTH}"}
+        - {name: PARALLEL_SLOTS,  value: "${ATLAS_PARALLEL_SLOTS}"}
+        # PC-202: per-layer residual scoring needs --embeddings; the
+        # entrypoint already adds it. ASA control vector at
+        # /models/ast_edit_steering.gguf is picked up automatically by
+        # the entrypoint when present.
+        # Embedding pooling for the Geometric Lens — the convention the
+        # shipped C(x)/G(x) artifacts are trained on, and what the lens
+        # enforces via model_identity.json's embedding_contract. Pinned
+        # here so a rebuilt serving stack can't silently switch pooling
+        # and invalidate every score (the 2026-07-15 bench incident).
+        # L2 normalization is requested per-call by the lens
+        # (`embd_normalize` in the /embedding body).
+        - {name: ATLAS_EMBED_POOLING, value: "mean"}
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_LLAMA_PORT}
+          initialDelaySeconds: 120 # Model load is slow.
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: ${ATLAS_LLAMA_PORT}
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 5
+        resources:
+          requests:
+            cpu: ${ATLAS_LLAMA_CPU_REQUEST}
+            memory: ${ATLAS_LLAMA_MEMORY_REQUEST}
+            nvidia.com/gpu: 1
+          limits:
+            cpu: ${ATLAS_LLAMA_CPU_LIMIT}
+            memory: ${ATLAS_LLAMA_MEMORY_LIMIT}
+            nvidia.com/gpu: 1
+      volumes:
+      - name: models              # Models stay on the node — too large for a PVC.
+        hostPath:
+          path: ${ATLAS_MODELS_DIR}
+          type: Directory
+---
+# In-cluster service: callers (geometric-lens, v3-service, atlas-proxy)
+# resolve `llama-server:${ATLAS_LLAMA_PORT}` via this. External access
+# via NodePort for debug + bare-llama testing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-server
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  type: NodePort
+  selector: {app: llama-server}
+  ports:
+  - port: ${ATLAS_LLAMA_PORT}
+    targetPort: ${ATLAS_LLAMA_PORT}
+    nodePort: ${ATLAS_LLAMA_NODEPORT}
+    name: http

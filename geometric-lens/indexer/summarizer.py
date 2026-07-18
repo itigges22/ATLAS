@@ -8,6 +8,7 @@ from typing import Dict, Optional
 import httpx
 
 from models.tree_node import TreeNode, NodeType
+from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ async def _llm_summarize(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=_svc_auth_headers()) as client:
             response = await client.post(
                 f"{llama_url}/v1/chat/completions",
                 json={
@@ -187,8 +188,8 @@ async def _llm_summarize(
 
 
 def _clean_reasoning_preamble(text: str) -> str:
-    """Strip LLM reasoning preamble from Qwen3 reasoning_content responses."""
-    # Remove common reasoning starters that Qwen3 produces
+    """Strip a reasoning preamble from reasoning-capable model responses."""
+    # Remove common reasoning starters emitted by several chat templates.
     # Pattern: "Okay, let's see. The user wants me to..." up to the actual content
     # The actual summary usually starts after a sentence about "The function/class..."
     lines = text.split("\n")

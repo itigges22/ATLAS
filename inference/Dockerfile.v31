@@ -16,8 +16,10 @@
 # Then build with `--platform linux/arm64` via buildx. The dnf -> apt
 # differences are handled by the package install step below (the recipe
 # uses apt if dnf isn't present).
-ARG BUILDER_IMAGE=docker.io/nvidia/cuda:12.9.0-devel-rockylinux9
-ARG RUNTIME_IMAGE=docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9
+# Digest-pinned defaults for reproducible builds (Dependabot maintains);
+# override the ARGs for alternate bases (e.g. sbsa arm64 experiments).
+ARG BUILDER_IMAGE=docker.io/nvidia/cuda:12.9.0-devel-rockylinux9@sha256:7c290c736a183f91b1e90cd62e90ff9fb760102d6ace39292c43a567c0f5b24e
+ARG RUNTIME_IMAGE=docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9@sha256:b58050e1787e4ace37bdda12b097a2c6ca30df3d563f3356238029cb49cf7201
 FROM ${BUILDER_IMAGE} AS builder
 # CUDA compute capability of the target GPU. Override at build time:
 #   podman build --build-arg CUDA_ARCH=89 -f Dockerfile.v31
@@ -89,7 +91,7 @@ RUN git init /llama.cpp && \
 #    (latter via the previous layer). Cheap step (~1s) so re-running
 #    on patch tweaks is fine.
 #    - sed: spec-decode embeddings fix. Kept for compatibility, harmless
-#      when no draft model is used (Qwen3.5). Falls through silently if
+#      when no draft model is used. Falls through silently if
 #      the target line doesn't exist in newer upstream.
 #    - git apply: PC-202 hidden-states patch. Adds optional `layers:
 #      [int]` request param; response gains `hidden_states` (base64
@@ -126,9 +128,14 @@ FROM ${RUNTIME_IMAGE}
 ARG RUNTIME_IMAGE
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
-RUN mkdir -p /models /templates
-COPY templates/ /templates/
-COPY entrypoint-v3.1-9b.sh /entrypoint.sh
+# Ship cvector-generator alongside llama-server so the bootstrap can run
+# the ASA steering-vector build (BiasBusters #4) as a one-shot container
+# without needing a separate llama.cpp install on the host.
+COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
+RUN mkdir -p /models
+COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-EXPOSE 8000
+# The entrypoint's default listen port (PORT env) is 8080; the compose
+# healthcheck and port mapping both target 8080.
+EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

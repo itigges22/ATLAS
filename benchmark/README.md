@@ -5,8 +5,8 @@
 The V3 pipeline runner (`v3_runner.py` + the modules in `v3/`) targets
 the V3.1.0 model+topology: Qwen3.5-9B-Q6_K with the PlanSearch /
 DivSampling / Budget Forcing / PR-CoT / Refinement / Derivation stack.
-Ablation work is tracked under `scripts/run_v31_ablation.sh`; the
-6-condition study (A–F) is mid-run on hardware tier `medium`.
+Ablation work is tracked under `scripts/run_v31_ablation.sh` (a
+6-condition study, A–F, on hardware tier `medium`).
 Headline 9B numbers are not yet published — `docs/SOURCES.md`
 "Known Limitations" lists this as a V3.1.x roadmap item.
 
@@ -14,6 +14,33 @@ Until the 9B numbers land, the **V3 (14B) results in
 [`docs/reports/V3_ABLATION_STUDY.md`](../docs/reports/V3_ABLATION_STUDY.md)**
 are the canonical published evidence (74.6% LiveCodeBench v5 pass@1,
 599 tasks, 4 ablation conditions).
+
+### How the benchmark path differs from the product path
+
+The phase engines (`benchmark/v3/*`), candidate selection, S*, and the
+lens service backend (identity checks, thresholds, C(x)/G(x) math,
+artifact resolution) are one shared implementation — v3-service imports
+these modules directly. The orchestrators differ deliberately, and
+benchmark numbers should be read with these differences in mind:
+
+- **Lens usage.** The benchmark scores C(x) only
+  (`/internal/lens/score-text`). The product additionally requests
+  per-step G(x) scoring and applies the severe-veto / per-step
+  threshold stack to every write — that product-side quality gate is
+  not measured by benchmark pass rates.
+- **Candidate budget.** The benchmark runs a fixed k=3 and logs
+  BlendASC/ReASC as telemetry only; the product allocates k adaptively
+  from calibrated C(x) energy when calibration is present.
+- **Probe budget.** The product probes with a light→standard→nothink
+  cascade; the benchmark issues a single standard probe.
+- **Verification oracle.** The benchmark verifies against the dataset's
+  ground-truth tests; the product has no oracle at runtime and uses
+  SelfTestGen + build/syntax gates instead.
+
+Failure sentinels are aligned (an unscorable candidate reads as the
+neutral `(0.0, 0.5)` on both paths), and benchmark candidate ordering
+is energy-sorted like the product's, so scoring cannot diverge
+silently within the shared stages.
 
 ---
 
@@ -32,7 +59,7 @@ Config: See `config.py` for parameters.
 - **LiveCodeBench v5** (primary): Coding problem-solving, 599 tasks, stdin/stdout evaluation
 - **GPQA Diamond**: Knowledge reasoning, 198 multiple-choice questions
 - **IFBench**: Instruction following, 300 tasks. **Note:** IFBench evaluation is incomplete -- evaluate_ifbench_loose() defaults to True for ~11/15 instruction categories. IFBench is excluded from headline results pending proper implementation.
-- **SciCode**: Scientific coding, ~80 multi-step problems
+- **SciCode**: Scientific coding, ~80 multi-step problems (341 sub-problems)
 - **Custom**: Real-world coding tasks, 100 problems from `benchmark/custom/tasks.json`
 
 ## V2 Results Summary
@@ -62,7 +89,7 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 | File | Purpose |
 |------|---------|
 | `runner.py` | Base benchmark runner (function + stdio modes, ChatML formatting, code extraction) |
-| `cli.py` | Command-line interface (`atlas benchmark --humaneval --dry-run`, etc.) |
+| `cli.py` | Command-line interface (`python3 -m benchmark.cli --humaneval --dry-run`, etc.) |
 | `config.py` | Benchmark configuration loaded from `atlas.conf` |
 | `models.py` | Data models: BenchmarkTask, AttemptResult, TaskResult, BenchmarkRun |
 | `datasets/` | Dataset loaders (HumanEval, MBPP, EvalPlus, LiveCodeBench v5, GPQA, IFBench, SciCode) |
@@ -70,7 +97,7 @@ All results from a single benchmark run. Not averaged across multiple runs; vari
 | `custom/` | 100 custom benchmark tasks + validator |
 | **V3 pipeline (active)** | |
 | `v3_runner.py` | V3 benchmark runner entry point (PlanSearch + DivSampling + PR-CoT, ablation conditions A–F) |
-| `v3/` | 19 V3 pipeline modules (plan_search.py, div_sampling.py, budget_forcing.py, pr_cot.py, refinement_loop.py, etc.) |
+| `v3/` | 18 V3 pipeline modules (plan_search.py, div_sampling.py, budget_forcing.py, pr_cot.py, refinement_loop.py, etc.) |
 | **V2 (historical)** | |
 | `v2_runner.py` | V2 benchmark orchestrator (phases 0–6, telemetry, Mode A/B) |
 | `v2_report.py` | V2 result analysis and reporting |

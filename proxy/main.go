@@ -8,13 +8,15 @@
 // V3 stages) lives behind the agent loop's `write_file` tool.
 //
 // Usage:
-//   atlas-proxy                  (default port 8090)
-//   ATLAS_LLAMA_URL=http://localhost:8080 atlas-proxy
+//
+//	atlas-proxy                  (default port 8090)
+//	ATLAS_LLAMA_URL=http://localhost:8080 atlas-proxy
 package main
 
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -31,18 +33,22 @@ import (
 
 var (
 	inferenceURL = envOr("ATLAS_INFERENCE_URL", "http://localhost:8080")
-	lensURL     = envOr("ATLAS_LENS_URL", "http://localhost:8099")
-	sandboxURL = envOr("ATLAS_SANDBOX_URL", "http://localhost:30820")
-	proxyPort  = envOr("ATLAS_PROXY_PORT", "8090")
-	modelName  = envOr("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+	lensURL      = envOr("ATLAS_LENS_URL", "http://localhost:8099")
+	sandboxURL   = envOr("ATLAS_SANDBOX_URL", "http://localhost:30820")
+	v3URL        = envOr("ATLAS_V3_URL", "http://localhost:8070")
+	proxyPort    = envOr("ATLAS_PROXY_PORT", "8090")
+	modelName    = envOr("ATLAS_MODEL_NAME", "local-model")
+	healthClient = &http.Client{Timeout: 3 * time.Second}
+	// v3-service can take longer to answer when a pipeline run is in
+	// flight; keep its readiness probe on a shorter leash so /ready
+	// stays snappy.
+	v3HealthClient = &http.Client{Timeout: 2 * time.Second}
 )
 
 const (
-	maxRepairAttempts = 3
-	gxLowThreshold   = 0.5  // below this → trigger best-of-K
-	gxHighThreshold   = 0.9  // above this → early exit from best-of-K
-	sandboxTimeout    = 8    // seconds
-	interactiveTimeout = 3   // seconds for interactive programs
+	demoRawCapability   = "demo_raw_completion_v1"
+	maxRepairAttempts   = 3
+	maxRequestBodyBytes = 16 << 20
 )
 
 func envOr(key, fallback string) string {
@@ -107,10 +113,10 @@ func resolveVerifyTarget(workingDir string) string {
 // ---------------------------------------------------------------------------
 
 var (
-	totalRequests   atomic.Int64
-	totalRepairs    atomic.Int64
-	sandboxPasses   atomic.Int64
-	sandboxFails    atomic.Int64
+	totalRequests atomic.Int64
+	totalRepairs  atomic.Int64
+	sandboxPasses atomic.Int64
+	sandboxFails  atomic.Int64
 )
 
 // ---------------------------------------------------------------------------
@@ -131,10 +137,36 @@ type LensScore struct {
 // ---------------------------------------------------------------------------
 
 func handleModels(w http.ResponseWriter, r *http.Request) {
+	// Prefer llama-server's loaded model over our configured fallback. This
+	// keeps the API (and /demo title) truthful when a local launch overrides
+	// ATLAS_MODEL_NAME or the local .env lags behind the running server.
+	id := modelName
+	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
+		strings.TrimRight(inferenceURL, "/")+"/v1/models", nil)
+	if err == nil {
+		if upstream, upstreamErr := healthClient.Do(upstreamReq); upstreamErr == nil {
+			defer upstream.Body.Close()
+			if upstream.StatusCode == http.StatusOK {
+				var loaded struct {
+					Data []struct {
+						ID string `json:"id"`
+					} `json:"data"`
+				}
+				if decodeErr := json.NewDecoder(io.LimitReader(upstream.Body, 1<<20)).Decode(&loaded); decodeErr == nil {
+					for _, candidate := range loaded.Data {
+						if candidate.ID = strings.TrimSpace(candidate.ID); candidate.ID != "" {
+							id = candidate.ID
+							break
+						}
+					}
+				}
+			}
+		}
+	}
 	resp := map[string]any{
 		"object": "list",
 		"data": []map[string]any{
-			{"id": "atlas", "object": "model", "owned_by": "atlas"},
+			{"id": id, "object": "model", "owned_by": "atlas"},
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -144,22 +176,22 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	llmOK, ragOK, sandboxOK, lensReady := false, false, false, false
 
-	if resp, err := http.Get(inferenceURL + "/health"); err == nil {
+	if resp, err := healthClient.Get(inferenceURL + "/health"); err == nil {
 		resp.Body.Close()
 		llmOK = resp.StatusCode == 200
 	}
-	if resp, err := http.Get(lensURL + "/health"); err == nil {
+	if resp, err := healthClient.Get(lensURL + "/health"); err == nil {
 		resp.Body.Close()
 		ragOK = resp.StatusCode == 200
 	}
 	// Geometric-lens /ready is the gate that flips to 503 when scoring is
 	// degraded (lens weights missing, embedding-dim mismatch, etc — see
 	// PC-019). /health stays informational; /ready is the pass/fail.
-	if resp, err := http.Get(lensURL + "/ready"); err == nil {
+	if resp, err := healthClient.Get(lensURL + "/ready"); err == nil {
 		resp.Body.Close()
 		lensReady = resp.StatusCode == 200
 	}
-	if resp, err := http.Get(sandboxURL + "/health"); err == nil {
+	if resp, err := healthClient.Get(sandboxURL + "/health"); err == nil {
 		resp.Body.Close()
 		sandboxOK = resp.StatusCode == 200
 	}
@@ -171,12 +203,13 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := map[string]any{
-		"status":     overallStatus,
-		"inference":  llmOK,
-		"lens":       ragOK,
-		"lens_ready": lensReady,
-		"sandbox":    sandboxOK,
-		"port":       proxyPort,
+		"status":       overallStatus,
+		"inference":    llmOK,
+		"lens":         ragOK,
+		"lens_ready":   lensReady,
+		"sandbox":      sandboxOK,
+		"port":         proxyPort,
+		"capabilities": []string{demoRawCapability},
 		"stats": map[string]int64{
 			"requests":       totalRequests.Load(),
 			"repairs":        totalRepairs.Load(),
@@ -191,20 +224,30 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func handleReady(w http.ResponseWriter, r *http.Request) {
 	llmOK, sandboxOK, lensReady := false, false, false
 
-	if resp, err := http.Get(inferenceURL + "/health"); err == nil {
+	if resp, err := healthClient.Get(inferenceURL + "/health"); err == nil {
 		resp.Body.Close()
 		llmOK = resp.StatusCode == 200
 	}
-	if resp, err := http.Get(lensURL + "/ready"); err == nil {
+	if resp, err := healthClient.Get(lensURL + "/ready"); err == nil {
 		resp.Body.Close()
 		lensReady = resp.StatusCode == 200
 	}
-	if resp, err := http.Get(sandboxURL + "/health"); err == nil {
+	if resp, err := healthClient.Get(sandboxURL + "/health"); err == nil {
 		resp.Body.Close()
 		sandboxOK = resp.StatusCode == 200
 	}
+	// T2/T3 writes route through v3-service, so readiness includes it
+	// whenever a V3 URL is configured.
+	v3OK := true
+	if v3URL != "" {
+		v3OK = false
+		if resp, err := v3HealthClient.Get(v3URL + "/health"); err == nil {
+			resp.Body.Close()
+			v3OK = resp.StatusCode == 200
+		}
+	}
 
-	ready := llmOK && lensReady && sandboxOK
+	ready := llmOK && lensReady && sandboxOK && v3OK
 	w.Header().Set("Content-Type", "application/json")
 	if !ready {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -214,12 +257,11 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 		"inference":  llmOK,
 		"lens_ready": lensReady,
 		"sandbox":    sandboxOK,
+		"v3":         v3OK,
 	})
 }
 
-func main() {
-	log.SetFlags(log.Ltime | log.Lmicroseconds)
-
+func newProxyMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	// /v1/chat/completions used to be wrapped here with the Aider whole-
 	// file output format and embedded agent loop. After PC-062 the TUI
@@ -232,41 +274,69 @@ func main() {
 	mux.HandleFunc("/models", handleModels)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/ready", handleReady)
-	mux.HandleFunc("/v1/agent", handleAgent) // tool-based agent endpoint
-	mux.HandleFunc("/events", handleEvents)  // PC-061: typed SSE event stream
-	mux.HandleFunc("/cancel", handleCancel)  // PC-062: TUI abort hook
+	mux.HandleFunc("/v1/agent", handleAgent)                             // tool-based agent endpoint
+	mux.HandleFunc("/events", handleEvents)                              // PC-061: typed SSE event stream
+	mux.HandleFunc("/cancel", handleCancel)                              // PC-062: TUI abort hook
+	mux.HandleFunc("/v1/permission", handlePermission)                   // interactive approve/deny for destructive tools
+	mux.HandleFunc("/feedback", handleFeedback)                          // per-file accept/deny + pass thumbs → lens samples
+	mux.HandleFunc("/v1/lens/training-status", handleLensTrainingStatus) // sample counts for the "retrain available" alert
 	// PC-059: TUI calls this on connect to render a Lens/ASA compat badge.
 	mux.HandleFunc("/v1/calibration/status", handleCalibrationStatus)
+	mux.HandleFunc("/version", handleVersion)
 
 	// Catch-all: proxy to llama-server
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// %q on the path quotes + escapes CR/LF so a crafted URL can't
-		// fake additional log entries (go/log-injection).
-		log.Printf("passthrough: %s %q", r.Method, r.URL.Path)
-		body, _ := io.ReadAll(r.Body)
-		proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, inferenceURL+r.URL.Path, bytes.NewReader(body))
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+	mux.HandleFunc("/", handlePassthrough)
+	return mux
+}
+
+func handlePassthrough(w http.ResponseWriter, r *http.Request) {
+	// %q on the path quotes + escapes CR/LF so a crafted URL can't
+	// fake additional log entries (go/log-injection).
+	logEvent("info", fmt.Sprintf("passthrough: %s %q", r.Method, r.URL.Path),
+		requestIDFromContext(r.Context()), nil)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, ErrResourceLimit, "request body exceeds the configured limit")
+		return
+	}
+	upstreamURL := inferenceURL + r.URL.RequestURI()
+	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(body))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, ErrInternal, err.Error())
+		return
+	}
+	proxyReq.Header = r.Header.Clone()
+	resp, err := http.DefaultClient.Do(proxyReq)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, ErrDependencyDown, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	for k, v := range resp.Header {
+		for _, vv := range v {
+			w.Header().Add(k, vv)
 		}
-		proxyReq.Header = r.Header
-		resp, err := http.DefaultClient.Do(proxyReq)
-		if err != nil {
-			http.Error(w, err.Error(), 502)
-			return
-		}
-		defer resp.Body.Close()
-		for k, v := range resp.Header {
-			for _, vv := range v {
-				w.Header().Add(k, vv)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	})
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func main() {
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	// Private-value filtering: every log line passes through the
+	// filter before it reaches stderr (see private_values.go).
+	// In json mode the filtered line is then wrapped into a JSON
+	// record; the record stamps its own ts, so the log package's
+	// time prefix is dropped to keep it out of msg.
+	out := io.Writer(os.Stderr)
+	if logJSON {
+		log.SetFlags(0)
+		out = jsonLineWriter{w: os.Stderr}
+	}
+	log.SetOutput(filteringWriter{w: out})
 
 	addr := ":" + proxyPort
-	log.Printf("ATLAS Proxy v3.0.1 starting on %s", addr)
+	log.Printf("ATLAS Proxy v3.1.3 starting on %s", addr)
 	log.Printf("  Inference: %s", inferenceURL)
 	log.Printf("  Geometric Lens: %s", lensURL)
 	log.Printf("  Sandbox: %s", sandboxURL)
@@ -277,6 +347,8 @@ func main() {
 	// steering: present at X" banner is folded into logCalibrationStatusAtStartup
 	// below (which also adds the corresponding Lens line) so the proxy
 	// surfaces a unified calibration view at startup.
+	installTokenTransport()
+
 	logCalibrationStatusAtStartup()
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
@@ -284,7 +356,14 @@ func main() {
 		log.Printf("  Keep-warm: pinging %s every 45s (set ATLAS_KEEP_LLAMA_WARM=0 to disable)", inferenceURL)
 	}
 
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           http.MaxBytesHandler(withRequestID(requireServiceToken(newProxyMux())), maxRequestBodyBytes),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       90 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
@@ -342,11 +421,4 @@ func (t Tier) String() string {
 		return "T3:hard"
 	}
 	return "T?:unknown"
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

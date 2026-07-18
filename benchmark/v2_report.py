@@ -315,7 +315,7 @@ def generate_report(run_dir: Path) -> Path:
         pct = 100 * count / total_routes
         report += f"| {route} | {count} | {pct:.1f}% |\n"
 
-    report += f"""
+    report += """
 ## Difficulty Distribution
 
 | Difficulty | Count | Percentage |

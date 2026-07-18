@@ -128,10 +128,14 @@ FROM ubuntu:${UBUNTU_TAG}
 #   vulkan-tools             — vulkaninfo for `atlas doctor` diagnostics
 #   libgomp1                 — llama.cpp's OpenMP threading runtime
 #   ca-certificates          — for any HF/HTTPS calls at runtime
+#   curl                     — the compose healthcheck runs `curl -sf
+#                              http://localhost:8080/health` inside the
+#                              container; without it the service never
+#                              reports healthy
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libvulkan1 mesa-vulkan-drivers vulkan-tools \
-        libgomp1 ca-certificates && \
+        libgomp1 ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
@@ -141,9 +145,8 @@ COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 # a separate llama.cpp install on the host. Same as CUDA + ROCm images.
 COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
 
-RUN mkdir -p /models /templates
-COPY templates/ /templates/
-COPY entrypoint-v3.1-9b.sh /entrypoint.sh
+RUN mkdir -p /models
+COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # No GPU-specific device passthrough or group_add here — the compose
@@ -151,5 +154,7 @@ RUN chmod +x /entrypoint.sh
 # on which Vulkan ICD the user is targeting (NVIDIA toolkit vs /dev/dri
 # vs neither for CPU lavapipe).
 
-EXPOSE 8000
+# The entrypoint's default listen port (PORT env) is 8080; the compose
+# healthcheck and port mapping both target 8080.
+EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

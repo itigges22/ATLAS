@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from benchmark.llm_client import strip_reasoning_leak
+
 
 # Type alias for LLM callable
 LLMCallable = Callable[[str, float, int, Optional[int]], Tuple[str, int, float]]
@@ -175,8 +177,9 @@ def extract_code_from_repair(response: str) -> str:
     """Extract Python code from a repair response."""
     import re
 
-    # Strip thinking blocks
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    # Safety net: client returns clean content, but strip any leaked
+    # reasoning block model-agnostically before code extraction.
+    response = strip_reasoning_leak(response)
 
     # Try ```python blocks
     py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)

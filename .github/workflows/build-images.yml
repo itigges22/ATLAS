@@ -2,11 +2,24 @@
 #
 # Image names: ghcr.io/itigges22/atlas-{proxy,v3,lens,llama,llama-vulkan,sandbox}
 #
-# Tag scheme:
-#   - main branch push  -> :latest, :sha-<short>
-#   - dev branch push   -> :dev,    :sha-<short>
-#   - git tag vX.Y.Z    -> :X.Y.Z,  :X.Y,  :latest
-#   - manual dispatch   -> :sha-<short>
+# Two-phase publish:
+#   Phase 1 (build matrix): every service pushes an immutable :sha-<short>
+#     tag. These are per-commit artifacts — safe to publish even if a
+#     sibling service's build fails, because nothing points at them yet.
+#   Phase 2 (promote job): only after ALL services built AND the `tests`
+#     workflow passed on the same commit, the moving tags are repointed
+#     at the :sha-<short> images via `imagetools create` (a registry-side
+#     manifest copy — multi-arch preserved, nothing rebuilt).
+#   This closes two failure modes the old single-phase push had:
+#     - a commit that fails tests could still overwrite :dev / :latest
+#     - fail-fast:false + independent jobs could leave :dev pointing at
+#       mixed-commit images across services when one build failed
+#
+# Tag scheme (phase 2):
+#   - main branch push  -> :latest
+#   - dev branch push   -> :dev
+#   - git tag vX.Y.Z    -> :X.Y.Z, and :X.Y for stable (non-rc) tags
+#   - manual dispatch   -> :sha-<short> only (no promotion)
 #
 # Platform matrix:
 #   - llama (CUDA, NVIDIA): amd64 only — CUDA arm64 needs base image swaps
@@ -26,6 +39,8 @@ name: Build & publish container images
 # Branch refs (`refs/heads/dev`, `refs/heads/main`) get cancelled; tag refs
 # (`refs/tags/v1.0.0`) won't conflict because the same tag can't be pushed
 # twice. Per-ref grouping prevents a dev push from killing a main release.
+# A cancelled run can strand :sha-* tags for some services, but never a
+# moving tag — promotion is all-or-nothing in phase 2.
 concurrency:
   group: build-images-${{ github.ref }}
   cancel-in-progress: true
@@ -40,19 +55,112 @@ on:
     # if a paths filter were present, breaking release-by-tag. CI is cheap
     # (Buildx layer cache makes docs-only pushes near-instant); over-build
     # beats miss-build.
+  pull_request:
+    branches: [main, dev]
   workflow_dispatch:
+    inputs:
+      alias_tag:
+        description: >
+          Registry-side tag alias, "SRC=DST" (e.g. "3.1.3=v3.1.3"):
+          points atlas-*:DST at the existing atlas-*:SRC manifests for
+          all six services. No builds. Leave empty for a normal
+          sha-only dispatch build.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
 
 env:
   REGISTRY: ghcr.io
   OWNER: ${{ github.repository_owner }}
 
 jobs:
-  build:
-    name: ${{ matrix.service.name }}
+  # PR-time build check for the small services only (no push, no GHCR
+  # login — fork PRs have a read-only token). Catches Dockerfile breakage
+  # before merge instead of on the post-merge dev publish. The llama
+  # images are excluded: 30+ min CUDA/Vulkan builds are too expensive per
+  # PR, and the llama-patches-apply job in test.yml already catches the
+  # common breakage (llama.cpp patch drift) in ~30s.
+  pr-build:
+    name: PR build check (${{ matrix.service.name }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: proxy
+            context: ./proxy
+            dockerfile: ./proxy/Dockerfile
+          - name: v3
+            context: .
+            dockerfile: ./v3-service/Dockerfile
+          - name: lens
+            context: ./geometric-lens
+            dockerfile: ./geometric-lens/Dockerfile
+          - name: sandbox
+            context: ./sandbox
+            dockerfile: ./sandbox/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
+
+      - name: Build (no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          # No cache-to: PR builds read the branch cache but don't write,
+          # so a PR can't poison or thrash the 10 GB GHA cache budget.
+          provenance: false
+
+  # Registry-side tag alias (workflow_dispatch with alias_tag): no
+  # builds — repoints atlas-*:DST at the existing atlas-*:SRC manifests
+  # for all six services via imagetools create.
+  alias:
+    name: alias image tag
+    if: github.event_name == 'workflow_dispatch' && inputs.alias_tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create alias
+        env:
+          ALIAS: ${{ inputs.alias_tag }}
+        run: |
+          set -euo pipefail
+          SRC="${ALIAS%%=*}"; DST="${ALIAS##*=}"
+          if [[ -z "$SRC" || -z "$DST" || "$SRC" == "$DST" || "$ALIAS" != *"="* ]]; then
+            echo "::error::alias_tag must be SRC=DST (got '$ALIAS')"; exit 1
+          fi
+          for svc in proxy v3 lens sandbox llama llama-vulkan; do
+            echo "  atlas-${svc}:${DST} <- atlas-${svc}:${SRC}"
+            docker buildx imagetools create \
+              -t "${REGISTRY}/${OWNER}/atlas-${svc}:${DST}" \
+              "${REGISTRY}/${OWNER}/atlas-${svc}:${SRC}"
+          done
+
+  build:
+    name: ${{ matrix.service.name }}
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.alias_tag == '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # keyless cosign signing via the workflow OIDC identity
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +191,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Free disk space (large llama builds)
         if: matrix.service.name == 'llama' || matrix.service.name == 'llama-vulkan'
@@ -93,7 +201,7 @@ jobs:
         # `jlumbroso/free-disk-space` action reclaims ~30 GB by removing
         # Android SDK, dotnet, Haskell, large hosted-tool caches, etc.
         # That puts us comfortably under the limit.
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
         with:
           tool-cache: true
           android: true
@@ -109,15 +217,15 @@ jobs:
       # cold cache). Tag pushes are the only ones that include arm64.
       - name: Set up QEMU (multi-arch llama-vulkan only)
         if: matrix.service.name == 'llama-vulkan' && startsWith(github.ref, 'refs/tags/v')
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4.2.0
         with:
           platforms: arm64
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -125,28 +233,18 @@ jobs:
 
       - name: Compute tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        env:
+          # Pin the short-SHA length so the promote job can recompute the
+          # same tag with `cut -c1-7` — don't rely on the action's default.
+          DOCKER_METADATA_SHORT_SHA_LENGTH: 7
         with:
           images: ${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-${{ matrix.service.name }}
-          # `flavor: latest=false` disables metadata-action's auto-latest
-          # logic, which marks the current run's semver tag as `:latest`
-          # within its own run — so a backport tag like `v0.9.5` pushed
-          # AFTER `v1.0.0` would silently downgrade `:latest` to v0.9.5
-          # for everyone. Instead, `:latest` is set explicitly below ONLY
-          # on main pushes, so it tracks bleeding edge from main, and
-          # users pin to versioned tags for stability.
-          flavor: |
-            latest=false
+          # Phase 1 publishes ONLY the immutable per-commit tag. All moving
+          # tags (dev/latest/semver) are applied by the promote job after
+          # every service built and tests passed — see header comment.
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=sha,prefix=sha-,format=short
-            type=semver,pattern={{version}}
-            # Restrict :X.Y to stable tags only — without `enable=`,
-            # tagging `v1.0.0-rc1` after `v1.0.0` would silently flip
-            # `:1.0` to point at the RC (downgrade for users pinned to
-            # `:1.0`). Same class of footgun as auto-latest above.
-            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref, '-') }}
 
       # Cache strategy:
       #   llama / llama-vulkan -> registry-based cache (CUDA/Vulkan builds
@@ -158,7 +256,8 @@ jobs:
       #   others -> GHA cache (small, fast, no extra registry write).
       - name: Build & push (llama CUDA, registry cache)
         if: matrix.service.name == 'llama'
-        uses: docker/build-push-action@v5
+        id: build-llama
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
@@ -167,7 +266,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache,mode=max
-          provenance: false
+          provenance: mode=max
+          sbom: true
 
       # #116: llama-vulkan with conditional arm64. The platforms
       # expression evaluates to amd64+arm64 only on tag pushes (releases),
@@ -175,7 +275,8 @@ jobs:
       # emulation via QEMU is 5-10x slower.
       - name: Build & push (llama Vulkan, registry cache, arch-conditional)
         if: matrix.service.name == 'llama-vulkan'
-        uses: docker/build-push-action@v5
+        id: build-vulkan
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
@@ -185,11 +286,13 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama-vulkan:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama-vulkan:buildcache,mode=max
-          provenance: false
+          provenance: mode=max
+          sbom: true
 
       - name: Build & push (small services, GHA cache)
         if: matrix.service.name != 'llama' && matrix.service.name != 'llama-vulkan'
-        uses: docker/build-push-action@v5
+        id: build-small
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
@@ -198,4 +301,122 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,scope=${{ matrix.service.name }},mode=max
-          provenance: false
+          provenance: mode=max
+          sbom: true
+
+      # Keyless (OIDC) signature over the pushed digest. Signing the
+      # digest covers every tag that ever points at it — including the
+      # dev/latest/semver tags the promote job repoints later, since
+      # imagetools create reuses the same manifest digest. Verify with:
+      #   cosign verify \
+      #     --certificate-identity-regexp 'github.com/itigges22/ATLAS' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     ghcr.io/itigges22/atlas-<svc>@<digest>
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Sign image (keyless)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build-llama.outputs.digest || steps.build-vulkan.outputs.digest || steps.build-small.outputs.digest }}
+        run: |
+          cosign sign --yes "${REGISTRY}/${OWNER}/atlas-${{ matrix.service.name }}@${DIGEST}"
+
+  # Phase 2: repoint the moving tags at the :sha-<short> images, but only
+  # after every service built and the `tests` workflow succeeded on this
+  # exact commit. `imagetools create` is a registry-side manifest copy —
+  # multi-arch manifests are preserved and nothing is rebuilt or pulled.
+  promote:
+    name: promote moving tags
+    needs: build
+    # Push events only: workflow_dispatch is deliberately sha-only, and
+    # `needs: build` already guarantees all six services published.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: read  # for `gh run list` when polling the tests workflow
+    steps:
+      - name: Wait for tests workflow on this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Tag pushes don't trigger test.yml, but under the dev -> staging
+        # -> main fast-forward flow the tagged commit was already pushed
+        # to a branch, so a tests run for this SHA exists — we find it by
+        # commit, not by ref. If none exists (tag on a never-pushed
+        # commit), fail loudly rather than promote untested images.
+        run: |
+          echo "Looking for 'tests' workflow run on ${GITHUB_SHA}..."
+          for i in $(seq 1 60); do
+            read -r status conclusion < <(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow test.yml \
+              --commit "${GITHUB_SHA}" \
+              --limit 1 \
+              --json status,conclusion \
+              --jq '.[0] | "\(.status) \(.conclusion)"' || echo "absent absent")
+            case "${status:-absent}" in
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "tests passed on ${GITHUB_SHA} — promoting."
+                  exit 0
+                fi
+                echo "::error::tests workflow concluded '$conclusion' on ${GITHUB_SHA} — refusing to promote moving tags. The :sha-* images are published for debugging."
+                exit 1
+                ;;
+              absent)
+                echo "::error::no tests workflow run found for ${GITHUB_SHA}. Push the commit to dev/main first (tests must pass before tags are promoted)."
+                exit 1
+                ;;
+              *)
+                echo "  tests run status: $status (attempt $i/60) — waiting 30s"
+                sleep 30
+                ;;
+            esac
+          done
+          echo "::error::timed out after 30 minutes waiting for the tests workflow on ${GITHUB_SHA}."
+          exit 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Repoint moving tags
+        # Tag policy (mirrors the old metadata-action config, including
+        # its downgrade defenses):
+        #   main push -> :latest (bleeding edge tracks main only — a
+        #     backport tag pushed after v1.0.0 must NOT downgrade :latest)
+        #   dev push  -> :dev
+        #   tag vX.Y.Z -> :X.Y.Z always; :X.Y only for stable tags, so
+        #     tagging v1.0.1-rc1 can't flip :1.0 to an RC.
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/heads/main) TAGS="latest" ;;
+            refs/heads/dev)  TAGS="dev" ;;
+            refs/tags/v*)
+              VERSION="${GITHUB_REF#refs/tags/v}"
+              # Both forms: :X.Y.Z and :vX.Y.Z. The git tag carries the v,
+              # so docs/pins that quote the tag verbatim (ATLAS_BOOTSTRAP_REF,
+              # ATLAS_IMAGE_TAG) resolve without callers stripping it.
+              TAGS="${VERSION} v${VERSION}"
+              if [[ "${VERSION}" != *-* ]]; then
+                TAGS="${TAGS} ${VERSION%.*}"
+              fi
+              ;;
+            *) echo "::error::unexpected ref ${GITHUB_REF}"; exit 1 ;;
+          esac
+          SHORT="sha-$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "Promoting ${SHORT} -> ${TAGS}"
+          for svc in proxy v3 lens sandbox llama llama-vulkan; do
+            src="${REGISTRY}/${OWNER}/atlas-${svc}:${SHORT}"
+            for tag in ${TAGS}; do
+              echo "  atlas-${svc}:${tag} <- ${SHORT}"
+              docker buildx imagetools create -t "${REGISTRY}/${OWNER}/atlas-${svc}:${tag}" "${src}"
+            done
+          done

@@ -13,49 +13,81 @@ Algorithm (matches the Feb 2026 ASA paper, arxiv 2602.04935):
   5. Write as a GGUF control vector that llama-server's
      --control-vector-scaled flag consumes.
 
-Layer choice: ~75% of model depth (BiasBusters practitioner guidance).
-Qwen3.5-9B has 36 layers; layer 27 is the default. Override via --layer.
+Layer choice: ~75% of the selected model's depth (BiasBusters practitioner
+guidance). `atlas asa build` derives it from the loaded model; direct callers
+must pass `--layer`.
 
 Run inside the atlas-geometric-lens container so it can reach the
 PC-202 hidden-states endpoint via the same network the lens uses:
     docker exec -i atlas-geometric-lens-1 python3 \\
         /workspace_calib/build_steering_vector.py \\
         --pairs /workspace_calib/contrast_pairs.jsonl \\
-        --out /workspace_calib/ast_edit_steering.gguf
+        --out /workspace_calib/ast_edit_steering.gguf \\
+        --layer <75%-of-model-depth>
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
 import time
 from pathlib import Path
+from urllib.request import Request, urlopen
 
+# Imported at module load so a missing gguf package fails in seconds, not
+# after the ~25-minute extraction pass right before the write step.
+import gguf
 import numpy as np
 
 sys.path.insert(0, "/app")
 from geometric_lens.embedding_extractor import extract_per_layer_per_token
 
 
-QWEN_PROMPT_TEMPLATE = (
-    "<|im_start|>system\n"
-    "You are ATLAS, a coding assistant. Choose the right tool for the job.\n"
-    "<|im_end|>\n"
-    "<|im_start|>user\n"
-    "{user}\n"
-    "<|im_end|>\n"
-    "<|im_start|>assistant\n"
-    "{assistant_prefix}"
+_SYSTEM_PROMPT = (
+    "You are ATLAS, a coding assistant. Choose the right tool for the job."
 )
 
 
-def render_prompt(pair: dict) -> str:
-    return QWEN_PROMPT_TEMPLATE.format(
-        user=pair["user"],
-        assistant_prefix=pair["assistant_prefix"],
+def _llama_url() -> str:
+    return os.environ.get(
+        "LLAMA_EMBED_URL",
+        os.environ.get("LLAMA_URL", "http://llama-server:8080"),
+    ).rstrip("/")
+
+
+@functools.lru_cache(maxsize=2048)
+def _render_user_context(user: str) -> str:
+    """Render system+user messages with the loaded model's own template."""
+    payload = json.dumps({
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user},
+        ],
+    }).encode()
+    req = Request(
+        f"{_llama_url()}/apply-template",
+        data=payload,
+        headers={"Content-Type": "application/json"},
     )
+    try:
+        with urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+    except Exception as exc:
+        raise RuntimeError(
+            "llama-server /apply-template is required for model-agnostic "
+            f"ASA calibration: {exc}"
+        ) from exc
+    prompt = result.get("prompt") if isinstance(result, dict) else None
+    if not isinstance(prompt, str) or not prompt:
+        raise RuntimeError("unexpected llama-server /apply-template response")
+    return prompt
+
+
+def render_prompt(pair: dict) -> str:
+    return _render_user_context(pair["user"]) + pair["assistant_prefix"]
 
 
 def extract_mean_residual(prompt: str, layer: int) -> np.ndarray:
@@ -72,7 +104,9 @@ def extract_mean_residual(prompt: str, layer: int) -> np.ndarray:
     return arr.mean(axis=0)
 
 
-def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray, n_pairs: int) -> None:
+def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray,
+                              n_pairs: int, model_hint: str = "unknown",
+                              layer_count: int = 0) -> None:
     """Write the steering vector in llama.cpp's control-vector GGUF format.
 
     Format expected by llama-server --control-vector-scaled:
@@ -82,11 +116,10 @@ def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray, n_
       - One tensor per layer named "direction.<layer>", shape (hidden_dim,),
         dtype f32. Layers without a direction tensor are not steered.
     """
-    import gguf
-
     writer = gguf.GGUFWriter(str(out_path), arch="controlvector")
-    writer.add_string("controlvector.model_hint", "qwen3")
-    writer.add_uint32("controlvector.layer_count", 36)
+    writer.add_string("controlvector.model_hint", model_hint)
+    writer.add_uint32("controlvector.layer_count",
+                      layer_count if layer_count > 0 else layer + 1)
     writer.add_string(
         "general.description",
         f"ATLAS BiasBusters #4 ASA — ast_edit vs edit_file (n={n_pairs} pairs, layer {layer})",
@@ -105,10 +138,17 @@ def main() -> int:
                     help="contrast_pairs.jsonl — paired ast_edit/edit_file prompts")
     ap.add_argument("--out", required=True, type=Path,
                     help="output GGUF control vector path")
-    ap.add_argument("--layer", type=int, default=27,
-                    help="layer to extract residuals from (default 27 = ~75%% of Qwen3.5-9B's 36 layers)")
+    ap.add_argument("--layer", type=int, required=True,
+                    help="layer to extract residuals from; use ~75%% of the "
+                         "selected model's layer count")
     ap.add_argument("--limit", type=int, default=0,
                     help="cap pairs processed (0 = all). Useful for smoke tests.")
+    ap.add_argument("--model-hint", default="unknown",
+                    help="architecture name stamped into the vector's "
+                         "controlvector.model_hint metadata")
+    ap.add_argument("--layer-count", type=int, default=0,
+                    help="total layer count stamped into the vector "
+                         "metadata (0 = use --layer + 1)")
     args = ap.parse_args()
 
     pairs = []
@@ -167,7 +207,9 @@ def main() -> int:
     print(f"v_global = v_pos - v_neg, ||v_global||={norm:.4f}")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    write_gguf_control_vector(args.out, args.layer, v_global, len(pos_means))
+    write_gguf_control_vector(args.out, args.layer, v_global, len(pos_means),
+                              model_hint=args.model_hint,
+                              layer_count=args.layer_count)
     size = os.path.getsize(args.out)
     print(f"wrote {args.out} ({size} bytes, layer {args.layer}, hidden_dim {len(v_global)})")
     return 0

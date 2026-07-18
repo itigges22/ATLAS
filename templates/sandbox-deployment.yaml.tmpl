@@ -1,0 +1,111 @@
+# sandbox — isolated code execution (/shell, /execute, /jobs/* background
+# jobs). The container fs is read-only for hardening; per-language toolchain
+# cache targets are emptyDir-backed (PC-191 universal-tmpfs pattern, sized
+# to "ephemeral, not a real cache" — wiped on Pod restart). The project
+# workspace is hostPath-mounted from ATLAS_PROJECTS_DIR — same directory
+# the proxy Pod sees, so paths the agent learns via read_file/list_directory
+# work verbatim in run_command.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: sandbox}
+  template:
+    metadata:
+      labels: {app: sandbox}
+    spec:
+      containers:
+      - name: sandbox
+        image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-sandbox:${ATLAS_IMAGE_TAG}
+        ports:
+        # executor_server.py listens on a fixed 8020 (uvicorn hardcodes
+        # it); ATLAS_SANDBOX_PORT only moves the Service port. Pinning the
+        # container-side ports means changing the external var can't break
+        # the probes.
+        - containerPort: 8020
+          name: http
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop: [ALL]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        # Project workspace — bind-mount equivalent.
+        - {name: workspace,  mountPath: /workspace}
+        # Per-language ephemeral caches. Mirrors docker-compose tmpfs config.
+        - {name: tmp,        mountPath: /tmp}
+        - {name: home,       mountPath: /home/sandbox}
+        - {name: pylocal,    mountPath: /home/sandbox/.local}
+        - {name: cache,      mountPath: /home/sandbox/.cache}
+        - {name: npm,        mountPath: /home/sandbox/.npm}
+        - {name: cargo,      mountPath: /home/sandbox/.cargo}
+        - {name: go,         mountPath: /home/sandbox/go}
+        - {name: m2,         mountPath: /home/sandbox/.m2}
+        - {name: gradle,     mountPath: /home/sandbox/.gradle}
+        - {name: bundle,     mountPath: /home/sandbox/.bundle}
+        - {name: gem,        mountPath: /home/sandbox/.gem}
+        - {name: composer,   mountPath: /home/sandbox/.composer}
+        - {name: nuget,      mountPath: /home/sandbox/.nuget}
+        - {name: pubcache,   mountPath: /home/sandbox/.pub-cache}
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8020
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8020
+          initialDelaySeconds: 20
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: workspace
+        hostPath:
+          path: ${ATLAS_PROJECTS_DIR}
+          type: DirectoryOrCreate
+      - {name: tmp,      emptyDir: {sizeLimit: 1Gi}}
+      - {name: home,     emptyDir: {sizeLimit: 128Mi}}
+      - {name: pylocal,  emptyDir: {sizeLimit: 256Mi}}
+      - {name: cache,    emptyDir: {sizeLimit: 256Mi}}
+      - {name: npm,      emptyDir: {sizeLimit: 256Mi}}
+      - {name: cargo,    emptyDir: {sizeLimit: 512Mi}}
+      - {name: go,       emptyDir: {sizeLimit: 512Mi}}
+      - {name: m2,       emptyDir: {sizeLimit: 512Mi}}
+      - {name: gradle,   emptyDir: {sizeLimit: 512Mi}}
+      - {name: bundle,   emptyDir: {sizeLimit: 256Mi}}
+      - {name: gem,      emptyDir: {sizeLimit: 256Mi}}
+      - {name: composer, emptyDir: {sizeLimit: 256Mi}}
+      - {name: nuget,    emptyDir: {sizeLimit: 256Mi}}
+      - {name: pubcache, emptyDir: {sizeLimit: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  type: NodePort
+  selector: {app: sandbox}
+  ports:
+  - port: ${ATLAS_SANDBOX_PORT}
+    targetPort: 8020            # fixed container port (see Deployment note)
+    nodePort: ${ATLAS_SANDBOX_NODEPORT}
+    name: http

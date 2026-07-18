@@ -22,7 +22,7 @@ from atlas.cli.commands import lens
 # ---------------------------------------------------------------------------
 
 def _probe(reachable=True, embedding_dim=4096, n_layers=32,
-           model_name="Qwen3.5-9B-Q6_K.gguf", patch=True, error=""):
+           model_name="test-model.gguf", patch=True, error=""):
     return lens.LlamaProbe(
         reachable=reachable,
         url="http://test-llama:8080",
@@ -32,6 +32,27 @@ def _probe(reachable=True, embedding_dim=4096, n_layers=32,
         has_hidden_states_patch=patch,
         error=error,
     )
+
+
+def _write_complete_runtime_artifacts(path, model="test-model",
+                                      embedding_dim=4096):
+    (path / "model_identity.json").write_text(json.dumps({
+        "model": model,
+        "embedding_dim": embedding_dim,
+    }))
+    (path / "cx_normalization.json").write_text(json.dumps({
+        "midpoint": 5.0,
+        "steepness": 0.5,
+        "pass_energy_mean": 1.0,
+        "fail_energy_mean": 9.0,
+    }))
+    (path / "gx_thresholds.json").write_text(json.dumps({
+        "severe": 0.1,
+        "off_rails": 0.2,
+        "low": 0.3,
+    }))
+    (path / "gx_xgboost.json").write_text("{}")
+    (path / "gx_weights.json").write_text("{}")
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +106,17 @@ def test_check_zero_dim_is_incompatible(monkeypatch, tmp_path):
     assert v.verdict == "incompatible"
 
 
+def test_check_rejects_requested_model_that_is_not_loaded(monkeypatch,
+                                                           tmp_path):
+    monkeypatch.setattr(
+        lens, "probe_llama",
+        lambda *a, **kw: _probe(model_name="loaded-model.gguf"),
+    )
+    verdict = lens._check_model("requested-model.gguf", str(tmp_path))
+    assert verdict.verdict == "incompatible"
+    assert "has 'loaded-model.gguf' loaded" in verdict.reason
+
+
 def test_check_missing_artifact_is_needs_build(monkeypatch, tmp_path):
     """Probe OK, no cost_field.pt exists -> needs-build (exit 1)."""
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
@@ -115,6 +147,7 @@ def test_check_dim_match_is_compat(monkeypatch, tmp_path):
     torch = pytest.importorskip("torch")
     state = {"net.0.weight": torch.zeros(512, 4096)}
     torch.save(state, tmp_path / "cost_field.pt")
+    _write_complete_runtime_artifacts(tmp_path)
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     monkeypatch.setattr(lens, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
@@ -124,11 +157,53 @@ def test_check_dim_match_is_compat(monkeypatch, tmp_path):
     assert v.artifact_dim == 4096
 
 
+def test_check_dim_match_without_calibration_needs_build(monkeypatch, tmp_path):
+    torch = pytest.importorskip("torch")
+    torch.save({"net.0.weight": torch.zeros(512, 4096)},
+               tmp_path / "cost_field.pt")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe())
+    verdict = lens._check_model(None, str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "cx_normalization.json" in verdict.reason
+
+
+def test_check_rejects_present_but_invalid_calibration(monkeypatch, tmp_path):
+    torch = pytest.importorskip("torch")
+    torch.save({"net.0.weight": torch.zeros(512, 4096)},
+               tmp_path / "cost_field.pt")
+    _write_complete_runtime_artifacts(tmp_path)
+    (tmp_path / "gx_thresholds.json").write_text(json.dumps({
+        "severe": 0.4, "off_rails": 0.3, "low": 0.2,
+    }))
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe())
+    verdict = lens._check_model(None, str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "gx_thresholds.json" in verdict.reason
+    assert "invalid" in verdict.reason
+
+
+def test_check_rejects_artifacts_for_same_dim_different_model(monkeypatch,
+                                                               tmp_path):
+    torch = pytest.importorskip("torch")
+    torch.save({"net.0.weight": torch.zeros(512, 4096)},
+               tmp_path / "cost_field.pt")
+    _write_complete_runtime_artifacts(tmp_path, "other-model")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe())
+    verdict = lens._check_model(None, str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "model_identity.json" in verdict.reason
+    assert "other-model" in verdict.reason
+
+
 def test_check_compat_warns_when_pc202_patch_missing(monkeypatch, tmp_path):
     """Compat verdict but no PC-202 patch -> reason mentions G(x) limitation."""
     torch = pytest.importorskip("torch")
     state = {"net.0.weight": torch.zeros(512, 4096)}
     torch.save(state, tmp_path / "cost_field.pt")
+    _write_complete_runtime_artifacts(tmp_path)
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     monkeypatch.setattr(lens, "probe_llama",
                         lambda *a, **kw: _probe(patch=False))
@@ -136,6 +211,39 @@ def test_check_compat_warns_when_pc202_patch_missing(monkeypatch, tmp_path):
     assert v.verdict == "compat"
     assert "PC-202" in v.reason
     assert "G(x)" in v.reason
+
+
+def test_activate_bundle_replaces_complete_set_and_removes_legacy(tmp_path):
+    live = tmp_path / "live"
+    staging = tmp_path / "staging"
+    live.mkdir()
+    staging.mkdir()
+    (live / "cost_field.pt").write_bytes(b"old-cost")
+    (live / "metric_tensor.pt").write_bytes(b"stale-metric")
+    (live / "gx_xgboost.pkl").write_bytes(b"stale-pickle")
+    (staging / "cost_field.pt").write_bytes(b"new-cost")
+    _write_complete_runtime_artifacts(staging)
+
+    lens._activate_lens_bundle(str(staging), str(live))
+
+    assert (live / "cost_field.pt").read_bytes() == b"new-cost"
+    assert (live / "model_identity.json").is_file()
+    assert not (live / "metric_tensor.pt").exists()
+    assert not (live / "gx_xgboost.pkl").exists()
+
+
+def test_activate_incomplete_bundle_preserves_live_artifacts(tmp_path):
+    live = tmp_path / "live"
+    staging = tmp_path / "staging"
+    live.mkdir()
+    staging.mkdir()
+    (live / "cost_field.pt").write_bytes(b"old-cost")
+    (staging / "cost_field.pt").write_bytes(b"new-cost")
+
+    with pytest.raises(ValueError, match="incomplete"):
+        lens._activate_lens_bundle(str(staging), str(live))
+
+    assert (live / "cost_field.pt").read_bytes() == b"old-cost"
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +297,46 @@ def test_load_training_samples_missing_file(tmp_path):
     """Missing file returns empty list, not an exception."""
     assert lens._load_training_samples(str(tmp_path / "nope.json")) == []
     assert lens._load_training_samples(None) == []
+
+
+# ---------------------------------------------------------------------------
+# Collected-corpus loader (atlas lens retrain source)
+# ---------------------------------------------------------------------------
+
+def test_load_collected_samples_reads_corpus(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATLAS_LENS_HOST_DIR", str(tmp_path))
+    mdir = tmp_path / "gemma-4-12b-it-Q4_K_M"
+    mdir.mkdir()
+    (mdir / "samples.jsonl").write_text(
+        '{"content": "FROM python:3.11\\n", "label": 1, "weight": 1.0}\n'
+        '{"content": "FROM base\\nCMD run\\n", "label": 0, "weight": 1.0}\n'
+        '{"content": "def f(): pass\\n", "label": 1, "weight": 0.4}\n'
+    )
+    samples = lens._load_collected_samples("gemma-4-12b-it-Q4_K_M")
+    assert len(samples) == 3
+    # mapped to the {text, label, weight} shape _extract_training_embeddings wants
+    assert samples[0] == {"text": "FROM python:3.11\n", "label": 1, "weight": 1.0}
+    assert samples[2]["weight"] == 0.4
+
+
+def test_load_collected_samples_single_subdir_fallback(tmp_path, monkeypatch):
+    """A wrong/blank model name still resolves when exactly one corpus exists."""
+    monkeypatch.setenv("ATLAS_LENS_HOST_DIR", str(tmp_path))
+    mdir = tmp_path / "only-model"
+    mdir.mkdir()
+    (mdir / "samples.jsonl").write_text('{"content": "x\\n", "label": 1}\n')
+    assert len(lens._load_collected_samples("some-other-name")) == 1
+
+
+def test_load_collected_samples_empty_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATLAS_LENS_HOST_DIR", str(tmp_path))
+    assert lens._load_collected_samples("whatever") == []
+
+
+def test_sanitize_model_dir_matches_proxy(tmp_path):
+    # Must mirror proxy/lens_samples.go:sanitizeModelName.
+    assert lens._sanitize_model_dir("vendor/Model:Q6_K") == "vendor_Model_Q6_K"
+    assert lens._sanitize_model_dir("") == "default"
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +406,7 @@ def test_build_compat_with_no_force_is_noop(monkeypatch, tmp_path, capsys):
     torch = pytest.importorskip("torch")
     state = {"net.0.weight": torch.zeros(512, 4096)}
     torch.save(state, tmp_path / "cost_field.pt")
+    _write_complete_runtime_artifacts(tmp_path)
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     monkeypatch.setattr(lens, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
@@ -292,12 +441,39 @@ def test_publish_refuses_when_no_artifact(monkeypatch, tmp_path, capsys):
     assert "atlas lens build" in out
 
 
+def test_publish_refuses_uncalibrated_partial_artifact(monkeypatch, tmp_path,
+                                                       capsys):
+    (tmp_path / "cost_field.pt").write_bytes(b"weights")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    rc = lens.main(["publish", "test-model", "--dry-run", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "incomplete or uncalibrated" in out
+    assert "cx_normalization.json" in out
+
+
+def test_publish_refuses_invalid_calibration(monkeypatch, tmp_path, capsys):
+    (tmp_path / "cost_field.pt").write_bytes(b"weights")
+    _write_complete_runtime_artifacts(tmp_path)
+    (tmp_path / "cx_normalization.json").write_text(json.dumps({
+        "midpoint": 1.0,
+        "steepness": False,
+    }))
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    rc = lens.main(["publish", "test-model", "--dry-run", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "calibration is invalid" in out
+    assert "cx_normalization.json" in out
+
+
 def test_publish_dry_run_prints_pr_body(monkeypatch, tmp_path, capsys):
     """Dry-run hashes the artifact, renders the PR body, prints it."""
     torch = pytest.importorskip("torch")
     state = {"net.0.weight": torch.zeros(512, 4096),
              "net.0.bias": torch.zeros(512)}
     torch.save(state, tmp_path / "cost_field.pt")
+    _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     rc = lens.main(["publish", "Qwen3.5-9B-Q6_K", "--dry-run", "--no-color"])
     out = capsys.readouterr().out
@@ -318,6 +494,7 @@ def test_publish_dry_run_works_without_torch(monkeypatch, tmp_path, capsys):
     # The SHA-256 + size + path inspection paths don't need torch; only
     # the dim introspection does.
     (tmp_path / "cost_field.pt").write_bytes(b"fake pt content for sha256")
+    _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     # Force the dim-inspection to fail by stubbing _inspect_cost_field.
     monkeypatch.setattr(
@@ -340,6 +517,7 @@ def test_publish_requires_repo_unless_dry_run(monkeypatch, tmp_path, capsys):
     if not lens._huggingface_hub_available():
         pytest.skip("huggingface_hub not installed on this host")
     (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
     monkeypatch.setattr(
@@ -373,6 +551,7 @@ def test_publish_skip_pr_writes_body_without_gh(monkeypatch, tmp_path, capsys):
     """--skip-pr in dry-run mode should print the PR body unconditionally
     (no `gh` invocation, no upload). Sanity-check the exit code is 0."""
     (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     monkeypatch.setattr(
         lens, "_inspect_cost_field",
@@ -401,6 +580,48 @@ def test_render_registry_pr_body_includes_required_fields():
     assert "a" * 64 in body
     # The maintainer needs the Python diff with `lens_status="supported"`
     assert 'lens_status="supported"' in body
+    assert "lens_calibrated=True" in body
+
+
+def test_registry_set_lens_upgrades_existing_entry():
+    content = '''
+@dataclass
+class Model:
+    lens_calibrated: bool = False
+    lens_hf_repo: Optional[str] = None
+
+REGISTRY: List[Model] = [
+    Model(
+        name="ExampleModel",
+        tier="medium",
+        lens_status="unverified",
+        lens_calibrated=False,
+        lens_artifact_files=["old.pt"],
+        lens_hf_repo="owner/old-bundle",
+    ),
+]
+'''
+    updated = lens._registry_set_lens(
+        content,
+        "ExampleModel",
+        "owner/current-bundle",
+        ["cost_field.pt", "cx_normalization.json", "gx_thresholds.json"],
+    )
+    assert updated is not None
+    assert updated.count('lens_status="supported"') == 1
+    assert updated.count("lens_calibrated=True") == 1
+    assert 'lens_hf_repo="owner/current-bundle"' in updated
+    assert "old.pt" not in updated
+    assert "owner/old-bundle" not in updated
+
+
+def test_registry_set_lens_returns_none_for_unknown_entry():
+    assert lens._registry_set_lens(
+        "REGISTRY: List[Model] = [\n]\n",
+        "MissingModel",
+        "owner/bundle",
+        ["cost_field.pt"],
+    ) is None
 
 
 def test_sha256_file_is_deterministic_and_correct(tmp_path):
@@ -503,31 +724,27 @@ def test_preflight_dry_run_doesnt_flag_missing_token_as_failure(
     assert "nothing will leave the host" in out
 
 
-def test_publish_uses_atlas_publish_branch_only_when_set(
-    monkeypatch, tmp_path, capsys
-):
-    """Regression for the `gh pr create --head ""` bug: when
-    ATLAS_PUBLISH_BRANCH is unset, we must NOT pass --head to gh
-    (gh rejects empty refs instead of inferring the current branch).
-    We assert on the subprocess args via a captured spy."""
+def test_publish_opens_pr_via_github_api(monkeypatch, tmp_path, capsys):
+    """The registry PR is built through `gh api` (branch + commit + PR) —
+    never `gh pr create`, which needs a local git checkout most installs
+    don't have (PC-214). A failing API call falls back to printing the
+    PR body rather than failing the publish."""
     if not lens._huggingface_hub_available():
         pytest.skip("huggingface_hub not installed on this host")
     (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
     monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
     monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
-    monkeypatch.delenv("ATLAS_PUBLISH_BRANCH", raising=False)
     monkeypatch.setattr(
         lens, "_inspect_cost_field",
         lambda d: lens.ArtifactInspection(present=True, dim=4096))
 
-    # Capture subprocess.run invocations. Return success so the publish
-    # flow continues past the gh call as it would in the green path.
     captured = []
 
     class _FakeResult:
-        returncode = 0
-        stdout = "https://github.com/itigges22/ATLAS/pull/42"
-        stderr = ""
+        returncode = 1   # every gh api call "fails" -> body fallback
+        stdout = ""
+        stderr = "simulated offline"
 
     def _fake_run(cmd, *a, **kw):
         captured.append(cmd)
@@ -535,7 +752,6 @@ def test_publish_uses_atlas_publish_branch_only_when_set(
 
     import subprocess as _sp
     monkeypatch.setattr(_sp, "run", _fake_run)
-    # Skip the actual HF upload — we only care about the gh args here.
     from huggingface_hub import HfApi
     monkeypatch.setattr(HfApi, "create_repo", lambda self, **kw: None)
     monkeypatch.setattr(HfApi, "upload_file", lambda self, **kw: None)
@@ -544,55 +760,9 @@ def test_publish_uses_atlas_publish_branch_only_when_set(
                     "--repo", "alice/atlas-lens-test", "--no-color"])
     assert rc == 0
     gh_calls = [c for c in captured if c and c[0] == "gh"]
-    assert gh_calls, "expected at least one gh invocation"
-    gh_cmd = gh_calls[0]
-    # Critical: no empty --head value.
-    if "--head" in gh_cmd:
-        idx = gh_cmd.index("--head")
-        head_val = gh_cmd[idx + 1] if idx + 1 < len(gh_cmd) else ""
-        assert head_val, (
-            "gh pr create must not be invoked with an empty --head; "
-            f"saw: {gh_cmd}"
-        )
-
-
-def test_publish_passes_atlas_publish_branch_when_set(
-    monkeypatch, tmp_path, capsys
-):
-    """Inverse of the regression test: when ATLAS_PUBLISH_BRANCH IS set,
-    we should pass --head <branch> through to gh."""
-    if not lens._huggingface_hub_available():
-        pytest.skip("huggingface_hub not installed on this host")
-    (tmp_path / "cost_field.pt").write_bytes(b"fake")
-    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
-    monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
-    monkeypatch.setenv("ATLAS_PUBLISH_BRANCH", "registry/qwen-9b-lens")
-    monkeypatch.setattr(
-        lens, "_inspect_cost_field",
-        lambda d: lens.ArtifactInspection(present=True, dim=4096))
-
-    captured = []
-
-    class _FakeResult:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def _fake_run(cmd, *a, **kw):
-        captured.append(cmd)
-        return _FakeResult()
-
-    import subprocess as _sp
-    monkeypatch.setattr(_sp, "run", _fake_run)
-    from huggingface_hub import HfApi
-    monkeypatch.setattr(HfApi, "create_repo", lambda self, **kw: None)
-    monkeypatch.setattr(HfApi, "upload_file", lambda self, **kw: None)
-
-    lens.main(["publish", "Qwen3.5-9B-Q6_K",
-               "--repo", "alice/atlas-lens-test", "--no-color"])
-    gh_calls = [c for c in captured if c and c[0] == "gh"]
-    assert gh_calls, "expected a gh invocation"
-    gh_cmd = gh_calls[0]
-    assert "--head" in gh_cmd
-    idx = gh_cmd.index("--head")
-    assert gh_cmd[idx + 1] == "registry/qwen-9b-lens"
+    assert gh_calls, "expected gh api invocations"
+    assert all(c[1] == "api" for c in gh_calls), \
+        f"publish must use `gh api`, not gh pr create: {gh_calls}"
+    out = capsys.readouterr().out
+    # API path failed -> the PR body is printed for manual paste.
+    assert "Add Lens artifacts" in out

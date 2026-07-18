@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type envelopeMsg struct {
@@ -33,12 +36,6 @@ type tickMsg time.Time
 // chatStreamMsg is one event from a /v1/agent SSE turn.
 type chatStreamMsg struct {
 	ev chatEvent
-}
-
-// chatTurnDoneMsg signals that the current /v1/agent turn finished
-// (clean [DONE] or error). err is nil on clean completion.
-type chatTurnDoneMsg struct {
-	err error
 }
 
 type chatRole int
@@ -58,11 +55,19 @@ type chatMessage struct {
 	Meta string
 	// Success — only meaningful for tool rows. Drives the icon color.
 	Success bool
+	// Echo — the row mirrors raw slash/bash input for display only.
+	// buildChatHistory skips echo rows so they never reach /v1/agent
+	// as fake user turns.
+	Echo bool
 }
 
 type tuiModel struct {
 	proxyURL string
 	events   chan Envelope
+
+	// /demo handoff: set by the slash command just before quitting; main.go
+	// relaunches into the split-pane demo with this length (short|medium|long).
+	launchDemoLength string
 
 	// Visible state
 	width  int
@@ -74,13 +79,29 @@ type tuiModel struct {
 	maxLines int
 
 	// Chat
-	input          textarea.Model
-	chat           []chatMessage
-	chatEvents     chan chatEvent
-	turnActive     bool
-	turnCancel     context.CancelFunc
-	turnSessionID  string
-	chatRenderer   *glamour.TermRenderer
+	input         textarea.Model
+	chat          []chatMessage
+	chatEvents    chan chatEvent
+	turnActive    bool
+	turnCancel    context.CancelFunc
+	turnSessionID string
+	// lastPassSession is the session id of the most recently COMPLETED pass —
+	// what /good and /bad rate. Distinct from turnSessionID (which a new turn
+	// overwrites at send time); set when a turn finishes.
+	lastPassSession string
+	// retrainNotified gates the "retrain available" banner to once per TUI
+	// session so it doesn't repeat on every subsequent turn.
+	retrainNotified bool
+	// Post-pass review state. passWrites accumulates the files written during
+	// the in-flight pass; on completion it becomes lastPassFiles (what /review
+	// lists and /good·/bad rate). passVerdicts holds per-file deny verdicts the
+	// user set for the last pass (path → "deny"), with optional reasons for
+	// /redo. All cleared when a new pass starts.
+	passWrites    map[string]bool
+	lastPassFiles []string
+	passVerdicts  map[string]string
+	passReasons   map[string]string
+	chatRenderer  *glamour.TermRenderer
 
 	// Set when the user presses Ctrl+C mid-turn so the trailing flurry
 	// of error/llm_call_end/__turn_done__ events render as "cancelled"
@@ -96,8 +117,8 @@ type tuiModel struct {
 	// (OSC52 fallback works over SSH). Cell coords are screen-relative.
 	// We only copy when there was a real drag (non-zero delta), so a
 	// pure click doesn't trigger a copy.
-	selecting          bool
-	selPane            string // "chat" / "events" / "pipeline" / "files"
+	selecting            bool
+	selPane              string // "chat" / "events" / "pipeline" / "files"
 	selStartX, selStartY int
 	selEndX, selEndY     int
 
@@ -108,13 +129,32 @@ type tuiModel struct {
 	workingDir string
 	mode       string
 
+	// Interactive permission approval. The proxy pauses a destructive tool
+	// call mid-turn and emits a "permission_request"; pendingPerm holds the
+	// prompt while the modal is up and gates all input until the user
+	// answers. sessionAllowedTools is the "allow for session" whitelist —
+	// a tool in it auto-answers allow without re-prompting, and its sorted
+	// keys ride every /v1/agent request as session_allowed_tools so the
+	// proxy skips the prompt proxy-side on later turns.
+	pendingPerm         *permPrompt
+	sessionAllowedTools map[string]bool
+
+	// Session persistence. sessionUID is the stable id for the on-disk
+	// transcript (distinct from turnSessionID, which is minted per turn for
+	// /cancel and /v1/permission correlation). sessionCreatedAt is the
+	// created_at stamp preserved across saves. persistEnabled gates writes
+	// so demo child models never touch the sessions dir.
+	sessionUID       string
+	sessionCreatedAt string
+	persistEnabled   bool
+
 	// Polish state — spinner phase, last-sent message for Ctrl+R.
 	spinnerFrame int
 	lastUserMsg  string
 
 	// Token accounting from llm_call_end events. lastTurnTokens is the
-	// usage reported on the most recent LLM call (Qwen3.5 reports the
-	// FULL prompt+completion total, not a delta — that's the value we
+	// usage reported on the most recent LLM call. llama-server reports the
+	// full prompt+completion total, not a delta — that's the value we
 	// compare against maxContextTokens to gauge "how full is the
 	// window"). totalTokensSession sums per-call deltas across the
 	// whole session, used for the "tokens used overall" indicator.
@@ -130,8 +170,8 @@ type tuiModel struct {
 	streamingLLM       bool
 	streamingLLMText   string
 	streamingLLMHeader string
-	// May 10 2026: reasoning_token events stream the model's thought
-	// process (Qwen3.5 reasoning_content) separately from llm_token
+	// reasoning_token events stream a reasoning-capable model's thought
+	// process separately from llm_token
 	// content. We accumulate into a parallel buffer and render it
 	// inline with the streaming row so users can see what the model
 	// is thinking before it commits to a tool call. Cleared with
@@ -140,7 +180,7 @@ type tuiModel struct {
 
 	// Prompt-eval progress. While llama-server is encoding the prompt
 	// (before the first decoded token arrives), the proxy polls /slots
-	// every 250ms and emits llm_prompt_progress with processed/total/pct.
+	// every 100ms and emits llm_prompt_progress with processed/total/pct.
 	// We render this as the body of the streaming row instead of a static
 	// "encoding prompt…" line. Cleared on llm_first_token / llm_call_end.
 	promptProcessed int
@@ -155,8 +195,9 @@ type tuiModel struct {
 	// Same idea, but for V3's *internal* LLM calls (candidate gen,
 	// scoring). Tracked separately so a v3_token doesn't overwrite the
 	// agent loop's row and vice versa.
-	streamingV3     bool
-	streamingV3Text string
+	streamingV3              bool
+	streamingV3Text          string
+	streamingV3ReasoningText string
 
 	// Plan state — populated by plan_loaded events from the proxy.
 	// One planView per turn (replaced on revision). nil when the
@@ -184,7 +225,6 @@ type tuiModel struct {
 	chatScroll     int
 	eventsScroll   int
 	pipelineScroll int
-	lastChatTotal  int
 
 	// Hide-pane toggles. Slash commands /hide files / pipeline / events
 	// drop the corresponding pane; /show <name> brings it back.
@@ -200,7 +240,6 @@ type tuiModel struct {
 	// Spinner verb cycle — every ~3s the "thinking" word changes so
 	// long generations don't feel static. Index advances based on
 	// spinnerFrame ticks rather than a separate timer.
-	thinkingVerbIdx int
 
 	// Sidebar file tree — flat list of entries scanned from workingDir,
 	// re-scanned every fileScanInterval and after every write/edit/
@@ -219,6 +258,17 @@ type tuiModel struct {
 
 	// Lifecycle
 	quitting bool
+}
+
+// permPrompt is the state behind the interactive permission modal. It
+// captures the tool call the proxy paused on plus the turn's session id so
+// the y/a/n decision can POST /v1/permission with the correct correlation.
+type permPrompt struct {
+	toolName   string
+	message    string
+	toolCallID string
+	sessionID  string
+	args       string // raw args JSON, kept for display
 }
 
 // toast is one transient notification. ExpiresAt is checked every tick
@@ -324,16 +374,21 @@ func newTUIModel(proxyURL string) tuiModel {
 	)
 
 	return tuiModel{
-		proxyURL:         proxyURL,
-		events:           make(chan Envelope, 256),
-		state:            newPipelineState(),
-		maxLines:         1000,
-		input:            ta,
-		chatEvents:       make(chan chatEvent, 64),
-		chatRenderer:     renderer,
-		workingDir:       wd,
-		mode:             "default",
-		maxContextTokens: 32768, // Qwen3.5-9B context size; matches llama-server config
+		proxyURL:            proxyURL,
+		events:              make(chan Envelope, 256),
+		state:               newPipelineState(),
+		maxLines:            1000,
+		input:               ta,
+		chatEvents:          make(chan chatEvent, 64),
+		chatRenderer:        renderer,
+		workingDir:          wd,
+		mode:                "default",
+		sessionAllowedTools: map[string]bool{},
+		// Stable persistence key, minted once per model. Distinct from the
+		// per-turn turnSessionID used for /cancel + /v1/permission.
+		sessionUID:       newSessionID(),
+		sessionCreatedAt: time.Now().UTC().Format(time.RFC3339),
+		maxContextTokens: configuredContextTokens(),
 		// File scan is dispatched async from Init() — see scanFilesCmd.
 		// Doing it synchronously here blocked tea.NewProgram from
 		// entering its event loop, during which the user's keystrokes
@@ -344,6 +399,28 @@ func newTUIModel(proxyURL string) tuiModel {
 		modifiedFiles: map[string]bool{},
 		lastFileScan:  time.Time{},
 	}
+}
+
+// configuredContextTokens returns the per-slot context available to one TUI
+// turn. Runtime sizing is model/hardware data written by `atlas tier fit`; the
+// UI must not infer context from a model family or parameter count.
+func configuredContextTokens() int {
+	total := 32768 // neutral fallback when launched outside the ATLAS wrapper
+	if raw := os.Getenv("ATLAS_CTX_SIZE"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			total = n
+		}
+	}
+	slots := 1
+	if raw := os.Getenv("ATLAS_PARALLEL_SLOTS"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			slots = n
+		}
+	}
+	if perSlot := total / slots; perSlot > 0 {
+		return perSlot
+	}
+	return total
 }
 
 // scanFilesMsg carries the result of an async file scan back to the
@@ -452,6 +529,9 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 		if row.Body == "" {
 			continue
 		}
+		if row.Echo {
+			continue // slash/bash input echoes are display-only
+		}
 		var role, content string
 		switch row.Role {
 		case roleUser:
@@ -499,16 +579,29 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 	m.turnSessionID = sessionID
 	m.turnActive = true
 	m.userCancelled = false // fresh turn — clear the cancel sticky flag
+	// Fresh pass: reset post-pass review state so verdicts/writes don't leak
+	// from the previously-rated pass into this one.
+	m.passWrites = map[string]bool{}
+	m.passVerdicts = map[string]string{}
+	m.passReasons = map[string]string{}
+	m.lastPassFiles = nil
 
 	proxyURL := m.proxyURL
 	workingDir := m.workingDir
 	mode := m.mode
 	out := m.chatEvents
 	history := m.buildChatHistory()
+	allowed := sortedAllowedTools(m.sessionAllowedTools)
+
+	// Persist the transcript at turn start — the process is often killed or
+	// execv'd, so the safest moment to snapshot is right after the user row
+	// (already appended by the caller) lands.
+	m.saveSession()
 
 	return func() tea.Msg {
 		go func() {
-			err := sendChat(ctx, proxyURL, message, workingDir, mode, sessionID, history, out)
+			err := sendChatOpts(ctx, proxyURL, message, workingDir, mode, sessionID,
+				history, demoOpts{allowedTools: allowed}, out)
 			// Signal turn end via the same channel using a sentinel
 			// chatEvent (type="__turn_done__") — keeps the event
 			// ordering: all messages drain before the done marker.
@@ -519,6 +612,76 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 		}()
 		return nil
 	}
+}
+
+// handlePermKey answers the permission modal. y=allow once, a=allow for the
+// whole session (whitelists the tool so later requests skip the prompt),
+// n/esc=deny. Every other key is swallowed. Each answer records a display-only
+// system row (Echo=true so it never reaches /v1/agent as a fake turn) and
+// returns a Cmd that POSTs the decision off the UI thread, mirroring the
+// /cancel post-back pattern.
+func (m tuiModel) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	pp := m.pendingPerm
+	if pp == nil {
+		return m, nil
+	}
+	switch msg.String() {
+	case "y":
+		m.pendingPerm = nil
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "permission",
+			Body: "allowed " + pp.toolName, Echo: true,
+		})
+		dlog("permission", "allow_once", map[string]interface{}{"tool": pp.toolName})
+		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "allow", "once")
+	case "a":
+		if m.sessionAllowedTools == nil {
+			m.sessionAllowedTools = map[string]bool{}
+		}
+		m.sessionAllowedTools[pp.toolName] = true
+		m.pendingPerm = nil
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "permission",
+			Body: "allowed " + pp.toolName + " for session", Echo: true,
+		})
+		dlog("permission", "allow_session", map[string]interface{}{"tool": pp.toolName})
+		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "allow", "session")
+	case "n", "esc":
+		// The proxy emits a permission_denied event once the deny lands, which
+		// renders the transcript row — no local row here (avoids a duplicate).
+		m.pendingPerm = nil
+		dlog("permission", "deny", map[string]interface{}{"tool": pp.toolName})
+		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "deny", "once")
+	}
+	// Swallow any other key while the modal is up.
+	return m, nil
+}
+
+// postPermissionCmd returns a Cmd that POSTs a permission decision off the UI
+// thread. Best-effort — a failed/404 POST is ignored (the proxy fail-safe and
+// /cancel still bound the turn).
+func (m *tuiModel) postPermissionCmd(sessionID, toolCallID, decision, scope string) tea.Cmd {
+	proxyURL := m.proxyURL
+	return func() tea.Msg {
+		_ = postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope)
+		return nil
+	}
+}
+
+// sortedAllowedTools returns the session allowlist as a sorted slice for the
+// request's session_allowed_tools field (sorted so repeated sends are stable).
+func sortedAllowedTools(allowed map[string]bool) []string {
+	if len(allowed) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(allowed))
+	for tool, ok := range allowed {
+		if ok {
+			out = append(out, tool)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // newSessionID returns a fresh hex token for tagging an /v1/agent turn
@@ -543,6 +706,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Permission modal gates all input: while a request is pending only
+		// the y/a/n (and esc) decision keys are live; every other key is
+		// swallowed so it never reaches the textarea or the normal switch.
+		// Ctrl+C / Ctrl+D still fall through to cancel/quit — cancelling the
+		// turn unblocks the proxy's permission wait via the request context.
+		if m.pendingPerm != nil {
+			if s := msg.String(); s != "ctrl+c" && s != "ctrl+d" {
+				return m.handlePermKey(msg)
+			}
+			m.pendingPerm = nil
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			if m.turnActive && m.turnCancel != nil {
@@ -554,6 +728,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sid := m.turnSessionID
 				proxyURL := m.proxyURL
 				m.turnActive = false
+				// Stop the encoding/decoding tick from repainting after
+				// cancel — otherwise the "encoding prompt … Ns" timer keeps
+				// ticking forever because promptEvalStart/streamingLLM were
+				// never cleared.
+				m.promptEvalStart = time.Time{}
+				m.streamingLLM = false
 				m.chat = append(m.chat, chatMessage{
 					Role: roleSystem, Meta: "cancelled",
 					Body: "turn cancelled",
@@ -571,6 +751,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+l":
 			m.chat = nil
+			m.chatScroll = 0
+			// Start a fresh persistence session so the cleared transcript
+			// doesn't overwrite the saved one.
+			m.startNewSession()
 			return m, nil
 
 		case "ctrl+t":
@@ -613,64 +797,68 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Enter sends; Shift+Enter (or Alt+Enter) inserts newline.
 			// textarea handles Shift+Enter as KeyShiftEnter ("shift+enter").
-			if !m.turnActive {
-				text := strings.TrimSpace(m.input.Value())
-				if text == "" {
+			if m.turnActive {
+				// Mid-turn Enter can't send — surface why instead of
+				// silently inserting a newline into the pending input.
+				m.showToast("turn in progress — Ctrl+C to cancel")
+				return m, nil
+			}
+			text := strings.TrimSpace(m.input.Value())
+			if text == "" {
+				return m, nil
+			}
+			m.input.Reset()
+			dlog("user", "input", map[string]interface{}{"text": text})
+			// Bash mode: leading "!" runs as a shell command in the
+			// working dir, output appears as a system row. Same path
+			// as /run but with the conversational shorthand devs
+			// expect from Claude Code.
+			if strings.HasPrefix(text, "!") {
+				cmdStr := strings.TrimSpace(text[1:])
+				if cmdStr == "" {
+					m.chat = append(m.chat, chatMessage{
+						Role: roleSystem, Meta: "error",
+						Body: "Bash mode: type ! followed by a command.",
+					})
 					return m, nil
 				}
-				m.input.Reset()
-				dlog("user", "input", map[string]interface{}{"text": text})
-				// Bash mode: leading "!" runs as a shell command in the
-				// working dir, output appears as a system row. Same path
-				// as /run but with the conversational shorthand devs
-				// expect from Claude Code.
-				if strings.HasPrefix(text, "!") {
-					cmdStr := strings.TrimSpace(text[1:])
-					if cmdStr == "" {
-						m.chat = append(m.chat, chatMessage{
-							Role: roleSystem, Meta: "error",
-							Body: "Bash mode: type ! followed by a command.",
-						})
-						return m, nil
-					}
-					m.chat = append(m.chat, chatMessage{
-						Role: roleUser, Body: "! " + cmdStr,
-					})
-					return m, runShellCmd(m.workingDir, "!"+cmdStr,
-						[]string{"bash", "-lc", cmdStr})
-				}
-				// "?" alone (or with trailing whitespace) is a shorthand
-				// for /help — same convention as Claude Code so users
-				// don't have to remember the slash form.
-				if text == "?" {
-					text = "/help"
-				}
-				// Slash commands intercepted before agent send.
-				if consumed, slashCmd, quit := m.handleSlash(text); consumed {
-					dlog("slash", "dispatched", map[string]interface{}{
-						"input": text, "quit": quit,
-					})
-					if quit {
-						m.quitting = true
-					}
-					if slashCmd != nil {
-						cmds = append(cmds, slashCmd)
-					}
-					return m, tea.Batch(cmds...)
-				}
-				// Plain message → send to agent. Append context-files
-				// hint so the agent knows the user's chosen scope.
 				m.chat = append(m.chat, chatMessage{
-					Role: roleUser, Body: text,
+					Role: roleUser, Body: "! " + cmdStr, Echo: true,
 				})
-				m.lastUserMsg = text
-				dlog("turn", "started", map[string]interface{}{
-					"session_id": "(set in sendChatCmd)",
-					"len":        len(text),
+				return m, runShellCmd(m.workingDir, "!"+cmdStr,
+					[]string{"bash", "-lc", cmdStr})
+			}
+			// "?" alone (or with trailing whitespace) is a shorthand
+			// for /help — same convention as Claude Code so users
+			// don't have to remember the slash form.
+			if text == "?" {
+				text = "/help"
+			}
+			// Slash commands intercepted before agent send.
+			if consumed, slashCmd, quit := m.handleSlash(text); consumed {
+				dlog("slash", "dispatched", map[string]interface{}{
+					"input": text, "quit": quit,
 				})
-				cmds = append(cmds, m.sendChatCmd(text+m.contextSuffix()))
+				if quit {
+					m.quitting = true
+				}
+				if slashCmd != nil {
+					cmds = append(cmds, slashCmd)
+				}
 				return m, tea.Batch(cmds...)
 			}
+			// Plain message → send to agent. Append context-files
+			// hint so the agent knows the user's chosen scope.
+			m.chat = append(m.chat, chatMessage{
+				Role: roleUser, Body: text,
+			})
+			m.lastUserMsg = text
+			dlog("turn", "started", map[string]interface{}{
+				"session_id": "(set in sendChatCmd)",
+				"len":        len(text),
+			})
+			cmds = append(cmds, m.sendChatCmd(text+m.contextSuffix()))
+			return m, tea.Batch(cmds...)
 		}
 
 	case tea.MouseMsg:
@@ -728,9 +916,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selStartY, m.selEndY,
 					m.selStartX, m.selEndX)
 				dlog("mouse", "release", map[string]interface{}{
-					"pane":     selPane,
-					"startX":   m.selStartX, "startY": m.selStartY,
-					"endX":     m.selEndX, "endY": m.selEndY,
+					"pane":   selPane,
+					"startX": m.selStartX, "startY": m.selStartY,
+					"endX": m.selEndX, "endY": m.selEndY,
 					"text_len": len(text),
 					"preview":  truncate(text, 60),
 				})
@@ -821,6 +1009,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatStreamMsg:
 		if msg.ev.Type == "__turn_done__" {
 			m.turnActive = false
+			// A permission prompt can't outlive its turn — the proxy-side
+			// pending entry is gone, so answering would just 404. Clear
+			// the modal so input isn't gated by a dead prompt.
+			m.pendingPerm = nil
+			// The just-finished pass is now rateable via /good and /bad.
+			m.lastPassSession = m.turnSessionID
+			// Freeze the pass's written files for /review and per-file verdicts.
+			m.lastPassFiles = m.lastPassFiles[:0]
+			for p := range m.passWrites {
+				m.lastPassFiles = append(m.lastPassFiles, p)
+			}
+			sort.Strings(m.lastPassFiles)
 			var p struct {
 				Err string `json:"err"`
 			}
@@ -832,6 +1032,36 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 			dlog("turn", "ended", map[string]interface{}{"err": p.Err})
+			// Snapshot the completed turn so a later --continue/--resume
+			// reloads the full transcript.
+			m.saveSession()
+			// Post-pass rate prompt — make the thumbs feature discoverable.
+			// Only when the pass actually produced writes (something to rate)
+			// and it wasn't cancelled/errored.
+			if len(m.lastPassFiles) > 0 && p.Err == "" && !m.userCancelled {
+				m.chat = append(m.chat, chatMessage{
+					Role: roleSystem, Meta: "rate",
+					Body: fmt.Sprintf(
+						"Rate this pass → 👍 /good · 👎 /bad · 🔍 /review (%d file(s) written) — trains the lens on your workloads.",
+						len(m.lastPassFiles)),
+				})
+			}
+			// Check (once per session) whether enough labeled samples have
+			// accumulated to offer a lens retrain. Async so it never blocks
+			// the UI; the result arrives as a lensRetrainStatusMsg.
+			if !m.retrainNotified {
+				proxyURL := m.proxyURL
+				return m, tea.Batch(
+					waitForChatEvent(m.chatEvents),
+					func() tea.Msg {
+						ts, err := fetchTrainingStatus(proxyURL)
+						if err != nil {
+							return nil
+						}
+						return lensRetrainStatusMsg{ts}
+					},
+				)
+			}
 		} else {
 			// Skip dlog for llm_token — at ~30 tok/s a long generation
 			// produces thousands of entries and crowds out actually
@@ -846,6 +1076,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForChatEvent(m.chatEvents)
 
 	case slashResultMsg:
+		// Per-file verdicts are cleared only once /good or /bad actually
+		// landed — a failed submit keeps them staged for a retry.
+		if (msg.command == "/good" || msg.command == "/bad") && msg.err == nil {
+			m.passVerdicts = map[string]string{}
+			m.passReasons = map[string]string{}
+		}
 		body := msg.output
 		if msg.err != nil {
 			if body == "" {
@@ -869,6 +1105,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			"command": msg.command, "ok": msg.err == nil,
 			"output_len": len(msg.output),
 		})
+		return m, nil
+
+	case lensRetrainStatusMsg:
+		// Surface the retrain prompt once per session when enough labeled
+		// samples have accumulated. Tells the user the exact command to run.
+		if msg.status.RetrainAvailable && !m.retrainNotified {
+			m.retrainNotified = true
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "lens",
+				Body: fmt.Sprintf(
+					"🧠 Lens retrain available — %d labeled samples collected (%d 👍 / %d 👎). "+
+						"Run `%s` to boost the lens on your own workloads.",
+					msg.status.Total, msg.status.Good, msg.status.Bad, msg.status.Command),
+			})
+		}
 		return m, nil
 
 	case tickMsg:
@@ -1045,6 +1296,17 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		// is always set; processed/total/pct are present only when
 		// llama-server's /slots endpoint exposes them. We render a bar
 		// when we have %, a spinner+timer otherwise.
+		//
+		// Guard: the poller runs on a fixed cadence and can emit one more
+		// progress event AFTER llm_first_token has flipped the row to
+		// "decoding…" and tokens are streaming. Without this check that
+		// stale event overwrites the live token row, the next token
+		// overwrites it back, and the row flickers between "encoding" and
+		// the stream every frame. Once promptEvalStart is zeroed (decoding
+		// has begun) we're past prompt eval — drop late progress events.
+		if m.promptEvalStart.IsZero() {
+			break
+		}
 		var p struct {
 			Processed int     `json:"processed"`
 			Total     int     `json:"total"`
@@ -1106,7 +1368,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		}
 
 	case "reasoning_token":
-		// May 10 2026: Qwen3.5 reasoning_content streamed alongside
+		// reasoning_content may stream alongside
 		// content. Accumulate into a parallel buffer and re-render the
 		// streaming row with a "‹thinking›" prefix so the user can see
 		// the model's thought process. Distinct from llm_token because
@@ -1155,7 +1417,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		m.streamingLLMText = ""
 		m.streamingReasoningText = ""
 		m.streamingLLMHeader = ""
-		// Track tokens for the stats line. Qwen3.5's usage.total_tokens
+		// Track tokens for the stats line. llama-server's usage.total_tokens
 		// is "prompt + completion of *this* call", which is the right
 		// value for "context window utilization". The session-wide sum
 		// comes from the proxy's running ctx.TotalTokens (==accumulated
@@ -1171,6 +1433,10 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			m.chat = append(m.chat, chatMessage{
 				Role: roleAssistant, Body: p.Content,
 			})
+			// Persist after an assistant text row so a resumed transcript
+			// reconstructs the full exchange even if the turn's done marker
+			// never arrives (process killed mid-turn).
+			m.saveSession()
 		}
 
 	case "tool_call":
@@ -1200,6 +1466,15 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 					m.modifiedFiles[path] = true
 					// Force-expire the debounce so the next tick scans.
 					m.lastFileScan = time.Time{}
+					// Track content writes for post-pass review (delete isn't a
+					// lens sample). The path here matches what the proxy keys
+					// /feedback verdicts by, so /deny <path> lines up.
+					if p.Name != "delete_file" {
+						if m.passWrites == nil {
+							m.passWrites = map[string]bool{}
+						}
+						m.passWrites[path] = true
+					}
 				}
 			}
 		}
@@ -1232,19 +1507,49 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 
 	case "permission_request":
 		var p struct {
-			ToolName string `json:"tool_name"`
+			ToolName   string          `json:"tool_name"`
+			Message    string          `json:"message"`
+			ToolCallID string          `json:"tool_call_id"`
+			Args       json.RawMessage `json:"args"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "permission",
-			Body: fmt.Sprintf("permission requested for %s (auto-allow in default mode for read tools)", p.ToolName),
-		})
+		// A tool already approved "for session" auto-answers allow without
+		// showing the modal, so the user isn't re-prompted for it. The POST
+		// is fire-and-forget (appendChatEvent has no Cmd return path); the
+		// proxy fail-safe still bounds the turn if it never lands.
+		if m.sessionAllowedTools[p.ToolName] {
+			proxyURL := m.proxyURL
+			sid := m.turnSessionID
+			cid := p.ToolCallID
+			go func() { _ = postPermissionDecision(proxyURL, sid, cid, "allow", "once") }()
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "permission",
+				Body: "auto-allowed " + p.ToolName + " (session)", Echo: true,
+			})
+			return
+		}
+		// Otherwise raise the modal and gate input until the user answers.
+		// Capture the current turn's session id so the decision correlates
+		// to THIS turn on POST /v1/permission.
+		m.pendingPerm = &permPrompt{
+			toolName:   p.ToolName,
+			message:    p.Message,
+			toolCallID: p.ToolCallID,
+			sessionID:  m.turnSessionID,
+			args:       string(p.Args),
+		}
 
 	case "permission_denied":
 		var p struct {
 			Tool string `json:"tool"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
+		// A deny can originate proxy-side (timeout, cancel) while the
+		// modal is still up — clear it so the input isn't gated by a
+		// prompt that no longer has a pending request behind it.
+		if m.pendingPerm != nil && m.pendingPerm.toolName == p.Tool {
+			m.pendingPerm = nil
+		}
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "denied",
 			Body: fmt.Sprintf("permission denied for %s", p.Tool),
@@ -1308,6 +1613,26 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			m.replaceV3LLMRow(body)
 		}
 
+	case "v3_reasoning_token":
+		// Reasoning deltas from V3's streaming LLM call (candidate
+		// generation / repair phases think before emitting code).
+		// Rendered into the same in-place v3-llm row as v3_token, with
+		// the ‹thinking› prefix the chat-path reasoning_token uses, so
+		// long PlanSearch phases show live progress instead of a
+		// frozen "decoding…" row.
+		var p struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil && p.Text != "" {
+			m.streamingV3ReasoningText += p.Text
+			body := "decoding…\n" +
+				"  ‹thinking› " + formatStreamingLLM(m.streamingV3ReasoningText)
+			if m.streamingV3Text != "" {
+				body += "\n" + formatStreamingLLM(m.streamingV3Text)
+			}
+			m.replaceV3LLMRow(body)
+		}
+
 	case "v3_llm_end":
 		// V3's LLM call finished. Replace the streaming row with the
 		// summary detail ("1234 tok · 12345ms") so scrollback shows a
@@ -1323,6 +1648,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		m.replaceV3LLMRow(body)
 		m.streamingV3 = false
 		m.streamingV3Text = ""
+		m.streamingV3ReasoningText = ""
 
 	case "v3_progress":
 		// V3 pipeline narration emitted by proxy/tools.go via
@@ -1447,6 +1773,54 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// Reasoning repetition detector: the proxy saw the model open its
+	// reasoning stream with the same prefix on consecutive turns and
+	// queued a corrective for the next LLM call. Third member of the
+	// "model is stuck" family alongside the lens and tool-repeat
+	// interventions.
+	case "agent_reasoning_intervention":
+		body := formatAgentReasoningIntervention(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "repeat!", Body: body,
+			})
+		}
+
+	// Stream cut: the proxy detected the model's content repeating
+	// itself mid-stream and stopped the call rather than letting it
+	// spin to the token limit.
+	case "content_loop_cut":
+		var p struct {
+			Chars int `json:"chars"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "cut",
+			Body: fmt.Sprintf("content loop detected — stream cut after %d chars", p.Chars),
+		})
+
+	// Stream cut: the model burned its reasoning budget without ever
+	// emitting content, so the proxy stopped the call and re-prompts.
+	case "reasoning_budget_cut":
+		var p struct {
+			ReasoningChars int `json:"reasoning_chars"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "cut",
+			Body: fmt.Sprintf("reasoning budget exceeded (%d chars, no content) — stream cut, re-prompting", p.ReasoningChars),
+		})
+
+	// Symbol-index context: the proxy matched project symbols against
+	// the user's request and injected their snippets as a system note.
+	case "symbol_index_injected":
+		body := formatSymbolIndexInjected(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "symbols", Body: body,
+			})
+		}
+
 	// Plan pipeline progress (planner candidate generation, scoring,
 	// selection). Lots of these fire during a 3-candidate sweep but
 	// we already drop per-token noise in the proxy callback — what
@@ -1497,21 +1871,21 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 // pane is the place to show timelines and counters in detail.
 func formatV3StageEvent(eventType string, data json.RawMessage) string {
 	var p struct {
-		Stage     string  `json:"stage"`
-		Detail    string  `json:"detail"`
-		Index     int     `json:"index"`
-		ElapsedMS int     `json:"elapsed_ms"`
-		Energy    float64 `json:"energy"`
-		Passed    int     `json:"passed"`
-		Total     int     `json:"total"`
-		K         int     `json:"k"`
-		Plans     int     `json:"plans"`
-		Slots     int     `json:"slots"`
-		Tier      string  `json:"tier"`
-		Strategy  string  `json:"strategy"`
-		Iterations int    `json:"iterations"`
-		Tokens    int     `json:"tokens"`
-		Failing   int     `json:"failing"`
+		Stage      string  `json:"stage"`
+		Detail     string  `json:"detail"`
+		Index      int     `json:"index"`
+		ElapsedMS  int     `json:"elapsed_ms"`
+		Energy     float64 `json:"energy"`
+		Passed     int     `json:"passed"`
+		Total      int     `json:"total"`
+		K          int     `json:"k"`
+		Plans      int     `json:"plans"`
+		Slots      int     `json:"slots"`
+		Tier       string  `json:"tier"`
+		Strategy   string  `json:"strategy"`
+		Iterations int     `json:"iterations"`
+		Tokens     int     `json:"tokens"`
+		Failing    int     `json:"failing"`
 	}
 	_ = json.Unmarshal(data, &p)
 	if p.Detail == "" && p.Stage == "" {
@@ -1641,6 +2015,59 @@ func formatAgentRepeatIntervention(data json.RawMessage) string {
 	return fmt.Sprintf("REPEAT at turn %d on %s — %s", p.Turn, p.Tool, reasonPreview)
 }
 
+// formatAgentReasoningIntervention renders the agent_reasoning_intervention
+// event, which fires when the proxy saw the model's reasoning stream open
+// with the same normalized prefix on consecutive turns and queued a
+// corrective for the next LLM call. Reason is the verbose corrective;
+// trimmed for display like its sibling interventions.
+func formatAgentReasoningIntervention(data json.RawMessage) string {
+	var p struct {
+		Turn        int    `json:"turn"`
+		Consecutive int    `json:"consecutive"`
+		Reason      string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	reasonPreview := p.Reason
+	if len(reasonPreview) > 200 {
+		if cut := strings.Index(reasonPreview, ". "); cut > 0 && cut < 200 {
+			reasonPreview = reasonPreview[:cut+1]
+		} else {
+			reasonPreview = reasonPreview[:197] + "..."
+		}
+	}
+	return fmt.Sprintf("REASONING REPEAT at turn %d (×%d) — %s",
+		p.Turn, p.Consecutive, reasonPreview)
+}
+
+// formatSymbolIndexInjected renders the symbol_index_injected event —
+// the proxy matched project symbols against the request and prepended
+// their snippets as a system note before the first LLM call.
+func formatSymbolIndexInjected(data json.RawMessage) string {
+	var p struct {
+		Matched []string `json:"matched"`
+		NFiles  int      `json:"n_files"`
+		Skipped int      `json:"skipped"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	names := strings.Join(p.Matched, ", ")
+	if len(names) > 100 {
+		names = names[:97] + "..."
+	}
+	body := fmt.Sprintf("injected %d symbol snippet(s) from %d project file(s)",
+		len(p.Matched), p.NFiles)
+	if names != "" {
+		body += " — " + names
+	}
+	if p.Skipped > 0 {
+		body += fmt.Sprintf(" (%d skipped)", p.Skipped)
+	}
+	return body
+}
+
 // formatLensVeto renders a v3_lens_veto event as a single chat row.
 // Fires when V3 rejected a sandbox-passing candidate because gx_min sat
 // in the unambiguously-bad band — i.e. sandbox said "this code runs"
@@ -1688,10 +2115,10 @@ func formatCallChainContext(data json.RawMessage) string {
 // V3 actually rejected the candidate, not informational telemetry.
 func formatStructuralVeto(data json.RawMessage) string {
 	var p struct {
-		Index            int      `json:"index"`
-		NUnresolved      int      `json:"n_unresolved"`
-		UnresolvedCalls  []string `json:"unresolved_calls"`
-		NCallsTotal      int      `json:"n_calls_total"`
+		Index           int      `json:"index"`
+		NUnresolved     int      `json:"n_unresolved"`
+		UnresolvedCalls []string `json:"unresolved_calls"`
+		NCallsTotal     int      `json:"n_calls_total"`
 	}
 	if err := json.Unmarshal(data, &p); err != nil {
 		return ""
@@ -1773,9 +2200,9 @@ func extractPaneSelection(paneName string, startY, endY, startX, endX int) strin
 	// when there's less content than the pane height. The rendered pane
 	// has `padTop` blank rows BEFORE the real content, but `pane.lines`
 	// holds only the real content. So a click at screen Y maps to flat
-	// index `viewStart + (Y - paneTopY) - padTop`. Without the padTop
-	// subtraction, copies were offset by the number of pad rows — which
-	// is why the user saw "wrong text" copied for short panes.
+	// index `viewStart + (Y - paneTopY) - padTop`. The files pane pads
+	// at the BOTTOM instead (content top-anchored), so its padTop is 0
+	// and rows in the trailing padding clamp past the last line.
 	paneH := pane.bottomY - pane.topY + 1
 	visible := len(pane.lines) - pane.viewStart
 	if visible > paneH {
@@ -1785,6 +2212,9 @@ func extractPaneSelection(paneName string, startY, endY, startX, endX int) strin
 		visible = 0
 	}
 	padTop := paneH - visible
+	if pane.padBottom {
+		padTop = 0
+	}
 	rowStart := (startY - pane.topY) - padTop
 	rowEnd := (endY - pane.topY) - padTop
 	if rowStart < 0 {
@@ -1982,7 +2412,7 @@ func looksCancelled(err string) bool {
 // others don't) we render a 24-cell bar plus the running counters.
 // When only elapsed time is known, we render a spinner + timer + the
 // chars/4 estimate so the user sees motion and rough magnitude. The
-// proxy emits one of these every 250ms while llama-server is grinding
+// proxy emits one of these every 100ms while llama-server is grinding
 // through prompt eval (30–90s on long histories).
 func formatPromptProgress(processed, total int, pct float64, elapsedMS int64) string {
 	secs := float64(elapsedMS) / 1000.0
@@ -2139,6 +2569,7 @@ func (m tuiModel) View() string {
 		m.hideFiles, m.hidePipeline, m.hideEvents,
 		sel,
 		renderCalibrationBadge(m.calibration),
+		m.pendingPerm,
 		width, height)
 	// View is supposed to be pure, but we need to know the rendered
 	// line count to clamp PgUp / mouse-wheel-up. Stashing it on the
@@ -2233,11 +2664,15 @@ var lastChatTotalRendered int
 //	            at screen Y maps to lines[viewStart + (Y - topY)].
 //	lines     — the full flattened pane content, pre-window. Already
 //	            ANSI-styled; consumers strip ANSI before clipboard.
+//	padBottom — content is top-anchored: blank pad rows render BELOW
+//	            it (files pane). All other panes pad above so the
+//	            newest entry stays anchored at the bottom.
 type paneSnapshot struct {
-	name                       string
+	name                         string
 	topY, bottomY, leftX, rightX int
-	viewStart                  int
-	lines                      []string
+	viewStart                    int
+	lines                        []string
+	padBottom                    bool
 }
 
 // paneSnaps holds the most recent layout's pane bounds. Single TUI
@@ -2282,7 +2717,7 @@ func renderHeader(proxyURL, workingDir, mode string, busy bool,
 		Background(lipgloss.Color("63")).
 		Foreground(lipgloss.Color("231")).
 		Padding(0, 1).
-		Render(fmt.Sprintf("ATLAS TUI"))
+		Render("ATLAS TUI")
 	right := lipgloss.NewStyle().
 		Background(lipgloss.Color("236")).
 		Foreground(lipgloss.Color("251")).
@@ -2307,7 +2742,7 @@ func formatEventLine(ev Envelope, width int) string {
 	line := fmt.Sprintf("%s  %s %s %s", ts, typeCell, stageCell, detail)
 	line = strings.ReplaceAll(line, "\n", " ")
 	if lipgloss.Width(line) > width {
-		line = line[:width]
+		line = ansi.Truncate(line, width, "")
 	}
 	return line
 }

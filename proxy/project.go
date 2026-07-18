@@ -59,11 +59,8 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	info := &ProjectInfo{
-		Language:     "nodejs",
-		ConfigFiles:  []string{"package.json"},
-		BuildCommand: "npm run build",
-		DevCommand:   "npm run dev",
-		TestCommand:  "npm test",
+		Language:    "nodejs",
+		ConfigFiles: []string{"package.json"},
 	}
 
 	// Parse package.json for framework detection
@@ -75,9 +72,22 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	var pkg struct {
 		Dependencies    map[string]string `json:"dependencies"`
 		DevDependencies map[string]string `json:"devDependencies"`
+		PackageManager  string            `json:"packageManager"`
+		Scripts         map[string]string `json:"scripts"`
 	}
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		return info
+	}
+	pm := detectNodePackageManager(files, pkg.PackageManager)
+
+	if hasScript(pkg.Scripts, "build") {
+		info.BuildCommand = nodeScriptCommand(pm, "build")
+	}
+	if hasScript(pkg.Scripts, "dev") {
+		info.DevCommand = nodeScriptCommand(pm, "dev")
+	}
+	if hasScript(pkg.Scripts, "test") {
+		info.TestCommand = nodeScriptCommand(pm, "test")
 	}
 
 	allDeps := make(map[string]string)
@@ -91,7 +101,9 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	// Detect framework
 	if _, ok := allDeps["next"]; ok {
 		info.Framework = "nextjs"
-		info.BuildCommand = "npx next build"
+		if info.BuildCommand == "" {
+			info.BuildCommand = "npx next build"
+		}
 	} else if _, ok := allDeps["react"]; ok {
 		info.Framework = "react"
 	} else if _, ok := allDeps["vue"]; ok {
@@ -113,6 +125,53 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	return info
+}
+
+func detectNodePackageManager(files map[string]bool, packageManager string) string {
+	switch {
+	case files["pnpm-lock.yaml"]:
+		return "pnpm"
+	case files["yarn.lock"]:
+		return "yarn"
+	case files["bun.lock"] || files["bun.lockb"]:
+		return "bun"
+	default:
+		if packageManager != "" {
+			pm := strings.ToLower(strings.TrimSpace(packageManager))
+			if idx := strings.IndexAny(pm, "@+"); idx > 0 {
+				pm = pm[:idx]
+			}
+			switch pm {
+			case "pnpm", "yarn", "bun", "npm":
+				return pm
+			}
+		}
+		return "npm"
+	}
+}
+
+func hasScript(scripts map[string]string, name string) bool {
+	if scripts == nil {
+		return false
+	}
+	_, ok := scripts[name]
+	return ok
+}
+
+func nodeScriptCommand(pm, script string) string {
+	switch pm {
+	case "yarn":
+		return "yarn " + script
+	case "bun":
+		return "bun run " + script
+	case "pnpm":
+		return "pnpm run " + script
+	default:
+		if script == "test" {
+			return "npm test"
+		}
+		return "npm run " + script
+	}
 }
 
 func detectPython(projectDir string, files map[string]bool) *ProjectInfo {

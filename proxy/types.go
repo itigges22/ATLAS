@@ -59,11 +59,6 @@ func envOverrideMaxTurns() int {
 	return n
 }
 
-// TierUsesV3 returns whether write_file/edit_file should route through V3.
-func TierUsesV3(t Tier) bool {
-	return t >= Tier2Medium
-}
-
 // ---------------------------------------------------------------------------
 // Agent messages — the conversation between model and tool executor
 // ---------------------------------------------------------------------------
@@ -107,10 +102,11 @@ type ToolResult struct {
 	Error   string          `json:"error,omitempty"`
 
 	// V3 metadata (populated when V3 pipeline was used)
-	V3Used           bool    `json:"v3_used,omitempty"`
-	CandidatesTested int     `json:"candidates_tested,omitempty"`
-	WinningScore     float64 `json:"winning_score,omitempty"`
-	PhaseSolved      string  `json:"phase_solved,omitempty"`
+	V3Used               bool                     `json:"v3_used,omitempty"`
+	CandidatesTested     int                      `json:"candidates_tested,omitempty"`
+	WinningScore         float64                  `json:"winning_score,omitempty"`
+	PhaseSolved          string                   `json:"phase_solved,omitempty"`
+	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 }
 
 // MarshalText returns a compact string representation for the model.
@@ -141,6 +137,35 @@ type ReadFileOutput struct {
 	EndLine    int    `json:"end_line"`
 }
 
+// -- outline_file --
+
+type OutlineInput struct {
+	Path string `json:"path"`
+}
+
+type OutlineSymbol struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	// Intra-file call-graph neighborhood (issue #39, populated only when
+	// ATLAS_CALL_GRAPH is on in v3-service). Calls = functions this symbol
+	// invokes; CalledBy = functions that invoke it. Lets the model follow a
+	// symptom to its callee-rooted cause instead of editing where the
+	// symptom surfaces.
+	Calls    []string `json:"calls,omitempty"`
+	CalledBy []string `json:"called_by,omitempty"`
+}
+
+type OutlineOutput struct {
+	Symbols   []OutlineSymbol `json:"symbols"`
+	Supported bool            `json:"supported"`
+	// Outline is the rendered human-readable listing (header, L<start>-<end>
+	// lines, call edges). The model reads this; Symbols carries the same
+	// data structurally.
+	Outline string `json:"outline,omitempty"`
+}
+
 // -- write_file --
 
 type WriteFileInput struct {
@@ -149,11 +174,12 @@ type WriteFileInput struct {
 }
 
 type WriteFileOutput struct {
-	BytesWritten     int     `json:"bytes_written"`
-	V3Used           bool    `json:"v3_used,omitempty"`
-	CandidatesTested int     `json:"candidates_tested,omitempty"`
-	WinningScore     float64 `json:"winning_score,omitempty"`
-	PhaseSolved      string  `json:"phase_solved,omitempty"`
+	BytesWritten         int                      `json:"bytes_written"`
+	V3Used               bool                     `json:"v3_used,omitempty"`
+	CandidatesTested     int                      `json:"candidates_tested,omitempty"`
+	WinningScore         float64                  `json:"winning_score,omitempty"`
+	PhaseSolved          string                   `json:"phase_solved,omitempty"`
+	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 }
 
 // -- edit_file --
@@ -166,10 +192,10 @@ type EditFileInput struct {
 }
 
 type EditFileOutput struct {
-	OK          bool   `json:"ok"`
-	DiffPreview string `json:"diff_preview,omitempty"`
-	LinesAdded  int    `json:"lines_added,omitempty"`
-	LinesRemoved int   `json:"lines_removed,omitempty"`
+	OK           bool   `json:"ok"`
+	DiffPreview  string `json:"diff_preview,omitempty"`
+	LinesAdded   int    `json:"lines_added,omitempty"`
+	LinesRemoved int    `json:"lines_removed,omitempty"`
 }
 
 // -- ast_edit (GH #39 v1) --
@@ -178,7 +204,7 @@ type EditFileOutput struct {
 // (function, class, HTML element) with new content. The selector grammar is
 // per-language and intentionally narrow in v1 to avoid the model
 // hallucinating raw tree-sitter s-expressions (42% intended-match measured
-// on Qwen3.5-9B-Q6_K, May 8 — see GH #39 open design questions).
+// on the then-reference local model, May 8 — see GH #39 open design questions).
 //
 //   Selectors v1:
 //     python: function:NAME, class:NAME (decorator-aware: replaces
@@ -192,11 +218,11 @@ type AstEditInput struct {
 }
 
 type AstEditOutput struct {
-	OK         bool   `json:"ok"`
-	Selector   string `json:"selector"`
-	Language   string `json:"language,omitempty"`
-	BytesOld   int    `json:"bytes_old,omitempty"`
-	BytesNew   int    `json:"bytes_new,omitempty"`
+	OK       bool   `json:"ok"`
+	Selector string `json:"selector"`
+	Language string `json:"language,omitempty"`
+	BytesOld int    `json:"bytes_old,omitempty"`
+	BytesNew int    `json:"bytes_new,omitempty"`
 }
 
 // -- delete_file --
@@ -207,6 +233,26 @@ type DeleteFileInput struct {
 
 type DeleteFileOutput struct {
 	Deleted bool `json:"deleted"`
+}
+
+// -- move_file --
+//
+// Relocate or rename a file within the workspace. A pure move/rename is not a
+// content change, so it does NOT go through the V3 / surgical-edit gate the way
+// write_file/edit_file do — it exists so "reorganize the files" (e.g. move
+// index.html into templates/) is a single tool call instead of a
+// read→write→delete dance the model can't reliably compose. Shell `mv`/`cp`
+// stay refused; this is the supported relocation path.
+
+type MoveFileInput struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+}
+
+type MoveFileOutput struct {
+	Moved       bool   `json:"moved"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
 }
 
 // -- run_command --
@@ -279,9 +325,9 @@ type StopBackgroundOutput struct {
 // -- search_files --
 
 type SearchFilesInput struct {
-	Pattern string `json:"pattern"`           // regex pattern
-	Path    string `json:"path,omitempty"`    // directory to search in
-	Glob    string `json:"glob,omitempty"`    // file glob filter (e.g., "*.go")
+	Pattern string `json:"pattern"`        // regex pattern
+	Path    string `json:"path,omitempty"` // directory to search in
+	Glob    string `json:"glob,omitempty"` // file glob filter (e.g., "*.go")
 }
 
 type SearchMatch struct {
@@ -321,37 +367,14 @@ type ListDirectoryInput struct {
 }
 
 type DirEntry struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"` // "file", "dir", "symlink"
-	Size  int64  `json:"size,omitempty"`
+	Name string `json:"name"`
+	Type string `json:"type"` // "file", "dir", "symlink"
+	Size int64  `json:"size,omitempty"`
 }
 
 type ListDirectoryOutput struct {
 	Entries []DirEntry `json:"entries"`
 	Path    string     `json:"path"`
-}
-
-// -- plan_tasks --
-
-type PlanTasksInput struct {
-	Tasks []PlannedTask `json:"tasks"`
-}
-
-type PlannedTask struct {
-	ID          string   `json:"id"`
-	Description string   `json:"description"`
-	Files       []string `json:"files,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-}
-
-type TaskStatus struct {
-	ID     string `json:"id"`
-	Status string `json:"status"` // "completed", "failed", "skipped"
-	Error  string `json:"error,omitempty"`
-}
-
-type PlanTasksOutput struct {
-	Results []TaskStatus `json:"results"`
 }
 
 // ---------------------------------------------------------------------------
@@ -363,9 +386,9 @@ type AgentContext struct {
 	// Configuration
 	Tier           Tier
 	MaxTurns       int
-	WorkingDir     string       // Project directory for agent operations (container path, e.g. /workspace)
-	RealProjectDir string       // Same as WorkingDir; kept for delete_file compatibility
-	HostWorkingDir string       // The host-side path that's bind-mounted as WorkingDir
+	WorkingDir     string // Project directory for agent operations (container path, e.g. /workspace)
+	RealProjectDir string // Same as WorkingDir; kept for delete_file compatibility
+	HostWorkingDir string // The host-side path that's bind-mounted as WorkingDir
 	// (e.g. /home/isaac/snake when /workspace is mounted from there).
 	// Used to translate absolute host paths the model receives back from
 	// the user's prompt — e.g. "fix /home/isaac/snake/app.py" — into
@@ -374,17 +397,39 @@ type AgentContext struct {
 	PermissionMode PermissionMode
 	YoloMode       bool
 
+	// AllowedTools names tools the client has pre-approved for this session
+	// (seeded from the request's session_allowed_tools) plus any the user
+	// approves with session scope during this turn. A named tool skips the
+	// interactive permission prompt. Guarded by mu.
+	AllowedTools map[string]bool
+
 	// Service URLs
-	InferenceURL     string
-	SandboxURL string
-	LensURL     string
-	V3URL      string
+	InferenceURL string
+	SandboxURL   string
+	LensURL      string
+	V3URL        string
+
+	// BypassV3 short-circuits the V3 layer for this request: pre-flight
+	// plan generation and the write/edit candidate pipelines. The base
+	// file/tool agent and its guardrails still run so /demo can compare
+	// executable outputs from the same model without falsely presenting
+	// the left side as a bare chat completion.
+	BypassV3 bool
+
+	// DisableFreshSlot skips the PC-045 slot-erase at the start of the
+	// agent loop so the demo's pre-warm pass actually survives into the
+	// real run. Without this, the prefix cache the warmup builds is
+	// wiped on the next /v1/agent call and the demo pays the 25-second
+	// cold-start cost twice. Only set this from controlled flows
+	// (`/demo`, tests) — production sessions want PC-045's per-session
+	// isolation.
+	DisableFreshSlot bool
 
 	// Project info (populated by project detection)
 	Project *ProjectInfo
 
 	// State
-	Messages     []AgentMessage
+	Messages []AgentMessage
 	// PriorHistory is the prior-turn user/assistant transcript, sent by
 	// the TUI on each /v1/agent request so the agent can answer follow-ups
 	// like "what did you just delete?" — without it, every user message
@@ -392,25 +437,46 @@ type AgentContext struct {
 	// from the request body; consumed once at the top of runAgentLoop
 	// and then ignored. Tool/system rows are filtered out at the TUI
 	// boundary; only role=user|assistant text turns flow through here.
-	PriorHistory []AgentMessage
+	PriorHistory  []AgentMessage
 	FileReadTimes map[string]time.Time // for staleness detection
 	FilesRead     map[string]string    // cache of read file contents
-	TotalTokens  int
+	TotalTokens   int
 
 	// SessionWrites tracks files this agent loop wrote during this run.
 	// The write_file guard rejects overwrites of "existing" files >5
 	// lines (BiasBusters #3 — protects the user's code from clobbering).
 	// But a file the agent itself wrote in this session is NOT the
 	// user's code; it's the agent's own working output, and the agent
-	// must be allowed to iterate on it. Without this, the model can't
-	// realize mid-loop that an early file needs rewriting once later
-	// files exist (May 12 2026 multi-file Flask run — the wiring bug
+	// must be allowed to iterate on it. Without this, the model can
+	// realize mid-loop that app.py was a stub and needs rewriting
+	// (May 12 2026 /demo multi-file flask run — the entire wiring bug
 	// stemmed from the guard refusing the model's self-correction).
 	SessionWrites map[string]bool
 
+	// ManifestAnnounced tracks which SessionWrites paths have been named
+	// in a session-file-manifest note (session_manifest.go) so each file
+	// is announced to the model once.
+	ManifestAnnounced map[string]bool
+
+	// AssetLintSeen dedupes asset-graph lint findings (asset_lint.go) so
+	// a persistent orphan is mentioned once, not after every write.
+	AssetLintSeen map[string]bool
+
+	// PassWrites records the model-authored content of each write this pass
+	// (write_file / edit_file / ast_edit), for lens training-data collection.
+	// On pass completion the writes are stashed by session id; a later
+	// /feedback call (per-file accept/deny + pass thumbs) turns them into
+	// labeled, weighted lens samples. Captured at the same point the lens
+	// scores the content, so a sample mirrors exactly what the lens saw.
+	PassWrites []PassWrite
+
+	// PassID identifies this prompt-pass (the session id from the request) so
+	// deferred /feedback can find this pass's writes after the loop returns.
+	PassID string
+
 	// PC-207 agent-loop integration: rolling list of gx_score_min values
 	// from lens scoring of write_file/edit_file tool calls. When the
-	// recent N values all fall below lensLowScoreThreshold the loop
+	// recent N values all fall below the selected model's calibrated threshold the loop
 	// injects a corrective system message before the next LLM call.
 	// See proxy/lens_score.go for the pattern detection.
 	LensScoreHistory []float64
@@ -440,7 +506,7 @@ type AgentContext struct {
 	// See proxy/agent.go error-loop break for the use site.
 	RecentFailurePaths []string
 
-	mu           sync.Mutex
+	mu sync.Mutex
 
 	// Plan is the optional pre-flight plan produced by /v3/plan. Set
 	// once at the top of the agent loop for non-trivial requests; nil
@@ -471,6 +537,11 @@ type AgentContext struct {
 	// depend on host services (DBs, env vars, system tools) the
 	// sandbox can't see. Shell-op guardrails still apply either way.
 	VerifyOnHost bool
+
+	// TrustMode gates command execution (untrusted refuses; trusted =
+	// sandbox; fully-trusted permits host execution). Resolved once per
+	// turn from ATLAS_TRUST_MODE.
+	TrustMode trustMode
 
 	// Streaming callback
 	StreamFn func(eventType string, data interface{})
@@ -511,12 +582,74 @@ func (c *AgentContext) RecordFileRead(path string, content string) {
 	c.FilesRead[path] = content
 }
 
+// RecordPassWrite appends a model-authored write to this pass's collection
+// list, for deferred lens-training labeling. Last-write-wins per path so a
+// file the model rewrote several times in one pass yields one sample (its
+// final content), not several near-duplicates.
+func (c *AgentContext) RecordPassWrite(tool, path, content string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.PassWrites {
+		if c.PassWrites[i].Path == path {
+			c.PassWrites[i] = PassWrite{Tool: tool, Path: path, Content: content}
+			return
+		}
+	}
+	c.PassWrites = append(c.PassWrites, PassWrite{Tool: tool, Path: path, Content: content})
+}
+
 // WasFileRead returns true if the file was read during this agent session.
 func (c *AgentContext) WasFileRead(path string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, ok := c.FileReadTimes[path]
 	return ok
+}
+
+// GetFileRead returns the cached content for path under the context lock.
+func (c *AgentContext) GetFileRead(path string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	content, ok := c.FilesRead[path]
+	return content, ok
+}
+
+// ForgetFileRead drops the read-cache entry for path under the context
+// lock. Used when a file is moved away from path.
+func (c *AgentContext) ForgetFileRead(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.FilesRead, path)
+}
+
+// SnapshotFilesRead returns a copy of the session read-cache under the
+// context lock, for callers that iterate over it.
+func (c *AgentContext) SnapshotFilesRead() map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]string, len(c.FilesRead))
+	for k, v := range c.FilesRead {
+		out[k] = v
+	}
+	return out
+}
+
+// allowToolForTurn records a tool the user approved with session scope so
+// later calls to it in this turn skip the permission prompt.
+func (c *AgentContext) allowToolForTurn(toolName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.AllowedTools == nil {
+		c.AllowedTools = map[string]bool{}
+	}
+	c.AllowedTools[toolName] = true
+}
+
+// isToolAllowed reports whether a tool has been pre-approved for the session.
+func (c *AgentContext) isToolAllowed(toolName string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.AllowedTools[toolName]
 }
 
 // ---------------------------------------------------------------------------
@@ -541,13 +674,6 @@ func (m PermissionMode) String() string {
 		return "yolo"
 	}
 	return "default"
-}
-
-// PermissionRule is a pattern-based allow/deny rule.
-type PermissionRule struct {
-	Tool    string `json:"tool"`    // e.g., "run_command"
-	Pattern string `json:"pattern"` // e.g., "npm *"
-	Action  string `json:"action"`  // "allow" or "deny"
 }
 
 // ---------------------------------------------------------------------------
@@ -581,17 +707,31 @@ type V3GenerateRequest struct {
 
 // V3GenerateResponse is the response from the V3 service.
 type V3GenerateResponse struct {
-	Code             string  `json:"code"`
-	Passed           bool    `json:"passed"`
-	PhaseSolved      string  `json:"phase_solved"`
-	CandidatesTested int     `json:"candidates_tested"`
-	WinningScore     float64 `json:"winning_score"`
-	TotalTokens      int     `json:"total_tokens"`
-	TotalTimeMs      float64 `json:"total_time_ms"`
+	Code                 string                   `json:"code"`
+	Passed               bool                     `json:"passed"`
+	PhaseSolved          string                   `json:"phase_solved"`
+	CandidatesTested     int                      `json:"candidates_tested"`
+	WinningScore         float64                  `json:"winning_score"`
+	TotalTokens          int                      `json:"total_tokens"`
+	TotalTimeMs          float64                  `json:"total_time_ms"`
+	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 	// RPGSignatureMissing lists planned RPG node signatures the winning code
 	// failed to realize (V3.2, issue #120). Non-empty signals structural drift
 	// from the plan — the proxy's re-plan loop surfaces the affected subgraph.
 	RPGSignatureMissing []string `json:"rpg_signature_missing,omitempty"`
+}
+
+// V3VerificationEvidence describes the concrete verifier that accepted or
+// rejected a V3 candidate. It is intentionally small and bounded by the V3
+// service before crossing the wire.
+type V3VerificationEvidence struct {
+	Verifier   string `json:"verifier"`
+	Command    string `json:"command,omitempty"`
+	Status     string `json:"status"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	DurationMs int    `json:"duration_ms,omitempty"`
+	Stdout     string `json:"stdout,omitempty"`
+	Stderr     string `json:"stderr,omitempty"`
 }
 
 // LensScore is already defined in main.go — reused here.
@@ -689,7 +829,8 @@ type SSEEvent struct {
 }
 
 type PermissionRequest struct {
-	ToolName string          `json:"tool_name"`
-	Args     json.RawMessage `json:"args"`
-	Message  string          `json:"message"` // human-readable description
+	ToolName   string          `json:"tool_name"`
+	Args       json.RawMessage `json:"args"`
+	Message    string          `json:"message"`      // human-readable description
+	ToolCallID string          `json:"tool_call_id"` // echoed back on POST /v1/permission
 }

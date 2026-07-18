@@ -111,7 +111,7 @@ class MBPPPlusDataset(BaseDataset):
         if filepath.exists():
             return filepath
 
-        print(f"Downloading MBPP+ dataset from HuggingFace...")
+        print("Downloading MBPP+ dataset from HuggingFace...")
         rows = []
 
         # Fetch in batches of 100 (378 tasks = 4 requests)

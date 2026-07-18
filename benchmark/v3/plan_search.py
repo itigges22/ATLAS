@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from benchmark.llm_client import strip_reasoning_leak
+
 from .budget_forcing import BudgetForcing, get_system_prompt
 
 
@@ -298,10 +300,9 @@ def extract_code_from_response(response: str) -> str:
 
     Handles: ```python blocks, ``` blocks, <think> blocks, raw code.
     """
-    # Strip thinking blocks
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-    if '<think>' in response and '</think>' not in response:
-        response = response[:response.index('<think>')].strip()
+    # Strip any reasoning leak via the shared, model-agnostic helper (handles
+    # both closed <think>...</think> blocks and orphaned closing tags).
+    response = strip_reasoning_leak(response)
 
     # Try ```python blocks
     py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)
@@ -378,14 +379,13 @@ class PlanSearch:
         step2_tokens = 0
         step3_tokens = 0
 
-        # Step 1: Constraint Extraction
-        constraint_sets = self._step1_extract_constraints(
+        # Step 1: Constraint Extraction. The step-1 token count is returned
+        # through locals (not stored on self) so concurrent generate() calls
+        # on a shared instance never cross-attribute each other's telemetry.
+        constraint_sets, step1_tokens = self._step1_extract_constraints(
             problem, n, llm_call, budget_tier, base_seed
         )
         result.constraint_sets = constraint_sets
-        step1_tokens = sum(
-            t for _, t, _ in [self._last_step1_call]
-        ) if hasattr(self, '_last_step1_call') else 0
 
         # Ensure we have at least one constraint set
         if not constraint_sets:
@@ -472,8 +472,13 @@ class PlanSearch:
         self, problem: str, n: int,
         llm_call: LLMCallable, budget_tier: str,
         seed: int
-    ) -> List[ConstraintSet]:
-        """Step 1: Extract N constraint sets from the problem."""
+    ) -> Tuple[List[ConstraintSet], int]:
+        """Step 1: Extract N constraint sets from the problem.
+
+        Returns the parsed constraint sets and the token count for this
+        step (threaded back to the caller via locals rather than instance
+        state, so parallel requests keep independent telemetry).
+        """
         user_content = CONSTRAINT_EXTRACTION_PROMPT.format(
             n=n, problem=problem
         )
@@ -486,9 +491,8 @@ class PlanSearch:
         response, tokens, time_ms = llm_call(
             prompt, self.config.step1_temperature, max_tokens, seed
         )
-        self._last_step1_call = (response, tokens, time_ms)
 
-        return parse_constraint_sets(response, n)
+        return parse_constraint_sets(response, n), tokens
 
     def _step2_construct_plan(
         self, problem: str, constraint_set: ConstraintSet,

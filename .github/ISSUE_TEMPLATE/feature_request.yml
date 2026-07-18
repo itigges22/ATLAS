@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose an improvement or new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you were trying to do and where ATLAS fell short. Concrete workflows help more than abstract capabilities.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What you'd want to happen instead. If there are multiple ways to get there, name the trade-off you'd pick.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds tried
+      description: Anything you already tried (config, prompts, other tools) and why it wasn't enough.

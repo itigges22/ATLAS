@@ -31,6 +31,8 @@ type calibrationStatus struct {
 		CostFieldDim    int    `json:"cost_field_dim"`
 		EmbedDim        int    `json:"embed_dim"`
 		GxLoaded        bool   `json:"gx_loaded"`
+		CxCalibrated    bool   `json:"cx_calibrated"`
+		GxCalibrated    bool   `json:"gx_calibrated"`
 		Hint            string `json:"hint"`
 	} `json:"lens"`
 	ASA struct {
@@ -176,11 +178,11 @@ func renderCalibrationBadge(s *calibrationStatus) string {
 func renderOneBadge(name, verdict string) string {
 	switch verdict {
 	case "supported":
-		return badgeOK.Render(name+" ✓")
-	case "no-artifacts", "missing", "dim-mismatch":
-		return badgeWarn.Render(name+" ⚠")
+		return badgeOK.Render(name + " ✓")
+	case "no-artifacts", "incomplete-artifacts", "uncalibrated", "missing", "dim-mismatch", "unverified":
+		return badgeWarn.Render(name + " ⚠")
 	case "unreachable", "incompatible":
-		return badgeFail.Render(name+" ✗")
+		return badgeFail.Render(name + " ✗")
 	default:
 		return badgeDim.Render(name + " ?")
 	}
@@ -194,8 +196,12 @@ func renderOneBadge(name, verdict string) string {
 // services are down, not that the artifact is wrong — a "build" hint
 // would be misleading there.
 func badgeActionHint(s *calibrationStatus) string {
-	lensWarn := s.Lens.Verdict == "no-artifacts" || s.Lens.Verdict == "dim-mismatch"
+	lensWarn := s.Lens.Verdict == "no-artifacts" ||
+		s.Lens.Verdict == "incomplete-artifacts" ||
+		s.Lens.Verdict == "uncalibrated" ||
+		s.Lens.Verdict == "dim-mismatch"
 	asaWarn := s.ASA.Verdict == "missing"
+	asaUnverified := s.ASA.Verdict == "unverified"
 	switch {
 	case lensWarn && asaWarn:
 		return "→ atlas lens build / atlas asa build · docs/PUBLISHING.md"
@@ -203,24 +209,8 @@ func badgeActionHint(s *calibrationStatus) string {
 		return "→ atlas lens build · docs/PUBLISHING.md"
 	case asaWarn:
 		return "→ atlas asa build · docs/PUBLISHING.md"
+	case asaUnverified:
+		return "→ atlas asa check"
 	}
 	return ""
-}
-
-// calibrationTooltip renders the verbose hint text that the Stats pane
-// surfaces below the pipeline (when the badge shows ⚠ or ✗). Currently
-// emitted as a one-line summary; the full hint stays accessible via
-// `atlas lens check` / `atlas asa check`.
-func calibrationTooltip(s *calibrationStatus) string {
-	if s == nil {
-		return ""
-	}
-	var notes []string
-	if s.Lens.Verdict != "supported" && s.Lens.Hint != "" {
-		notes = append(notes, "Lens: "+s.Lens.Hint)
-	}
-	if s.ASA.Verdict != "supported" && s.ASA.Hint != "" {
-		notes = append(notes, "ASA: "+s.ASA.Hint)
-	}
-	return strings.Join(notes, "  |  ")
 }

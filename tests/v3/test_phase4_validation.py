@@ -121,7 +121,7 @@ class TestPhase4GoNoGo:
 
         # Final check: measure AUC on ALL domains using the last model
         final_model = result["model"]
-        print(f"\n=== Final AUC Retention (after all 5 domains) ===")
+        print("\n=== Final AUC Retention (after all 5 domains) ===")
 
         max_degradation = 0.0
         for name in domain_names[:-1]:  # Exclude last (it just trained on it)

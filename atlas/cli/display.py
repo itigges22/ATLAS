@@ -88,10 +88,11 @@ def _write(s: str):
 
 def banner():
     """Print startup banner with box drawing."""
+    from atlas import __version__
     tw = min(w(), 64)
     print()
     print(f"  {BOX_TL}{BOX_H * (tw - 4)}{BOX_TR}")
-    title = f" {BOLD}{BRIGHT_CYAN}ATLAS{RESET} {DIM}v3.1{RESET} {GRAY}{DIAMOND} Adaptive Test-time Learning{RESET} "
+    title = f" {BOLD}{BRIGHT_CYAN}ATLAS{RESET} {DIM}v{__version__}{RESET} {GRAY}{DIAMOND} Adaptive Test-time Learning{RESET} "
     # Center the title
     padding = tw - 4 - 42  # rough visible length
     print(f"  {BOX_V}{title}{' ' * max(padding, 0)}{BOX_V}")
@@ -99,10 +100,12 @@ def banner():
     print()
 
 
-def status_block(model: str, speed: str, lens: str, sandbox: str):
-    """Print service status block."""
+def status_block(model: str, lens: str, sandbox: str, speed: str = ""):
+    """Print service status block. The speed line only renders when the
+    caller has a real measurement to report."""
     _status_item("Model", model, BRIGHT_CYAN)
-    _status_item("Speed", speed, BRIGHT_GREEN if "tok" in speed else YELLOW)
+    if speed:
+        _status_item("Speed", speed, BRIGHT_GREEN if "tok" in speed else YELLOW)
     _status_item("Lens", lens, BRIGHT_GREEN if lens == "connected" else RED)
     _status_item("Sandbox", sandbox, BRIGHT_GREEN if sandbox in ("ready", "healthy") else RED)
     print()
@@ -156,7 +159,7 @@ def stream_thinking_start():
 def stream_thinking_token(text: str):
     """Stream a thinking token (dimmed)."""
     # Indent and dim
-    text = text.replace("\n", f"\n  ")
+    text = text.replace("\n", "\n  ")
     _write(f"{DIM}{text}{RESET}{DIM}")
 
 
@@ -245,10 +248,9 @@ def warn(msg: str):
 
 def progress_bar(current: int, total: int, pass_count: int, label: str = ""):
     """Inline progress bar for benchmarks."""
-    bar_w = min(w() - 50, 25)
+    bar_w = max(1, min(w() - 50, 25))
     filled = int(bar_w * current / max(total, 1))
     bar = f"{BRIGHT_CYAN}{'█' * filled}{GRAY}{'░' * (bar_w - filled)}{RESET}"
-    current / max(total, 1) * 100
     pass_rate = pass_count / max(current, 1) * 100
     line = f"\r  {bar} {BOLD}{current}{RESET}/{total}  {BRIGHT_GREEN}{pass_rate:.1f}%{RESET}  {DIM}{label}{RESET}"
     _write(line)
@@ -267,7 +269,6 @@ def help_text():
   {GRAY}{BOX_H * (tw - 4)}{RESET}
   {CYAN}/solve{RESET} {DIM}<file>{RESET}       Solve a problem from file
   {CYAN}/bench{RESET} {DIM}[options]{RESET}    Run benchmark
-  {CYAN}/ablation{RESET} {DIM}[opts]{RESET}    Run ablation study
   {CYAN}/status{RESET}              Service health
   {CYAN}/help{RESET}                This help
   {CYAN}/quit{RESET}                Exit

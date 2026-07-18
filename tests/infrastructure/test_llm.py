@@ -7,7 +7,12 @@ and various generation parameters.
 
 import json
 import pytest
-import httpx
+
+# importorskip, not a plain import: the `-m "not integration"` default
+# deselects these tests, but pytest still imports the module during
+# collection — a hard import would fail collection on environments
+# (like CI) that don't install the integration deps.
+httpx = pytest.importorskip("httpx")
 
 
 class TestLlamaHealth:
@@ -30,18 +35,42 @@ class TestLlamaModels:
         assert "data" in data, "Response should have 'data' field"
         assert len(data["data"]) > 0, "Should have at least one model"
 
-    def test_model_name_contains_qwen(self, llama_client: httpx.Client):
-        """Model name should contain 'Qwen' based on configuration."""
+    def test_model_name_matches_configured(self, llama_client: httpx.Client):
+        """The served model should match the deployment's configured model
+        (ATLAS_MODEL_NAME from .env), whatever that model is."""
+        import os
+        expected = None
+        try:
+            from benchmark.config import config as _cfg
+            expected = (_cfg.model_name or "").lower()
+        except Exception:
+            expected = None
+        expected = (os.environ.get("ATLAS_MODEL_NAME") or expected or "").lower()
+        if not expected:
+            pytest.skip("no configured model name to compare against")
         response = llama_client.get("/v1/models")
         assert response.status_code == 200
         data = response.json()
         models = data["data"]
         model_ids = [m.get("id", "") for m in models]
-        qwen_model = any("qwen" in mid.lower() for mid in model_ids)
-        assert qwen_model, f"Expected a Qwen model, found: {model_ids}"
+
+        def canonical_model_id(value):
+            value = value.rsplit("/", 1)[-1].lower()
+            return value[:-5] if value.endswith(".gguf") else value
+
+        expected_id = canonical_model_id(expected)
+        served_ids = [canonical_model_id(mid) for mid in model_ids]
+        matched = any(
+            expected_id == served
+            or expected_id in served
+            or served in expected_id
+            for served in served_ids
+            if served
+        )
+        assert matched, f"Expected configured model {expected!r}, found: {model_ids}"
 
     def test_context_length_is_configured(self, llama_client: httpx.Client):
-        """Model should report context length (expected 16384)."""
+        """Model should report the configured minimum context length."""
         # Try /props endpoint for llama.cpp server properties
         response = llama_client.get("/props", timeout=10.0)
         if response.status_code == 200:
@@ -70,7 +99,7 @@ class TestLlamaChatCompletion:
         assert "choices" in data, "Response should have 'choices' field"
         assert len(data["choices"]) > 0, "Should have at least one choice"
         message = data["choices"][0].get("message", {})
-        # Qwen3.5-9B may put response in "content" or "reasoning_content"
+        # Reasoning-capable templates may use either response field.
         content = message.get("content", "") or message.get("reasoning_content", "")
         assert len(content) > 0 or data.get("usage", {}).get("completion_tokens", 0) > 0, \
             f"Response should have content or tokens: {data}"
@@ -126,7 +155,7 @@ class TestLlamaChatCompletion:
                         continue  # Skip malformed SSE lines (expected)
 
             assert len(chunks) > 0, "Should receive at least one chunk"
-            # Chunks should have delta content or reasoning_content (Qwen3.5-9B)
+            # Reasoning-capable templates may stream either response field.
             has_content = any(
                 c.get("choices", [{}])[0].get("delta", {}).get("content") or
                 c.get("choices", [{}])[0].get("delta", {}).get("reasoning_content")
@@ -189,7 +218,7 @@ class TestLlamaChatCompletion:
         )
         assert response.status_code == 200
         message = response.json()["choices"][0]["message"]
-        # Qwen3.5-9B may use "content" or "reasoning_content"
+        # Reasoning-capable templates may use either response field.
         content = (message.get("content", "") or message.get("reasoning_content", "") or "").lower()
         # Check if the model acknowledged the system instruction in any way
         # A more reliable test: the response should be influenced by the system message
@@ -210,7 +239,7 @@ class TestLlamaChatCompletion:
         )
         assert response.status_code == 200
         # Soft test — exercises the JSON parse path; the content shape
-        # isn't asserted because Qwen3.5's exact counting behavior varies.
+        # isn't asserted because exact counting behavior varies by model.
         _ = response.json()["choices"][0]["message"]["content"]
 
 
@@ -228,11 +257,10 @@ class TestLlamaServerFeatures:
                 assert flash is True, "Flash attention should be enabled"
 
     def test_speculative_decoding_check(self, llama_client: httpx.Client):
-        """Check speculative decoding status (not used in V3.0.1)."""
+        """Report speculative decoding when the selected model enables it."""
         response = llama_client.get("/props", timeout=10.0)
         if response.status_code == 200:
             data = response.json()
-            # V3.0.1 uses Qwen3.5-9B without spec decode
             draft = data.get("draft_model") or data.get("speculative")
             if draft:
                 print(f"Speculative decoding configured: {draft}")
@@ -307,7 +335,7 @@ class TestLlamaChatCompletionAdvanced:
         )
         assert response.status_code == 200
         message = response.json()["choices"][0]["message"]
-        # Qwen3.5-9B may use "content" or "reasoning_content" — exercise
+        # Reasoning-capable templates may use either field — exercise
         # both lookups for parser coverage; we don't assert the value
         # because the model's response shape varies across runs.
         _ = message.get("content", "") or message.get("reasoning_content", "") or ""

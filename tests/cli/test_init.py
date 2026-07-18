@@ -72,14 +72,22 @@ def test_yes_skip_download_writes_env_and_keys(tmp_path, monkeypatch, capsys):
     # Wizard must write every key the compose stack reads at boot.
     for key in ("ATLAS_MODELS_DIR", "ATLAS_MODEL_FILE", "ATLAS_MODEL_NAME",
                 "ATLAS_CTX_SIZE", "ATLAS_GHCR_OWNER", "ATLAS_IMAGE_TAG",
-                "ATLAS_LLAMA_PORT", "PARALLEL_SLOTS",
-                "ATLAS_BACKEND", "ATLAS_GPU_VENDOR", "ATLAS_GPU_INDEX"):
+                "ATLAS_LLAMA_PORT", "ATLAS_PARALLEL_SLOTS",
+                "ATLAS_KV_TYPE_K", "ATLAS_KV_TYPE_V",
+                "ATLAS_BACKEND", "ATLAS_GPU_VENDOR", "ATLAS_GPU_INDEX",
+                "ATLAS_PROXY_UID", "ATLAS_PROXY_GID"):
         assert f"{key}=" in body, f"missing {key} in .env"
+
+    # Proxy runs as the invoking user so it can write the /workspace and
+    # lens_training bind mounts (the image's baked-in uid 1001 can't).
+    assert f"ATLAS_PROXY_UID={os.getuid()}" in body
+    assert f"ATLAS_PROXY_GID={os.getgid()}" in body
 
     # Default models_dir is ./models when it equals atlas_root/models.
     assert "ATLAS_MODELS_DIR=./models" in body
     assert "ATLAS_IMAGE_TAG=latest" in body
     assert "ATLAS_GHCR_OWNER=itigges22" in body
+    assert "ATLAS_MACOS_PREFIX=~/.atlas/macos" in body
 
 
 def test_api_keys_file_has_strict_permissions(tmp_path, monkeypatch):
@@ -673,3 +681,22 @@ def test_x86_64_does_not_surface_arch_line(tmp_path, monkeypatch, capsys):
          ["--yes", "--skip-download", "--no-color"])
     out = capsys.readouterr().out
     assert "Architecture:" not in out
+
+
+def test_loose_secrets_perms_without_yes_fails_noninteractive(tmp_path,
+                                                                monkeypatch,
+                                                                capsys):
+    """secrets/ with loose perms + no --yes + non-interactive stdin: the
+    wizard must not report success while silently skipping api-keys.json."""
+    root = _make_atlas_root(tmp_path)
+    secrets_dir = os.path.join(root, "secrets")
+    os.makedirs(secrets_dir, mode=0o755)
+    os.chmod(secrets_dir, 0o755)  # umask-proof
+
+    rc = _run(monkeypatch, root, ["--skip-download", "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "loose permissions" in out
+    assert "Setup incomplete" in out
+    assert "Setup complete" not in out
+    assert not os.path.exists(os.path.join(secrets_dir, "api-keys.json"))

@@ -8,7 +8,7 @@ keymap and slash-command reference.
 
 Launch strategy:
   1. Locate the `atlas-tui` binary on PATH or in ~/.local/bin
-  2. If missing and Go 1.24+ is available → build from tui/
+  2. If missing or older than checkout source, build from tui/
   3. If still missing → print install instructions and exit
   4. Otherwise → ensure atlas-proxy is running, then exec the TUI
 
@@ -21,6 +21,8 @@ import shutil
 import subprocess
 import sys
 from typing import List, Optional
+
+from atlas.cli.runtime_artifacts import go_binary_is_current
 
 
 def _find_atlas_dir() -> str:
@@ -74,18 +76,31 @@ def _build_tui(atlas_dir: str) -> Optional[str]:
     return None
 
 
+def _select_tui_binary(atlas_dir: str) -> Optional[str]:
+    """Select a TUI binary whose behavior matches the current checkout."""
+    binary = _find_tui_binary(atlas_dir)
+    source_dir = os.path.join(atlas_dir, "tui") if atlas_dir else ""
+    if binary and go_binary_is_current(
+        binary,
+        source_dir,
+        extra_names=("demo_prompts_fallback.json",),
+    ):
+        return binary
+    if binary:
+        print("  atlas-tui source changed; rebuilding the installed binary...")
+    return _build_tui(atlas_dir)
+
+
 def main(argv: List[str]) -> int:
     """Entry point for `atlas tui [...args]`."""
     atlas_dir = _find_atlas_dir()
 
-    binary = _find_tui_binary(atlas_dir)
-    if not binary:
-        binary = _build_tui(atlas_dir)
+    binary = _select_tui_binary(atlas_dir)
     if not binary:
         sys.stderr.write(
             "atlas tui: atlas-tui binary not found and Go is not "
             "available to build it.\n"
-            "Install Go 1.24+ (https://go.dev/dl/) or build manually:\n"
+            "Install Go 1.26.2+ (https://go.dev/dl/) or build manually:\n"
             "  cd tui && go build -o ~/.local/bin/atlas-tui .\n"
         )
         return 1
@@ -95,12 +110,17 @@ def main(argv: List[str]) -> int:
     # force-recreate when cwd is outside the bind. The recreate is ~5s
     # — fast enough to do unconditionally, and necessary for tool calls
     # to work (the proxy can only read/write paths under its mount).
-    from atlas.cli.repl import _ensure_proxy, PROXY_URL
-    if not _ensure_proxy():
+    from atlas.cli.repl import (
+        DEMO_RAW_CAPABILITY,
+        PROXY_URL,
+        _ensure_proxy,
+    )
+    if not _ensure_proxy(required_capability=DEMO_RAW_CAPABILITY):
         sys.stderr.write(
-            "atlas tui: atlas-proxy not running and could not be "
-            "started locally. Start it manually (docker compose up "
-            "atlas-proxy) and rerun.\n"
+            "atlas tui: atlas-proxy is unavailable or too old for the "
+            "current demo contract and could not be rebuilt.\n"
+            "From the ATLAS checkout, run: docker compose up -d --build "
+            "atlas-proxy\n"
         )
         return 1
 
@@ -108,6 +128,16 @@ def main(argv: List[str]) -> int:
     args = list(argv)
     if "--proxy" not in args:
         args = ["--proxy", PROXY_URL] + args
+
+    # Hand the TUI the checkout's service token path (internal auth) —
+    # the TUI runs from arbitrary project dirs, so a cwd-relative
+    # lookup wouldn't find it. Only the PATH crosses the env boundary,
+    # never the token value.
+    if not os.environ.get("ATLAS_SERVICE_TOKEN_FILE"):
+        from atlas.cli import token as _token
+        tok_path = _token.token_path()
+        if os.path.isfile(tok_path):
+            os.environ["ATLAS_SERVICE_TOKEN_FILE"] = tok_path
 
     # Default --log to a stable path under ~/.cache so debugging the
     # TUI doesn't require the user to remember a flag. Alt-screen mode

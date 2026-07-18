@@ -3,14 +3,13 @@
 Classifies the host's GPU/RAM/disk into one of five tiers and emits the
 recommended ATLAS *runtime* settings for that tier (context length,
 parallel slots, KV cache quantization). The recommended *model* per tier
-lives in `model_recommendations.py` so PC-056's full model registry can
+lives in `model_registry.py` so PC-056's full model registry can
 absorb that surface without churning every caller of TierProfile.
 
 Layering:
-    tier.py                  -> hardware capability + runtime knobs
-    model_recommendations.py -> per-tier default model (PC-056 will replace)
-    PC-054 wizard            -> consumes both, writes merged .env
-    PC-056 model registry    -> upgrades model_recommendations in place
+    tier.py           -> hardware capability + runtime knobs
+    model_registry.py -> per-tier default model (full registry schema)
+    init wizard       -> consumes both, writes merged .env
 
 Tier breakpoints are based on VRAM, the hardest constraint for LLM
 inference. Vendor-agnostic as of V3.1.1 — NVIDIA, AMD (ROCm), Apple
@@ -55,7 +54,7 @@ import sys
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional, Tuple
 
-from atlas.cli.commands import model_recommendations
+from atlas.cli.commands import model_registry
 
 # Reuse doctor's color + unicode-safety primitives so output looks consistent.
 RESET = "\033[0m"
@@ -176,7 +175,8 @@ def _read_nvidia_smi() -> List[GPUInfo]:
     if p.returncode != 0:
         return []
     gpus: List[GPUInfo] = []
-    for ln in (l.strip() for l in p.stdout.strip().splitlines() if l.strip()):
+    for ln in (line.strip() for line in p.stdout.strip().splitlines()
+               if line.strip()):
         parts = [x.strip() for x in ln.split(",")]
         if len(parts) < 3:
             continue
@@ -524,14 +524,14 @@ class TierProfile:
 
     PC-055.2 split: this record is pure *hardware capability* + the
     llama-server runtime knobs that derive from it. Model selection
-    (which gguf to load) lives in `model_recommendations.py` so PC-056's
+    (which gguf to load) lives in `model_registry.py` so PC-056's
     full model registry can absorb that surface without touching tiers.
 
     Runtime fields map directly to docker-compose.yml / .env knobs:
       context_length   -> ATLAS_CTX_SIZE / CONTEXT_LENGTH
-      parallel_slots   -> PARALLEL_SLOTS  (llama-server --parallel)
-      kv_cache_k       -> KV_CACHE_TYPE_K (llama-server -ctk)
-      kv_cache_v       -> KV_CACHE_TYPE_V (llama-server -ctv)
+      parallel_slots   -> ATLAS_PARALLEL_SLOTS  (llama-server --parallel)
+      kv_cache_k       -> ATLAS_KV_TYPE_K (llama-server -ctk)
+      kv_cache_v       -> ATLAS_KV_TYPE_V (llama-server -ctv)
 
     The min_* fields are constraint floors used by `evaluate_constraints`.
     They reflect "what you actually need to run ATLAS at this tier without
@@ -563,19 +563,14 @@ class TierProfile:
         for .env writing.
 
         Model-related env vars (ATLAS_MODEL_FILE, ATLAS_MODEL_NAME) are
-        rendered by `model_recommendations.ModelRecommendation.env_vars()`.
+        rendered by `model_registry.ModelRecommendation.env_vars()`.
         Wizard / installer code merges the two dicts before writing .env.
         """
         return {
             "ATLAS_CTX_SIZE": str(self.context_length),
-            # Note: PARALLEL_SLOTS / KV_CACHE_TYPE_K|V are read by the
-            # llama entrypoint, not directly by docker-compose. Surface
-            # them so PC-054 wizard can render them, even though writing
-            # them into .env requires the entrypoint contract to honor
-            # `${PARALLEL_SLOTS:-...}`.
-            "PARALLEL_SLOTS": str(self.parallel_slots),
-            "KV_CACHE_TYPE_K": self.kv_cache_k,
-            "KV_CACHE_TYPE_V": self.kv_cache_v,
+            "ATLAS_PARALLEL_SLOTS": str(self.parallel_slots),
+            "ATLAS_KV_TYPE_K": self.kv_cache_k,
+            "ATLAS_KV_TYPE_V": self.kv_cache_v,
         }
 
 
@@ -601,7 +596,8 @@ TIERS: List[TierProfile] = [
         tier="small",
         label="Small (entry-level GPU)",
         description="Conservative settings sized for 8 GB cards. "
-                    "7B Q4 model leaves ~3 GB for KV cache + compute.",
+                    "Choose a registry model that leaves room for KV cache "
+                    "and compute buffers.",
         min_vram_gb=8.0, max_vram_gb=12.0,
         example_gpus=["RTX 3060 8GB", "RTX 4060 8GB",
                       "RX 6600 XT 8GB", "RX 7600 8GB",
@@ -613,7 +609,7 @@ TIERS: List[TierProfile] = [
         # 5 containers (~7 GB combined RSS) + host OS + sandbox tmpfs
         # + V3 pipeline burst memory ~= 12 GB minimum.
         min_system_ram_gb=12.0,
-        # 4 cores: 1 for proxy/redis idle, 1 for sandbox compiles,
+        # 4 cores: 1 for proxy/lens idle, 1 for sandbox compiles,
         # 1 for v3 PR-CoT repair, 1 for llama prompt processing.
         min_cpu_cores=4,
         # Model (4.4 GB) + container images (8 GB) + ~7 GB working space.
@@ -624,8 +620,8 @@ TIERS: List[TierProfile] = [
     TierProfile(
         tier="medium",
         label="Medium (mid-range GPU)",
-        description="ATLAS development target. 9B Q6 model with 32K "
-                    "context fits comfortably with q8/q4 KV cache.",
+        description="ATLAS development target. Registry-selected model with "
+                    "32K context and q8/q4 KV cache.",
         min_vram_gb=12.0, max_vram_gb=20.0,
         example_gpus=["RTX 4060 Ti 16GB", "RTX 5060 Ti 16GB",
                       "RTX 3080 Ti 12GB", "RTX 4070 Ti Super 16GB",
@@ -648,7 +644,7 @@ TIERS: List[TierProfile] = [
     TierProfile(
         tier="large",
         label="Large (high-end consumer GPU)",
-        description="Headroom for 14B Q5/Q6 model with 32K context and "
+        description="Headroom for a larger registry model with 32K context and "
                     "2 parallel slots for multi-conversation.",
         min_vram_gb=20.0, max_vram_gb=32.0,
         example_gpus=["RTX 3090 24GB", "RTX 4090 24GB", "RTX 5090 24GB",
@@ -669,7 +665,7 @@ TIERS: List[TierProfile] = [
     TierProfile(
         tier="xlarge",
         label="X-Large (datacenter GPU)",
-        description="32B+ model with 64K context, 2-4 parallel slots, "
+        description="Large registry model with 64K context, 2-4 parallel slots, "
                     "and full F16 KV cache for maximum quality.",
         min_vram_gb=32.0, max_vram_gb=None,
         example_gpus=["RTX 5090 32GB", "RTX A6000 48GB",
@@ -881,7 +877,7 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     # PC-055.2: model lookup lives in model_recommendations (now a shim
     # over model_registry). PC-056 added lens_status — surface it here
     # so users see the warning before committing to install.
-    rec = model_recommendations.for_tier(t.tier)
+    rec = model_registry.for_tier(t.tier)
     if rec is not None:
         lens = getattr(rec, "lens_status", None)  # tolerate older shim
         if lens == "supported":
@@ -965,14 +961,14 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
         # the new `recommendation` key, and `env` is the merged dict (model
         # vars + tier runtime vars) so consumers writing .env get one bag.
         constraints = (evaluate_constraints(p, t) if t.tier != "cpu" else [])
-        rec = model_recommendations.for_tier(t.tier)
+        rec = model_registry.for_tier(t.tier)
         env = dict(t.env_vars())
         if rec is not None:
             env.update(rec.env_vars())
         out = {
             "probe": _round_floats(asdict(p)),
             "tier": asdict(t),
-            "recommendation": (model_recommendations.as_dict(rec)
+            "recommendation": (model_registry.as_dict(rec)
                                if rec is not None else None),
             "env": env,
             "constraints": [_round_floats(asdict(c)) for c in constraints],
@@ -998,8 +994,7 @@ def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
         return 1
     _safe_print("  Apply these settings: edit .env to set the values "
                 "shown above.")
-    _safe_print(f"  Or run: {CYAN if color else ''}atlas wizard{RESET if color else ''}"
-                f"  (when PC-054 lands).")
+    _safe_print(f"  Or run: {CYAN if color else ''}atlas init{RESET if color else ''}.")
     # Exit non-zero on constraint failure so scripts (bootstrap, CI) can
     # gate on it. Warnings stay exit 0 — they're actionable, not fatal.
     overall = overall_status(evaluate_constraints(p, t))
@@ -1030,8 +1025,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="atlas tier",
         description="Hardware tier classification (PC-055)")
     parser.add_argument("subcommand", nargs="?", default="classify",
-        choices=["classify", "list"],
-        help="`classify` (default) probes this host. `list` shows all tiers.")
+        choices=["classify", "list", "fit"],
+        help="`classify` (default) probes this host. `list` shows all tiers. "
+             "`fit` sizes llama-server runtime knobs for the configured model "
+             "on this GPU (PC-208).")
+    parser.add_argument("model", nargs="?", default=None,
+        help="for `fit`: GGUF path (default: the model configured in .env)")
+    parser.add_argument("--write", action="store_true",
+        help="for `fit`: write the result into .env")
+    parser.add_argument("--slots", type=int, default=None,
+        help="for `fit`: parallel slot count (default: 4)")
     parser.add_argument("--json", action="store_true",
         help="emit JSON output (for PC-054 wizard, PC-056 model registry)")
     parser.add_argument("--raw", action="store_true",
@@ -1046,6 +1049,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.subcommand == "list":
         return _emit_list(args, color)
+
+    if args.subcommand == "fit":
+        from atlas.cli.commands import fit as fit_module
+        return fit_module.emit_fit(args, color)
 
     p = probe(install_dir=args.install_dir)
     t = classify(p)

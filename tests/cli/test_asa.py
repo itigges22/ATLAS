@@ -21,7 +21,7 @@ from atlas.cli.commands import lens as lens_module
 # ---------------------------------------------------------------------------
 
 def _probe(reachable=True, embedding_dim=4096, n_layers=32,
-           model_name="Qwen3.5-9B-Q6_K.gguf", patch=True, error=""):
+           model_name="test-model.gguf", patch=True, error=""):
     return lens_module.LlamaProbe(
         reachable=reachable,
         url="http://test-llama:8080",
@@ -31,6 +31,10 @@ def _probe(reachable=True, embedding_dim=4096, n_layers=32,
         has_hidden_states_patch=patch,
         error=error,
     )
+
+
+def _write_model_marker(vector_path, model="test-model"):
+    (vector_path.parent / (vector_path.name + ".model")).write_text(model + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +60,18 @@ def test_host_resolve_honors_atlas_models_dir(tmp_path, monkeypatch):
     resolved = asa._host_resolve_vector_path(
         "/models/ast_edit_steering.gguf", str(tmp_path))
     assert resolved == str(alt / "ast_edit_steering.gguf")
+
+
+def test_host_resolve_reads_models_dir_from_dotenv(tmp_path, monkeypatch):
+    monkeypatch.delenv("ATLAS_MODELS_DIR", raising=False)
+    alt = tmp_path / "dotenv-models"
+    alt.mkdir()
+    vector = alt / "ast_edit_steering.gguf"
+    vector.write_bytes(b"GGUF" + b"\x00" * 100)
+    (tmp_path / ".env").write_text(f"ATLAS_MODELS_DIR={alt}\n")
+    resolved = asa._host_resolve_vector_path(
+        "/models/ast_edit_steering.gguf", str(tmp_path))
+    assert resolved == str(vector)
 
 
 def test_host_resolve_passthrough_when_path_resolves(tmp_path):
@@ -103,7 +119,7 @@ def test_read_cvector_meta_real_gguf(tmp_path):
 
     out_path = tmp_path / "v.gguf"
     writer = gguf.GGUFWriter(str(out_path), arch="controlvector")
-    writer.add_string("controlvector.model_hint", "qwen3")
+    writer.add_string("controlvector.model_hint", "testarch")
     writer.add_uint32("controlvector.layer_count", 36)
     vec = np.zeros(4096, dtype=np.float32)
     writer.add_tensor("direction.27", vec)
@@ -116,7 +132,7 @@ def test_read_cvector_meta_real_gguf(tmp_path):
     assert meta["present"] is True
     assert meta["dim"] == 4096
     assert meta["layer_count"] == 36
-    assert meta["model_hint"] == "qwen3"
+    assert meta["model_hint"] == "testarch"
     assert meta["error"] == ""
 
 
@@ -155,6 +171,7 @@ def test_check_vector_present_dim_match_is_compat(monkeypatch, tmp_path):
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()
     writer.close()
+    _write_model_marker(vp)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
     monkeypatch.setattr(lens_module, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
@@ -177,6 +194,7 @@ def test_check_dim_mismatch_is_needs_build(monkeypatch, tmp_path):
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()
     writer.close()
+    _write_model_marker(vp)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
     monkeypatch.setattr(lens_module, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
@@ -192,6 +210,7 @@ def test_check_unverified_when_gguf_pkg_missing(monkeypatch, tmp_path):
     host-tooling gap)."""
     vp = tmp_path / "v.gguf"
     vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    _write_model_marker(vp)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
     monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
     # Stub _read_cvector_meta to simulate gguf-missing case
@@ -204,6 +223,76 @@ def test_check_unverified_when_gguf_pkg_missing(monkeypatch, tmp_path):
     assert v.verdict == "compat"
     assert v.unverified is True
     assert "gguf" in v.reason.lower() or "verification" in v.reason.lower()
+
+
+def test_check_present_vector_without_marker_is_not_compatible(monkeypatch,
+                                                                tmp_path):
+    vp = tmp_path / "v.gguf"
+    vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
+    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
+        "present": True, "size_bytes": 104, "dim": 4096,
+        "layer_count": None, "model_hint": None, "error": "",
+    })
+    verdict = asa._check_asa(str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "entrypoint will keep it disabled" in verdict.reason
+
+
+def test_check_rejects_marker_for_another_model(monkeypatch, tmp_path):
+    vp = tmp_path / "v.gguf"
+    vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    _write_model_marker(vp, "other-model")
+    monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
+    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
+        "present": True, "size_bytes": 104, "dim": 4096,
+        "layer_count": None, "model_hint": None, "error": "",
+    })
+    verdict = asa._check_asa(str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "other-model" in verdict.reason
+
+
+def test_model_marker_value_strips_loaded_model_path():
+    assert asa._model_marker_value("/models/Example-Model.gguf") == "Example-Model"
+
+
+def test_check_needs_build_points_at_published_artifacts(monkeypatch, tmp_path):
+    """When the loaded model has a registry entry with downloadable ASA
+    artifacts, the needs-build reason must offer the download path — not
+    only the local retrain."""
+    vp = tmp_path / "v.gguf"
+    vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
+    monkeypatch.setattr(
+        lens_module, "probe_llama",
+        lambda *a, **kw: _probe(
+            model_name="/models/gemma-4-12b-it-Q4_K_M.gguf"))
+    monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
+        "present": True, "size_bytes": 104, "dim": 4096,
+        "layer_count": None, "model_hint": None, "error": "",
+    })
+    verdict = asa._check_asa(str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "atlas model install-artifacts gemma-4-12b-it-Q4_K_M" \
+        in verdict.reason
+
+
+def test_check_needs_build_no_hint_for_unregistered_model(monkeypatch,
+                                                          tmp_path):
+    vp = tmp_path / "v.gguf"
+    vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
+    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
+        "present": True, "size_bytes": 104, "dim": 4096,
+        "layer_count": None, "model_hint": None, "error": "",
+    })
+    verdict = asa._check_asa(str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "install-artifacts" not in verdict.reason
 
 
 def test_check_json_output_shape(monkeypatch, tmp_path, capsys):
@@ -250,6 +339,87 @@ def test_build_refuses_when_docker_missing(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "docker not on PATH" in out or "docker" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# GGUF-header depth fallback (llama-server builds without n_layer in /props)
+# ---------------------------------------------------------------------------
+
+def _write_minimal_model_gguf(path, arch="testarch", block_count=48):
+    """A model GGUF carrying only general.architecture and
+    <arch>.block_count — the two keys the depth fallback reads."""
+    pytest.importorskip("gguf")
+    import gguf
+    writer = gguf.GGUFWriter(str(path), arch=arch)
+    writer.add_uint32(f"{arch}.block_count", block_count)
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+
+
+def test_gguf_block_count_reads_arch_prefixed_depth(tmp_path):
+    p = tmp_path / "m.gguf"
+    _write_minimal_model_gguf(p, arch="newarch", block_count=48)
+    assert asa._gguf_block_count(str(p)) == 48
+
+
+def test_gguf_block_count_zero_on_non_gguf(tmp_path):
+    p = tmp_path / "junk.gguf"
+    p.write_bytes(b"NOPE" + b"\x00" * 64)
+    assert asa._gguf_block_count(str(p)) == 0
+    assert asa._gguf_block_count(str(tmp_path / "missing.gguf")) == 0
+
+
+def test_build_derives_layer_from_gguf_when_props_lacks_depth(
+        monkeypatch, tmp_path, capsys):
+    """Some llama-server builds omit n_layer from /props. Build must fall
+    back to <arch>.block_count from the model GGUF on the host and derive
+    layer = round(depth * 0.75) instead of demanding --layer."""
+    models = tmp_path / "models"
+    models.mkdir()
+    _write_minimal_model_gguf(models / "m.gguf", arch="newarch",
+                              block_count=48)
+
+    monkeypatch.setattr(
+        lens_module, "probe_llama",
+        lambda *a, **kw: _probe(n_layers=0, model_name="/models/m.gguf"))
+    monkeypatch.setattr(asa, "_docker_available", lambda: True)
+    # ATLAS_MODELS_DIR steers /models/* host resolution to tmp_path;
+    # _atlas_root stays real so the staged build script resolves.
+    monkeypatch.setenv("ATLAS_MODELS_DIR", str(models))
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", _fake_subprocess_run_for_build())
+    monkeypatch.setattr(
+        asa, "_docker_exec",
+        lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "",
+                                        "stderr": ""})())
+    pairs = _make_fixture_pairs(tmp_path)
+
+    rc = asa.main(["build", "--dry-run", "--no-color",
+                   "--pairs", str(pairs)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "model depth 48 read from GGUF header" in out
+    assert "--layer 36" in out
+
+
+def test_build_still_asks_for_layer_when_gguf_unreadable(
+        monkeypatch, tmp_path, capsys):
+    """No /props depth AND no readable model GGUF on the host: refuse
+    with the explicit --layer instruction rather than guessing."""
+    monkeypatch.setattr(
+        lens_module, "probe_llama",
+        lambda *a, **kw: _probe(n_layers=0,
+                                model_name="/models/not-here.gguf"))
+    monkeypatch.setattr(asa, "_docker_available", lambda: True)
+    monkeypatch.setattr(asa, "_atlas_root", lambda: str(tmp_path))
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", _fake_subprocess_run_for_build())
+    rc = asa.main(["build", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "--layer" in out
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +479,7 @@ def test_build_dry_run_cleans_up_staged_files(monkeypatch, tmp_path, capsys):
     rc = asa.main(["build", "--dry-run", "--no-color",
                    "--pairs", str(pairs)])
     assert rc == 0
+    assert "--layer 24" in capsys.readouterr().out
     rm_targets = [cmd[-1] for _, cmd in docker_exec_calls
                   if cmd[:2] == ["rm", "-f"]]
     assert "/tmp/build_steering_vector.py" in rm_targets, (
@@ -385,13 +556,25 @@ def test_publish_refuses_when_no_vector(monkeypatch, tmp_path, capsys):
 def test_publish_dry_run_prints_pr_body(monkeypatch, tmp_path, capsys):
     vp = tmp_path / "v.gguf"
     vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    _write_model_marker(vp, "TestModel-9B")
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
-    rc = asa.main(["publish", "Qwen3.5-9B-Q6_K", "--dry-run", "--no-color"])
+    rc = asa.main(["publish", "TestModel-9B", "--dry-run", "--no-color"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "Verification checklist" in out
     assert "Provenance" in out
     assert "asa_artifact_files" in out
+
+
+def test_publish_refuses_vector_marked_for_another_model(monkeypatch, tmp_path,
+                                                          capsys):
+    vp = tmp_path / "v.gguf"
+    vp.write_bytes(b"GGUF" + b"\x00" * 100)
+    _write_model_marker(vp, "other-model")
+    monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
+    rc = asa.main(["publish", "TestModel-9B", "--dry-run", "--no-color"])
+    assert rc == 1
+    assert "Refusing to mislabel" in capsys.readouterr().out
 
 
 def test_render_asa_pr_body_includes_required_fields():

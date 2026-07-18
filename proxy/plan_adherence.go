@@ -127,10 +127,9 @@ func actionMatchesTool(action, toolName string) bool {
 // substring match so "curl http://localhost:5000/" matches a plan
 // target of "curl http://localhost:5000/hello".
 //
-// Old version did unconditional substring match, which made "app.py"
-// erroneously match "tests/test_app.py" — so reads of the test file
-// would tick off the source-file plan step. Tightened to require a
-// path-component boundary for path-shaped strings.
+// Path-shaped strings require a path-component boundary: without it,
+// "app.py" would match "tests/test_app.py" and reads of the test file
+// would tick off the source-file plan step.
 func targetsOverlap(planTarget, toolTarget string) bool {
 	a := strings.ToLower(strings.TrimSpace(planTarget))
 	b := strings.ToLower(strings.TrimSpace(toolTarget))
@@ -294,7 +293,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	// concrete signal of "what the agent knows now" beyond the
 	// original priority-files sample.
 	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	for path, content := range ctx.FilesRead {
+	for path, content := range ctx.SnapshotFilesRead() {
 		if len(pctx) >= 8 {
 			break
 		}
@@ -317,7 +316,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 		ProjectContext: pctx,
 		NCandidates:    3,
 	}
-	plan, err := callV3PlanStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		switch stage {
 		case "token", "llm_start", "llm_end":
 			return

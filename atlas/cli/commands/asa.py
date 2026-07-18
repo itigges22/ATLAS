@@ -2,8 +2,8 @@
 
 Parallels `atlas lens` for the BiasBusters #4 steering vectors. Same
 model-coupling problem the Lens had before PC-057/058: a steering vector
-trained against Qwen3.5-9B's residual-stream geometry (4096-dim, 36
-layers) doesn't transfer to a different model. This module wraps the
+trained against one model's residual-stream geometry doesn't transfer to
+a different model. This module wraps the
 existing `geometric-lens/asa_calibration/build_steering_vector.py`
 workflow into one CLI so swap-in models can be calibrated end-to-end.
 
@@ -25,7 +25,7 @@ docker-cp + docker-exec dance keeps the source of truth at one path.
 
 Invoke:
     atlas asa check                       # probe the running stack
-    atlas asa build                       # train fresh vector w/ bundled pairs
+    atlas asa build                       # generate pairs + train fresh vector
     atlas asa build --pairs custom.jsonl  # train with custom contrast pairs
     atlas asa build --limit 50            # smoke test (50 pairs, ~1 min)
     atlas asa publish --repo USER/REPO    # upload + open registry-PR
@@ -45,7 +45,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
+from atlas.cli import compose as compose_config
 from atlas.cli.commands import lens as lens_module  # for shared helpers
+from atlas.cli.commands import model_registry
 
 
 # Output primitives — mirror lens.py for cross-module UX consistency.
@@ -65,7 +67,7 @@ def _safe_print(s: str = "") -> None:
         print(s.encode("ascii", errors="replace").decode("ascii"))
 
 
-# Default paths shared with the entrypoint (inference/entrypoint-v3.1-9b.sh).
+# Default paths shared with the entrypoint (inference/entrypoint-v3.1.sh).
 # Keep aligned — operators expect `atlas asa` to point at the same file
 # llama-server will actually --control-vector-scaled at boot.
 DEFAULT_VECTOR_NAME = "ast_edit_steering.gguf"
@@ -73,10 +75,14 @@ DEFAULT_HOST_VECTOR_PATH = "/models/" + DEFAULT_VECTOR_NAME  # llama-server view
 DEFAULT_LENS_CONTAINER = "atlas-geometric-lens-1"
 
 
-def _configured_vector_path() -> str:
+def _configured_vector_path(atlas_root: Optional[str] = None) -> str:
     """Path the lens / entrypoint use. Matches the env-var conventions
     in proxy/calibration_status.go's probeASAStatus()."""
-    return os.environ.get("ATLAS_CONTROL_VECTOR", DEFAULT_HOST_VECTOR_PATH)
+    configured = os.environ.get("ATLAS_CONTROL_VECTOR")
+    if not configured and atlas_root:
+        configured = compose_config.read_env_file(atlas_root).get(
+            "ATLAS_CONTROL_VECTOR")
+    return configured or DEFAULT_HOST_VECTOR_PATH
 
 
 def _host_resolve_vector_path(configured: str, atlas_root: str) -> str:
@@ -93,7 +99,9 @@ def _host_resolve_vector_path(configured: str, atlas_root: str) -> str:
         return configured  # the path resolved directly — use it
     if configured.startswith("/models/"):
         # Try ATLAS_MODELS_DIR first, then the default <atlas_root>/models
-        env_dir = os.environ.get("ATLAS_MODELS_DIR")
+        env_dir = (os.environ.get("ATLAS_MODELS_DIR")
+                   or compose_config.read_env_file(atlas_root).get(
+                       "ATLAS_MODELS_DIR"))
         candidates = []
         if env_dir:
             host_dir = (env_dir if os.path.isabs(env_dir)
@@ -111,6 +119,43 @@ def _atlas_root() -> str:
     """Reuse lens.py's resolution so both subcommand families walk up the
     same way."""
     return lens_module._atlas_root()
+
+
+def _gguf_block_count(path: str) -> int:
+    """Model depth from the GGUF header (`<arch>.block_count`), 0 on any
+    failure. Fallback for llama-server builds whose /props carries no
+    n_layer. Keyed off general.architecture, so any GGUF works."""
+    import struct
+    try:
+        from atlas.cli.commands.fit import _read_gguf_kv
+        found = {}
+        with open(path, "rb") as f:
+            for key, val in _read_gguf_kv(f):
+                if key == "general.architecture" or key.endswith(".block_count"):
+                    found[key] = val
+                arch = found.get("general.architecture")
+                if arch and f"{arch}.block_count" in found:
+                    return int(found[f"{arch}.block_count"])
+    except (OSError, ValueError, struct.error):
+        return 0
+    return 0
+
+
+def _canonical_model_identity(value: Optional[str]) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    name = text.rsplit("/", 1)[-1]
+    if name.lower().endswith(".gguf"):
+        name = name[:-5]
+    return name.casefold()
+
+
+def _model_marker_value(value: Optional[str]) -> str:
+    """Normalize a loaded-model path into a portable sidecar value."""
+    text = str(value or "").strip().replace("\\", "/")
+    name = text.rsplit("/", 1)[-1]
+    if name.lower().endswith(".gguf"):
+        name = name[:-5]
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +178,8 @@ def _read_cvector_meta(path: str) -> dict:
     """
     out = {
         "present": False, "size_bytes": 0, "dim": None,
-        "layer_count": None, "model_hint": None, "error": "",
+        "layer_count": None, "model_hint": None, "steered_layer": None,
+        "error": "",
     }
     if not os.path.isfile(path):
         out["error"] = "file not found"
@@ -178,14 +224,21 @@ def _read_cvector_meta(path: str) -> dict:
                     pass
         # Each "direction.<layer>" tensor has shape (hidden_dim,) — its
         # length IS the residual stream dim we need to match against the
-        # model's embedding dim.
+        # model's embedding dim, and its name suffix is the layer the
+        # vector actually steers.
         for tensor in reader.tensors:
             if tensor.name.startswith("direction."):
                 shape = list(tensor.shape)
                 if shape:
                     # First (and typically only) dim
                     out["dim"] = int(shape[0])
-                    break
+                try:
+                    out["steered_layer"] = int(
+                        tensor.name.split(".", 1)[1])
+                except (IndexError, ValueError):
+                    # best-effort: swallow on failure (caller continues)
+                    pass
+                break
     except Exception as e:  # tolerate broken GGUFs
         out["error"] = f"gguf parse failed: {e}"
     return out
@@ -206,6 +259,7 @@ class ASACheckVerdict:
     vector_dim: Optional[int] = None
     vector_layer_count: Optional[int] = None
     vector_model_hint: Optional[str] = None
+    vector_model_marker: Optional[str] = None
     unverified: bool = False  # True when dim couldn't be parsed
 
     @property
@@ -218,12 +272,15 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
     if not probe.reachable:
         return ASACheckVerdict(
             verdict="incompatible", reason=probe.error, probe=probe,
-            vector_path=_configured_vector_path(),
+            vector_path=_configured_vector_path(atlas_root),
         )
 
-    configured = _configured_vector_path()
+    configured = _configured_vector_path(atlas_root)
     vpath = _host_resolve_vector_path(configured, atlas_root)
     meta = _read_cvector_meta(vpath)
+    # Appended to every needs-build reason: when the registry has a
+    # published vector for the loaded model, downloading beats retraining.
+    dl_hint = model_registry.artifact_download_hint(probe.model_name, "asa")
     v = ASACheckVerdict(
         verdict="needs-build",
         reason=meta["error"] or "no control vector at " + vpath,
@@ -238,7 +295,29 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
 
     if not meta["present"]:
         v.reason = (f"no control vector at {vpath}. Run `atlas asa build` "
-                    f"to train one, or drop a pre-built .gguf at the path.")
+                    f"to train one, or drop a pre-built .gguf at the path."
+                    f"{dl_hint}")
+        return v
+
+    marker_path = vpath + ".model"
+    try:
+        with open(marker_path) as marker_file:
+            v.vector_model_marker = marker_file.read().strip() or None
+    except OSError:
+        v.vector_model_marker = None
+    selected_model = probe.model_name or os.environ.get("ATLAS_MODEL_NAME", "")
+    if not v.vector_model_marker:
+        v.reason = (f"control vector is present but {marker_path} is missing. "
+                    "The inference entrypoint will keep it disabled; run "
+                    "`atlas asa build` to create a verified vector and marker."
+                    f"{dl_hint}")
+        return v
+    if (selected_model and _canonical_model_identity(v.vector_model_marker)
+            != _canonical_model_identity(selected_model)):
+        v.reason = (f"control vector is marked for {v.vector_model_marker!r}, "
+                    f"but llama-server has {selected_model!r} loaded. The "
+                    "entrypoint will keep it disabled; run `atlas asa build`."
+                    f"{dl_hint}")
         return v
 
     if meta["dim"] is None:
@@ -260,7 +339,7 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
         v.reason = (f"Dim mismatch: control vector at {vpath} is "
                     f"{meta['dim']}-dim, but model emits {probe.embedding_dim}-dim "
                     f"residuals. Vector was trained for a different model; "
-                    f"run `atlas asa build` to retrain.")
+                    f"run `atlas asa build` to retrain.{dl_hint}")
         return v
 
     v.verdict = "compat"
@@ -303,8 +382,14 @@ def _emit_check(args: argparse.Namespace, color: bool) -> int:
             _safe_print(f"  layer count:  {v.vector_layer_count}")
         if v.vector_model_hint:
             _safe_print(f"  model hint:   {v.vector_model_hint}")
+        _safe_print(f"  model marker: {v.vector_model_marker or '(missing)'}")
     _safe_print("")
     _safe_print(f"  {v.reason}")
+    if v.verdict != "compat":
+        _safe_print("")
+        _safe_print("  This is the ASA-only view. `atlas doctor` runs the "
+                    "full stack diagnosis (service health, auth, disk, "
+                    "lens/ASA state) if the fix above isn't enough.")
     return v.exit_code
 
 
@@ -326,6 +411,15 @@ def _docker_exec(container: str, cmd: List[str], capture: bool = False):
     return subprocess.run(full, timeout=3600)
 
 
+def _docker_exec_rm(container: str, path: str) -> None:
+    """Best-effort rm inside the container. A hung docker exec must not
+    turn staging/cleanup into a traceback."""
+    try:
+        _docker_exec(container, ["rm", "-f", path])
+    except subprocess.TimeoutExpired:
+        _safe_print(f"  (cleanup of {path} in {container} timed out)")
+
+
 def _emit_build(args: argparse.Namespace, color: bool) -> int:
     """Train fresh ASA vector by running build_steering_vector.py inside
     the lens container.
@@ -345,7 +439,11 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                     f"{RESET if color else ''}")
         return 1
 
-    container = args.container or DEFAULT_LENS_CONTAINER
+    # Resolve the lens container via compose so non-"atlas" project names
+    # (COMPOSE_PROJECT_NAME, renamed checkout dirs) work; fall back to the
+    # conventional name when compose resolution fails.
+    container = args.container or compose_config.container_id(
+        atlas_root, "geometric-lens", fallback=DEFAULT_LENS_CONTAINER)
 
     # 1. Pre-flight: check the container is up + lens reachable
     _safe_print(f"[1/5] Pre-flight: container {container}, "
@@ -371,6 +469,34 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         return 2
     _safe_print(f"  model emits {probe.embedding_dim}-dim residuals; "
                 f"container running")
+    layer = args.layer
+    if layer is None:
+        n_layers = probe.n_layers
+        if not n_layers and probe.model_name:
+            # Some llama-server builds omit n_layer from /props; read
+            # <arch>.block_count from the model's GGUF header instead.
+            model_host = _host_resolve_vector_path(probe.model_name, atlas_root)
+            if os.path.isfile(model_host):
+                n_layers = _gguf_block_count(model_host)
+                if n_layers:
+                    _safe_print(f"  model depth {n_layers} read from GGUF "
+                                f"header ({os.path.basename(model_host)})")
+        if not n_layers:
+            _safe_print(f"  {RED if color else ''}can't derive an ASA layer: "
+                        f"llama-server did not report model depth and the "
+                        f"model GGUF was not readable on this host. Pass "
+                        f"--layer explicitly (e.g. --layer 36 for a 48-layer "
+                        f"model: depth × 0.75).{RESET if color else ''}")
+            return 2
+        layer = max(1, round(n_layers * 0.75))
+    if (args.model and probe.model_name
+            and _canonical_model_identity(args.model)
+            != _canonical_model_identity(probe.model_name)):
+        _safe_print(f"  {RED if color else ''}requested model "
+                    f"{args.model!r}, but llama-server has "
+                    f"{probe.model_name!r} loaded. Refusing to train and "
+                    f"mislabel a vector.{RESET if color else ''}")
+        return 2
 
     # 2. Resolve script + pairs paths on the host
     asa_dir = os.path.join(atlas_root, "geometric-lens", "asa_calibration")
@@ -381,6 +507,23 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                     f"build_steering_vector.py at {script_host}. Are you in "
                     f"an ATLAS checkout?{RESET if color else ''}")
         return 1
+    if not os.path.isfile(pairs_host) and not args.pairs:
+        generator = os.path.join(asa_dir, "generate_pairs.py")
+        if not os.path.isfile(generator):
+            _safe_print(f"  {RED if color else ''}contrast-pair generator "
+                        f"not found at {generator}.{RESET if color else ''}")
+            return 1
+        _safe_print("  generating default model-neutral contrast pairs…")
+        generated = subprocess.run(
+            [sys.executable, generator, "--out", pairs_host,
+             "--n", "1000", "--seed", "42"],
+            capture_output=True, text=True,
+        )
+        if generated.returncode != 0:
+            _safe_print(f"  {RED if color else ''}contrast-pair generation "
+                        f"failed: {generated.stderr.strip()}"
+                        f"{RESET if color else ''}")
+            return 1
     if not os.path.isfile(pairs_host):
         _safe_print(f"  {RED if color else ''}contrast pairs not found at "
                     f"{pairs_host}.{RESET if color else ''}")
@@ -392,12 +535,10 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
 
     # 3. Stage script + pairs into the container. We also pre-emptively
     # delete any stale `/tmp/ast_edit_steering.gguf` from a previous
-    # failed run — otherwise a fresh training crash that writes nothing
-    # would let step [4/5] silently `docker cp` the OLD vector back to
-    # the host as if it were a new build. (Silent data corruption bug,
-    # caught in round-2 audit.)
+    # failed run. Otherwise a fresh crash that writes nothing could copy
+    # the old vector back to the host as if it were a new build.
     _safe_print(f"[2/5] Staging script + pairs into {container}…")
-    _docker_exec(container, ["rm", "-f", "/tmp/ast_edit_steering.gguf"])
+    _docker_exec_rm(container, "/tmp/ast_edit_steering.gguf")
     for src, dst in [(script_host, "/tmp/build_steering_vector.py"),
                       (pairs_host, "/tmp/contrast_pairs.jsonl")]:
         cp = subprocess.run(["docker", "cp", src, f"{container}:{dst}"],
@@ -406,35 +547,63 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             _safe_print(f"  {RED if color else ''}docker cp {src} failed: "
                         f"{cp.stderr.strip()}{RESET if color else ''}")
             return 1
-    _safe_print(f"  staged")
+    _safe_print("  staged")
 
     if args.dry_run:
         _safe_print(f"[3/5] (dry-run) would run build_steering_vector.py "
-                    f"with --layer {args.layer} "
+                    f"with --layer {layer} "
                     f"--limit {args.limit if args.limit else 'all'}")
         # Even in dry-run, clean up the staged script + pairs so we
         # don't leave them in the container's /tmp. The cleanup loop
         # in the real-run path uses try/finally; here it's just a
         # direct pair of removes since we have no run to wrap.
         for f in ("/tmp/build_steering_vector.py", "/tmp/contrast_pairs.jsonl"):
-            _docker_exec(container, ["rm", "-f", f])
+            _docker_exec_rm(container, f)
         return 0
 
     # 4. Run the build inside the container. try/finally so the staged
     # files in the container's /tmp always get cleaned up — even when
     # the training run crashes or we hit a sanity-check failure on the
     # output. Otherwise repeated failed runs would pile up in /tmp.
-    _safe_print(f"[3/5] Training (layer {args.layer}, "
+    _safe_print(f"[3/5] Training (layer {layer}, "
                 f"{args.limit or 'all'} pairs). Takes ~25 min for 1000 pairs…")
     cmd = ["python3", "/tmp/build_steering_vector.py",
             "--pairs", "/tmp/contrast_pairs.jsonl",
             "--out", "/tmp/ast_edit_steering.gguf",
-            "--layer", str(args.layer)]
+            "--layer", str(layer)]
     if args.limit:
         cmd += ["--limit", str(args.limit)]
+    # Stamp the vector's metadata with the real model's architecture and
+    # layer count (read from the configured GGUF) instead of placeholders.
+    try:
+        from atlas.cli.commands import fit as fit_module
+        model_path = fit_module._default_model_path()
+        if model_path:
+            meta = fit_module.read_gguf_meta(model_path)
+            if meta.architecture:
+                cmd += ["--model-hint", meta.architecture]
+            if meta.n_layers:
+                cmd += ["--layer-count", str(meta.n_layers)]
+    except Exception:
+        pass   # metadata stamps are informational — never block the build
+    built_ok = False     # training produced a vector in the container
+    copied_out = False   # the built vector survives in the container until True
     try:
         start = time.time()
-        result = _docker_exec(container, cmd)
+        try:
+            result = _docker_exec(container, cmd)
+        except subprocess.TimeoutExpired:
+            _safe_print(f"  {RED if color else ''}training timed out after "
+                        f"1h inside {container}.{RESET if color else ''}")
+            _safe_print(f"  If the run finished writing before the timeout, "
+                        f"the vector may still be in the container — recover "
+                        f"it with: docker cp "
+                        f"{container}:/tmp/ast_edit_steering.gguf .")
+            # Leave /tmp/ast_edit_steering.gguf in the container for
+            # recovery (the finally block only removes it after copy-out
+            # or a clean pre-training failure).
+            built_ok = True
+            return 1
         elapsed = time.time() - start
         if result.returncode != 0:
             _safe_print(f"  {RED if color else ''}build script exited "
@@ -442,10 +611,27 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                         f"docker logs {container}{RESET if color else ''}")
             return 1
         _safe_print(f"  build completed in {elapsed:.1f}s")
+        built_ok = True
 
-        # 5. Copy result back + save to artifact dir
-        artifact_dir = args.artifact_dir or os.path.dirname(
-            _configured_vector_path())
+        # 5. Copy result back + save to artifact dir. The configured vector
+        # path is the CONTAINER view (/models/...); the host-side build must
+        # write to the bind-mounted models dir, not literally /models.
+        artifact_dir = args.artifact_dir
+        if not artifact_dir:
+            configured = _configured_vector_path(atlas_root)
+            resolved = _host_resolve_vector_path(configured, atlas_root)
+            if resolved.startswith("/models/"):
+                # No existing host file to anchor the translation (first
+                # build for this model) — target the bind-mount source.
+                env_dir = (os.environ.get("ATLAS_MODELS_DIR")
+                           or compose_config.read_env_file(atlas_root).get(
+                               "ATLAS_MODELS_DIR")
+                           or "models")
+                artifact_dir = (env_dir if os.path.isabs(env_dir)
+                                else os.path.normpath(
+                                    os.path.join(atlas_root, env_dir)))
+            else:
+                artifact_dir = os.path.dirname(resolved)
         os.makedirs(artifact_dir, exist_ok=True)
         out_path = args.out or os.path.join(artifact_dir, DEFAULT_VECTOR_NAME)
         _safe_print(f"[4/5] Copying built vector to {out_path}…")
@@ -458,9 +644,9 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                         f"{cp.stderr.strip()}{RESET if color else ''}")
             return 1
 
-        # Size sanity check. A real ASA vector for a 4096-dim model is
-        # ~32 KB (1 float32 direction × 4096 dims + GGUF header). A few
-        # hundred bytes means the training script crashed mid-write to
+        # Size sanity check. A real ASA vector contains at least one
+        # float32 direction plus a GGUF header. A few hundred bytes means
+        # the training script crashed mid-write to
         # its tempfile and produced a truncated/empty GGUF — reporting
         # that as success would be worse than a clean failure. 1 KB
         # floor catches all realistic truncation modes while staying
@@ -477,23 +663,46 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                 pass
             return 1
         _safe_print(f"  saved: {out_path} ({size} bytes)")
+        model_identity = _model_marker_value(args.model or probe.model_name)
+        if not model_identity:
+            _safe_print(f"  {RED if color else ''}could not identify the "
+                        f"loaded model for the ASA safety marker."
+                        f"{RESET if color else ''}")
+            try:
+                os.remove(out_path)
+            except OSError:
+                # Best-effort cleanup after refusing an unmarked vector; the
+                # command is already returning failure to the operator.
+                pass
+            return 1
+        with open(out_path + ".model", "w") as marker:
+            marker.write(str(model_identity).strip() + "\n")
+        _safe_print(f"  model marker: {out_path}.model ({model_identity})")
 
+        copied_out = True
         _safe_print("")
         _safe_print(f"  {GREEN if color else ''}Build complete.{RESET if color else ''}")
-        _safe_print(f"  Next: restart llama-server so it picks up the new vector:")
-        _safe_print(f"    docker compose up -d --build llama-server --no-deps")
-        _safe_print(f"  Then verify: atlas asa check")
-        _safe_print(f"  Or share it: atlas asa publish --repo USER/REPO")
+        _safe_print("  Next: restart llama-server so it picks up the new vector:")
+        _safe_print("    docker compose restart llama-server")
+        _safe_print("  Then verify: atlas asa check")
+        _safe_print("  Or share it: atlas asa publish --repo USER/REPO")
         return 0
     finally:
-        # Clean up staged inputs + output in the container's /tmp.
-        # Leaving them would (1) waste space across repeated runs and
-        # (2) re-enable the stale-output bug for the NEXT run, since
-        # the pre-flight rm above only catches one prior failure.
-        for f in ("/tmp/build_steering_vector.py",
-                  "/tmp/contrast_pairs.jsonl",
-                  "/tmp/ast_edit_steering.gguf"):
-            _docker_exec(container, ["rm", "-f", f])
+        # Clean up staged inputs in the container's /tmp. The built OUTPUT
+        # is only removed once it has been copied to the host — a failure
+        # between training and copy-out must leave the vector recoverable
+        # (`docker cp <container>:/tmp/ast_edit_steering.gguf .`), not
+        # destroy ~15 min of training. Staleness across runs is handled by
+        # the pre-flight rm above.
+        cleanup = ["/tmp/build_steering_vector.py",
+                   "/tmp/contrast_pairs.jsonl"]
+        if copied_out or not built_ok:
+            cleanup.append("/tmp/ast_edit_steering.gguf")
+        else:
+            _safe_print(f"  Built vector left in the container for recovery: "
+                        f"docker cp {container}:/tmp/ast_edit_steering.gguf .")
+        for f in cleanup:
+            _docker_exec_rm(container, f)
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +771,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         return 1
 
     atlas_root = _atlas_root()
-    raw = args.vector or _configured_vector_path()
+    raw = args.vector or _configured_vector_path(atlas_root)
     vpath = _host_resolve_vector_path(raw, atlas_root)
     if not os.path.isfile(vpath):
         _safe_print(f"  {RED if color else ''}No control vector at {vpath}. "
@@ -581,9 +790,44 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  Hint:   {meta['model_hint']}")
 
     matched = lens_module._resolve_model_arg(args.model)
-    model_label = matched.name if matched else (args.model or "<unknown-model>")
-    base_model = (matched.model_display if matched
-                  else "<unknown base model>")
+    model_label = matched.name if matched else (args.model or "")
+    if not model_label:
+        # No model argument — fall back to the configured model, the same
+        # resolution every other subcommand uses.
+        try:
+            from atlas.cli.commands import fit as fit_module
+            mp = fit_module._default_model_path()
+            if mp:
+                model_label = os.path.splitext(os.path.basename(mp))[0]
+        except Exception:
+            # Configured-model discovery is best-effort; the explicit-model
+            # validation below produces the actionable error for the user.
+            pass
+    if not model_label:
+        _safe_print(f"  {RED if color else ''}Could not identify the model "
+                    f"this vector belongs to. Pass the registry model name "
+                    f"explicitly.{RESET if color else ''}")
+        return 1
+    marker_path = vpath + ".model"
+    try:
+        with open(marker_path) as marker_file:
+            marked_model = marker_file.read().strip()
+    except OSError:
+        marked_model = ""
+    if not marked_model:
+        _safe_print(f"  {RED if color else ''}Missing model marker at "
+                    f"{marker_path}. Rebuild with `atlas asa build` before "
+                    f"publishing.{RESET if color else ''}")
+        return 1
+    if (_canonical_model_identity(marked_model)
+            != _canonical_model_identity(model_label)):
+        _safe_print(f"  {RED if color else ''}Vector marker says "
+                    f"{marked_model!r}, but publish target is "
+                    f"{model_label!r}. Refusing to mislabel the artifact."
+                    f"{RESET if color else ''}")
+        return 1
+    base_model = (matched.model_display if matched else
+                  model_label)
     license_id = args.license or "apache-2.0"
 
     hf_repo = args.repo or f"<your-hf-username>/atlas-asa-{model_label.lower()}"
@@ -611,17 +855,20 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
             api.upload_file(path_or_fileobj=vpath,
                              path_in_repo=DEFAULT_VECTOR_NAME,
                              repo_id=hf_repo)
-            _safe_print(f"  uploaded")
+            _safe_print("  uploaded")
         except Exception as e:
             _safe_print(f"  {RED if color else ''}upload failed: "
                         f"{e}{RESET if color else ''}")
             return 1
 
-    _safe_print(f"[3/4] Rendering registry-PR body…")
+    _safe_print("[3/4] Rendering registry-PR body…")
+    # The vector file knows which layer it steers (direction.<N> tensor) —
+    # trust it over the --layer flag's default.
+    layer = meta.get("steered_layer") or args.layer
     pr_body = _render_asa_pr_body(model_label, hf_repo, base_model,
-                                    dim, args.layer, sha, license_id)
+                                    dim, layer, sha, license_id)
     if args.skip_pr or args.dry_run:
-        _safe_print(f"[4/4] (skipping PR open — printing body for paste)")
+        _safe_print("[4/4] (skipping PR open — printing body for paste)")
         _safe_print("")
         _safe_print(pr_body)
         _safe_print("")
@@ -634,29 +881,33 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     import shutil as _shutil
     gh_path = _shutil.which("gh")
     if not gh_path:
-        _safe_print(f"[4/4] `gh` not found — printing PR body for manual paste")
+        _safe_print("[4/4] `gh` not found — printing PR body for manual paste")
         _safe_print("")
         _safe_print(pr_body)
         return 0
-    _safe_print(f"[4/4] Opening registry-PR via `gh pr create`…")
-    # Only pass --head when ATLAS_PUBLISH_BRANCH is explicitly set; an
-    # empty --head crashes gh outright instead of inferring the current
-    # branch. Same fix as lens.py's publish flow.
-    gh_args = ["gh", "pr", "create",
-               "--repo", "itigges22/ATLAS",
-               "--title", f"Registry: add ASA vector for {model_label} "
-                          f"(via atlas asa publish)",
-               "--body", pr_body]
-    if branch := os.environ.get("ATLAS_PUBLISH_BRANCH", "").strip():
-        gh_args += ["--head", branch]
-    result = subprocess.run(gh_args, capture_output=True, text=True, timeout=30)
-    if result.returncode == 0:
+    # GitHub-API PR (shared with lens publish): commits a real registry
+    # edit — flips the model's asa_status to supported and records the
+    # vector's HF repo — no local git checkout required. The model must
+    # already have a registry entry (the lens publish PR adds it); when
+    # it doesn't, fall back to the printed body.
+    _safe_print("[4/4] Opening registry-PR via the GitHub API…")
+    title = (f"Registry: add ASA vector for {model_label} "
+             f"(via atlas asa publish)")
+    vector_name = os.path.basename(
+        _configured_vector_path(atlas_root)) or "ast_edit_steering.gguf"
+    pr_url = lens_module.open_registry_pr_via_api(
+        model_label, title, pr_body,
+        lambda content: lens_module._registry_set_asa(
+            content, model_label, hf_repo, [vector_name]),
+        color)
+    if pr_url:
         _safe_print(f"  {GREEN if color else ''}PR opened: "
-                    f"{result.stdout.strip()}{RESET if color else ''}")
+                    f"{pr_url}{RESET if color else ''}")
     else:
-        _safe_print(f"  {YELL if color else ''}gh pr create returned "
-                    f"{result.returncode} — printing body for paste"
-                    f"{RESET if color else ''}")
+        _safe_print(f"  {YELL if color else ''}Could not open the PR "
+                    f"automatically (is the model in the registry yet? the "
+                    f"lens publish PR adds the entry) — body below for "
+                    f"manual paste{RESET if color else ''}")
         _safe_print("")
         _safe_print(pr_body)
     return 0
@@ -687,10 +938,10 @@ def main(argv=None):
     p_build.add_argument("model", nargs="?", default=None,
         help="registry name (default: whatever llama-server has loaded)")
     p_build.add_argument("--pairs", default=None,
-        help="contrast pairs JSONL (default: "
-             "geometric-lens/asa_calibration/contrast_pairs.jsonl)")
-    p_build.add_argument("--layer", type=int, default=27,
-        help="layer to extract residuals from (default 27 = ~75%% of Qwen3.5-9B's 36)")
+        help="contrast pairs JSONL (default: generate "
+             "geometric-lens/asa_calibration/contrast_pairs.jsonl on demand)")
+    p_build.add_argument("--layer", type=int, default=None,
+        help="layer to extract residuals from (default: 75%% of loaded model depth)")
     p_build.add_argument("--limit", type=int, default=0,
         help="cap pairs processed for smoke tests (0 = all)")
     p_build.add_argument("--container", default=None,
@@ -713,12 +964,12 @@ def main(argv=None):
         help="path to the .gguf (default: ATLAS_CONTROL_VECTOR)")
     p_pub.add_argument("--license", default="apache-2.0",
         help="SPDX license id")
-    p_pub.add_argument("--layer", type=int, default=27,
-        help="layer the vector was trained at (recorded in PR body)")
+    p_pub.add_argument("--layer", type=int, default=None,
+        help="layer the vector was trained at (default: read from vector metadata)")
     p_pub.add_argument("--dry-run", action="store_true",
         help="don't upload, don't open PR")
     p_pub.add_argument("--skip-pr", action="store_true",
-        help="upload to HF but don't try gh pr create")
+        help="upload to HF but skip the registry PR")
     p_pub.add_argument("--no-color", action="store_true")
 
     args = parser.parse_args(argv)

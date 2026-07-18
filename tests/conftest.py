@@ -2,7 +2,6 @@
 Pytest configuration and fixtures for ATLAS infrastructure tests.
 
 This module provides shared fixtures for testing all ATLAS services including:
-- Redis client
 - HTTP clients for each service
 - Test user and API key management
 - Test project creation
@@ -11,7 +10,6 @@ This module provides shared fixtures for testing all ATLAS services including:
 
 import os
 import uuid
-import time
 import tempfile
 import shutil
 from typing import Generator, Optional
@@ -20,16 +18,15 @@ from dataclasses import dataclass
 import pytest
 
 try:
-    import redis
     import httpx
-    _HAS_INFRA_DEPS = True
+    _HAS_HTTPX = True
 except ImportError:
-    _HAS_INFRA_DEPS = False
+    httpx = None
+    _HAS_HTTPX = False
+
 
 # Service endpoints - using cluster IPs when running inside cluster,
 # or localhost with NodePort when running externally
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 
 # Determine if running inside cluster or externally
 IN_CLUSTER = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token")
@@ -42,10 +39,19 @@ if IN_CLUSTER:
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://atlas-dashboard:3001")
 else:
-    # Running locally - use NodePort or port-forward
+    # Running locally — resolve from the deployment's config the same way
+    # the benchmark suite does (.env on Docker, K3s NodePorts as fallback),
+    # so the live-stack tests hit whichever deploy is actually running.
+    try:
+        from benchmark.config import config as _atlas_config
+        _llama_default = _atlas_config.llama_url
+        _rag_default = _atlas_config.rag_url
+    except Exception:
+        _llama_default = "http://localhost:32735"
+        _rag_default = "http://localhost:31144"
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://localhost:30000")
-    RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
-    LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:32735")
+    RAG_API_URL = os.environ.get("RAG_API_URL", _rag_default)
+    LLAMA_URL = os.environ.get("LLAMA_URL", _llama_default)
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://localhost:30080")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://localhost:30820")
     DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:30001")
@@ -73,29 +79,7 @@ class TestAPIKey:
     name: str
 
 
-if _HAS_INFRA_DEPS:
-    @pytest.fixture(scope="session")
-    def redis_client() -> Generator:
-        """Create a Redis client for testing."""
-        try:
-            client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-            client.ping()
-            yield client
-        except redis.ConnectionError:
-            import subprocess
-            proc = subprocess.Popen(
-                ["kubectl", "port-forward", "svc/redis", "6379:6379"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            time.sleep(2)
-            try:
-                client = redis.Redis(host="localhost", port=6379, decode_responses=True)
-                client.ping()
-                yield client
-            finally:
-                proc.terminate()
-                proc.wait()
-
+if _HAS_HTTPX:
     @pytest.fixture(scope="session")
     def api_portal_client() -> Generator:
         """HTTP client for API Portal service."""
@@ -176,18 +160,6 @@ if _HAS_INFRA_DEPS:
                 f"/api/keys/{api_key.key_id}",
                 headers={"Authorization": f"Bearer {test_user.jwt_token}"}
             )
-
-    @pytest.fixture(scope="function")
-    def cleanup_redis_keys(redis_client) -> Generator:
-        """Track and clean up Redis keys created during tests."""
-        keys_to_cleanup = []
-        yield keys_to_cleanup
-        for key in keys_to_cleanup:
-            try:
-                redis_client.delete(key)
-            except Exception:
-                # best-effort: swallow on failure (caller continues)
-                pass
 
 
 @pytest.fixture(scope="function")
@@ -310,8 +282,14 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Add markers to tests based on their location."""
+    """Separate hermetic tests from suites that require running services."""
     for item in items:
-        # Add integration marker to tests in integration folder
-        if "integration" in str(item.fspath):
+        path = str(item.fspath).replace("\\", "/")
+        live_infrastructure = path.endswith((
+            "/tests/infrastructure/test_llm.py",
+            "/tests/infrastructure/test_sandbox.py",
+            "/tests/infrastructure/test_sandbox_java_kotlin.py",
+            "/tests/infrastructure/test_sandbox_ruby_php.py",
+        ))
+        if "/tests/integration/" in path or live_infrastructure:
             item.add_marker(pytest.mark.integration)

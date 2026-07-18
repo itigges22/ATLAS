@@ -4,15 +4,25 @@
 
 | File | Size | Purpose |
 |------|------|---------|
-| `cost_field.pt` | 8.3M | C(x) cost field — 4096→512→128→1 MLP, maps embeddings to correctness energy |
-| `metric_tensor.pt` | 65M | G(x) metric tensor — 4096→512→4096, geometric correction field |
-| `gx_xgboost.json` | 1.5M | G(x) XGBoost ensemble — native XGBoost JSON dump (preferred loader path, see PC-031) |
-| `gx_xgboost.pkl` | 958K | G(x) XGBoost ensemble — legacy pickle, kept as fallback for one release while users refresh their model dir |
-| `gx_weights.json` | 12M | G(x) ensemble weights |
+| `cost_field.pt` | ~8M | C(x) cost field — hidden-dim→512→128→1 MLP, maps embeddings to correctness energy. Dim follows the trained model (bundled: 3840, Gemma 4 12B). |
+| `cost_field.safetensors` | ~8M | Pickle-free twin of `cost_field.pt`, written together by `save_cost_field` and shipped by `atlas lens publish`. |
+| `model_identity.json` | <1K | Selected model name + embedding width. Current runtimes require it to match `ATLAS_MODEL_NAME`; same-width models are not interchangeable. |
+| `cx_normalization.json` | <1K | Per-model C(x) sigmoid midpoint and steepness, derived from PASS/FAIL energy separation. |
+| `gx_xgboost.json` | 17K | G(x) XGBoost ensemble — native XGBoost JSON dump (preferred loader path, see PC-031). |
+| `gx_weights.json` | ~11M | G(x) PCA projection + training stats (hidden-dim→128). |
+| `gx_thresholds.json` | <1K | Per-model `severe`, `off_rails`, and `low` operating thresholds. |
+
+`gx_xgboost.pkl` (the legacy pickle fallback) is removed on retrain —
+`save_gx` deletes it so a previous model's pickle can't shadow the JSON.
+
+The checked-in reference bundle predates the identity/calibration files above.
+It remains useful as frozen provenance, but current runtime interventions stay
+disabled until `atlas lens build` produces a complete bundle for the selected
+model.
 
 ## Training Data
 
-**In-repo sample**: `geometric-lens/data/sample/` — 10 embeddings (5 PASS, 5 FAIL) showing the data format.
+**In-repo sample**: `geometric-lens/data/sample/embeddings.json` — 10 embeddings (5 PASS, 5 FAIL) showing the training-data format (`{"embeddings": [...], "labels": [1|0, ...]}`; 3840-dim, from a Gemma 4 12B bench run).
 
 **Full dataset on HuggingFace**: https://huggingface.co/datasets/itigges22/ATLAS
 

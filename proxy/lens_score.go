@@ -19,14 +19,6 @@ import (
 	"time"
 )
 
-// Threshold below which a write/edit is considered "low quality" by the
-// lens. Calibrated against G(x) verdict bands: 0.7+ likely_correct,
-// 0.3-0.7 uncertain, <0.3 likely_incorrect. We pick a strict 0.15 so
-// only severe quality crashes trigger intervention — the lens already
-// returns false-low scores on short snippets, so the threshold needs
-// margin to avoid false positives on legitimate small edits.
-const lensLowScoreThreshold = 0.15
-
 // Number of consecutive low-score write/edit calls that count as a
 // regression. 2 is the minimum that's clearly a pattern (not a one-off
 // dud); higher values (3+) miss the May 6 stub-loop case where the
@@ -47,8 +39,6 @@ const lensRegressionRunLength = 2
 // surface language of the file being scored — Python stub, HTML stub,
 // Rust stub, Java stub all produce the same kind of low gx_min when
 // the model's internal state collapses to a placeholder pattern.
-const lensSevereThreshold = 0.05
-
 type lensAggregate struct {
 	FirstOffRailsIdx int     `json:"first_off_rails_idx"`
 	GxScoreMin       float64 `json:"gx_score_min"`
@@ -56,15 +46,38 @@ type lensAggregate struct {
 	CxNormMax        float64 `json:"cx_norm_max"`
 }
 
+// lensThresholds are the per-model operating points the lens service judged a
+// score against. They ship with the lens artifact (gx_thresholds.json) and are
+// returned in every score response so the proxy's regression checks use the
+// loaded model's calibration instead of the hardcoded fallback constants.
+type lensThresholds struct {
+	OffRails float64 `json:"off_rails"`
+	Low      float64 `json:"low"`
+	Severe   float64 `json:"severe"`
+}
+
 type lensPerStepResult struct {
-	Enabled     bool          `json:"enabled"`
-	GxAvailable bool          `json:"gx_available"`
-	NTokens     int           `json:"n_tokens"`
-	HiddenDim   int           `json:"hidden_dim"`
-	Layer       string        `json:"layer"`
-	Aggregate   lensAggregate `json:"aggregate"`
-	LatencyMS   float64       `json:"latency_ms"`
-	Error       string        `json:"error,omitempty"`
+	Enabled     bool            `json:"enabled"`
+	GxAvailable bool            `json:"gx_available"`
+	NTokens     int             `json:"n_tokens"`
+	HiddenDim   int             `json:"hidden_dim"`
+	Layer       string          `json:"layer"`
+	Aggregate   lensAggregate   `json:"aggregate"`
+	LatencyMS   float64         `json:"latency_ms"`
+	Thresholds  *lensThresholds `json:"thresholds,omitempty"`
+	Error       string          `json:"error,omitempty"`
+}
+
+// calibratedThresholds returns operating points only when the selected
+// model's Lens artifact supplied a valid calibration. Uncalibrated scores are
+// useful telemetry, but must not trigger corrective behavior using another
+// model's cutoffs.
+func (r lensPerStepResult) calibratedThresholds() (low, severe float64, ok bool) {
+	if r.Thresholds == nil || r.Thresholds.Low <= 0 || r.Thresholds.Severe <= 0 ||
+		r.Thresholds.Severe > r.Thresholds.Low {
+		return 0, 0, false
+	}
+	return r.Thresholds.Low, r.Thresholds.Severe, true
 }
 
 // scoreContentForAgent calls /internal/lens/score-per-step on the given
@@ -140,7 +153,7 @@ func extractScorableContent(toolName string, args json.RawMessage) (string, bool
 // search/list/find/run_background's cwd). Used by the path-aware
 // error-loop breaker to distinguish "stuck on one file" from
 // "grinding through different files." Returns "" when no path is
-// applicable to the tool (e.g. plan_tasks, run_command's arbitrary
+// applicable to the tool (e.g. run_command's arbitrary
 // shell) — empty paths compare unequal, which prevents the breaker
 // from firing on tool-mix sequences.
 func extractFailurePath(toolName string, args json.RawMessage) string {
@@ -168,19 +181,21 @@ func extractFailurePath(toolName string, args json.RawMessage) string {
 // pattern. Returns ("", false) when no intervention is warranted.
 //
 // Pattern: the most recent N (= lensRegressionRunLength) gx_score_min
-// values are all below lensLowScoreThreshold. This is the "model is
+// values are all below the calibrated low threshold. This is the "model is
 // stuck on a stub or near-duplicate response" signature — the May 6
 // resources.html loop is the canonical example.
-func agentLensRegression(history []float64) (string, bool) {
+// low and severe are the per-model thresholds (resolved from the lens score's
+// bundled thresholds. Callers skip intervention when calibration is absent.
+func agentLensRegression(history []float64, low, severe float64) (string, bool) {
 	if len(history) == 0 {
 		return "", false
 	}
-	// Severe single-write short-circuit: gx_min below lensSevereThreshold
-	// (~0.05) is so far into the "likely_incorrect" band that one sample
-	// is enough — don't wait for a second confirmation while V3's
-	// sandbox-verifier rubber-stamps the stub in the same iteration.
+	// Severe single-write short-circuit: gx_min below the severe threshold
+	// is so far into the "likely_incorrect" band that one sample is enough —
+	// don't wait for a second confirmation while V3's sandbox-verifier
+	// rubber-stamps the stub in the same iteration.
 	last := history[len(history)-1]
-	if last < lensSevereThreshold {
+	if last < severe {
 		return fmt.Sprintf(
 			"⚠ Lens severe-quality alert: the geometric lens scored your last write at "+
 				"gx_min=%.3f, which is in the unambiguously-bad band (<%.2f). This usually "+
@@ -190,10 +205,10 @@ func agentLensRegression(history []float64) (string, bool) {
 				"clarification on what concrete content is needed, or (c) skip this file and "+
 				"move on if it's not blocking the verify step. DO NOT re-issue the same "+
 				"write — the lens will catch it again.",
-			last, lensSevereThreshold), true
+			last, severe), true
 	}
 	// Run-of-N moderate-low check: lensRegressionRunLength consecutive
-	// scores below lensLowScoreThreshold (~0.15). Catches gradual stub
+	// scores below the calibrated low threshold. Catches gradual stub
 	// loops where each write is moderately bad but no single one is
 	// catastrophic.
 	if len(history) < lensRegressionRunLength {
@@ -201,7 +216,7 @@ func agentLensRegression(history []float64) (string, bool) {
 	}
 	recent := history[len(history)-lensRegressionRunLength:]
 	for _, score := range recent {
-		if score >= lensLowScoreThreshold {
+		if score >= low {
 			return "", false
 		}
 	}

@@ -1,0 +1,16 @@
+[
+  {
+    "prompt": "Build a single-file terminal snake game in Python. Save it to snake.py. Use the curses module from the standard library — no external dependencies. Requirements: arrow keys (or WASD) for direction, snake grows by one when it eats food, game ends on wall OR self collision, food never spawns on the snake body, the direction cannot immediately reverse (pressing left while moving right is ignored), display the current score in a status line, press q to quit cleanly. The terminal must be restored to a usable state on exit.",
+    "difficulty": "short",
+    "expected_baseline_failure": "The first-pass base agent may miss direction reversal, food placement, growth, clean curses teardown, or non-blocking input.",
+    "expected_v3_repair": "V3's sandbox verifies imports and compilation; plan/repair review checks the gameplay invariants.",
+    "notes": "Fast single-file demo with playable output. Actual failures depend on the configured model."
+  },
+  {
+    "prompt": "Write a Python CLI that takes a directory and outputs a tree view to stdout, similar to the `tree` command. Save to tree.py. Requirements: argparse with a positional directory argument and a `--max-depth N` flag (default 10), uses ├── and └── for branching, sorts entries alphabetically with directories first, gracefully skips files it can't read (permission errors), exits 0 on success and 1 on error.",
+    "difficulty": "short",
+    "expected_baseline_failure": "The first-pass base agent may miss directories-first sorting, permission handling, max depth, or correct box drawing.",
+    "expected_v3_repair": "V3 catches the crash via permission test; PR-CoT applies the correct unicode pattern",
+    "notes": "Embedded fallback short prompt."
+  }
+]

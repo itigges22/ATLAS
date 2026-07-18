@@ -131,12 +131,21 @@ func parseSSE(ctx context.Context, r io.Reader, out chan<- Envelope) error {
 // reconnection. Useful when the proxy restarts mid-session — TUI keeps
 // running rather than dying on the first dropped connection.
 func streamEventsWithReconnect(ctx context.Context, eventsURL string, out chan<- Envelope) {
-	backoff := 500 * time.Millisecond
+	const initialBackoff = 500 * time.Millisecond
+	backoff := initialBackoff
 	maxBackoff := 30 * time.Second
 	for {
+		connectedAt := time.Now()
 		err := streamEvents(ctx, eventsURL, out)
 		if ctx.Err() != nil {
 			return // user quit / TUI shutdown
+		}
+		// A connection that survived a while was healthy — start the
+		// backoff ladder over instead of carrying an escalated delay
+		// from failures that happened long ago (e.g. proxy restarts
+		// hours apart would otherwise each cost the max 30s).
+		if time.Since(connectedAt) > time.Minute {
+			backoff = initialBackoff
 		}
 		// Connection died; back off and retry.
 		dlog("conn", "events_disconnected", map[string]interface{}{

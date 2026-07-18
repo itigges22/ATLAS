@@ -45,6 +45,25 @@ func TestRenderCalibrationBadge_NoArtifacts_ShowsWarning(t *testing.T) {
 	}
 }
 
+func TestRenderCalibrationBadge_Uncalibrated_ShowsWarning(t *testing.T) {
+	s := &calibrationStatus{}
+	s.Lens.Verdict = "uncalibrated"
+	s.ASA.Verdict = "unverified"
+	got := renderCalibrationBadge(s)
+	if !strings.Contains(got, "Lens ⚠") || !strings.Contains(got, "ASA ⚠") {
+		t.Errorf("expected truthful warnings, got %q", got)
+	}
+}
+
+func TestBadgeActionHint_UnverifiedASA_PointsAtCheck(t *testing.T) {
+	s := &calibrationStatus{}
+	s.Lens.Verdict = "supported"
+	s.ASA.Verdict = "unverified"
+	if got := badgeActionHint(s); !strings.Contains(got, "atlas asa check") {
+		t.Errorf("expected verification hint, got %q", got)
+	}
+}
+
 func TestRenderCalibrationBadge_Unreachable_ShowsFail(t *testing.T) {
 	s := &calibrationStatus{}
 	s.Lens.Verdict = "unreachable"
@@ -122,27 +141,6 @@ func TestFetchCalibrationStatusCmd_ProxyDown_ReturnsErr(t *testing.T) {
 	}
 	if cmsg.status != nil {
 		t.Error("expected nil status on err")
-	}
-}
-
-func TestCalibrationTooltip_OnlyShowsNonSupported(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "supported"
-	s.Lens.Hint = "ready"
-	s.ASA.Verdict = "missing"
-	s.ASA.Hint = "no control vector at /models/ast_edit_steering.gguf"
-	got := calibrationTooltip(s)
-	if strings.Contains(got, "Lens:") {
-		t.Errorf("supported Lens should not appear in tooltip: %q", got)
-	}
-	if !strings.Contains(got, "ASA:") {
-		t.Errorf("missing ASA should appear: %q", got)
-	}
-}
-
-func TestCalibrationTooltip_NilStatus_Empty(t *testing.T) {
-	if got := calibrationTooltip(nil); got != "" {
-		t.Errorf("expected empty tooltip for nil status, got %q", got)
 	}
 }
 

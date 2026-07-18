@@ -181,14 +181,18 @@ class BlendASC:
     def allocate(self, raw_energy: float,
                  task_id: str = "",
                  probe_tokens: int = 0,
-                 probe_time_ms: float = 0.0) -> Tuple[int, str]:
-        """Determine k and budget tier based on raw Lens energy.
+                 probe_time_ms: float = 0.0,
+                 normalized_energy: Optional[float] = None) -> Tuple[int, str]:
+        """Determine k and budget tier from calibrated Lens energy.
 
         Args:
             raw_energy: Raw C(x) energy from Geometric Lens.
             task_id: Task identifier for telemetry.
             probe_tokens: Tokens used for the probe candidate.
             probe_time_ms: Time in ms for the probe generation.
+            normalized_energy: Per-model normalized energy from the Lens.
+                When omitted, raw energy is normalized with this component's
+                explicitly configured calibration for backward compatibility.
 
         Returns:
             Tuple of (k, budget_tier).
@@ -196,11 +200,13 @@ class BlendASC:
         if not self.config.enabled:
             return self.config.default_k, "standard"
 
-        normalized = normalize_energy(
-            raw_energy,
-            midpoint=self.config.energy_midpoint,
-            steepness=self.config.energy_steepness,
-        )
+        normalized = normalized_energy
+        if normalized is None:
+            normalized = normalize_energy(
+                raw_energy,
+                midpoint=self.config.energy_midpoint,
+                steepness=self.config.energy_steepness,
+            )
         k, tier = compute_k(normalized, self._k_table)
 
         # Log telemetry

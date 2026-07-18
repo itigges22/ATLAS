@@ -183,6 +183,17 @@ func walkPythonFiles(root string) map[string]string {
 	return result
 }
 
+// symbolGraphNode mirrors one entry of the v3-service symbol_index "graph"
+// field (issue #39 Phase 3): a matched symbol's call-graph neighborhood.
+// Present only when ATLAS_CALL_GRAPH is on; omitted otherwise.
+type symbolGraphNode struct {
+	Symbol    string   `json:"symbol"`
+	DefinedIn []string `json:"defined_in"`
+	Callers   []string `json:"callers"`
+	Callees   []string `json:"callees"`
+	Impact    []string `json:"impact"`
+}
+
 // symbolIndexResult mirrors the v3-service /internal/symbol_index response.
 type symbolIndexResult struct {
 	Matched []struct {
@@ -197,6 +208,7 @@ type symbolIndexResult struct {
 		Name   string `json:"name"`
 		Reason string `json:"reason"`
 	} `json:"skipped"`
+	Graph []symbolGraphNode `json:"graph"`
 }
 
 // resolveProjectSymbols POSTs to v3-service and returns the matched
@@ -275,5 +287,31 @@ func formatProjectContextMessage(matched []struct {
 		}
 		sb.WriteString("```\n\n")
 	}
+	return sb.String()
+}
+
+// formatGraphNeighborhood renders the call-graph neighborhood (callers /
+// callees) of the matched symbols (issue #39 Phase 3). Empty when no graph
+// data was returned (flag off, or no edges). Gives the model the structurally
+// related code without a read_file loop.
+func formatGraphNeighborhood(graph []symbolGraphNode) string {
+	if len(graph) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## Call-graph neighborhood (structurally related symbols)\n\n")
+	for _, g := range graph {
+		sb.WriteString("- `")
+		sb.WriteString(g.Symbol)
+		sb.WriteString("`")
+		if len(g.Callers) > 0 {
+			sb.WriteString(" — called by: " + strings.Join(g.Callers, ", "))
+		}
+		if len(g.Callees) > 0 {
+			sb.WriteString("; calls: " + strings.Join(g.Callees, ", "))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
 	return sb.String()
 }

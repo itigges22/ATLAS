@@ -1,0 +1,69 @@
+name: Container image scan
+
+# Scans the published service images for known vulnerabilities on a
+# schedule (and manually). Findings are reported; CRITICAL/HIGH in the
+# base OS/library layers should be triaged per SECURITY.md.
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox]
+    steps:
+      - name: Scan ${{ matrix.image }}:dev
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        with:
+          image-ref: ghcr.io/itigges22/${{ matrix.image }}:dev
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'   # report-only for now; flip to 1 to gate
+
+  attestations:
+    name: SBOM + provenance attestation check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox]
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+      - name: Verify signature + BuildKit SBOM/provenance attestations
+        # build-images.yml runs `cosign sign` (image signature) and
+        # BuildKit `sbom: true` / `provenance: mode=max`, which attach
+        # UNSIGNED in-toto attestation manifests to the OCI index —
+        # `cosign verify-attestation` cannot see those (it checks
+        # cosign-signed DSSE attestations, which we don't produce). So:
+        # cosign verifies the signature; imagetools inspect asserts the
+        # BuildKit SBOM + provenance are actually attached.
+        run: |
+          set -euo pipefail
+          REF="ghcr.io/itigges22/${{ matrix.image }}:dev"
+          echo "Verifying cosign signature on $REF"
+          cosign verify \
+            --certificate-identity-regexp \
+              "https://github.com/itigges22/ATLAS/.github/workflows/build-images.yml@.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$REF" > /dev/null
+          echo "Checking BuildKit attestations on $REF"
+          SBOM=$(docker buildx imagetools inspect "$REF" --format '{{ json .SBOM }}')
+          if [ -z "$SBOM" ] || [ "$SBOM" = "null" ] || [ "$SBOM" = "{}" ]; then
+            echo "::error::$REF carries no BuildKit SBOM attestation"
+            exit 1
+          fi
+          PROV=$(docker buildx imagetools inspect "$REF" --format '{{ json .Provenance }}')
+          if [ -z "$PROV" ] || [ "$PROV" = "null" ] || [ "$PROV" = "{}" ]; then
+            echo "::error::$REF carries no BuildKit provenance attestation"
+            exit 1
+          fi
+          echo "OK: signature verified; SBOM + provenance attached"

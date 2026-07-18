@@ -1,0 +1,65 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+    ignore:
+      # setuptools >=83 requires python >=3.10, but RHEL9-family hosts
+      # (a supported bootstrap target) build the CLI from pyproject on
+      # system python 3.9. Revisit when the py3.9 floor is dropped.
+      - dependency-name: "setuptools" 
+
+  - package-ecosystem: gomod
+    directory: /proxy
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /tui
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /proxy
+      - /v3-service
+      - /sandbox
+      - /geometric-lens
+      - /inference
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ["*"]
+    # Base-image majors are deliberate migrations, not routine bumps:
+    # a CUDA major must match the host driver ceiling and rebuild the
+    # llama image against the pinned llama.cpp patches, and a Python
+    # major moves the lens/sandbox interpreter under pinned torch
+    # wheels. Digest and minor/patch updates still flow.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Docker tags aren't semver: the python interpreter version rides
+      # the MINOR component (3.11 -> 3.14), and moving it is the same
+      # deliberate migration as a major (pinned torch wheels, lens/
+      # sandbox interpreter). Patch + digest updates still flow.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-minor"]

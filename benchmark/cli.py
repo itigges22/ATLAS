@@ -5,16 +5,16 @@ ATLAS Benchmark CLI.
 Main entry point for running benchmarks and analyzing results.
 
 Usage:
-    atlas benchmark --humaneval [--dry-run] [--k K] [--runs N]
-    atlas benchmark --mbpp [--dry-run] [--k K] [--runs N]
-    atlas benchmark --humaneval-plus [--dry-run] [--k K] [--runs N]
-    atlas benchmark --mbpp-plus [--dry-run] [--k K] [--runs N]
-    atlas benchmark --livecodebench [--dry-run] [--k K] [--runs N]
-    atlas benchmark --scicode [--dry-run] [--k K] [--runs N]
-    atlas benchmark --custom [--dry-run] [--k K] [--runs N]
-    atlas benchmark --all [--dry-run] [--k K] [--runs N]
-    atlas benchmark analyze --input DIR --output DIR
-    atlas benchmark cost --input DIR --output DIR
+    python3 -m benchmark.cli --humaneval [--dry-run] [--k K]
+    python3 -m benchmark.cli --mbpp [--dry-run] [--k K]
+    python3 -m benchmark.cli --humaneval-plus [--dry-run] [--k K]
+    python3 -m benchmark.cli --mbpp-plus [--dry-run] [--k K]
+    python3 -m benchmark.cli --livecodebench [--dry-run] [--k K]
+    python3 -m benchmark.cli --scicode [--dry-run] [--k K]
+    python3 -m benchmark.cli --custom [--dry-run] [--k K]
+    python3 -m benchmark.cli --all [--dry-run] [--k K]
+    python3 -m benchmark.cli analyze --input DIR --output DIR
+    python3 -m benchmark.cli cost --input DIR --output DIR
 """
 
 import argparse
@@ -152,7 +152,6 @@ def run_benchmark_suite(
     dataset_name: str,
     dry_run: bool = False,
     k: int = 1,
-    runs: int = 1,
     output_dir: Path = None,
     model_url: str = None,
     logger: logging.Logger = None,
@@ -165,7 +164,6 @@ def run_benchmark_suite(
         dataset_name: 'humaneval', 'mbpp', or 'custom'
         dry_run: If True, only validate without LLM calls
         k: Number of attempts per task
-        runs: Number of independent runs (not implemented yet)
         output_dir: Directory for results
         model_url: LLM endpoint URL
         logger: Logger instance
@@ -476,16 +474,16 @@ def main():
         epilog="""
 Examples:
     # Run HumanEval in dry-run mode (validation only)
-    atlas benchmark --humaneval --dry-run
+    python3 -m benchmark.cli --humaneval --dry-run
 
     # Run HumanEval with pass@1
-    atlas benchmark --humaneval --k 1
+    python3 -m benchmark.cli --humaneval --k 1
 
     # Run HumanEval with pass@20
-    atlas benchmark --humaneval --k 20 --runs 3
+    python3 -m benchmark.cli --humaneval --k 20
 
     # Analyze results
-    atlas benchmark analyze --input benchmark/results/v1/ --output benchmark/results/v1/analysis/
+    python3 -m benchmark.cli analyze --input benchmark/results/v1/ --output benchmark/results/v1/analysis/
 """
     )
 
@@ -502,7 +500,6 @@ Examples:
     # Run options
     parser.add_argument("--dry-run", action="store_true", help="Validate without LLM calls")
     parser.add_argument("--k", type=int, default=1, help="Number of attempts per task (default: 1)")
-    parser.add_argument("--runs", type=int, default=1, help="Number of independent runs (default: 1)")
     parser.add_argument("--output", type=str, help="Output directory")
     parser.add_argument("--model", type=str, help="LLM endpoint URL")
     parser.add_argument("--resume", action="store_true", help="Resume from existing results, skipping completed tasks")
@@ -574,7 +571,6 @@ Examples:
                 dataset_name=dataset,
                 dry_run=args.dry_run,
                 k=args.k,
-                runs=args.runs,
                 output_dir=output_dir,
                 model_url=args.model,
                 logger=logger,

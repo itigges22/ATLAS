@@ -42,7 +42,7 @@ const (
 
 	// reasoningSnippetLen is the prefix length used for similarity
 	// comparison. 80 chars is roughly the first 1-2 sentences of
-	// Qwen3.5's reasoning preamble, which is where the rehash pattern
+	// the model's reasoning preamble, which is where the rehash pattern
 	// shows. Longer would over-match (later sentences naturally vary
 	// even within a stuck loop); shorter would under-match (the model's
 	// boilerplate openings collide on unrelated tasks).

@@ -1,0 +1,50 @@
+name: Star history chart
+
+# Renders the README's star-history SVGs (scripts/star-history-chart.py)
+# and commits them to the orphan `star-history` asset branch. Replaces
+# the star-history.com embed, whose shared API-token pool rate-limits
+# unpredictably; this uses the workflow's own token and serves the chart
+# from the repo.
+#
+# The workflow token cannot list per-star timestamps (GitHub limits the
+# stargazers endpoints to admins/collaborators as of July 2026), so each
+# run appends the current stargazers_count to star-history.json on the
+# asset branch and renders from that series. A maintainer-token run of
+# the script rebuilds the series at per-day resolution.
+on:
+  schedule:
+    - cron: '0 5 * * 1'   # weekly, Monday 05:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    if: github.repository == 'itigges22/ATLAS'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: star-history
+          path: chart-branch
+
+      - name: Render SVGs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/star-history-chart.py chart-branch
+
+      - name: Commit if changed
+        working-directory: chart-branch
+        run: |
+          git add star-history-light.svg star-history-dark.svg star-history.json
+          if git diff --cached --quiet; then
+            echo "no change (no new stars this week)"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chart: weekly star-history refresh"
+          git push origin star-history

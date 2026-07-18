@@ -1,0 +1,104 @@
+# geometric-lens — C(x)/G(x) scoring + PC-207 per-token scoring + project
+# RAG store. Stateful via the projects PVC (indexed project source) and
+# the state PVC (SQLite: pattern cache, co-occurrence graph, router
+# posteriors, task queue, metrics); depends on llama-server for
+# embeddings.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lens-projects
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_PVC_PROJECTS_SIZE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lens-state
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_PVC_LENS_STATE_SIZE}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geometric-lens
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: geometric-lens}
+  template:
+    metadata:
+      labels: {app: geometric-lens}
+    spec:
+      containers:
+      - name: lens
+        image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-lens:${ATLAS_IMAGE_TAG}
+        ports:
+        # The lens image's CMD pins uvicorn to 8099; ATLAS_LENS_PORT only
+        # moves the Service port. Pinning the container-side ports means
+        # changing the external var can't break the probes.
+        - containerPort: 8099
+          name: http
+        env:
+        - {name: LLAMA_URL,              value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
+        - {name: LLAMA_EMBED_URL,        value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
+        - {name: ATLAS_MODEL_NAME,       value: "${ATLAS_MAIN_MODEL}"}
+        - {name: GEOMETRIC_LENS_ENABLED, value: "true"}
+        - {name: PROJECT_DATA_DIR,       value: "/data/projects"}
+        - {name: SQLITE_DB_PATH,         value: "/data/state/geometric_state.db"}
+        volumeMounts:
+        - name: projects
+          mountPath: /data/projects
+        - name: state
+          mountPath: /data/state
+        readinessProbe:
+          httpGet:
+            path: /ready          # /ready is strict (PC-019); /health is informational.
+            port: 8099
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8099
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: projects
+        persistentVolumeClaim:
+          claimName: lens-projects
+      - name: state
+        persistentVolumeClaim:
+          claimName: lens-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: geometric-lens
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  type: NodePort
+  selector: {app: geometric-lens}
+  ports:
+  - port: ${ATLAS_LENS_PORT}
+    targetPort: 8099            # fixed container port (see Deployment note)
+    nodePort: ${ATLAS_LENS_NODEPORT}
+    name: http

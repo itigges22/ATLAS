@@ -1,5 +1,4 @@
-"""Tests for atlas.cli.commands.model_registry (PC-056) + the
-PC-055.2 model_recommendations back-compat shim.
+"""Tests for atlas.cli.commands.model_registry (PC-056).
 
 Covers:
   - REGISTRY shape + lens_status truth (only 9B is supported today)
@@ -7,11 +6,10 @@ Covers:
   - is_installed / installed_size_gb file-system probe
   - can_install reflects download_url
   - supported_models / models_for_tier filters
-  - PC-055.2 shim still resolves the same names + ModelRecommendation
-    is now an alias for Model
+  - stable public field names on the Model record
 """
 
-from atlas.cli.commands import model_registry, model_recommendations
+from atlas.cli.commands import model_registry
 
 
 # ---------------------------------------------------------------------------
@@ -20,23 +18,22 @@ from atlas.cli.commands import model_registry, model_recommendations
 
 def test_registry_has_known_qwen_entries():
     """PC-056 shipped with 4 tier presets; PC-056.1 added Q4_K_M and
-    Q8_0 variants of the 9B for a total of 6. Adding more is a
-    deliberate scope change and should be a separate ticket — flag
-    it loudly here."""
-    assert len(model_registry.REGISTRY) == 6
+    Q8_0 variants of the 9B; PC-215 added gemma-4-12b for a total of 7.
+    Adding more is a deliberate scope change and should be a separate
+    ticket — flag it loudly here."""
+    assert len(model_registry.REGISTRY) == 7
     names = {m.name for m in model_registry.REGISTRY}
     assert names == {"Qwen3.5-7B-Q4_K_M",
                      "Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K", "Qwen3.5-9B-Q8_0",
-                     "Qwen3.5-14B-Q5_K_M", "Qwen3.5-32B-Q5_K_M"}
+                     "Qwen3.5-14B-Q5_K_M", "Qwen3.5-32B-Q5_K_M",
+                     "gemma-4-12b-it-Q4_K_M"}
 
 
-def test_only_9b_is_supported_today():
-    """The PC-056 architectural conversation surfaced that only the 9B
-    has Lens artifacts. If this changes (e.g., PC-058 adds 14B back),
-    update here AND the doctor's tier_match check + the docs."""
+def test_only_published_lens_weight_bundles_are_supported_today():
+    """Supported means downloadable weights; calibration is tracked separately."""
     supported = model_registry.supported_models()
-    assert len(supported) == 1
-    assert supported[0].name == "Qwen3.5-9B-Q6_K"
+    names = {m.name for m in supported}
+    assert names == {"Qwen3.5-9B-Q6_K", "gemma-4-12b-it-Q4_K_M"}
 
 
 def test_only_9b_quants_are_publicly_installable():
@@ -129,9 +126,7 @@ def test_qwen_9b_q6k_claims_asa_supported():
 # ---------------------------------------------------------------------------
 
 def test_for_tier_prefers_supported():
-    """If a tier has multiple registered models, for_tier picks the
-    supported one. Today every tier has only one entry; this guards
-    against future breakage when PC-058 adds variants."""
+    """When several tier entries exist, prefer one with published weights."""
     m = model_registry.for_tier("medium")
     assert m is not None
     assert m.lens_status == "supported"
@@ -171,10 +166,10 @@ def test_by_name_unknown_returns_none():
 
 
 def test_models_for_tier_returns_only_matches():
-    """PC-056.1: medium tier now has 3 entries (Q4_K_M, Q6_K, Q8_0)."""
+    """Medium tier: the three 9B quants plus gemma-4-12b (PC-215)."""
     medium = model_registry.models_for_tier("medium")
     assert all(m.tier == "medium" for m in medium)
-    assert len(medium) == 3
+    assert len(medium) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -223,31 +218,18 @@ def test_installed_size_gb_returns_none_when_absent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# PC-055.2 back-compat shim
+# Stable public API
 # ---------------------------------------------------------------------------
 
-def test_shim_for_tier_resolves_same_as_registry():
-    for tier_name in ("small", "medium", "large", "xlarge"):
-        a = model_recommendations.for_tier(tier_name)
-        b = model_registry.for_tier(tier_name)
-        assert a is b, f"shim and registry disagree on tier {tier_name!r}"
+def test_tier_for_model_known_file():
+    assert model_registry.tier_for_model("Qwen3.5-9B-Q6_K.gguf") == "medium"
 
 
-def test_shim_tier_for_model_works():
-    assert model_recommendations.tier_for_model("Qwen3.5-9B-Q6_K.gguf") == "medium"
-
-
-def test_shim_modelrecommendation_is_model_alias():
-    """The shim must keep ModelRecommendation pointing at Model so
-    isinstance() checks in PC-055.2-era code keep working."""
-    assert model_recommendations.ModelRecommendation is model_registry.Model
-
-
-def test_shim_callers_can_access_old_field_names():
-    """PC-055.2 callers do `rec.model_file`, `rec.model_display`,
-    `rec.model_size_gb`. The PC-056 Model preserves those exact field
-    names so the shim is transparent."""
-    rec = model_recommendations.for_tier("medium")
+def test_model_exposes_stable_field_names():
+    """Callers do `rec.model_file`, `rec.model_display`,
+    `rec.model_size_gb` — the Model record keeps those exact field
+    names stable."""
+    rec = model_registry.for_tier("medium")
     assert hasattr(rec, "model_file")
     assert hasattr(rec, "model_display")
     assert hasattr(rec, "model_size_gb")
@@ -261,17 +243,18 @@ def test_shim_callers_can_access_old_field_names():
 # PC-056.1 schema additions: 9B variants, commit-pinned URLs, requires_hf_token
 # ---------------------------------------------------------------------------
 
-def test_pc0561_registry_now_has_six_entries():
-    """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B. Adding more is
-    a deliberate scope change — flag it loudly here."""
-    assert len(model_registry.REGISTRY) == 6
+def test_pc0561_registry_now_has_seven_entries():
+    """PC-056.1 added Q4_K_M and Q8_0 variants of the 9B; PC-215 added
+    gemma-4-12b via the publish flow. Adding more is a deliberate scope
+    change — flag it loudly here."""
+    assert len(model_registry.REGISTRY) == 7
 
 
 def test_pc0561_three_quants_for_9b():
     """All three 9B quants present — Q4_K_M (smaller), Q6_K (default
     supported), Q8_0 (higher quality)."""
     nine_quants = {m.name for m in model_registry.REGISTRY
-                    if m.tier == "medium"}
+                    if m.tier == "medium" and m.name.startswith("Qwen3.5-9B")}
     assert nine_quants == {"Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K",
                             "Qwen3.5-9B-Q8_0"}
 
@@ -334,7 +317,6 @@ def test_pc0561_supported_model_has_lens_artifact_files():
     'supported' claim — doctor cross-checks against this list."""
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     assert "cost_field.pt" in m.lens_artifact_files
-    assert "metric_tensor.pt" in m.lens_artifact_files
 
 
 # ---------------------------------------------------------------------------
@@ -408,13 +390,23 @@ def test_lens_artifact_dir_for_honors_atlas_lens_models_env(monkeypatch, tmp_pat
     assert d == str(tmp_path)
 
 
+def test_lens_artifact_dir_for_reads_compose_dotenv(monkeypatch, tmp_path):
+    monkeypatch.delenv("ATLAS_LENS_MODELS", raising=False)
+    artifact_dir = tmp_path / "external-lens"
+    (tmp_path / ".env").write_text(
+        f"ATLAS_LENS_MODELS={artifact_dir}\n")
+    m = model_registry.by_name("Qwen3.5-9B-Q6_K")
+    assert model_registry.lens_artifact_dir_for(m, str(tmp_path)) == str(
+        artifact_dir)
+
+
 def test_lens_artifacts_present_ok_when_files_exist(tmp_path):
     """Set up a fake artifact dir with the required .pt files, point
     ATLAS_LENS_MODELS at it, expect ok=True."""
     art_dir = tmp_path / "lens-models"
     art_dir.mkdir()
     (art_dir / "cost_field.pt").write_bytes(b"x")
-    (art_dir / "metric_tensor.pt").write_bytes(b"y")
+    (art_dir / "model_identity.json").write_text('{"model": "Qwen3.5-9B-Q6_K", "embedding_dim": 4096}')
     import os
     os.environ["ATLAS_LENS_MODELS"] = str(art_dir)
     try:
@@ -435,7 +427,6 @@ def test_lens_artifacts_present_missing_files_listed(tmp_path):
         state = model_registry.lens_artifacts_present(m, str(tmp_path))
         assert state["ok"] is False
         assert "cost_field.pt" in state["missing_files"]
-        assert "metric_tensor.pt" in state["missing_files"]
     finally:
         del os.environ["ATLAS_LENS_MODELS"]
 
@@ -447,3 +438,34 @@ def test_lens_artifacts_present_skips_unsupported_models(tmp_path):
     state = model_registry.lens_artifacts_present(m, str(tmp_path))
     assert state["ok"] is True
     assert state["expected_files"] == []
+
+
+def test_by_model_file_matches_basename_and_case():
+    m = model_registry.by_model_file("/models/gemma-4-12b-it-Q4_K_M.gguf")
+    assert m is not None and m.name == "gemma-4-12b-it-Q4_K_M"
+    assert model_registry.by_model_file("GEMMA-4-12B-IT-q4_k_m.GGUF") is m \
+        or model_registry.by_model_file("GEMMA-4-12B-IT-q4_k_m.GGUF").name \
+        == m.name
+    assert model_registry.by_model_file("not-a-registered-model.gguf") is None
+    assert model_registry.by_model_file("") is None
+
+
+def test_artifact_download_hint_for_supported_kinds():
+    hint = model_registry.artifact_download_hint(
+        "/models/gemma-4-12b-it-Q4_K_M.gguf", "asa")
+    assert "atlas model install-artifacts gemma-4-12b-it-Q4_K_M" in hint
+    assert model_registry.artifact_download_hint(
+        "gemma-4-12b-it-Q4_K_M.gguf", "lens") != ""
+    assert model_registry.artifact_download_hint("unknown.gguf", "asa") == ""
+
+
+def test_artifact_download_hint_empty_without_urls(monkeypatch):
+    """A registry entry whose kind isn't 'supported' with a URL base must
+    produce no hint — nothing downloadable was claimed."""
+    from dataclasses import replace
+    entry = model_registry.by_name("gemma-4-12b-it-Q4_K_M")
+    stripped = replace(entry, asa_status="no-artifacts",
+                       asa_artifact_url_base=None)
+    monkeypatch.setattr(model_registry, "REGISTRY", [stripped])
+    assert model_registry.artifact_download_hint(
+        "gemma-4-12b-it-Q4_K_M.gguf", "asa") == ""

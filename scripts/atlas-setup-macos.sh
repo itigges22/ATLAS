@@ -39,7 +39,9 @@ REBUILD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --rebuild) REBUILD=1; shift;;
-    --prefix)  PREFIX="$2"; shift 2;;
+    --prefix)
+      [[ $# -ge 2 ]] || { echo "--prefix requires a value" >&2; exit 2; }
+      PREFIX="$2"; shift 2;;
     -h|--help)
       sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
       exit 0;;
@@ -222,23 +224,24 @@ if [[ $NEED_BUILD -eq 1 ]]; then
         fetch --depth 1 origin "$LLAMA_CPP_REV"
     git checkout -q FETCH_HEAD
 
-    # Apply PC-202 hidden-states patch (real .patch file, must apply
+    # Apply the hidden-states patch (real .patch file, must apply
     # cleanly — CI gates on this via llama-patches-apply).
     if ! git apply --check "$PATCH_DIR/expose-hidden-states.patch"; then
-      red "PC-202 patch does not apply to $LLAMA_CPP_REV."
+      red "hidden-states patch does not apply to $LLAMA_CPP_REV."
       red "  See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
       exit 1
     fi
     git apply "$PATCH_DIR/expose-hidden-states.patch"
 
-    # spec-decode embeddings fix — uses sed (the .patch file is
-    # malformed dead code; the sed is what actually applies, same as
-    # the Dockerfiles). || true keeps re-runs idempotent if the line
-    # is already present.
+    # Apply the same spec-decode embeddings fix as the Dockerfiles.
     sed -i.bak '/auto params_dft = params_base;/a\
         params_dft.embedding = false;  \/\/ ATLAS: draft never needs embeddings' \
-        tools/server/server-context.cpp 2>/dev/null || true
+        tools/server/server-context.cpp
     rm -f tools/server/server-context.cpp.bak
+    if ! grep -q 'params_dft.embedding = false' tools/server/server-context.cpp; then
+      red "spec-decode embeddings fix did not apply to $LLAMA_CPP_REV."
+      exit 1
+    fi
 
     green "  Patches applied."
 
@@ -265,14 +268,55 @@ if [[ $NEED_BUILD -eq 1 ]]; then
     cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
   popd >/dev/null
 
-  # Install binary + ASA cvector tool to the prefix.
+  # Stage all native tools before replacing the installed set. If any
+  # replacement fails, restore every prior file so a failed upgrade cannot
+  # leave a mixed-revision runtime.
   mkdir -p "$LLAMA_BIN_DIR"
-  cp "$LLAMA_BUILD_DIR/build/bin/llama-server" "$LLAMA_SERVER"
-  cp "$LLAMA_BUILD_DIR/build/bin/llama-cli" "$LLAMA_BIN_DIR/llama-cli-metal"
+  INSTALL_STAGE=$(mktemp -d "$PREFIX/.atlas-install.XXXXXX")
+  INSTALL_BACKUP=$(mktemp -d "$PREFIX/.atlas-backup.XXXXXX")
+  install_names=(
+    llama-server-metal
+    llama-cli-metal
+    llama-cvector-generator-metal
+    .llama_cpp_rev
+  )
+  cp "$LLAMA_BUILD_DIR/build/bin/llama-server" \
+     "$INSTALL_STAGE/llama-server-metal"
+  cp "$LLAMA_BUILD_DIR/build/bin/llama-cli" \
+     "$INSTALL_STAGE/llama-cli-metal"
   cp "$LLAMA_BUILD_DIR/build/bin/llama-cvector-generator" \
-     "$LLAMA_BIN_DIR/llama-cvector-generator-metal"
+     "$INSTALL_STAGE/llama-cvector-generator-metal"
+  chmod 0755 "$INSTALL_STAGE/llama-server-metal" \
+             "$INSTALL_STAGE/llama-cli-metal" \
+             "$INSTALL_STAGE/llama-cvector-generator-metal"
+  printf '%s\n' "$LLAMA_CPP_REV" > "$INSTALL_STAGE/.llama_cpp_rev"
 
-  echo "$LLAMA_CPP_REV" > "$SHA_MARKER"
+  for name in "${install_names[@]}"; do
+    if [[ -e "$LLAMA_BIN_DIR/$name" ]]; then
+      cp -p "$LLAMA_BIN_DIR/$name" "$INSTALL_BACKUP/$name"
+    fi
+  done
+
+  install_failed=0
+  for name in "${install_names[@]}"; do
+    if ! mv -f "$INSTALL_STAGE/$name" "$LLAMA_BIN_DIR/$name"; then
+      install_failed=1
+      break
+    fi
+  done
+  if [[ $install_failed -ne 0 ]]; then
+    for name in "${install_names[@]}"; do
+      if [[ -e "$INSTALL_BACKUP/$name" ]]; then
+        mv -f "$INSTALL_BACKUP/$name" "$LLAMA_BIN_DIR/$name" || true
+      else
+        rm -f "$LLAMA_BIN_DIR/$name"
+      fi
+    done
+    rm -rf "$INSTALL_STAGE" "$INSTALL_BACKUP"
+    red "native binary install failed; restored the previous build."
+    exit 1
+  fi
+  rm -rf "$INSTALL_STAGE" "$INSTALL_BACKUP"
   green "  Built and installed:"
   green "    $LLAMA_SERVER"
   green "    $LLAMA_BIN_DIR/llama-cli-metal"
@@ -358,7 +402,7 @@ Install prefix:      $PREFIX
 
 Next steps:
   1. atlas init                                       # wizard writes .env (picks Metal hybrid)
-  2. ./scripts/atlas-llama-macos.sh                   # start native llama-server (new terminal)
+  2. ATLAS_MACOS_PREFIX="$PREFIX" ./scripts/atlas-llama-macos.sh  # start native llama-server
   3. docker compose -f docker-compose.yml \\
                     -f docker-compose.macos.yml up -d # start proxy + v3 + lens + sandbox
   4. atlas doctor                                     # verify install health

@@ -7,7 +7,7 @@
 // reviewers don't have to chase three call sites to know what we
 // reject.
 //
-// Background: ATLAS runs against a local qwen-coder model that's
+// Background: ATLAS runs against compact local coding models that are
 // weaker than the API frontier models. Claude-Code-style "trust the
 // model + permission prompts" doesn't hold for us; the model will
 // reliably emit markdown-fenced code with prose preamble and reach
@@ -28,14 +28,14 @@ import (
 // sanitizeFileContent strips markdown wrappers and prose preamble from
 // content destined for disk. The local model frequently emits:
 //
-//   Looking at the task, I need to create a complete index.html...
+//	Looking at the task, I need to create a complete index.html...
 //
-//   ```html
-//   <!DOCTYPE html>
-//   ...
-//   ```
+//	```html
+//	<!DOCTYPE html>
+//	...
+//	```
 //
-//   This file does X, Y, Z.
+//	This file does X, Y, Z.
 //
 // Without this strip, the whole markdown wrapper lands on disk
 // verbatim — Jinja chokes on `{{ url_for(...) }}` fragments inside a
@@ -45,6 +45,12 @@ import (
 // fence/prose was stripped — the caller should log it so we can spot
 // repeat offenders. .md / .markdown / .rst files are passed through
 // unchanged because fences are legitimate content there.
+//
+// Only a WHOLE-FILE wrapper is stripped: the opening fence must sit at
+// the very top of the content (preceded by at most a few prose lines),
+// and the closing fence may be followed only by a short prose trailer.
+// A fence deeper in the file — e.g. a fenced example inside a docstring
+// — is legitimate content and passes through unchanged.
 func sanitizeFileContent(filePath, content string) (string, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
@@ -54,12 +60,25 @@ func sanitizeFileContent(filePath, content string) (string, bool) {
 
 	lines := strings.Split(content, "\n")
 
+	// Locate the opening fence within the preamble allowance. More than
+	// a few non-empty lines before the first fence — or any line that
+	// opens a docstring/comment block — means the fence is interior
+	// content, not a wrapper.
+	const maxWrapperProseLines = 5
 	openIdx := -1
+	preambleProse := 0
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			openIdx = i
 			break
+		}
+		if trimmed == "" {
+			continue
+		}
+		preambleProse++
+		if preambleProse > maxWrapperProseLines || lineSignalsRealContent(trimmed) {
+			return content, false
 		}
 	}
 	if openIdx < 0 {
@@ -71,6 +90,25 @@ func sanitizeFileContent(filePath, content string) (string, bool) {
 		if strings.TrimSpace(lines[i]) == "```" {
 			closeIdx = i
 			break
+		}
+	}
+
+	// Same whole-file requirement on the way out: after the closing
+	// fence only a short prose trailer ("This file: 1. ... 2. ...") is
+	// allowed. Substantial content or docstring/comment markers after
+	// the fence mean the pair is interior — pass through unchanged.
+	if closeIdx > openIdx {
+		const maxTrailerProseLines = 8
+		trailerProse := 0
+		for _, line := range lines[closeIdx+1:] {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			trailerProse++
+			if trailerProse > maxTrailerProseLines || lineSignalsRealContent(trimmed) {
+				return content, false
+			}
 		}
 	}
 
@@ -93,105 +131,176 @@ func sanitizeFileContent(filePath, content string) (string, bool) {
 	return cleaned, true
 }
 
-// shellDestructiveRe matches the leading token of a destructive
-// filesystem command. We split on `&&`, `||`, `;`, `|` first, so each
-// segment can be checked in isolation.
-var shellDestructiveRe = regexp.MustCompile(
-	`^\s*(rm|mv|cp|rmdir|chmod|chown|truncate)(\s+|$)`)
+// docstringDelimiters mark a Python/multiline string. When one appears
+// anywhere on a preamble or trailer line, the line is real string content
+// (e.g. `DOC = """usage:`) and a fence around it is legitimate — so the
+// content is not a whole-file wrapper. These are matched with Contains
+// because code commonly precedes the delimiter on the opening line.
+var docstringDelimiters = []string{`"""`, "'''"}
 
-// shellFindDeleteRe catches `find ... -delete` and `find ... -exec rm`.
-// These bypass the leading-token check above because the destructive
-// verb is buried deep in the command line.
+// commentBlockOpeners mark a comment block. These are matched by prefix so
+// that model prose merely mentioning a marker (e.g. "the /* config */
+// block:") does not disqualify a genuine whole-file wrapper, while a line
+// that actually opens a comment block does.
+var commentBlockOpeners = []string{"/*", "*/", "<!--", "-->"}
+
+// lineSignalsRealContent reports whether a trimmed line indicates the text
+// around a fence is real file content (a docstring or comment block) rather
+// than model prose wrapping the file.
+func lineSignalsRealContent(trimmed string) bool {
+	for _, d := range docstringDelimiters {
+		if strings.Contains(trimmed, d) {
+			return true
+		}
+	}
+	for _, m := range commentBlockOpeners {
+		if strings.HasPrefix(trimmed, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// run_command executes inside the sandbox container, which is already a
+// project-folder jail: read-only rootfs, no-new-privileges, ONLY the project
+// dir bind-mounted writable at /workspace, and the /shell endpoint forces cwd
+// under /workspace. So the model cannot touch the host — the blast radius of
+// any shell command is the project folder (recoverable via git). Given that,
+// the old "block every mutating verb" policy was overbroad: it made the model
+// reinvent mv/cp/rm as bespoke tools and loop when it couldn't (e.g. "mv
+// index.html templates/" refused → mkdir loop → stuck). Policy now (2026-06):
+// allow shell to manage files freely; block ONLY the few commands that are
+// catastrophic even inside the jail — wiping the whole project, fork-bombing
+// the sandbox, or destroying a block device. Content edits are still nudged
+// toward write_file/edit_file by the system prompt (that's where V3 + the lens
+// add value), but they are no longer hard-refused at the shell.
+
+// shellFindDeleteRe catches `find ... -delete` / `find ... -exec rm` — a
+// recursive delete whose target is usually `.` (the project root), so its
+// blast radius is the whole workspace. Kept blocked; targeted deletes use
+// `rm <file>` or delete_file.
 var shellFindDeleteRe = regexp.MustCompile(
 	`\bfind\b.*?(-delete\b|-exec\s+rm\b)`)
 
-// shellTruncatingRedirectRe catches `> path` (overwrite) but excludes:
-//   - `>>`            append (handled by [^>] predecessor)
-//   - `2>`, `1>`      stderr/stdout fd redirect (handled by [^0-9])
-//   - `>&1`, `>&2`    fd dup (handled by [^&] in dest leading char)
-//   - `> /dev/null`   discard, allowed downstream
-//
-// The destination's leading char is split out so `&` (fd duplication)
-// and `>` (would be `>>`, already excluded) are rejected without
-// double-checking. Composite redirects like `2>&1` are entirely
-// non-truncating and must not trip this — the previous regex did,
-// breaking every legit `python app.py 2>&1` verification call.
-var shellTruncatingRedirectRe = regexp.MustCompile(
-	`(^|[^>0-9])>\s*([^>&\s][^>\s]*)`)
+// shellForkBombRe matches the classic fork bomb and close variants: a function
+// whose body pipes to itself and backgrounds (`| … &`) then invokes itself.
+// The `&` (background spawn) inside the braces is the signature that separates
+// a bomb from a benign `f() { ls | grep x; }`.
+var shellForkBombRe = regexp.MustCompile(`\(\)\s*\{[^}]*\|[^}]*&[^}]*\}\s*;`)
 
-// validateShellCommand returns a non-empty rejection reason if the
-// command would mutate user files via the shell. Build/test/lint
-// commands (python, npm, go, cargo, pytest, make, ls, cat, grep…)
-// are all fine — only the destructive filesystem verbs trigger this.
-//
-// Today's behaviour we're trying to prevent: agent loops responding
-// to a "fix this" prompt by running `mv templates venv/templates`,
-// `rm -rf old/`, or piping a heredoc with `>` over an existing source
-// file. The native edit_file / write_file / delete_file tools are
-// the supported mutation path — their content goes through V3 and
-// the surgical-edit gate; shell mutation bypasses both.
+// shellDeviceWriteRe matches filesystem/device destruction: mkfs/wipefs, `dd`
+// onto a device, or a redirect straight onto a block device.
+var shellDeviceWriteRe = regexp.MustCompile(
+	`\b(mkfs\S*|wipefs)\b|\bdd\b[^|;&]*\bof=/dev/|(^|\s)>\s*/dev/(sd|nvme|mmcblk|vd|hd|xvd)`)
+
+// shellWrapperRe matches a `bash -c "…"` / `sh -c '…'` / `eval …` prefix so we
+// can unwrap it and run the catastrophic checks against the REAL command — a
+// model that wraps `rm -rf /` in `bash -c` must not slip past the denylist.
+var shellWrapperRe = regexp.MustCompile(`^\s*(?:(?:bash|sh|zsh|dash|ksh)\s+-c|eval)\s+`)
+
+// unwrapShellWrapper strips one `bash -c "…"` / `eval "…"` layer (and the
+// surrounding quotes) so catastrophic-pattern checks see the inner command.
+func unwrapShellWrapper(seg string) string {
+	loc := shellWrapperRe.FindStringIndex(seg)
+	if loc == nil {
+		return seg
+	}
+	inner := strings.TrimSpace(seg[loc[1]:])
+	if len(inner) >= 2 {
+		if (inner[0] == '"' && inner[len(inner)-1] == '"') ||
+			(inner[0] == '\'' && inner[len(inner)-1] == '\'') {
+			inner = inner[1 : len(inner)-1]
+		}
+	}
+	return inner
+}
+
+// validateShellCommand returns a non-empty rejection reason ONLY for a command
+// that is catastrophic even inside the sandbox jail (whole-project wipe, fork
+// bomb, device destruction). Everything else — mv, cp, mkdir, rm of specific
+// files, chmod, sed -i, > redirects, build/test/run — is allowed.
 func validateShellCommand(cmd string) string {
 	stripped := strings.TrimSpace(cmd)
 	if stripped == "" {
 		return ""
 	}
+	// Whole-command checks (survive segment splitting / wrapper quoting).
+	unwrapped := unwrapShellWrapper(stripped)
+	if shellForkBombRe.MatchString(stripped) || shellForkBombRe.MatchString(unwrapped) {
+		return "run_command refused: that is a fork bomb — it would exhaust the sandbox's process table. If you need to spawn processes, run them one at a time."
+	}
+	if shellDeviceWriteRe.MatchString(stripped) || shellDeviceWriteRe.MatchString(unwrapped) {
+		return "run_command refused: writing to a block device or formatting a filesystem (dd/mkfs/wipefs) is blocked. Work with files under the project directory instead."
+	}
 
-	// Split on shell separators. Quoted segments aren't perfectly
-	// honoured but model-emitted commands rarely contain quoted ; or |.
-	segments := splitShellSegments(stripped)
-	for _, seg := range segments {
+	for _, seg := range splitShellSegments(stripped) {
 		seg = strings.TrimSpace(seg)
 		if seg == "" {
 			continue
 		}
-		// `cd ...` segments are pass-throughs, not destructive — but
-		// they prepend to the working directory of subsequent
-		// segments, which we already analyse independently.
-		if strings.HasPrefix(seg, "cd ") || seg == "cd" {
-			continue
-		}
-		if shellDestructiveRe.MatchString(seg) {
-			verb := strings.Fields(seg)[0]
-			return shellRejectionMessage(verb, "the leading verb is " + verb)
+		seg = unwrapShellWrapper(seg)
+		if msg := catastrophicRm(seg); msg != "" {
+			return msg
 		}
 		if shellFindDeleteRe.MatchString(seg) {
-			return shellRejectionMessage("find -delete",
-				"`find` with -delete or -exec rm")
-		}
-		if shellHiddenCommandRe.MatchString(seg) {
-			return shellRejectionMessage("bash -c / sh -c / eval",
-				"a shell wrapper (bash -c, sh -c, eval, …) — these hide arbitrary commands inside a quoted argument and bypass the per-segment safety check")
-		}
-		// Truncating redirect: `... > some/path`. We only reject when
-		// the target isn't /dev/null and isn't an obvious build artefact
-		// suffix (.log, .out) — those are usually intentional.
-		//
-		// Use FindStringSubmatch so we read just the destination path
-		// (capture group 2), not "everything after the >". Trailing
-		// flags like `2>&1 &` would otherwise glue onto the path and
-		// break the suffix exception (see PC-189).
-		if sm := shellTruncatingRedirectRe.FindStringSubmatch(seg); sm != nil {
-			dest := sm[2]
-			if dest == "/dev/null" || dest == "/dev/stderr" {
-				continue
-			}
-			lowerDest := strings.ToLower(dest)
-			if strings.HasSuffix(lowerDest, ".log") || strings.HasSuffix(lowerDest, ".out") {
-				continue
-			}
-			return shellRejectionMessage("> redirect",
-				"a truncating redirect into "+dest)
+			return "run_command refused: `find ... -delete` / `-exec rm` recursively deletes from the search root (usually the whole project). Delete specific files with `rm <file>` or the delete_file tool."
 		}
 	}
 	return ""
 }
 
-// shellRejectionMessage formats a directive that points the model
-// at the right native tool. The model's next turn sees this as the
-// tool_result and (in practice) re-emits the operation as edit_file
-// or delete_file.
-func shellRejectionMessage(verb, detail string) string {
-	return "run_command refused: " + detail + ". Modify files with the dedicated tools — `edit_file` (old_str/new_str) for content changes, `write_file` for brand-new files, `delete_file` for removal. Shell `" + verb + "` bypasses the surgical-edit gate, the V3 pipeline, and audit logging, and will be rejected."
+// catastrophicRm flags a recursive `rm` whose target would wipe the whole
+// project (or root / home). A targeted recursive delete of a subdirectory
+// (`rm -rf __pycache__`, `rm -rf node_modules`, `rm -rf build`) is allowed —
+// only roots and glob-everything targets are catastrophic.
+func catastrophicRm(seg string) string {
+	fields := strings.Fields(seg)
+	i := 0
+	for i < len(fields) && (fields[i] == "sudo" || strings.Contains(fields[i], "=")) {
+		i++ // skip a sudo / leading VAR=val env prefix
+	}
+	if i >= len(fields) || filepath.Base(fields[i]) != "rm" {
+		return ""
+	}
+	recursive := false
+	var targets []string
+	for _, f := range fields[i+1:] {
+		if strings.HasPrefix(f, "--") {
+			if f == "--recursive" {
+				recursive = true
+			}
+			continue
+		}
+		if strings.HasPrefix(f, "-") {
+			if strings.ContainsAny(f, "rR") {
+				recursive = true
+			}
+			continue
+		}
+		targets = append(targets, f)
+	}
+	if !recursive {
+		return "" // `rm file` / `rm -f file` is fine; only recursive wipes are gated
+	}
+	for _, t := range targets {
+		if isCatastrophicDeleteTarget(t) {
+			return "run_command refused: `rm -r` of " + t + " would wipe the whole project (or root). Delete a specific subdirectory by name instead (e.g. `rm -rf build`), or use delete_file."
+		}
+	}
+	return ""
+}
+
+// isCatastrophicDeleteTarget reports whether a recursive-rm target is a root /
+// home / project-root / glob-everything path.
+func isCatastrophicDeleteTarget(t string) bool {
+	t = strings.Trim(t, `"'`)
+	switch t {
+	case "/", "/*", "~", "~/", "~/*", "$HOME", "${HOME}", "$HOME/*", "${HOME}/*",
+		".", "./", "./*", "*", "..", "../", "../*",
+		"/workspace", "/workspace/", "/workspace/*":
+		return true
+	}
+	return false
 }
 
 // workspaceRefRe matches `/workspace` as a path component (preceded by
@@ -202,7 +311,7 @@ var workspaceRefRe = regexp.MustCompile(`(^|[^a-zA-Z0-9_])/workspace(/|\s|$|[^a-
 // validateWorkingDirReference rejects shell commands that reference
 // `/workspace` when /workspace is not the project's working directory.
 //
-// Qwen3.5 has a stubborn training-data prior toward `/workspace` as a
+// Coding models often have a training-data prior toward `/workspace` as a
 // generic project sandbox path — coding-assistant fine-tunes use it
 // heavily. The system prompt explicitly warns against absolute paths
 // but the prior leaks through under conversation pressure. May 8 2026
@@ -253,7 +362,7 @@ func validateRunCommand(cmd, workingDir string) string {
 // <html>-element rewrite of a 120B file; the on-disk result was a
 // destroyed file passed off as a successful "done". The model usually
 // produces this shape when its response stops mid-output (json_object
-// grammar + /nothink + length bias all converging on minimal valid
+// grammar + length bias converging on minimal valid
 // JSON) — the parser sees a syntactically clean tool_call with empty
 // content, no truncation marker fires, the recovery path doesn't
 // engage, and the destructive write lands.
@@ -261,13 +370,14 @@ func validateRunCommand(cmd, workingDir string) string {
 // Heuristic: skip the check when the original was already small
 // (line-level edits often legitimately shrink), reject when the new
 // payload is clearly a stub. Threshold history:
-//   v1 (May 9 2026): newSize < 32 — model slipped a 32B stub past it
-//   v2 (May 10 morning): bumped to 128 — false-rejected legit
-//     "5KB function refactored to 80B one-liner" case
-//   v3 (current): 64 — catches today's 32B destructive stubs and any
-//     "doctype-only" outputs while leaving room for real one-liner
-//     refactors. Subtler cases (legitimate-shape but bad code) are
-//     V3's job now that ast_edit always routes through it.
+//
+//	v1 (May 9 2026): newSize < 32 — model slipped a 32B stub past it
+//	v2 (May 10 morning): bumped to 128 — false-rejected legit
+//	  "5KB function refactored to 80B one-liner" case
+//	v3 (current): 64 — catches today's 32B destructive stubs and any
+//	  "doctype-only" outputs while leaving room for real one-liner
+//	  refactors. Subtler cases (legitimate-shape but bad code) are
+//	  V3's job now that ast_edit always routes through it.
 func validateNotSuspiciouslyShrunk(toolName, path string, oldSize, newSize int) string {
 	if oldSize < 100 {
 		return ""
@@ -297,17 +407,6 @@ func stripLeadingDoctype(content string) (string, bool) {
 	}
 	return content, false
 }
-
-// shellHiddenCommandRe catches `bash -c "..."` / `sh -c "..."` /
-// `zsh -c "..."` / `dash -c "..."` / `eval ...`. These wrappers can
-// hide arbitrary destructive commands inside a quoted argument that
-// the leading-token check above can't see — Roo Code's bypass test
-// case is `bash -c "rm -rf foo"`. We don't try to parse the inner
-// command (that's a recursive-shell-parser rabbit hole); we reject
-// the wrapper itself. Build/test commands that need shell features
-// (pipes, redirects, env vars) work fine without `bash -c`.
-var shellHiddenCommandRe = regexp.MustCompile(
-	`^\s*(bash|sh|zsh|dash|ksh)\s+-c\b|^\s*eval(\s+|$)`)
 
 // fixIntentWords tracks vocabulary that signals "the user wants
 // something repaired or verified." Reused by the verification gate
@@ -400,7 +499,8 @@ var verificationCommandRe = regexp.MustCompile(
 		// Test runners
 		`pytest|python\s+-m\s+pytest|nose|tox|` +
 		// Build / type-check / static analysis
-		`mypy|ruff|pylint|tsc|eslint|gofmt|vet|` +
+		`mypy|ruff|pylint|tsc|eslint|gofmt|vet|markdownlint|stylelint|` +
+		`shellcheck|hadolint|flake8|rubocop|golangci-lint|` +
 		// Run-the-thing
 		`python|python3|node|deno|bun|ruby|cargo\s+run|cargo\s+test|cargo\s+check|cargo\s+build|` +
 		`go\s+run|go\s+test|go\s+build|go\s+vet|` +

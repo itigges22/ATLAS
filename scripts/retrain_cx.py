@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 ATLAS_DIR = os.environ.get("ATLAS_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-"""Retrain C(x) cost field using llama-server 9B embeddings.
+"""Retrain C(x) cost field using the selected llama-server model.
 
 Collects code + pass/fail labels from ablation results,
 embeds each through llama-server at localhost:8080, then trains
@@ -17,15 +17,68 @@ import random
 from urllib.request import Request, urlopen
 
 # Add geometric-lens to path for imports
-sys.path.insert(0, '" + ATLAS_DIR + "/geometric-lens')
+sys.path.insert(0, os.path.join(ATLAS_DIR, "geometric-lens"))
 
-LLAMA_EMBED_URL = "http://localhost:8080/embedding"
-MODELS_DIR = "" + ATLAS_DIR + "/geometric-lens/geometric_lens/models"
-DATA_DIR = "" + ATLAS_DIR + "/docs/reports/ablation/condition_a"
+LLAMA_BASE_URL = os.environ.get(
+    "ATLAS_INFERENCE_URL", os.environ.get("LLAMA_URL", "http://localhost:8080")
+).rstrip("/")
+LLAMA_EMBED_URL = f"{LLAMA_BASE_URL}/embedding"
+MODELS_DIR = os.path.join(ATLAS_DIR, "geometric-lens", "geometric_lens", "models")
+DATA_DIR = os.path.join(ATLAS_DIR, "docs", "reports", "ablation", "condition_a")
+
+
+def _read_env_var(name: str) -> str:
+    """Read one variable from the repo Docker .env ("" when unavailable)."""
+    try:
+        envp = os.path.join(ATLAS_DIR, ".env")
+        if os.path.exists(envp):
+            with open(envp, encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export "):
+                        line = line[len("export "):].lstrip()
+                    if line.startswith(name + "="):
+                        value = line.split("=", 1)[1].lstrip()
+                        # Drop a whitespace-preceded inline comment.
+                        head, hash_sep, _ = value.partition("#")
+                        if hash_sep and head and head[-1] in " \t":
+                            value = head
+                        value = value.strip().strip('"').strip("'")
+                        if value:
+                            return value
+    except Exception:
+        # The compose .env is optional for this standalone helper.
+        pass
+    return ""
+
+
+def _lens_base_urls() -> list:
+    """Candidate lens-service base URLs: Docker .env port (default 8099)
+    first, then the K3s NodePort fallback."""
+    port = _read_env_var("ATLAS_LENS_PORT") or "8099"
+    urls = [f"http://localhost:{port}"]
+    if port != "31144":
+        urls.append("http://localhost:31144")
+    return urls
+
+
+def get_loaded_model_name() -> str:
+    """Return llama-server's loaded model id for artifact provenance."""
+    try:
+        with urlopen(f"{LLAMA_BASE_URL}/v1/models", timeout=10) as resp:
+            data = json.loads(resp.read())
+        models = data.get("data", [])
+        if models and models[0].get("id"):
+            return str(models[0]["id"])
+    except Exception:
+        # Provenance lookup is best-effort; offline training can still use
+        # the explicitly configured ATLAS_MODEL_NAME fallback below.
+        pass
+    return os.environ.get("ATLAS_MODEL_NAME", "unknown-local-model")
 
 
 def get_llama_embedding(text: str, retries: int = 2) -> list:
-    """Get 4096-dim embedding from llama-server (Qwen3.5-9B).
+    """Get a model-native embedding from llama-server.
 
     Returns the pooled embedding list, or raises the underlying urlopen
     exception after exhausting retries.
@@ -286,7 +339,7 @@ def compute_auc(scores, labels):
 
 def main():
     print("=" * 60)
-    print("C(x) Cost Field Retraining — llama-server 9B Embeddings")
+    print("C(x) Cost Field Retraining — selected-model embeddings")
     print("=" * 60)
 
     # Step 1: Collect labeled code
@@ -314,18 +367,23 @@ def main():
     start = time.time()
     embeddings, labels = embed_samples(samples)
     elapsed = time.time() - start
+    if not embeddings:
+        print(f"  ERROR: no embeddings were harvested — is llama-server "
+              f"reachable at {LLAMA_BASE_URL} with /embedding enabled?")
+        sys.exit(1)
     print(f"  Embedded {len(embeddings)} samples in {elapsed:.1f}s ({elapsed/len(embeddings):.2f}s/sample)")
     print(f"  Embedding dim: {len(embeddings[0])}")
 
     # Save embeddings for future use
-    emb_path = os.path.join(MODELS_DIR, "training_embeddings_llama9b.json")
+    model_name = get_loaded_model_name()
+    emb_path = os.path.join(MODELS_DIR, "training_embeddings_selected_model.json")
     print(f"\n[3/4] Saving embeddings to {emb_path}...")
     with open(emb_path, 'w') as f:
         json.dump({
             "embeddings": embeddings,
             "labels": labels,
             "dim": len(embeddings[0]),
-            "model": "Qwen3.5-9B (llama-server)",
+            "model": model_name,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "n_pass": sum(1 for l in labels if l == "PASS"),
             "n_fail": sum(1 for l in labels if l == "FAIL"),
@@ -350,6 +408,12 @@ def main():
     # Save new model
     torch.save(model.state_dict(), old_path)
     print(f"  Saved new model to {old_path}")
+    from geometric_lens.calibration import (
+        derive_cx_normalization, save_cx_normalization,
+    )
+    calibration = derive_cx_normalization(pass_mean, fail_mean)
+    calibration_path = save_cx_normalization(MODELS_DIR, calibration)
+    print(f"  Saved C(x) calibration to {calibration_path}")
 
     # Save stats
     stats = {
@@ -360,7 +424,7 @@ def main():
         "n_pass": sum(1 for l in labels if l == "PASS"),
         "n_fail": sum(1 for l in labels if l == "FAIL"),
         "dim": len(embeddings[0]),
-        "model": "Qwen3.5-9B (llama-server)",
+        "model": model_name,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     stats_path = os.path.join(MODELS_DIR, "retrain_stats.json")
@@ -368,16 +432,20 @@ def main():
         json.dump(stats, f, indent=2)
     print(f"  Saved stats to {stats_path}")
 
-    # Hot reload
+    # Hot reload — Docker .env port first (default 8099), K3s NodePort fallback
     print("\n  Attempting hot reload via Geometric Lens...")
-    try:
-        req = Request("http://localhost:31144/internal/lens/reload",
-                       method="POST",
-                       headers={"Content-Type": "application/json"})
-        with urlopen(req, timeout=5) as resp:
-            print(f"  Reload response: {resp.read().decode()}")
-    except Exception as e:
-        print(f"  Hot reload failed (manual restart needed): {e}")
+    for base in _lens_base_urls():
+        try:
+            req = Request(f"{base}/internal/lens/reload",
+                           method="POST",
+                           headers={"Content-Type": "application/json"})
+            with urlopen(req, timeout=10) as resp:
+                print(f"  Reload response ({base}): {resp.read().decode()}")
+            break
+        except Exception as e:
+            print(f"  Hot reload failed at {base}: {e}")
+    else:
+        print("  Hot reload not applied (manual restart needed)")
 
     print(f"\n{'=' * 60}")
     print(f"DONE! C(x) retrained: val_AUC={val_auc:.4f}")

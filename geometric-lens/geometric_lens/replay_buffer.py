@@ -28,7 +28,7 @@ class ReplayBuffer:
     """Domain-stratified experience replay for C(x) continual learning.
 
     Each entry stores:
-        embedding: list[float]  — 4096-dim self-embedding (Qwen3.5-9B)
+        embedding: list[float]  — model self-embedding (hidden-dim length)
         label: str              — "PASS" or "FAIL"
         domain: str             — "LCB", "SciCode", "Custom", "TheoryFormation"
         epoch: int              — training epoch when learned

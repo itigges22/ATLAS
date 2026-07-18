@@ -1,0 +1,68 @@
+# v3-service — V3 pipeline (probe, PlanSearch, DivSampling, sandbox-verify,
+# PR-CoT/refinement/derivation repair, /v3/plan). Internal-only by default;
+# atlas-proxy calls in via `v3-service:${ATLAS_V3_PORT}`. The NodePort is
+# optional debug access — drop the type/nodePort lines below to make it
+# truly cluster-internal.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: v3-service
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: v3-service}
+  template:
+    metadata:
+      labels: {app: v3-service}
+    spec:
+      containers:
+      - name: v3
+        image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-v3:${ATLAS_IMAGE_TAG}
+        ports:
+        # The container listens on a fixed 8070 (ATLAS_V3_PORT env below
+        # pins the service's own bind port); the external ATLAS_V3_PORT
+        # var only moves the Service port. Pinning the container-side
+        # ports means changing the external var can't break the probes.
+        - containerPort: 8070
+          name: http
+        env:
+        - {name: ATLAS_V3_PORT,       value: "8070"}
+        - {name: ATLAS_INFERENCE_URL, value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
+        - {name: ATLAS_LENS_URL,      value: "http://geometric-lens:${ATLAS_LENS_PORT}"}
+        - {name: ATLAS_SANDBOX_URL,   value: "http://sandbox:${ATLAS_SANDBOX_PORT}"}
+        - {name: ATLAS_MODEL_NAME,    value: "${ATLAS_MAIN_MODEL}"}
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8070
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8070
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: v3-service
+  namespace: ${ATLAS_NAMESPACE}
+spec:
+  type: NodePort
+  selector: {app: v3-service}
+  ports:
+  - port: ${ATLAS_V3_PORT}
+    targetPort: 8070            # fixed container port (see Deployment note)
+    nodePort: ${ATLAS_V3_NODEPORT}
+    name: http

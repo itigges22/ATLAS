@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, AsyncGenerator
 from datetime import datetime, timezone
 
 from config import config
+from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -29,18 +30,6 @@ FULL_BUDGET = 8000
 def is_routing_enabled() -> bool:
     """Check if confidence routing is enabled (ROUTING_ENABLED env var)."""
     return os.environ.get("ROUTING_ENABLED", "true").lower() in ("true", "1", "yes")
-
-
-def _get_router_redis():
-    """Get Redis client for the router (reuses existing connection)."""
-    try:
-        import redis
-        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-        r = redis.from_url(redis_url, decode_responses=True)
-        r.ping()
-        return r
-    except Exception:
-        return None
 
 
 def build_context_prompt(chunks: List[Dict[str, Any]], max_tokens: int = 8000) -> str:
@@ -83,7 +72,7 @@ def build_context_prompt(chunks: List[Dict[str, Any]], max_tokens: int = 8000) -
             # Check if we have room
             if total_chars + len(chunk_text) > max_chars:
                 context_parts.append(
-                    f"\n... (additional context truncated due to length limit)"
+                    "\n... (additional context truncated due to length limit)"
                 )
                 break
 
@@ -503,21 +492,19 @@ async def rag_enhanced_completion(
                 and scored_patterns[0].composite_score > 0.7
             )
 
-            # Select route via Thompson Sampling
-            r = _get_router_redis()
-            if r:
-                route_decision = thompson_select(
-                    r=r,
-                    signals=signals,
-                    difficulty=difficulty,
-                    cache_hit_available=cache_hit_available,
-                )
-                logger.info(
-                    f"Router decision: route={route_decision.route.value} "
-                    f"D(x)={route_decision.difficulty_score:.3f} "
-                    f"bin={route_decision.difficulty_bin.value} "
-                    f"k={route_decision.retry_budget}"
-                )
+            # Select route via Thompson Sampling. Degrades internally to
+            # STANDARD when the state store is unreachable.
+            route_decision = thompson_select(
+                signals=signals,
+                difficulty=difficulty,
+                cache_hit_available=cache_hit_available,
+            )
+            logger.info(
+                f"Router decision: route={route_decision.route.value} "
+                f"D(x)={route_decision.difficulty_score:.3f} "
+                f"bin={route_decision.difficulty_bin.value} "
+                f"k={route_decision.retry_budget}"
+            )
         except Exception as e:
             logger.error(f"Confidence Router failed, defaulting to STANDARD: {e}")
             route_decision = None
@@ -661,13 +648,9 @@ def record_route_feedback(
         from router.feedback_recorder import record_outcome
         from models.route import Route, DifficultyBin
 
-        r = _get_router_redis()
-        if not r:
-            return
-
         route = Route(route_value)
         d_bin = DifficultyBin(difficulty_bin_value)
-        record_outcome(r, d_bin, route, success)
+        record_outcome(d_bin, route, success)
     except Exception as e:
         logger.error(f"Failed to record route feedback: {e}")
 
@@ -690,7 +673,7 @@ async def forward_to_llama(
     if tools:
         payload["tools"] = tools
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=300.0, headers=_svc_auth_headers()) as client:
         response = await client.post(
             f"{config.llama.base_url}/v1/chat/completions",
             json=payload,
@@ -748,7 +731,7 @@ async def forward_to_llama_stream(
     if tools:
         payload["tools"] = tools
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=300.0, headers=_svc_auth_headers()) as client:
         async with client.stream(
             "POST",
             f"{config.llama.base_url}/v1/chat/completions",

@@ -11,6 +11,7 @@ Sources (tried in order):
 """
 
 import json
+import os
 import urllib.request
 from pathlib import Path
 from typing import List, Optional
@@ -21,6 +22,41 @@ from ..models import BenchmarkTask
 
 # Maximum number of test cases per problem (for memory/time)
 MAX_TESTS_PER_PROBLEM = 50
+
+# Row fields _parse consumes — the download cache keeps only these.
+# Raw HF rows are ~4 MB each, dominated by encoded private-test blobs the
+# parser can't decode and skips; slimmed rows are ~2 KB (measured: 600
+# rows, 2.4 GB raw -> 1 MB slimmed, parsed tasks identical).
+_ROW_FIELDS = ("question_id", "task_id", "question_content", "starter_code",
+               "canonical_solution", "difficulty", "platform",
+               "private_test_cases", "public_test_cases")
+
+
+def _slim_row(row: dict) -> dict:
+    """Drop row fields the parser never reads; truncate test-case lists to
+    MAX_TESTS_PER_PROBLEM (the parser truncates identically at read time).
+    Test-case fields that don't JSON-parse are dropped — the parser skips
+    them anyway."""
+    out = {}
+    for k in _ROW_FIELDS:
+        if k not in row:
+            continue
+        val = row[k]
+        if k.endswith("test_cases"):
+            was_str = isinstance(val, str)
+            cases = val
+            if was_str:
+                try:
+                    cases = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if not isinstance(cases, list):
+                continue
+            cases = cases[:MAX_TESTS_PER_PROBLEM]
+            out[k] = json.dumps(cases) if was_str else cases
+        else:
+            out[k] = val
+    return out
 
 
 class LiveCodeBenchDataset(BaseDataset):
@@ -71,16 +107,33 @@ class LiveCodeBenchDataset(BaseDataset):
         return self
 
     def download(self) -> Path:
-        """Download LiveCodeBench via HuggingFace rows API and cache as JSONL."""
+        """Download LiveCodeBench via HuggingFace rows API and cache as JSONL.
+
+        A download that breaks mid-pagination is cached alongside a
+        `.partial` marker so the next run retries the full fetch instead of
+        trusting the truncated file forever. The partial cache is used as a
+        last resort only when every source fails outright.
+        """
         filepath = self.cache_dir / self.FILENAME
+        partial_marker = filepath.with_name(filepath.name + ".partial")
 
         if filepath.exists():
-            return filepath
+            if not partial_marker.exists():
+                return filepath
+            print(f"Cached LiveCodeBench copy at {filepath} is a partial "
+                  f"download — retrying the full fetch...")
+
+        def _cached_rows() -> int:
+            if not filepath.exists():
+                return 0
+            with open(filepath, encoding='utf-8') as f:
+                return sum(1 for _ in f)
 
         # Try each dataset source in order
         for dataset_id in self.DATASET_IDS:
             print(f"Downloading LiveCodeBench (release_v5) from {dataset_id}...")
             rows = []
+            complete = False
 
             offset = 0
             while True:
@@ -95,6 +148,7 @@ class LiveCodeBenchDataset(BaseDataset):
                         batch = data.get("rows", [])
                         rows.extend(batch)
                         if len(batch) < 100:
+                            complete = True
                             break
                         offset += 100
                 except Exception as e:
@@ -105,12 +159,30 @@ class LiveCodeBenchDataset(BaseDataset):
                     rows = []
                     break
 
-            if rows:
-                with open(filepath, 'w', encoding='utf-8') as f:
+            # Never overwrite the cache with a smaller partial copy. Write
+            # via tmp + rename so an interrupted write can't tear the cache.
+            if rows and (complete or len(rows) > _cached_rows()):
+                tmp = filepath.with_name(filepath.name + ".tmp")
+                with open(tmp, 'w', encoding='utf-8') as f:
                     for row in rows:
-                        f.write(json.dumps(row.get("row", row)) + "\n")
-                print(f"Downloaded {len(rows)} tasks to {filepath}")
+                        f.write(json.dumps(_slim_row(row.get("row", row)))
+                                + "\n")
+                os.replace(tmp, filepath)
+                if complete:
+                    partial_marker.unlink(missing_ok=True)
+                    print(f"Downloaded {len(rows)} tasks to {filepath}")
+                else:
+                    partial_marker.touch()
+                    print(f"Warning: cached an INCOMPLETE set ({len(rows)} "
+                          f"tasks); the next run will retry the full fetch.")
                 return filepath
+
+        # Every source failed outright — an existing cache beats nothing.
+        if filepath.exists():
+            print(f"Warning: all sources failed; using the existing "
+                  f"{'partial ' if partial_marker.exists() else ''}cache "
+                  f"({_cached_rows()} tasks).")
+            return filepath
 
         raise RuntimeError("Failed to download LiveCodeBench from any source")
 

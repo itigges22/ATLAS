@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,120 @@ func TestSanitizeFileContentHandlesUnmatchedFence(t *testing.T) {
 	}
 }
 
+func TestSanitizeFileContentLeavesInteriorFenceAlone(t *testing.T) {
+	// A fenced usage example inside a docstring partway through a real
+	// module. The fence is legitimate content — stripping to the fence
+	// body would discard the code before and after it.
+	var b strings.Builder
+	for i := 0; i < 38; i++ {
+		fmt.Fprintf(&b, "def fn_%d():\n", i)
+	}
+	b.WriteString("def frobnicate(x):\n")
+	b.WriteString("    \"\"\"Frobnicate x.\n\n")
+	b.WriteString("    Example:\n\n")
+	b.WriteString("    ```python\n")
+	b.WriteString("    frobnicate(1)\n")
+	b.WriteString("    ```\n")
+	b.WriteString("    \"\"\"\n")
+	b.WriteString("    return x + 1\n")
+	for i := 0; i < 70; i++ {
+		fmt.Fprintf(&b, "def tail_%d():\n", i)
+	}
+	in := b.String()
+	got, sanitized := sanitizeFileContent("frob.py", in)
+	if sanitized {
+		t.Error("sanitized=true for interior docstring fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed for interior fence:\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentLeavesTopDocstringFenceAlone(t *testing.T) {
+	// Fence near the top of the file, but inside a module docstring —
+	// the docstring marker before the fence disqualifies the wrapper
+	// interpretation, and the code after the closing fence must survive.
+	in := strings.Join([]string{
+		`"""Frobnicate.`,
+		"",
+		"```python",
+		"frob()",
+		"```",
+		`"""`,
+		"def frob():",
+		"    return 1",
+	}, "\n")
+	got, sanitized := sanitizeFileContent("frob.py", in)
+	if sanitized {
+		t.Error("sanitized=true for docstring-wrapped fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed:\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentLeavesInlineDocstringFenceAlone(t *testing.T) {
+	// The opening docstring line has code before the delimiter
+	// (DOC = """...), so the fence inside it is legitimate content and the
+	// assignment, closing delimiter, and trailing function must all survive.
+	in := strings.Join([]string{
+		`DOC = """Usage example:`,
+		"```python",
+		"x = 1",
+		"```",
+		`end"""`,
+		"",
+		"def f():",
+		"    return 1",
+	}, "\n")
+	got, sanitized := sanitizeFileContent("example.py", in)
+	if sanitized {
+		t.Error("sanitized=true for inline-docstring-wrapped fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed (data loss):\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentStripsWrapperWithProseCommentMention(t *testing.T) {
+	// A genuine whole-file wrapper whose intro prose merely mentions a
+	// comment marker must still be stripped (the marker is not at line start).
+	in := strings.Join([]string{
+		"Here's app.js with the /* config */ block rewritten:",
+		"```javascript",
+		"const x = 1;",
+		"export default x;",
+		"```",
+	}, "\n")
+	got, sanitized := sanitizeFileContent("app.js", in)
+	if !sanitized {
+		t.Fatal("sanitized=false; the wrapper should have been stripped")
+	}
+	if strings.Contains(got, "```") || strings.Contains(got, "Here's app.js") {
+		t.Errorf("wrapper not fully stripped:\n%q", got)
+	}
+}
+
+func TestSanitizeFileContentLeavesFenceFollowedByCodeAlone(t *testing.T) {
+	// Opening fence at the top, but substantial content after the last
+	// bare fence — not a whole-file wrapper.
+	var b strings.Builder
+	b.WriteString("```\n")
+	b.WriteString("example()\n")
+	b.WriteString("```\n")
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, "line_%d = %d\n", i, i)
+	}
+	in := b.String()
+	got, sanitized := sanitizeFileContent("data.py", in)
+	if sanitized {
+		t.Error("sanitized=true with 20 content lines after the fence; should pass through")
+	}
+	if got != in {
+		t.Errorf("content changed:\n%q", got)
+	}
+}
+
 func TestSanitizeFileContentPreservesTrailingNewline(t *testing.T) {
 	in := "```python\ndef foo():\n    pass\n```\n"
 	got, sanitized := sanitizeFileContent("foo.py", in)
@@ -83,19 +198,30 @@ func TestSanitizeFileContentPreservesTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestValidateShellCommandBlocksDestructiveVerbs(t *testing.T) {
+// Catastrophic commands stay blocked even though run_command is otherwise
+// permissive — these would wipe the whole project, fork-bomb the sandbox, or
+// destroy a block device, none of which the project-folder jail protects
+// against on its own.
+func TestValidateShellCommandBlocksCatastrophic(t *testing.T) {
 	cases := []struct {
 		name string
 		cmd  string
 	}{
-		{"plain rm", "rm /workspace/foo.py"},
-		{"rm -rf", "rm -rf templates"},
-		{"mv", "mv templates venv/templates"},
-		{"cp overwrite", "cp old.py new.py"},
-		{"chained mv", "cd /workspace && mv app.py venv/"},
+		{"rm -rf root", "rm -rf /"},
+		{"rm -rf workspace root", "rm -rf /workspace"},
+		{"rm -rf workspace glob", "rm -rf /workspace/*"},
+		{"rm -rf home", "rm -rf $HOME"},
+		{"rm -rf dot", "rm -rf ."},
+		{"rm -rf star", "rm -rf *"},
+		{"rm -rf chained at root", "cd /workspace && rm -rf ."},
 		{"find -delete", "find . -name '*.tmp' -delete"},
 		{"find -exec rm", "find . -type f -exec rm {} \\;"},
-		{"truncating redirect", "echo bad > /workspace/app.py"},
+		{"fork bomb", ":(){ :|:& };:"},
+		{"mkfs", "mkfs.ext4 /dev/sda1"},
+		{"dd to device", "dd if=/dev/zero of=/dev/sda bs=1M"},
+		{"redirect to device", "echo x > /dev/sda"},
+		{"bash -c wrapping rm -rf /", `bash -c "rm -rf /"`},
+		{"eval wrapping rm -rf home", `eval "rm -rf $HOME"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,6 +229,32 @@ func TestValidateShellCommandBlocksDestructiveVerbs(t *testing.T) {
 				t.Errorf("validateShellCommand(%q) = empty, want rejection", tc.cmd)
 			}
 		})
+	}
+}
+
+// File-management commands the OLD policy blocked are now allowed — the model
+// shouldn't reinvent shell, and the sandbox jail bounds the blast radius to
+// the project folder. This is the regression guard for the 2026-06 loosening.
+func TestValidateShellCommandAllowsFileManagement(t *testing.T) {
+	allowed := []string{
+		"mv index.html templates/",
+		"mv templates venv/templates",
+		"cp old.py new.py",
+		"cd /workspace && mv app.py src/",
+		"rm app.py",                 // delete a specific file
+		"rm -f stale.pyc",           // forced, but not recursive
+		"rm -rf __pycache__",        // recursive, but a named subdir
+		"rm -rf node_modules build", // named subdirs
+		"mkdir -p static/js",
+		"chmod +x run.sh",
+		"sed -i 's/foo/bar/' app.py", // in-place content edit via shell
+		"echo bad > app.py",          // truncating redirect into a project file
+		"ln -s ../shared lib",
+	}
+	for _, cmd := range allowed {
+		if got := validateShellCommand(cmd); got != "" {
+			t.Errorf("validateShellCommand(%q) rejected: %s", cmd, got)
+		}
 	}
 }
 
@@ -180,29 +332,31 @@ func TestValidateShellCommandAllowsLogRedirectWithTrailingFlags(t *testing.T) {
 	}
 }
 
-func TestValidateShellCommandBlocksBashCBypass(t *testing.T) {
-	// The deny-list is bypassable if the model wraps the destructive
-	// verb inside `bash -c "..."`. Roo Code's regression test case.
-	cases := []string{
-		`bash -c "rm -rf foo"`,
-		`sh -c 'mv templates venv/'`,
-		`zsh -c "echo malicious"`,
+func TestValidateShellCommandUnwrapsBashCForCatastrophic(t *testing.T) {
+	// `bash -c "..."` / `eval "..."` are allowed wrappers now, but they must
+	// not smuggle a catastrophic command past the denylist — we unwrap one
+	// layer and re-check.
+	blocked := []string{
+		`bash -c "rm -rf /"`,
+		`sh -c 'rm -rf /workspace'`,
 		`dash -c "find . -delete"`,
 		`eval "rm -rf $HOME"`,
-		`eval $command`,
+		`bash -c ":(){ :|:& };:"`,
 	}
-	for _, cmd := range cases {
+	for _, cmd := range blocked {
 		if got := validateShellCommand(cmd); got == "" {
 			t.Errorf("validateShellCommand(%q) = empty, want rejection", cmd)
 		}
 	}
 }
 
-func TestValidateShellCommandStillAllowsLegitShellWork(t *testing.T) {
-	// `bash -c` is the bypass; bash with no -c (or other flags) is fine.
-	// `python -c` is a common, legit verification idiom and should pass.
+func TestValidateShellCommandAllowsLegitShellWork(t *testing.T) {
+	// bash -c wrapping a benign command is fine now; `python -c` / `node -e`
+	// verification idioms must pass.
 	allowed := []string{
 		"bash --version",
+		`bash -c "python app.py"`,
+		`sh -c 'pytest -q'`,
 		"python -c 'import flask; print(flask.__version__)'",
 		"node -e 'console.log(1+1)'",
 		"git log -c",
@@ -285,8 +439,9 @@ func TestValidateWorkingDirReferenceIgnoresUnrelatedPaths(t *testing.T) {
 
 func TestValidateRunCommandChainsBothGates(t *testing.T) {
 	const wd = "/home/isaac/snake"
-	// Shell-mutation gate fires first (more specific message).
-	if got := validateRunCommand("rm -rf /workspace/foo", wd); got == "" || !strings.Contains(got, "rm") {
+	// Shell-mutation gate fires first (more specific message). Use a
+	// catastrophic command, since targeted file ops are now allowed.
+	if got := validateRunCommand("rm -rf /", wd); got == "" || !strings.Contains(got, "rm") {
 		t.Errorf("expected shell-mutation rejection mentioning rm, got %q", got)
 	}
 	// /workspace gate fires when shell-mutation is clean.
@@ -331,8 +486,8 @@ func TestValidateNotSuspiciouslyShrunkRejectsDestructiveStub(t *testing.T) {
 
 func TestValidateNotSuspiciouslyShrunkAllowsLegitEdits(t *testing.T) {
 	cases := []struct {
-		name             string
-		old, new         int
+		name     string
+		old, new int
 	}{
 		{"original below threshold (line edit)", 50, 5},
 		{"genuine small change", 200, 150},
@@ -375,51 +530,51 @@ func TestValidateNotSuspiciouslyShrunkRejectionMessage(t *testing.T) {
 // duplicated doctype. This test locks the strip behaviour.
 func TestStripLeadingDoctype(t *testing.T) {
 	cases := []struct {
-		name    string
-		in      string
-		want    string
+		name     string
+		in       string
+		want     string
 		stripped bool
 	}{
 		{
-			name: "html5 doctype",
-			in:   "<!DOCTYPE html>\n<html><body></body></html>",
-			want: "<html><body></body></html>",
+			name:     "html5 doctype",
+			in:       "<!DOCTYPE html>\n<html><body></body></html>",
+			want:     "<html><body></body></html>",
 			stripped: true,
 		},
 		{
-			name: "html5 doctype lowercase",
-			in:   "<!doctype html>\n<html></html>",
-			want: "<html></html>",
+			name:     "html5 doctype lowercase",
+			in:       "<!doctype html>\n<html></html>",
+			want:     "<html></html>",
 			stripped: true,
 		},
 		{
-			name: "doctype with leading whitespace",
-			in:   "  \n<!DOCTYPE html>\n<html></html>",
-			want: "<html></html>",
+			name:     "doctype with leading whitespace",
+			in:       "  \n<!DOCTYPE html>\n<html></html>",
+			want:     "<html></html>",
 			stripped: true,
 		},
 		{
-			name: "no doctype",
-			in:   "<html><body></body></html>",
-			want: "<html><body></body></html>",
+			name:     "no doctype",
+			in:       "<html><body></body></html>",
+			want:     "<html><body></body></html>",
 			stripped: false,
 		},
 		{
-			name: "doctype not at start (after content)",
-			in:   "<html><!DOCTYPE html><body></body></html>",
-			want: "<html><!DOCTYPE html><body></body></html>",
+			name:     "doctype not at start (after content)",
+			in:       "<html><!DOCTYPE html><body></body></html>",
+			want:     "<html><!DOCTYPE html><body></body></html>",
 			stripped: false,
 		},
 		{
-			name: "verbose html4 doctype",
-			in:   `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">` + "\n<html></html>",
-			want: "<html></html>",
+			name:     "verbose html4 doctype",
+			in:       `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">` + "\n<html></html>",
+			want:     "<html></html>",
 			stripped: true,
 		},
 		{
-			name: "empty content",
-			in:   "",
-			want: "",
+			name:     "empty content",
+			in:       "",
+			want:     "",
 			stripped: false,
 		},
 	}
@@ -531,6 +686,9 @@ func TestIsVerificationCommand(t *testing.T) {
 		"make test",
 		"ruff check src/",
 		"mypy app.py",
+		"markdownlint README.md",
+		"shellcheck scripts/setup.sh",
+		"golangci-lint run ./...",
 	}
 	for _, cmd := range verifies {
 		if !isVerificationCommand(cmd) {
@@ -723,7 +881,7 @@ func TestResolveAgentPathStripsWorkspacePrefix(t *testing.T) {
 		{"workspace/app.py", "/workspace/app.py"},
 		{"workspace", "/workspace"},
 		{"./workspace/app.py", "/workspace/app.py"},
-		{"app.py", "/workspace/app.py"},          // no prefix → unchanged
+		{"app.py", "/workspace/app.py"}, // no prefix → unchanged
 		{"src/main.go", "/workspace/src/main.go"},
 	}
 	for _, tc := range cases {

@@ -13,19 +13,25 @@ import subprocess
 import time
 import signal
 import atexit
+import json
 from typing import Optional, List
 
-from atlas.cli import display, client
+from atlas.cli import client, compose as compose_config, display
 from atlas.cli.commands import solve, status, bench
+from atlas.cli.runtime_artifacts import go_binary_is_current
 
 
-PROXY_PORT = os.environ.get("ATLAS_PROXY_PORT", "8090")
+# Shell env wins; otherwise the Docker .env's port keys drive the URLs.
+_ENV_VALUES = compose_config.read_env_file(compose_config.find_atlas_root())
+PROXY_PORT = compose_config.service_port("proxy", values=_ENV_VALUES)
 PROXY_URL = os.environ.get("ATLAS_PROXY_URL", f"http://localhost:{PROXY_PORT}")
-INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
-SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
-V3_URL = os.environ.get("ATLAS_V3_URL", "http://localhost:8070")
-MODEL_NAME = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+INFERENCE_URL = compose_config.service_url("llama", values=_ENV_VALUES)
+LENS_URL = compose_config.service_url("lens", values=_ENV_VALUES)
+SANDBOX_URL = compose_config.service_url("sandbox", values=_ENV_VALUES)
+V3_URL = compose_config.service_url("v3", values=_ENV_VALUES)
+MODEL_NAME = (os.environ.get("ATLAS_MODEL_NAME")
+              or _ENV_VALUES.get("ATLAS_MODEL_NAME", "local-model"))
+DEMO_RAW_CAPABILITY = "demo_raw_completion_v1"
 
 _proxy_process = None
 
@@ -39,6 +45,29 @@ def _check_url(url: str, timeout: int = 3) -> bool:
             return resp.status == 200
     except Exception:
         return False
+
+
+def _proxy_capabilities(url: Optional[str] = None, timeout: int = 3) -> set[str]:
+    """Read the active proxy capability contract from its health response."""
+    import urllib.request
+
+    base_url = (url or PROXY_URL).rstrip("/")
+    try:
+        req = urllib.request.Request(f"{base_url}/health")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return set()
+            payload = json.loads(resp.read(1 << 20))
+    except (OSError, ValueError, TypeError):
+        return set()
+    capabilities = payload.get("capabilities", []) if isinstance(payload, dict) else []
+    if not isinstance(capabilities, list):
+        return set()
+    return {item for item in capabilities if isinstance(item, str)}
+
+
+def _proxy_supports_capability(capability: str, url: Optional[str] = None) -> bool:
+    return capability in _proxy_capabilities(url)
 
 
 def _find_go() -> Optional[str]:
@@ -90,7 +119,7 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
     output = os.path.expanduser("~/.local/bin/atlas-proxy-v2")
     os.makedirs(os.path.dirname(output), exist_ok=True)
 
-    print(f"  Building atlas-proxy from source...")
+    print("  Building atlas-proxy from source...")
     try:
         result = subprocess.run(
             [go_bin, "build", "-o", output, "."],
@@ -108,6 +137,17 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
     except Exception as e:
         print(f"  Build failed: {e}")
         return None
+
+
+def _select_proxy_binary(atlas_dir: str) -> Optional[str]:
+    """Select or rebuild the local proxy for the current checkout."""
+    binary = _find_proxy_binary(atlas_dir)
+    source_dir = os.path.join(atlas_dir, "proxy") if atlas_dir else ""
+    if binary and go_binary_is_current(binary, source_dir):
+        return binary
+    if binary:
+        print("  atlas-proxy source changed; rebuilding the installed binary...")
+    return _build_proxy(atlas_dir) if _find_go() else None
 
 
 def _kill_stale_proxy() -> None:
@@ -322,12 +362,22 @@ def _docker_workspace_for(container: str) -> Optional[str]:
         return None
 
 
+def _compose_container(service: str, fallback: str) -> str:
+    """Resolve a compose service's container via `docker compose ps -q`
+    so non-default project names (COMPOSE_PROJECT_NAME, renamed checkout
+    dirs) still work; fall back to the conventional name."""
+    root = compose_config.find_atlas_root()
+    return compose_config.container_id(root, service, fallback=fallback) or fallback
+
+
 def _docker_proxy_workspace() -> Optional[str]:
-    return _docker_workspace_for("atlas-atlas-proxy-1")
+    return _docker_workspace_for(
+        _compose_container("atlas-proxy", "atlas-atlas-proxy-1"))
 
 
 def _docker_sandbox_workspace() -> Optional[str]:
-    return _docker_workspace_for("atlas-sandbox-1")
+    return _docker_workspace_for(
+        _compose_container("sandbox", "atlas-sandbox-1"))
 
 
 def _recreate_docker_proxy(atlas_dir: str, project_dir: str) -> bool:
@@ -346,11 +396,10 @@ def _recreate_docker_proxy(atlas_dir: str, project_dir: str) -> bool:
     env["ATLAS_PROJECT_DIR"] = project_dir
     try:
         result = subprocess.run(
-            [
-                "docker", "compose", "up", "-d",
-                "atlas-proxy", "sandbox",
+            compose_config.command(atlas_dir, [
+                "up", "-d", "atlas-proxy", "sandbox",
                 "--no-deps", "--no-build", "--force-recreate",
-            ],
+            ]),
             cwd=atlas_dir, env=env,
             capture_output=True, text=True, timeout=60,
         )
@@ -367,6 +416,64 @@ def _recreate_docker_proxy(atlas_dir: str, project_dir: str) -> bool:
     except Exception as e:
         print(f"  Recreate failed: {e}")
         return False
+
+
+def _rebuild_docker_proxy_for_capability(
+    atlas_dir: str,
+    project_dir: str,
+    capability: str,
+) -> bool:
+    """Build and recreate atlas-proxy from checkout source, then verify it."""
+    if not atlas_dir:
+        return False
+    print("  Active atlas-proxy predates the raw demo contract; rebuilding it...")
+    env = os.environ.copy()
+    env["ATLAS_PROJECT_DIR"] = project_dir
+    try:
+        result = subprocess.run(
+            compose_config.command(atlas_dir, [
+                "up", "-d", "--build", "--no-deps", "--force-recreate",
+                "atlas-proxy",
+            ]),
+            cwd=atlas_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout)[-500:]
+            print(f"  Proxy rebuild failed: {tail}")
+            return False
+        deadline = time.time() + 60.0
+        while time.time() < deadline:
+            if _proxy_supports_capability(capability):
+                print("  Proxy rebuilt with the current demo contract")
+                return True
+            time.sleep(1.0)
+        print("  Rebuilt proxy never advertised the required demo capability")
+        return False
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"  Proxy rebuild failed: {e}")
+        return False
+
+
+def _repair_proxy_capability(atlas_dir: str, capability: str) -> bool:
+    """Replace a reachable but stale proxy with one from this checkout."""
+    if _proxy_supports_capability(capability):
+        return True
+    if _docker_compose_owns_proxy(atlas_dir):
+        return _rebuild_docker_proxy_for_capability(atlas_dir, os.getcwd(), capability)
+    if not _find_go():
+        print(
+            "  Active atlas-proxy is too old for /demo and Go is unavailable "
+            "to rebuild it."
+        )
+        return False
+    proxy_bin = _build_proxy(atlas_dir)
+    if not proxy_bin or not _launch_local_proxy(proxy_bin):
+        return False
+    return _proxy_supports_capability(capability)
 
 
 def _align_workspace(atlas_dir: str) -> None:
@@ -424,7 +531,7 @@ def _docker_compose_owns_proxy(atlas_dir: Optional[str]) -> bool:
         return False
     try:
         result = subprocess.run(
-            ["docker", "compose", "config", "--services"],
+            compose_config.command(atlas_dir, ["config", "--services"]),
             cwd=atlas_dir, capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
@@ -447,7 +554,7 @@ def _wait_for_proxy(timeout: float = 60.0) -> bool:
     return False
 
 
-def _ensure_proxy() -> bool:
+def _ensure_proxy(required_capability: Optional[str] = None) -> bool:
     """Ensure atlas-proxy is running, launching it locally if needed.
 
     Strategy:
@@ -461,12 +568,16 @@ def _ensure_proxy() -> bool:
        locally from CWD
     4. Nothing available → return False
     """
+    atlas_dir = _find_atlas_dir()
+
     # Already running?
     if _check_url(PROXY_URL):
-        _align_workspace(_find_atlas_dir())
+        if required_capability and not _repair_proxy_capability(
+            atlas_dir, required_capability
+        ):
+            return False
+        _align_workspace(atlas_dir)
         return True
-
-    atlas_dir = _find_atlas_dir()
 
     # #118: macOS hybrid + Linux + CUDA/ROCm all run atlas-proxy in
     # docker. If the user's compose stack defines it, the stack owns
@@ -474,36 +585,35 @@ def _ensure_proxy() -> bool:
     if _docker_compose_owns_proxy(atlas_dir):
         # The stack is configured. Wait for the proxy to bind — it
         # may be mid-startup (we polled too early).
-        print(f"  Docker compose stack owns atlas-proxy. Waiting for it to come up...")
+        print("  Docker compose stack owns atlas-proxy. Waiting for it to come up...")
         if _wait_for_proxy(timeout=60):
             print(f"  Proxy responded on port {PROXY_PORT}")
+            if required_capability and not _repair_proxy_capability(
+                atlas_dir, required_capability
+            ):
+                return False
             _align_workspace(atlas_dir)
             return True
         # Still nothing after 60s — the stack probably isn't running.
         # Tell the user how to start it instead of silently launching a
         # local proxy that would collide later.
-        print(f"  Proxy never responded. The docker stack is probably not running.")
-        print(f"  Start it with one of:")
-        print(f"    docker compose up -d                                      "
-              f"# Linux + NVIDIA")
-        print(f"    docker compose -f docker-compose.yml "
-              f"-f docker-compose.rocm.yml up -d   # Linux + AMD")
-        print(f"    docker compose -f docker-compose.yml "
-              f"-f docker-compose.vulkan.yml up -d # Vulkan")
-        print(f"    docker compose -f docker-compose.yml "
-              f"-f docker-compose.macos.yml up -d  # macOS hybrid (#32)")
-        print(f"  Then re-run atlas.")
+        print("  Proxy never responded. The docker stack is probably not running.")
+        print("  Start it with:")
+        print(f"    {compose_config.format_command(atlas_dir, ['up', '-d'])}")
+        print("  Then re-run atlas.")
         return False
 
     # Try to find or build and launch locally (dev workflow, no docker).
-    proxy_bin = _find_proxy_binary(atlas_dir)
-
-    if not proxy_bin and _find_go():
-        proxy_bin = _build_proxy(atlas_dir)
+    proxy_bin = _select_proxy_binary(atlas_dir)
 
     if proxy_bin:
         print(f"  Starting local proxy ({os.path.basename(proxy_bin)})...")
         if _launch_local_proxy(proxy_bin):
+            if required_capability and not _proxy_supports_capability(
+                required_capability
+            ):
+                print("  Local proxy started without the required demo capability")
+                return False
             print(f"  Proxy ready on port {PROXY_PORT}")
             return True
 
@@ -519,7 +629,6 @@ def startup_checks() -> bool:
     if llm_ok:
         display.status_block(
             model=llm_model,
-            speed="~51 tok/s",
             lens="connected" if rag_ok else "unavailable",
             sandbox="ready" if sandbox_ok else "unavailable",
         )
@@ -564,63 +673,143 @@ def handle_command(line: str):
 
     elif cmd == "/bench":
         import shlex
-        bench_args = shlex.split(args) if args else []
+        try:
+            bench_args = shlex.split(args) if args else []
+        except ValueError as e:
+            display.error(f"/bench: {e}")
+            display.info("Usage: /bench [--tasks N] [--strategy NAME]")
+            return
         tasks = 0
-        dataset = "livecodebench"
         strategy = "random"
         i = 0
         while i < len(bench_args):
             if bench_args[i] == "--tasks" and i + 1 < len(bench_args):
-                tasks = int(bench_args[i + 1])
-                i += 2
-            elif bench_args[i] == "--dataset" and i + 1 < len(bench_args):
-                dataset = bench_args[i + 1]
+                try:
+                    tasks = int(bench_args[i + 1])
+                except ValueError:
+                    display.error(f"--tasks expects an integer, got "
+                                  f"{bench_args[i + 1]!r}")
+                    display.info("Usage: /bench [--tasks N] [--strategy NAME]")
+                    return
                 i += 2
             elif bench_args[i] == "--strategy" and i + 1 < len(bench_args):
                 strategy = bench_args[i + 1]
                 i += 2
             else:
                 i += 1
-        bench.bench(dataset=dataset, max_tasks=tasks, selection_strategy=strategy)
-
-    elif cmd == "/ablation":
-        display.warn("Ablation mode coming soon")
+        if tasks < 0:
+            display.error("--tasks must be >= 0 (0 runs the full dataset)")
+            return
+        bench.bench(max_tasks=tasks, selection_strategy=strategy)
 
     else:
         display.error(f"Unknown command: {cmd}")
         display.info("Type /help for commands")
 
 
+_SUBCOMMAND_HELP = [
+    ("init",    "first-run install wizard"),
+    ("doctor",  "install health diagnostic"),
+    ("tier",    "hardware tier probe + runtime fit"),
+    ("model",   "model registry: list/install/verify/remove"),
+    ("onboard", "guided drop-in for a new model"),
+    ("lens",    "Geometric Lens check/build/publish"),
+    ("asa",     "ASA control-vector check/build/publish"),
+    ("publish", "publish lens + ASA artifacts in one step"),
+    ("bench",   "run benchmarks with live progress"),
+    ("compose", "docker compose with ATLAS's compose files"),
+    ("upgrade", "staged upgrade with auto-restore on failure"),
+    ("rollback","return the deployment to a previous release"),
+    ("diagnostics", "collect a filtered diagnostic bundle"),
+    ("artifact", "verify / snapshot / roll back artifact bundles"),
+    ("config",  "validate / migrate the .env configuration"),
+    ("tui",     "launch the terminal UI"),
+]
+
+# Flags recognized by the interactive UI. They are passed through to the TUI
+# binary unchanged (a leading-dash argument is not treated as a subcommand);
+# listed here so `atlas --help` documents them.
+_SESSION_FLAG_HELP = [
+    ("--continue", "resume the most recent session in the current directory"),
+    ("--resume [id]", "resume a session by id, or pick from a list"),
+]
+
+
+def _print_usage(stream=None) -> None:
+    out = stream or sys.stdout
+    out.write("usage: atlas [subcommand] [args...]\n\n")
+    out.write("Run `atlas` with no arguments for the interactive UI.\n\n")
+    out.write("subcommands:\n")
+    for name, desc in _SUBCOMMAND_HELP:
+        out.write(f"  {name:<8} {desc}\n")
+    out.write("\nsession flags (interactive UI):\n")
+    for name, desc in _SESSION_FLAG_HELP:
+        out.write(f"  {name:<14} {desc}\n")
+    out.write("\n  --version     print the CLI version and exit\n")
+
+
+def _dispatch_subcommand(name: str, argv: List[str]) -> int:
+    if name == "compose":
+        return _run_compose(argv)
+    import importlib
+    module = importlib.import_module(f"atlas.cli.commands.{name}")
+    return module.main(argv)
+
+
+def _run_compose(argv: List[str]) -> int:
+    """`atlas compose ...` — thin passthrough to `docker compose` with the
+    project's compose file set (backend overlays included)."""
+    atlas_dir = compose_config.find_atlas_root()
+    if not os.path.isfile(os.path.join(atlas_dir, "docker-compose.yml")):
+        print("atlas compose: no docker-compose.yml found — run from an "
+              "ATLAS checkout.", file=sys.stderr)
+        return 1
+    try:
+        cmd = compose_config.command(atlas_dir, argv)
+    except FileNotFoundError as e:
+        print(f"atlas compose: {e}", file=sys.stderr)
+        return 1
+    try:
+        return subprocess.call(cmd, cwd=atlas_dir)
+    except FileNotFoundError:
+        print("atlas compose: docker not found on PATH.", file=sys.stderr)
+        return 1
+
+
 def run():
     """Main entry point.
 
     Launch strategy:
-    1. `atlas doctor [...]` → run install diagnostic and exit (PC-053)
-    2. `atlas init`/`atlas tier`/`atlas tui`/`atlas model` → subcommand dispatch
+    1. `atlas <subcommand> [...]` → subcommand dispatch (see _SUBCOMMAND_HELP)
+    2. `atlas --help` / unknown subcommand → usage
     3. Default (interactive tty) → launch the Bubbletea TUI
     4. Pipe mode (no tty) → built-in REPL with /solve, /bench
     """
-    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
-        from atlas.cli.commands import doctor
-        sys.exit(doctor.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        from atlas.cli.commands import init
-        sys.exit(init.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "tier":
-        from atlas.cli.commands import tier
-        sys.exit(tier.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "tui":
-        from atlas.cli.commands import tui
-        sys.exit(tui.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "model":
-        from atlas.cli.commands import model
-        sys.exit(model.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "lens":
-        from atlas.cli.commands import lens
-        sys.exit(lens.main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "asa":
-        from atlas.cli.commands import asa
-        sys.exit(asa.main(sys.argv[2:]))
+    # Internal service auth: one global opener covers every urllib
+    # call the CLI makes (proxy, llama, lens, v3, sandbox). No-op when
+    # secrets/service-token doesn't exist.
+    try:
+        from atlas.cli.token import install_urllib_opener
+        install_urllib_opener()
+    except Exception:
+        pass  # auth is best-effort on the client side; servers enforce
+
+    if len(sys.argv) > 1:
+        first = sys.argv[1]
+        known = {name for name, _ in _SUBCOMMAND_HELP}
+        if first in ("--help", "-h"):
+            _print_usage()
+            sys.exit(0)
+        if first in ("--version", "-V"):
+            from atlas import __version__
+            print(f"atlas {__version__}")
+            sys.exit(0)
+        if first in known:
+            sys.exit(_dispatch_subcommand(first, sys.argv[2:]))
+        if not first.startswith("-"):
+            print(f"atlas: unknown subcommand {first!r}\n", file=sys.stderr)
+            _print_usage(sys.stderr)
+            sys.exit(2)
 
     # Interactive default → TUI. Pipe mode (e.g. `echo "..." | atlas`) skips
     # the TUI and runs the built-in /solve flow so scripts and CI usage

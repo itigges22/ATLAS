@@ -1,0 +1,42 @@
+name: Bug report
+description: Something in ATLAS misbehaves
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: atlas doctor output
+      description: Paste the output of `atlas doctor`. It captures versions, backend, model, and service health in one shot.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Which GGUF you were running (registry name or filename), if not already in the doctor output.
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Inference backend
+      options:
+        - CUDA
+        - ROCm
+        - Vulkan
+        - Metal (macOS)
+        - CPU
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "Proxy or v3-service logs around the failure (`docker compose logs atlas-proxy` / `docker compose logs v3-service`)."
+      render: text

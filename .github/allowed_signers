@@ -1,0 +1,12 @@
+# SSH allowed-signers for verifying ATLAS release tags.
+#
+# Verify a release tag locally:
+#   git config gpg.ssh.allowedSignersFile .github/allowed_signers
+#   git verify-tag <tag>
+#
+# Each line: <principal> <key-type> <key>. The principal is the signer's
+# git email. To authorize a maintainer to cut releases, add their SSH
+# signing key here AND register the same public key on their GitHub
+# account so GitHub shows tags as Verified:
+#   gh ssh-key add <key>.pub --type signing --title "atlas release signing"
+jitigges@vt.edu ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGbVgFIZTQFImY4CKn1p5sVqdlkM5+ZhltiSfOjwGkUy atlas-release-signing (itigges22)

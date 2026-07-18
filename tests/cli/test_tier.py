@@ -22,7 +22,7 @@ import tempfile
 
 import pytest
 
-from atlas.cli.commands import tier, model_recommendations
+from atlas.cli.commands import tier, model_registry
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +270,7 @@ def test_tier_profile_has_no_model_fields():
     t = tier.by_name("medium")
     for field in ("model_file", "model_display", "model_size_gb"):
         assert not hasattr(t, field), (
-            f"TierProfile.{field} should live in model_recommendations, "
+            f"TierProfile.{field} should live in model_registry, "
             "not on the tier (PC-055.2 split).")
 
 
@@ -281,17 +281,19 @@ def test_tier_env_vars_excludes_model_keys():
     assert "ATLAS_MODEL_FILE" not in env
     assert "ATLAS_MODEL_NAME" not in env
     assert "ATLAS_CTX_SIZE" in env
-    assert "PARALLEL_SLOTS" in env
+    assert "ATLAS_PARALLEL_SLOTS" in env
+    assert "ATLAS_KV_TYPE_K" in env
+    assert "ATLAS_KV_TYPE_V" in env
 
 
-def test_model_recommendations_for_each_gpu_tier():
+def test_model_registry_recommendation_for_each_gpu_tier():
     """Every GPU tier should have a model recommendation. The 'cpu' tier
     intentionally has no recommendation in PC-056's honest registry —
     ATLAS requires a CUDA GPU and there's no GGUF model to recommend
     for CPU-only hosts. tier.py renders that as 'N/A — install a CUDA
     GPU' from the TierProfile.notes field, not from a recommendation."""
     for t in tier.TIERS:
-        rec = model_recommendations.for_tier(t.tier)
+        rec = model_registry.for_tier(t.tier)
         if t.tier == "cpu":
             assert rec is None, "cpu tier should not have a model recommendation"
             continue
@@ -302,13 +304,13 @@ def test_model_recommendations_for_each_gpu_tier():
 def test_model_recommendation_reverse_lookup_roundtrip():
     """Forward + reverse lookups must agree — used by doctor.check_tier_match."""
     for tier_name in ("small", "medium", "large", "xlarge"):
-        rec = model_recommendations.for_tier(tier_name)
-        assert model_recommendations.tier_for_model(rec.model_file) == tier_name
+        rec = model_registry.for_tier(tier_name)
+        assert model_registry.tier_for_model(rec.model_file) == tier_name
 
 
 def test_model_recommendation_unknown_returns_none():
-    assert model_recommendations.for_tier("nonexistent") is None
-    assert model_recommendations.tier_for_model("not-a-real.gguf") is None
+    assert model_registry.for_tier("nonexistent") is None
+    assert model_registry.tier_for_model("not-a-real.gguf") is None
 
 
 # ---------------------------------------------------------------------------

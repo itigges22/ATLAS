@@ -6,10 +6,6 @@ into images at build time, so every code change requires a rebuild.
 This page documents the opt-in dev iteration mode that skips the
 rebuild loop.
 
-For first-time setup, see `docs/SETUP.md`. For configuration, see
-`docs/CONFIGURATION.md`. For troubleshooting, see
-`docs/TROUBLESHOOTING.md`.
-
 ---
 
 ## When to use dev mode
@@ -36,8 +32,8 @@ docker compose up -d
 ```
 
 To turn dev mode off, delete the override file (or rename it) and
-re-run `docker compose up -d`. The override is git-ignored by
-convention; commit changes to the `.example` file instead.
+re-run `docker compose up -d`. The override is git-ignored; commit
+changes to the `.example` file instead.
 
 ### geometric-lens
 
@@ -64,10 +60,7 @@ need to restart the container — but no rebuild:
 docker compose restart v3-service
 ```
 
-Restart is ~1 second vs ~30 seconds for a rebuild. If you find
-yourself doing this constantly, the next step is to add `watchfiles`
-or migrate to uvicorn — file as a follow-up if it becomes a real
-pain point.
+Restart is ~1 second vs ~30 seconds for a rebuild.
 
 ---
 
@@ -91,15 +84,14 @@ ports (the defaults work because each upstream service publishes its
 port to localhost):
 
 ```bash
-cd atlas-proxy
+cd proxy
 ATLAS_PROXY_PORT=8090 \
 ATLAS_INFERENCE_URL=http://localhost:8080 \
 ATLAS_LLAMA_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:30820 \
 ATLAS_V3_URL=http://localhost:8070 \
-ATLAS_AGENT_LOOP=1 \
-ATLAS_MODEL_NAME=Qwen3.5-9B-Q6_K \
+ATLAS_MODEL_NAME=local-model \
 ATLAS_WORKSPACE_DIR=$(pwd)/.. \
 go run .
 ```
@@ -131,11 +123,10 @@ This is what users on `main` get, ~30-60s per cycle.
 
 ## Other services
 
-`llama-server`, `redis`, and `sandbox` are not bind-mounted.
+`llama-server` and `sandbox` are not bind-mounted.
 
 - llama-server is a third-party binary — changes there are
   Dockerfile / model-config changes, which need a rebuild anyway.
-- redis is upstream redis with no project-side code.
 - sandbox runs read-only on purpose; the override should not
   weaken that. If you're editing the sandbox harness itself, do a
   targeted rebuild: `docker compose up -d --build sandbox`.
@@ -160,7 +151,6 @@ This is the fallback whenever dev mode is off or doesn't apply
 
 ## Cross-references
 
-- `ISSUES.md` PC-030 — ticket that introduced this workflow.
 - `docs/SETUP.md` — first-time install.
 - `docs/CONFIGURATION.md` — env vars used by each service.
 - `docs/TROUBLESHOOTING.md` — runtime symptoms and fixes.

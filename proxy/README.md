@@ -25,13 +25,15 @@ Each user message drives an agent loop that runs until the model emits
    called to seed an explicit step list. 3 candidates sampled, scored
    heuristically, best plan pinned. The active step is injected into
    the system prompt every turn (`plan_reminder.go`).
-2. **Grammar-constrained generation** — `llama-server` produces a JSON
-   envelope: `tool_call`, `text`, or `done`. GBNF + `response_format:
-   json_object` makes invalid output unrepresentable.
-3. **Tool dispatch + validation** — 13 tools (`read_file`,
-   `search_files`, `list_directory`, `find_file`, `write_file`,
-   `edit_file`, `ast_edit`, `delete_file`, `run_command`, `plan_tasks`,
-   `run_background`, `tail_background`, `stop_background`). Per-tool
+2. **Grammar-constrained generation** — `llama-server` is strongly steered
+   toward a JSON envelope: `tool_call`, `text`, or `done`. GBNF +
+   `response_format: json_object` constrains decoding, while the proxy recovers
+   malformed or truncated output and treats parsing as fallible.
+3. **Tool dispatch + validation** — 14 tools (`read_file`,
+   `outline_file`, `search_files`, `list_directory`, `find_file`,
+   `write_file`, `edit_file`, `ast_edit`, `delete_file`, `move_file`,
+   `run_command`, `run_background`, `tail_background`,
+   `stop_background`). Per-tool
    guardrails: read-tracking, mtime checks, default-deny patterns,
    suspicious-shrinkage guard (`guardrails.go`).
 4. **V3 routing for T2+ writes** — when a file edit qualifies (≥ 50
@@ -74,7 +76,7 @@ atlas-proxy-v2                          # listens on :8090
 | ATLAS_SANDBOX_URL | http://localhost:30820 | Code execution sandbox |
 | ATLAS_V3_URL | http://localhost:8070 | V3 pipeline service |
 | ATLAS_PROXY_PORT | 8090 | Proxy listen port |
-| ATLAS_MODEL_NAME | Qwen3.5-9B-Q6_K | Model name for llama-server |
+| ATLAS_MODEL_NAME | local-model | Neutral fallback request identifier; normal installs set the selected model |
 | ATLAS_WORKSPACE_DIR | (cwd) | Workspace root for read/write tools |
 
 ## Build

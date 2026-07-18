@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -80,5 +82,35 @@ func TestExtractCandidateSymbolsCap(t *testing.T) {
 	got := extractCandidateSymbols(msg)
 	if len(got) != symbolMaxCandidates {
 		t.Errorf("got %d symbols, want %d (cap)", len(got), symbolMaxCandidates)
+	}
+}
+
+// #39 Phase 3: the proxy must parse and consume the v3-service "graph" field.
+func TestSymbolIndexResultParsesGraph(t *testing.T) {
+	raw := `{"matched":[{"name":"load","kind":"function","file":"svc.py","snippet":"def load(): ...","n_lines":1,"truncated":false}],` +
+		`"skipped":[],` +
+		`"graph":[{"symbol":"load","defined_in":["svc.py"],"callers":["main"],"callees":["clean"],"impact":["main"]}]}`
+	var r symbolIndexResult
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(r.Graph) != 1 || r.Graph[0].Symbol != "load" {
+		t.Fatalf("graph not parsed: %+v", r.Graph)
+	}
+	if r.Graph[0].Callers[0] != "main" || r.Graph[0].Callees[0] != "clean" {
+		t.Errorf("graph neighborhood wrong: %+v", r.Graph[0])
+	}
+}
+
+func TestFormatGraphNeighborhood(t *testing.T) {
+	if formatGraphNeighborhood(nil) != "" {
+		t.Error("empty graph should format to empty string")
+	}
+	out := formatGraphNeighborhood([]symbolGraphNode{
+		{Symbol: "load", Callers: []string{"main"}, Callees: []string{"clean"}},
+	})
+	if !strings.Contains(out, "load") || !strings.Contains(out, "called by: main") ||
+		!strings.Contains(out, "calls: clean") {
+		t.Errorf("unexpected format: %q", out)
 	}
 }

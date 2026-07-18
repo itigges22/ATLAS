@@ -25,6 +25,7 @@ Flags:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json as jsonlib
 import os
 import secrets as secrets_mod
@@ -464,6 +465,66 @@ def _step_download(m: model_registry.Model, models_dir: str,
 # Step 4 — write .env
 # ---------------------------------------------------------------------------
 
+def _detect_total_ram_gib() -> float:
+    """Best-effort total physical RAM in GiB, portable across the platforms
+    ATLAS installs on. Returns 0.0 when it can't tell (caller treats that as
+    "leave the sandbox memory uncapped")."""
+    # Linux — authoritative and dependency-free.
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / (1024 ** 2)  # kB → GiB
+    except OSError:
+        # /proc is Linux-specific; continue to macOS and psutil probes.
+        pass
+    # macOS / BSD.
+    try:
+        import subprocess
+        out = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                             capture_output=True, text=True, timeout=3)
+        if out.returncode == 0 and out.stdout.strip():
+            return int(out.stdout.strip()) / (1024 ** 3)
+    except Exception:
+        # sysctl is a best-effort platform probe; psutil remains available as
+        # the portable fallback.
+        pass
+    # Portable fallback if psutil happens to be installed.
+    try:
+        import psutil
+        return psutil.virtual_memory().total / (1024 ** 3)
+    except Exception:
+        return 0.0
+
+
+def _sandbox_limits() -> Tuple[str, str, str, str, str]:
+    """Compute (MEM, PIDS, CPUS, UID, GID) sandbox settings for THIS host.
+
+    The sandbox runs untrusted model-authored shell, so the container is the
+    real backstop against resource exhaustion. Memory caps at ~75% of host
+    RAM (a ceiling, not a reservation) with a 2 GiB floor; CPUs cap at ~75%
+    of cores (1-core floor) so a runaway build can't starve the
+    latency-sensitive llama-server; pids_limit is a constant fork-bomb stop.
+    UID/GID are the invoking user's, so the non-root sandbox writes
+    /workspace files with the right owner (no CAP_DAC_OVERRIDE needed —
+    the container drops all capabilities). "0" for mem/cpus means Docker
+    leaves them uncapped, so detection failure degrades to the prior
+    behavior rather than a bad cap.
+    """
+    ram = _detect_total_ram_gib()
+    if ram <= 0:
+        mem = "0"  # undetectable → no cap (no regression vs. before)
+    else:
+        mem = f"{max(2, int(ram * 0.75))}g"
+    cores = os.cpu_count() or 0
+    cpus = str(max(1, int(cores * 0.75))) if cores else "0"
+    try:
+        uid, gid = str(os.getuid()), str(os.getgid())
+    except AttributeError:  # non-POSIX host
+        uid, gid = "1000", "1000"
+    return mem, "1024", cpus, uid, gid
+
+
 def _render_env(m: model_registry.Model, profile: tier.TierProfile,
                  selected_gpu: Optional[tier.GPUInfo],
                  models_dir: str, atlas_root: str, image_tag: str,
@@ -498,24 +559,40 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         backend_id, backend_name, _ = _backend_for(vendor)
     gpu_index = str(selected_gpu.index) if selected_gpu else "0"
 
+    sandbox_mem, sandbox_pids, sandbox_cpus, sandbox_uid, sandbox_gid = _sandbox_limits()
+
     keys = {
         "ATLAS_MODELS_DIR": models_value,
         "ATLAS_MODEL_FILE": m.model_file,
         "ATLAS_MODEL_NAME": m.model_file.rsplit(".", 1)[0],
         "ATLAS_CTX_SIZE": str(profile.context_length),
-        "PARALLEL_SLOTS": str(profile.parallel_slots),
-        "KV_CACHE_TYPE_K": profile.kv_cache_k,
-        "KV_CACHE_TYPE_V": profile.kv_cache_v,
+        "ATLAS_PARALLEL_SLOTS": str(profile.parallel_slots),
+        "ATLAS_KV_TYPE_K": profile.kv_cache_k,
+        "ATLAS_KV_TYPE_V": profile.kv_cache_v,
         "ATLAS_BACKEND": backend_id,
         "ATLAS_GPU_VENDOR": vendor,
         "ATLAS_GPU_INDEX": gpu_index,
         "ATLAS_GHCR_OWNER": ghcr_owner,
         "ATLAS_IMAGE_TAG": image_tag,
+        "ATLAS_MACOS_PREFIX": "~/.atlas/macos",
         "ATLAS_LLAMA_PORT": "8080",
         "ATLAS_LENS_PORT": "8099",
         "ATLAS_V3_PORT": "8070",
         "ATLAS_SANDBOX_PORT": "30820",
         "ATLAS_PROXY_PORT": "8090",
+        # Sandbox resource caps, sized to this host (see _sandbox_limits).
+        # mem ~75% of detected RAM; pids a constant fork-bomb stop.
+        "ATLAS_SANDBOX_MEM": sandbox_mem,
+        "ATLAS_SANDBOX_PIDS": sandbox_pids,
+        "ATLAS_SANDBOX_CPUS": sandbox_cpus,
+        "ATLAS_SANDBOX_UID": sandbox_uid,
+        "ATLAS_SANDBOX_GID": sandbox_gid,
+        # The proxy writes two host bind mounts (/workspace,
+        # /data/lens_training); run it as the invoking user for the same
+        # reason as the sandbox — the image's baked-in uid 1001 can't
+        # write operator-owned host dirs.
+        "ATLAS_PROXY_UID": sandbox_uid,
+        "ATLAS_PROXY_GID": sandbox_gid,
     }
 
     gpu_descr = (f"{selected_gpu.name} ({selected_gpu.vram_gb:.1f} GB VRAM)"
@@ -619,10 +696,18 @@ def _step_write_api_keys(atlas_root: str, args: argparse.Namespace,
         mode = os.stat(secrets_dir).st_mode & 0o777
         if mode & 0o077 and not args.yes:
             _safe_print(f"  {YELLOW if color else ''}secrets/ exists with "
-                        f"loose permissions ({oct(mode)}). Re-run with --yes "
-                        f"to chmod to 0700, or chmod manually."
+                        f"loose permissions ({oct(mode)})."
                         f"{RESET if color else ''}")
-            return keys_path, None, ""
+            # Interactive: ask before tightening (the user might have
+            # chmod'd it intentionally for a multi-user setup).
+            # Non-interactive without --yes: refuse — the caller reports
+            # failure instead of a silent skip masquerading as success.
+            if not _confirm("chmod secrets/ to 0700 and continue?",
+                            default_yes=False, args=args):
+                _safe_print("  Not writing api-keys.json into a loose "
+                            "secrets/ dir. Re-run with --yes to chmod to "
+                            "0700, or chmod manually.")
+                return keys_path, None, ""
 
     if args.dry_run:
         _safe_print(f"  (dry-run) would write {keys_path}")
@@ -666,6 +751,52 @@ def _step_write_api_keys(atlas_root: str, args: argparse.Namespace,
     return keys_path, backup, key
 
 
+def _step_write_service_token(atlas_root: str, args: argparse.Namespace,
+                               color: bool) -> str:
+    """Generate <root>/secrets/service-token (0600) unless present.
+
+    The token authenticates internal service-to-service and CLI-to-
+    service requests (Authorization: Bearer). Existing tokens are kept
+    so re-running init doesn't break a live stack; --rotate-token
+    regenerates (restart services afterwards so they reload it). The
+    value itself is never printed.
+    """
+    secrets_dir = os.path.join(atlas_root, "secrets")
+    tok_path = os.path.join(secrets_dir, "service-token")
+
+    if args.dry_run:
+        _safe_print(f"  (dry-run) would write {tok_path}")
+        return tok_path
+
+    if os.path.isfile(tok_path) and not getattr(args, "rotate_token", False):
+        _safe_print(f"  Service token already present at {tok_path} (kept; "
+                    "use --rotate-token to regenerate)")
+        return tok_path
+
+    os.makedirs(secrets_dir, mode=0o700, exist_ok=True)
+    token = "atlas-st-" + secrets_mod.token_urlsafe(32)
+    fd = os.open(tok_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(token + "\n")
+    except Exception:
+        # fdopen failing before it takes ownership leaves fd open; a
+        # double-close after fdopen succeeded raises OSError — ignore it.
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+    # Re-assert the mode in case a pre-existing file kept looser bits;
+    # some filesystems (e.g. certain network mounts) refuse chmod.
+    with contextlib.suppress(PermissionError):
+        os.chmod(tok_path, 0o600)
+    action = "Rotated" if getattr(args, "rotate_token", False) else "Wrote"
+    _safe_print(f"  {action} {tok_path} (mode 0600) — internal service auth")
+    if getattr(args, "rotate_token", False):
+        _safe_print("    Restart the stack so services reload it: "
+                    "docker compose restart")
+    return tok_path
+
+
 # ---------------------------------------------------------------------------
 # Already-configured guard
 # ---------------------------------------------------------------------------
@@ -699,6 +830,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--skip-download", action="store_true",
         help="write config but don't download the model "
              "(bring-your-own gguf)")
+    parser.add_argument("--rotate-token", action="store_true",
+        help="regenerate secrets/service-token (internal service auth); "
+             "restart the stack afterwards so services reload it")
     parser.add_argument("--reconfigure", action="store_true",
         help="back up existing .env and api-keys.json (.bak suffix) "
              "before writing new ones")
@@ -775,7 +909,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Step 5
     _safe_print("[5/5] Generating api-keys.json…")
     keys_path, keys_backup, api_key = _step_write_api_keys(atlas_root, args, color)
+    if api_key or args.dry_run:
+        # Same secured secrets/ dir; skipped when api-keys was refused
+        # (loose perms) so we never write a token into a loose dir.
+        _step_write_service_token(atlas_root, args, color)
     _safe_print("")
+    if not args.dry_run and not api_key:
+        # api-keys.json was skipped (loose secrets/ perms, declined or
+        # non-interactive) — the install isn't complete, so don't report
+        # success.
+        _safe_print(f"  {RED if color else ''}Setup incomplete: "
+                    f"api-keys.json was not written.{RESET if color else ''}")
+        return 1
 
     # Next steps. args.backend wins over vendor-derived since the wizard
     # writes that into ATLAS_BACKEND above.
@@ -803,16 +948,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             _safe_print("")
             _safe_print("  See docs/SETUP_MACOS.md for the full walkthrough.")
         else:
+            _safe_print("  1. atlas tier fit --write     # size the runtime for "
+                        "this model + GPU (tier presets are VRAM-band defaults)")
             if backend_id == "rocm":
-                _safe_print("  1. docker compose -f docker-compose.yml "
+                _safe_print("  2. docker compose -f docker-compose.yml "
                             "-f docker-compose.rocm.yml up -d   # bring up the ROCm stack")
             elif backend_id == "vulkan":
-                _safe_print("  1. docker compose -f docker-compose.yml "
+                _safe_print("  2. docker compose -f docker-compose.yml "
                             "-f docker-compose.vulkan.yml up -d   # bring up the Vulkan stack")
             else:
-                _safe_print("  1. docker compose up -d        # bring up the stack")
-            _safe_print("  2. atlas doctor               # verify install health")
-            _safe_print("  3. atlas                      # start using ATLAS")
+                _safe_print("  2. docker compose up -d        # bring up the stack")
+            _safe_print("  3. atlas doctor               # verify install health")
+            _safe_print("  4. atlas                      # start using ATLAS")
 
     if args.json:
         out = {

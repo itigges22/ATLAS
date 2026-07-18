@@ -26,7 +26,7 @@ func fakeAgentServer(t *testing.T, events []chatEvent,
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/agent", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
-			http.Error(w, "method", 405)
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -49,7 +49,7 @@ func fakeAgentServer(t *testing.T, events []chatEvent,
 	})
 	mux.HandleFunc("/cancel", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
-			http.Error(w, "method", 405)
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -110,9 +110,51 @@ func TestSendChatPostsRequestBodyAndStreamsEvents(t *testing.T) {
 	}
 }
 
+func TestDemoRawSideUsesOneDirectModelRequest(t *testing.T) {
+	var got rawChatRequest
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	out := make(chan chatEvent, 8)
+
+	if err := sendRawChat(context.Background(), srv.URL, "configured-model", "build it", out); err != nil {
+		t.Fatalf("sendRawChat: %v", err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("path = %q, want raw chat completions endpoint", gotPath)
+	}
+	if !got.Stream || got.Model != "configured-model" {
+		t.Fatalf("request = %#v", got)
+	}
+	if len(got.Messages) != 1 || got.Messages[0]["content"] != "build it" {
+		t.Fatalf("messages = %#v", got.Messages)
+	}
+	for _, message := range got.Messages {
+		if strings.Contains(message["content"], "plan_tasks") {
+			t.Fatalf("raw request contains orchestration tool guidance: %#v", got.Messages)
+		}
+	}
+	close(out)
+	var types []string
+	for event := range out {
+		types = append(types, event.Type)
+	}
+	if strings.Join(types, ",") != "llm_call_start,llm_first_token,llm_token,llm_call_end,text" {
+		t.Fatalf("events = %v", types)
+	}
+}
+
 func TestSendChatHandlesNon200Status(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "no llama", 503)
+		http.Error(w, "no llama", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
 	out := make(chan chatEvent, 1)
@@ -241,6 +283,37 @@ func TestLoadBearerTokenReadsAPIKey(t *testing.T) {
 	t.Setenv("ATLAS_API_KEYS_PATH", path)
 	if got := loadBearerToken(); got != "abc123" {
 		t.Errorf("loadBearerToken = %q, want abc123", got)
+	}
+}
+
+// `atlas init` writes {"sk-…": {"user": …}} — token strings keyed to
+// metadata objects. The loader picks the lexicographically first token.
+func TestLoadBearerTokenReadsAtlasInitShape(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/api-keys.json"
+	body := map[string]interface{}{
+		"sk-atlas-zzz": map[string]string{"user": "local", "created_by": "atlas init"},
+		"sk-atlas-aaa": map[string]string{"user": "local", "created_by": "atlas init"},
+	}
+	if err := writeJSON(path, body); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ATLAS_API_KEYS_PATH", path)
+	if got := loadBearerToken(); got != "sk-atlas-aaa" {
+		t.Errorf("loadBearerToken = %q, want sk-atlas-aaa", got)
+	}
+}
+
+func TestLoadBearerTokenReadsGroupedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/api-keys.json"
+	body := map[string]interface{}{"keys": map[string]string{"tui": "tok-1"}}
+	if err := writeJSON(path, body); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ATLAS_API_KEYS_PATH", path)
+	if got := loadBearerToken(); got != "tok-1" {
+		t.Errorf("loadBearerToken = %q, want tok-1", got)
 	}
 }
 

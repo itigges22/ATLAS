@@ -144,7 +144,7 @@ func regenerateOnDrift(ctx *AgentContext, req V3GenerateRequest, prev *V3Generat
 		"missing": prev.RPGSignatureMissing,
 	}))
 
-	retried, err := callV3GenerateStreaming(ctx.V3URL, retryReq,
+	retried, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, retryReq,
 		func(stage, detail string, data map[string]interface{}) {
 			if ctx.StreamFn != nil && stage != "token" {
 				ctx.StreamFn("v3_progress", map[string]string{

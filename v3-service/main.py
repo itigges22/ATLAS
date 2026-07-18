@@ -19,11 +19,10 @@ import sys
 import threading
 import time
 import urllib.request
-import uuid
 import urllib.error
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Dict, List, Optional, Tuple
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 # Force line-buffered stdout
 sys.stdout.reconfigure(line_buffering=True)
@@ -33,6 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmark.runner import extract_code
+from benchmark.llm_client import chatml_to_messages
 from benchmark.v3.budget_forcing import BudgetForcing, BudgetForcingConfig
 from benchmark.v3.plan_search import PlanSearch, PlanSearchConfig
 from benchmark.v3.div_sampling import DivSampling, DivSamplingConfig
@@ -53,7 +53,49 @@ from benchmark.v3.candidate_selection import CandidateInfo, select_candidate
 INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
 LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
 SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
+
+
+def _load_service_token() -> str:
+    """Internal-auth token (Authorization: Bearer). Empty = auth
+    disabled — an install without `atlas init` keeps the open-localhost
+    behavior and `atlas doctor` warns. The value is never logged."""
+    path = os.environ.get("ATLAS_SERVICE_TOKEN_FILE",
+                          "/run/atlas-secrets/service-token")
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+SERVICE_TOKEN = _load_service_token()
+
+if SERVICE_TOKEN:
+    # Outbound injection: one opener covers every urllib call site
+    # (llama, lens, sandbox). urllib merges addheaders under explicit
+    # per-request headers, so requests that already set Authorization
+    # keep their own value.
+    _opener = urllib.request.build_opener()
+    _opener.addheaders = [("Authorization", f"Bearer {SERVICE_TOKEN}")]
+    urllib.request.install_opener(_opener)
 PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
+
+
+def _service_headers(rid: str = "") -> dict:
+    """Headers for outbound service-to-service calls: forwards the
+    current request's correlation ID so lens/sandbox/llama log records
+    join the same trace. Pass rid explicitly from background threads —
+    a new thread doesn't inherit the request's ContextVar."""
+    headers = {"Content-Type": "application/json"}
+    if not rid:
+        try:
+            from structured_log import get_request_id
+            rid = get_request_id()
+        except ImportError:
+            rid = ""
+    if rid:
+        headers["X-ATLAS-Request-ID"] = rid
+    return headers
 
 BASE_TEMPERATURE = 0.6
 DIVERSITY_TEMPERATURE = 0.8
@@ -65,7 +107,7 @@ MAX_TOKENS = 8192
 # The pattern cache uses retry_count / max_retries as a "surprise" proxy — higher
 # retries mean the pattern was harder to find and worth caching with more weight.
 _PHASE_RETRY_COUNT = {
-    "probe_pass": 1,        # solved on first probe
+    "probe": 1,             # solved on first probe (phase_solved="probe")
     "phase1": 2,            # plan-search candidates passed
     "phase1_sstar": 2,      # S* tiebreak among passing candidates
     "pr_cot": 3,            # required PR-CoT repair
@@ -84,6 +126,14 @@ def _post_pattern_outcome(problem: str, result: dict):
     """
     import threading
 
+    # Capture the correlation ID on the request thread — the ContextVar
+    # doesn't propagate into a newly created thread.
+    try:
+        from structured_log import get_request_id
+        rid = get_request_id()
+    except ImportError:
+        rid = ""
+
     def _do_post():
         payload = {
             "query": problem,
@@ -99,7 +149,7 @@ def _post_pattern_outcome(problem: str, result: dict):
             req = urllib.request.Request(
                 f"{LENS_URL}/internal/patterns/write",
                 data=json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(rid),
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -111,121 +161,17 @@ def _post_pattern_outcome(problem: str, result: dict):
 
 
 # --- PC-061 step B: typed event emission ------------------------------------
-# Stage names ending in known suffixes get classified into envelope types and
-# their logical stage stripped of the suffix. This lets a single emit call
-# decide whether it's a stage_start, stage_end (with success), or error event
-# without each call site needing to know the envelope schema.
-
-_STAGE_SUFFIX_CLASS = {
-    "_pass":   ("stage_end", True),
-    "_skip":   ("stage_end", True),
-    "_done":   ("stage_end", True),
-    "_failed": ("stage_end", False),
-    "_error":  ("error", None),
-    "_retry":  ("stage_start", None),
-}
-
-# Suffixes that have a "logical" parent stage. _retry is excluded — it's a
-# fresh stage_start, not a terminal event, so its logical name is itself.
-_TERMINAL_SUFFIXES = ("_pass", "_skip", "_done", "_failed", "_error")
-
-
-def _classify_stage(stage: str):
-    """Map a stage name to (envelope_type, success_value).
-
-    Returns ("stage_start", None) for names without a known suffix.
-    """
-    for suffix, classification in _STAGE_SUFFIX_CLASS.items():
-        if stage.endswith(suffix):
-            return classification
-    return ("stage_start", None)
-
-
-def _logical_stage(stage: str) -> str:
-    """Strip a known terminal suffix to get the canonical stage name. Used to
-    pair stage_end events back to their stage_start by name."""
-    for suffix in _TERMINAL_SUFFIXES:
-        if stage.endswith(suffix):
-            return stage[:-len(suffix)]
-    return stage
-
-
-def _emit_event(wfile, envelope_opt_in: bool, stage: str, detail: str,
-                stage_start_ids: dict) -> None:
-    """Emit one or two SSE frames for `stage`:
-      1. Always: legacy ``{"stage", "detail"}`` shape (back-compat).
-      2. If ``envelope_opt_in``: typed envelope per docs/PROTOCOL.md.
-
-    ``stage_start_ids`` is mutated to track stage_start IDs by logical stage
-    name; a later stage_end with the same logical name picks up parent_id +
-    duration_ms automatically. BrokenPipeError on writes is swallowed —
-    client disconnect mid-stream must not propagate into the pipeline
-    thread.
-    """
-    legacy = json.dumps({"stage": stage, "detail": detail})
-    try:
-        wfile.write(f"data: {legacy}\n\n".encode())
-        wfile.flush()
-    except Exception:
-        return  # client gone — don't try the envelope either
-
-    if not envelope_opt_in:
-        return
-
-    event_type, success = _classify_stage(stage)
-    logical = _logical_stage(stage)
-    now = time.time()
-    event_id = "evt_" + uuid.uuid4().hex[:8]
-
-    parent_id = None
-    duration_ms = None
-    if event_type == "stage_start":
-        # Track this start so a future stage_end can pair to it. Keyed by
-        # logical name so e.g. "phase2" and "phase2_pass" share a key.
-        stage_start_ids[logical] = (event_id, now)
-    elif event_type == "stage_end":
-        prior = stage_start_ids.get(logical)
-        if prior is not None:
-            parent_id, start_ts = prior
-            duration_ms = max(0, int((now - start_ts) * 1000))
-
-    if event_type == "error":
-        payload = {"message": detail, "recoverable": True}
-    elif event_type == "stage_end":
-        payload = {"detail": detail, "success": success}
-    else:
-        payload = {"detail": detail}
-
-    envelope = {
-        "event_id":  event_id,
-        "timestamp": now,
-        "type":      event_type,
-        "stage":     logical,
-        "payload":   payload,
-    }
-    if parent_id is not None:
-        envelope["parent_id"] = parent_id
-    if duration_ms is not None:
-        envelope["duration_ms"] = duration_ms
-
-    try:
-        wfile.write(f"data: {json.dumps(envelope)}\n\n".encode())
-        wfile.flush()
-    except Exception:
-        pass  # client gone after legacy frame went through — best-effort
-
-
 # --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
 
 class LLMAdapter:
     """Calls llama-server's /v1/chat/completions, parsing ChatML prompts into messages.
 
-    PC-206: `thinking` controls Qwen3.5's hybrid reasoning mode.
-    - False (default) — `/nothink` injected, `enable_thinking=False`.
+    PC-206: `thinking` controls template-level reasoning when supported.
+    - False (default) — `enable_thinking=False`.
       Required for grammar-constrained JSON output (the agent's tool-call
       shape) and for the tight V3 sampling loop where reasoning would 5-20×
       output token cost. This matches the previously hardcoded behavior.
-    - True — `/nothink` NOT injected, `enable_thinking=True`. Use for
+    - True — `enable_thinking=True`. Use for
       high-reasoning-value calls (planner, verification, claim-check) where
       the output can absorb a preamble and the strip pattern in __call__
       cleans up `<think>...</think>` blocks before downstream JSON parse.
@@ -314,46 +260,23 @@ class LLMAdapter:
             <|im_start|>system\n...\n<|im_end|>\n<|im_start|>user\n...\n<|im_end|>\n<|im_start|>assistant\n
         """
         prompt = body.pop("prompt", "")
-        model_name = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
+        model_name = os.environ.get("ATLAS_MODEL_NAME", "local-model")
 
         # PC-206: thinking flag drops down from __call__. Default False so
-        # any caller that constructs a body dict directly preserves the
-        # pre-PC-206 /nothink behavior.
+        # callers get bounded generation unless they opt into reasoning.
         thinking = bool(body.pop("_thinking", False))
 
-        # Parse ChatML into messages
-        messages = []
-        parts = re.split(r'<\|im_start\|>(\w+)\n', prompt)
-        # parts = ['', 'system', 'content...<|im_end|>\n', 'user', 'content...<|im_end|>\n', ...]
-        i = 1
-        while i < len(parts) - 1:
-            role = parts[i]
-            content = parts[i + 1].replace('<|im_end|>', '').strip()
-            # Remove think pre-fill from assistant messages
-            content = content.replace('<think>\n\n</think>', '').strip()
-            if content:
-                messages.append({"role": role, "content": content})
-            i += 2
-
-        # If parsing failed, just send as user message
-        if not messages:
+        # Convert the internal prompt carrier into structured messages before
+        # llama-server applies the selected model's own template.
+        messages = chatml_to_messages(prompt)
+        if "<|im_start|>" not in prompt:
             print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
-            user_content = prompt if thinking else "/nothink\n" + prompt
-            messages = [{"role": "user", "content": user_content}]
         else:
             print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
                   f" (thinking={'on' if thinking else 'off'})", flush=True)
-            if not thinking:
-                # Ensure /nothink in last user message — NOT enough on its
-                # own (Qwen3 reasoning still streams into reasoning_content
-                # without the chat_template_kwargs flip below), but cheap
-                # belt-and-braces signal to the model.
-                for msg in messages:
-                    if msg["role"] == "user" and not msg["content"].startswith("/nothink"):
-                        msg["content"] = "/nothink\n" + msg["content"]
-            else:
-                # PC-206: strip any /nothink the prompt template hardcoded.
-                # Lets a caller flip thinking on without rewriting prompts.
+            if thinking:
+                # Strip the legacy directive from old prompt templates when a
+                # caller explicitly enables reasoning.
                 for msg in messages:
                     if msg["role"] == "user" and msg["content"].startswith("/nothink"):
                         msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
@@ -364,12 +287,9 @@ class LLMAdapter:
             "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
             "temperature": body.get("temperature", 0.6),
             "stream": bool(body.get("stream", False)),
-            # PC-206: when thinking=True, Qwen3.5's hybrid reasoning mode is
-            # allowed; the <think>...</think> blocks get stripped in __call__
-            # before downstream JSON parse. When False (the agent-loop default),
-            # enable_thinking=False is the load-bearing one — /nothink in the
-            # prompt alone is NOT enough; confirmed via logs where 2048 tok of
-            # reasoning streamed into delta.reasoning_content with empty content.
+            # The chat template may honor enable_thinking; templates that do
+            # not support it ignore the kwarg. Reasoning blocks are stripped
+            # in __call__ before downstream JSON parsing.
             "chat_template_kwargs": {"enable_thinking": thinking},
         }
         if chat_body["stream"]:
@@ -381,7 +301,7 @@ class LLMAdapter:
         req = urllib.request.Request(
             f"{INFERENCE_URL}/v1/chat/completions",
             data=json.dumps(chat_body).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=_service_headers(),
         )
         for attempt in range(5):
             try:
@@ -463,6 +383,12 @@ class LLMAdapter:
         raise RuntimeError("unreachable: _send loop must return or raise")
 
 
+class ClientDisconnected(Exception):
+    """SSE client went away mid-pipeline. Raised at phase boundaries in
+    V3PipelineService.run so a dead client doesn't keep burning GPU minutes;
+    the HTTP handlers catch it and stop without writing a response."""
+
+
 # --- Sandbox Adapter (calls sandbox /execute) ---------------------------------
 
 class SandboxAdapter:
@@ -490,13 +416,79 @@ class SandboxAdapter:
             req = urllib.request.Request(
                 f"{SANDBOX_URL}/execute",
                 data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(),
             )
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            # 45s client timeout: the sandbox's server-side budgets (syntax
+            # check + optional pip install + lint + the 15s run cap) can sum
+            # past 30s, and the old 20s read timeout gave up on executions
+            # the sandbox would still have completed.
+            with urllib.request.urlopen(req, timeout=45) as resp:
                 data = json.loads(resp.read())
                 return data.get("success", False), data.get("stdout", ""), data.get("stderr", "")
         except Exception as e:
             return False, "", str(e)
+
+    def syntax_check(self, code: str, language: str, filename: str = "") -> Tuple[bool, str, str]:
+        """Ask the sandbox to parse or compile source without executing it."""
+        body = {
+            "code": code,
+            "language": language,
+            "filename": filename or None,
+        }
+        try:
+            req = urllib.request.Request(
+                f"{SANDBOX_URL}/syntax-check",
+                data=json.dumps(body).encode(),
+                headers=_service_headers(),
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read())
+            errors = data.get("errors", [])
+            error_text = "\n".join(str(error) for error in errors)
+            return bool(data.get("valid", False)), "", error_text
+        except Exception as e:
+            return False, "", f"syntax verification unavailable: {e}"
+
+    def run_command(
+        self,
+        command: str,
+        files: Optional[Dict[str, str]] = None,
+        cwd: str = "/workspace",
+        timeout: int = 60,
+    ) -> Tuple[bool, str, str, Dict[str, Any]]:
+        """Run a project command through the sandbox /shell endpoint.
+
+        `files` is an ephemeral overlay: the sandbox snapshots /workspace,
+        applies these relative paths in the temp copy, runs the command there,
+        then deletes the temp copy. It lets V3 verify a candidate without
+        writing it to the user's real workspace.
+        """
+        body = {
+            "command": command,
+            "cwd": cwd or "/workspace",
+            "timeout": timeout,
+        }
+        if files:
+            body["files"] = files
+        try:
+            req = urllib.request.Request(
+                f"{SANDBOX_URL}/shell",
+                data=json.dumps(body).encode(),
+                headers=_service_headers(),
+            )
+            with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
+                data = json.loads(resp.read())
+            return (
+                bool(data.get("success", False)),
+                data.get("stdout", ""),
+                data.get("stderr", ""),
+                data,
+            )
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")
+            return False, "", detail, {"exit_code": None, "elapsed_ms": 0}
+        except Exception as e:
+            return False, "", f"build verification unavailable: {e}", {"exit_code": None, "elapsed_ms": 0}
 
 
 # --- Embedding Adapter --------------------------------------------------------
@@ -510,7 +502,7 @@ class EmbedAdapter:
             req = urllib.request.Request(
                 f"{INFERENCE_URL}/v1/embeddings",
                 data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=_service_headers(),
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read())
@@ -541,13 +533,20 @@ def score_candidate_per_step(code: str) -> dict:
         req = urllib.request.Request(
             f"{LENS_URL}/internal/lens/score-per-step",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=_service_headers(),
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
         if not data.get("enabled"):
             return {}
         agg = data.get("aggregate", {}) or {}
+        thresholds = data.get("thresholds")
+        if not (
+            isinstance(thresholds, dict)
+            and all(isinstance(thresholds.get(k), (int, float))
+                    for k in ("off_rails", "low", "severe"))
+        ):
+            thresholds = None
         result = {
             "n_tokens":            int(data.get("n_tokens", 0)),
             "gx_available":        bool(data.get("gx_available", False)),
@@ -557,6 +556,7 @@ def score_candidate_per_step(code: str) -> dict:
             "cx_norm_max":         float(agg.get("cx_norm_max", 0.0)),
             "cx_norm_mean":        float(agg.get("cx_norm_mean", 0.0)),
             "latency_ms":          float(data.get("latency_ms", 0.0)),
+            "thresholds":          thresholds,
         }
         print(
             f"  [lens] candidate scored: n_tok={result['n_tokens']} "
@@ -570,8 +570,12 @@ def score_candidate_per_step(code: str) -> dict:
         return {}
 
 
-def score_candidate(code: str) -> Tuple[float, float]:
-    """Score code with Geometric Lens C(x). Returns (raw_energy, normalized).
+def score_candidate(code: str) -> Tuple[float, float, bool]:
+    """Score code with Geometric Lens C(x).
+
+    Returns ``(raw_energy, normalized_energy, calibrated)``. The normalized
+    value is neutral when this model has no calibration and must not drive
+    adaptive routing in that case.
 
     Timeout note: 10s was tight under load — the lens shares the box with
     V3's streaming generator and llama-server, and a single hot probe
@@ -584,14 +588,18 @@ def score_candidate(code: str) -> Tuple[float, float]:
         req = urllib.request.Request(
             f"{LENS_URL}/internal/lens/gx-score",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=_service_headers(),
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
-            return data.get("cx_energy", 0.0), data.get("gx_score", 0.5)
+            return (
+                data.get("cx_energy", 0.0),
+                data.get("cx_normalized", 0.5),
+                bool(data.get("cx_calibrated", False)),
+            )
     except Exception as e:
-        print(f"  [lens] score_candidate failed: {e} — falling back to (0.0, 0.5)", flush=True)
-        return 0.0, 0.5
+        print(f"  [lens] score_candidate failed: {e} — using neutral uncalibrated score", flush=True)
+        return 0.0, 0.5, False
 
 
 # --- Task-type classifier (PC-022) -------------------------------------------
@@ -636,14 +644,22 @@ def smoke_compile_check(code: str, sandbox, language: str = "python") -> Tuple[b
     pairs are nonsensical (curses games, pygame apps, flask servers, …).
     Runs inside the sandbox so any import-time crashes show up as stderr.
 
-    PC-048: language-aware. Python files run the AST parse / compile
-    smoke. HTML/JSON/YAML files run a stdlib parse for well-formedness.
-    Everything else (CSS, JS, MD, plain text, …) returns OK without a
-    sandbox round-trip — we don't have a cheap, accurate validator and
-    the LLM is more reliable on those formats than spurious-failure
-    pressure from a half-built validator would be.
+    PC-048: language-aware. Python, JavaScript, TypeScript, Go, Rust,
+    C/C++, Bash, HTML, XML, JSON, and YAML files use the sandbox syntax
+    checker. Unknown formats fail explicitly instead of being accepted
+    without evidence.
     """
     lang = (language or "python").lower()
+
+    verified_languages = {
+        "python", "py", "javascript", "typescript", "go", "java", "kotlin",
+        "rust", "c", "cpp", "ruby", "php", "bash", "html", "htm", "xml", "json", "yaml", "yml",
+    }
+    if hasattr(sandbox, "syntax_check") and lang in verified_languages:
+        normalized = {
+            "py": "python", "htm": "html", "yml": "yaml",
+        }.get(lang, lang)
+        return sandbox.syntax_check(code, normalized)
 
     if lang in ("html", "htm"):
         smoke = (
@@ -699,10 +715,7 @@ def smoke_compile_check(code: str, sandbox, language: str = "python") -> Tuple[b
         return (ok and "SMOKE_OK" in out), out, err
 
     if lang not in ("python", "py"):
-        # CSS, JS, TS, MD, plain text, anything else — no cheap validator,
-        # trust the LLM. Returning OK avoids false-positive failures that
-        # cascade into PR-CoT repair attempts and LLM timeouts.
-        return True, "SMOKE_SKIP (non-Python)", ""
+        return False, "", f"syntax verification unavailable for language: {lang}"
 
     # Default: Python compile smoke
     smoke = (
@@ -718,6 +731,147 @@ def smoke_compile_check(code: str, sandbox, language: str = "python") -> Tuple[b
     )
     ok, out, err = sandbox(smoke)
     return (ok and "SMOKE_OK" in out), out, err
+
+
+BUILD_EVIDENCE_LIMIT = 4000
+ALLOWED_BUILD_PREFIXES = (
+    "npm run build",
+    "npm run test",
+    "npm test",
+    "pnpm run build",
+    "pnpm run test",
+    "pnpm test",
+    "yarn build",
+    "yarn test",
+    "yarn run build",
+    "yarn run test",
+    "bun run build",
+    "bun run test",
+    "bun test",
+    "npx tsc --noEmit",
+    "npx next build",
+    "python -m py_compile",
+    "python -m pytest",
+    "pytest",
+    "go build",
+    "go test",
+    "cargo build",
+    "cargo check",
+    "make",
+    "cmake --build",
+    "bash -n",
+)
+DISALLOWED_BUILD_TOKENS = (
+    ";", "&&", "||", "|", "&", "<", ">", "`", "$(", "\n", "\r", "\x00",
+)
+
+
+def _bounded_evidence(text: str, limit: int = BUILD_EVIDENCE_LIMIT) -> str:
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n... (truncated)"
+
+
+def _build_command_allowed(command: str) -> bool:
+    command = (command or "").strip()
+    if not command or any(token in command for token in DISALLOWED_BUILD_TOKENS):
+        return False
+    for prefix in ALLOWED_BUILD_PREFIXES:
+        if command == prefix or command.startswith(prefix + " "):
+            return True
+    return False
+
+
+def _project_relative_path(file_path: str, working_dir: str = "/workspace") -> str:
+    if not file_path:
+        raise ValueError("file_path is required for build verification")
+    path = PurePath(file_path)
+    root = PurePath(working_dir or "/workspace")
+    if not root.is_absolute() or ".." in root.parts:
+        raise ValueError(f"working_dir must be an absolute project root: {working_dir}")
+    if path.is_absolute():
+        try:
+            rel = path.relative_to(root)
+        except ValueError as e:
+            raise ValueError(f"file_path must be under working_dir: {file_path}") from e
+    else:
+        rel = path
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError(f"unsafe file_path for build verification: {file_path}")
+    return str(rel)
+
+
+def verify_build_command(
+    code: str,
+    sandbox,
+    build_command: str,
+    file_path: str,
+    project_files: Dict[str, str],
+    working_dir: str,
+    emit=None,
+) -> Tuple[bool, str, str, Dict[str, Any]]:
+    command = (build_command or "").strip()
+    evidence: Dict[str, Any] = {
+        "verifier": "build_command",
+        "command": command,
+        "status": "unavailable",
+        "exit_code": None,
+        "duration_ms": 0,
+        "stdout": "",
+        "stderr": "",
+    }
+    if not command:
+        return True, "", "", {}
+    if not hasattr(sandbox, "run_command"):
+        evidence["stderr"] = "sandbox build command runner is unavailable"
+        if emit:
+            emit("build_verify_unavailable", evidence["stderr"], command=command)
+        return False, "", evidence["stderr"], evidence
+    if not _build_command_allowed(command):
+        evidence["stderr"] = f"build command is not allowed by verification policy: {command}"
+        if emit:
+            emit("build_verify_unavailable", evidence["stderr"], command=command)
+        return False, "", evidence["stderr"], evidence
+
+    try:
+        rel_path = _project_relative_path(file_path, working_dir)
+    except ValueError as e:
+        evidence["stderr"] = str(e)
+        if emit:
+            emit("build_verify_unavailable", evidence["stderr"], command=command)
+        return False, "", evidence["stderr"], evidence
+
+    # Build verification snapshots the real /workspace inside the sandbox.
+    # Do not overlay `project_files` here: that map is prompt context from
+    # the proxy and may be intentionally truncated for token budget. Only
+    # overlay the candidate under test so full project files remain intact.
+    overlay = {rel_path: code}
+    ok, out, err, meta = sandbox.run_command(
+        command,
+        files=overlay,
+        cwd=working_dir or "/workspace",
+        timeout=60,
+    )
+    evidence.update({
+        "status": "passed" if ok else "failed",
+        "exit_code": meta.get("exit_code"),
+        "duration_ms": int(meta.get("elapsed_ms") or 0),
+        "stdout": _bounded_evidence(out),
+        "stderr": _bounded_evidence(err),
+    })
+    if emit:
+        emit(
+            "build_verify",
+            f"{command}: {'OK' if ok else 'FAIL'}",
+            command=command,
+            status=evidence["status"],
+            exit_code=evidence["exit_code"],
+            duration_ms=evidence["duration_ms"],
+        )
+    if not ok:
+        return False, out, err or out or f"build command failed: {command}", evidence
+    return True, out, err, evidence
 
 
 def interactive_lint(code: str) -> Tuple[bool, str]:
@@ -854,6 +1008,49 @@ def interactive_lint(code: str) -> Tuple[bool, str]:
 
 # --- V3 Pipeline Orchestrator ------------------------------------------------
 
+def _candidate_by_index(candidates: List[Dict[str, Any]], index: int) -> Optional[Dict[str, Any]]:
+    """Return the candidate dict whose original ``index`` field matches.
+
+    Selection modules (S*, lens) report winners by the candidate's original
+    index, but the ``passing`` list has been sorted and filtered — positional
+    indexing would pick the wrong candidate (or IndexError). Returns None
+    when no candidate carries that index.
+    """
+    return next((c for c in candidates if c.get("index") == index), None)
+
+
+def _make_self_test(code: str, tc) -> str:
+    """Build executable assertion code for a single test case.
+
+    Uses ast.literal_eval (safe — only parses Python literals) to convert
+    I/O string representations to actual values for comparison.
+    All code runs inside the sandboxed container.
+    """
+    inp = tc.input_str.strip()
+    exp = tc.expected_output.strip()
+    fn = re.search(r'^def (\w+)\(', code, re.MULTILINE)
+    if fn and 'input()' not in code:
+        name = fn.group(1)
+        return (code + "\nimport ast as _a\n"
+            + f"_i={repr(inp)}\n_e={repr(exp)}\n"
+            + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
+            + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
+            + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
+            + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n")
+    # exec the candidate from a string literal instead of splicing its lines
+    # under `try:` — per-line indenting corrupts multiline string literals
+    # inside the candidate. exec(..., globals()) keeps the namespace (and
+    # __name__) identical to the previous inline form.
+    return (
+        "import sys as _s,io as _o\n"
+        f"_s.stdin=_o.StringIO({repr(inp)})\n"
+        "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
+        f"_src={repr(code)}\n"
+        "try:\n    exec(compile(_src,'solution.py','exec'),globals())\nfinally:\n _s.stdout=_old\n"
+        f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
+        "print('SELF_TEST_PASS')\n")
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -874,7 +1071,9 @@ class V3PipelineService:
 
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
-            file_path: str = "", constraints: List[str] = None) -> Dict[str, Any]:
+            file_path: str = "", build_command: str = "",
+            working_dir: str = "/workspace",
+            constraints: List[str] = None) -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -885,6 +1084,9 @@ class V3PipelineService:
             file_path: Target file path (used by PC-048 to detect language
                 for the smoke check — `.html` files use HTML parser, not
                 Python compile, etc.)
+            build_command: Optional project build command to run against an
+                ephemeral candidate overlay after syntax/self-tests pass.
+            working_dir: Container workspace root used by the sandbox overlay.
             constraints: raw constraint strings from the request. When the V3.2
                 RPG planner is active (issue #120) these carry the node's planned
                 signatures, used by the RPG signature veto below. Backward
@@ -896,9 +1098,8 @@ class V3PipelineService:
         constraints = constraints or []
 
         # PC-048: derive language from the target file's extension. Used
-        # only by smoke_compile_check below to pick the right parser
-        # (Python compile vs HTML parser vs JSON loads vs skip-and-pass
-        # for unknown formats). Defaults to Python when no file_path is
+        # only by smoke_compile_check below to pick the right syntax
+        # checker. Defaults to Python when no file_path is
         # supplied, preserving previous behavior for /v3/run callers.
         _ext = Path(file_path).suffix.lower() if file_path else ""
         _ext_to_lang = {
@@ -912,10 +1113,14 @@ class V3PipelineService:
             ".md": "markdown", ".markdown": "markdown",
             ".txt": "text", ".rst": "text",
             ".toml": "toml",
-            ".xml": "html",  # treat XML same as HTML for parsing
+            ".xml": "xml",
             ".sh": "bash", ".bash": "bash",
             ".go": "go",
+            ".java": "java",
+            ".kt": "kotlin",
             ".rs": "rust",
+            ".rb": "ruby",
+            ".php": "php",
         }
         smoke_language = _ext_to_lang.get(_ext, "python")
 
@@ -935,12 +1140,23 @@ class V3PipelineService:
             ev = {"stage": stage, "detail": detail, "t": time.time() - start}
             if data:
                 ev["data"] = data
-            events.append(ev)
+            # Token deltas stream live through the callback but are not
+            # stored: one dict per token would make the final `event: result`
+            # frame multi-MB on long generations.
+            if stage != "token":
+                events.append(ev)
             if progress_callback:
                 try:
                     progress_callback(stage, detail, **data)
                 except TypeError:
                     progress_callback(stage, detail)
+
+        def check_client():
+            """Abort at phase boundaries once the SSE client disconnects.
+            The handler sets `disconnected` on the callback when a write
+            hits BrokenPipeError; a dead client must not keep burning GPU."""
+            if getattr(progress_callback, "disconnected", False):
+                raise ClientDisconnected(f"client disconnected during task {task_id}")
 
         llm = LLMAdapter(progress_callback=emit)
         # PC-046: ship the user's other project files into the sandbox so
@@ -961,6 +1177,7 @@ class V3PipelineService:
             "total_tokens": 0,
             "total_time_ms": 0.0,
             "events": [],
+            "verification_evidence": [],
         }
 
         # ===== PHASE 0: PROBE =====
@@ -987,7 +1204,7 @@ class V3PipelineService:
 
         if not probe_code:
             emit("probe_failed", "No code extracted from probe")
-            # Generate with /nothink
+            # Generate with the minimal reasoning budget
             chatml = self.budget_forcing.format_chatml(problem, "nothink")
             response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
             probe_code = extract_code(response)
@@ -1013,35 +1230,35 @@ class V3PipelineService:
         else:
             emit("self_test_skip", "Interactive task — using compile smoke-test")
 
-        def _make_test(code, tc):
-            """Build executable assertion code for a single test case.
-
-            Uses ast.literal_eval (safe — only parses Python literals) to convert
-            I/O string representations to actual values for comparison.
-            All code runs inside the sandboxed container.
-            """
-            inp = tc.input_str.strip()
-            exp = tc.expected_output.strip()
-            fn = re.search(r'^def (\w+)\(', code, re.MULTILINE)
-            if fn and 'input()' not in code:
-                name = fn.group(1)
-                return (code + "\nimport ast as _a\n"
-                    + f"_i={repr(inp)}\n_e={repr(exp)}\n"
-                    + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
-                    + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
-                    + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
-                    + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n")
-            return (
-                "import sys as _s,io as _o\n"
-                f"_s.stdin=_o.StringIO({repr(inp)})\n"
-                "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
-                "try:\n" + "\n".join("    "+l for l in code.split("\n"))
-                + "\nfinally:\n _s.stdout=_old\n"
-                f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
-                "print('SELF_TEST_PASS')\n")
-
         def verified_sandbox(code, extra_test=""):
             """Sandbox + verification. Algorithmic tasks: I/O self-tests; interactive: compile smoke."""
+            verification_evidence: List[Dict[str, Any]] = []
+
+            def verify_build_if_requested(out="", err=""):
+                ok, build_out, build_err, evidence = verify_build_command(
+                    code=code,
+                    sandbox=sandbox,
+                    build_command=build_command,
+                    file_path=file_path,
+                    project_files=files,
+                    working_dir=working_dir or "/workspace",
+                    emit=emit,
+                )
+                if evidence:
+                    verification_evidence.append(evidence)
+                if not ok:
+                    return False, build_out, build_err, verification_evidence
+                return True, out, err, verification_evidence
+
+            # Non-Python candidates always use the language-aware syntax path.
+            # Python self-tests cannot establish correctness for another language.
+            if smoke_language not in ("python", "py"):
+                ok, out, err = smoke_compile_check(code, sandbox, language=smoke_language)
+                emit("smoke_check", f"compile={'OK' if ok else 'FAIL'} ({smoke_language})")
+                if not ok:
+                    return ok, out, err, verification_evidence
+                return verify_build_if_requested(out, err)
+
             # Interactive tasks: skip the run-and-test; just verify the code
             # parses and compiles. Running curses/pygame/flask in the sandbox
             # would fail for environmental reasons (no TTY, no display) even
@@ -1053,29 +1270,29 @@ class V3PipelineService:
                 ok, out, err = smoke_compile_check(code, sandbox, language=smoke_language)
                 emit("smoke_check", f"compile={'OK' if ok else 'FAIL'} ({smoke_language})")
                 if not ok:
-                    return ok, out, err
+                    return ok, out, err, verification_evidence
                 # Interactive lint is Python-AST based — only meaningful for
                 # Python files. Skip for HTML/CSS/JSON/etc.
                 if smoke_language not in ("python", "py"):
-                    return True, out, err
+                    return True, out, err, verification_evidence
                 # Interactive lint: catch raw stdin reads / blocking input loops
                 # that compile fine but don't actually work for keystroke
                 # handling (PC-034).
                 lint_ok, lint_reason = interactive_lint(code)
                 if lint_ok:
                     emit("interactive_lint", "OK")
-                    return True, out, err
+                    return verify_build_if_requested(out, err)
                 emit("interactive_lint", f"FAIL: {lint_reason}")
-                return False, out, f"interactive_lint: {lint_reason}"
+                return False, out, f"interactive_lint: {lint_reason}", verification_evidence
 
             ok, out, err = sandbox(code)
             if not ok:
-                return False, out, err
+                return False, out, err, verification_evidence
             if self_tests and self_tests.test_cases:
                 p, fails = 0, []
                 for i, tc in enumerate(self_tests.test_cases):
                     try:
-                        tc_code = _make_test(code, tc)
+                        tc_code = _make_self_test(code, tc)
                         tp, to, te = sandbox(tc_code)
                         if tp and "SELF_TEST_PASS" in to:
                             p += 1
@@ -1086,16 +1303,18 @@ class V3PipelineService:
                 total = len(self_tests.test_cases)
                 emit("self_test_verify", f"{p}/{total} passed")
                 if total > 0 and p < total / 2:
-                    return False, out, f"Self-test:{p}/{total}. "+";".join(fails[:3])
-            return True, out, err
+                    return False, out, f"Self-test:{p}/{total}. "+";".join(fails[:3]), verification_evidence
+            return verify_build_if_requested(out, err)
 
         # Score and test probe with self-generated tests
         probe_energy_raw, probe_energy_norm = 0.0, 0.5
+        probe_cx_calibrated = False
         probe_passed = False
         if probe_code:
-            probe_energy_raw, probe_energy_norm = score_candidate(probe_code)
-            emit("probe_scored", f"C(x)={probe_energy_raw:.2f} norm={probe_energy_norm:.2f}")
-            probe_passed, probe_stdout, probe_stderr = verified_sandbox(probe_code)
+            probe_energy_raw, probe_energy_norm, probe_cx_calibrated = score_candidate(probe_code)
+            norm_label = f"{probe_energy_norm:.2f}" if probe_cx_calibrated else "uncalibrated"
+            emit("probe_scored", f"C(x)={probe_energy_raw:.2f} norm={norm_label}")
+            probe_passed, probe_stdout, probe_stderr, probe_evidence = verified_sandbox(probe_code)
             emit("probe_sandbox", f"passed={probe_passed} stderr={probe_stderr[:80] if probe_stderr else ''}")
             result["total_tokens"] += tokens
 
@@ -1106,12 +1325,21 @@ class V3PipelineService:
             result["phase_solved"] = "probe"
             result["candidates_generated"] = 1
             result["total_time_ms"] = (time.time() - start) * 1000
+            result["verification_evidence"] = probe_evidence
+            result["winning_score"] = probe_energy_norm
             result["events"] = events
             return result
 
         # ===== PHASE 2: ADAPTIVE K ALLOCATION =====
+        check_client()
         emit("phase2", "Allocating compute budget...")
-        k, budget_tier = self.blend_asc.allocate(probe_energy_raw, task_id)
+        if probe_cx_calibrated:
+            k, budget_tier = self.blend_asc.allocate(
+                probe_energy_raw, task_id,
+                normalized_energy=probe_energy_norm,
+            )
+        else:
+            k, budget_tier = self.blend_asc.config.default_k, "standard"
         bf_tier = budget_tier
         emit("phase2_allocated", f"k={k} tier={budget_tier}", k=k, tier=budget_tier)
 
@@ -1124,6 +1352,7 @@ class V3PipelineService:
             candidates.append({
                 "index": 0, "code": probe_code,
                 "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
+                "energy_calibrated": probe_cx_calibrated,
                 "passed": probe_passed, "stdout": "", "stderr": "",
             })
 
@@ -1139,12 +1368,13 @@ class V3PipelineService:
                 )
                 for i, code in enumerate(ps_result.candidates):
                     if code:
-                        energy_raw, energy_norm = score_candidate(code)
+                        energy_raw, energy_norm, energy_calibrated = score_candidate(code)
                         per_step = score_candidate_per_step(code)  # PC-207
                         cand_index = len(candidates)
                         candidates.append({
                             "index": cand_index, "code": code,
                             "energy": energy_raw, "energy_norm": energy_norm,
+                            "energy_calibrated": energy_calibrated,
                             "passed": False, "stdout": "", "stderr": "",
                             "per_step": per_step,
                         })
@@ -1173,6 +1403,7 @@ class V3PipelineService:
             emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...",
                  slots=remaining_k)
             for idx in range(remaining_k):
+                check_client()
                 try:
                     perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
                     chatml = self.budget_forcing.format_chatml(perturbed, bf_tier)
@@ -1183,12 +1414,13 @@ class V3PipelineService:
                     )
                     code = extract_code(response)
                     if code:
-                        energy_raw, energy_norm = score_candidate(code)
+                        energy_raw, energy_norm, energy_calibrated = score_candidate(code)
                         per_step = score_candidate_per_step(code)  # PC-207
                         cand_index = len(candidates)
                         candidates.append({
                             "index": cand_index, "code": code,
                             "energy": energy_raw, "energy_norm": energy_norm,
+                            "energy_calibrated": energy_calibrated,
                             "passed": False, "stdout": "", "stderr": "",
                             "per_step": per_step,
                         })
@@ -1219,15 +1451,17 @@ class V3PipelineService:
 
         passing = []
         for c in candidates:
+            check_client()
             if c.get("passed"):
                 passing.append(c)
                 continue
             sb_start = time.time()
-            passed, stdout, stderr = verified_sandbox(c["code"])
+            passed, stdout, stderr, verification_evidence = verified_sandbox(c["code"])
             sb_ms = int((time.time() - sb_start) * 1000)
             c["passed"] = passed
             c["stdout"] = stdout
             c["stderr"] = stderr
+            c["verification_evidence"] = verification_evidence
             if passed:
                 passing.append(c)
                 emit("sandbox_pass", f"Candidate {c['index']} passed",
@@ -1243,7 +1477,7 @@ class V3PipelineService:
 
         # ===== LENS VETO =====
         # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
-        # geometric-lens gx_min sits in the unambiguously-bad band (<0.05).
+        # geometric-lens gx_min sits below THIS model's calibrated severe band.
         # Sandbox is an ORM (does it execute?), lens is a PRM (is the
         # generation pattern collapsing into a stub?) — they answer
         # different questions. The May 7 dashboard.html session shipped
@@ -1254,17 +1488,18 @@ class V3PipelineService:
         # Language-agnostic by construction: the lens runs on the model's
         # residual stream; gx values don't depend on whether the file
         # being scored is HTML, Python, Rust, or Java.
-        LENS_SEVERE = 0.05
         if passing:
             kept, vetoed = [], []
             for c in passing:
                 per_step = c.get("per_step") or {}
                 gx_min = per_step.get("gx_score_min")
-                if gx_min is not None and gx_min < LENS_SEVERE:
+                severe = (per_step.get("thresholds") or {}).get("severe")
+                if (gx_min is not None and isinstance(severe, (int, float))
+                        and gx_min < severe):
                     vetoed.append(c)
                     emit("lens_veto",
                          f"Candidate {c['index']} sandbox-passed but lens-vetoed "
-                         f"(gx_min={gx_min:.3f} < {LENS_SEVERE}) — likely a stub",
+                         f"(gx_min={gx_min:.3f} < {severe:.3f}) — likely a stub",
                          index=c["index"], gx_score_min=gx_min,
                          first_off_rails_idx=per_step.get("first_off_rails_idx", -1))
                 else:
@@ -1272,7 +1507,7 @@ class V3PipelineService:
             if vetoed:
                 print(
                     f"  [lens] vetoed {len(vetoed)}/{len(passing)} sandbox-passing "
-                    f"candidates with gx_min < {LENS_SEVERE} — falling "
+                    f"candidates using per-model severe thresholds — falling "
                     f"{'through to phase-3 repair' if not kept else 'back to remaining %d' % len(kept)}",
                     flush=True,
                 )
@@ -1322,7 +1557,46 @@ class V3PipelineService:
                 )
             passing = kept
 
-        # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
+        # ===== CALL-GRAPH VETO (issue #39, Phase 1) =====
+        # Deepens the structural veto using the import graph: reject a candidate
+        # whose direct calls don't resolve to a real, in-scope definition (local,
+        # builtin, imported, or supplied by a resolved wildcard) — not merely
+        # "some project file defines that name." Catches broken cross-file
+        # references the shipped veto accepts. Flag-gated by ATLAS_CALL_GRAPH;
+        # conservative — stays lenient on opaque wildcards and never empties the
+        # candidate set (a fully-failing set falls through intact to repair).
+        if passing and files and file_path:
+            try:
+                from graph import call_graph_enabled, unresolved_calls
+                _cg_on = call_graph_enabled()
+            except Exception:
+                _cg_on = False
+            if _cg_on:
+                cg_kept = []
+                for c in passing:
+                    try:
+                        res = unresolved_calls(
+                            file_path, c.get("code", ""), files,
+                            builtins=set(PY_BUILTINS), strict=True)
+                    except Exception as cge:
+                        print(f"  [call_graph] veto skipped for cand {c.get('index')}: {cge}",
+                              flush=True)
+                        cg_kept.append(c)
+                        continue
+                    if res.get("ok") and res.get("unresolved"):
+                        emit("call_graph_veto",
+                             f"Candidate {c.get('index')} has unresolved call(s): "
+                             f"{', '.join(res['unresolved'][:3])}",
+                             index=c.get("index"), unresolved=res["unresolved"][:5])
+                        print(f"  [call_graph] vetoed cand {c.get('index')} — "
+                              f"unresolved: {res['unresolved'][:5]}", flush=True)
+                        continue
+                    cg_kept.append(c)
+                if cg_kept:  # only prune when at least one candidate survives
+                    passing = cg_kept
+
+
+                # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
         # When the RPG planner is active, the request constraints carry the
         # node's planned signatures. Extend the #39-pt-1 veto from "imports
         # survive" to "the planned interface exists": reject sandbox-passing
@@ -1379,15 +1653,22 @@ class V3PipelineService:
                         task_id=task_id,
                     )
                     if tb_result.triggered and tb_result.winner_index >= 0:
-                        winner = passing[tb_result.winner_index]
-                        emit("s_star_winner", f"Winner: candidate {winner['index']}",
-                             index=winner["index"], energy=winner.get("energy_norm", 0.0))
-                        result["passed"] = True
-                        result["code"] = winner["code"]
-                        result["phase_solved"] = "phase1_sstar"
-                        result["total_time_ms"] = (time.time() - start) * 1000
-                        result["events"] = events
-                        return result
+                        # winner_index is the candidate's ORIGINAL index, not a
+                        # position in the sorted/filtered `passing` list — match
+                        # by field like the lens path below. No match falls
+                        # through to lens selection.
+                        winner = _candidate_by_index(passing, tb_result.winner_index)
+                        if winner is not None:
+                            emit("s_star_winner", f"Winner: candidate {winner['index']}",
+                                 index=winner["index"], energy=winner.get("energy_norm", 0.0))
+                            result["passed"] = True
+                            result["code"] = winner["code"]
+                            result["phase_solved"] = "phase1_sstar"
+                            result["total_time_ms"] = (time.time() - start) * 1000
+                            result["verification_evidence"] = winner.get("verification_evidence", [])
+                            result["winning_score"] = winner.get("energy_norm", 0.0)
+                            result["events"] = events
+                            return result
                 except Exception as e:
                     emit("s_star_error", str(e)[:200])
 
@@ -1404,10 +1685,14 @@ class V3PipelineService:
                 result["code"] = selected.code
                 result["phase_solved"] = "phase1"
                 result["total_time_ms"] = (time.time() - start) * 1000
+                winner = _candidate_by_index(passing, selected.index)
+                result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
+                result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
                 result["events"] = events
                 return result
 
         # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
+        check_client()
         emit("phase3", "All candidates failed — entering repair phase...",
              failing=len([c for c in candidates if not c.get("passed")]))
 
@@ -1444,7 +1729,19 @@ class V3PipelineService:
         if failing:
             failing_func = _failing_function_from_stderr(failing[0].error_output)
             if failing_func and files:
-                chain_context_block = call_chain_context(files, failing_func)
+                # Phase 2 (#39 point 3): when the call graph is enabled, build a
+                # multi-hop reachability slice (entry-point path, transitive
+                # impact, callees) instead of the 1-hop callers/callees block.
+                # Falls back to the shipped builder on flag-off or any failure.
+                chain_context_block = ""
+                try:
+                    from graph import call_graph_enabled as _cg_on, repair_context as _cg_repair
+                    if _cg_on():
+                        chain_context_block = _cg_repair(files, failing_func)
+                except Exception as cge:
+                    print(f"  [phase3] graph repair-context skipped: {cge}", flush=True)
+                if not chain_context_block:
+                    chain_context_block = call_chain_context(files, failing_func)
                 if chain_context_block:
                     emit("call_chain_context",
                          f"Built call-chain for failing `{failing_func}`",
@@ -1475,7 +1772,7 @@ class V3PipelineService:
                 )
                 result["total_tokens"] += pr_result.total_tokens
                 for repair_code in pr_result.repairs:
-                    passed, stdout, stderr = verified_sandbox(repair_code)
+                    passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
                     if passed:
                         emit("pr_cot_pass", "PR-CoT repair succeeded!",
                              strategy="pr_cot", tokens=pr_result.total_tokens)
@@ -1483,6 +1780,7 @@ class V3PipelineService:
                         result["code"] = repair_code
                         result["phase_solved"] = "pr_cot"
                         result["total_time_ms"] = (time.time() - start) * 1000
+                        result["verification_evidence"] = repair_evidence
                         result["events"] = events
                         return result
                 emit("pr_cot_failed", "PR-CoT repair did not produce passing code")
@@ -1491,6 +1789,7 @@ class V3PipelineService:
 
         # Strategy 2: Refinement Loop
         if failing:
+            check_client()
             emit("refinement", "Starting refinement loop...",
                  strategy="refinement", failing=len(failing))
             constraints = []  # from PlanSearch
@@ -1521,23 +1820,28 @@ class V3PipelineService:
                 )
                 result["total_tokens"] += ref_result.total_tokens
                 if ref_result.solved:
-                    emit("refinement_pass",
-                         f"Refinement solved in {ref_result.total_iterations} iterations!",
-                         strategy="refinement",
-                         iterations=ref_result.total_iterations,
-                         tokens=ref_result.total_tokens)
-                    result["passed"] = True
-                    result["code"] = ref_result.winning_code
-                    result["phase_solved"] = "refinement"
-                    result["total_time_ms"] = (time.time() - start) * 1000
-                    result["events"] = events
-                    return result
+                    passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
+                    if passed:
+                        emit("refinement_pass",
+                             f"Refinement solved in {ref_result.total_iterations} iterations!",
+                             strategy="refinement",
+                             iterations=ref_result.total_iterations,
+                             tokens=ref_result.total_tokens)
+                        result["passed"] = True
+                        result["code"] = ref_result.winning_code
+                        result["phase_solved"] = "refinement"
+                        result["total_time_ms"] = (time.time() - start) * 1000
+                        result["verification_evidence"] = refinement_evidence
+                        result["events"] = events
+                        return result
+                    emit("refinement_verify_failed", (stderr or "")[:200])
                 emit("refinement_failed", f"Exhausted {ref_result.total_iterations} iterations")
             except Exception as e:
                 emit("refinement_error", str(e)[:200])
 
         # Strategy 3: Derivation Chains
         if failing:
+            check_client()
             emit("derivation", "Attempting derivation chains...",
                  strategy="derivation", failing=len(failing))
             failure_context = "; ".join(
@@ -1560,7 +1864,7 @@ class V3PipelineService:
                 result["total_tokens"] += dc_result.total_tokens
                 if dc_result.solved:
                     # Verify with real sandbox
-                    passed, _, _ = verified_sandbox(dc_result.final_code)
+                    passed, _, _, derivation_evidence = verified_sandbox(dc_result.final_code)
                     if passed:
                         emit("derivation_pass", "Derivation chains solved!",
                              strategy="derivation")
@@ -1568,6 +1872,7 @@ class V3PipelineService:
                         result["code"] = dc_result.final_code
                         result["phase_solved"] = "derivation"
                         result["total_time_ms"] = (time.time() - start) * 1000
+                        result["verification_evidence"] = derivation_evidence
                         result["events"] = events
                         return result
                 emit("derivation_failed", dc_result.reason)
@@ -1582,114 +1887,6 @@ class V3PipelineService:
         result["total_time_ms"] = (time.time() - start) * 1000
         result["events"] = events
         return result
-
-
-# --- Build Verification (per-file-type) --------------------------------------
-
-class BuildVerifier:
-    """Generates file-type-appropriate verification commands.
-
-    Instead of stdin/stdout test pairs (for algorithm problems), this generates
-    build/compile/import commands appropriate for arbitrary code files.
-    """
-
-    # Extension → (verification commands, description)
-    VERIFY_MAP = {
-        ".py": (["python -m py_compile {file}"], "Python compile check"),
-        ".ts": (["npx tsc --noEmit"], "TypeScript type check"),
-        ".tsx": (["npx tsc --noEmit"], "TypeScript/React type check"),
-        ".js": (["node --check {file}"], "JavaScript syntax check"),
-        ".jsx": (["node --check {file}"], "JavaScript/React syntax check"),
-        ".go": (["go build ."], "Go build"),
-        ".rs": (["cargo check"], "Rust cargo check"),
-        ".c": (["gcc -fsyntax-only {file}"], "C syntax check"),
-        ".h": (["gcc -fsyntax-only {file}"], "C header syntax check"),
-        ".cpp": (["g++ -fsyntax-only {file}"], "C++ syntax check"),
-        ".sh": (["bash -n {file}"], "Shell syntax check"),
-        ".bash": (["bash -n {file}"], "Shell syntax check"),
-        ".json": (['python -c "import json; json.load(open(\'{file}\'))"'], "JSON validation"),
-    }
-
-    # Framework → build command override
-    FRAMEWORK_BUILD = {
-        "nextjs": "npx next build",
-        "react": "npx react-scripts build",
-        "flask": "python -m py_compile {file}",
-        "django": "python manage.py check",
-        "express": "node --check {file}",
-    }
-
-    def __init__(self, file_path: str, framework: str = "",
-                 build_command: str = "", working_dir: str = ""):
-        self.file_path = file_path
-        self.framework = framework
-        self.build_command = build_command
-        self.working_dir = working_dir
-        self._ext = Path(file_path).suffix.lower()
-
-    def describe(self) -> str:
-        cmds = self.get_commands()
-        return " && ".join(cmds) if cmds else "no verification available"
-
-    def get_commands(self) -> List[str]:
-        """Return verification commands for this file type."""
-        # Framework-specific override
-        if self.framework and self.framework in self.FRAMEWORK_BUILD:
-            cmd = self.FRAMEWORK_BUILD[self.framework].format(file=self.file_path)
-            return [cmd]
-
-        # Explicit build command from project detection
-        if self.build_command:
-            return [self.build_command]
-
-        # Extension-based
-        if self._ext in self.VERIFY_MAP:
-            cmds, _ = self.VERIFY_MAP[self._ext]
-            return [c.format(file=self.file_path) for c in cmds]
-
-        return []
-
-    def verify_code_in_sandbox(self, code: str, sandbox: SandboxAdapter) -> Tuple[bool, str, str]:
-        """Run the code through sandbox with appropriate verification.
-
-        For Python files, we can execute directly.
-        For other languages, we check syntax/compilation.
-        """
-        if self._ext == ".py":
-            return sandbox(code)
-
-        # For non-Python, the sandbox only supports Python execution.
-        # Wrap verification in a Python script that writes the file
-        # and runs the verification command.
-        if self.get_commands():
-            verify_script = self._build_verify_script(code)
-            return sandbox(verify_script)
-
-        # Fallback: basic syntax check
-        return sandbox(code)
-
-    def _build_verify_script(self, code: str) -> str:
-        """Build a Python script that writes the file and runs verification."""
-        import shlex
-        cmds = self.get_commands()
-        code.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
-
-        lines = [
-            "import subprocess, tempfile, os, sys",
-            "tmpdir = tempfile.mkdtemp()",
-            f"filepath = os.path.join(tmpdir, '{Path(self.file_path).name}')",
-            f"with open(filepath, 'w') as f:",
-            f"    f.write('''{code}''')",
-            "os.chdir(tmpdir)",
-        ]
-        for cmd in cmds:
-            lines.append(f"r = subprocess.run({shlex.quote(cmd)}, shell=True, capture_output=True, text=True, timeout=30)")
-            lines.append("if r.returncode != 0:")
-            lines.append("    print(r.stderr, file=sys.stderr)")
-            lines.append("    sys.exit(1)")
-
-        lines.append("print('BUILD_VERIFY_PASS')")
-        return "\n".join(lines)
 
 
 # --- Problem Builder for /v3/generate ----------------------------------------
@@ -1742,7 +1939,7 @@ def _build_problem_from_request(
 # a heuristic scorer (V3's lens-based scorer is for code embeddings, not prose
 # plans, so it doesn't apply here).
 #
-# Why bother: when qwen-coder gets a multi-step task without a plan, it
+# Why bother: when a compact coding model gets a multi-step task without a plan, it
 # wanders through 12+ turns of recon before any real work. Forcing the
 # model to commit to an ordered set of steps up front cuts the wander to
 # zero — even a wrong plan beats no plan, because at least the wrongness
@@ -1865,7 +2062,9 @@ _VERIFY_CMD_RE = re.compile(
     r"cargo\s+(run|test|check|build)|go\s+(run|test|build|vet)|"
     r"npm\s+(test|run|start)|yarn\s+(test|run|start)|pnpm\s+(test|run|start)|"
     r"make\b|just\b|curl\b|wget\b|http\b|httpie\b|"
-    r"mypy\b|ruff\b|pylint\b|tsc\b|eslint\b)"
+    r"mypy\b|ruff\b|pylint\b|tsc\b|eslint\b|"
+    r"markdownlint\b|stylelint\b|shellcheck\b|hadolint\b|flake8\b|"
+    r"rubocop\b|golangci-lint\b)"
 )
 
 
@@ -2045,8 +2244,8 @@ def generate_plan(
             emit("rpg_error", f"RPG planning failed: {re_}; using flat planner")
 
     # PC-206: thinking-aware infrastructure shipped — planner CAN run with
-    # Qwen3.5 hybrid reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
-    # because empirically on the reference Qwen3.5-9B-Q6_K + this codebase's
+    # Template-level reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
+    # because empirically on the reference local model + this codebase's
     # hardware tier, thinking pushes planner latency from ~5-30s to >4min
     # per candidate (model spends the full token budget reasoning before
     # emitting JSON). On faster GPU tiers the design's aspirational
@@ -2195,13 +2394,24 @@ def _ast_selector_to_query(selector: str, language: str):
         if s.startswith("<") and s.endswith(">") and len(s) > 2:
             tag = s[1:-1].strip().lower()
             if not tag.replace("-", "").replace("_", "").isalnum():
-                return None, None, f"selector '{selector}' has invalid tag name"
+                return None, None, (
+                    f"selector '{selector}' has invalid tag name — use a bare "
+                    f"tag like <script> or <body>, not attributes"
+                )
+            # tree-sitter-html parses <script> and <style> as dedicated
+            # script_element / style_element nodes (their bodies are raw
+            # JS/CSS, not HTML), NOT generic `element` nodes — so the generic
+            # element query matches them 0 times. Target their real node type.
+            if tag == "script":
+                return "(script_element) @target", "target", None
+            if tag == "style":
+                return "(style_element) @target", "target", None
             return (
                 f'(element (start_tag (tag_name) @_tag (#eq? @_tag "{tag}"))) @target',
                 "target", None,
             )
         return None, None, (
-            f"unknown selector '{selector}' for html. Supported: <tag> (e.g. <body>, <head>, <h1>)"
+            f"unknown selector '{selector}' for html. Supported: <tag> (e.g. <body>, <head>, <h1>, <script>, <style>)"
         )
     return None, None, f"unsupported language: {language}"
 
@@ -2592,10 +2802,8 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
 # PR-CoT / refinement so the repair LLM sees it as part of failure
 # context.
 
-import re as _re_phase3
-
 # Python traceback frame: `File "path", line N, in funcname`
-_TRACEBACK_FRAME_RE = _re_phase3.compile(r'File "[^"]+", line \d+, in (\S+)')
+_TRACEBACK_FRAME_RE = re.compile(r'File "[^"]+", line \d+, in (\S+)')
 
 
 def _failing_function_from_stderr(stderr: str):
@@ -2807,6 +3015,15 @@ def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
     if not _AST_EDIT_AVAILABLE:
         return {"success": False, "error": "ast_edit unavailable: tree-sitter not installed in this v3-service build"}
 
+    # Empty-content guard (defense-in-depth; the proxy also checks). Splicing
+    # empty content over a node deletes it — a model that omits `content`
+    # would silently remove the function instead of fixing it.
+    if not content.strip():
+        return {"success": False, "error": (
+            f"ast_edit: content is empty — that would DELETE '{selector}', not edit it. "
+            f"Provide the full replacement body of the node."
+        )}
+
     language, lang_obj = _ast_language_for_path(path)
     if not language:
         return {"success": False, "error": (
@@ -2839,9 +3056,26 @@ def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
 
     targets = captures.get(target_cap, [])
     if len(targets) == 0:
+        # Ground the retry in the file's REAL symbols. A weak model
+        # hallucinates selectors for functions that don't exist
+        # (observed: function:get_inventory_count, function:calculate_inventory
+        # against a file that defines item_subtotal / total_value). The lens
+        # can't catch this — the replacement text is plausible code; the
+        # TARGET is the problem. Listing what's actually defined turns a
+        # dead-end "verify the symbol exists" into an actionable retry.
+        available = ""
+        if language == "python":
+            try:
+                names = []
+                for name, kind, _sb, _eb in _symbol_index_for_python_source(source_text.encode("utf-8")):
+                    names.append(f"{kind}:{name}")
+                if names:
+                    available = " This file defines: " + ", ".join(names[:30]) + ". Use one of these exact selectors, or read the file to confirm."
+            except Exception:
+                available = ""
         return {"success": False, "error": (
-            f"selector '{selector}' matched 0 nodes in {path}. "
-            f"Verify the symbol exists — read the file first if unsure."
+            f"selector '{selector}' matched 0 nodes in {path} — that symbol does not exist in this file."
+            + (available or " Read the file first to see what's defined.")
         )}
     if len(targets) > 1:
         return {"success": False, "error": (
@@ -2863,6 +3097,27 @@ def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
     except UnicodeDecodeError as e:
         return {"success": False, "error": f"replacement produced invalid utf-8: {e}"}
 
+    # Post-splice syntax gate (Python). Tree-sitter is error-tolerant: it
+    # happily locates the node and splices in replacement content that is
+    # not valid Python — observed live: a model emitted `item["id""]` and
+    # `&quot;`-escaped quotes, ast_edit reported success, and a previously
+    # runnable Flask app shipped with a SyntaxError. Refuse to hand back a
+    # broken file; return the parse error so the model can fix its quoting
+    # on the retry. Keyed off file type, not the model.
+    if language == "python":
+        try:
+            compile(new_content, path, "exec")
+        except SyntaxError as e:
+            snippet = (e.text or "").strip()
+            return {"success": False, "error": (
+                f"ast_edit: the replacement makes {path} invalid Python — "
+                f"SyntaxError at line {e.lineno}: {e.msg}"
+                + (f" (offending line: {snippet})" if snippet else "")
+                + '. The file was NOT modified. Check your quoting (no doubled '
+                  'quotes like ["id""], no escaped \\" inside the content, no '
+                  'HTML entities like &quot;) and re-emit the full node.'
+            )}
+
     return {
         "success": True,
         "language": language,
@@ -2880,7 +3135,28 @@ pipeline = V3PipelineService()
 
 
 class V3Handler(BaseHTTPRequestHandler):
+    def _authorized(self) -> bool:
+        """Token check for every route except /health. Constant-time
+        compare; 401 bodies never echo token material."""
+        if not SERVICE_TOKEN or self.path == "/health":
+            return True
+        import hmac
+        got = self.headers.get("Authorization", "")
+        want = f"Bearer {SERVICE_TOKEN}"
+        if hmac.compare_digest(got, want):
+            return True
+        self._json_response(401, {
+            "error": "unauthorized",
+            "detail": "internal service auth is enabled; send "
+                      "Authorization: Bearer <service-token> "
+                      "(secrets/service-token)"})
+        return False
+
     def do_POST(self):
+        from structured_log import set_request_id as _set_rid
+        _set_rid(self.headers.get("X-ATLAS-Request-ID", ""))
+        if not self._authorized():
+            return
         if self.path == "/v3/run":
             self._handle_run()
         elif self.path == "/v3/generate":
@@ -2893,12 +3169,22 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_cyclomatic_complexity()
         elif self.path == "/internal/symbol_index":
             self._handle_symbol_index()
+        elif self.path == "/internal/call_graph":
+            self._handle_call_graph()
+        elif self.path == "/internal/outline":
+            self._handle_outline()
+        elif self.path == "/internal/pycheck":
+            self._handle_pycheck()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
             self._json_response(404, {"error": "not found"})
 
     def do_GET(self):
+        from structured_log import set_request_id as _set_rid
+        _set_rid(self.headers.get("X-ATLAS-Request-ID", ""))
+        if not self._authorized():
+            return
         if self.path == "/health":
             self._json_response(200, {"status": "ok", "service": "v3-pipeline"})
         else:
@@ -2906,7 +3192,11 @@ class V3Handler(BaseHTTPRequestHandler):
 
     def _handle_run(self):
         content_len = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_len))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid JSON body: {e}"})
+            return
 
         problem = body.get("problem", "")
         task_id = body.get("task_id", "cli")
@@ -2932,11 +3222,19 @@ class V3Handler(BaseHTTPRequestHandler):
                 try:
                     self.wfile.write(f"data: {event}\n\n".encode())
                     self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    # Client gone — flag it so pipeline.run aborts at the
+                    # next phase boundary instead of grinding on.
+                    emit_sse.disconnected = True
                 except Exception:
                     # best-effort: swallow on failure (caller continues)
                     pass
 
-            result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
+            try:
+                result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
+            except ClientDisconnected as e:
+                print(f"[run] pipeline aborted: {e}", flush=True)
+                return
             _post_pattern_outcome(problem, result)
 
             # Final result event
@@ -2972,7 +3270,11 @@ class V3Handler(BaseHTTPRequestHandler):
             total_time_ms: float
         """
         content_len = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_len))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid JSON body: {e}"})
+            return
 
         file_path = body.get("file_path", "")
         baseline_code = body.get("baseline_code", "")
@@ -2996,11 +3298,9 @@ class V3Handler(BaseHTTPRequestHandler):
         # Build file context for the pipeline
         files = dict(project_context) if project_context else {}
 
-        # Determine build verification for this file type
-        build_verifier = BuildVerifier(file_path, framework, build_command, working_dir)
-
         print(f"[generate] file={file_path} framework={framework} tier=T{tier}", flush=True)
-        print(f"[generate] build_verify: {build_verifier.describe()}", flush=True)
+        if build_command:
+            print(f"[generate] requested build command: {build_command}", flush=True)
         print(f"[generate] constraints: {constraints}", flush=True)
 
         # Stream V3 pipeline progress as SSE events, then final result as JSON
@@ -3020,21 +3320,28 @@ class V3Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 # Also log for debugging
                 print(f"  [SSE] {stage}: {detail[:80]}", flush=True)
-            except BrokenPipeError:
-                # best-effort: swallow on failure (caller continues)
-                pass
+            except (BrokenPipeError, ConnectionResetError):
+                # Client gone — flag it so pipeline.run aborts at the
+                # next phase boundary instead of grinding on.
+                emit_progress.disconnected = True
             except Exception as e:
                 print(f"  [SSE ERROR] {e}", flush=True)
 
         # Run V3 pipeline with streaming progress
-        result = pipeline.run(
-            problem=problem,
-            task_id=f"gen-{Path(file_path).stem}",
-            progress_callback=emit_progress,
-            files=files,
-            file_path=file_path,  # PC-048: language-aware smoke check
-            constraints=constraints,  # V3.2: RPG signature veto (issue #120)
-        )
+        try:
+            result = pipeline.run(
+                problem=problem,
+                task_id=f"gen-{Path(file_path).stem}",
+                progress_callback=emit_progress,
+                files=files,
+                file_path=file_path,  # PC-048: language-aware smoke check
+                build_command=build_command,
+                working_dir=working_dir or "/workspace",
+                constraints=constraints,  # V3.2: RPG signature veto (issue #120)
+            )
+        except ClientDisconnected as e:
+            print(f"[generate] pipeline aborted: {e}", flush=True)
+            return
         _post_pattern_outcome(problem, result)
 
         # If baseline code was provided and pipeline didn't produce anything better,
@@ -3049,9 +3356,10 @@ class V3Handler(BaseHTTPRequestHandler):
             "passed": result.get("passed", False),
             "phase_solved": result.get("phase_solved", "none"),
             "candidates_tested": result.get("candidates_generated", 0),
-            "winning_score": 0.0,
+            "winning_score": result.get("winning_score", 0.0),
             "total_tokens": result.get("total_tokens", 0),
             "total_time_ms": result.get("total_time_ms", 0.0),
+            "verification_evidence": result.get("verification_evidence", []),
         }
 
         # V3.2 RPG (issue #120): report which planned signatures the WINNING
@@ -3111,7 +3419,11 @@ class V3Handler(BaseHTTPRequestHandler):
             reasons: list[str]
         """
         content_len = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_len))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid JSON body: {e}"})
+            return
 
         user_message = body.get("user_message", "")
         working_dir = body.get("working_dir", "")
@@ -3250,12 +3562,195 @@ class V3Handler(BaseHTTPRequestHandler):
         n_matched = len(result.get("matched", []))
         n_skipped = len(result.get("skipped", []))
         n_files = len(file_map)
+
+        # Phase 3 (#39 point 4): when the call graph is enabled, attach each
+        # matched symbol's graph neighborhood (callers / callees / impact) so
+        # the proxy can inject structurally related code instead of name-matched
+        # snippets alone. Additive: the "matched"/"skipped" shape is unchanged,
+        # so flag-off callers see exactly today's response.
+        try:
+            from graph import call_graph_enabled, symbol_neighborhood, build_graph
+            if call_graph_enabled() and result.get("matched"):
+                # Build the project graph ONCE, then neighborhood each matched
+                # symbol against it (not once per symbol).
+                g = build_graph(file_map)
+                related = []
+                for m in result["matched"]:
+                    nb = symbol_neighborhood(file_map, m["name"], graph=g)
+                    if nb["callers"] or nb["callees"] or nb["impact"]:
+                        related.append(nb)
+                if related:
+                    result["graph"] = related
+        except Exception as cge:
+            print(f"  [symbol_index] graph neighborhood skipped: {cge}", flush=True)
+
         print(
             f"  [symbol_index] {n_files} files, {len(symbols)} candidates → "
             f"matched={n_matched} skipped={n_skipped}",
             flush=True,
         )
         self._json_response(200, result)
+
+    def _handle_call_graph(self):
+        """POST /internal/call_graph — structural call-graph query (issue #39).
+
+        Builds (cached) a project call graph from the supplied files and runs a
+        native analysis on it. No solver; O(V+E) traversal.
+
+        Request:
+            {"file_map": {"app.py": "...", "pkg/util.py": "..."},
+             "analysis": "callers" | "callees" | "reachability" | "path" |
+                         "impact" | "cycles" | "dead-code" | "entry-points" | "facts",
+             "target": "<name>",        # callers/callees/impact
+             "from": "<name>", "to": "<name>",   # reachability/path
+             "entry_points": ["main"]}  # dead-code (optional)
+        Response:
+            {"ok": true, "analysis": "...", "result": <analysis result>}
+            or {"ok": false, "error": "..."}
+
+        Gated by ATLAS_CALL_GRAPH; returns ok=false when the flag is off so the
+        feature stays inert until enabled.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"ok": False, "error": f"invalid JSON body: {e}"})
+            return
+
+        try:
+            from graph import (
+                build_graph, run_analysis, graph_to_prolog, call_graph_enabled,
+                reachable_pairs,
+            )
+        except Exception as e:  # pragma: no cover - import guard
+            self._json_response(200, {"ok": False, "error": f"graph package unavailable: {e}"})
+            return
+
+        if not call_graph_enabled():
+            self._json_response(200, {"ok": False, "error": "ATLAS_CALL_GRAPH disabled"})
+            return
+
+        file_map = body.get("file_map") or {}
+        analysis = body.get("analysis", "facts")
+        try:
+            g = build_graph(file_map)
+            if analysis == "facts":
+                # Prolog facts + rules for an external solver (chiasmus_verify / SWI).
+                result = graph_to_prolog(g, entry_points=body.get("entry_points"))
+            elif analysis == "closure":
+                # Phase 5: the transitive reaches/2 relation via the in-process
+                # Datalog engine — a relation the native single-pair API doesn't
+                # expose directly. Returned as [from, to] pairs.
+                result = [list(p) for p in reachable_pairs(g)]
+            else:
+                result = run_analysis(
+                    g, analysis,
+                    target=body.get("target"),
+                    frm=body.get("from"),
+                    to=body.get("to"),
+                    entry_points=body.get("entry_points"),
+                )
+        except ValueError as e:
+            self._json_response(400, {"ok": False, "error": str(e)})
+            return
+        except Exception as e:
+            self._json_response(200, {"ok": False, "error": f"call_graph failed: {e}"})
+            return
+
+        print(f"  [call_graph] {len(file_map)} files, analysis={analysis} → ok", flush=True)
+        self._json_response(200, {"ok": True, "analysis": analysis, "result": result})
+
+    def _handle_pycheck(self):
+        """POST /internal/pycheck — does this Python source parse?
+
+        Request:  {"path": "app.py", "source": "<file text>"}
+        Response: {"ok": bool, "error": "...", "line": N}
+
+        Used by the proxy's edit_file path to refuse writing a .py file the
+        edit would break — the same gate ast_edit applies post-splice. Pure
+        compile() check, no execution.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"ok": False, "error": f"invalid JSON body: {e}"})
+            return
+        path = body.get("path", "") or "<edit>"
+        source = body.get("source", "") or ""
+        try:
+            compile(source, path, "exec")
+            self._json_response(200, {"ok": True})
+        except SyntaxError as e:
+            snippet = (e.text or "").strip()
+            msg = f"SyntaxError at line {e.lineno}: {e.msg}"
+            if snippet:
+                msg += f" (offending line: {snippet})"
+            self._json_response(200, {"ok": False, "error": msg, "line": e.lineno or 0})
+
+    def _handle_outline(self):
+        """POST /internal/outline — list a file's top-level functions/classes.
+
+        Request:  {"path": "app.py", "source": "<file text>"}
+        Response: {"symbols": [{name, kind, start_line, end_line}], "supported": bool}
+
+        Reuses the same decorator-aware tree-sitter walk ast_edit uses, so a
+        symbol the outline names is selectable by ast_edit with the same name.
+        Bodies are NOT returned — this is the cheap "what's in here" probe so
+        the model can then read just the one function's line range instead of
+        the whole file. .py only here; the proxy regex-falls-back for the rest.
+
+        When ATLAS_CALL_GRAPH is on, each symbol also carries its intra-file
+        call-graph neighborhood (`calls` / `called_by`). The outline is the
+        artifact the model inspects right before it decides WHICH symbol to
+        edit, so this is where structural context earns its keep: it lets the
+        model follow `total_value -> item_subtotal` to a callee-rooted bug
+        instead of editing the function where the symptom merely surfaces
+        (issue #39). Scoped to this one file — no project-wide scan — so it's
+        cheap and never misses the file in a large repo. Additive: the
+        symbols/supported shape is unchanged, so flag-off callers see exactly
+        today's response.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"symbols": [], "supported": False, "error": f"invalid JSON body: {e}"})
+            return
+        path = body.get("path", "") or ""
+        source = body.get("source", "") or ""
+        symbols = []
+        supported = False
+        if path.endswith(".py") and _AST_EDIT_AVAILABLE:
+            supported = True
+            src = source.encode("utf-8")
+            for name, kind, sb_, eb in _symbol_index_for_python_source(src):
+                symbols.append({
+                    "name": name,
+                    "kind": kind,
+                    "start_line": src[:sb_].count(b"\n") + 1,
+                    "end_line": src[:eb].count(b"\n") + 1,
+                })
+
+        # Call-graph neighborhood (issue #39, flag-gated). Build the single-file
+        # graph once and attach callers/callees to each symbol the model can see.
+        if symbols:
+            try:
+                from graph import call_graph_enabled, symbol_neighborhood, build_graph
+                if call_graph_enabled():
+                    file_map = {path: source}
+                    g = build_graph(file_map)
+                    for s in symbols:
+                        nb = symbol_neighborhood(file_map, s["name"], graph=g)
+                        if nb["callees"]:
+                            s["calls"] = nb["callees"]
+                        if nb["callers"]:
+                            s["called_by"] = nb["callers"]
+            except Exception as cge:  # pragma: no cover - import/extract guard
+                print(f"  [outline] call-graph neighborhood skipped: {cge}", flush=True)
+
+        self._json_response(200, {"symbols": symbols, "supported": supported})
 
     def _handle_cyclomatic_complexity(self):
         """POST /internal/cyclomatic_complexity — McCabe CC for tier classification.
@@ -3307,13 +3802,58 @@ class V3Handler(BaseHTTPRequestHandler):
 
 # --- Main --------------------------------------------------------------------
 
+class _PrivateValueStream:
+    """Line-filtering wrapper for stdout/stderr: the v3 service logs
+    via print(), so the stream is the serialization choke point (the
+    equivalent of the root-handler filter in the FastAPI services)."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text):
+        from private_values import filter_private_values
+        filtered = filter_private_values(text)
+        if os.environ.get("ATLAS_LOG_FORMAT", "").lower() == "json" \
+                and filtered.strip():
+            # Wrap each non-empty print line as a structured record so v3
+            # matches the other services' JSON logs (it logs via print()).
+            import json as _json
+            from structured_log import get_request_id as _get_rid
+            for line in filtered.splitlines():
+                if not line.strip():
+                    continue
+                rec = {"service": "v3-service", "level": "info", "msg": line}
+                rid = _get_rid()
+                if rid:
+                    rec["request_id"] = rid
+                self._stream.write(_json.dumps(rec) + "\n")
+            return
+        self._stream.write(filtered)
+
+    def flush(self):
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
 if __name__ == "__main__":
+    sys.stdout = _PrivateValueStream(sys.stdout)
+    sys.stderr = _PrivateValueStream(sys.stderr)
+    from structured_log import install as _install_logging
+    _install_logging("v3-service")
     print(f"ATLAS V3 Pipeline Service starting on :{PORT}")
     print(f"  Inference:     {INFERENCE_URL}")
     print(f"  Geometric Lens: {LENS_URL}")
     print(f"  Sandbox: {SANDBOX_URL}")
 
-    server = HTTPServer(("0.0.0.0", PORT), V3Handler)
+    # ThreadingHTTPServer: a long pipeline call must not starve /health and
+    # the /internal/* endpoints. Shared state is thread-safe by construction:
+    # LLMAdapter._lock serializes the llama.cpp backend, pipeline components
+    # are read-only after __init__ (telemetry_dir=None so nothing appends),
+    # per-run state (events, candidates, adapters) is local to each request,
+    # and the graph package's FileGraphCache carries its own lock.
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), V3Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

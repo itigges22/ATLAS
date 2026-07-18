@@ -18,6 +18,9 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   go-tests:
     name: go test (${{ matrix.module }})
@@ -27,19 +30,25 @@ jobs:
       matrix:
         module: [proxy, tui]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
-          # 1.24 floor for proxy. tui requires 1.26+ via go.mod, but
-          # GOTOOLCHAIN=auto (1.21+ default) auto-fetches the newer
-          # toolchain when needed — same path as a real install.
-          go-version: '1.24'
+          # 1.26 covers both modules (tui requires 1.26+ via go.mod;
+          # proxy's 1.24 floor builds fine on it). setup-go v6 pins
+          # GOTOOLCHAIN=local, so the version here must satisfy every
+          # module — no auto-fetch.
+          go-version: '1.26'
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: go test -race
-        working-directory: ${{ matrix.module }}
-        run: go test -race ./...
+        run: python scripts/production-readiness.py --only go-${{ matrix.module }}-test
+
+      - name: go vet
+        run: python scripts/production-readiness.py --only go-${{ matrix.module }}-vet
+
+      - name: staticcheck
+        run: python scripts/production-readiness.py --only go-${{ matrix.module }}-staticcheck
 
   python-tests:
     name: pytest (${{ matrix.subset }})
@@ -47,47 +56,107 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # tests/v3/, tests/v3-service/, and tests/cli/ are pure unit tests —
-        # no services needed. tests/integration/ + tests/infrastructure/
-        # require a live llama-server / sandbox / lens, gated separately by
-        # the integration workflow (not yet wired up — PC-064).
+        # tests/v3/, tests/v3-service/, tests/cli/, and geometric-lens/tests/
+        # are pure unit tests — no services needed. tests/infrastructure/ is
+        # mixed: test_llm.py + test_sandbox.py carry the `integration` marker
+        # (they need a live llama-server / sandbox stack, so they are
+        # hardware-gated and do not run in GitHub-hosted CI; deterministic
+        # control-plane coverage is the e2e-acceptance job below), while the
+        # compose and CPU-image checks are static file assertions that run
+        # anywhere.
         subset:
           - tests/v3
           - tests/v3-service
           - tests/cli
+          - tests/infrastructure
+          - tests/contracts
+          - tests/concurrency
+          - tests/perf
+          - geometric-lens/tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
           cache: pip
+          # Default cache key only tracks requirements*.txt; include
+          # pyproject.toml so dependency changes there rotate the cache.
+          cache-dependency-path: |
+            pyproject.toml
+            **/requirements*.txt
 
       - name: install
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest
+          # pyyaml: tests/contracts/test_openapi_contract.py importorskips
+          # yaml — without the install the whole route-parity contract
+          # silently skips instead of gating.
+          pip install pytest pyyaml
+          # tree-sitter grammars for the #39 call-graph extraction tests under
+          # tests/v3-service/ (they skip cleanly if absent, but CI should run
+          # them). Pre-built wheels, no build toolchain needed.
+          pip install tree_sitter tree_sitter_python tree_sitter_javascript
+
+      - name: install sandbox runtime dependencies
+        # tests/infrastructure needs these too: the boundary-regression
+        # suite boots sandbox/executor_server.py, which imports
+        # fastapi/pydantic unconditionally.
+        if: matrix.subset == 'tests/v3-service' || matrix.subset == 'tests/infrastructure'
+        run: pip install -r sandbox/requirements-runtime.txt
+
+      - name: install lens dependencies (CPU torch)
+        if: matrix.subset == 'geometric-lens/tests'
+        # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
+        # CUDA default is ~2 GB and pointless on a CPU runner), then the
+        # service requirements. xgboost tests importorskip if absent, but
+        # requirements.txt pins xgboost-cpu so they run here.
+        run: |
+          pip install torch==2.12.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r geometric-lens/requirements.txt
 
       - name: pytest
+        run: python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+
+  perf-gate:
+    name: perf budget gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version: '1.26'
+          cache-dependency-path: proxy/go.sum
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.11'
+      - name: Build proxy (for binary-size metric)
+        run: cd proxy && go build -o /tmp/test-atlas-proxy .
+      - name: Measure + gate against budgets
         run: |
-          # If the subset directory doesn't exist, skip cleanly rather
-          # than failing CI with "no tests collected".
-          if [[ -d "${{ matrix.subset }}" ]]; then
-            pytest "${{ matrix.subset }}" --no-header -q
-          else
-            echo "::notice::${{ matrix.subset }} not present — skipping"
-          fi
+          ATLAS_PROXY_BINARY=/tmp/test-atlas-proxy \
+            python -m benchmark.perf.harness measure > /tmp/perf.json
+          python -m benchmark.perf.harness check /tmp/perf.json
 
   ruff:
     name: ruff (python lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
+
+      - name: test integrity + compile check
+        # test-integrity runs tests/validate_tests.py (the weakened-test
+        # linter); python-compile is a whole-tree syntax check. Both are
+        # static — no dependencies beyond the stdlib.
+        run: |
+          python scripts/production-readiness.py \
+            --only test-integrity \
+            --only python-compile
 
       - name: ruff check
         # --select F is Pyflakes — real-bug rules (undefined names, redefined
@@ -99,14 +168,18 @@ jobs:
         # entries from --ignore as the codebase gets cleaner.
         run: |
           pip install ruff
-          ruff check --select F --ignore F401,F541,F841 \
-            atlas/ tests/ benchmark/ geometric-lens/ v3-service/ sandbox/
+          python scripts/production-readiness.py --only ruff
+
+      - name: mypy (typed modules)
+        run: |
+          pip install mypy
+          python scripts/production-readiness.py --only mypy-typed
 
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
@@ -115,37 +188,90 @@ jobs:
         # --severity=error catches real bugs (unquoted vars in dangerous
         # contexts, misuse of [[ ]], etc) without bikeshedding on style.
         # Bump to `warning` later once the scripts are stable.
-        run: |
-          shellcheck --severity=error \
-            scripts/atlas-bootstrap.sh \
-            scripts/download-models.sh
+        run: python scripts/production-readiness.py --only shellcheck
 
   compose-validate:
     name: docker compose config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: validate compose YAML
         # The runner has docker compose v2 pre-installed. `config -q`
-        # parses + validates docker-compose.yml without pulling images.
-        # Set dummy env so vars don't fail the parse.
+        # parses + validates the base file plus every overlay combination
+        # real installs run (ROCm, Vulkan, Vulkan+CPU, macOS) without
+        # pulling images. Dummy env is supplied by the gate itself.
         run: |
-          touch .env  # compose reads .env for ${VAR} interpolation
-          docker compose config -q
+          python scripts/production-readiness.py \
+            --only compose \
+            --only compose-rocm \
+            --only compose-vulkan \
+            --only compose-cpu \
+            --only compose-macos
 
   yamllint:
     name: yamllint (workflows)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: yamllint
         run: |
           pip install yamllint
-          # Only lint workflow YAML — docker-compose.yml is validated
-          # by compose-validate above; broader yamllint can come later.
-          yamllint -d "{rules: {line-length: disable, document-start: disable}}" .github/workflows/
+          python scripts/production-readiness.py --only workflow-yaml
+
+  e2e-acceptance:
+    # Deterministic end-to-end acceptance tests (tests/e2e/): real proxy
+    # binary + real sandbox executor + scripted fake llama-server.
+    # test_acceptance.py drives the direct agent path (read -> edit ->
+    # sandbox verification -> interactive permission -> done);
+    # test_v3_lens_acceptance.py boots the REAL v3-service and drives
+    # the differentiated pipeline (probe -> lens-calibrated k ->
+    # PlanSearch candidates -> per-candidate lens scoring -> sandbox
+    # verification -> lens winner selection), asserting V3 was not
+    # bypassed, lens scoring was called, and the lens-preferred
+    # candidate landed on disk — plus V3-unreachable/malformed/timeout
+    # and lens-unreachable failure modes. No GPU, no model download.
+    name: e2e acceptance (proxy + sandbox + fake llama)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version: '1.26'
+          cache-dependency-path: proxy/go.sum
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            **/requirements*.txt
+
+      - name: build proxy
+        run: cd proxy && go build -o /tmp/test-atlas-proxy .
+
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+          pip install -r sandbox/requirements-runtime.txt
+
+      - name: e2e acceptance test
+        env:
+          ATLAS_PROXY_BINARY: /tmp/test-atlas-proxy
+        # -rs surfaces any skip loudly; the grep turns an all-skipped run
+        # into a hard failure so the acceptance test can't silently stop
+        # gating (skipif is for local dev boxes, never for this job).
+        run: |
+          python -m pytest tests/e2e -v -rs --no-header | tee /tmp/e2e.out
+          if grep -q "SKIPPED" /tmp/e2e.out; then
+            echo "::error::e2e acceptance test skipped in CI — its preconditions are this job's responsibility"
+            exit 1
+          fi
 
   llama-patches-apply:
     # Smoke test: verifies the PC-202 hidden-states + spec-decode
@@ -161,7 +287,7 @@ jobs:
     name: llama.cpp patches apply to pinned SHA
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: extract LLAMA_CPP_REV + check Dockerfiles agree
         id: sha
@@ -207,13 +333,8 @@ jobs:
         #   2. `sed -i '/auto params_dft = params_base;/a ...'` for the
         #      spec-decode embeddings fix. The sed has `|| true`, so a
         #      missing target line would silently no-op... we verify the
-        #      target line exists so that doesn't go unnoticed.
-        #
-        # NOTE: inference/patches/fix-embeddings-spec-decode.patch is
-        # NOT checked here. It's malformed (blank context lines lack
-        # leading space) and unused — the sed is what actually applies.
-        # That patch file should be either fixed or removed in a
-        # future cleanup; tracked informally for now.
+        #      target line exists so that doesn't go unnoticed. The sed
+        #      IS the patch — there is no separate .patch file for it.
         run: |
           cd llama.cpp
           # 1. PC-202 hidden-states patch
@@ -232,3 +353,111 @@ jobs:
             exit 1
           fi
           echo "All patch checks passed."
+
+  java-container-smoke:
+    name: java sandbox smoke (containerized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: build sandbox image
+        run: docker build -t atlas-sandbox-test ./sandbox
+      - name: start sandbox
+        run: |
+          docker run -d --name sandbox-test -p 8020:8020 atlas-sandbox-test
+          sleep 5
+      - name: smoke test /execute
+        run: |
+          curl -sf -X POST http://localhost:8020/execute \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"public class Main { public static void main(String[] args) { System.out.println(\"ok\"); } }","language":"java"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['success'], d; print('PASS: /execute')"
+      - name: smoke test /syntax-check
+        run: |
+          curl -sf -X POST http://localhost:8020/syntax-check \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"public class Main { public static void main(String[] args) { System.out.println(\"ok\"); } }","language":"java"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['valid'], d; print('PASS: /syntax-check')"
+      - name: cleanup
+        if: always()
+        run: docker rm -f sandbox-test || true
+
+  kotlin-container-smoke:
+    name: kotlin sandbox smoke (containerized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: build sandbox image
+        run: docker build -t atlas-sandbox-test ./sandbox
+      - name: start sandbox
+        run: |
+          docker run -d --name sandbox-test -p 8020:8020 atlas-sandbox-test
+          sleep 5
+      - name: smoke test /execute
+        run: |
+          curl -sf -X POST http://localhost:8020/execute \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"fun main() { println(\"ok\") }","language":"kotlin"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['success'], d; print('PASS: /execute')"
+      - name: smoke test /syntax-check
+        run: |
+          curl -sf -X POST http://localhost:8020/syntax-check \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"fun main() { println(\"ok\") }","language":"kotlin"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['valid'], d; print('PASS: /syntax-check')"
+      - name: cleanup
+        if: always()
+        run: docker rm -f sandbox-test || true
+
+  ruby-container-smoke:
+    name: ruby sandbox smoke (containerized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: build sandbox image
+        run: docker build -t atlas-sandbox-test ./sandbox
+      - name: start sandbox
+        run: |
+          docker run -d --name sandbox-test -p 8020:8020 atlas-sandbox-test
+          sleep 5
+      - name: smoke test /execute
+        run: |
+          curl -sf -X POST http://localhost:8020/execute \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"puts \"ok\"","language":"ruby"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['success'], d; print('PASS: /execute')"
+      - name: smoke test /syntax-check
+        run: |
+          curl -sf -X POST http://localhost:8020/syntax-check \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"puts \"ok\"","language":"ruby"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['valid'], d; print('PASS: /syntax-check')"
+      - name: cleanup
+        if: always()
+        run: docker rm -f sandbox-test || true
+
+  php-container-smoke:
+    name: php sandbox smoke (containerized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: build sandbox image
+        run: docker build -t atlas-sandbox-test ./sandbox
+      - name: start sandbox
+        run: |
+          docker run -d --name sandbox-test -p 8020:8020 atlas-sandbox-test
+          sleep 5
+      - name: smoke test /execute
+        run: |
+          curl -sf -X POST http://localhost:8020/execute \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"<?php echo \"ok\";","language":"php"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['success'], d; print('PASS: /execute')"
+      - name: smoke test /syntax-check
+        run: |
+          curl -sf -X POST http://localhost:8020/syntax-check \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"<?php echo \"ok\";","language":"php"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['valid'], d; print('PASS: /syntax-check')"
+      - name: cleanup
+        if: always()
+        run: docker rm -f sandbox-test || true

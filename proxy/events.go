@@ -38,13 +38,13 @@ type Envelope struct {
 
 // Legal Type values. Mirror atlas.cli.events.EVENT_TYPES.
 const (
-	EvtStageStart  = "stage_start"
-	EvtStageEnd    = "stage_end"
-	EvtToolCall    = "tool_call"
-	EvtToolResult  = "tool_result"
-	EvtMetric      = "metric"
-	EvtError       = "error"
-	EvtDone        = "done"
+	EvtStageStart = "stage_start"
+	EvtStageEnd   = "stage_end"
+	EvtToolCall   = "tool_call"
+	EvtToolResult = "tool_result"
+	EvtMetric     = "metric"
+	EvtError      = "error"
+	EvtDone       = "done"
 )
 
 // NewEventID returns a short, log-readable, session-unique id. Same format
@@ -121,16 +121,6 @@ func Emit(ev Envelope) {
 	defaultBroker.emit(ev)
 }
 
-// EmitSimple is a convenience for the common stage_start / stage_end /
-// metric cases — saves callers from constructing the map themselves.
-func EmitSimple(typ, stage string, detail string) {
-	payload := map[string]interface{}{}
-	if detail != "" {
-		payload["detail"] = detail
-	}
-	Emit(NewEnvelope(typ, stage, payload))
-}
-
 // ---------------------------------------------------------------------------
 // HTTP handler
 // ---------------------------------------------------------------------------
@@ -140,7 +130,7 @@ func EmitSimple(typ, stage string, detail string) {
 func handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, ErrInternal, "streaming unsupported")
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")

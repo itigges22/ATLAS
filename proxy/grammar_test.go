@@ -70,6 +70,33 @@ func TestBuildResponseFormat_UnknownModeDefaultsToStrict(t *testing.T) {
 	}
 }
 
+func TestDemoBaselineExcludesOrchestrationTool(t *testing.T) {
+	ctx := &AgentContext{
+		BypassV3: true,
+		Messages: []AgentMessage{{Role: "user", Content: "build the project"}},
+	}
+	prompt := buildSystemPrompt(ctx)
+	if strings.Contains(prompt, "plan_tasks") {
+		t.Fatal("prompt advertises the removed plan_tasks tool")
+	}
+	// With no orchestration exclusions, the baseline needs no override
+	// grammar on a plain first step.
+	if _, grammar := buildStepRequest(ctx); grammar != "" {
+		t.Fatalf("baseline unexpectedly received override grammar: %q", grammar)
+	}
+}
+
+func TestNormalAgentPromptOmitsRemovedTools(t *testing.T) {
+	ctx := &AgentContext{Messages: []AgentMessage{{Role: "user", Content: "build the project"}}}
+	if prompt := buildSystemPrompt(ctx); strings.Contains(prompt, "plan_tasks") {
+		t.Fatal("prompt still mentions the removed plan_tasks tool")
+	}
+	_, grammar := buildStepRequest(ctx)
+	if grammar != "" {
+		t.Fatalf("normal agent unexpectedly received override grammar: %q", grammar)
+	}
+}
+
 // TestSchemaConstrained_ReachesLlamaServerOverTheWire is the
 // integration-shaped end of #33: it spins up a fake llama-server with
 // httptest, captures the actual JSON the proxy POSTs, and verifies the
@@ -156,9 +183,17 @@ func TestSchemaConstrained_ReachesLlamaServerOverTheWire(t *testing.T) {
 		t.Errorf("response_format.type = %v, want json_object", rf["type"])
 	}
 	if _, hasSchema := rf["schema"]; !hasSchema {
-		t.Errorf("response_format on the wire MISSING schema field — " +
-			"the #33 optimization regressed to loose JSON. " +
+		t.Errorf("response_format on the wire MISSING schema field — "+
+			"the #33 optimization regressed to loose JSON. "+
 			"request body: %v", got)
+	}
+	kwargs, ok := got["chat_template_kwargs"].(map[string]interface{})
+	if !ok || kwargs["enable_thinking"] != false {
+		t.Fatalf("chat_template_kwargs.enable_thinking = %v, want false",
+			got["chat_template_kwargs"])
+	}
+	if _, legacy := got["enable_thinking"]; legacy {
+		t.Fatal("enable_thinking must be nested under chat_template_kwargs")
 	}
 
 	// Strict mode should NOT also send a `grammar` field (mixing the

@@ -37,10 +37,28 @@ jobs:
         language: [python, go]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      # setup-go must run BEFORE codeql init: init injects a traced go
+      # wrapper into PATH, and a later setup-go would repoint PATH at the
+      # toolcache go, bypassing CodeQL's build tracing.
+      - name: setup go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          # 1.26 covers both modules (tui requires 1.26+ via go.mod;
+          # proxy's 1.24 floor builds fine on it). setup-go v6 pins
+          # GOTOOLCHAIN=local, so the version here must satisfy every
+          # module — no auto-fetch.
+          go-version: '1.26'
+          # The modules live in proxy/ and tui/ (no root go.mod); without
+          # this the default cache lookup warns and never caches.
+          cache-dependency-path: |
+            proxy/go.sum
+            tui/go.sum
 
       - name: init codeql (${{ matrix.language }})
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # v4.37.0
         with:
           languages: ${{ matrix.language }}
           # security-and-quality runs the broader pack — catches both
@@ -48,14 +66,6 @@ jobs:
           # security-extended is also fine; we pick the wider one
           # because we already gate Pyflakes via ruff.
           queries: security-and-quality
-
-      - name: setup go
-        if: matrix.language == 'go'
-        uses: actions/setup-go@v5
-        with:
-          # 1.24 floor for proxy. tui requires 1.26+ via go.mod;
-          # GOTOOLCHAIN=auto auto-fetches the newer toolchain.
-          go-version: '1.24'
 
       - name: build go modules
         # CodeQL needs to observe a real compile to extract dataflow.
@@ -68,6 +78,6 @@ jobs:
           (cd tui   && go build ./...)
 
       - name: analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # v4.37.0
         with:
           category: "/language:${{ matrix.language }}"

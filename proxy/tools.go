@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,15 +27,16 @@ var toolRegistry = map[string]*ToolDef{}
 
 func init() {
 	registerTool(readFileTool())
+	registerTool(outlineFileTool())
 	registerTool(writeFileTool())
 	registerTool(editFileTool())
 	registerTool(astEditTool())
 	registerTool(deleteFileTool())
+	registerTool(moveFileTool())
 	registerTool(runCommandTool())
 	registerTool(searchFilesTool())
 	registerTool(findFileTool())
 	registerTool(listDirectoryTool())
-	registerTool(planTasksTool())
 	registerTool(runBackgroundTool())
 	registerTool(tailBackgroundTool())
 	registerTool(stopBackgroundTool())
@@ -83,6 +85,14 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 			Error:   missingArgsHint(name),
 		}
 	}
+	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
+		return &ToolResult{Success: false, Error: reason}
+	}
+	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
+	// destructive shell patterns) are refused in every permission mode.
+	if denied, reason := shouldDenyToolCall(name, args); denied {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason)}
+	}
 
 	result, err := tool.Execute(args, ctx)
 	if err != nil {
@@ -116,6 +126,8 @@ func missingArgsHint(name string) string {
 		return `edit_file: no arguments provided. Call with {"path":"<file>","old_str":"<exact text to replace>","new_str":"<replacement>"}.`
 	case "delete_file":
 		return `delete_file: no arguments provided. Call with {"path":"<file>"}.`
+	case "move_file":
+		return `move_file: no arguments provided. Call with {"source":"<current path>","destination":"<new path or dir>"}.`
 	case "list_directory":
 		return `list_directory: no arguments provided. Call with {"path":"."} for the working directory or {"path":"<subdir>"}.`
 	case "search_files":
@@ -201,6 +213,21 @@ func readFileTool() *ToolDef {
 			// sibling before generating a new file in the same dir.
 			patternReadTracker.add(path)
 
+			// Call-graph footer (issue #39, flag-gated). The model reads a
+			// file far more often than it outlines one, so attach the
+			// intra-file call edges to a .py read where the localization
+			// decision happens. Fire on any read that starts at the top of
+			// the file (start == 0) — that covers both a whole-file read and
+			// the model's common "offset:0, limit:N" first look; it computes
+			// the graph from the full file on disk regardless of the page
+			// shown, and skips mid-file pages so a model scrolling a big file
+			// doesn't get the footer repeated.
+			if start == 0 && strings.HasSuffix(input.Path, ".py") && callGraphEnabled() {
+				if footer := callGraphFooter(ctx, input.Path, string(data)); footer != "" {
+					content += footer
+				}
+			}
+
 			out := ReadFileOutput{
 				Content:    content,
 				TotalLines: totalLines,
@@ -211,6 +238,197 @@ func readFileTool() *ToolDef {
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// outline_file — cheap structural index of a file (names + line ranges, no
+// bodies). The surgical-read entry point: outline to see what's in a file
+// for a few hundred bytes, then read_file with offset/limit to pull just
+// the one function you need. Saves the model from dumping a whole file into
+// context (and re-reading it) just to find one bug. GH #39.
+// ---------------------------------------------------------------------------
+
+func outlineFileTool() *ToolDef {
+	return &ToolDef{
+		Name: "outline_file",
+		Description: "List a file's top-level functions and classes with their " +
+			"line ranges — NO bodies, so it costs almost no context. Use this " +
+			"FIRST to navigate an existing file instead of reading the whole " +
+			"thing: outline_file to find the function you care about, then " +
+			"read_file with offset/limit to read just its lines, then ast_edit " +
+			"(selector function:NAME / class:NAME) or edit_file to change it. " +
+			"Python is parsed precisely (tree-sitter, decorator-aware); other " +
+			"languages get a best-effort definition scan.",
+		InputSchema: OutlineInput{},
+		ReadOnly:    true,
+		Destructive: false,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input OutlineInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(input.Path) == "" {
+				return &ToolResult{Success: false,
+					Error: "outline_file: path cannot be empty. Pass {\"path\":\"<file>\"}."}, nil
+			}
+			path := resolveAgentPath(ctx, input.Path)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
+			}
+			src := string(data)
+			totalLines := strings.Count(src, "\n") + 1
+
+			// Prefer the v3 tree-sitter outline for .py (accurate, matches
+			// ast_edit selectors). Fall back to a language-agnostic regex
+			// scan for everything else and whenever v3 is unavailable.
+			var syms []OutlineSymbol
+			if strings.HasSuffix(input.Path, ".py") {
+				if v3, ok := outlineViaV3(ctx, input.Path, src); ok {
+					syms = v3
+				}
+			}
+			engine := "tree-sitter"
+			if syms == nil {
+				syms = outlineByRegex(input.Path, src)
+				engine = "scan"
+			}
+
+			ctx.RecordFileRead(path, src)
+			patternReadTracker.add(path)
+
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "%s — %d lines, %d symbols (%s)\n",
+				input.Path, totalLines, len(syms), engine)
+			if len(syms) == 0 {
+				sb.WriteString("(no top-level functions/classes found — read_file to view it directly)\n")
+			}
+			hasGraph := false
+			for _, s := range syms {
+				fmt.Fprintf(&sb, "L%d-%d\t%s %s\n", s.StartLine, s.EndLine, s.Kind, s.Name)
+				if len(s.Calls) > 0 {
+					fmt.Fprintf(&sb, "\tcalls: %s\n", strings.Join(s.Calls, ", "))
+					hasGraph = true
+				}
+				if len(s.CalledBy) > 0 {
+					fmt.Fprintf(&sb, "\tcalled by: %s\n", strings.Join(s.CalledBy, ", "))
+					hasGraph = true
+				}
+			}
+			if hasGraph {
+				// Steer the model to use the structure for localization — the
+				// #39 point: a wrong value a function returns may come from a
+				// function it calls, not from the function itself.
+				sb.WriteString("\nNote: if a function returns a wrong value, the bug may be in a function it `calls`, not in the function itself — follow the call edges to the root cause before editing.\n")
+			}
+			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0, Outline: sb.String()}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
+		},
+	}
+}
+
+// callGraphEnabled mirrors v3-service's flag so the proxy can skip the extra
+// outline round-trip on the read_file path when the feature is off. Forwarded
+// to the proxy container via docker-compose (issue #39).
+func callGraphEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("ATLAS_CALL_GRAPH"))
+	return v != "" && v != "0" && strings.ToLower(v) != "false"
+}
+
+// callGraphFooter renders a compact intra-file call-graph summary for a
+// whole-file read, reusing the same v3 outline (which carries calls/called_by
+// when ATLAS_CALL_GRAPH is on). Returns "" when there are no edges, so a file
+// with no internal calls doesn't get a noisy empty section.
+func callGraphFooter(ctx *AgentContext, path, source string) string {
+	syms, ok := outlineViaV3(ctx, path, source)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	any := false
+	for _, s := range syms {
+		if len(s.Calls) == 0 && len(s.CalledBy) == 0 {
+			continue
+		}
+		if !any {
+			sb.WriteString("\n\n## Call graph (within this file)\n")
+			any = true
+		}
+		sb.WriteString("- " + s.Name)
+		if len(s.Calls) > 0 {
+			sb.WriteString(" calls: " + strings.Join(s.Calls, ", "))
+		}
+		if len(s.CalledBy) > 0 {
+			sb.WriteString("; called by: " + strings.Join(s.CalledBy, ", "))
+		}
+		sb.WriteString("\n")
+	}
+	if any {
+		sb.WriteString("If a function returns a wrong value, the bug may be in a function it calls — follow the edges to the root cause before editing.\n")
+	}
+	return sb.String()
+}
+
+// outlineViaV3 asks v3-service for a tree-sitter outline. Returns (nil,false)
+// on any failure so the caller can fall back to the regex scan.
+func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool) {
+	if ctx.V3URL == "" {
+		return nil, false
+	}
+	body, _ := json.Marshal(map[string]string{"path": path, "source": source})
+	req, err := http.NewRequestWithContext(ctx.Ctx, "POST",
+		ctx.V3URL+"/internal/outline", bytes.NewReader(body))
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, false
+	}
+	var out OutlineOutput
+	if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.Supported {
+		return nil, false
+	}
+	return out.Symbols, true
+}
+
+// outlineByRegex is the language-agnostic fallback: any line starting (at
+// column 0, allowing common keywords) with a definition. Good enough to give
+// the model line anchors to read from; not as precise as tree-sitter.
+func outlineByRegex(path, source string) []OutlineSymbol {
+	type pat struct {
+		re   *regexp.Regexp
+		kind string
+	}
+	// Ordered, language-agnostic-ish. Name is capture group 1.
+	pats := []pat{
+		{regexp.MustCompile(`^(?:async\s+)?def\s+([A-Za-z_]\w*)`), "function"},
+		{regexp.MustCompile(`^class\s+([A-Za-z_]\w*)`), "class"},
+		{regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)`), "function"},
+		{regexp.MustCompile(`^type\s+([A-Za-z_]\w*)`), "type"},
+		{regexp.MustCompile(`^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)`), "function"},
+		{regexp.MustCompile(`^(?:export\s+)?class\s+([A-Za-z_$][\w$]*)`), "class"},
+	}
+	lines := strings.Split(source, "\n")
+	var out []OutlineSymbol
+	for i, ln := range lines {
+		for _, p := range pats {
+			if m := p.re.FindStringSubmatch(ln); m != nil {
+				out = append(out, OutlineSymbol{
+					Name: m[1], Kind: p.kind,
+					StartLine: i + 1, EndLine: i + 1, // single-line anchor; body follows
+				})
+				break
+			}
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -464,13 +682,16 @@ func writeFileTool() *ToolDef {
 			// V3 takes the model's content as baseline candidate, generates diverse
 			// alternatives via PlanSearch/DivSampling, build-verifies each, and
 			// selects the best. This is the intelligence layer.
-			if fileTier >= Tier2Medium && ctx.V3URL != "" {
+			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 {
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
 				res, err := writeFileWithV3(path, input.Content, ctx)
 				if err == nil && res != nil && res.Success {
 					ctx.SessionWrites[input.Path] = true
 				}
 				return res, err
+			}
+			if ctx.BypassV3 {
+				log.Printf("[write_file] V3 bypassed (demo baseline pane) — direct write %s", input.Path)
 			}
 
 			// T1: Direct write — config, data, boilerplate
@@ -528,9 +749,9 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	}
 
 	// Add project context from files read during this session
-	if len(ctx.FilesRead) > 0 {
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
-		for p, content := range ctx.FilesRead {
+		for p, content := range filesRead {
 			relPath, _ := filepath.Rel(ctx.WorkingDir, p)
 			if relPath == "" {
 				relPath = p
@@ -541,6 +762,35 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			}
 			req.ProjectContext[relPath] = content
 		}
+	}
+
+	// Files this session WROTE are project context too — previously only
+	// files the model had read were included, so written-but-never-read
+	// siblings were invisible to candidate generation (2026-07-18: V3
+	// generated an app.py blind to the session's own templates/index.html
+	// and static/game.js, and the winner inlined its page, orphaning
+	// both). Disk content wins over any stale read snapshot: the on-disk
+	// version is what verification produced.
+	for rel := range ctx.SessionWrites {
+		if rel == "" {
+			continue
+		}
+		abs := resolveAgentPath(ctx, rel)
+		if abs == path {
+			continue // the file being generated is the baseline, not context
+		}
+		data, rerr := os.ReadFile(abs)
+		if rerr != nil {
+			continue
+		}
+		content := string(data)
+		if len(content) > 4000 {
+			content = content[:4000] + "\n... (truncated)"
+		}
+		if req.ProjectContext == nil {
+			req.ProjectContext = make(map[string]string)
+		}
+		req.ProjectContext[rel] = content
 	}
 
 	// Add project info if available
@@ -576,7 +826,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	//   llm_end     \u2014 V3's LLM call finished (with token/timing summary)
 	//   <other>     \u2014 pipeline stage marker (probe, plansearch, sandbox\u2026)
 	currentV3Stage := ""
-	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		// Token deltas: forward to the TUI on a separate SSE event so
 		// it can render them as a streaming dim row, mirroring how the
 		// agent's own LLM tokens are shown. No envelope (would bloat
@@ -584,6 +834,19 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if stage == "token" {
 			if ctx.StreamFn != nil {
 				ctx.StreamFn("v3_token", map[string]string{"text": detail})
+			}
+			return
+		}
+		// Reasoning deltas during V3 LLM calls (<think>
+		// stream). Forwarded as v3_reasoning_token (NOT plain
+		// reasoning_token) because the agent-loop's reasoning_token
+		// handler in the TUI targets the agent's LLM row — V3 calls
+		// run in a different lifecycle and need their own pipe into
+		// the V3 streaming row. Gives the /demo viewer something to
+		// watch during long PlanSearch / repair phases.
+		if stage == "reasoning_token" {
+			if ctx.StreamFn != nil {
+				ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
 			}
 			return
 		}
@@ -681,9 +944,22 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		},
 	})
 	if err != nil {
+		// User cancellation is not a fallback case — the turn was aborted,
+		// so nothing should land on disk.
+		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+			log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
+			return &ToolResult{
+				Success: false,
+				Error:   "write_file cancelled — no content was written",
+			}, nil
+		}
 		// Fallback to direct write if V3 service unavailable
 		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
-		ctx.Stream("text", map[string]string{"content": fmt.Sprintf("  \u2514\u2500 V3 unavailable, writing directly")})
+		msg := "  \u2514\u2500 V3 unavailable, writing directly"
+		if errors.Is(err, context.DeadlineExceeded) {
+			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
+		}
+		ctx.Stream("text", map[string]string{"content": msg})
 		return writeFileDirect(path, baselineContent)
 	}
 
@@ -722,11 +998,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 
 	// Enrich result with V3 metadata
 	out := WriteFileOutput{
-		BytesWritten:     len(code),
-		V3Used:           true,
-		CandidatesTested: v3Result.CandidatesTested,
-		WinningScore:     v3Result.WinningScore,
-		PhaseSolved:      v3Result.PhaseSolved,
+		BytesWritten:         len(code),
+		V3Used:               true,
+		CandidatesTested:     v3Result.CandidatesTested,
+		WinningScore:         v3Result.WinningScore,
+		PhaseSolved:          v3Result.PhaseSolved,
+		VerificationEvidence: v3Result.VerificationEvidence,
 	}
 	outBytes, _ := json.Marshal(out)
 	result.Data = outBytes
@@ -734,6 +1011,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	result.CandidatesTested = v3Result.CandidatesTested
 	result.WinningScore = v3Result.WinningScore
 	result.PhaseSolved = v3Result.PhaseSolved
+	result.VerificationEvidence = v3Result.VerificationEvidence
 
 	// V3.2 RPG drift loop (issue #120): if the winning code failed to realize
 	// the node's planned signatures, surface the drift + downstream subgraph.
@@ -801,7 +1079,7 @@ func editFileTool() *ToolDef {
 			actualOldStr := findActualString(content, input.OldStr)
 			if actualOldStr == "" {
 				// GH #39: model occasionally HTML-entity-encodes < > &
-				// inside JSON tool-call args (Qwen3.5 quirk). When the
+				// inside JSON tool-call args (a recurring small-model quirk). When the
 				// disk has literal angle brackets, findActualString
 				// misses. Try once with entities decoded — if the
 				// decoded form matches the file, accept it
@@ -831,6 +1109,23 @@ func editFileTool() *ToolDef {
 				}
 			}
 			if actualOldStr == "" {
+				// Last resort before failing: whitespace-tolerant line match.
+				// Small models can't reproduce a code block byte-for-byte —
+				// indentation width, tabs-vs-spaces, and trailing spaces drift
+				// constantly — so exact old_str matching is the #1 reason
+				// edit_file fails for them, which strands the whole V3/lens
+				// stack (it only engages after a successful edit). This
+				// matches old_str against the file ignoring per-line leading/
+				// trailing whitespace, and ONLY accepts a UNIQUE match — an
+				// ambiguous or content-different old_str still fails, so it
+				// can never silently edit the wrong place. Exact-matching
+				// (frontier) models never reach this path. See GH #39.
+				if fuzzy, ok := findFuzzyLineMatch(content, input.OldStr); ok {
+					log.Printf("[edit_file] exact old_str missed on %s; unique whitespace-tolerant match found — proceeding (small-model indentation drift)", input.Path)
+					actualOldStr = fuzzy
+				}
+			}
+			if actualOldStr == "" {
 				// Mismatch persists — return targeted error.
 				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
 					strings.Contains(input.OldStr, "&gt;") ||
@@ -845,7 +1140,29 @@ func editFileTool() *ToolDef {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
 						alt, truncateStr(input.OldStr, 200))
 				}
-				return nil, fmt.Errorf("string to replace not found in file.\nSearched for: %s", truncateStr(input.OldStr, 200))
+				// Generic mismatch — the model's old_str doesn't byte-match
+				// the file (whitespace, quotes, or paraphrase drift, which
+				// smaller models do constantly). For structured files,
+				// ast_edit sidesteps the whole problem: it selects the node
+				// by name, no old_str to reproduce exactly. Steer there.
+				ext := strings.ToLower(filepath.Ext(input.Path))
+				astAlt := ""
+				if ext == ".py" || ext == ".html" || ext == ".htm" {
+					astAlt = " To replace a whole function/class/element without " +
+						"matching exact text, use ast_edit with a selector " +
+						"(e.g. `function:NAME`, `class:NAME`, `<body>`) and the " +
+						"new content — no old_str needed, so a near-miss can't fail it."
+				}
+				// Ground the retry in the file's REAL content. A small model
+				// frequently writes old_str from its memory of the file
+				// rather than the file itself (observed: old_str
+				// `item = items[id + 1]` for a file whose actual line is
+				// `return jsonify(items[item_id + 1])`). Without an anchor it
+				// gives up on the surgical edit and rewrites the whole node
+				// from the same faulty memory. Quoting the closest actual
+				// line gives it real bytes to copy into the next attempt.
+				hint := closestLineHint(content, input.OldStr)
+				return nil, fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200))
 			}
 
 			// Check uniqueness
@@ -888,6 +1205,31 @@ func editFileTool() *ToolDef {
 				return &ToolResult{Success: false, Error: rejection}, nil
 			}
 
+			// No-op guard — same rationale as ast_edit's. new_str identical
+			// to old_str (or a replacement that leaves the file unchanged)
+			// must not report success: the model believes the fix landed
+			// and moves on while the bug is still on disk.
+			if newContent == content {
+				log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
+				return &ToolResult{Success: false, Error: "edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
+					"Look at the current code again and emit a new_str that actually differs from the existing code."}, nil
+			}
+
+			// Syntax gate — the edit_file counterpart of ast_edit's
+			// post-splice compile check. A garbage-quoted new_str (doubled
+			// quotes, stray escapes) otherwise lands on disk and turns a
+			// runnable .py file into a SyntaxError. Best-effort: when the
+			// v3-service is unreachable or busy the check is skipped rather
+			// than blocking the edit.
+			if strings.ToLower(filepath.Ext(input.Path)) == ".py" {
+				if ok, perr := pycheckViaV3(ctx, input.Path, newContent); !ok {
+					log.Printf("[edit_file] syntax gate rejected edit to %s: %s", input.Path, perr)
+					return &ToolResult{Success: false, Error: fmt.Sprintf(
+						"edit_file: this edit would make %s invalid Python — %s. The file was NOT modified. "+
+							"Check your quoting in new_str and try again.", input.Path, perr)}, nil
+				}
+			}
+
 			// Route through V3 pipeline when the file warrants it. The
 			// gate now mirrors write_file (file-tier only, no request-tier
 			// AND-gate) — having two separate tier checks meant V3 only
@@ -909,7 +1251,8 @@ func editFileTool() *ToolDef {
 				fileTier = newTier
 			}
 			// GH #39 point 2: CC enrichment — same as write_file's path.
-			if cc, ok := cyclomaticComplexity(ctx, input.Path, newContent); ok {
+			cc, ccOK := cyclomaticComplexity(ctx, input.Path, newContent)
+			if ccOK {
 				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
 					log.Printf("[edit_file] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
 					fileTier = refined
@@ -918,10 +1261,19 @@ func editFileTool() *ToolDef {
 				}
 			}
 			v3Out := V3EditMetadata{}
-			if fileTier >= Tier2Medium && ctx.V3URL != "" {
+			if fileTier >= Tier2Medium && editWarrantsV3(newContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 {
 				log.Printf("[edit_file] V3 pipeline activating for %s (file_tier=%d, req_tier=%d)", input.Path, fileTier, ctx.Tier)
 				improved, meta, err := improveContentWithV3(path, newContent, ctx)
 				if err != nil {
+					// User cancellation is not a fallback case — the turn
+					// was aborted, so nothing should land on disk.
+					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+						log.Printf("[edit_file] V3 aborted by cancellation — not writing %s", input.Path)
+						return &ToolResult{
+							Success: false,
+							Error:   "edit_file cancelled — no content was written",
+						}, nil
+					}
 					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
 				} else if improved != "" {
 					// V3 sometimes returns code wrapped in markdown
@@ -974,6 +1326,7 @@ func editFileTool() *ToolDef {
 				result.CandidatesTested = v3Out.CandidatesTested
 				result.WinningScore = v3Out.WinningScore
 				result.PhaseSolved = v3Out.PhaseSolved
+				result.VerificationEvidence = v3Out.VerificationEvidence
 			}
 			return result, nil
 		},
@@ -1019,6 +1372,46 @@ func astEditTool() *ToolDef {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
 			source := string(data)
+
+			// Empty-content guard. Replacing a node with nothing is a
+			// deletion, not an edit — observed live: a model called ast_edit
+			// with the `content` field omitted entirely, which spliced an
+			// empty string over `function:add` and silently deleted it
+			// (calc.py lost both functions while __main__ still called
+			// them). It passes the syntax gate (the file still parses) and
+			// the no-op guard (the content did change), so nothing else
+			// catches it. Refuse it and steer: an edit needs a replacement
+			// body; an intentional removal is delete_file's job.
+			if strings.TrimSpace(input.Content) == "" {
+				log.Printf("[ast_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"ast_edit: content is empty — that would DELETE `%s`, not fix it. "+
+						"Provide the full replacement body of the node (e.g. the corrected function definition). "+
+						"If you truly mean to remove code, use delete_file on the whole file instead.",
+					input.Selector)}, nil
+			}
+
+			// Runaway-content guard. ast_edit replaces ONE node, so the
+			// replacement should be roughly node-sized. A reasoning-heavy
+			// model sometimes leaks its entire chain-of-thought into the
+			// content field instead of emitting just the new body — observed
+			// live: a 69KB "content" for a 3-line function, full of
+			// "# Wait, the user said..." commentary. That blob then ships to
+			// disk and, being huge, trips downstream size heuristics (it once
+			// re-triggered a 23-min V3 PlanSearch). Reject when the
+			// replacement is implausibly larger than the whole file: >4× the
+			// file and over an 8KB floor (so legit edits that grow a small
+			// file stay clear, and large-function edits in large files aren't
+			// touched). Steer the model to emit only the replacement node.
+			if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
+				log.Printf("[ast_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
+					input.Path, input.Selector, len(input.Content), len(source))
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"ast_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
+						"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
+						"not the whole file and not your reasoning. Re-emit ast_edit with content set to ONLY the replacement node.",
+					len(input.Content), len(source), input.Selector)}, nil
+			}
 
 			ctx.mu.Lock()
 			lastRead := ctx.FileReadTimes[path]
@@ -1108,26 +1501,46 @@ func astEditTool() *ToolDef {
 				return &ToolResult{Success: false, Error: rejection}, nil
 			}
 
-			// V3 quality-gate routing. Two May 10 2026 corrections to the
-			// May 9 v1:
-			//   (a) Tier classification used post-edit content only. When
-			//       ast_edit produced a destructive stub (32B), tier
-			//       classified as T1 and V3 skipped the very edits that
-			//       most needed quality-checking. Switched to
-			//       max(oldTier, newTier) so destructive edits to T2+
-			//       originals always trigger V3.
-			//   (b) Even with the max-tier fix, the Tier2Medium floor
-			//       made V3 too rare. Lead requested V3 fire on
-			//       essentially every ast_edit emit — drop the floor
-			//       entirely for ast_edit when V3URL is configured.
-			//       T1 ast_edits run V3 too; only when V3URL is empty
-			//       does ast_edit ship its result without quality gating.
+			// V3 quality-gate routing. History:
+			//   (a) May 10: tier classified on post-edit content only, so a
+			//       destructive ast_edit that shrank a T2+ file into a stub
+			//       classified T1 and skipped V3 — the edits that most need
+			//       checking. Fixed by classifying on max(oldTier, newTier).
+			//   (b) May 10: floor dropped entirely so V3 fired on every
+			//       ast_edit.
+			//   (c) Jun 8: floor restored to Tier2Medium. With (b), every
+			//       one-line ast_edit ran the full PlanSearch pipeline —
+			//       minutes per edit on a reasoning-heavy model, blocking the
+			//       single-threaded v3-service and looking like a hang. But
+			//       ast_edit is ALREADY surgical: the model named the exact
+			//       node and the replacement is its own tree-sitter
+			//       transform. PlanSearch-improving a precise node swap is
+			//       mostly cost. Gate it to T2+ files (same as edit_file /
+			//       write_file): trivial edits apply instantly, V3 still
+			//       engages where the file is genuinely complex. max-tier
+			//       from (a) is preserved, so a destructive edit to a T2+
+			//       original still triggers V3.
 			//
 			// Baseline candidate is the AST-edited full file. V3's
 			// alternatives compete against it; if one build-verifies
 			// better, V3 wins; otherwise the AST-edited content passes
 			// through unchanged. Either way the answer is build-verified.
 			finalContent := astResp.NewContent
+
+			// No-op guard. A weak model frequently "fixes" a bug by
+			// re-emitting the node's existing (broken) code verbatim —
+			// observed live: ast_edit function:add with content identical
+			// to the buggy body, twice in one batch. Reporting success on
+			// a no-op tells the model the fix landed when nothing changed;
+			// it then moves on to verification, fails, and can't work out
+			// why. Fail loudly instead so the model re-derives the edit.
+			if finalContent == source {
+				log.Printf("[ast_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"ast_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
+						"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
+					input.Selector)}, nil
+			}
 			v3Out := V3EditMetadata{}
 			oldTier := classifyFileTier(input.Path, source) // pre-edit content
 			newTier := classifyFileTier(input.Path, finalContent)
@@ -1135,16 +1548,26 @@ func astEditTool() *ToolDef {
 			if newTier > fileTier {
 				fileTier = newTier
 			}
-			if cc, ok := cyclomaticComplexity(ctx, input.Path, finalContent); ok {
+			cc, ccOK := cyclomaticComplexity(ctx, input.Path, finalContent)
+			if ccOK {
 				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
 					log.Printf("[ast_edit] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
 					fileTier = refined
 				}
 			}
-			if ctx.V3URL != "" {
-				log.Printf("[ast_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d) post-AST-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier)
+			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 {
+				log.Printf("[ast_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-AST-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
 				improved, meta, err := improveContentWithV3(path, finalContent, ctx)
 				if err != nil {
+					// User cancellation is not a fallback case — the turn
+					// was aborted, so nothing should land on disk.
+					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+						log.Printf("[ast_edit] V3 aborted by cancellation — not writing %s", input.Path)
+						return &ToolResult{
+							Success: false,
+							Error:   "ast_edit cancelled — no content was written",
+						}, nil
+					}
 					log.Printf("[ast_edit] V3 failed: %v — falling back to AST-edited content", err)
 				} else if improved != "" {
 					if cleanedImproved, sanitized := sanitizeFileContent(input.Path, improved); sanitized {
@@ -1184,6 +1607,7 @@ func astEditTool() *ToolDef {
 				result.CandidatesTested = v3Out.CandidatesTested
 				result.WinningScore = v3Out.WinningScore
 				result.PhaseSolved = v3Out.PhaseSolved
+				result.VerificationEvidence = v3Out.VerificationEvidence
 			}
 			return result, nil
 		},
@@ -1194,10 +1618,11 @@ func astEditTool() *ToolDef {
 // edit_file result can carry the same v3_used / candidates_tested fields
 // write_file does. See PC-042.
 type V3EditMetadata struct {
-	Used             bool
-	CandidatesTested int
-	WinningScore     float64
-	PhaseSolved      string
+	Used                 bool
+	CandidatesTested     int
+	WinningScore         float64
+	PhaseSolved          string
+	VerificationEvidence []V3VerificationEvidence
 }
 
 // improveContentWithV3 sends content through the V3 pipeline and returns
@@ -1211,9 +1636,9 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		Tier:         int(ctx.Tier),
 		WorkingDir:   ctx.WorkingDir,
 	}
-	if len(ctx.FilesRead) > 0 {
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
-		for p, c := range ctx.FilesRead {
+		for p, c := range filesRead {
 			rel, _ := filepath.Rel(ctx.WorkingDir, p)
 			if rel == "" {
 				rel = p
@@ -1239,12 +1664,20 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// unknown stages fall back to the v3_progress text line. Without
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
-	v3Result, err := callV3GenerateStreaming(ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		if ctx.StreamFn == nil {
 			return
 		}
 		if stage == "token" {
 			ctx.StreamFn("v3_token", map[string]string{"text": detail})
+			return
+		}
+		// Reasoning deltas from V3's LLM calls (see write_file path's
+		// matching branch). Same purpose: visible thinking stream
+		// during long PlanSearch / repair phases. v3_reasoning_token,
+		// not reasoning_token, so it targets the V3 row not the agent row.
+		if stage == "reasoning_token" {
+			ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
 			return
 		}
 		if stage == "llm_start" {
@@ -1302,15 +1735,139 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		chosen = content
 	}
 	return chosen, V3EditMetadata{
-		Used:             true,
-		CandidatesTested: v3Result.CandidatesTested,
-		WinningScore:     v3Result.WinningScore,
-		PhaseSolved:      v3Result.PhaseSolved,
+		Used:                 true,
+		CandidatesTested:     v3Result.CandidatesTested,
+		WinningScore:         v3Result.WinningScore,
+		PhaseSolved:          v3Result.PhaseSolved,
+		VerificationEvidence: v3Result.VerificationEvidence,
 	}, nil
 }
 
 // findActualString searches for oldStr in content, handling quote normalization.
 // Returns the actual string found in content (may differ in quote style).
+// findFuzzyLineMatch rescues an old_str whose only error is per-line
+// whitespace drift (indentation width, tabs vs spaces, trailing spaces) —
+// the dominant edit_file failure mode for small models. It compares old_str
+// against the file line-by-line with each line whitespace-stripped, and
+// returns the EXACT span from the file (original indentation preserved) so
+// the caller's existing uniqueness-count + replace logic works unchanged.
+//
+// Safety: it requires exactly ONE matching window. Zero or multiple matches
+// return ("", false) so the caller fails cleanly rather than editing a
+// guessed location. It also refuses to match when old_str has no
+// non-whitespace content (would match any blank run). Content differences
+// beyond whitespace (renamed tokens, changed quotes) do NOT match — those
+// are semantic and must fail.
+// closestLineHint finds the file line most similar to the first
+// non-blank line of a missed old_str and formats it (with its line
+// number) for inclusion in the edit_file mismatch error. Similarity is
+// shared-token count — crude, but enough to map a from-memory paraphrase
+// like `item = items[id + 1]` onto the real
+// `return jsonify(items[item_id + 1])`. Returns "" when nothing clears a
+// minimal overlap bar (so unrelated guesses don't get a misleading
+// anchor).
+func closestLineHint(content, oldStr string) string {
+	var probe string
+	for _, l := range strings.Split(oldStr, "\n") {
+		if strings.TrimSpace(l) != "" {
+			probe = l
+			break
+		}
+	}
+	if probe == "" {
+		return ""
+	}
+	tokenize := func(s string) map[string]bool {
+		out := map[string]bool{}
+		for _, t := range strings.FieldsFunc(s, func(r rune) bool {
+			return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+		}) {
+			out[t] = true
+		}
+		return out
+	}
+	probeToks := tokenize(probe)
+	if len(probeToks) == 0 {
+		return ""
+	}
+	bestScore, bestIdx := 0, -1
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		score := 0
+		for t := range tokenize(l) {
+			if probeToks[t] {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore, bestIdx = score, i
+		}
+	}
+	// Require at least 2 shared identifiers and half the probe's tokens —
+	// below that the "closest" line is likely unrelated.
+	if bestIdx < 0 || bestScore < 2 || bestScore*2 < len(probeToks) {
+		return ""
+	}
+	return fmt.Sprintf("\nClosest actual line in the file (line %d): %s\nCopy real lines from the file into old_str — do not write them from memory.",
+		bestIdx+1, truncateStr(strings.TrimSpace(lines[bestIdx]), 160))
+}
+
+func findFuzzyLineMatch(content, oldStr string) (string, bool) {
+	fileLines := strings.Split(content, "\n")
+	oldLines := strings.Split(oldStr, "\n")
+	// Drop a single trailing empty line from a trailing newline in old_str.
+	if len(oldLines) > 1 && strings.TrimSpace(oldLines[len(oldLines)-1]) == "" {
+		oldLines = oldLines[:len(oldLines)-1]
+	}
+	if len(oldLines) == 0 {
+		return "", false
+	}
+	strip := func(ls []string) []string {
+		out := make([]string, len(ls))
+		nonEmpty := false
+		for i, l := range ls {
+			out[i] = strings.TrimSpace(l)
+			if out[i] != "" {
+				nonEmpty = true
+			}
+		}
+		if !nonEmpty {
+			return nil // all-whitespace target: refuse
+		}
+		return out
+	}
+	want := strip(oldLines)
+	if want == nil {
+		return "", false
+	}
+	n := len(want)
+	matchStart := -1
+	matches := 0
+	for i := 0; i+n <= len(fileLines); i++ {
+		ok := true
+		for j := 0; j < n; j++ {
+			if strings.TrimSpace(fileLines[i+j]) != want[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			matches++
+			matchStart = i
+			if matches > 1 {
+				return "", false // ambiguous — fail safe
+			}
+		}
+	}
+	if matches != 1 {
+		return "", false
+	}
+	return strings.Join(fileLines[matchStart:matchStart+n], "\n"), true
+}
+
 func findActualString(content, oldStr string) string {
 	// Direct match first
 	if strings.Contains(content, oldStr) {
@@ -1337,8 +1894,8 @@ func normalizeQuotes(s string) string {
 	r := strings.NewReplacer(
 		"\u201c", "\"", // left double
 		"\u201d", "\"", // right double
-		"\u2018", "'",  // left single
-		"\u2019", "'",  // right single
+		"\u2018", "'", // left single
+		"\u2019", "'", // right single
 	)
 	return r.Replace(s)
 }
@@ -1347,7 +1904,7 @@ func normalizeQuotes(s string) string {
 func denormalizeQuotes(s string) string {
 	r := strings.NewReplacer(
 		"\"", "\u201c", // straight double → left double (approximate)
-		"'", "\u2019",  // straight single → right single (approximate)
+		"'", "\u2019", // straight single → right single (approximate)
 	)
 	return r.Replace(s)
 }
@@ -1413,17 +1970,54 @@ func deleteFileTool() *ToolDef {
 							return nil, fmt.Errorf("directory not empty: %s (%d entries)", input.Path, len(entries))
 						}
 					}
-					os.Remove(realPath)
+					if rmErr := os.Remove(realPath); rmErr != nil {
+						return &ToolResult{
+							Success: false,
+							Error:   fmt.Sprintf("delete_file: %v", rmErr),
+						}, nil
+					}
 					deleted = true
 					log.Printf("[delete_file] %s deleted from project dir %s", input.Path, ctx.RealProjectDir)
 				}
 			}
 
-			// Also delete from temp/working dir if it exists there
+			// Also delete from temp/working dir if it exists there. If the
+			// project-dir removal already succeeded, a failure on this mirror
+			// copy is not reported as an overall failure — the user-visible
+			// file is already gone, and reporting failure would make the model
+			// retry against a path it can never clear.
 			path := resolveAgentPath(ctx, input.Path)
-			if _, err := os.Stat(path); err == nil {
-				os.Remove(path)
-				deleted = true
+			if info, err := os.Stat(path); err == nil {
+				if info.IsDir() {
+					entries, _ := os.ReadDir(path)
+					if len(entries) > 0 {
+						if deleted {
+							log.Printf("[delete_file] %s removed from project dir; working-dir copy is a non-empty directory, left in place", input.Path)
+						} else {
+							return &ToolResult{
+								Success: false,
+								Error:   fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries)),
+							}, nil
+						}
+					} else if rmErr := os.Remove(path); rmErr != nil && !deleted {
+						return &ToolResult{
+							Success: false,
+							Error:   fmt.Sprintf("delete_file: %v", rmErr),
+						}, nil
+					} else if rmErr == nil {
+						deleted = true
+					}
+				} else if rmErr := os.Remove(path); rmErr != nil {
+					if !deleted {
+						return &ToolResult{
+							Success: false,
+							Error:   fmt.Sprintf("delete_file: %v", rmErr),
+						}, nil
+					}
+					log.Printf("[delete_file] %s removed from project dir; working-dir copy removal failed: %v", input.Path, rmErr)
+				} else {
+					deleted = true
+				}
 			}
 
 			if !deleted {
@@ -1438,6 +2032,119 @@ func deleteFileTool() *ToolDef {
 			// suggestion in chat after a destructive operation.
 			result.Error = "__FORCE_DONE__"
 			return result, nil
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// move_file — relocate / rename a file within the workspace.
+//
+// Added to close the "reorganize the files" gap (observed: a flask task asked
+// to move index.html into templates/; `mv` is refused, there is no move tool,
+// so the model looped on mkdir until the repetition breaker fired). A pure
+// move is not a content change, so it bypasses the V3 / surgical-edit gate —
+// content is preserved verbatim. Refuses to clobber an existing destination
+// file so a relocation can't silently destroy data.
+// ---------------------------------------------------------------------------
+
+func moveFileTool() *ToolDef {
+	return &ToolDef{
+		Name:        "move_file",
+		Description: "Move or rename a file within the project (e.g. move index.html into templates/, or rename old.py to new.py). Use this to reorganize files — shell `mv`/`cp` are refused. If destination is an existing directory, the file is moved into it keeping its name. Content is preserved exactly.",
+		InputSchema: MoveFileInput{},
+		ReadOnly:    false,
+		Destructive: false,
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var input MoveFileInput
+			if err := json.Unmarshal(rawInput, &input); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(input.Source) == "" || strings.TrimSpace(input.Destination) == "" {
+				return &ToolResult{
+					Success: false,
+					Error:   `move_file: both source and destination are required. Call with {"source":"<current path>","destination":"<new path>"}.`,
+				}, nil
+			}
+
+			src := resolveAgentPath(ctx, input.Source)
+			srcInfo, err := os.Stat(src)
+			if err != nil {
+				return &ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("move_file: source %s not found. Use list_directory or find_file to confirm the path before moving.", input.Source),
+				}, nil
+			}
+
+			// Resolve destination. If it names an existing directory (or ends
+			// with a separator), move INTO it keeping the source basename —
+			// mirrors `mv file dir/`. The relative dest is what we report back
+			// so the model's mental model stays in project-relative terms.
+			relDest := input.Destination
+			dst := resolveAgentPath(ctx, input.Destination)
+			if info, err := os.Stat(dst); err == nil && info.IsDir() {
+				dst = filepath.Join(dst, filepath.Base(src))
+				relDest = filepath.Join(input.Destination, filepath.Base(src))
+			} else if strings.HasSuffix(input.Destination, "/") {
+				dst = filepath.Join(dst, filepath.Base(src))
+				relDest = filepath.Join(input.Destination, filepath.Base(src))
+			}
+
+			if src == dst {
+				return &ToolResult{
+					Success: false,
+					Error:   "move_file: source and destination are the same path — nothing to do.",
+				}, nil
+			}
+
+			// Never clobber an existing destination file: a relocation must not
+			// silently destroy data. Tell the model to pick another name or
+			// delete_file the destination first if the overwrite is intended.
+			if _, err := os.Stat(dst); err == nil {
+				return &ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("move_file: destination %s already exists. Pick a different name, or delete_file the destination first if you mean to replace it.", relDest),
+				}, nil
+			}
+
+			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+				return nil, fmt.Errorf("move_file: cannot create destination dir: %w", err)
+			}
+
+			// os.Rename is atomic on the same filesystem; fall back to
+			// copy+remove across devices (bind mounts can straddle filesystems).
+			if err := os.Rename(src, dst); err != nil {
+				if srcInfo.IsDir() {
+					return nil, fmt.Errorf("move_file: cannot move directory across filesystems: %w", err)
+				}
+				data, rerr := os.ReadFile(src)
+				if rerr != nil {
+					return nil, fmt.Errorf("move_file: cannot read source: %w", rerr)
+				}
+				if werr := os.WriteFile(dst, data, srcInfo.Mode().Perm()); werr != nil {
+					return nil, fmt.Errorf("move_file: cannot write destination: %w", werr)
+				}
+				os.Remove(src)
+			}
+			log.Printf("[move_file] %s → %s", input.Source, relDest)
+
+			// Keep agent bookkeeping consistent: the file the model just read
+			// now lives at the new path. Re-point the recorded read and the
+			// session-write set so a follow-up edit isn't bounced as blind and
+			// dedup logic tracks the right path.
+			if content, ok := ctx.GetFileRead(src); ok {
+				ctx.RecordFileRead(dst, content)
+				ctx.ForgetFileRead(src)
+			}
+			if ctx.SessionWrites != nil {
+				if ctx.SessionWrites[input.Source] {
+					delete(ctx.SessionWrites, input.Source)
+				}
+				ctx.SessionWrites[relDest] = true
+			}
+
+			out := MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
+			outBytes, _ := json.Marshal(out)
+			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -1541,6 +2248,13 @@ func runCommandTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
+			// Trust gate: untrusted mode refuses command execution;
+			// host execution is honored only under fully-trusted (else
+			// downgraded to the sandbox below).
+			if !ctx.TrustMode.commandsAllowed() {
+				return &ToolResult{Success: false, Error: untrustedRefusal}, nil
+			}
+
 			timeoutSec := 30
 			if input.Timeout != nil && *input.Timeout > 0 {
 				timeoutSec = *input.Timeout
@@ -1574,7 +2288,11 @@ func runCommandTool() *ToolDef {
 			// to the host path so the command lands in the right dir.
 			var out RunCommandOutput
 			var err error
-			if ctx.VerifyOnHost {
+			// Host execution requires fully-trusted; otherwise a
+			// host request is downgraded to sandbox so the trust
+			// level can't be silently escalated by ATLAS_VERIFY_IN.
+			useHost := ctx.VerifyOnHost && ctx.TrustMode.hostExecutionAllowed()
+			if useHost {
 				hostCwd := cwd
 				if ctx.HostWorkingDir != "" && strings.HasPrefix(cwd, ctx.WorkingDir) {
 					hostCwd = ctx.HostWorkingDir + strings.TrimPrefix(cwd, ctx.WorkingDir)
@@ -1583,8 +2301,11 @@ func runCommandTool() *ToolDef {
 			} else {
 				out, err = runViaSandbox(ctx, input.Command, cwd, timeoutSec)
 				if err != nil {
-					log.Printf("[run_command] sandbox unreachable, falling back to local exec: %v", err)
-					out = runLocally(input.Command, cwd, time.Duration(timeoutSec)*time.Second)
+					log.Printf("[run_command] sandbox unavailable: %v", err)
+					out = RunCommandOutput{
+						Stderr:   fmt.Sprintf("sandbox unavailable: %v", err),
+						ExitCode: 1,
+					}
 				}
 			}
 
@@ -1625,7 +2346,13 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 		"timeout": timeoutSec,
 	})
 	endpoint := ctx.SandboxURL + "/shell"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	// Bind the agent's request context so a user cancel aborts the
+	// in-flight sandbox call instead of waiting out the client timeout.
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return RunCommandOutput{}, err
 	}
@@ -1666,10 +2393,11 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 	}, nil
 }
 
-// runLocally executes the command in the proxy container as a fallback
-// when the sandbox is unreachable (e.g. running tests outside docker
-// compose). Same code path as the original local exec — kept verbatim
-// so dev workflows that don't bring up the sandbox still work.
+// runLocally executes a command only when the operator explicitly selects
+// host verification (ATLAS_VERIFY_IN=host). Sandbox outages never route
+// here implicitly. Host mode removes the container backstop entirely:
+// the only thing between model output and the host shell is
+// validateShellCommand's catastrophe-only blocklist.
 func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -1698,40 +2426,6 @@ func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 		Stdout:   truncateStr(stdout.String(), 8000),
 		Stderr:   truncateStr(stderr.String(), 4000),
 		ExitCode: exitCode,
-	}
-}
-
-// ---------------------------------------------------------------------------
-// plan_tasks — orchestration tool for parallel execution
-// ---------------------------------------------------------------------------
-
-func planTasksTool() *ToolDef {
-	return &ToolDef{
-		Name:        "plan_tasks",
-		Description: "Decompose work into parallel tasks with dependencies. Independent tasks run concurrently. Use for multi-file project creation.",
-		InputSchema: PlanTasksInput{},
-		ReadOnly:    false,
-		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input PlanTasksInput
-			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
-			}
-
-			// Returns pending status — parallel execution is defined in
-			// parallel.go (executePlanTasksTool) but not yet wired in
-			results := make([]TaskStatus, len(input.Tasks))
-			for i, t := range input.Tasks {
-				results[i] = TaskStatus{
-					ID:     t.ID,
-					Status: "pending",
-				}
-			}
-
-			out := PlanTasksOutput{Results: results}
-			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
-		},
 	}
 }
 
@@ -1881,9 +2575,10 @@ func cyclomaticComplexity(ctx *AgentContext, path, source string) (int, bool) {
 // the regex classifier is the floor, CC only escalates.
 //
 // Thresholds:
-//   CC ≥ 16 → Tier3Hard  — definitely needs full V3 + best-of-K
-//   CC ≥  8 → Tier2Medium — moderate branching, V3 likely helps
-//   CC <  8 → leave base tier unchanged
+//
+//	CC ≥ 16 → Tier3Hard  — definitely needs full V3 + best-of-K
+//	CC ≥  8 → Tier2Medium — moderate branching, V3 likely helps
+//	CC <  8 → leave base tier unchanged
 //
 // Calibrated against the snake/app.py family: a flask file with 8 routes
 // runs at CC≈9 (one branch per route) and the regex already classifies
@@ -1897,6 +2592,31 @@ func refineTierWithCC(base Tier, cc int) Tier {
 		return Tier2Medium
 	}
 	return base
+}
+
+// editWarrantsV3 decides whether a successful, surgical edit should be run
+// back through the V3 whole-file pipeline. edit_file and ast_edit both
+// produce content the model specified precisely — an exact old→new string
+// swap, or a named tree-sitter node replacement — so the result is already
+// what was asked for. V3's PlanSearch generates and build-verifies whole-
+// file alternatives: worthwhile when a file is large or genuinely complex,
+// but on a small, low-complexity file it spends minutes (single-threaded
+// v3-service, reasoning-heavy models) only to reproduce the same edit. The
+// file tier alone can't distinguish these — a 9-line calc.py classifies
+// Tier2 like a 400-line module — so gate additionally on the resulting
+// file's complexity and size. Trivial edits then apply instantly while V3
+// still engages where a file is substantial enough to benefit. Keys off
+// the code, not the model, so it stays model-agnostic.
+//
+// ccOK is false when complexity couldn't be measured (non-code or parser
+// miss); fall back to a line-count bar so we neither always-run nor
+// never-run on unmeasurable files.
+func editWarrantsV3(content string, cc int, ccOK bool) bool {
+	if ccOK && cc >= 8 {
+		return true
+	}
+	lines := strings.Count(content, "\n") + 1
+	return lines >= 80
 }
 
 // hasLogicIndicators checks if content contains signs of real application logic
@@ -1979,6 +2699,151 @@ func resolvePath(path, workingDir string) string {
 // user pastes "/home/isaac/snake/app.py" into a prompt — the model
 // copies the absolute path, the proxy rewrites it to /workspace/app.py,
 // and read_file actually finds the file.
+// pycheckViaV3 asks the v3-service whether Python source parses. Returns
+// (true, "") when it parses, when the check can't run (service down, busy,
+// timeout), or when V3 is bypassed — fail-open by design: the gate exists
+// to catch garbage-quoted edits, not to make edits depend on v3-service
+// availability. Returns (false, error) only on a definitive SyntaxError.
+func pycheckViaV3(ctx *AgentContext, path, source string) (bool, string) {
+	if ctx.V3URL == "" || ctx.BypassV3 {
+		return true, ""
+	}
+	body, err := json.Marshal(map[string]string{"path": path, "source": source})
+	if err != nil {
+		return true, ""
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post(ctx.V3URL+"/internal/pycheck", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return true, ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return true, ""
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return true, ""
+	}
+	if out.OK {
+		return true, ""
+	}
+	return false, out.Error
+}
+
+// redundantReadShortCircuit returns a compact synthetic result when the
+// model asks to read a file it has ALREADY read this session and the
+// content on disk is unchanged. A weak model frequently re-reads the same
+// file several times before acting; each re-read re-injects the full file
+// into the conversation and — on sliding-window-attention models that
+// can't reuse llama.cpp's KV cache — forces a full re-encode of the whole
+// prompt, costing tens of seconds for zero new information. Serving a
+// short "already in context, act now" pointer keeps the working set small
+// and steers toward the edit.
+//
+// Only whole-file reads short-circuit (a paged read with offset/limit is
+// the model deliberately fetching a different span, so let it through),
+// and only when the on-disk content byte-matches what was already shown
+// (so a re-read after an edit still returns the new content). Returns nil
+// to mean "no short-circuit — execute the read normally." Model-agnostic:
+// keys off whether this exact content was already served, not the model.
+func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
+	if name != "read_file" {
+		return nil
+	}
+	if envOr("ATLAS_DEDUP_READS", "1") == "0" {
+		return nil
+	}
+	var input ReadFileInput
+	if err := json.Unmarshal(args, &input); err != nil {
+		return nil
+	}
+	if input.Offset != nil || input.Limit != nil || strings.TrimSpace(input.Path) == "" {
+		return nil
+	}
+	path, err := resolveWorkspacePath(ctx, input.Path)
+	if err != nil {
+		return &ToolResult{Success: false, Error: "read_file: " + err.Error()}
+	}
+	ctx.mu.Lock()
+	prev, ok := ctx.FilesRead[path]
+	cacheEntries := len(ctx.FilesRead)
+	ctx.mu.Unlock()
+	if !ok {
+		// Diagnostic: a re-read that SHOULD have been cached but wasn't.
+		// Logged only when some other entry exists (first read of a file
+		// is the normal case and not worth a line).
+		if cacheEntries > 0 {
+			log.Printf("[read-dedup] no cache entry for %q (have %d entries) — serving real read", truncateStr(path, 240), cacheEntries)
+		}
+		return nil
+	}
+	data, _, err := readWorkspaceFile(ctx, input.Path)
+	if err != nil || string(data) != prev {
+		if err == nil {
+			log.Printf("[read-dedup] %q changed on disk since last read (%dB -> %dB) — serving real read", truncateStr(path, 240), len(prev), len(data))
+		}
+		return nil // changed or unreadable — let the real read run
+	}
+	// CRITICAL: only short-circuit to a pointer if the content is STILL in
+	// the live conversation. After conversation trimming drops the original
+	// read, "its content is above" becomes a lie — the model has nothing,
+	// edits blind, and (if weak) hallucinates symbols/lines that aren't in
+	// the file. When the content has been trimmed out, return nil so the
+	// real read re-serves the full file. Verified failure mode: a model editing
+	// function:count_items / old_str="return len(items)" against a file
+	// containing neither, reasoning "I don't see the file content."
+	if !fileContentInContext(ctx, prev) {
+		log.Printf("[read-dedup] %q content was trimmed from context — re-serving full read", truncateStr(path, 240))
+		return nil
+	}
+	out := ReadFileOutput{
+		Content:    fmt.Sprintf("(You already read %s earlier in this session and it has not changed — its full content is above in the conversation. Do not read it again. Make your edit now with ast_edit or edit_file.)", input.Path),
+		TotalLines: strings.Count(prev, "\n") + 1,
+		StartLine:  1,
+		EndLine:    strings.Count(prev, "\n") + 1,
+	}
+	b, _ := json.Marshal(out)
+	return &ToolResult{Success: true, Data: b}
+}
+
+// fileContentInContext reports whether a file's content is still present in
+// the live (post-trim) conversation. Conservative: an empty/short-content file
+// probes as "present" (nothing to lose).
+//
+// The probe must survive JSON escaping. Tool results are stored in the
+// conversation via ToolResult.MarshalText (json.Marshal), so the file content
+// lives in ctx.Messages with `"`→`\"`, newlines→`\n`, tabs→`\t`. The old probe
+// (the longest raw LINE) failed for any file whose longest line contained a
+// double quote — e.g. a flask app's embedded HTML/JS — producing a false
+// "trimmed" verdict that made the dedup re-serve the whole file every read and
+// the model loop on read_file. Instead, probe with the longest maximal run of
+// characters JSON does NOT escape (no `"`, `\`, or \n/\r/\t); that run is byte-
+// identical in both the raw file and the escaped conversation copy.
+func fileContentInContext(ctx *AgentContext, content string) bool {
+	probe := ""
+	for _, run := range strings.FieldsFunc(content, func(r rune) bool {
+		return r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t'
+	}) {
+		t := strings.TrimSpace(run)
+		if len(t) > len(probe) {
+			probe = t
+		}
+	}
+	if len(probe) < 12 {
+		return true // too short to probe reliably; don't churn re-reads
+	}
+	for _, m := range ctx.Messages {
+		if strings.Contains(m.Content, probe) {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveAgentPath(ctx *AgentContext, path string) string {
 	// PC-198 — defensive prefix strip. The local model frequently
 	// emits `workspace/app.py` (no leading slash) when it means the
@@ -2093,19 +2958,6 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// firstNonEmptyLine returns the first non-blank line of s, trimmed of trailing
-// whitespace. Used to surface a one-line hint from a tool's stderr without
-// dumping the whole buffer to the UI.
-func firstNonEmptyLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		trimmed := strings.TrimRight(line, " \t\r")
-		if strings.TrimSpace(trimmed) != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 // ---------------------------------------------------------------------------
 // Background commands (PC-196)
 // ---------------------------------------------------------------------------
@@ -2124,7 +2976,7 @@ func firstNonEmptyLine(s string) string {
 
 func runBackgroundTool() *ToolDef {
 	return &ToolDef{
-		Name: "run_background",
+		Name:        "run_background",
 		Description: "Start a long-running command (server, watcher, etc.) in the background and return a job_id. Use for `python app.py`, `npm start`, `cargo run`, `flask run` — anything that doesn't exit. Returns initial stdout/stderr captured during a brief settle window so you can confirm startup. Pair with run_command/curl to probe the running service, then stop_background to clean up.",
 		InputSchema: RunBackgroundInput{},
 		ReadOnly:    false,
@@ -2134,6 +2986,13 @@ func runBackgroundTool() *ToolDef {
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
+
+			// Trust gate: same contract as run_command — untrusted mode
+			// refuses all command execution, foreground or background.
+			if !ctx.TrustMode.commandsAllowed() {
+				return &ToolResult{Success: false, Error: untrustedRefusal}, nil
+			}
+
 			if strings.TrimSpace(input.Command) == "" {
 				return &ToolResult{Success: false, Error: "run_background: command cannot be empty"}, nil
 			}
@@ -2185,7 +3044,7 @@ func runBackgroundTool() *ToolDef {
 
 func tailBackgroundTool() *ToolDef {
 	return &ToolDef{
-		Name: "tail_background",
+		Name:        "tail_background",
 		Description: "Read the recent stdout/stderr of a background job started via run_background. Returns the last N lines of each stream (default 50), the run state (running/exited), and the exit code if applicable. Use to check whether a server is still up, watch test runner output, or read the failure traceback after a crash.",
 		InputSchema: TailBackgroundInput{},
 		ReadOnly:    true,
@@ -2219,7 +3078,7 @@ func tailBackgroundTool() *ToolDef {
 
 func stopBackgroundTool() *ToolDef {
 	return &ToolDef{
-		Name: "stop_background",
+		Name:        "stop_background",
 		Description: "Stop a background job started via run_background. Sends SIGTERM, waits briefly, then SIGKILL if needed. Returns the final stdout/stderr buffer. Always call this when you're done with a background job — leaving them running blocks future job slots.",
 		InputSchema: StopBackgroundInput{},
 		ReadOnly:    false,
@@ -2248,7 +3107,11 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 		return "", 0, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	body, _ := json.Marshal(map[string]interface{}{"command": command, "cwd": cwd})
-	req, err := http.NewRequest("POST", ctx.SandboxURL+"/jobs/start", bytes.NewReader(body))
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "POST", ctx.SandboxURL+"/jobs/start", bytes.NewReader(body))
 	if err != nil {
 		return "", 0, err
 	}
@@ -2259,7 +3122,9 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		var d struct{ Detail string `json:"detail"` }
+		var d struct {
+			Detail string `json:"detail"`
+		}
 		_ = json.NewDecoder(resp.Body).Decode(&d)
 		if d.Detail != "" {
 			return "", 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, d.Detail)
@@ -2281,7 +3146,15 @@ func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (TailBack
 		return TailBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	url := fmt.Sprintf("%s/jobs/%s/output?lines=%d", ctx.SandboxURL, jobID, lines)
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(url)
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+	if err != nil {
+		return TailBackgroundOutput{}, err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return TailBackgroundOutput{}, err
 	}
@@ -2304,7 +3177,16 @@ func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutpu
 		return StopBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	url := fmt.Sprintf("%s/jobs/%s/stop", ctx.SandboxURL, jobID)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Post(url, "application/json", nil)
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "POST", url, nil)
+	if err != nil {
+		return StopBackgroundOutput{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return StopBackgroundOutput{}, err
 	}

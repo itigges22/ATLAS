@@ -342,10 +342,10 @@ class SelfTestGen:
             problem=problem,
         )
 
-        # Wrap in ChatML so LLMAdapter's Budget Forcing enforcement works.
-        # Without ChatML, the /nothink retry can't inject into the prompt
-        # (pattern mismatch on <|im_end|>\n<|im_start|>user), and the model
-        # burns all tokens on <think> with nothing left for test cases.
+        # Wrap in ChatML so the shared client's normalizer
+        # (chatml_to_messages) sees distinct system/user roles — the system
+        # prompt is what keeps this structured step concise (no
+        # think-language, so the adapter leaves thinking off).
         prompt = (
             "<|im_start|>system\n"
             "You are an expert programmer generating test cases."

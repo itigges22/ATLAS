@@ -6,16 +6,29 @@ import time
 from atlas.cli import display, client
 
 
-def format_prompt(problem: str) -> str:
-    """Format problem as ChatML prompt."""
-    return (
-        f"<|im_start|>system\n"
-        f"You are a competitive programming expert. Write clean, correct Python code "
-        f"that reads from stdin and prints to stdout. Think step by step.\n"
-        f"<|im_end|>\n"
-        f"<|im_start|>user\n{problem}\n<|im_end|>\n"
-        f"<|im_start|>assistant\n"
-    )
+def build_messages(problem: str) -> list:
+    """Chat messages for /v1/chat/completions — llama-server applies the
+    GGUF's own chat template (--jinja), keeping this model-agnostic."""
+    return [
+        {"role": "system", "content": (
+            "You are a competitive programming expert. Write clean, correct "
+            "Python code that reads from stdin and prints to stdout. "
+            "Think step by step.")},
+        {"role": "user", "content": problem},
+    ]
+
+
+def _chat_text(data: dict) -> str:
+    """Extract the assistant text from a chat-completions payload. Falls
+    back to reasoning_content when the template routed everything there."""
+    choices = data.get("choices", [])
+    if not choices:
+        return ""
+    msg = choices[0].get("message", {}) or {}
+    text = msg.get("content") or ""
+    if not text.strip():
+        text = msg.get("reasoning_content") or ""
+    return text
 
 
 def extract_code(text: str) -> str:
@@ -49,7 +62,7 @@ def solve(problem: str, stream: bool = True, verify: bool = True,
           sandbox_test: str = ""):
     """Solve a coding problem with the full ATLAS pipeline."""
     start = time.time()
-    prompt = format_prompt(problem)
+    messages = build_messages(problem)
 
     display.assistant_label()
 
@@ -62,8 +75,8 @@ def solve(problem: str, stream: bool = True, verify: bool = True,
         tokens = 0
 
         try:
-            for token_text, is_done in client.generate_stream(
-                prompt, max_tokens=8192, stop=["<|im_end|>"]
+            for token_text, is_done in client.chat_stream(
+                messages, max_tokens=8192
             ):
                 full_text += token_text
                 tokens += 1
@@ -115,13 +128,13 @@ def solve(problem: str, stream: bool = True, verify: bool = True,
         except Exception as e:
             display.warn(f"Stream error: {e}")
             # Fallback to batch
-            data = client.generate(prompt, max_tokens=8192, stop=["<|im_end|>"])
-            full_text = data["choices"][0].get("text", "")
+            data = client.chat(messages, max_tokens=8192)
+            full_text = _chat_text(data)
             tokens = data.get("usage", {}).get("completion_tokens", 0)
     else:
         # Batch mode
-        data = client.generate(prompt, max_tokens=8192, stop=["<|im_end|>"])
-        full_text = data["choices"][0].get("text", "")
+        data = client.chat(messages, max_tokens=8192)
+        full_text = _chat_text(data)
         tokens = data.get("usage", {}).get("completion_tokens", 0)
 
     # Extract code

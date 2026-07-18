@@ -100,11 +100,11 @@ def build_tree_from_files(
             content=content,
         )
 
-        # Parse AST for supported languages
+        # AST children are Python-only: other extensions are indexed as
+        # file-level nodes without function/class granularity.
         if ext == ".py":
             ast_nodes = parse_python_file(content, path)
             _attach_ast_children(file_node, ast_nodes, project_id, path, content)
-        # TODO: Add JS/TS parsing when tree-sitter-javascript is added
 
         # Count imports for metadata
         if ext == ".py":

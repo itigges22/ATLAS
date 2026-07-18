@@ -110,29 +110,19 @@ check_llm_inference() {
     fi
 }
 
-# Full E2E test
+# Full E2E test — drive an actual agent turn through atlas-proxy.
+# Replaces the legacy api-portal user-registration probe (api-portal was
+# removed; no auth surface anymore — the proxy is the entry point).
 check_e2e() {
-    # Create test user and get API key
-    local register_response=$(curl -sf --max-time "$ATLAS_HEALTH_CHECK_TIMEOUT" \
-        -X POST "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/api/auth/register" \
+    local response=$(curl -sf --max-time 30 \
+        -X POST "http://localhost:${ATLAS_PROXY_NODEPORT}/v1/agent" \
         -H "Content-Type: application/json" \
-        -d '{"email":"test@verify.local","password":"testpass123","username":"verifytest"}' 2>/dev/null || echo "")
+        -d '{"message":"echo hello","mode":"yolo","session_id":"verify-install"}' 2>/dev/null || echo "")
 
-    if [[ -z "$register_response" ]]; then
-        # User might already exist, try login
-        local login_response=$(curl -sf --max-time "$ATLAS_HEALTH_CHECK_TIMEOUT" \
-            -X POST "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/api/auth/login" \
-            -H "Content-Type: application/json" \
-            -d '{"email":"test@verify.local","password":"testpass123"}' 2>/dev/null || echo "")
-
-        if echo "$login_response" | grep -q "token"; then
-            check_pass "Authentication system working"
-        else
-            check_warn "Could not verify authentication (may need manual test)"
-            return
-        fi
+    if [[ -n "$response" ]] && echo "$response" | grep -q "data:"; then
+        check_pass "atlas-proxy /v1/agent reachable + streaming SSE"
     else
-        check_pass "User registration working"
+        check_warn "atlas-proxy /v1/agent did not return an SSE stream (may need manual test)"
     fi
 }
 
@@ -206,21 +196,18 @@ main() {
     # Pod status - using actual app labels from manifests
     echo ""
     echo "Pod Status:"
-    check_pod "redis"
     check_pod "llama-server"
     check_pod "geometric-lens"
-    check_pod "llm-proxy"
+    check_pod "atlas-proxy"
     check_pod "sandbox"
 
     # Service health endpoints - using NodePort values from config
     echo ""
     echo "Service Health:"
-    check_service "LLM Server" "http://localhost:${ATLAS_LLAMA_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
-    check_service "API Portal" "http://localhost:${ATLAS_API_PORTAL_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
-    check_service "Geometric Lens" "http://localhost:${ATLAS_RAG_API_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
-    check_service "LLM Proxy" "http://localhost:${ATLAS_LLM_PROXY_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
-    check_service "Sandbox" "http://localhost:${ATLAS_SANDBOX_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
-    check_service "Dashboard" "http://localhost:${ATLAS_DASHBOARD_NODEPORT}/" "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "llama-server"   "http://localhost:${ATLAS_LLAMA_NODEPORT}/health"  "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "geometric-lens" "http://localhost:${ATLAS_LENS_NODEPORT}/health"   "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "atlas-proxy"    "http://localhost:${ATLAS_PROXY_NODEPORT}/health"  "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "sandbox"        "http://localhost:${ATLAS_SANDBOX_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
 
     # Functional checks
     echo ""

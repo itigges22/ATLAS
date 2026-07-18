@@ -98,10 +98,8 @@ func TestRunViaSandbox4xxIsValidationFailure(t *testing.T) {
 }
 
 func TestRunViaSandboxUnreachableReturnsError(t *testing.T) {
-	// Sandbox URL that won't accept connections. Caller is supposed
-	// to fall back to local exec — that decision is in run_command,
-	// not runViaSandbox. We just verify we surface the network
-	// error so the caller can branch on it.
+	// Sandbox URL that won't accept connections. The caller must surface
+	// this error and must not change the execution target implicitly.
 	ctx := &AgentContext{SandboxURL: "http://127.0.0.1:1"}
 	_, err := runViaSandbox(ctx, "echo hi", "/workspace", 5)
 	if err == nil {
@@ -109,10 +107,31 @@ func TestRunViaSandboxUnreachableReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunCommandDoesNotFallbackWhenSandboxIsUnavailable(t *testing.T) {
+	ctx := &AgentContext{
+		WorkingDir: "/workspace",
+		SandboxURL: "http://127.0.0.1:1",
+	}
+	res, err := runCommandTool().Execute(
+		json.RawMessage(`{"command":"printf fallback-ran"}`), ctx,
+	)
+	if err != nil {
+		t.Fatalf("run_command: %v", err)
+	}
+	if res.Success {
+		t.Fatal("run_command succeeded even though the sandbox was unavailable")
+	}
+	if strings.Contains(string(res.Data), "fallback-ran") {
+		t.Fatalf("command appears to have run locally: %s", res.Data)
+	}
+	if !strings.Contains(res.Error, "sandbox unavailable") {
+		t.Fatalf("error = %q, want sandbox unavailable", res.Error)
+	}
+}
+
 func TestRunLocallyEcho(t *testing.T) {
-	// runLocally is the fallback when the sandbox is unreachable.
-	// Quick sanity: a trivial echo command should return its output
-	// with exit_code 0.
+	// runLocally is the explicit ATLAS_VERIFY_IN=host execution primitive.
+	// Quick sanity: a trivial echo command returns a populated result.
 	out := runLocally("echo hello", ".", 0)
 	// timeout=0 still has an internal default — go's select with
 	// time.After(0) fires immediately, so we accept either the

@@ -28,7 +28,7 @@
 # until it's up.
 #
 # Verify with:
-#   curl http://localhost:8080/health    # should hit native llama-server
+#   curl "http://localhost:${ATLAS_LLAMA_PORT:-8080}/health"    # should hit native llama-server
 #   atlas doctor                         # check_metal_native confirms wiring
 
 services:
@@ -36,7 +36,7 @@ services:
     # alpine/socat is ~4MB. We override the upstream image entirely
     # rather than building anything Mac-specific — keeps the macos
     # overlay self-contained, no Mac-only image needed in GHCR.
-    image: alpine/socat:latest
+    image: alpine/socat:1.8.1.3@sha256:b991911ea370c3b6409ade77746b81eb97bf715d87f7dde2a45832d6bee34872
     build: !reset null
     # Drop the GPU resource request from the base file. socat doesn't
     # need a GPU and Docker Desktop on Mac doesn't have one to give
@@ -59,22 +59,26 @@ services:
     # without any host publish needed.
     ports: !reset []
     # The actual forwarding: listen on every interface port 8080 inside
-    # the container, forward TCP to host.docker.internal:8080 (Docker
-    # Desktop for Mac auto-resolves this to the host's loopback).
+    # the container, forward TCP to host.docker.internal:$ATLAS_LLAMA_PORT
+    # (Docker Desktop for Mac auto-resolves this to the host's loopback).
+    # Keep the container-side port fixed at 8080 so the rest of the stack
+    # can continue using http://llama-server:8080, while the native
+    # host-side port can move when 8080 is already occupied.
     # fork = handle multiple concurrent clients (proxy + v3 + lens all
     # connect simultaneously). reuseaddr = recover from restarts
     # cleanly without TIME_WAIT delays.
     command: >
       TCP-LISTEN:8080,fork,reuseaddr
-      TCP:host.docker.internal:8080
-    # Health check: alpine/socat is minimal — no nc, no wget, no
-    # ss/netstat. The only thing we're guaranteed to have is socat
-    # itself + /proc. Checking that PID 1 is socat is the cheapest
-    # and most portable signal that the container is doing its job.
-    # If socat dies, PID 1 dies, container exits → docker restart
-    # policy kicks in (or compose marks the dep as unhealthy).
+      TCP:host.docker.internal:${ATLAS_LLAMA_PORT:-8080}
+    # Verify the complete bridge, not merely that socat is still PID 1.
+    # Dependent services use condition: service_healthy, so they now wait
+    # until the native server is accepting connections on the host.
     healthcheck:
-      test: ["CMD-SHELL", "grep -q socat /proc/1/cmdline"]
+      test:
+        - CMD-SHELL
+        - >-
+          socat -T2 -u /dev/null
+          TCP:host.docker.internal:${ATLAS_LLAMA_PORT:-8080},connect-timeout=2
       interval: 10s
       timeout: 3s
       retries: 3

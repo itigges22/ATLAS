@@ -31,26 +31,69 @@ def parse_atlas_conf() -> dict:
     if not conf_path.exists():
         return config
 
-    with open(conf_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if '=' in line:
-                key, value = line.split('=', 1)
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                config[key] = value
+    try:
+        with open(conf_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('export '):
+                    line = line[len('export '):].lstrip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    # Drop a whitespace-preceded inline comment ("8080  # note");
+                    # a '#' embedded directly in the value is preserved.
+                    value = value.lstrip()
+                    head, hash_sep, _ = value.partition('#')
+                    if hash_sep and head and head[-1] in ' \t':
+                        value = head
+                    value = value.strip().strip('"').strip("'")
+                    config[key] = value
+    except (OSError, UnicodeDecodeError):
+        # Unreadable conf (permissions, encoding) — behave as if absent.
+        return config
 
     return config
+
+
+def parse_dotenv() -> dict:
+    """Parse the Docker Compose .env file (KEY=VALUE) if present. This is the
+    source of truth for a Docker deployment's host ports and model file (the
+    K3s path uses atlas.conf instead)."""
+    env = {}
+    path = get_project_root() / ".env"
+    if not path.exists():
+        return env
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('export '):
+                    line = line[len('export '):].lstrip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                # Drop a whitespace-preceded inline comment ("8080  # note");
+                # a '#' embedded directly in the value is preserved.
+                value = value.lstrip()
+                head, hash_sep, _ = value.partition('#')
+                if hash_sep and head and head[-1] in ' \t':
+                    value = head
+                env[key.strip()] = value.strip().strip('"').strip("'")
+    except (OSError, UnicodeDecodeError):
+        # Unreadable .env (permissions, encoding) — behave as if absent.
+        return env
+    return env
 
 
 class BenchmarkConfig:
     """Configuration for benchmark operations."""
 
     def __init__(self):
-        """Initialize configuration from atlas.conf and environment."""
+        """Initialize configuration from atlas.conf, .env, and environment."""
         self._conf = parse_atlas_conf()
+        self._env = parse_dotenv()
         self._root = get_project_root()
 
     @property
@@ -90,18 +133,34 @@ class BenchmarkConfig:
 
     @property
     def llama_url(self) -> str:
-        """URL for llama-server."""
-        # Check environment first
+        """URL for llama-server. Resolution order: explicit LLAMA_URL env →
+        in-cluster service DNS → Docker .env host port (ATLAS_LLAMA_PORT) →
+        K3s NodePort from atlas.conf."""
         url = os.environ.get("LLAMA_URL")
         if url:
             return url
-
-        # Check if running in cluster
         if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
             return "http://llama-service:8000"
+        port = self._env.get("ATLAS_LLAMA_PORT")   # Docker deployment (.env)
+        if port:
+            return f"http://localhost:{port}"
+        port = self._conf.get("ATLAS_LLAMA_NODEPORT", "32735")   # K3s on-host
+        return f"http://localhost:{port}"
 
-        # Use NodePort from config
-        port = self._conf.get("ATLAS_LLAMA_NODEPORT", "32735")
+    @property
+    def rag_url(self) -> str:
+        """URL for the geometric-lens / RAG service. Same resolution order as
+        llama_url: RAG_API_URL env → in-cluster DNS → Docker .env
+        (ATLAS_LENS_PORT) → K3s NodePort."""
+        url = os.environ.get("RAG_API_URL")
+        if url:
+            return url
+        if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
+            return "http://geometric-lens-service:8000"
+        port = self._env.get("ATLAS_LENS_PORT")
+        if port:
+            return f"http://localhost:{port}"
+        port = self._conf.get("ATLAS_LENS_NODEPORT", "31144")
         return f"http://localhost:{port}"
 
     @property
@@ -111,8 +170,10 @@ class BenchmarkConfig:
 
     @property
     def model_name(self) -> str:
-        """Main model filename."""
-        return self._conf.get("ATLAS_MAIN_MODEL", "Qwen3.5-9B-Q6_K.gguf")
+        """Main model filename — Docker .env (ATLAS_MODEL_FILE) first, then
+        atlas.conf (ATLAS_MAIN_MODEL)."""
+        return (self._env.get("ATLAS_MODEL_FILE")
+                or self._conf.get("ATLAS_MAIN_MODEL", ""))
 
     @property
     def default_timeout_seconds(self) -> int:
@@ -172,8 +233,11 @@ class BenchmarkConfig:
             "mbpp_pass1": 0.734,           # 73.4% per tech report (3-shot)
             "humaneval_plus_pass1": 0.61,  # EvalPlus leaderboard estimate
             "mbpp_plus_pass1": 0.65,       # EvalPlus leaderboard estimate
-            "livecodebench_pass1": 0.20,   # Placeholder — will update after first run
-            "scicode_pass1": 0.10,         # Placeholder — will update after first run
+            # Measured in-repo: 54.9% single-generation baseline on the
+            # 599-task LiveCodeBench set (docs/reports/V3_ABLATION_STUDY.md).
+            "livecodebench_pass1": 0.549,
+            # No published or measured figure; unvalidated estimate.
+            "scicode_pass1": 0.10,
         }
 
     def ensure_directories(self) -> None:
@@ -185,3 +249,33 @@ class BenchmarkConfig:
 
 # Global config instance
 config = BenchmarkConfig()
+
+
+def _service_token() -> str:
+    """Internal-auth token (secrets/service-token). Empty = disabled."""
+    import os
+    path = os.environ.get("ATLAS_SERVICE_TOKEN_FILE",
+                          str(get_project_root() / "secrets" /
+                              "service-token"))
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def service_token_headers() -> dict:
+    tok = _service_token()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+def install_urllib_opener() -> None:
+    """Cover every benchmark urllib site with the internal-auth header
+    (urllib merges these under explicit per-request headers)."""
+    import urllib.request
+    tok = _service_token()
+    if not tok:
+        return
+    opener = urllib.request.build_opener()
+    opener.addheaders = [("Authorization", f"Bearer {tok}")]
+    urllib.request.install_opener(opener)

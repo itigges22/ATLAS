@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from benchmark.llm_client import strip_reasoning_leak
+
 
 # Type aliases
 LLMCallable = Callable[[str, float, int, Optional[int]], Tuple[str, int, float]]
@@ -225,7 +227,9 @@ def parse_decomposition(response: str,
 
 def extract_code(response: str) -> str:
     """Extract Python code from LLM response."""
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    # Safety net: client returns clean content, but strip any leaked
+    # reasoning block model-agnostically before code extraction.
+    response = strip_reasoning_leak(response)
     py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)
     if py_blocks:
         return py_blocks[-1].strip()

@@ -14,48 +14,59 @@ Usage:
         --positive ast_edit_positive.txt \\
         --negative ast_edit_negative.txt
 
-Then run upstream cvector-generator (built from llama.cpp tools/):
+Then run upstream cvector-generator (built from llama.cpp tools/) with the
+same selected model used to render these prompts:
     llama-cvector-generator \\
-        -m /models/Qwen3.5-9B-Q6_K.gguf \\
+        -m /models/your-model.gguf \\
         --positive-file ast_edit_positive.txt \\
         --negative-file ast_edit_negative.txt \\
         --method mean \\
         -o ast_edit_steering.gguf \\
         -ngl 99
 
-And add to inference/entrypoint-v3.1-9b.sh (or set the env var the
+And add to inference/entrypoint-v3.1.sh (or set the env var the
 entrypoint reads):
     --control-vector-scaled /path/to/ast_edit_steering.gguf:0.5
 """
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 
-# Qwen3.5 chat-template format. cvector-generator wants one prompt per
-# line with literal `\n` for newlines. Each prompt is the model's full
-# context up through the assistant prefix — the prefix is what shifts
-# the residual stream toward "I'm about to emit ast_edit" (positive) or
-# "I'm about to emit edit_file" (negative).
-QWEN_PROMPT_TEMPLATE = (
-    "<|im_start|>system\\n"
-    "You are ATLAS, a coding assistant. Choose the right tool for the job.\\n"
-    "<|im_end|>\\n"
-    "<|im_start|>user\\n"
-    "{user}\\n"
-    "<|im_end|>\\n"
-    "<|im_start|>assistant\\n"
-    "{assistant_prefix}"
+_SYSTEM_PROMPT = (
+    "You are ATLAS, a coding assistant. Choose the right tool for the job."
 )
 
 
-def render(pair: dict) -> str:
-    return QWEN_PROMPT_TEMPLATE.format(
-        user=pair["user"].replace("\n", "\\n"),
-        assistant_prefix=pair["assistant_prefix"].replace("\n", "\\n"),
+def render(pair: dict, llama_url: str) -> str:
+    """Use the loaded model's template, then escape newlines for the tool."""
+    payload = json.dumps({
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": pair["user"]},
+        ],
+    }).encode()
+    req = Request(
+        f"{llama_url.rstrip('/')}/apply-template",
+        data=payload,
+        headers={"Content-Type": "application/json"},
     )
+    try:
+        with urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+    except Exception as exc:
+        raise RuntimeError(
+            "llama-server /apply-template is required for model-agnostic "
+            f"ASA calibration: {exc}"
+        ) from exc
+    prompt = result.get("prompt") if isinstance(result, dict) else None
+    if not isinstance(prompt, str) or not prompt:
+        raise RuntimeError("unexpected llama-server /apply-template response")
+    return (prompt + pair["assistant_prefix"]).replace("\n", "\\n")
 
 
 def main() -> int:
@@ -67,6 +78,11 @@ def main() -> int:
                     help="output file for label==ast_edit prompts")
     ap.add_argument("--negative", required=True, type=Path,
                     help="output file for label==edit_file prompts")
+    ap.add_argument(
+        "--llama-url",
+        default=os.environ.get("LLAMA_URL", "http://localhost:8080"),
+        help="loaded llama-server used to apply the selected model's template",
+    )
     args = ap.parse_args()
 
     pos: list[str] = []
@@ -85,7 +101,11 @@ def main() -> int:
                 if key not in pair:
                     print(f"line {lineno}: missing field {key!r}", file=sys.stderr)
                     return 1
-            rendered = render(pair)
+            try:
+                rendered = render(pair, args.llama_url)
+            except RuntimeError as exc:
+                print(f"line {lineno}: {exc}", file=sys.stderr)
+                return 2
             if pair["label"] == "ast_edit":
                 pos.append(rendered)
             elif pair["label"] == "edit_file":

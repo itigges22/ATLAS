@@ -11,7 +11,7 @@ Subcommands:
     atlas model remove     — delete a model file from ATLAS_MODELS_DIR
 
 The lens_status field is the central truth this command surfaces. A
-user installing Qwen3.5-14B-Q5_K_M on a large-tier box gets a working
+user installing a registry model on a compatible hardware tier gets a working
 llama.cpp model but no G(x) verification — half of what makes ATLAS
 *ATLAS*. Doctor warns at runtime; this command warns at install time.
 
@@ -49,6 +49,7 @@ import urllib.error
 import urllib.request
 from typing import List, Optional, Tuple
 
+from atlas.cli import compose as compose_config
 from atlas.cli.commands import model_registry, tier
 from atlas.cli.commands.model_registry import Model
 
@@ -95,26 +96,37 @@ def _safe_print(s: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 def _find_atlas_root() -> str:
-    """Walk up from CWD looking for docker-compose.yml. Falls back to CWD."""
-    cur = os.path.abspath(os.getcwd())
-    while True:
-        if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return os.path.abspath(os.getcwd())
-        cur = parent
+    """The repo root (the directory holding docker-compose.yml). Resolved from
+    this file first so commands work from any cwd, then by walking up from the
+    cwd; falls back to the cwd."""
+    starts = (os.path.dirname(os.path.abspath(__file__)),
+              os.path.abspath(os.getcwd()))
+    for start in starts:
+        cur = start
+        while True:
+            if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    return os.path.abspath(os.getcwd())
 
 
 def _resolve_models_dir(arg_models_dir: Optional[str]) -> str:
     """Resolution order: --models-dir flag > ATLAS_MODELS_DIR env >
-    ./models/ relative to atlas_root."""
+    ATLAS_MODELS_DIR in the compose .env > ./models/ relative to
+    atlas_root. Relative values resolve against the atlas root (the
+    compose deployment's frame of reference), not the cwd."""
     if arg_models_dir:
         return os.path.abspath(arg_models_dir)
-    env = os.environ.get("ATLAS_MODELS_DIR")
+    atlas_root = _find_atlas_root()
+    env = (os.environ.get("ATLAS_MODELS_DIR")
+           or compose_config.read_env_file(atlas_root).get("ATLAS_MODELS_DIR"))
     if env:
-        return os.path.abspath(env)
-    return os.path.join(_find_atlas_root(), "models")
+        return env if os.path.isabs(env) else \
+            os.path.normpath(os.path.join(atlas_root, env))
+    return os.path.join(atlas_root, "models")
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +215,10 @@ def _emit_list(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  {icon}  {name_col}")
         _safe_print(f"      tier: {m.tier:6s}  size: {m.model_size_gb:5.1f} GB  "
                     f"{_lens_label(m.lens_status)}  {DASH}  {inst_marker}")
+        if m.lens_status == "supported" and not m.lens_calibrated:
+            _safe_print(f"      {YELL if color else ''}Lens calibration: "
+                        f"legacy bundle; run `atlas lens build` before "
+                        f"production use{RESET if color else ''}")
         if installed:
             cur = model_registry.installed_size_gb(m, models_dir)
             if cur is not None and abs(cur - m.model_size_gb) > 0.5:
@@ -232,10 +248,11 @@ def _emit_recommend(args: argparse.Namespace, color: bool) -> int:
             "recommendation": (model_registry.as_dict(rec) if rec else None),
             "fallback": None,
         }
-        # If the tier-recommended model isn't `supported`, surface 9B as
-        # the fallback that actually works end-to-end.
+        # If the tier recommendation has no published weights, surface the
+        # best available Lens bundle as a fallback.
         if rec is None or rec.lens_status != "supported":
-            supported = model_registry.supported_models()
+            supported = sorted(model_registry.supported_models(),
+                               key=lambda item: not item.lens_calibrated)
             if supported:
                 out["fallback"] = model_registry.as_dict(supported[0])
         print(json.dumps(out, indent=2, ensure_ascii=not UNICODE_OK))
@@ -256,6 +273,11 @@ def _emit_recommend(args: argparse.Namespace, color: bool) -> int:
                 f"({rec.model_display}, {rec.model_size_gb:.1f} GB)")
     _safe_print(f"      Lens status: {_lens_label(rec.lens_status)}")
     if rec.lens_status == "supported":
+        if not rec.lens_calibrated:
+            _safe_print(f"      {YELL if color else ''}Calibration required: "
+                        f"published weights predate per-model C(x)/G(x) "
+                        f"calibration. Run `atlas lens build` before "
+                        f"production use.{RESET if color else ''}")
         if rec.can_install:
             _safe_print(f"      {GREEN if color else ''}Ready to install:"
                         f"{RESET if color else ''} "
@@ -265,17 +287,20 @@ def _emit_recommend(args: argparse.Namespace, color: bool) -> int:
                         f"see SETUP.md for manual download.{RESET if color else ''}")
         return 0
 
-    # Tier-default has no Lens artifacts. Surface 9B as the fallback.
+    # Tier-default has no Lens artifacts. Surface a published bundle.
     _safe_print()
     _safe_print(f"  {YELL if color else ''}This tier's recommended model has "
                 f"no Lens artifacts.{RESET if color else ''} G(x) verification "
                 f"will silently no-op if you install it.")
-    supported = model_registry.supported_models()
+    supported = sorted(model_registry.supported_models(),
+                       key=lambda item: not item.lens_calibrated)
     if supported:
         f = supported[0]
         _safe_print()
+        fallback_label = ("calibrated end-to-end" if f.lens_calibrated
+                          else "published Lens weights; calibration required")
         _safe_print(f"  {GREEN if color else ''}Recommended fallback "
-                    f"(end-to-end supported):{RESET if color else ''} "
+                    f"({fallback_label}):{RESET if color else ''} "
                     f"{BOLD if color else ''}{f.name}{RESET if color else ''}")
         _safe_print(f"      tier: {f.tier} (your hardware: {t.tier} {DASH} "
                     f"{'over-provisioned, fine' if t.tier in ('large','xlarge') else 'under-provisioned, may run slow'})")
@@ -295,32 +320,87 @@ def _human_bytes(n: float) -> str:
     return f"{n:.1f} PB"
 
 
+def _remote_size_gb(url: str, token: Optional[str]) -> float:
+    """Best-effort HEAD to read Content-Length (GB); 0.0 if unknown. Follows
+    redirects (HF resolve → CDN). Used to disk-check --url installs that carry
+    no registry size."""
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            cl = resp.headers.get("Content-Length")
+            return int(cl) / (1024 ** 3) if cl else 0.0
+    except Exception:
+        return 0.0
+
+
 def _emit_install(args: argparse.Namespace, color: bool) -> int:
-    m = model_registry.by_name(args.name)
-    if m is None:
-        _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
-                    f"{RESET if color else ''}")
-        _safe_print("  Run `atlas model list` to see available names.")
-        return 1
-
-    models_dir = _resolve_models_dir(args.models_dir)
-
-    # Lens-status gate: refuse no-artifacts unless --no-lens.
-    if m.lens_status != "supported" and not args.no_lens:
-        _safe_print(f"  {YELL if color else ''}Refusing to install `{m.name}`: "
-                    f"Lens status `{m.lens_status}`.{RESET if color else ''}")
+    if getattr(args, "url", None):
+        # --url: install an UNREGISTERED model (drop-in / BYO). Synthesize a
+        # registry entry with no SHA pin and no lens artifacts; the lens-status
+        # gate and registry lookup below are bypassed. The download path handles
+        # sha256=None (skips verification) and model_size_gb=0.0 (uses the
+        # Content-Length header for progress). See docs/CONFIGURATION.md
+        # "Adding your own model".
+        from urllib.parse import urlparse, unquote
+        fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
+        if not fname or not fname.lower().endswith(".gguf"):
+            _safe_print(f"  {RED if color else ''}Could not infer a .gguf "
+                        f"filename from the URL.{RESET if color else ''}")
+            _safe_print("  Pass --file <name.gguf> to set the on-disk filename.")
+            return 1
+        m = Model(name=fname.rsplit(".", 1)[0], tier="unknown", model_file=fname,
+                  model_display=fname, model_size_gb=0.0,
+                  lens_status="no-artifacts", download_url=args.url, sha256=None,
+                  notes="unregistered (installed via --url)")
+        models_dir = _resolve_models_dir(args.models_dir)
+        _safe_print(f"  {YELL if color else ''}Unregistered model (--url): no "
+                    f"SHA pin, no bundled Lens artifacts.{RESET if color else ''}")
+        _safe_print("  After download: set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
+                    "in .env, then run `atlas onboard` to finish (rebuild check "
+                    "+ Lens retrain). See docs/CONFIGURATION.md \"Adding your "
+                    "own model\".")
         _safe_print()
-        _safe_print("  This model has no trained Lens artifacts. ATLAS "
-                    "will run llama-server on it, but G(x) verification "
-                    "will silently no-op (gx_score: 0.5 on every "
-                    "generation). Half of what makes ATLAS *ATLAS* will "
-                    "be missing.")
-        _safe_print()
-        _safe_print("  To proceed anyway: rerun with `--no-lens` to "
-                    "acknowledge.")
-        _safe_print("  See PC-058 roadmap for the Lens training pipeline "
-                    "that will fix this.")
-        return 1
+    else:
+        if not args.name:
+            _safe_print(f"  {RED if color else ''}Provide a registry model name "
+                        f"or --url.{RESET if color else ''}")
+            _safe_print("  `atlas model list` for names, or "
+                        "`atlas model install --url <hf-url>` for your own model.")
+            return 1
+        m = model_registry.by_name(args.name)
+        if m is None:
+            _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
+                        f"{RESET if color else ''}")
+            _safe_print("  Run `atlas model list` to see available names.")
+            return 1
+
+        models_dir = _resolve_models_dir(args.models_dir)
+
+        # Lens-status gate: refuse no-artifacts unless --no-lens.
+        if m.lens_status != "supported" and not args.no_lens:
+            _safe_print(f"  {YELL if color else ''}Refusing to install `{m.name}`: "
+                        f"Lens status `{m.lens_status}`.{RESET if color else ''}")
+            _safe_print()
+            _safe_print("  This model has no trained Lens artifacts. ATLAS "
+                        "will run llama-server on it, but G(x) verification "
+                        "will silently no-op (gx_score: 0.5 on every "
+                        "generation). Half of what makes ATLAS *ATLAS* will "
+                        "be missing.")
+            _safe_print()
+            _safe_print("  To proceed anyway: rerun with `--no-lens` to "
+                        "acknowledge.")
+            _safe_print("  See PC-058 roadmap for the Lens training pipeline "
+                        "that will fix this.")
+            return 1
+        if m.lens_status == "supported" and not m.lens_calibrated:
+            _safe_print(f"  {YELL if color else ''}Note: `{m.name}` has a "
+                        f"legacy Lens weight bundle without current per-model "
+                        f"C(x)/G(x) calibration. Installation may continue, "
+                        f"but Lens interventions remain disabled until you run "
+                        f"`atlas lens build`.{RESET if color else ''}")
+            _safe_print()
 
     if not m.can_install:
         _safe_print(f"  {RED if color else ''}Cannot install `{m.name}`: "
@@ -380,6 +460,18 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:
     except OSError:
         free_gb = 0.0
     needed = m.model_size_gb * 1.2
+    if needed == 0:
+        # Unregistered (--url) models carry no registry size. Probe the remote
+        # Content-Length so the disk check still fails fast; if the server
+        # won't report it, proceed (the mid-download OSError path keeps the
+        # .part for retry) rather than refuse with an arbitrary floor.
+        remote_gb = _remote_size_gb(m.download_url, _hf_token())
+        if remote_gb > 0:
+            needed = remote_gb * 1.2
+            _safe_print(f"  Remote size ~{remote_gb:.1f} GB (from Content-Length)")
+        else:
+            _safe_print("  (remote size unknown — skipping disk pre-check; "
+                        "ensure the partition has room)")
     if free_gb < needed:
         _safe_print(f"  {RED if color else ''}Insufficient disk: "
                     f"{free_gb:.1f} GB free, need ~{needed:.1f} GB "
@@ -426,6 +518,28 @@ def _emit_install_artifacts(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
                     f"{RESET if color else ''}")
         return 1
+    # Distinguish "nothing registered for direct download" from a real
+    # install: without a URL base there is nothing this command can fetch,
+    # and reporting success would be misleading.
+    has_lens_urls = (m.lens_status in ("supported", "unverified")
+                     and m.lens_artifact_url_base and m.lens_artifact_files)
+    has_asa_urls = (m.asa_status in ("supported", "unverified")
+                    and m.asa_artifact_url_base and m.asa_artifact_files)
+    if not has_lens_urls and not has_asa_urls:
+        _safe_print(f"  {YELL if color else ''}No artifacts are registered "
+                    f"for direct download for `{m.name}`."
+                    f"{RESET if color else ''}")
+        if m.lens_hf_repo:
+            _safe_print(f"  Lens artifacts are published at "
+                        f"https://huggingface.co/{m.lens_hf_repo} "
+                        f"(fetch manually or via ATLAS_LENS_MODELS).")
+        if m.asa_hf_repo:
+            _safe_print(f"  ASA vector is published at "
+                        f"https://huggingface.co/{m.asa_hf_repo}.")
+        if not m.lens_hf_repo and not m.asa_hf_repo:
+            _safe_print("  Train locally with `atlas lens build` / "
+                        "`atlas asa build`.")
+        return 3
     models_dir = _resolve_models_dir(args.models_dir)
     try:
         os.makedirs(models_dir, exist_ok=True)
@@ -463,14 +577,23 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
     if (m.lens_status in ("supported", "unverified")
             and m.lens_artifact_url_base
             and m.lens_artifact_files):
-        # Target dir: lens_artifact_dir override OR the global
-        # ATLAS_LENS_MODELS dir. Default matches the rest of the lens
-        # code's expectations (geometric-lens/geometric_lens/models/).
-        lens_dir = (m.lens_artifact_dir or
-                    os.environ.get("ATLAS_LENS_MODELS",
-                                    os.path.join(os.path.dirname(models_dir),
-                                                  "geometric-lens",
-                                                  "geometric_lens", "models")))
+        # Target dir: the registry's per-model resolution (model override
+        # > ATLAS_LENS_MODELS > <atlas_root>/geometric-lens/geometric_lens/
+        # models/) so downloads land where the lens service reads them.
+        atlas_root = _find_atlas_root()
+        lens_dir = model_registry.lens_artifact_dir_for(m, atlas_root)
+        if not lens_dir:
+            # `unverified` entries with a URL base resolve like the
+            # global default lens_artifact_dir_for uses.
+            env_dir = (os.environ.get("ATLAS_LENS_MODELS")
+                       or compose_config.read_env_file(atlas_root).get(
+                           "ATLAS_LENS_MODELS"))
+            if env_dir:
+                lens_dir = env_dir if os.path.isabs(env_dir) else \
+                    os.path.normpath(os.path.join(atlas_root, env_dir))
+            else:
+                lens_dir = os.path.normpath(os.path.join(
+                    atlas_root, "geometric-lens", "geometric_lens", "models"))
         try:
             os.makedirs(lens_dir, exist_ok=True)
         except OSError as e:
@@ -485,7 +608,8 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
                 continue
             attempted += 1
             url = m.lens_artifact_url_base + fname
-            if _download_artifact(url, target_path, color) != 0:
+            if _download_artifact(url, target_path, color,
+                                  expected_sha256=m.lens_artifact_sha256.get(fname)) != 0:
                 failures += 1
 
     # ----- ASA artifacts ----------------------------------------------
@@ -498,13 +622,34 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
                     f"→ {models_dir}")
         for fname in m.asa_artifact_files:
             target_path = os.path.join(models_dir, fname)
-            if os.path.isfile(target_path) and not args.force_artifacts:
+            marker_path = target_path + ".model"
+            marker = ""
+            try:
+                with open(marker_path) as marker_file:
+                    marker = marker_file.read().strip()
+            except OSError:
+                # Missing/unreadable marker means the artifact is unverified
+                # and must be replaced; marker remains empty intentionally.
+                pass
+            if (os.path.isfile(target_path) and not args.force_artifacts
+                    and marker in (m.name, m.model_file)):
                 _safe_print(f"    [skip] {fname} already present")
                 continue
+            if os.path.isfile(target_path) and not args.force_artifacts:
+                _safe_print(f"    [replace] {fname} is unmarked or belongs "
+                            f"to {marker or 'another model'}")
             attempted += 1
             url = m.asa_artifact_url_base + fname
-            if _download_artifact(url, target_path, color) != 0:
+            if _download_artifact(url, target_path, color,
+                                  expected_sha256=m.asa_artifact_sha256.get(fname)) != 0:
                 failures += 1
+            else:
+                try:
+                    with open(marker_path, "w") as marker_file:
+                        marker_file.write(m.name + "\n")
+                except OSError as e:
+                    _safe_print(f"    could not write ASA model marker: {e}")
+                    failures += 1
 
     if attempted == 0:
         return 0  # nothing to do or everything already present
@@ -514,23 +659,50 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,
     return 0
 
 
-def _download_artifact(url: str, target_path: str, color: bool) -> int:
+def _download_artifact(url: str, target_path: str, color: bool,
+                       expected_sha256: Optional[str] = None) -> int:
     """Download a single artifact file (lens .pt or asa .gguf). These
     are small (KB to a few MB) compared to the model gguf, so no
     progress bar or resume — just a one-shot urlretrieve-style fetch
     with the HF token header if available.
+
+    Lens .pt files are torch checkpoints and ASA vectors are fed to
+    llama-server, so when the registry carries a hash the bytes are
+    verified before the file is moved into place; a mismatch is a hard
+    failure. Files without a registry hash download with an explicit
+    "unverified" note rather than a silent [ok].
     """
     token = _hf_token()
     req = _build_request(url, range_start=0, token=token)
     fname = os.path.basename(target_path)
     tmp_path = target_path + ".part"
     try:
+        hasher = hashlib.sha256()
         with urllib.request.urlopen(req, timeout=60) as resp:
             with open(tmp_path, "wb") as out:
-                shutil.copyfileobj(resp, out, length=64 * 1024)
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+                    out.write(chunk)
+        if expected_sha256:
+            actual = hasher.hexdigest()
+            if actual != expected_sha256.lower():
+                _safe_print(f"    [fail] {fname}: SHA-256 mismatch — "
+                            f"expected {expected_sha256[:16]}…, got {actual[:16]}…. "
+                            f"Refusing to install; the artifact may have been "
+                            f"re-published (update the registry hash) or tampered with.")
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+                return 1
         os.replace(tmp_path, target_path)
         size_kb = os.path.getsize(target_path) / 1024
-        _safe_print(f"    [ok] {fname} ({size_kb:.1f} KB)")
+        if expected_sha256:
+            _safe_print(f"    [ok] {fname} ({size_kb:.1f} KB, sha256 verified)")
+        else:
+            _safe_print(f"    [ok] {fname} ({size_kb:.1f} KB, unverified — "
+                        f"no registry hash for this file)")
         return 0
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
         _safe_print(f"    [fail] {fname}: {e}")
@@ -827,6 +999,14 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
         return 130
     except urllib.error.HTTPError as e:
         _safe_print()
+        if e.code == 416 and range_start > 0:
+            # Requested range starts at/after the end of the file — the
+            # .part usually already holds the complete download. Verify
+            # it (hash when the registry has one, size otherwise) and
+            # finalize; on verification failure delete the .part so the
+            # next attempt starts clean.
+            return _finalize_complete_part(m, tmp, target, range_start,
+                                            h, e, color)
         if e.code == 401:
             if token:
                 _safe_print(f"  {RED if color else ''}HTTP 401 even with "
@@ -913,6 +1093,78 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
     _safe_print(f"  {GREEN if color else ''}Done.{RESET if color else ''} "
                 f"{_human_bytes(actual)} in {elapsed:.0f}s "
                 f"({_human_bytes(rate)}/s of new bytes)")
+    return 0
+
+
+def _finalize_complete_part(m: Model, tmp: str, target: str,
+                             range_start: int, h: "hashlib._Hash",
+                             e: "urllib.error.HTTPError", color: bool) -> int:
+    """HTTP 416 on resume: the .part already spans the whole file. Verify
+    it (SHA256 when the registry pins one, otherwise the total from the
+    416's Content-Range header) and promote it via os.replace. A .part that
+    can't be verified — failing SHA256, or with neither a SHA256 pin nor a
+    Content-Range to check against — is deleted with retry guidance rather
+    than promoted, so a corrupt or mismatched part is never finalized."""
+    # Total size, when the server reports it ("Content-Range: bytes */N").
+    total = None
+    content_range = ""
+    try:
+        content_range = (e.headers.get("Content-Range") or "") if e.headers else ""
+    except AttributeError:
+        content_range = ""
+    if content_range.startswith("bytes */"):
+        try:
+            total = int(content_range.split("/", 1)[1])
+        except ValueError:
+            total = None
+
+    # Decide whether the on-disk .part is trustworthy enough to promote.
+    # Two accepted proofs, in priority order:
+    #   1. SHA256 match, when the registry pins one. Authoritative — if a
+    #      hash is registered it ALONE decides, and a mismatch deletes the
+    #      .part rather than falling back to a weaker size check (otherwise a
+    #      corrupt part whose size happens to line up would be promoted).
+    #   2. A Content-Range total from the 416 response that the .part size
+    #      matches within the existing tolerance. Used only when no SHA256 is
+    #      registered (BYO / --url models).
+    # When NEITHER proof is available (no SHA256 and no Content-Range), we
+    # cannot tell a complete download from a corrupt or mismatched .part —
+    # e.g. the user re-ran with a different --url or a smaller file under the
+    # same --file — so we refuse to finalize and delete the .part instead of
+    # promoting it blindly.
+    verified = False
+    how = ""
+    if m.sha256:
+        verified = h.hexdigest() == m.sha256
+        how = "SHA256"
+    elif total is not None:
+        verified = abs(range_start - total) <= int(total * 0.05)
+        how = "size (Content-Range)"
+
+    if not verified:
+        detail = how or "no SHA256 pin or Content-Range header to verify against"
+        _safe_print(f"  {RED if color else ''}Server reports the download "
+                    f"is complete (HTTP 416), but the existing .part could "
+                    f"not be verified ({detail})."
+                    f"{RESET if color else ''}")
+        try:
+            os.unlink(tmp)
+        except OSError:
+            # best-effort: swallow on failure (caller continues)
+            pass
+        _safe_print("  Removed the .part file. Re-run the install to "
+                    "download a fresh copy from scratch.")
+        return 1
+
+    try:
+        os.replace(tmp, target)
+    except OSError as replace_err:
+        _safe_print(f"  {RED if color else ''}Failed to move into place: "
+                    f"{replace_err}{RESET if color else ''}")
+        return 1
+    _safe_print(f"  {GREEN if color else ''}Download was already complete "
+                f"(verified via {how}).{RESET if color else ''} "
+                f"{_human_bytes(range_start)} moved into place.")
     return 0
 
 
@@ -1089,7 +1341,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_rec.add_argument("--no-color", action="store_true")
 
     p_inst = sub.add_parser("install", help="download a model into ATLAS_MODELS_DIR")
-    p_inst.add_argument("name", help="model name (see `atlas model list`)")
+    p_inst.add_argument("name", nargs="?", default=None,
+        help="registry model name (see `atlas model list`); omit when using --url")
+    p_inst.add_argument("--url", default=None,
+        help="direct download URL for an UNREGISTERED model (e.g. a HuggingFace "
+             "resolve/main/*.gguf link). Skips the registry + SHA pin; pair with "
+             "--file to set the on-disk name. See docs/CONFIGURATION.md "
+             "\"Adding your own model\".")
+    p_inst.add_argument("--file", default=None,
+        help="on-disk filename for --url installs (default: basename of the URL)")
     p_inst.add_argument("--dry-run", action="store_true",
         help="print what would happen, no network or disk writes")
     p_inst.add_argument("--no-lens", action="store_true",

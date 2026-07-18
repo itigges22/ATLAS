@@ -8,7 +8,7 @@ import urllib.error
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Embedding dimension is 4096 for Qwen3.5-9B (current V3.1 model).
+# Embedding dimensionality is read from the selected model's response.
 
 
 # --- Embedding extraction -----------------------------------------------------

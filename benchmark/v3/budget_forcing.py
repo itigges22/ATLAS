@@ -8,7 +8,7 @@ Config: [budget_forcing] in atlas.conf
 Telemetry: telemetry/budget_forcing_events.jsonl
 
 Budget Tiers:
-  nothink  — 0 thinking tokens, /nothink system prompt
+  nothink  — 0 thinking tokens (thinking disabled via the shared client)
   light    — up to 1024 thinking tokens, no Wait injection
   standard — up to 2048 thinking tokens, Wait at <512
   hard     — up to 4096 thinking tokens, Wait at <1024
@@ -80,9 +80,15 @@ BUDGET_TIERS: Dict[str, Dict] = {
 
 VALID_TIERS = frozenset(BUDGET_TIERS.keys())
 
-# System prompts per tier category
+# System prompts per tier category. Thinking is controlled model-agnostically
+# by the shared client (`enable_thinking` chat-template kwarg) rather than by an
+# in-prompt directive, so no `/nothink` token here — these are plain English.
+# COUPLING: v3_runner's LLMAdapter derives enable_thinking from think-language
+# in the system prompt ("Think step by step" / "Think carefully" / "Think
+# through") because the LLMCallable contract has no tier parameter. Reword
+# these prompts and the adapter's marker list together.
 _SYSTEM_PROMPT_NOTHINK = (
-    "You are an expert programmer. Respond directly and concisely. /nothink"
+    "You are an expert programmer. Respond directly and concisely."
 )
 _SYSTEM_PROMPT_THINK = (
     "You are an expert programmer. Think step by step about the problem "
@@ -271,8 +277,20 @@ def should_inject_wait(thinking_text: str, thinking_token_count: int,
 def build_continuation_prompt(original_chatml: str, thinking_so_far: str) -> str:
     """Build a prompt for continuing generation after Wait injection.
 
-    Takes the original ChatML prompt (up through <|im_start|>assistant\\n)
-    and appends the thinking so far plus the Wait injection.
+    Takes the original ChatML prompt (up through ``<|im_start|>assistant\\n``)
+    and appends the thinking so far plus the Wait injection inside a ``<think>``
+    block, so the model resumes reasoning instead of finishing early.
+
+    MODEL-AGNOSTIC NOTE: assistant-turn pre-fill / mid-``<think>`` continuation
+    is not expressible over ``/v1/chat/completions`` (the shared client posts
+    discrete messages and lets the model's own template open/close reasoning).
+    The ``<think>`` marker here is a best-effort convention: on models that use
+    it the continuation resumes their reasoning; on models that don't, the
+    block is simply prior assistant text plus a "Wait, reconsider" nudge, which
+    still degrades gracefully — the model just continues normally rather than
+    inside a reasoning span. Callers that route through the chat client should
+    pass ``thinking_so_far`` as prior assistant context and ``WAIT_INJECTION_TEXT``
+    as a follow-up user turn instead of relying on raw ``<think>`` pre-fill.
 
     Args:
         original_chatml: The full ChatML prompt that was sent initially.
@@ -333,26 +351,26 @@ class BudgetForcing:
     def format_chatml(self, user_content: str, tier: str) -> str:
         """Format a ChatML prompt with the appropriate system prompt for the tier.
 
+        The returned ChatML string is normalized by the shared client
+        (`chatml_to_messages` -> `/v1/chat/completions`), so the model's OWN
+        template applies. Thinking on/off is handled model-agnostically by the
+        client's `enable_thinking` kwarg, NOT by a pre-filled `<think>` block
+        (that pre-fill was Qwen-specific and breaks other templates). We
+        therefore emit a clean trailing assistant cue regardless of tier; the
+        normalizer drops the empty assistant turn.
+
         Args:
             user_content: The user's message content.
             tier: Budget tier name.
 
         Returns:
-            Full ChatML-formatted prompt string for the /completion endpoint.
+            Full ChatML-formatted prompt string.
         """
         system = get_system_prompt(tier)
-        if tier == "nothink":
-            # Pre-fill closed think block to force-skip thinking on Qwen3.5+
-            assistant_prefix = "<think>\n\n</think>\n\n"
-        else:
-            # With --jinja enabled, the model naturally uses <think> tags.
-            # Do NOT pre-fill <think>\n — it breaks the tag structure
-            # (response won't include opening <think>, only </think>).
-            assistant_prefix = ""
         return (
             f"<|im_start|>system\n{system}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"
-            f"<|im_start|>assistant\n{assistant_prefix}"
+            f"<|im_start|>assistant\n"
         )
 
     def get_max_tokens(self, tier: str) -> int:

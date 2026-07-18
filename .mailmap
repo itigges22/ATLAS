@@ -1,0 +1,4 @@
+# Canonical identities for git tooling (shortlog, blame, log).
+# Maps commit emails that aren't linked to a GitHub account onto the
+# contributor's GitHub noreply identity.
+Dmitri Sotnikov <121208+yogthos@users.noreply.github.com> Yogthos <yogthos@gmail.com>

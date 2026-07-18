@@ -3,10 +3,9 @@
 
 Single source of truth for "which models can ATLAS run end-to-end?"
 
-This module is the upgrade-in-place of PC-055.2's
-`model_recommendations.py` stub. It preserves the stable public API
+This module owns the model registry. It exposes the stable public API
 (`for_tier`, `tier_for_model`, the Model record's name-compat fields)
-that doctor + tier callers depend on, while extending each entry with
+that doctor + tier callers depend on, extending each entry with
 download metadata + the critical `lens_status` field that captures the
 key truth surfaced during PC-056 scoping:
 
@@ -40,8 +39,8 @@ Schema notes:
   install** (was print-only in PC-056). Verifies download integrity,
   not provenance. Stronger provenance verification is PC-060 territory.
 - `lens_status` values:
-    "supported"   — metric tensor + embeddings present in repo, has
-                    been validated end-to-end against this exact quant
+    "supported"   — model-specific Lens weights are published and
+                    downloadable for this exact model
     "no-artifacts" — model exists but Lens won't score it (no tensor
                     trained at all)
     "unverified"  — has artifacts that should structurally apply (e.g.,
@@ -56,6 +55,10 @@ Schema notes:
   the artifact dir for `lens_status: supported` to be honest. Doctor's
   tier_match cross-checks this — if a model claims supported but
   artifacts are missing, that's a config drift that should warn.
+- `lens_calibrated`: distinguishes current bundles containing per-model
+  C(x) normalization and G(x) operating thresholds from legacy weight
+  bundles. A legacy supported bundle remains downloadable, but runtime
+  interventions stay disabled until it is rebuilt and republished.
 
 PC-056.1 install hardening (relative to PC-056):
 - SHA256 enforced at download time (delete file + exit 1 on mismatch)
@@ -68,6 +71,8 @@ import hashlib
 import os
 from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional
+
+from atlas.cli import compose as compose_config
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,10 @@ class Model:
     model_display: str             # human-friendly UI name
     model_size_gb: float           # on-disk size — informs disk-space messaging
     lens_status: str               # 'supported' | 'no-artifacts' | 'unverified'
+    # True only when the published bundle includes current per-model C(x)
+    # normalization and G(x) operating thresholds. `lens_status=supported`
+    # means weights are available; this flag distinguishes legacy bundles.
+    lens_calibrated: bool = False
     download_url: Optional[str] = None   # None = no known URL at all
     sha256: Optional[str] = None         # content hash (HF x-linked-etag) when known
     license: Optional[str] = None        # SPDX-ish identifier (Apache-2.0, etc.)
@@ -98,6 +107,16 @@ class Model:
     # `supported` claim to be honest. doctor.check_tier_match
     # cross-checks this — registered "supported" + missing files = warn.
     lens_artifact_files: List[str] = field(default_factory=list)
+    # Per-file SHA-256 of the published lens artifacts, keyed by filename.
+    # Lens .pt files are torch checkpoints — a tampered download would be
+    # deserialized on the lens container, so the installer verifies any
+    # file that has an entry here and reports unverified ones. Populate
+    # from HF's x-linked-etag (LFS objects) or sha256sum of the upload.
+    lens_artifact_sha256: Dict[str, str] = field(default_factory=dict)
+    # PC-214: HuggingFace repo holding this model's published lens
+    # artifacts (`atlas lens publish` destination). None = unpublished;
+    # consumers download per the HF repo's model card.
+    lens_hf_repo: Optional[str] = None
     # Base URL where the lens_artifact_files live for download. The
     # installer appends each filename to this base. None = no auto-
     # download path; user has to train locally via `atlas lens build`
@@ -121,6 +140,11 @@ class Model:
     # open for multi-vector setups (per-layer banks) without a schema
     # change. doctor cross-checks alongside lens_artifact_files.
     asa_artifact_files: List[str] = field(default_factory=list)
+    # Per-file SHA-256 of the published ASA artifacts — same contract as
+    # lens_artifact_sha256.
+    asa_artifact_sha256: Dict[str, str] = field(default_factory=dict)
+    # PC-214: HuggingFace repo holding this model's published ASA vector.
+    asa_hf_repo: Optional[str] = None
     # Base URL where the asa_artifact_files live for download. Same
     # contract as lens_artifact_url_base — installer appends each
     # filename and downloads to models_dir (NOT lens dir; ASA vectors
@@ -232,7 +256,11 @@ REGISTRY: List[Model] = [
         model_display="Qwen3.5 9B (Q6_K)",
         # PC-056 verified 2026-05-01: Content-Length = 7458301152 bytes.
         model_size_gb=6.94,
+        # Legacy C(x)+metric-tensor bundle predates per-model C(x)/G(x)
+        # calibration files. Downloadable for migration, but not production-
+        # calibrated until it is rebuilt and republished.
         lens_status="supported",
+        lens_calibrated=False,
         # PC-056.1: pinned to commit hash (was resolve/main/...).
         download_url=_unsloth_qwen35_url("Qwen3.5-9B-GGUF",
                                           "Qwen3.5-9B-Q6_K.gguf"),
@@ -243,7 +271,7 @@ REGISTRY: List[Model] = [
         # PC-056.1: declare the artifact files so doctor can cross-check.
         # lens_artifact_dir=None means "use the global ATLAS_LENS_MODELS
         # dir" — current single-model layout.
-        lens_artifact_files=["cost_field.pt", "metric_tensor.pt"],
+        lens_artifact_files=["cost_field.pt", "model_identity.json"],
         # Lens artifacts live on the public itigges22/ATLAS dataset on
         # HF (no token needed). Installer appends each filename in
         # lens_artifact_files to this base. Note: *.pt is gitignored in
@@ -254,6 +282,12 @@ REGISTRY: List[Model] = [
             "https://huggingface.co/datasets/itigges22/ATLAS/"
             "resolve/main/models/"
         ),
+        # x-linked-etag of the HF LFS objects (captured 2026-07-02).
+        # Update whenever the artifacts are re-published.
+        lens_artifact_sha256={
+            "cost_field.pt": "79176de9746076ebbe9e9ea0e56207d04410b1f88e3dc255bcbc9fd1689164d9",
+            "model_identity.json": "d0c3039cb7ad62237152a09ca6e83683dd5e148f463eaa07eee8ba9056d18ced",
+        },
         # PC-061: ASA control vector trained + published 2026-05-12.
         asa_status="supported",
         asa_artifact_files=["ast_edit_steering.gguf"],
@@ -261,8 +295,15 @@ REGISTRY: List[Model] = [
             "https://huggingface.co/datasets/itigges22/ATLAS/"
             "resolve/main/models/"
         ),
-        notes="ATLAS development target. Lens artifacts trained and "
-              "shipped in the repo (cost_field.pt + metric_tensor.pt). "
+        # sha256sum of the published file (captured 2026-07-02; the HF
+        # etag is a git blob SHA-1 for this non-LFS file, so the hash
+        # was computed from the downloaded bytes). Update on re-publish.
+        asa_artifact_sha256={
+            "ast_edit_steering.gguf": "8b9a7d8ba617dc2b9d6c0f53b398314390ac3e3573748c71a2b3a2721bdeea70",
+        },
+        notes="ATLAS development target. Legacy Lens artifacts are "
+              "downloadable but require `atlas lens build` to add current "
+              "per-model calibration. "
               "ASA control vector built + published to HF 2026-05-12. "
               "End-to-end supported.",
     ),
@@ -327,20 +368,69 @@ REGISTRY: List[Model] = [
               "llama.cpp model only — G(x) verification will silently "
               "no-op (--no-lens to acknowledge). See PC-058 roadmap.",
     ),
+    Model(
+        name="gemma-4-12b-it-Q4_K_M",
+        tier="medium",
+        model_file="gemma-4-12b-it-Q4_K_M.gguf",
+        model_display="gemma-4-12b-it-Q4_K_M",
+        model_size_gb=6.6,
+        # Published before cx_normalization.json/gx_thresholds.json became
+        # required. Keep the model-specific weights downloadable while the
+        # separate calibration flag prevents a production-ready claim.
+        lens_status="supported",
+        lens_calibrated=False,
+        download_url=None,
+        sha256=None,
+        # Gemma-family weights ship under Google's Gemma Terms of Use,
+        # not Apache-2.0 (HF license identifier: "gemma").
+        license="gemma",
+        lens_artifact_files=["cost_field.pt", "cost_field.safetensors", "gx_xgboost.json", "gx_weights.json", "model_identity.json"],
+        lens_hf_repo="itigges22/atlas-lens-gemma4-12b",
+        lens_artifact_url_base=(
+            "https://huggingface.co/itigges22/atlas-lens-gemma4-12b/"
+            "resolve/main/"
+        ),
+        # x-linked-etag of the HF LFS objects; gx_xgboost.json is a small
+        # non-LFS file, so its hash is sha256sum of the published bytes.
+        # Captured 2026-07-02; update on re-publish.
+        lens_artifact_sha256={
+            "cost_field.pt": "82b2d960b71b84a90ecc69189c67bc72a9b7cbc5c79b7b207dcaf2634b0af509",
+            "cost_field.safetensors": "d1ce645da3e3453505c6e31a5d055f5dd1d27da030a713fc79be6f148b3b4324",
+            "gx_weights.json": "343805ed5eec909fa21456f553382d7c5a7eeacd71cd99e7622d2db557770ed8",
+            "gx_xgboost.json": "5fc13d9054616e789244391df6f1264c7547bc330f938aaf9799c12263e77d8d",
+            "model_identity.json": "e08d6c596b3f8354e0c7ef5e5b8fe1d5b683f1fd367156ded68861b787737105",
+        },
+        notes="Added via `atlas lens publish` — legacy uncalibrated artifacts "
+              "(3840-dim) at https://huggingface.co/itigges22/atlas-lens-gemma4-12b. "
+              "download_url not captured at publish time; maintainers "
+              "can fill it in for `atlas model install` support.",
+        asa_status="supported",
+        asa_artifact_files=["ast_edit_steering.gguf"],
+        asa_hf_repo="itigges22/atlas-asa-gemma4-12b",
+        asa_artifact_url_base=(
+            "https://huggingface.co/itigges22/atlas-asa-gemma4-12b/"
+            "resolve/main/"
+        ),
+        # sha256sum of the published vector — verified byte-identical to
+        # the locally built models/ast_edit_steering.gguf (gemma4,
+        # layer 36). Captured 2026-07-02; update on re-publish.
+        asa_artifact_sha256={
+            "ast_edit_steering.gguf": "fbcfd8af85980c21fd0eb7d37c5627b027008934ad6c626b99eabf6e5587bb46",
+        },
+    ),
 ]
 
 
 # ---------------------------------------------------------------------------
-# Lookups — preserves PC-055.2 model_recommendations public API
+# Lookups — the public API doctor/tier/model consume
 # ---------------------------------------------------------------------------
 
 def for_tier(tier_name: str) -> Optional[Model]:
     """Return the default model recommendation for a tier name.
 
-    "Default" = the supported model if any tier-matched entry has
-    `lens_status == "supported"`, otherwise the first tier-matched
-    entry (which by definition is `no-artifacts`). Callers can inspect
-    `lens_status` to render the warning.
+    "Default" = a calibrated supported model when available, otherwise a
+    supported legacy bundle, otherwise the first tier-matched entry. Callers
+    inspect `lens_status` and `lens_calibrated` to render any warning.
 
     Returns None for tier names not in the registry (e.g., 'cpu',
     or unknown tiers). Caller decides how to render that.
@@ -349,7 +439,9 @@ def for_tier(tier_name: str) -> Optional[Model]:
     if not matches:
         return None
     supported = [m for m in matches if m.lens_status == "supported"]
-    return supported[0] if supported else matches[0]
+    calibrated = [m for m in supported if m.lens_calibrated]
+    return calibrated[0] if calibrated else (supported[0] if supported
+                                              else matches[0])
 
 
 def tier_for_model(model_file: str) -> Optional[str]:
@@ -378,14 +470,48 @@ def all_models() -> List[Model]:
     return list(REGISTRY)
 
 
+def by_model_file(model_file: str) -> Optional[Model]:
+    """Look up a model by its gguf filename. Tolerates a full path
+    (basename is compared) and case differences — callers pass whatever
+    llama-server's /props reported as the loaded model."""
+    base = str(model_file or "").replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if not base:
+        return None
+    for m in REGISTRY:
+        if m.model_file.casefold() == base:
+            return m
+    return None
+
+
+def artifact_download_hint(model_name: str, kind: str) -> str:
+    """One-sentence pointer at `atlas model install-artifacts` when the
+    registry carries downloadable artifacts of `kind` ("lens" | "asa")
+    for the loaded model; empty string when there is nothing to download.
+    The check commands append this to needs-build reasons so users reach
+    the published artifact before a local retrain."""
+    m = by_model_file(model_name)
+    if m is None:
+        return ""
+    status = getattr(m, f"{kind}_status", "")
+    if (status == "supported"
+            and getattr(m, f"{kind}_artifact_url_base", None)
+            and getattr(m, f"{kind}_artifact_files", None)):
+        return (f" Published artifacts for this model exist: "
+                f"`atlas model install-artifacts {m.name}` downloads and "
+                f"hash-verifies them — no local retrain needed.")
+    return ""
+
+
 def models_for_tier(tier_name: str) -> List[Model]:
     """All models registered against a tier (not just the default)."""
     return [m for m in REGISTRY if m.tier == tier_name]
 
 
 def supported_models() -> List[Model]:
-    """Models with end-to-end Lens support — i.e., what `atlas model
-    install` will install without `--no-lens`."""
+    """Models with downloadable model-specific Lens weights.
+
+    `lens_calibrated` separately identifies current production bundles.
+    """
     return [m for m in REGISTRY if m.lens_status == "supported"]
 
 
@@ -507,7 +633,9 @@ def lens_artifact_dir_for(model: Model, atlas_root: str) -> Optional[str]:
             return model.lens_artifact_dir
         return os.path.normpath(os.path.join(atlas_root,
                                               model.lens_artifact_dir))
-    env = os.environ.get("ATLAS_LENS_MODELS")
+    env = (os.environ.get("ATLAS_LENS_MODELS")
+           or compose_config.read_env_file(atlas_root).get(
+               "ATLAS_LENS_MODELS"))
     if env:
         return env if os.path.isabs(env) else \
             os.path.normpath(os.path.join(atlas_root, env))

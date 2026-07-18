@@ -6,4 +6,4 @@ including support for HumanEval, MBPP, LiveCodeBench, GPQA Diamond, IFBench, Sci
 and custom task sets.
 """
 
-__version__ = "3.0.1"
+__version__ = "3.1.2"

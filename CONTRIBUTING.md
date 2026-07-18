@@ -1,6 +1,11 @@
 # Contributing to ATLAS
 
-Thank you for your interest in contributing to ATLAS! This document provides guidelines for contributing to the project.
+Guidelines for contributing to ATLAS.
+
+- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — dev iteration workflow (rebuilds, host-side proxy, tests)
+- [PUBLISHING.md](docs/PUBLISHING.md) — publishing Lens / ASA artifacts
+- [RELEASE.md](docs/RELEASE.md) — release contract and verification levels
+- [STORY.md](docs/STORY.md) — project background
 
 ## How to Contribute
 
@@ -14,7 +19,7 @@ Before opening an issue:
    - ATLAS version/commit hash
    - Operating system and version
    - GPU model and driver version
-   - Output of `kubectl get pods`
+   - Output of `docker compose ps` (or `kubectl get pods` on K3s)
    - Relevant logs
 
 When opening an issue:
@@ -22,11 +27,11 @@ When opening an issue:
 1. Use a clear, descriptive title
 2. Describe the expected vs actual behavior
 3. Provide steps to reproduce
-4. Include logs and configuration (remove secrets!)
+4. Include logs and configuration (remove secrets)
 
 ### Suggesting Features
 
-Feature requests are welcome! Please:
+Feature requests are welcome. Please:
 
 1. Describe the use case and problem you're solving
 2. Explain how your feature would work
@@ -54,8 +59,8 @@ git checkout -b feature/your-feature-name
 cp .env.example .env
 # Edit .env if you need to change model path or ports
 
-# Run tests before making changes
-python tests/validate_tests.py
+# Run the complete developer quality gate before making changes
+python scripts/production-readiness.py
 ```
 
 #### Making Changes
@@ -84,7 +89,7 @@ Examples:
 
 #### Submitting
 
-1. Ensure all tests pass: `python tests/validate_tests.py`
+1. Ensure all required checks pass: `python scripts/production-readiness.py`
 2. Update CHANGELOG.md if applicable
 3. Push to your fork
 4. Open a pull request with:
@@ -105,26 +110,15 @@ Code isn't the only thing you can contribute. ATLAS ships per-model
 vectors** (`*.gguf`) — these are coupled to the base model they were
 trained against, so every new model needs its own pair before ATLAS
 runs end-to-end against it. If you've trained one, please contribute
-it back!
+it back.
 
-Artifact contributions follow a different workflow than code changes:
-
-- You train locally with `atlas lens build` / `atlas asa build`
-- You run `atlas lens publish` / `atlas asa publish`, which uploads the
-  binary to a HuggingFace repo you own AND opens a registry PR on this
-  repo containing the HF link + SHA-256 + dim
-- The maintainer pulls the artifact onto a verification VM, runs it
-  against a private trust-gate set, and merges (or asks for changes)
-  on the PR
-
-You do NOT need a GitHub PAT or write access to this repo. The minimum
-requirement is a HuggingFace account + write token. Full walkthrough,
-including credential setup, what happens after submission, and
-troubleshooting:
-
-→ **[docs/PUBLISHING.md](docs/PUBLISHING.md)**
-
-CLI flag reference for the publish commands lives in [docs/CLI.md](docs/CLI.md).
+You train locally with `atlas lens build` / `atlas asa build`, then run
+`atlas lens publish` / `atlas asa publish` to upload to a HuggingFace repo
+you own and open a registry PR. You do NOT need a GitHub PAT or write
+access to this repo — a HuggingFace account and write token is enough. The
+full walkthrough (credential setup, verification, troubleshooting) is in
+**[docs/PUBLISHING.md](docs/PUBLISHING.md)**; CLI flag reference is in
+[docs/CLI.md](docs/CLI.md).
 
 ## Code Style
 
@@ -191,14 +185,23 @@ fi
 ### Running Tests
 
 ```bash
-# Run all tests
-python tests/validate_tests.py
+# Run the developer quality gate
+python scripts/production-readiness.py
+
+# Run only the test-integrity validator
+python scripts/production-readiness.py --only test-integrity
 
 # Run specific test file
 pytest tests/v3/test_plan_search.py -v
 
-# Run with coverage
+# Run with coverage (needs `pip install pytest-cov` — not a declared dependency)
 pytest tests/ --cov=. --cov-report=html
+
+# End-to-end acceptance test (real proxy + sandbox executor + fake
+# llama-server; no GPU or model needed). Build the proxy binary first.
+cd proxy && go build -o /tmp/test-atlas-proxy . && cd ..
+pip install -r sandbox/requirements-runtime.txt
+pytest tests/e2e -v
 ```
 
 ### Writing Tests
@@ -207,6 +210,12 @@ pytest tests/ --cov=. --cov-report=html
 - Name test files `test_*.py`
 - Use descriptive test function names
 - Test edge cases and error conditions
+- Keep tests hermetic: never depend on a repo-root `.env`. CI runs on a
+  clean checkout with no `.env`, so a test that reads it (directly, or by
+  shelling out to a script that does) passes locally and fails in CI. Create
+  your own `tmp_path / ".env"` or pass values via the subprocess environment.
+  The `tests/cli/` suite moves any local `.env` aside so local runs match CI;
+  to mimic that elsewhere, run with `.env` temporarily renamed.
 
 ```python
 def test_chunk_overlap_preserves_context():
@@ -259,5 +268,3 @@ By submitting a contribution (pull request, patch, or any other form), you agree
 - Check existing documentation
 - Search closed issues
 - Open a discussion for general questions
-
-Thank you for contributing!

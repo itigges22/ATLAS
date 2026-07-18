@@ -124,12 +124,19 @@ const slashCommandHelp = `Slash commands
   /commit [msg]           Stage all changes and create a commit.
   /undo                   Revert the last commit (keep changes in tree).
   /run <cmd>              Run a shell command in the working dir.
+  /good                   👍 the last pass — bank it as lens-training data.
+  /bad                    👎 the last pass — bank it as a negative example.
+  /review                 List files the last pass wrote (with verdicts).
+  /deny <path> [reason]   Mark one file from the last pass bad (per-file).
+  /accept <path>          Undo a /deny.
+  /redo <path> [reason]   Ask the agent to regenerate a rejected file.
   /clear                  Clear the chat history (keeps session tokens).
   /compact                Ask the agent to compact conversation history.
   /hide <pane>            Hide a pane: files, pipeline, events, or all.
   /show <pane>            Show a pane (or all).
   /mouse [on|off]         Toggle mouse capture (off lets you select text). No arg = off.
   /copy [N]               Copy last N chat messages to system clipboard (default 1).
+  /demo [len]             Split-pane demo: base agent vs V3 (short|medium|long).
   /quit                   Exit.
 
 Copying text  (TL;DR: just drag-highlight in chat — auto-copies on release)
@@ -177,7 +184,8 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 	}
 
 	// Echo the input as a "you" row so the chat reflects what was sent.
-	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: input})
+	// Echo rows are display-only — buildChatHistory never forwards them.
+	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: input, Echo: true})
 
 	parts := strings.Fields(input)
 	cmdName := parts[0]
@@ -191,6 +199,25 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		return true, nil, false
 
 	case "/quit", "/exit":
+		return true, tea.Quit, true
+
+	case "/demo":
+		// Quit the main TUI and hand off to the split-pane recording demo
+		// (base agent vs V3, same proxy/model). Length filters the prompt bank.
+		length := "medium"
+		if len(args) > 0 {
+			switch args[0] {
+			case "short", "medium", "long":
+				length = args[0]
+			default:
+				m.chat = append(m.chat, chatMessage{
+					Role: roleSystem, Meta: "error",
+					Body: "usage: /demo [short|medium|long]",
+				})
+				return true, nil, false
+			}
+		}
+		m.launchDemoLength = length
 		return true, tea.Quit, true
 
 	case "/add":
@@ -230,9 +257,150 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		return true, runShellCmd(m.workingDir, "/run",
 			[]string{"bash", "-lc", strings.Join(args, " ")}), false
 
+	case "/good", "/bad":
+		// Rate the last completed pass 👍/👎 and submit any per-file verdicts
+		// set with /deny. The proxy turns that pass's writes into labeled,
+		// weighted lens-training samples; the corpus feeds `atlas lens retrain`
+		// to boost the lens on your own workloads.
+		thumbs, face := "up", "👍"
+		if cmdName == "/bad" {
+			thumbs, face = "down", "👎"
+		}
+		sid := m.lastPassSession
+		proxyURL := m.proxyURL
+		// Snapshot the per-file verdicts for the submit. They're cleared
+		// by the slashResultMsg handler only after a successful submit,
+		// so a failed POST leaves them intact for a retry.
+		var files []fileVerdict
+		for p, v := range m.passVerdicts {
+			files = append(files, fileVerdict{Path: p, Verdict: v})
+		}
+		denied := len(files)
+		return true, func() tea.Msg {
+			n, err := submitFeedback(proxyURL, sid, thumbs, files)
+			if err != nil {
+				return slashResultMsg{command: cmdName, err: err,
+					output: "Couldn't record feedback: " + err.Error()}
+			}
+			if n == 0 {
+				return slashResultMsg{command: cmdName,
+					output: "Nothing to rate — no writes in the last pass (or it was already rated)."}
+			}
+			out := fmt.Sprintf(
+				"%s recorded — %d write(s) from the last pass banked for lens training.", face, n)
+			if denied > 0 {
+				out += fmt.Sprintf(" (%d marked bad per-file)", denied)
+			}
+			return slashResultMsg{command: cmdName, output: out}
+		}, false
+
+	case "/review":
+		// List the files the last pass wrote, with any per-file verdicts.
+		if len(m.lastPassFiles) == 0 {
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review",
+				Body: "No files written in the last pass to review."})
+			return true, nil, false
+		}
+		var b strings.Builder
+		b.WriteString("Files written in the last pass (mark bad ones with /deny <path> [reason], then /good or /bad):\n")
+		for _, f := range m.lastPassFiles {
+			mark := "·"
+			if m.passVerdicts[f] == "deny" {
+				mark = "👎"
+			}
+			fmt.Fprintf(&b, "  %s %s\n", mark, f)
+		}
+		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review", Body: strings.TrimRight(b.String(), "\n")})
+		return true, nil, false
+
+	case "/deny":
+		// Mark one file from the last pass as bad (a confident negative sample,
+		// regardless of the pass thumbs). Optional trailing reason is kept for
+		// /redo. Submitted on the next /good or /bad.
+		if len(args) == 0 {
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+				Body: "usage: /deny <path> [reason]"})
+			return true, nil, false
+		}
+		path := args[0]
+		// Only files the last pass actually wrote are rateable — a
+		// mistyped path would otherwise record a verdict the proxy
+		// silently drops at submit time.
+		rateable := false
+		for _, f := range m.lastPassFiles {
+			if f == path {
+				rateable = true
+				break
+			}
+		}
+		if !rateable {
+			body := "No files written in the last pass — nothing to deny."
+			if len(m.lastPassFiles) > 0 {
+				body = fmt.Sprintf("%s isn't in the last pass. Rateable files:\n  %s",
+					path, strings.Join(m.lastPassFiles, "\n  "))
+			}
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error", Body: body})
+			return true, nil, false
+		}
+		if m.passVerdicts == nil {
+			m.passVerdicts = map[string]string{}
+		}
+		m.passVerdicts[path] = "deny"
+		if reason := strings.Join(args[1:], " "); reason != "" {
+			if m.passReasons == nil {
+				m.passReasons = map[string]string{}
+			}
+			m.passReasons[path] = reason
+		}
+		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "deny", Body: fmt.Sprintf(
+			"Marked %s bad for this pass — it'll be a negative sample on /good or /bad. "+
+				"`/redo %s` to regenerate it, `/accept %s` to undo.", path, path, path)})
+		return true, nil, false
+
+	case "/accept":
+		// Undo a /deny.
+		if len(args) == 0 {
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+				Body: "usage: /accept <path>"})
+			return true, nil, false
+		}
+		delete(m.passVerdicts, args[0])
+		delete(m.passReasons, args[0])
+		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "accept",
+			Body: fmt.Sprintf("Cleared the deny on %s.", args[0])})
+		return true, nil, false
+
+	case "/redo":
+		// Ask the agent to regenerate a rejected file. Reuses the deny reason
+		// when none is given on the command.
+		if len(args) == 0 {
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+				Body: "usage: /redo <path> [reason]"})
+			return true, nil, false
+		}
+		if m.turnActive {
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+				Body: "A turn is in progress — wait for it to finish before /redo."})
+			return true, nil, false
+		}
+		path := args[0]
+		reason := strings.Join(args[1:], " ")
+		if reason == "" {
+			reason = m.passReasons[path]
+		}
+		redo := fmt.Sprintf("Redo the file %s — the previous version was rejected.", path)
+		if reason != "" {
+			redo += " Reason: " + reason
+		}
+		m.chat = append(m.chat, chatMessage{Role: roleUser, Body: redo})
+		return true, m.sendChatCmd(redo + m.contextSuffix()), false
+
 	case "/clear":
 		m.chat = nil
 		m.chatScroll = 0
+		// Start a fresh persistence session so the cleared transcript
+		// doesn't overwrite the saved one on disk.
+		m.startNewSession()
 		return true, nil, false
 
 	case "/compact":

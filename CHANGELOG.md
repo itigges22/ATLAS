@@ -2,7 +2,194 @@
 
 > This changelog is maintained as a best-effort summary; for line-level detail and any gaps, see the commit history (`git log`) or the GitHub PR list.
 
-## Unreleased
+## [3.1.3] - 2026-07-06 — Maia
+
+### Upgrade, rollback, and diagnostics
+- `atlas upgrade [--to TAG] [--dry-run]`: staged upgrade with a recorded restore point (tag + image digests + `.env` backup), cosign signature verification of the target images (unpublished backend images are skipped, not fatal), readiness wait, quick-doctor smoke check, and automatic restore of the previous release on any failure (restore never re-pulls — a moved mutable tag can't replace the cached known-good images). Same-tag release tags no-op; mutable tags (`latest`, `dev`) run a full refresh. `atlas rollback [--to TAG]` returns to the restore point, and a failed `--to` reverts `.env` to the previously deployed tag.
+- `atlas diagnostics collect`: a shareable support bundle (doctor output, service health, compose config, recent logs) with private values filtered.
+- `atlas config validate | migrate`: typed schema over `.env` (types/ranges/enums, unknown and deprecated keys), forward migration with a `.bak` and a schema-version stamp, `--dry-run` preview.
+- Signed artifact manifests: `atlas artifact verify | snapshot | rollback` — SSH-signed provenance manifests over lens/ASA bundles (verified against `.github/allowed_signers` + per-file SHA-256), one-generation bundle snapshot/rollback, and lens retrains auto-write a provenance manifest.
+
+### Observability
+- Structured JSON logs behind `ATLAS_LOG_FORMAT=json` across proxy, v3, lens, and sandbox, with `X-ATLAS-Request-ID` correlation: the proxy assigns/echoes the ID, forwards it on every outbound service call (with or without internal auth configured), v3 propagates it to lens/sandbox calls, and 401 responses carry the echo. All log paths pass the private-value filter, including exception tracebacks; the assignment filter also masks single-quoted values and Python dict reprs.
+- Stable error-code taxonomy on the proxy API (`GET /version` lists codes; errors return the documented JSON envelope) and an OpenAPI 3.1 spec for the proxy surface with route-parity contract tests.
+- Command-execution trust modes (`ATLAS_TRUST_MODE`): `untrusted` refuses command execution (both `run_command` and `run_background`), `trusted` (default) forces sandbox execution, `fully-trusted` permits host execution.
+- Performance budget gate in CI: versioned measurement schema (CLI import time, proxy binary size) checked against `benchmark/perf/budgets.json`; a result matching zero budgeted metrics or a failed import fails the gate instead of passing vacuously.
+
+### Adversarial review passes
+- Two loop-until-clean adversarial reviews over the release window fixed 33 confirmed bugs, including: a trust-mode bypass via `run_background`; correlation-ID forwarding dead on token-less installs; `.env` corruption on files without a trailing newline; upgrade signature verification skipping the llama image; artifact verification only working on the signer's machine; bundle snapshot/rollback producing mixed-generation bundles; a default `atlas upgrade` that could never fetch a moved `latest`; restore paths that masked the original failure; sandbox/v3 images missing `structured_log.py` (startup crash on next build); CI gates that could never fail (attestation checks, OpenAPI parity, perf vacuous-pass); and a K3s lens PVC that rendered empty on upgraded installs.
+
+### Dependency updates
+- Grouped Dependabot updates merged: GitHub Actions majors (with `go-version: 1.26` — setup-go v6 pins GOTOOLCHAIN=local), Go tui deps, the Python group (fastapi 0.139 / uvicorn 0.50 / pydantic 2.13 / xgboost 3.2 / torch 2.12.1, with the torch pin synced across Dockerfile/CI/guard tests), and Docker digests (CUDA 12.9.2, golang 1.26-alpine, alpine 3.24). Base-image majors (CUDA 13, Python 3.14) are deliberate migrations and now ignored by Dependabot config, as are setuptools bumps past the RHEL9 python3.9 floor; staticcheck bumped to 2026.1 (go1.26 stdlib).
+
+### Installer trust
+- Release-pinned install: `ATLAS_BOOTSTRAP_REF=vX.Y.Z` pins the cloned checkout to the (SSH-signed) tag and `ATLAS_IMAGE_TAG` to the matching cosign-signed images; README/SETUP document the pinned and review-before-running variants beside the one-shot `curl | bash`.
+
+### Docs & repo
+- Ops docs consolidated: UPGRADE/ROLLBACK/BACKUP_RESTORE merged into OPERATIONS.md; README opens with the project definition and a Why ATLAS section; star-history chart moved to the working endpoint; `.mailmap` maps contributor identities for git tooling.
+
+### Production-platform pass (support, supply chain, governance, ops)
+- `SUPPORT_MATRIX.md`: every OS/backend/model/deployment/language/feature path classified (Supported/Preview/Experimental/Community-tested/Research-only/Unsupported) with validation provenance; N/N-1 compatibility policy; the model contract stated plainly (direct-mode agnostic, per-model bundles for V3/Lens/ASA).
+- Supply chain: Docker bases digest-pinned (Dependabot-maintained) except the ROCm/Vulkan community-backend bases, which are tag-pinned; every pushed image carries SLSA provenance + SPDX SBOM attestations and a keyless cosign signature over its digest.
+- Sandbox: non-root runtime (uid-mapped to the host user by `atlas init`), cap_drop ALL, CPU quota, toolchains relocated out of /root, K3s securityContext with seccomp RuntimeDefault, and an optional egress cutoff (`ATLAS_SANDBOX_NET_INTERNAL`) — verified on a local hardened-profile run.
+- Lens state store is SQLite (ADR 0007, GH #57, core implementation from #128 by @HarshalPatel1972): pattern cache, co-occurrence graph, Thompson-sampling router posteriors, task queue, and metrics live in one WAL-mode `geometric_state.db` on the `lens-state` volume. The redis service, redis-data volume, and the `ATLAS_REDIS_*` config keys are removed (`atlas config migrate` drops them); `REDIS_URL` itself is simply no longer read; degradation semantics unchanged (cache/router go neutral on store failure, task queue 503s). One less external dependency; state backup is a single file.
+- Governance: GOVERNANCE/MAINTAINERS/CODEOWNERS; SECURITY.md severities, response targets, embargo/CVE, backports, artifact revocation; THIRD_PARTY_NOTICES; seven ADRs; a single OPERATIONS.md runbook (health, logs, runbooks, upgrade, rollback, backup). Planning/status trackers are kept out of the repo.
+- Tracker hygiene: label vocabulary created + applied to all open issues; #39 closed with evidence; fresh-audit status on #66/#115/#27; #124/#126/#128 marked blocked with exact conformance lists.
+
+### V3/Lens pipeline acceptance test
+- A second deterministic E2E (`tests/e2e/test_v3_lens_acceptance.py`) boots the **real v3-service** alongside the real proxy and sandbox: a Tier-2 write routes through the proxy's V3 bridge, the probe fails on purpose, lens-calibrated allocation yields k=3, PlanSearch generates candidates via the fake llama, each candidate is scored through both lens endpoints (a recording fake lens proves the calls) and verified in the real sandbox, and winner selection writes the lens-preferred candidate to disk. Failure modes at the seams: V3 unreachable/malformed/timeout fall back to the documented direct write; a lens outage leaves V3 running uncalibrated.
+- `tests/contracts/` drift gates run in CI: proxy↔TUI event producer/consumer parity, envelope-type parity (Go producer / Go consumer / Python spec), config keys ↔ readers ↔ docs, CLI subcommands ↔ implementations, registry hash/consumption contracts.
+- Product/benchmark scoring contracts aligned: unified neutral lens fail-soft sentinel, deterministic energy-sorted benchmark candidate ordering, corrected pattern-cache retry key; intentional orchestrator differences documented in `benchmark/README.md`.
+
+### End-to-end acceptance test
+- CI runs a deterministic full-control-plane test (`tests/e2e/`): the real proxy binary and the real sandbox executor (host uvicorn, no Docker) against a scripted fake llama-server, driving one complete agent turn — read, edit, sandbox-verified `run_command` behind an interactive permission approve, done — over the production SSE protocol. Asserts stage order (a silently skipped stage fails), file contents, and the sandbox side-effect; a second test pins the fail-closed session-less deny. The sandbox executor's workspace root is env-overridable (`ATLAS_SANDBOX_WORKSPACE_ROOT`; containers keep `/workspace`). Scope: this covers the control plane deterministically — real llama.cpp inference, GPU backends, hidden-state extraction, ASA steering, and model-dependent V3/Lens quality remain hardware-gated or manually validated (see the SETUP hardware table).
+
+### Permissions fail closed
+- `/v1/agent` requests without a `session_id` deny destructive tool calls in `default`/`accept-edits` mode instead of silently executing them (there is no channel to answer the prompt). Unattended clients use `mode:"yolo"` or `session_allowed_tools`; the API doc's non-TUI client guide now covers `/v1/permission`. The TUI clears a pending permission modal on `permission_denied` and turn end.
+
+### Wiring completed
+- `v3_reasoning_token` is rendered in the TUI's V3 streaming row (previously emitted and dropped — a frozen "decoding…" row through every PlanSearch phase).
+- Lens retrains (both the service endpoint and `scripts/retrain_lens_from_results.py`) write `model_identity.json` for the served model; without it the load path's identity check disabled the entire lens on the next restart. Published lens bundles on HF now include identity files, pinned in the registry, so `atlas model install-artifacts` yields a bundle that actually loads. The gemma registry entry carries lens+ASA url bases and hashes.
+- Compose passes through the documented-but-unreachable knobs: `ATLAS_PLAN_THINKING` (v3-service), `ATLAS_SHELL_SNAPSHOT_*` (sandbox), `ATLAS_CONTROL_VECTOR_*` (llama-server). `.env.example` gains the five consumed-but-undocumented keys.
+- `scripts/build-containers.sh` builds the five current services from their real contexts and tags exactly as the K3s manifests reference (previously built from a removed directory layout, silently producing one image under names no manifest pulls); `uninstall.sh`'s image removal no longer aborts on an unset variable.
+- ASA marker checks are case-insensitive in both launchers, matching `atlas asa check`; `atlas publish --dry-run` without repos no longer crashes; the `train` extra includes xgboost + scikit-learn and the ImportError guidance mentions it.
+
+### Removed (unwired, placeholder, or caller-less — verified)
+- The `plan_tasks` tool (acknowledged tasks as pending without executing them) and its never-wired parallel executor; the `PermissionRule`/`checkPermissionRules` rules engine (nothing loaded rules — the live machinery is `needsPermission` + `awaitPermission` + the built-in deny-list); `build_verify.go`, `v3_adapter.go`, unused grammar/schema wrappers, `EmitSimple`, `calibrationTooltip`, and v3-service's unwired dual-emit envelope helper.
+- The metric-tensor G(x) path: `evaluate_gx` is XGBoost-only and the metric tensor served only `/internal/lens/correctability`, an endpoint with no caller; the 67 MB `metric_tensor.pt` is out of the Q6_K bundle.
+- The V3.0-era inference files (`Dockerfile.mtp`, spec-decode/9B/embed entrypoints, custom jinja templates, the malformed unused patch file), the `model_recommendations` back-compat shim (callers migrated to `model_registry`), zero-reference scripts (`run_full_benchmarks.sh`, `validate_benchmarks.py`, `smoke-test-9b.sh`, `deploy-9b.sh`, `measure_bok_latency.sh`), `router/fallback_chain.py`, the `/ablation` coming-soon stub, the benchmark `--runs` no-op flag, and the dead `ATLAS_ENABLE_TRAINING`/`ATLAS_REGISTRY` config keys.
+- Docs describe only the live protocol: the v3-service dual-emit claim, the "done is always last" broker claim, and stale consumer lists are corrected in PROTOCOL.md and `atlas/cli/events.py`.
+
+### Supply-chain & artifact integrity
+- Lens/ASA artifact downloads verify SHA-256 against per-file hashes in the model registry (`lens_artifact_sha256` / `asa_artifact_sha256`); a mismatch removes the partial file and fails the install, and files without a registry hash are labeled unverified instead of `[ok]`. `download-models.sh` verifies GGUF downloads against the same registry hashes (previously size-check only on the shell path).
+- Lens checkpoint loading uses `torch.load(weights_only=True)` (the artifact can come from a remote download; full-pickle loading would execute code during deserialization). The legacy `gx_xgboost.pkl` fallback is opt-in via `ATLAS_ALLOW_PICKLE_GX=1` instead of automatic.
+- `benchmark/custom/validate.py` enforces `tasks.json.lock`: a task set that drifted from its approved hash fails validation instead of the lock being informational.
+- `gx_thresholds.json` (per-model G(x) operating thresholds) is tracked with its sibling lens artifacts, so a fresh clone runs with threshold interventions enabled.
+
+### CI / release safety
+- Image publishing is two-phase: the build matrix pushes only immutable `:sha-<short>` tags; a promote job repoints `:dev` / `:latest` / semver tags via `imagetools create` only after every service built **and** the `tests` workflow passed on the same commit. Failed tests or a partial matrix can no longer overwrite moving tags, including with mixed-commit images.
+- Pull requests build the four small service images (`push: false`) so Dockerfile breakage is caught before merge instead of on the post-merge publish.
+- Every GitHub Action is pinned to a full commit SHA (Dependabot keeps them fresh); `test.yml` / `install-test.yml` run with explicit `permissions: contents: read`; Dependabot also covers the Docker base images across all five service directories.
+- CI runs the static `tests/infrastructure` checks, `geometric-lens/tests` (34 hermetic tests, previously never in CI), the `test-integrity` + `python-compile` gates, and shellcheck over all of `scripts/*.sh` (previously 2 of 13 scripts). Install matrix uses the maintained `rockylinux/rockylinux:9` image.
+
+### Community health
+- `SECURITY.md` (threat model scoped to the single-user local deployment, private reporting via GitHub advisories), issue templates (bug report requires `atlas doctor` output), a PR template, and Dependabot config.
+
+### CLI
+- `atlas --version` prints the CLI version; the REPL banner shows the real version instead of a hardcoded `v3.1`.
+- `atlas bench` exits non-zero when the runner fails or produces no results (previously always exited 0).
+
+### Fixes & accuracy
+- Sandbox trust-model docstring describes what the container actually enforces; the never-enforced `MAX_MEMORY_MB` knob is removed (memory is capped by `ATLAS_SANDBOX_MEM`).
+- `plan_tasks` is documented as a planning aid (tasks are acknowledged, not executed); the unreferenced MTP inference experiment files are removed.
+- Packaging metadata completed (readme, URLs, classifiers, `train` extra for `atlas lens/asa build` dependencies; `setuptools>=77` to match the SPDX license form). Docs: uninstall section in SETUP, six previously-undocumented env vars in CONFIGURATION, `python3 -m benchmark.cli` invocation corrected, pass@1-v(k=3) defined where the headline number appears.
+
+### Interactive permissions
+- `default` and `accept-edits` modes now prompt before a destructive tool call runs. The turn pauses on a bordered approval box (`[y] allow once`, `[a] allow for session`, `[n]`/`Esc` deny); `Ctrl+C` still cancels the whole turn. An "allow for session" choice whitelists that tool so it isn't asked again (carried in the request's `session_allowed_tools`). `accept-edits` auto-allows file writes/edits and prompts `run_command`/`delete_file`; `yolo` is unchanged.
+- New `POST /v1/permission` endpoint and `permission_request` SSE event carry the decision back to the paused turn (keyed by `session_id` + `tool_call_id`, mirroring `/cancel`). A fail-safe timeout (`ATLAS_PERMISSION_TIMEOUT_SEC`, default 600s) denies if nothing is answered.
+
+### Sessions
+- The TUI saves each session to `~/.cache/atlas-tui/sessions/<id>.json` (one file per session, written each turn). `atlas --continue` resumes the most recent session in the current directory; `atlas --resume` picks one from a list; `atlas --resume <id>` resumes a specific session. The saved transcript is replayed into the view and fed back to the model as history; a directory mismatch keeps the current directory and warns. `/clear` starts a fresh session, leaving the prior one on disk.
+
+### Installer / bootstrap
+- Bootstrap writes the registry's default recommended model into `.env` when none is selected (logged), so the one-shot `curl | bash` flow completes without the wizard; an existing selection is respected.
+- No detected GPU selects the Vulkan overlay automatically, plus the new `docker-compose.cpu.yml` when `/dev/dri` is absent — GPU-less hosts boot via the lavapipe CPU ICD (slow but functional).
+- firewalld changes are opt-in via `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1`; services bind loopback, so local installs leave the firewall alone.
+- ASA steering-vector build dispatches per GPU vendor (CUDA/ROCm image + device flags), loads `.env` keys first, and skips cleanly on CPU-only hosts; re-runs pull the existing checkout as its owner (no dubious-ownership failure under sudo); service health wait raised to 450s to cover llama-server warmup.
+- `install.sh` (K3s) fails early with guidance when `bc` is missing; `download-models.sh` downloads via curl and writes a relative `default.gguf` symlink; the macOS native launcher keeps smaller fallback defaults than the Docker path (ctx 32768, q8_0/q4_0 KV, 1 slot) for Mac unified-memory headroom, and treats `.env` as optional so an env-only launch works.
+- GPU vendor detection word-bounds the AMD `lspci` match so NVIDIA/Intel GPUs aren't misdetected as AMD (#129).
+
+### Proxy
+- `/ready` also gates on v3-service health.
+- Cancellation aborts in-flight V3 plan/write calls and sandbox calls; a cancelled `write_file`/`edit_file`/`ast_edit` no longer falls back to writing content to disk; per-turn cancel handles so overlapping turns on one session id can't remove each other's registration.
+- The verification, done-without-action, and claim-check gates share a 3-bounce cap, so a persistently bounced `done` is eventually accepted instead of looping.
+- The markdown-fence sanitizer only strips a true whole-file wrapper — interior fences (e.g. docstring examples) pass through unchanged.
+- The safety deny-list (`.env`/`*.pem`/`*credentials*` writes, destructive shell patterns) is enforced centrally at tool dispatch in every permission mode.
+- `outline_file` returns structured JSON including the rendered outline; `delete_file` reports removal errors and refuses non-empty directories; exploration budget escalates its nudge instead of skipping the read; session read-cache access is lock-guarded.
+
+### Security & workspace containment
+- Proxy-level workspace containment: every path-taking tool argument (`path`, `source`, `destination`, `cwd`) is resolved and checked against the workspace root before any handler touches the filesystem. Paths escaping via `..`, absolute paths, or symlinked components are refused in every permission mode.
+- Untrusted text written to logs is field-encoded so it can't forge or split log lines.
+- v3-service verifies candidate code before accepting it: an allowlisted build/test command gate (shell metacharacters blocked) and language-aware syntax checks reject candidates that don't compile/parse.
+- Sandbox executor parses XML with `defusedxml` (untrusted-input safe).
+- `scripts/production-readiness.py` is the developer gate (test integrity, Python compile + unit tests, Go race/vet for proxy and TUI, and the v3 syntax/sandbox contract tests); CI runs the same named gates.
+
+### TUI
+- `/demo` raw lane runs with no sandbox or file tools; in review mode the raw pane keeps the model response while the V3 pane shows written files; stream events can no longer be overtaken by the done marker; prompt animation is multi-byte-safe; markdown re-wraps on terminal resize.
+- Feedback flow: staged per-file verdicts survive a failed submit; `/deny` validates the path against the files the last pass actually wrote; non-200 `/feedback` responses surface as errors; input echoes never replay into agent history.
+- Bearer-token loader reads the `atlas init` api-keys.json shape; `/events` reconnect backoff resets after a healthy connection; renderers added for reasoning-repetition interventions, stream cuts, and symbol-index injection.
+
+### CLI (continued)
+- `atlas compose <args...>` passthrough subcommand (base file + backend overlay); `atlas --help` lists subcommands; unknown subcommands print usage and exit 2.
+- Service URLs resolve from the Docker `.env` port keys when no explicit URL env var is set (repl, client, doctor, lens check).
+- `atlas onboard --url` offers to write `ATLAS_MODEL_FILE`/`ATLAS_MODEL_NAME` into `.env` (interactive prompt; `--apply` for non-interactive).
+- `atlas doctor` prints each result as it completes (JSON mode still buffers).
+- `atlas model`: models dir resolves from the compose `.env`; a resumed download that the server reports complete (HTTP 416) is verified and finalized in place; `install-artifacts` exits 3 when no artifacts are registered for direct download and points at the published repos; Gemma-family registry entries carry the `gemma` license identifier.
+- `atlas init` reports failure when `api-keys.json` is not written and asks before tightening a loose `secrets/` dir; `atlas asa build` resolves the lens container via compose (non-default project names) and survives docker-exec timeouts with recovery guidance; `atlas solve` uses `/v1/chat/completions` so the GGUF's own chat template applies; the startup status block drops the hardcoded speed figure; version reports 3.1.3.
+
+### Geometric Lens — per-model calibration
+- Per-model score calibration, model-identity checks, and threshold loading are their own modules (`calibration.py`, `identity.py`, `thresholds.py`): C(x) energy is normalized to a per-model scale and G(x) verdicts use per-model thresholds, so the same framework works across models without hardcoded constants.
+- The proxy exposes `GET /v1/calibration/status` (lens + ASA compat verdict for the loaded model); the TUI reads it as a header badge on startup.
+- `atlas lens check | build | publish` and `atlas asa check | build | publish` cover the per-model probe, training, and artifact-publish flow.
+- Adds the `entrypoint-v3.1.sh` inference entrypoint (env-driven, model-neutral) shared by the Docker images and the macOS launcher.
+
+### Lens service + retrain tooling
+- `/internal/lens/retrain` refuses with a structured 503 when the models dir is mounted read-only, pointing at host-side `atlas lens retrain`; retrain/reload are serialized and refresh the readiness state on success.
+- Artifact identity is verified against the model llama-server actually serves (`/v1/models` probe, `ATLAS_MODEL_NAME` fallback) and against the checkpoint's input dimension.
+- G(x) loading is shared between boot and per-directory reloads, so a reload yields the complete lens; G(x) operating thresholds derive from out-of-fold CV scores instead of the final booster's in-sample scores.
+- `retrain_lens_from_results.py` mean-pools per-token embedding responses (matching serve-time extraction) and hot-reloads the service; `retrain_cx.py` resolves ports from `.env` with a K3s NodePort fallback; benchmark lens-feedback keeps its sample buffer when a retrain is refused or fails.
+- The lens image ships the `gguf` package (ASA vector writer), and the ASA build fails fast when it is missing.
+
+### v3-service / sandbox
+- v3-service serves requests on a threading HTTP server with a thread-safe graph cache; client disconnects abort the pipeline at phase boundaries; selection winners are matched by original candidate index (was positional against a sorted list); self-test harness executes candidates from a string literal so multiline strings survive; sandbox client timeout raised to 45s.
+- Sandbox executor: per-call cap set to 300s in the Compose stack (`ATLAS_SANDBOX_MAX_EXECUTION_TIME`); process-group kill on timeout; optional `stdin` on `/execute`; project-context file writes routed through the O_NOFOLLOW containment helper; background jobs abandoned for 2h are reaped.
+
+### Compose / K3s
+- All services run with `restart: unless-stopped`; runtime-tuning keys (`ATLAS_V3_TIMEOUT`, `ATLAS_MAX_TOKENS`, `ATLAS_AGENT_HISTORY_BUDGET`, `ATLAS_LENS_RETRAIN_MIN`, `ATLAS_KEEP_LLAMA_WARM`, `ATLAS_FRESH_SLOT_PER_SESSION`) pass through to the proxy; `ATLAS_GPU_INDEX` reaches the llama container; `.env.example` documents the runtime-tuning section.
+- Inference Dockerfiles EXPOSE 8080 (matching the entrypoint); ROCm/Vulkan images install curl for the compose healthcheck.
+- K3s templates pin container-side ports so moving a Service port can't break probes; the proxy pod mounts models read-only and the lens-training corpus hostPath (`ATLAS_LENS_TRAINING_DIR`), and receives ctx/slot sizing; `deploy-9b.sh` uses the shared entrypoint and split KV-cache type keys.
+- `production-readiness.py` and CI validate every shipped compose overlay combination; the installer CI job asserts a non-empty model selection lands in `.env`.
+
+### Docs
+- Documentation refreshed against the current code: MAP regenerated; API (feedback/training-status endpoints, readiness gate, tool table, workspace containment); CLI, CONFIGURATION, SETUP, SOURCES, PLAN_MODE, TROUBLESHOOTING updated.
+- Documentation refactor for concision and structure: internal ticket references and dated change-narration removed from user-facing prose; duplicated content consolidated to a single canonical home with cross-links; `CAPABILITIES.md` + `PRODUCTION_READINESS.md` merged into `RELEASE.md`; `MAP.md` slimmed to a directory-level orientation map; shipped-release status trackers moved to `docs/reports/archive/`. Translations (`docs/lang/`) re-sync as a follow-up.
+- README intro clarified.
+- Full-tree accuracy audit against the code. API/PROTOCOL: `run_command` fails (no host fallback) when the sandbox is unreachable unless `ATLAS_VERIFY_IN=host`; the proxy is the live envelope producer (v3-service envelope opt-in is unwired); lens `/v1/*` endpoints require Bearer auth; missing request fields, SSE events, and v3-service endpoints documented; `ATLAS_PROXY_NODEPORT` name corrected. ARCHITECTURE: 15-tool table (adds `outline_file`); redis and the geometric-lens→v3-service edge in the service graph; XGBoost G(x) deployed, gradient-step correction unwired; sandbox cap 300s in Compose. CLI: `/demo` and `atlas lens retrain` documented; TUI has no `/bench`. CONFIGURATION: shell-gate table matches the catastrophic-only policy; token-budget trim; `ATLAS_REASONING_BUDGET`/`ATLAS_BACKEND` compose-passthrough notes corrected; adds `ATLAS_PERMISSION_TIMEOUT_SEC`, `ATLAS_LENS_HOST_DIR`, `ATLAS_LLAMA_HOST`; 12 sandbox languages. SETUP: `atlas` is the pip entrypoint (launcher-script passage removed); ASA `.gguf.model` marker gate + `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED`; TUI needs Go 1.26.2+. TROUBLESHOOTING: V3 fire conditions (10-line floor, ≥2 indicators), write-to-existing-path gate, exploration-budget nudges. PUBLISHING: pre-flight scope stated accurately. ja/ko/zh-CN copies updated to match; `docker-compose.override.yml` added to `.gitignore` (DEVELOPMENT.md documents it as ignored).
+
+## [3.1.2] - 2026-06-17 — Maia
+
+### Hardware reach
+- AMD ROCm via llama.cpp — including RDNA4 / RX 9070 (gfx1200/gfx1201) and community-verified cards (#26)
+- Apple Silicon — native macOS hybrid Metal path (native llama-server for inference + Docker for the rest of the stack) (#32)
+- Vulkan universal fallback — one image covering AMD / Intel / Snapdragon / Apple-via-MoltenVK / CPU (#114)
+
+### Agent reliability — local-model tool loop
+- Tool results are rendered as user-role turns on the wire. Gemma's chat template has no `tool` role and silently dropped `role:"tool"` messages, so the model never saw any tool output (`list_directory` / `read_file` / `run_command`) and re-issued the same call until the repetition breaker fired. This was the root cause behind the "it can't see what it's reading / it just loops" reports. Model-agnostic (Qwen reads the `[tool result]` marker the same way).
+- Read-dedup false-negative fixed: `fileContentInContext` probed the raw longest line, but tool results are stored JSON-escaped, so any file whose longest line contained a quote (e.g. a Flask app's embedded HTML) was wrongly judged "trimmed" and re-served every read → read loop. Now probes the longest escape-free run.
+- Traceback → directed edit (#39 / option 3): a `run_command` crash extracts the deepest in-project frame, quotes the offending line, and steers a minimal `edit_file`; run tools are banned from the next decision's grammar so the model must edit rather than re-run.
+- `move_file` tool: relocations/renames (e.g. `index.html` → `templates/`) no longer require a read→write→delete dance; shell `mv`/`cp` point here. Refuses to clobber an existing destination.
+- Steers for common dead-ends: `No module named X` → `pip install` (instead of re-running), and a filename that differs only in case from a real workspace file → the correct name.
+- Per-turn `max_tokens` 32768 → 8192 (`ATLAS_MAX_TOKENS`) and a content-stream loop cut, bounding runaways that previously ran to the slot ceiling.
+- Conversation window sized to the per-slot context (with the active file pinned in the trim) instead of a flat cap that dropped the file under edit.
+
+### Sandbox — shell policy + isolation
+- `run_command` shell gate narrowed from "block every mutating verb" to catastrophic-only (whole-project/root `rm -rf`, fork bombs, device destruction), since the sandbox container (read-only rootfs, no-new-privileges, project-only writable mount, cwd jailed) is the real boundary. Ordinary `mv`/`cp`/`mkdir`/`rm <file>`/`sed -i` now run; `bash -c`/`eval` are unwrapped so a wrapped catastrophic command can't slip through.
+- Host-sized cgroup limits on the sandbox: `pids_limit` (kernel-level fork-bomb stop) and a memory cap (`atlas init` detects host RAM and writes `ATLAS_SANDBOX_MEM` ~75%); `:-0` fallback keeps a raw `docker compose up` working uncapped.
+- Interactive wall-clock cap on the V3 pipeline (`ATLAS_V3_TIMEOUT`, default 180s) — a runaway falls back to the model's own (syntax-gated) content instead of hanging the session.
+
+### Geometric Lens — per-model thresholds + in-the-loop training data
+- G(x) operating thresholds are now per-model and ship with the lens artifact (`gx_thresholds.json`): the lens service loads them and returns them in each score response; the proxy uses them for its regression checks. The hardcoded 0.3 / 0.15 / 0.05 cutoffs were calibrated to one model's score scale and never fired for a model (e.g. Gemma) whose scores cluster higher. `atlas lens build` auto-emits the file, calibrated from the run's PASS-score percentiles.
+- ast_edit now matches `<script>` / `<style>` (tree-sitter parses them as dedicated `script_element` / `style_element` nodes, not generic `element`s — the old query matched 0).
+- In-the-loop lens-training data collection: each agent file-write is captured per pass; in the TUI, `/good`·`/bad` rate a pass and `/review` + `/deny`·`/accept` set per-file verdicts, which the proxy turns into labeled, weighted samples (a 👎 pass down-weights even its accepted files; a denial is a full-weight negative). `/redo` regenerates a rejected file. A one-time "lens retrain available" banner appears once enough balanced samples accrue.
+- `atlas lens retrain` trains the lens on that collected corpus (weighted G(x)) so it learns the user's own workloads, and emits fresh calibrated thresholds. New env: `ATLAS_LENS_DATA_DIR`, `ATLAS_LENS_RETRAIN_MIN`. TUI slash commands: `/good /bad /review /deny /accept /redo`.
+
+### Structural call-graph reasoning (#39, thanks @yogthos)
+- Intra-file call-graph neighborhood (`calls:` / `called by:` per symbol) rides on `outline_file` and whole-file `read_file` of a `.py`, gated by `ATLAS_CALL_GRAPH`. Surfaces structure at the localization decision point without a repo-wide scan. (PR #125 by Dmitri Sotnikov, integrated and extended.)
+
+### Documentation
+- Translated ARCHITECTURE.md to zh-CN / ja / ko (#25); added a language switcher to the English ARCHITECTURE.md
+
+## [3.1.0] - 2026-05-12 — Maia
 
 ### V3.2 — RPG-style architecture-first planning (#120, experimental, opt-in)
 - New `ATLAS_RPG_PLANNING` flag (default **off**) enables repository-level,

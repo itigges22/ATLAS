@@ -1,5 +1,6 @@
 """Bench command — run benchmarks with live progress."""
 
+import contextlib
 import json
 import os
 import sys
@@ -9,16 +10,36 @@ from pathlib import Path
 from atlas.cli import display
 
 
-def bench(dataset: str = "livecodebench", max_tasks: int = 0,
-          selection_strategy: str = "random"):
-    """Run benchmark with live progress display.
+def _atlas_root() -> Path:
+    """The repo root (the directory holding docker-compose.yml), resolved from
+    this file so the command works from any working directory."""
+    cur = Path(__file__).resolve().parent
+    for _ in range(8):
+        if (cur / "docker-compose.yml").exists():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return Path.cwd()
 
-    Delegates to the V3 runner but displays progress inline.
+
+def bench(dataset: str = "livecodebench", max_tasks: int = 0,
+          selection_strategy: str = "random", run_id: str = None) -> int:
+    """Run benchmark with live progress display. Returns a process exit
+    code: 0 on success (including a fully-resumed run), 1 when the runner
+    fails or produces nothing.
+
+    Delegates to the V3 runner but displays progress inline. The runner is
+    launched with the repo root as its working directory (the `benchmark`
+    package resolves via cwd and results are written under the repo), so the
+    command behaves the same from any directory.
     """
-    display.phase(f"Benchmark: {dataset}")
+    display.phase_label(f"Benchmark: {dataset}")
+
+    root = _atlas_root()
 
     # Build runner command
-    run_id = f"bench_{dataset}_{int(time.time())}"
+    run_id = run_id or f"bench_{dataset}_{int(time.time())}"
     cmd = [
         sys.executable, "-m", "benchmark.v3_runner",
         "--run-id", run_id,
@@ -28,11 +49,12 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     if max_tasks > 0:
         cmd.extend(["--max-tasks", str(max_tasks)])
 
-    # Set LLM environment
+    # Connectivity (llama/RAG URLs, model name) is resolved by benchmark.config
+    # from the deployment's .env / atlas.conf — nothing model- or
+    # deployment-specific is pinned here. An explicit LLAMA_URL/RAG_API_URL in
+    # the environment still wins. Generation stays serialized (the safe
+    # default for any architecture).
     env = os.environ.copy()
-    env["ATLAS_MODEL_NAME"] = os.environ.get("ATLAS_MODEL_NAME", "Qwen3.5-9B-Q6_K")
-    env["LLAMA_URL"] = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
-    env["ATLAS_LLM_PARALLEL"] = "1"
     env["ATLAS_PARALLEL_TASKS"] = "1"
 
     display.info(f"Run ID: {run_id}")
@@ -41,35 +63,77 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
         display.info(f"Tasks: {max_tasks}")
 
     import subprocess
+    from collections import deque
+    tail = deque(maxlen=15)  # last runner lines, shown if the run fails
     proc = subprocess.Popen(
-        cmd, env=env,
+        cmd, env=env, cwd=str(root),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1,
     )
 
-    results_dir = Path(f"benchmark/results/{run_id}/v3_lcb/per_task")
+    results_dir = root / "benchmark" / "results" / run_id / "v3_lcb" / "per_task"
     pass_count = 0
     task_count = 0
+    dataset_total = 0  # parsed from the runner's "[done/total]" prefix
+    saw_complete = False  # runner printed its BENCHMARK COMPLETE summary
 
     try:
         for line in proc.stdout:
             line = line.strip()
+            if line:
+                tail.append(line)
             # Parse runner output for progress
             if line.startswith("[") and "/" in line and "LCB" in line:
                 task_count += 1
                 if "PASS" in line:
                     pass_count += 1
-                total = max_tasks if max_tasks > 0 else 599
+                # The runner emits "[done/total] <task>: ..." — take the
+                # dataset size from the line rather than pinning it; a
+                # malformed prefix just keeps the previous total.
+                with contextlib.suppress(IndexError, ValueError):
+                    dataset_total = int(
+                        line[1:].split("]", 1)[0].split("/", 1)[1].strip())
+                total = max_tasks if max_tasks > 0 else \
+                    (dataset_total or task_count)
                 display.progress_bar(task_count, total, pass_count, line.split("]")[-1].strip()[:40])
             elif "BENCHMARK COMPLETE" in line:
+                saw_complete = True
                 display.progress_done()
-                display.newline()
+                print()
+            elif line.startswith(("Downloading ", "Downloaded ", "Warning:",
+                                  "Cached LiveCodeBench", "Failed:",
+                                  "Resuming:", "LIMITED MODE",
+                                  "Loading LiveCodeBench")):
+                # Dataset fetch + resume status: surface live, or silent
+                # fallbacks (partial cache, failed sources) look like
+                # nothing happened.
+                display.info(line.lstrip())
     except KeyboardInterrupt:
         proc.terminate()
         display.warn("Benchmark interrupted")
-        return
+        return 1
 
     proc.wait()
+
+    if proc.returncode != 0:
+        display.error(f"benchmark runner exited with code {proc.returncode}")
+        for l in tail:
+            print(f"    {l}")
+        return 1
+
+    if task_count == 0 and not saw_complete:
+        # The runner exited without processing a single task (e.g. an aborted
+        # pre-flight). Results already on disk are from an earlier run — don't
+        # summarize them as if this run produced them.
+        display.error("runner exited without processing any tasks")
+        for l in tail:
+            print(f"    {l}")
+        return 1
+    if task_count == 0:
+        # Resume found every task already complete — the summary below is
+        # the prior run's results, which is exactly what the operator wants.
+        display.info("no tasks remaining — all requested tasks were already "
+                     "complete on disk (resumed run)")
 
     # Final results
     if results_dir.exists():
@@ -77,14 +141,48 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
         # Read each result via context manager so handles close promptly
         # even when we hit a large results dir on a long benchmark run.
         def _load(f):
-            with open(f) as fh:
-                return json.load(fh)
+            try:
+                with open(f) as fh:
+                    d = json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                return {}
+            return d if isinstance(d, dict) else {}
         p = sum(1 for f in results if _load(f).get("passed"))
         total = len(results)
         rate = p / max(total, 1) * 100
         display.separator()
         display.success(f"pass@1: {p}/{total} ({rate:.1f}%)")
-        display.info(f"Results: benchmark/results/{run_id}/")
+        display.info(f"Results: {root / 'benchmark' / 'results' / run_id}/")
+        display.info(f"Lens retrain: atlas lens build --force --from-results "
+                     f"{results_dir}")
         display.separator()
-    else:
-        display.error("No results found")
+        return 0
+    display.error("No results found")
+    for l in tail:
+        print(f"    {l}")
+    return 1
+
+
+def main(argv=None) -> int:
+    """`atlas bench` subcommand entry point."""
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="atlas bench",
+        description="Generate + self-label candidates for the loaded model "
+                    "(baseline benchmark run). Results feed "
+                    "`atlas lens build --from-results`.")
+    parser.add_argument("--tasks", "--max-tasks", dest="tasks", type=int,
+        default=0, help="number of tasks to run (0 = all, default)")
+    parser.add_argument("--strategy", "--selection-strategy", dest="strategy",
+        default="random", choices=["lens", "random", "logprob", "oracle"],
+        help="candidate selection strategy (default: random)")
+    parser.add_argument("--run-id", default=None,
+        help="name for this run (default: bench_livecodebench_<timestamp>); "
+             "results land in benchmark/results/<run-id>/")
+    args = parser.parse_args(argv)
+    if args.tasks < 0:
+        parser.error("--tasks must be >= 0 (0 runs the full dataset)")
+
+    # The runner supports LiveCodeBench only, so no --dataset flag is exposed.
+    return bench(max_tasks=args.tasks, selection_strategy=args.strategy,
+                 run_id=args.run_id)
