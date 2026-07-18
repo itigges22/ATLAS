@@ -46,6 +46,7 @@ SCHEMA: Dict[str, Field] = {
                               enum=("untrusted", "trusted", "fully-trusted")),
     "ATLAS_VERIFY_IN": Field("enum", enum=("sandbox", "host")),
     "ATLAS_CALL_GRAPH": Field("bool"),
+    "ATLAS_RPG_PLANNING": Field("bool"),
     "ATLAS_KEEP_LLAMA_WARM": Field("bool"),
     "ATLAS_FRESH_SLOT_PER_SESSION": Field("bool"),
     "ATLAS_DEDUP_READS": Field("bool"),
