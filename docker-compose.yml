@@ -285,6 +285,14 @@ services:
     restart: unless-stopped
     build:
       context: ./proxy
+    # Run as the invoking user (same rationale as the sandbox's
+    # ATLAS_SANDBOX_UID): the proxy writes to two host bind mounts —
+    # /workspace (write_file/edit_file targets) and /data/lens_training
+    # (lens sample banking). The image's baked-in non-root user (uid 1001)
+    # can't write host dirs owned by the operator, which fails every file
+    # write with `permission denied` on the .atlas.tmp temp file.
+    # `atlas init` writes the invoking user's ids into .env.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
       - ATLAS_GRAMMAR_MODE=${ATLAS_GRAMMAR_MODE:-strict}
       - ATLAS_PROXY_PORT=8090

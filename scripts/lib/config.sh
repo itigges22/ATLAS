@@ -161,3 +161,11 @@ export ATLAS_GHCR_OWNER
 # non-empty hostPath in the manifest.
 ATLAS_LENS_TRAINING_DIR="${ATLAS_LENS_TRAINING_DIR:-${ATLAS_DATA_DIR:-/opt/atlas/data}/lens_training}"
 export ATLAS_LENS_TRAINING_DIR
+
+# Proxy runtime uid/gid (atlas-proxy template securityContext). The proxy
+# writes the /workspace hostPath; it must run as the owner of that dir.
+# Default: the invoking user, matching `atlas init`'s ATLAS_PROXY_UID
+# behavior on the compose path.
+ATLAS_PROXY_UID="${ATLAS_PROXY_UID:-$(id -u 2>/dev/null || echo 1000)}"
+ATLAS_PROXY_GID="${ATLAS_PROXY_GID:-$(id -g 2>/dev/null || echo 1000)}"
+export ATLAS_PROXY_UID ATLAS_PROXY_GID

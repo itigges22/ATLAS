@@ -66,6 +66,7 @@ Exact error strings and symptoms, mapped to their entries.
 | `RPC failed; curl 56` / `early EOF` / `fetch-pack: invalid index-pack output` | [llama.cpp Clone Times Out](#llamacpp-clone-times-out) |
 | `error loading model: unknown (model) architecture '…'` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
 | `error: patch failed:` / `patch does not apply` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
+| `open /workspace/....atlas.tmp: permission denied` on every write | [Proxy Can't Write the Workspace](#proxy-cant-write-the-workspace-atlastmp-permission-denied) |
 | Permission denied on mounted volumes / model files (Fedora/RHEL) | [SELinux Blocking Container Access](#selinux-blocking-container-access-fedorarhel) |
 | `"sandbox": false` in proxy health (manual container setup) | [Sandbox Unreachable](#sandbox-unreachable) |
 | `"sandbox": false` in proxy health (Compose stack) | [Sandbox Unreachable (health check)](#sandbox-unreachable-health-check) |
@@ -383,6 +384,23 @@ The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfil
 Prefer regenerating the patch over pinning to an older SHA — pinning backward means missing upstream fixes.
 
 After the rebuild loads the model, the Geometric Lens still needs retraining for the new model — see [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
+
+### Proxy Can't Write the Workspace (`.atlas.tmp: permission denied`)
+
+**Symptom:** Every `write_file`/`edit_file` fails with `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` (the agent then wanders looking for "a writable subdirectory"). Lens training samples also stop banking (`/data/lens_training` writes fail in proxy logs).
+
+**Cause:** The atlas-proxy image runs as a baked-in non-root user (uid 1001, `atlas`), but the host directories bind-mounted at `/workspace` (`ATLAS_PROJECT_DIR`) and `/data/lens_training` are owned by the operator's uid. Reads work (mode 755); every write is denied. Installs whose `.env` predates `ATLAS_PROXY_UID` hit this after pulling a hardened proxy image.
+
+**Fix:** run the proxy as the invoking user, the same way the sandbox already does:
+
+```bash
+# add your ids to .env (atlas init --reconfigure also writes these now)
+echo "ATLAS_PROXY_UID=$(id -u)" >> .env
+echo "ATLAS_PROXY_GID=$(id -g)" >> .env
+docker compose up -d --no-deps --force-recreate atlas-proxy
+```
+
+Verify: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` succeeds (then remove the file). K3s deployments render the same ids into the proxy Pod's `securityContext` via `scripts/generate-manifests.sh`.
 
 ### SELinux Blocking Container Access (Fedora/RHEL)
 
