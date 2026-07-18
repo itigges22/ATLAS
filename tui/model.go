@@ -1773,6 +1773,19 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// Asset-graph lint: cross-file coherence findings after a write
+	// (orphaned templates/static files, dangling references). Advisory
+	// only — render as a system row so the user sees what the model saw.
+	case "asset_lint":
+		var d struct {
+			Detail string `json:"detail"`
+		}
+		if json.Unmarshal(ev.Data, &d) == nil && d.Detail != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "assets", Body: d.Detail,
+			})
+		}
+
 	// Reasoning repetition detector: the proxy saw the model open its
 	// reasoning stream with the same prefix on consecutive turns and
 	// queued a corrective for the next LLM call. Third member of the
