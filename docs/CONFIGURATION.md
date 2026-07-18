@@ -283,7 +283,7 @@ These 8 safety detectors run in place of a per-tier turn cap. Each fires indepen
 
 | Detector | Threshold | Source |
 |----------|-----------|--------|
-| Tool-call repetition | Same `(tool, args)` signature `3×` within the last `8` calls | `proxy/tool_repeat.go` (`toolRepeatThreshold=3`, `toolRepeatWindow=8`) |
+| Tool-call repetition | Same `(tool, args)` signature `3×` within the last `8` calls. `write_file` signatures key on the target path alone — a whole-file rewrite of the same path counts as repetition even when each attempt's content differs; `edit_file`/`ast_edit` keep full-args signatures so distinct surgical edits don't trip it. | `proxy/tool_repeat.go` (`toolRepeatThreshold=3`, `toolRepeatWindow=8`) |
 | Reasoning repetition | Same reasoning snippet `2×` consecutive turns | `proxy/reasoning_repeat.go` (`reasoningRepeatThreshold=2`) |
 | Lens regression | `gx_score_min` runs `2` consecutive turns below the selected artifact's `low` threshold, OR one turn below its `severe` threshold; disabled if uncalibrated | `proxy/lens_score.go`, `gx_thresholds.json` |
 | Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → skip | `proxy/agent.go` |

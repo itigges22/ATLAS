@@ -695,7 +695,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// stub app.py, realized it needed render-module
 						// wiring, and got blocked from fixing it.
 						sessionOwned := ctx.SessionWrites[wfInput.Path]
-						if existingLines > 5 && !looksCorruptedOnDisk(existingPath, string(existing)) && !sessionOwned {
+						corrupted := looksCorruptedOnDisk(existingPath, string(existing))
+						if existingLines > 5 && !corrupted && !sessionOwned {
 							// GH #39: when the existing file is .py or .html
 							// and the model is replacing the whole thing,
 							// ast_edit is the right tool — selector-based
@@ -728,7 +729,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							continue
 						}
 						if existingLines > 5 {
-							log.Printf("[agent] PC-201: allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
+							// Name the actual carveout — the corrupted-file
+							// message on a session-owned overwrite sent a
+							// loop diagnosis down the wrong path (2026-07-18).
+							if corrupted {
+								log.Printf("[agent] PC-201: allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
+							} else {
+								log.Printf("[agent] allowing write_file on session-owned %s (%d lines, self-iteration carveout)", wfInput.Path, existingLines)
+							}
 						}
 					}
 				}
