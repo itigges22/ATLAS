@@ -715,6 +715,10 @@ type V3GenerateResponse struct {
 	TotalTokens          int                      `json:"total_tokens"`
 	TotalTimeMs          float64                  `json:"total_time_ms"`
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
+	// RPGSignatureMissing lists planned RPG node signatures the winning code
+	// failed to realize (V3.2, issue #120). Non-empty signals structural drift
+	// from the plan — the proxy's re-plan loop surfaces the affected subgraph.
+	RPGSignatureMissing []string `json:"rpg_signature_missing,omitempty"`
 }
 
 // V3VerificationEvidence describes the concrete verifier that accepted or
@@ -744,11 +748,20 @@ type V3PlanRequest struct {
 
 // PlanStep is a single step in a Plan. Mirrors v3-service/main.py's
 // PLAN_PROMPT_TEMPLATE shape: id, action, target, why.
+//
+// NodeID and Constraints are populated only by the V3.2 RPG planner
+// (issue #120): when a plan step is the projection of a Repository Planning
+// Graph node, Constraints carries that node's planned interface (signatures,
+// input/output edges) which the proxy threads into the per-node /v3/generate
+// call. They are empty for the flat planner, so behavior is unchanged when
+// ATLAS_RPG_PLANNING is off.
 type PlanStep struct {
-	ID     string `json:"id"`
-	Action string `json:"action"`
-	Target string `json:"target"`
-	Why    string `json:"why"`
+	ID          string   `json:"id"`
+	Action      string   `json:"action"`
+	Target      string   `json:"target"`
+	Why         string   `json:"why"`
+	NodeID      string   `json:"node_id,omitempty"`
+	Constraints []string `json:"constraints,omitempty"`
 }
 
 // Plan is the structured plan returned by /v3/plan. The agent loop
@@ -762,6 +775,48 @@ type Plan struct {
 	WinningScore     float64    `json:"winning_score"`
 	WinningIndex     int        `json:"winning_index"`
 	Reasons          []string   `json:"reasons"`
+	// RPG is the full Repository Planning Graph the flat Steps were projected
+	// from (V3.2, issue #120). Present only when the RPG planner ran; nil for
+	// the flat planner. Captured proxy-side for graph-guided traversal /
+	// observability.
+	RPG *RPG `json:"rpg,omitempty"`
+}
+
+// RPG is the Repository Planning Graph artifact (issue #120, arXiv:2509.16198):
+// capabilities (what to build) expanded into files + function signatures + the
+// data-flow / ordering edges between them (how). Mirrors v3-service/rpg.py.
+type RPG struct {
+	Capabilities []RPGCapability `json:"capabilities"`
+	Files        []RPGFile       `json:"files"`
+	Edges        []RPGEdge       `json:"edges"`
+	Verify       string          `json:"verify"`
+	Rationale    string          `json:"rationale"`
+}
+
+type RPGCapability struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Parent string `json:"parent"`
+}
+
+type RPGFunction struct {
+	Name      string `json:"name"`
+	Signature string `json:"signature"`
+	Summary   string `json:"summary"`
+}
+
+type RPGFile struct {
+	ID         string        `json:"id"`
+	Path       string        `json:"path"`
+	Capability string        `json:"capability"`
+	Functions  []RPGFunction `json:"functions"`
+}
+
+type RPGEdge struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
 }
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,10 @@ COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
 # Pure stdlib + the tree-sitter grammars installed above; no extra deps.
 COPY v3-service/graph/ /app/graph/
+# V3.2 RPG-style planning (issue #120): wavelet substrate + RPG construction.
+# Pure stdlib — no extra pip installs needed.
+COPY v3-service/wavelet/ /app/wavelet/
+COPY v3-service/rpg.py /app/rpg.py
 
 # Non-root application account created inside this image. The V3 service
 # writes nothing to the container fs at runtime (telemetry disabled; it

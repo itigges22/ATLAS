@@ -191,6 +191,31 @@
 
 ## [3.1.0] - 2026-05-12 — Maia
 
+### V3.2 — RPG-style architecture-first planning (#120, experimental, opt-in)
+- New `ATLAS_RPG_PLANNING` flag (default **off**) enables repository-level,
+  plan-then-fill planning ahead of the existing problem-level PlanSearch:
+  - **Wavelet substrate** (`v3-service/wavelet/`) — a faithful, dependency-free
+    Python port of [wavescope-mcp](https://github.com/yogthos/wavescope-mcp)
+    (Ricker CWT, structural signal, multi-resolution bands, project decomposition,
+    peak-diff). Numeric parity with upstream is golden-tested.
+  - **Repository Planning Graph** (`v3-service/rpg.py`, [arXiv:2509.16198](https://arxiv.org/abs/2509.16198)) —
+    two-stage construction (proposal capability tree → implementation files +
+    signatures + data-flow edges), graph validation/scoring, and a topological
+    projection to the existing flat `Plan` so the agent loop is unchanged. The
+    proposal stage is seeded with the wavelet coarse band on existing repos.
+  - **Graph-guided generation** — each node's planned interface (signatures,
+    edges) threads into its `/v3/generate` call (`proxy/rpg.go`), so the existing
+    PlanSearch ([arXiv:2409.03733](https://arxiv.org/abs/2409.03733)) fills a node
+    whose architecture is already pinned.
+  - **Structural verification + drift** — the candidate veto now rejects code
+    that doesn't realize its planned signatures; post-write drift detection
+    surfaces the affected downstream subgraph for re-planning.
+  - **Offline metrics** — `v3-service/rpg_eval.py` scores RPG artifacts for CI /
+    benchmark summaries.
+  - Strictly additive: with the flag off, planning and generation are unchanged.
+  - Design + phased status: `docs/reports/RPG_WAVELET_PLANNING_V3_2.md`. Credit
+    idea + framing to Dmitri Sotnikov (@yogthos), author of wavescope-mcp.
+
 ### Removed
 - Removed dead `ATLAS_USE_FOX` code paths in benchmark runner (#22)
 
