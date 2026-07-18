@@ -486,7 +486,7 @@ def _function_name_from_signature(sig: str) -> str:
     # Bare "name", but never a lone declaration keyword or modifier —
     # returning "" makes the caller skip enforcement rather than hunt for a
     # function literally named "public".
-    m = re.match(r"\s*([A-Za-z_]\w*)\s*$", s)
+    m = re.match(r"[ \t]{0,16}([A-Za-z_]\w*)[ \t]{0,16}$", s)
     if m and m.group(1) not in _DECL_KEYWORDS:
         return m.group(1)
     return ""
