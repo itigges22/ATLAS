@@ -194,7 +194,7 @@ the last message; pass an integer for the last N messages).
 | `/mouse on\|off` | Toggle mouse capture (off lets you copy text) |
 | `/copy [N]` | Copy the last N chat messages (default 1) to the clipboard — native clipboard tool first (`wl-copy`/`xclip`/`xsel`/`pbcopy`), OSC52 escape as the fallback (covers SSH) |
 | `/yank [N]` | Alias for `/copy` |
-| `/demo [short\|medium\|long]` | Exit to the split-pane recording demo: base agent vs V3, same proxy/model (default `medium`) |
+| `/demo [short\|medium\|long]` | Exit to the split-pane recording demo: base agent vs V3, same proxy/model (default `medium`). Both panes scroll: mouse wheel targets the pane under the cursor, `PgUp`/`PgDn` the focused side (`Tab` switches focus); in output review `↑`/`↓` line-steps and the file body scrolls the same way. |
 | `/quit` | Exit (same as `Ctrl+D`) |
 
 The `/add /drop /context` set is TUI-side state — file paths are
