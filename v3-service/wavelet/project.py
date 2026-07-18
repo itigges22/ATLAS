@@ -98,7 +98,9 @@ def _compile_glob(pat: str) -> "re.Pattern[str]":
 
 
 def _load_gitignore(root: str) -> List[_GitignoreRule]:
-    path = os.path.join(root, ".gitignore")
+    path = os.path.normpath(os.path.join(root, ".gitignore"))
+    if not path.startswith(os.path.normpath(root) + os.sep):
+        return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = f.read()
@@ -153,6 +155,7 @@ class ProjectFile:
 def _discover_files(root: str) -> Tuple[List[ProjectFile], bool]:
     results: List[ProjectFile] = []
     visited_real: set = set()
+    root = os.path.normpath(root)
     try:
         root_real = os.path.realpath(root)
     except OSError as e:
@@ -181,7 +184,13 @@ def _discover_files(root: str) -> Tuple[List[ProjectFile], bool]:
         for entry in entries:
             if truncated:
                 return
-            full_path = os.path.join(directory, entry)
+            # Containment guard: listdir entries can't contain separators on
+            # POSIX, but normalize + prefix-check anyway — it is free
+            # defense-in-depth and the sanitizer shape taint tracking
+            # recognizes, so the walk doesn't accrue path-injection alerts.
+            full_path = os.path.normpath(os.path.join(directory, entry))
+            if full_path != root and not full_path.startswith(root + os.sep):
+                continue
             rel_path = os.path.relpath(full_path, root)
             try:
                 st = os.lstat(full_path)
@@ -210,6 +219,8 @@ def _discover_files(root: str) -> Tuple[List[ProjectFile], bool]:
                     try:
                         visited_real.add(os.path.realpath(full_path))
                     except OSError:
+                        # Best-effort: an unresolvable pruned dir simply
+                        # isn't registered; the walk still skips it here.
                         pass
                     continue
                 try:

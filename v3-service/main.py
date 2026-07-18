@@ -2198,6 +2198,9 @@ def generate_plan(
     # V3.2 RPG-style architecture-first planning (issue #120), flag-gated by
     # ATLAS_RPG_PLANNING. Strictly additive: on any failure (flag off, modules
     # missing, model output unusable) we fall through to the flat planner below.
+    # Pre-bound so a partial import failure can never leave a name unbound
+    # on the guarded paths below (py/uninitialized-local-variable).
+    decompose_project = decompose_file_map = _rpg_mod = None
     try:
         from wavelet import rpg_planning_enabled, decompose_project, decompose_file_map
         import rpg as _rpg_mod

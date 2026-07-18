@@ -474,7 +474,7 @@ def _function_name_from_signature(sig: str) -> str:
         return m.group(1)
     # JS/TS arrow or function-expression assignment:
     # `handleClick = () =>`, `handleClick = async function`, `handleClick: (x) =>`.
-    m = re.search(r"\b([A-Za-z_]\w*)\s*[:=]\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_]\w*\s*=>)", s)
+    m = re.search(r"\b([A-Za-z_]\w*)[ \t]{0,16}[:=][ \t]{0,16}(?:async[ \t]{1,16})?(?:function\b|\([^)]{0,200}\)[ \t]{0,16}=>|[A-Za-z_]\w*[ \t]{0,16}=>)", s)
     if m and m.group(1) not in _DECL_KEYWORDS:
         return m.group(1)
     # C-style `modifiers type name(args)`: the name is the token directly
@@ -536,7 +536,7 @@ def _defined_names_ex(code: str, filename: str) -> tuple:
     # `const handleClick = () => ...`, `handleClick = async function ...`,
     # `handleClick: (x) => ...` (object-literal methods).
     for m in re.finditer(
-        r"\b([A-Za-z_]\w*)\s*[:=]\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_]\w*\s*=>)",
+        r"\b([A-Za-z_]\w*)[ \t]{0,16}[:=][ \t]{0,16}(?:async[ \t]{1,16})?(?:function\b|\([^)]{0,200}\)[ \t]{0,16}=>|[A-Za-z_]\w*[ \t]{0,16}=>)",
         code,
     ):
         if m.group(1) not in _DECL_KEYWORDS:
@@ -544,7 +544,7 @@ def _defined_names_ex(code: str, filename: str) -> tuple:
     # C-style / class-method definitions: `name(args) {` at definition
     # position (Java/C/C++/C#, JS method shorthand). Control-flow keywords
     # that look call-shaped are excluded.
-    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\([^;{})]*\)\s*\{", code):
+    for m in re.finditer(r"\b([A-Za-z_]\w*)[ \t]{0,16}\([^;{})]{0,300}\)[ \t\r\n]{0,16}\{", code):
         if (m.group(1) not in _CALLISH_NON_NAMES
                 and m.group(1) not in _DECL_KEYWORDS):
             names.add(m.group(1))
