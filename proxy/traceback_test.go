@@ -144,3 +144,46 @@ func TestTracebackSteerSkipsStdlib(t *testing.T) {
 		t.Errorf("should NOT point at stdlib, got: %s", steer)
 	}
 }
+
+// The missing-binary loop (TB2 bench 2026-07-18): `git clone ...` in a
+// sandbox without git. The steer must name the binary, state that
+// apt-get can't work (non-root, read-only), and point at alternatives.
+func TestMissingCommandSteerBashForm(t *testing.T) {
+	out := "bash: line 1: git: command not found\n"
+	steer := missingCommandSteer(out)
+	if !strings.Contains(steer, "`git`") || !strings.Contains(steer, "CANNOT be installed") {
+		t.Errorf("expected missing-command steer naming git, got: %q", steer)
+	}
+	if strings.Contains(steer, "apt-get install") {
+		t.Errorf("steer must not suggest apt-get install (impossible in sandbox): %q", steer)
+	}
+}
+
+// dash/sh abbreviates: "sh: 1: sqlite3: not found".
+func TestMissingCommandSteerShForm(t *testing.T) {
+	out := "sh: 1: sqlite3: not found\n"
+	steer := missingCommandSteer(out)
+	if !strings.Contains(steer, "`sqlite3`") {
+		t.Errorf("expected steer naming sqlite3, got: %q", steer)
+	}
+}
+
+// A full path is reduced to its basename.
+func TestMissingCommandSteerPathBasename(t *testing.T) {
+	out := "bash: line 3: /usr/local/bin/terraform: command not found\n"
+	steer := missingCommandSteer(out)
+	if !strings.Contains(steer, "`terraform`") {
+		t.Errorf("expected basename terraform, got: %q", steer)
+	}
+}
+
+// Bare "<name>: not found" without an sh prefix must NOT fire — program
+// output legitimately prints "config.yaml: not found" shapes.
+func TestMissingCommandSteerNoFalsePositive(t *testing.T) {
+	if s := missingCommandSteer("config.yaml: not found\n"); s != "" {
+		t.Errorf("expected no steer for non-shell not-found line, got: %q", s)
+	}
+	if s := missingCommandSteer("all tests passed\n"); s != "" {
+		t.Errorf("expected no steer for clean output, got: %q", s)
+	}
+}

@@ -87,6 +87,10 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_AGENT_HISTORY_BUDGET": Field("int", min=0, max=10_000_000),
     "ATLAS_SANDBOX_MEM": Field("str"),   # "4g"/"0"/bytes — freeform
     "ATLAS_SANDBOX_CPUS": Field("str"),  # "2"/"0.5"/"0" — freeform
+    # Sandbox tmpfs size ceilings (docker tmpfs size strings: "2G"/"512M")
+    "ATLAS_SANDBOX_TMP_SIZE": Field("str"),
+    "ATLAS_SANDBOX_PIP_SIZE": Field("str"),
+    "ATLAS_SANDBOX_CACHE_SIZE": Field("str"),
     # Lens SQLite state store path (host/dev runs; compose pins the
     # container path). Not ATLAS_-prefixed: read directly by the lens
     # service, listed here so migrate() carries it forward.

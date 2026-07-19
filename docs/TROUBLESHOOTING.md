@@ -67,6 +67,7 @@ Exact error strings and symptoms, mapped to their entries.
 | `error loading model: unknown (model) architecture '…'` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
 | `error: patch failed:` / `patch does not apply` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
 | `open /workspace/....atlas.tmp: permission denied` on every write | [Proxy Can't Write the Workspace](#proxy-cant-write-the-workspace-atlastmp-permission-denied) |
+| Agent insists a file "does not exist" that's right there; `read_file` and `run_command` disagree | [Agent Says Files Don't Exist That Are Right There](#agent-says-files-dont-exist-that-are-right-there-workspace-mount-split) |
 | Permission denied on mounted volumes / model files (Fedora/RHEL) | [SELinux Blocking Container Access](#selinux-blocking-container-access-fedorarhel) |
 | `"sandbox": false` in proxy health (manual container setup) | [Sandbox Unreachable](#sandbox-unreachable) |
 | `"sandbox": false` in proxy health (Compose stack) | [Sandbox Unreachable (health check)](#sandbox-unreachable-health-check) |
@@ -401,6 +402,26 @@ docker compose up -d --no-deps --force-recreate atlas-proxy
 ```
 
 Verify: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` succeeds (then remove the file). K3s deployments render the same ids into the proxy Pod's `securityContext` via `scripts/generate-manifests.sh`.
+
+### Agent Says Files Don't Exist That Are Right There (workspace mount split)
+
+**Symptom:** Agent sessions insist a file "does not exist" even though it's plainly in the project directory — `read_file` fails while `run_command` (`ls`, `cat`) sees the file fine, or vice versa. Sessions give up early ("It seems the file X does not exist"), writes never land in the project, and every `/health` endpoint is green.
+
+**Cause:** The proxy and the sandbox bind-mount **different host directories** as `/workspace`. File tools (`read_file`/`write_file`/`edit_file`) are served by the proxy against *its* mount; `run_command` executes in the *sandbox's* mount. Compose resolves the mount source from `ATLAS_PROJECT_DIR` (default: the compose working directory) **per container at creation time** — so recreating one container from a different directory, or with a different `.env`, silently splits them. Nothing fails at startup; the agent just operates split-brained.
+
+**Diagnose:** `atlas doctor` — the `workspace_mounts` check compares both mounts and fails with the two host paths when they differ. By hand:
+
+```bash
+docker inspect atlas-atlas-proxy-1 --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+docker inspect atlas-sandbox-1     --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+```
+
+**Fix:** pin `ATLAS_PROJECT_DIR` in `.env` to your project directory, then recreate both containers together:
+
+```bash
+echo "ATLAS_PROJECT_DIR=/path/to/your/project" >> .env
+docker compose up -d --force-recreate atlas-proxy sandbox
+```
 
 ### SELinux Blocking Container Access (Fedora/RHEL)
 

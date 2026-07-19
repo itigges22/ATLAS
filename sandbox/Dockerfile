@@ -10,6 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     # Node.js (via nodesource)
     curl ca-certificates gnupg unzip \
+    # Common CLI tools. The sandbox runs non-root on a read-only fs, so
+    # nothing can be apt-installed at runtime — anything a coding task
+    # commonly shells out to must be baked in. git and sqlite3 were the
+    # two observed gaps (TB2 bench 2026-07-18: `git clone` and
+    # `sqlite3 .recover` both dead-ended with "command not found");
+    # jq/patch/zip/xz are the same class: small, ubiquitous in build
+    # scripts, impossible to add later.
+    git sqlite3 jq patch zip xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 LTS

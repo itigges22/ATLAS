@@ -36,6 +36,15 @@ var (
 // import form (`ModuleNotFoundError: No module named 'flask'`).
 var reMissingModule = regexp.MustCompile(`No module named '?([A-Za-z0-9_.]+)'?`)
 
+// Missing-binary shapes. bash spells it out ("bash: line 1: git: command
+// not found"); dash/sh abbreviates ("sh: 1: git: not found") — the sh form
+// requires the `sh: N:` prefix so a stray "<file>: not found" in program
+// output can't false-positive.
+var (
+	reCmdNotFoundBash = regexp.MustCompile(`([A-Za-z0-9._/+-]+): command not found`)
+	reCmdNotFoundSh   = regexp.MustCompile(`(?m)(?:^|\s)(?:/bin/)?sh: \d+: ([A-Za-z0-9._/+-]+): not found`)
+)
+
 // missingModuleSteer catches the uninstalled-dependency loop: the model runs
 // `python -m flask run` (or `python app.py`), the sandbox reports the package
 // isn't installed, and the model re-runs the identical command until the
@@ -76,6 +85,35 @@ func missingModuleSteer(ctx *AgentContext, output string) string {
 		fmt.Fprintf(&sb, "Install it first with `pip install %s`, then re-run. ", mod)
 	}
 	sb.WriteString("Re-running the command before installing will fail exactly the same way.")
+	return sb.String()
+}
+
+// missingCommandSteer catches the missing-binary loop: the model runs a
+// command whose binary isn't in the sandbox image (`git clone ...` →
+// "bash: line 1: git: command not found"), then either re-runs it
+// identically into the repetition breaker or gives up outright (both
+// observed on the TB2 bench, 2026-07-18: git and sqlite3). The sandbox
+// runs non-root on a read-only base fs, so `apt-get install` can NEVER
+// work at runtime — without this steer the model has no way to know
+// that, and suggesting apt-get would just start a different loop. The
+// steer states the constraint and points at the escape hatches that DO
+// work: pip-installable equivalents (~/.local is writable, `python3 -m X`
+// avoids PATH issues) or a different approach with the preinstalled
+// toolchains. Returns "" when the output names no missing command.
+func missingCommandSteer(output string) string {
+	var cmd string
+	if m := reCmdNotFoundBash.FindStringSubmatch(output); m != nil {
+		cmd = m[1]
+	} else if m := reCmdNotFoundSh.FindStringSubmatch(output); m != nil {
+		cmd = m[1]
+	}
+	if cmd == "" {
+		return ""
+	}
+	cmd = filepath.Base(cmd) // "/usr/bin/foo: command not found" → foo
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[system note]: The command failed because `%s` is not installed in the sandbox, and system packages CANNOT be installed at runtime (non-root, read-only base — apt-get/sudo will not work). Re-running the same command will fail identically. ", cmd)
+	sb.WriteString("Instead: if a Python equivalent exists, `pip install <package>` works (invoke it as `python3 -m <module>` to avoid PATH issues); otherwise use one of the preinstalled toolchains (python3/pip, node/npm, go, cargo, ruby, php, java) or accomplish the step a different way.")
 	return sb.String()
 }
 

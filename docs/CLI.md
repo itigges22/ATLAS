@@ -36,7 +36,7 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 |---|---|
 | `atlas init` | First-run wizard: probes hardware, picks a model, writes `.env` + `secrets/api-keys.json`. |
 | `atlas tier` | Hardware probe + tier classification (NVIDIA / AMD / Apple Silicon detection). `atlas tier list` shows the full tier table; `atlas tier fit` sizes the runtime (context / KV type / ubatch) for the configured model + GPU (see below). |
-| `atlas doctor` | Install diagnostic. GPU runtime, container health, endpoint reachability. Prints each result as it completes; `--json` buffers into one machine-readable document. |
+| `atlas doctor` | Install diagnostic. GPU runtime, container health, endpoint reachability, workspace-mount alignment (proxy and sandbox must bind the same host dir as `/workspace` — a silent split sends file tools and `run_command` to different filesystems). Prints each result as it completes; `--json` buffers into one machine-readable document. |
 | `atlas model list \| recommend \| install \| install-artifacts \| verify \| remove` | Model registry operations. `recommend` names the best registry model for this hardware; `install --url <hf>` fetches an **unregistered** model (drop-in / BYO); `install-artifacts <name>` fetches a registered model's published lens + ASA artifacts. |
 | `atlas onboard` | Guided drop-in for a new model: arch check, rebuild gate, lens-retrain guidance (see below). |
 | `atlas bench` | Generate + self-label candidates for the loaded model (baseline benchmark). Feeds `atlas lens build --from-results` (see below). |

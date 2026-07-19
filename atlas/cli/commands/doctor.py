@@ -3,8 +3,8 @@
 Verifies an ATLAS install is healthy end-to-end. Runs ~20 checks across
 the host environment, the docker stack, and a live request through the
 proxy: individual checks (docker, compose, nvidia, model_file,
-lens_weights, sqlite_state, image_skew, tier_match (PC-055),
-tier_constraints (PC-055.1), asa_steering (BiasBusters #4),
+lens_weights, sqlite_state, workspace_mounts, image_skew, tier_match
+(PC-055), tier_constraints (PC-055.1), asa_steering (BiasBusters #4),
 e2e_smoke), five per-container state checks (one per service in
 `EXPECTED_SERVICES`), and five per-endpoint health checks. Designed to
 be the answer to "is it really working?" — both for humans (pretty
@@ -1053,6 +1053,54 @@ def check_tier_match() -> CheckResult:
         f"hardware (under-utilized but safe)")
 
 
+def check_workspace_mounts(services: List[Dict]) -> CheckResult:
+    """Proxy and sandbox must bind the SAME host directory as /workspace.
+
+    The proxy serves read_file/write_file against ITS /workspace while
+    run_command executes in the SANDBOX's /workspace. When the two
+    containers are recreated at different times with different
+    ATLAS_PROJECT_DIR values (or one from a different cwd), they silently
+    bind different host directories — file tools then operate on a
+    different filesystem than shell commands, the agent is told files
+    that exist "don't exist", and nothing else detects it (every /health
+    passes). Observed live 2026-07-18: proxy bound to the repo, sandbox
+    to the project dir; every agent session gave up believing its files
+    were missing.
+    """
+    names: Dict[str, str] = {}
+    for s in services:
+        svc = s.get("Service", "")
+        if svc in ("atlas-proxy", "sandbox") and s.get("State") == "running":
+            names[svc] = s.get("Name") or ""
+    if len(names) < 2:
+        return CheckResult("workspace_mounts", "skip",
+            "proxy or sandbox not running (see container checks)")
+    fmt = '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+    sources: Dict[str, str] = {}
+    for svc, cname in names.items():
+        rc, out, err = _run(["docker", "inspect", cname, "--format", fmt])
+        if rc != 0:
+            return CheckResult("workspace_mounts", "skip",
+                f"docker inspect {cname} failed", (err or out)[:200])
+        sources[svc] = out.strip()
+    proxy_src = sources.get("atlas-proxy", "")
+    sandbox_src = sources.get("sandbox", "")
+    if not proxy_src or not sandbox_src:
+        return CheckResult("workspace_mounts", "warn",
+            "no /workspace bind mount found on proxy or sandbox",
+            f"proxy={proxy_src or '(none)'} sandbox={sandbox_src or '(none)'}")
+    if os.path.realpath(proxy_src) == os.path.realpath(sandbox_src):
+        return CheckResult("workspace_mounts", "pass",
+            f"proxy and sandbox share {proxy_src}")
+    return CheckResult("workspace_mounts", "fail",
+        "proxy and sandbox bind DIFFERENT host dirs as /workspace "
+        f"{DASH} file tools and run_command are operating on different "
+        "filesystems (agent sessions will see missing files)",
+        f"proxy={proxy_src} sandbox={sandbox_src} {DASH} set "
+        "ATLAS_PROJECT_DIR to your project directory in .env, then "
+        "`docker compose up -d --force-recreate atlas-proxy sandbox`")
+
+
 def check_image_skew(services: List[Dict]) -> CheckResult:
     """PC-052 follow-up: warn if the 5 atlas-* images aren't on the same tag."""
     atlas_imgs = [s.get("Image", "") for s in services
@@ -1351,6 +1399,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the lens container answered above; skips cleanly otherwise.
     if any(r.status == "pass" for r in container_results):
         _add(check_sqlite_state())
+
+    # 9.5. Workspace mount alignment — proxy file tools and sandbox
+    # run_command must see the same host directory as /workspace, or the
+    # agent operates split-brained (reads/writes one dir, runs commands
+    # in another) with every /health still green.
+    _add(check_workspace_mounts(services))
 
     # 10. Image-tag skew (PC-052)
     _add(check_image_skew(services))

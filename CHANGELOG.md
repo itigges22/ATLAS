@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+### Agent-loop hardening from the Terminal-Bench 2.0 dogfood round (2026-07-18)
+- **`atlas doctor` workspace-mount check** — new `workspace_mounts` check fails
+  loudly when the proxy and sandbox bind different host directories as
+  `/workspace` (a silent split that sends file tools and `run_command` to
+  different filesystems while every `/health` stays green). New
+  TROUBLESHOOTING entry documents the symptom and fix (`ATLAS_PROJECT_DIR` +
+  recreate both containers together).
+- **Sandbox image: common CLI tools baked in** — `git`, `sqlite3`, `jq`,
+  `patch`, `zip`, `xz-utils`. The sandbox is non-root on a read-only base, so
+  absent binaries can never be installed at runtime; `git clone` and
+  `sqlite3 .recover` both dead-ended on "command not found".
+- **Missing-command steer** — `command not found` shell errors now get a
+  directed [system note] stating that system packages cannot be installed in
+  the sandbox and pointing at pip-installable equivalents or the preinstalled
+  toolchains, instead of the model re-running into the repetition breaker.
+- **Conversation-trim correctness** — the token budget now counts the pinned
+  user instruction and pinned file content (previously re-injected without
+  being counted) and reserves proportional tokenizer slack (`slot/8`);
+  a llama-server over-context 400 force-trims to the minimum window and
+  retries once instead of killing the session.
+- **Sandbox tmpfs sizing is env-tunable** — `ATLAS_SANDBOX_TMP_SIZE` (2G),
+  `ATLAS_SANDBOX_PIP_SIZE` (1G), `ATLAS_SANDBOX_CACHE_SIZE` (512M); the old
+  fixed 256M `~/.local` overflowed on `pip install pandas pyarrow`.
+
 ### V3.2 — RPG-style architecture-first planning (#120, experimental, opt-in)
 - New `ATLAS_RPG_PLANNING` flag (default **off**) enables repository-level,
   plan-then-fill planning ahead of the existing problem-level PlanSearch:

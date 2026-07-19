@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -223,5 +224,58 @@ func TestClassifyParseFailureProse(t *testing.T) {
 	got := classifyParseFailure(raw)
 	if !strings.Contains(got, "JSON") {
 		t.Errorf("prose response should get JSON-only nudge, got %q", got)
+	}
+}
+
+// budgetedKeepLast must COUNT the pinned messages (recent user + recent
+// file read) — trimMessages re-injects them even when they're outside
+// the tail, so ignoring them under-budgets the real prompt (observed
+// live as a llama-server exceed_context_size 400: 32844 > 32768).
+func TestBudgetedKeepLastCountsPinnedFile(t *testing.T) {
+	t.Setenv("ATLAS_CTX_SIZE", "131072")
+	t.Setenv("ATLAS_PARALLEL_SLOTS", "4")
+	// Budget ≈ 32768 - 8192 - 2048 - 4096 = 18432 tokens.
+	bigFile := strings.Repeat("x", 40000) // ~10k tokens, pinned read_file
+	msgs := []AgentMessage{{Role: "system", Content: "sys"}}
+	msgs = append(msgs, AgentMessage{Role: "user", Content: "task"})
+	msgs = append(msgs, AgentMessage{Role: "tool", ToolName: "read_file", Content: bigFile})
+	// 40 tool exchanges of ~1k tokens each — far beyond budget together
+	// with the pinned file.
+	chunk := strings.Repeat("y", 4000)
+	for i := 0; i < 40; i++ {
+		msgs = append(msgs,
+			AgentMessage{Role: "assistant", Content: "call"},
+			AgentMessage{Role: "tool", Content: chunk})
+	}
+
+	keep := budgetedKeepLast(msgs)
+	kept := trimMessages(msgs, keep)
+
+	// Sum the estimate over what trimMessages actually keeps; it must
+	// fit the budget (the old bug: pinned file was re-injected on top
+	// of an already-full tail).
+	total := 0
+	for _, m := range kept {
+		total += estTokens(m.Content)
+	}
+	if budget := conversationTokenBudget(); total > budget {
+		t.Errorf("kept set estimates %d tokens > budget %d — pins not counted", total, budget)
+	}
+	if keep < 8 {
+		t.Errorf("keep = %d, floor is 8", keep)
+	}
+}
+
+// Overflow detection keys on llama.cpp's error type string and message.
+func TestIsContextOverflow(t *testing.T) {
+	err := fmt.Errorf(`LLM returned 400: {"error":{"code":400,"message":"request (32844 tokens) exceeds the available context size (32768 tokens), try increasing it","type":"exceed_context_size_error"}}`)
+	if !isContextOverflow(err) {
+		t.Error("expected overflow detection on exceed_context_size_error")
+	}
+	if isContextOverflow(fmt.Errorf("LLM returned 500: upstream crashed")) {
+		t.Error("false positive on unrelated LLM error")
+	}
+	if isContextOverflow(nil) {
+		t.Error("false positive on nil")
 	}
 }

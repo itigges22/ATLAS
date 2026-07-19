@@ -398,3 +398,44 @@ def test_check_metal_native_fail_when_binary_crashes(monkeypatch, tmp_path):
     # The dynamic linker error should land in the detail so the user
     # can paste it into an issue without needing to re-run by hand.
     assert "dyld" in result.detail
+
+
+def _mount_services():
+    return [
+        {"Service": "atlas-proxy", "Name": "atlas-atlas-proxy-1", "State": "running"},
+        {"Service": "sandbox", "Name": "atlas-sandbox-1", "State": "running"},
+    ]
+
+
+def test_workspace_mounts_pass_when_aligned(monkeypatch):
+    """Proxy and sandbox binding the same host dir as /workspace passes."""
+    monkeypatch.setattr(doctor, "_run",
+                        lambda argv, *a, **k: (0, "/home/user/project\n", ""))
+    result = doctor.check_workspace_mounts(_mount_services())
+    assert result.status == "pass"
+    assert "/home/user/project" in result.message
+
+
+def test_workspace_mounts_fail_on_split(monkeypatch):
+    """The split-brain case (observed 2026-07-18): proxy bound to one host
+    dir, sandbox to another. Every /health passes, but file tools and
+    run_command operate on different filesystems — doctor must fail loudly
+    and name both paths plus the ATLAS_PROJECT_DIR fix."""
+    def fake_run(argv, *a, **k):
+        if "atlas-atlas-proxy-1" in argv:
+            return 0, "/home/user/ATLAS\n", ""
+        return 0, "/home/user/demo\n", ""
+    monkeypatch.setattr(doctor, "_run", fake_run)
+    result = doctor.check_workspace_mounts(_mount_services())
+    assert result.status == "fail"
+    assert "DIFFERENT" in result.message
+    assert "/home/user/ATLAS" in result.detail
+    assert "/home/user/demo" in result.detail
+    assert "ATLAS_PROJECT_DIR" in result.detail
+
+
+def test_workspace_mounts_skip_when_not_running():
+    """Without both containers running there is nothing to compare."""
+    result = doctor.check_workspace_mounts(
+        [{"Service": "atlas-proxy", "Name": "x", "State": "running"}])
+    assert result.status == "skip"

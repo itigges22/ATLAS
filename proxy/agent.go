@@ -1191,6 +1191,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					// repetition breaker.
 					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
 					log.Printf("[agent] missing-module steer: directed to install dependency")
+				} else if steer := missingCommandSteer(scan); steer != "" {
+					// Missing-binary recovery: the sandbox image lacks the
+					// command and can't apt-install it (non-root, read-only).
+					// Say so and point at the escape hatches, instead of the
+					// model re-running into the breaker or giving up.
+					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+					log.Printf("[agent] missing-command steer: named the unavailable binary")
 				} else if steer := missingFileSteer(ctx, scan); steer != "" {
 					// Case-typo recovery: command referenced a file whose name
 					// differs only in case from a real workspace file. Name the
@@ -1292,6 +1299,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 // callLLMConstrained calls the LLM with json_schema or grammar constraint.
 // Returns the raw response text and token count.
 //
+// isContextOverflow reports whether an LLM-call error is llama-server's
+// exceed_context_size_error 400 (prompt tokens > per-slot n_ctx). Matched
+// on the error body text — model-agnostic, keyed to llama.cpp's stable
+// error type string with the human message as fallback.
+func isContextOverflow(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "exceed_context_size") ||
+		strings.Contains(s, "exceeds the available context size")
+}
+
 // PC-043: When the model emits zero tokens (raw_len=0) — usually after a
 // tool result message under a constrained JSON grammar — we retry
 // inline once with a bumped temperature and a transient "continue"
@@ -1312,6 +1332,19 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 	messages, grammar := buildStepRequest(ctx)
 
 	content, tokens, err := callLLMOnceWithGrammar(ctx, messages, 0.3, grammar)
+	if isContextOverflow(err) {
+		// The real prompt exceeded the per-slot context despite the
+		// budget estimate (dense content under-counts at chars/4).
+		// Recover instead of hard-killing the session: force-trim the
+		// conversation to the minimum window (system + pins + 8-tail)
+		// and retry once. The trim persists on ctx.Messages — the
+		// conversation genuinely no longer fits, so shrinking it is
+		// the correct durable state, not just a retry hack.
+		log.Printf("[agent] context overflow from llama-server — force-trimming to minimum window and retrying")
+		ctx.Messages = trimMessages(ctx.Messages, 8)
+		messages, grammar = buildStepRequest(ctx)
+		content, tokens, err = callLLMOnceWithGrammar(ctx, messages, 0.3, grammar)
+	}
 	if err != nil {
 		return "", tokens, err
 	}
@@ -2212,7 +2245,13 @@ func conversationTokenBudget() int {
 	// model-agnostic re-encode cost (SWA models re-process the prompt each
 	// turn) is bounded by the slot itself; deploys that need it smaller can
 	// still set ATLAS_AGENT_HISTORY_BUDGET.
-	budget := perSlot - agentMaxTokens() - 2048
+	// Reserve: the model's reply (max_tokens), a fixed margin for
+	// system-prompt growth, and a proportional tokenizer-slack margin.
+	// estTokens is chars/4, which UNDER-counts dense content (code,
+	// JSON-escaped tool results run closer to 3 chars/token) — without
+	// the proportional slack the estimate can pass while the real
+	// prompt exceeds the slot (observed: 32844 real vs 32768 slot).
+	budget := perSlot - agentMaxTokens() - 2048 - perSlot/8
 	if budget < 4000 {
 		budget = 4000 // floor: tiny-context deploys still keep a usable window
 	}
@@ -2270,22 +2309,59 @@ func parallelSlots() int {
 	return slots
 }
 
+// pinnedIndices returns the two message indices trimMessages will keep
+// regardless of the tail window: the most recent user message (the task)
+// and the most recent file-content tool result (the file being edited).
+// Either is -1 when absent. Shared by trimMessages (which re-injects
+// them) and budgetedKeepLast (which must COUNT them — see below).
+func pinnedIndices(msgs []AgentMessage) (pinIdx, filePinIdx int) {
+	pinIdx, filePinIdx = -1, -1
+	for i := len(msgs) - 1; i >= 1; i-- {
+		if msgs[i].Role == "user" {
+			pinIdx = i
+			break
+		}
+	}
+	for i := len(msgs) - 1; i >= 1; i-- {
+		if msgs[i].Role == "tool" && (msgs[i].ToolName == "read_file" || msgs[i].ToolName == "outline_file") &&
+			!strings.Contains(msgs[i].Content, "You already read") { // skip dedup pointers — they carry no content
+			filePinIdx = i
+			break
+		}
+	}
+	return pinIdx, filePinIdx
+}
+
 // budgetedKeepLast returns how many trailing messages trimMessages should
-// keep so the kept set (system + pinned user + tail) fits the token budget.
-// Floored at 8 (never trim more aggressively than the old fixed rule); when
-// the whole conversation fits, returns len(msgs) so nothing is trimmed.
+// keep so the kept set (system + pinned user + pinned file + tail) fits the
+// token budget. Floored at 8 (never trim more aggressively than the old
+// fixed rule); when the whole conversation fits, returns len(msgs) so
+// nothing is trimmed.
+//
+// The pinned messages MUST be pre-counted here: trimMessages re-injects
+// them even when they fall outside the tail window, so a budget that
+// ignored them under-counted the real prompt by the size of the pinned
+// read_file — observed live as a llama-server 400 exceed_context_size
+// (32844 > 32768 per-slot) hard-killing a TB2 bench session.
 func budgetedKeepLast(msgs []AgentMessage) int {
 	if len(msgs) == 0 {
 		return 0
 	}
 	budget := conversationTokenBudget()
-	used := 0
-	if len(msgs) > 0 {
-		used += estTokens(msgs[0].Content) // system prompt is always kept
+	used := estTokens(msgs[0].Content) // system prompt is always kept
+	pinIdx, filePinIdx := pinnedIndices(msgs)
+	if pinIdx >= 1 {
+		used += estTokens(msgs[pinIdx].Content)
+	}
+	if filePinIdx >= 1 && filePinIdx != pinIdx {
+		used += estTokens(msgs[filePinIdx].Content)
 	}
 	keep := 0
 	for i := len(msgs) - 1; i >= 1; i-- {
-		t := estTokens(msgs[i].Content)
+		t := 0
+		if i != pinIdx && i != filePinIdx { // already counted above
+			t = estTokens(msgs[i].Content)
+		}
 		if used+t > budget && keep >= 8 {
 			break
 		}
@@ -2312,31 +2388,19 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 		return msgs
 	}
 
-	pinIdx := -1
-	for i := len(msgs) - 1; i >= 1; i-- {
-		if msgs[i].Role == "user" {
-			pinIdx = i
-			break
-		}
-	}
-
-	// Pin the most-recent file-content tool result (read_file / outline_file)
-	// so the file the model is working on never gets trimmed out from under it.
-	// Without this, a long agent loop drops the file content, the model edits
-	// BLIND, and a weak model then hallucinates symbols and old_str that
-	// aren't in the file (observed live: ast_edit function:count_items and
-	// edit_file old_str="return len(items)" against a file containing neither,
-	// with the model literally reasoning "I don't see the file content"). The
-	// exploration-budget breaker compounds it by telling the model it "has
-	// full project context" when the content was already trimmed.
-	filePinIdx := -1
-	for i := len(msgs) - 1; i >= 1; i-- {
-		if msgs[i].Role == "tool" && (msgs[i].ToolName == "read_file" || msgs[i].ToolName == "outline_file") &&
-			!strings.Contains(msgs[i].Content, "You already read") { // skip dedup pointers — they carry no content
-			filePinIdx = i
-			break
-		}
-	}
+	// Pins (shared scan with budgetedKeepLast, which counts them): the
+	// most-recent user message — the task — and the most-recent
+	// file-content tool result (read_file / outline_file), so the file the
+	// model is working on never gets trimmed out from under it. Without
+	// the file pin, a long agent loop drops the file content, the model
+	// edits BLIND, and a weak model then hallucinates symbols and old_str
+	// that aren't in the file (observed live: ast_edit
+	// function:count_items and edit_file old_str="return len(items)"
+	// against a file containing neither, with the model literally
+	// reasoning "I don't see the file content"). The exploration-budget
+	// breaker compounds it by telling the model it "has full project
+	// context" when the content was already trimmed.
+	pinIdx, filePinIdx := pinnedIndices(msgs)
 
 	tailStart := len(msgs) - keepLast
 	out := make([]AgentMessage, 0, keepLast+3)
