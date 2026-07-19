@@ -91,6 +91,81 @@ body {
 	text-align: center;
 }
 
+.badge {
+	align-self: flex-start;
+	font-size: 0.85em;
+	padding: 2px 8px;
+	border-radius: 3px;
+	border-left: 3px solid var(--vscode-editorInfo-foreground, #3794ff);
+	background: var(--vscode-textBlockQuote-background, transparent);
+	opacity: 0.9;
+}
+
+details.reasoning {
+	align-self: flex-start;
+	max-width: 95%;
+	font-size: 0.9em;
+	opacity: 0.75;
+}
+
+details.reasoning summary {
+	cursor: pointer;
+	font-style: italic;
+}
+
+.reasoning-body {
+	white-space: pre-wrap;
+	word-break: break-word;
+	padding: 4px 0 0 12px;
+}
+
+details.plan-card {
+	align-self: stretch;
+	padding: 6px 10px;
+	border-radius: 4px;
+	border: 1px solid var(--vscode-widget-border, var(--vscode-input-border, transparent));
+	background: var(--vscode-editor-inactiveSelectionBackground);
+	font-size: 0.9em;
+}
+
+details.plan-card summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.plan-steps {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px 0 0 4px;
+}
+
+.plan-step {
+	display: flex;
+	gap: 6px;
+	align-items: baseline;
+}
+
+.plan-step.done {
+	opacity: 0.65;
+	text-decoration: line-through;
+}
+
+.plan-box {
+	flex: none;
+}
+
+#progress {
+	padding: 2px 10px;
+	font-size: 0.85em;
+	font-style: italic;
+	opacity: 0.75;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	border-top: 1px solid var(--vscode-widget-border, var(--vscode-input-border, transparent));
+}
+
 .error-card {
 	align-self: stretch;
 	padding: 6px 10px;

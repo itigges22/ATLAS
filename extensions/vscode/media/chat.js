@@ -17,10 +17,19 @@
 
 	/** The assistant bubble currently receiving streamed text, if any. */
 	let openAssistantEl = null;
+	/** The collapsible "Thinking…" section currently receiving reasoning
+	 * deltas, if any. Closed alongside the assistant bubble. */
+	let openReasoningEl = null;
 	/** Tool chips awaiting a tool_result, keyed by tool name (FIFO per name). */
 	const pendingChips = new Map();
 	/** Open permission cards keyed by prompt id. */
 	const permissionCards = new Map();
+	/** Current plan checklist: step id -> row element. A new planLoaded
+	 * (revision) replaces the map — old checklists stay in the log, frozen. */
+	let planSteps = new Map();
+
+	/** Single transient progress line pinned above the composer. */
+	const progressEl = document.getElementById('progress');
 
 	function scrollToBottom() {
 		messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -39,6 +48,7 @@
 
 	function closeAssistantBubble() {
 		openAssistantEl = null;
+		openReasoningEl = null;
 	}
 
 	function assistantBubble() {
@@ -46,6 +56,68 @@
 			openAssistantEl = appendBlock('msg assistant', '');
 		}
 		return openAssistantEl;
+	}
+
+	function reasoningSection() {
+		if (!openReasoningEl) {
+			const details = document.createElement('details');
+			details.className = 'reasoning';
+			const summary = document.createElement('summary');
+			summary.textContent = 'Thinking…';
+			details.appendChild(summary);
+			const body = document.createElement('div');
+			body.className = 'reasoning-body';
+			details.appendChild(body);
+			messagesEl.appendChild(details);
+			scrollToBottom();
+			openReasoningEl = body;
+		}
+		return openReasoningEl;
+	}
+
+	function addPlanChecklist(steps, revision) {
+		planSteps = new Map();
+		const card = document.createElement('details');
+		card.className = 'plan-card';
+		card.open = true;
+		const summary = document.createElement('summary');
+		summary.textContent = revision > 0 ? 'Plan (revision ' + revision + ')' : 'Plan';
+		card.appendChild(summary);
+		const list = document.createElement('div');
+		list.className = 'plan-steps';
+		for (const step of steps) {
+			const row = document.createElement('div');
+			row.className = 'plan-step';
+			const box = document.createElement('span');
+			box.className = 'plan-box';
+			box.textContent = '☐';
+			row.appendChild(box);
+			const label = document.createElement('span');
+			label.textContent = step.label;
+			row.appendChild(label);
+			list.appendChild(row);
+			planSteps.set(step.id, row);
+		}
+		card.appendChild(list);
+		messagesEl.appendChild(card);
+		scrollToBottom();
+	}
+
+	function checkPlanStep(stepId) {
+		const row = planSteps.get(stepId);
+		if (!row) {
+			return;
+		}
+		row.classList.add('done');
+		const box = row.querySelector('.plan-box');
+		if (box) {
+			box.textContent = '☑';
+		}
+	}
+
+	function setProgress(text) {
+		progressEl.textContent = text;
+		progressEl.hidden = text === '';
 	}
 
 	function addToolChip(name, detail) {
@@ -197,7 +269,10 @@
 		messagesEl.textContent = '';
 		pendingChips.clear();
 		permissionCards.clear();
+		planSteps.clear();
 		openAssistantEl = null;
+		openReasoningEl = null;
+		setProgress('');
 	}
 
 	window.addEventListener('message', (event) => {
@@ -211,6 +286,10 @@
 				assistantBubble().textContent += message.text;
 				scrollToBottom();
 				break;
+			case 'reasoningDelta':
+				reasoningSection().textContent += message.text;
+				scrollToBottom();
+				break;
 			case 'toolCall':
 				closeAssistantBubble();
 				addToolChip(message.name, message.detail);
@@ -222,6 +301,19 @@
 				closeAssistantBubble();
 				appendBlock('note', message.text);
 				break;
+			case 'badge':
+				appendBlock('badge', message.text);
+				break;
+			case 'planLoaded':
+				closeAssistantBubble();
+				addPlanChecklist(message.steps, message.revision);
+				break;
+			case 'planStep':
+				checkPlanStep(message.stepId);
+				break;
+			case 'progress':
+				setProgress(message.text);
+				break;
 			case 'permissionPrompt':
 				closeAssistantBubble();
 				addPermissionCard(message.id, message.tool, message.detail, message.message, message.canDiff, message.note);
@@ -231,9 +323,11 @@
 				break;
 			case 'turnDone':
 				closeAssistantBubble();
+				setProgress('');
 				break;
 			case 'turnError':
 				closeAssistantBubble();
+				setProgress('');
 				appendBlock('error-card', message.message);
 				break;
 			case 'busy':

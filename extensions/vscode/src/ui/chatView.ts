@@ -6,15 +6,23 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { AtlasApiError, AtlasClient } from '../client/atlasClient';
+import { AtlasClient } from '../client/atlasClient';
 import type {
+	AgentLensInterventionEventData,
 	ErrorEventData,
+	LlmPromptProgressEventData,
 	PermissionDeniedEventData,
 	PermissionMode,
 	PermissionRequestEventData,
+	PlanAdherenceEventData,
+	PlanLoadedEventData,
+	PlanReviseEventData,
+	ReasoningTokenEventData,
 	TextEventData,
 	ToolCallEventData,
 	ToolResultEventData,
+	V3ProgressEventData,
+	V3StageEventData,
 } from '../client/types';
 import { editTargetPath, predictEdit, type EditPrediction } from '../session/editPreview';
 import {
@@ -24,20 +32,31 @@ import {
 	type PermissionChoice,
 } from '../session/permissionFlow';
 import { TurnManager } from '../session/turnManager';
+import { renderError } from '../util/errors';
+import { MismatchDetector } from '../workspace/mismatch';
 import { DiffProvider } from './diffProvider';
+import type { StatusBar } from './statusBar';
 
 /** SecretStorage key for the service token ('ATLAS: Set Service Token'). */
 export const TOKEN_SECRET_KEY = 'atlas.serviceToken';
+
+/** workspaceState key for the mismatch warning's "Don't show again". */
+export const MISMATCH_DISMISSED_KEY = 'atlas.mismatchWarningDismissed';
 
 /** Messages the extension posts INTO the webview (media/chat.js). */
 type OutboundMessage =
 	| { type: 'userMessage'; text: string }
 	| { type: 'assistantDelta'; text: string }
+	| { type: 'reasoningDelta'; text: string }
 	| { type: 'toolCall'; name: string; detail: string }
 	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string; diffId?: number }
 	| { type: 'note'; text: string }
+	| { type: 'badge'; text: string }
 	| { type: 'permissionPrompt'; id: number; tool: string; detail: string; message: string; canDiff: boolean; note?: string }
 	| { type: 'permissionResolved'; id: number; outcome: string }
+	| { type: 'planLoaded'; steps: { id: string; label: string }[]; revision: number }
+	| { type: 'planStep'; stepId: string }
+	| { type: 'progress'; text: string }
 	| { type: 'turnDone' }
 	| { type: 'turnError'; message: string }
 	| { type: 'reset' }
@@ -107,10 +126,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * synchronously calls back into showPermissionPrompt which claims it. */
 	private promptPrediction: EditPrediction | undefined;
 
+	/** Passive workspace-mismatch heuristic (see workspace/mismatch.ts). */
+	private readonly mismatch: MismatchDetector;
+	/** Optional status bar — polling pauses while a turn streams. */
+	private statusBar: StatusBar | undefined;
+
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		private readonly secrets: vscode.SecretStorage,
 		private readonly diffs: DiffProvider,
+		private readonly workspaceState: vscode.Memento,
 	) {
 		this.output = vscode.window.createOutputChannel('ATLAS');
 		this.permissions = new PermissionFlow(this.turns.sessionAllowedTools, {
@@ -119,6 +144,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			onAutoAllow: (toolName) => this.post({ type: 'note', text: `'${toolName}' auto-allowed (approved for this session).` }),
 			onPostError: (toolName, error) => this.log(`permission decision POST failed for '${toolName}'`, error),
 		});
+		this.mismatch = new MismatchDetector({
+			stat: (relative) => this.statLocalFile(relative),
+			onMismatch: () => this.warnMismatch(),
+		});
+	}
+
+	/** Late-bound (the status bar is created after the view provider). */
+	attachStatusBar(statusBar: StatusBar): void {
+		this.statusBar = statusBar;
+	}
+
+	/** Build a client from current settings + stored token. Shared with the
+	 * status bar poller via extension.ts. */
+	async makeClient(): Promise<AtlasClient> {
+		const config = vscode.workspace.getConfiguration('atlas');
+		const baseUrl = config.get<string>('proxyUrl', 'http://localhost:8090');
+		// Plaintext setting is a dev override; SecretStorage is the real home.
+		const token = config.get<string>('serviceToken', '') || (await this.secrets.get(TOKEN_SECRET_KEY)) || '';
+		return new AtlasClient({ baseUrl, token });
 	}
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -178,14 +222,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		const config = vscode.workspace.getConfiguration('atlas');
-		const baseUrl = config.get<string>('proxyUrl', 'http://localhost:8090');
 		const mode = config.get<PermissionMode>('permissionMode', 'default');
-		// Plaintext setting is a dev override; SecretStorage is the real home.
-		const token = config.get<string>('serviceToken', '') || (await this.secrets.get(TOKEN_SECRET_KEY)) || '';
-		const client = new AtlasClient({ baseUrl, token });
+		const client = await this.makeClient();
 
 		this.post({ type: 'userMessage', text: message });
 		this.postTransient({ type: 'busy', value: true });
+		this.statusBar?.setStreaming(true);
 		try {
 			for await (const event of this.turns.runTurn(client, message, mode)) {
 				await this.dispatch(event.type, event.data, client);
@@ -198,7 +240,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			// resolves pending requests when the turn ends.
 			this.permissions.endTurn();
 			this.snapshots.clear();
+			this.mismatch.reset();
+			this.postTransient({ type: 'progress', text: '' });
 			this.postTransient({ type: 'busy', value: false });
+			this.statusBar?.setStreaming(false);
 		}
 	}
 
@@ -208,6 +253,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				const payload = data as TextEventData;
 				if (typeof payload?.content === 'string') {
 					this.post({ type: 'assistantDelta', text: payload.content });
+				}
+				break;
+			}
+			case 'reasoning_token': {
+				const payload = data as ReasoningTokenEventData;
+				if (typeof payload?.text === 'string') {
+					this.post({ type: 'reasoningDelta', text: payload.text });
 				}
 				break;
 			}
@@ -225,6 +277,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					queue.push({ path: target, before });
 					this.snapshots.set(payload.name, queue);
 				}
+				await this.mismatch.recordToolCall(payload.name, payload.args);
 				break;
 			}
 			case 'tool_result': {
@@ -238,6 +291,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					error: payload.error,
 					diffId,
 				});
+				// Fire-and-forget: the check sleeps its settle delay before
+				// stat-ing, and the stream must not wait on it.
+				void this.mismatch.recordToolResult(payload.tool, payload.success);
 				break;
 			}
 			case 'permission_request': {
@@ -265,6 +321,70 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				this.post({ type: 'note', text: `Permission denied for '${payload.tool}'.` });
 				break;
 			}
+			case 'plan_loaded': {
+				const payload = data as PlanLoadedEventData;
+				if (Array.isArray(payload?.steps)) {
+					this.post({
+						type: 'planLoaded',
+						steps: payload.steps.map((step) => ({ id: step.id, label: `${step.action} ${step.target}`.trim() })),
+						revision: payload.revision ?? 0,
+					});
+				}
+				break;
+			}
+			case 'plan_adherence': {
+				const payload = data as PlanAdherenceEventData;
+				if (payload?.matched && typeof payload.step_id === 'string') {
+					this.post({ type: 'planStep', stepId: payload.step_id });
+				}
+				break;
+			}
+			case 'plan_revise': {
+				const payload = data as PlanReviseEventData;
+				this.post({ type: 'note', text: `Plan going off track — revising (${payload?.reason || 'off-plan streak'}).` });
+				break;
+			}
+			case 'llm_call_start':
+				this.postProgress('Thinking…');
+				break;
+			case 'llm_prompt_progress': {
+				const payload = data as LlmPromptProgressEventData;
+				const pct = typeof payload?.pct === 'number' && payload.pct > 0 ? ` ${Math.round(payload.pct * 100)}%` : '';
+				this.postProgress(`Processing prompt${pct}…`);
+				break;
+			}
+			case 'llm_first_token':
+			case 'llm_call_end':
+				this.postProgress('');
+				break;
+			case 'v3_progress': {
+				const payload = data as V3ProgressEventData;
+				if (typeof payload?.message === 'string') {
+					this.postProgress(`V3: ${payload.message}`);
+				}
+				break;
+			}
+			case 'v3_phase':
+			case 'v3_sandbox':
+			case 'v3_repair': {
+				const payload = data as V3StageEventData;
+				if (typeof payload?.stage === 'string') {
+					this.postProgress(`V3: ${payload.stage}${payload.detail ? ` — ${payload.detail}` : ''}`);
+				}
+				break;
+			}
+			case 'v3_lens_veto':
+			case 'v3_structural_veto': {
+				const payload = data as V3StageEventData;
+				const why = type === 'v3_lens_veto' ? 'lens quality veto' : 'unresolved-call veto';
+				this.post({ type: 'badge', text: `Candidate rejected (${why})${payload?.detail ? `: ${payload.detail}` : ''}` });
+				break;
+			}
+			case 'agent_lens_intervention': {
+				const payload = data as AgentLensInterventionEventData;
+				this.post({ type: 'badge', text: `Lens intervention: ${payload?.reason || 'corrective queued'}` });
+				break;
+			}
 			case 'error': {
 				const payload = data as ErrorEventData;
 				this.post({ type: 'turnError', message: payload.error || 'unknown stream error' });
@@ -273,10 +393,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'done':
 				// Bubble finalization happens on generator completion.
 				break;
+			// High-volume / TUI-internal streams the panel deliberately drops:
+			// llm_token duplicates the JSON tool-call content, v3 token streams
+			// churn the DOM for no user signal, agent_lens_score fires per write.
+			case 'llm_token':
+			case 'v3_token':
+			case 'v3_llm_start':
+			case 'v3_llm_end':
+			case 'v3_reasoning_token':
+			case 'agent_lens_score':
+				break;
 			default:
 				// Forward compatibility: unknown event types are logged, never fatal.
 				this.log(`unhandled event '${type}'`, data);
 		}
+	}
+
+	/** Single-line progress indicator under the newest message. Transient:
+	 * replay after a reload would show a stale spinner. */
+	private postProgress(text: string): void {
+		this.postTransient({ type: 'progress', text });
 	}
 
 	/** Consume the pending snapshot for a tool_result and, when there is
@@ -338,21 +474,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			this.post({ type: 'note', text: 'Turn cancelled.' });
 			return;
 		}
-		if (error instanceof AtlasApiError) {
-			this.post({ type: 'turnError', message: `${error.code || 'request failed'}: ${error.detail || error.message}` });
-			if (error.code === 'unauthorized') {
-				void vscode.window
-					.showErrorMessage('ATLAS proxy rejected the request (unauthorized).', 'Set Token')
-					.then((choice) => {
-						if (choice === 'Set Token') {
-							void vscode.commands.executeCommand('atlas.setToken');
-						}
-					});
-			}
-			return;
+		const rendered = renderError(error);
+		this.post({ type: 'turnError', message: rendered.message });
+		if (rendered.action === 'set-token') {
+			void vscode.window.showErrorMessage(rendered.message, 'Set Token').then((choice) => {
+				if (choice === 'Set Token') {
+					void vscode.commands.executeCommand('atlas.setToken');
+				}
+			});
+		} else if (rendered.prominent) {
+			void vscode.window.showErrorMessage(rendered.message);
 		}
-		const message = error instanceof Error ? error.message : String(error);
-		this.post({ type: 'turnError', message: `Could not reach the ATLAS proxy: ${message}` });
 	}
 
 	/** Show a permission prompt on both surfaces: an inline webview card
@@ -432,21 +564,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * undefined when there is no folder, the file does not exist, or it is
 	 * not readable as UTF-8 text. */
 	private async readLocalFile(target: string): Promise<string | undefined> {
-		let absolute: string;
-		if (path.isAbsolute(target)) {
-			absolute = target;
-		} else {
-			const folder = vscode.workspace.workspaceFolders?.[0];
-			if (!folder) {
-				return undefined;
-			}
-			absolute = path.join(folder.uri.fsPath, target);
+		const absolute = this.resolveLocalPath(target);
+		if (absolute === undefined) {
+			return undefined;
 		}
 		try {
 			return await fs.readFile(absolute, 'utf8');
 		} catch {
 			return undefined;
 		}
+	}
+
+	private resolveLocalPath(target: string): string | undefined {
+		if (path.isAbsolute(target)) {
+			return target;
+		}
+		const folder = vscode.workspace.workspaceFolders?.[0];
+		return folder === undefined ? undefined : path.join(folder.uri.fsPath, target);
+	}
+
+	/** Stat arm of the mismatch heuristic. Unresolvable (no folder) maps to
+	 * absent — the detector's verdicts treat that conservatively. */
+	private async statLocalFile(target: string): Promise<{ exists: boolean; mtimeMs?: number }> {
+		const absolute = this.resolveLocalPath(target);
+		if (absolute === undefined) {
+			return { exists: false };
+		}
+		try {
+			const stat = await fs.stat(absolute);
+			return { exists: true, mtimeMs: stat.mtimeMs };
+		} catch {
+			return { exists: false };
+		}
+	}
+
+	/** One-time warning when local disk state contradicts a successful file
+	 * op — the proxy is likely mounted on a different directory. */
+	private warnMismatch(): void {
+		if (this.workspaceState.get<boolean>(MISMATCH_DISMISSED_KEY, false)) {
+			return;
+		}
+		const message =
+			'ATLAS applied a file change, but this workspace does not reflect it. ' +
+			'The proxy is likely mounted on a different directory — restart ATLAS from this folder (see README).';
+		this.post({ type: 'note', text: message });
+		void vscode.window.showWarningMessage(message, "Don't Show Again").then((choice) => {
+			if (choice === "Don't Show Again") {
+				void this.workspaceState.update(MISMATCH_DISMISSED_KEY, true);
+			}
+		});
 	}
 
 	private post(message: OutboundMessage): void {
@@ -492,6 +658,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 	<main id="messages" aria-live="polite"></main>
+	<div id="progress" hidden></div>
 	<footer id="composer">
 		<textarea id="input" rows="2" placeholder="Ask ATLAS..."></textarea>
 		<div id="actions">

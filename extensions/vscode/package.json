@@ -37,6 +37,14 @@
       {
         "command": "atlas.newConversation",
         "title": "ATLAS: New Conversation"
+      },
+      {
+        "command": "atlas.refreshStatus",
+        "title": "ATLAS: Refresh Status & Calibration"
+      },
+      {
+        "command": "atlas.statusMenu",
+        "title": "ATLAS: Status Menu"
       }
     ],
     "viewsContainers": {

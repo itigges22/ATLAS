@@ -133,6 +133,76 @@ export interface PlanLoadedEventData {
 	revision: number;
 }
 
+/** plan_adherence fires after each tool call. Match shape carries
+ * step_index/step_id; miss shape carries tool/off_streak (+ neutral=true
+ * for recon tools that leave the off-streak unchanged). */
+export interface PlanAdherenceEventData {
+	matched: boolean;
+	step_index?: number;
+	step_id?: string;
+	step_action?: string;
+	satisfied: number;
+	total: number;
+	tool?: string;
+	off_streak?: number;
+	neutral?: boolean;
+}
+
+export interface PlanReviseEventData {
+	reason: string;
+	/** 1-indexed. */
+	revision: number;
+}
+
+/** v3_progress — fallback for V3 stages without a dedicated typed event. */
+export interface V3ProgressEventData {
+	message: string;
+}
+
+/** Common shape of the typed V3 stage events (v3_phase / v3_sandbox /
+ * v3_repair) — every one carries stage + detail plus stage-specific extras
+ * the progress line does not need. */
+export interface V3StageEventData {
+	stage: string;
+	detail: string;
+}
+
+export interface V3LensVetoEventData {
+	stage: string;
+	detail: string;
+	/** Candidate index. */
+	index: number;
+	gx_score_min: number;
+	first_off_rails_idx: number;
+}
+
+export interface V3StructuralVetoEventData {
+	stage: string;
+	detail: string;
+	/** Candidate index. */
+	index: number;
+	n_unresolved: number;
+	unresolved_calls: string[];
+	n_calls_total: number;
+}
+
+export interface AgentLensScoreEventData {
+	tool: 'write_file' | 'edit_file';
+	turn: number;
+	n_tokens: number;
+	first_off_rails_idx: number;
+	gx_score_min: number;
+	gx_score_mean: number;
+	latency_ms: number;
+}
+
+export interface AgentLensInterventionEventData {
+	turn: number;
+	tool: string;
+	/** The corrective injected into the next LLM call. */
+	reason: string;
+}
+
 // --- Non-stream endpoint payloads. ---
 
 /** POST /cancel response. 200 → cancelled:true; 404 → cancelled:false. */
@@ -161,6 +231,22 @@ export interface VersionResponse {
 	api_version: string;
 	protocol_version: number;
 	error_codes: string[];
+}
+
+/** GET /v1/calibration/status — lens + ASA compat verdict for the loaded
+ * model. Called once at activation and on manual refresh only: every call
+ * re-probes the lens service (~50–200 ms, docs/API.md). */
+export interface CalibrationStatusResponse {
+	lens: {
+		verdict: 'supported' | 'no-artifacts' | 'incomplete-artifacts' | 'uncalibrated' | 'dim-mismatch' | 'unreachable' | string;
+		hint?: string;
+	};
+	asa: {
+		verdict: 'supported' | 'missing' | 'unverified' | 'incompatible' | string;
+		hint?: string;
+	};
+	/** The seven status dimensions `atlas doctor` renders. */
+	dimensions?: { name: string; status: string; detail: string }[];
 }
 
 /** Closed error-code set from docs/API.md. Switch on `error`, never on

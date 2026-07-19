@@ -1,0 +1,56 @@
+name: vscode-extension
+
+# Code-level checks for the VS Code extension (extensions/vscode/) —
+# type-check, lint, unit tests, and a production bundle. Kept out of
+# test.yml's Go/Python matrix: the extension is its own npm ecosystem and
+# only needs to run when its files change.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'extensions/vscode/**'
+      - '.github/workflows/vscode-extension.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'extensions/vscode/**'
+      - '.github/workflows/vscode-extension.yml'
+
+concurrency:
+  group: vscode-extension-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: lint + test + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/vscode
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+
+      - name: install
+        run: npm ci
+
+      - name: type-check
+        run: npm run check-types
+
+      - name: lint
+        run: npm run lint
+
+      - name: test
+        run: npm test
+
+      - name: bundle (production)
+        run: node esbuild.js --production

@@ -12,6 +12,7 @@
 import { parseSSEStream } from './sse';
 import type {
 	AgentRequest,
+	CalibrationStatusResponse,
 	ChatEvent,
 	ErrorEnvelope,
 	PermissionDecisionRequest,
@@ -169,5 +170,21 @@ export class AtlasClient {
 			throw await toApiError(response);
 		}
 		return (await response.json()) as VersionResponse;
+	}
+
+	/**
+	 * GET /v1/calibration/status — lens/ASA verdict for the loaded model.
+	 * Uncached server-side (each call re-probes the lens service), so callers
+	 * hit it only at activation and on explicit user refresh.
+	 */
+	async getCalibrationStatus(): Promise<CalibrationStatusResponse> {
+		const response = await fetch(`${this.baseUrl}/v1/calibration/status`, {
+			method: 'GET',
+			headers: this.headers(false),
+		});
+		if (!response.ok) {
+			throw await toApiError(response);
+		}
+		return (await response.json()) as CalibrationStatusResponse;
 	}
 }
