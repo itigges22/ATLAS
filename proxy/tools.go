@@ -953,8 +953,16 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 				Error:   "write_file cancelled — no content was written",
 			}, nil
 		}
-		// Fallback to direct write if V3 service unavailable
+		// Fallback to direct write if V3 service unavailable — but never
+		// land content the sandbox confirms is broken: a truncated tool
+		// call writing a SyntaxError to disk with success=true is how the
+		// mini-bench got its two broken files (t06/t09).
 		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
+		if synErr, ok := checkFallbackSyntax(ctx, path, baselineContent); !ok {
+			log.Printf("[write_file] fallback content for %s failed syntax gate: %s", path, truncateStr(synErr, 120))
+			return &ToolResult{Success: false,
+				Error: fallbackSyntaxRejection(path, synErr)}, nil
+		}
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
 		if errors.Is(err, context.DeadlineExceeded) {
 			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
@@ -1301,6 +1309,24 @@ func editFileTool() *ToolDef {
 					newContent = improved
 					v3Out = meta
 				}
+			}
+
+			// Syntax gate on the composed result. A truncated new_str (or a
+			// string-level edit that broke the file) must not land when V3
+			// verification didn't run or failed — same class as the
+			// write_file fallback gate (mini-bench t06/t09). Semantics:
+			// an edit must not INTRODUCE breakage — when the ORIGINAL
+			// content already fails to parse, a still-failing result is a
+			// permitted repair-in-progress (fixing one error at a time),
+			// so the gate only blocks healthy→broken transitions.
+			if synErr, ok := checkFallbackSyntax(ctx, path, newContent); !ok {
+				if _, origOK := checkFallbackSyntax(ctx, path, content); origOK {
+					log.Printf("[edit_file] edited content for %s failed syntax gate: %s", input.Path, truncateStr(synErr, 120))
+					return &ToolResult{Success: false, Error: fmt.Sprintf(
+						"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
+						input.Path, truncateStr(synErr, 200))}, nil
+				}
+				log.Printf("[edit_file] %s still unparsable after edit (was already broken) — allowing repair-in-progress", input.Path)
 			}
 
 			// Atomic write

@@ -36,6 +36,16 @@ var (
 	// render_template_string with a sizeable inline literal — the smell
 	// that pairs with an orphaned template.
 	reInlineTemplate = regexp.MustCompile(`render_template_string\s*\(`)
+	// render_template('name.html') — referenced template must exist.
+	reRenderTemplate = regexp.MustCompile(`render_template\(\s*['"]([^'"]+)['"]`)
+	// {% extends "base.html" %} / {% include "nav.html" %}.
+	reJinjaRef = regexp.MustCompile(`\{%\s*(?:extends|include)\s+['"]([^'"]+)['"]`)
+	// fetch('/path'...) with a local absolute path (quote or backtick).
+	reFetchURL = regexp.MustCompile("fetch\\(\\s*[`'\"](/[^`'\"?#{]*)")
+	// <form action="/path">.
+	reFormAction = regexp.MustCompile(`(?i)\baction\s*=\s*["'](/[^"'?#{]*)["']`)
+	// @app.route('/path') / @bp.route(...).
+	reFlaskRoute = regexp.MustCompile(`@\w+\.route\(\s*['"]([^'"]+)['"]`)
 )
 
 // assetLintFindings walks the project under workingDir and returns
@@ -105,6 +115,58 @@ func assetLintFindings(workingDir string) []string {
 		}
 	}
 
+	htmlCount := 0
+	routeSet := []*regexp.Regexp{}
+	routeRaw := []string{}
+	for _, f := range files {
+		ext := strings.ToLower(filepath.Ext(f.rel))
+		if ext == ".html" || ext == ".htm" {
+			htmlCount++
+		}
+		if ext == ".py" {
+			for _, m := range reFlaskRoute.FindAllStringSubmatch(f.content, -1) {
+				raw := strings.TrimSuffix(m[1], "/")
+				if raw == "" {
+					raw = "/"
+				}
+				// '<int:id>'-style segments match any single path segment.
+				var b strings.Builder
+				b.WriteString("^")
+				for _, seg := range strings.Split(raw, "/") {
+					if seg == "" {
+						continue
+					}
+					b.WriteString("/")
+					if strings.HasPrefix(seg, "<") && strings.HasSuffix(seg, ">") {
+						b.WriteString("[^/]+")
+					} else {
+						b.WriteString(regexp.QuoteMeta(seg))
+					}
+				}
+				if b.String() == "^" {
+					b.WriteString("/")
+				}
+				b.WriteString("/?$")
+				if re, err := regexp.Compile(b.String()); err == nil {
+					routeSet = append(routeSet, re)
+					routeRaw = append(routeRaw, m[1])
+				}
+			}
+		}
+	}
+	routeMatches := func(target string) bool {
+		t := strings.TrimSuffix(target, "/")
+		if t == "" {
+			t = "/"
+		}
+		for _, re := range routeSet {
+			if re.MatchString(t) {
+				return true
+			}
+		}
+		return false
+	}
+
 	for _, f := range files {
 		switch {
 		case strings.HasPrefix(f.rel, "templates/"):
@@ -126,6 +188,71 @@ func assetLintFindings(workingDir string) []string {
 				findings = append(findings, fmt.Sprintf(
 					"%s is referenced by nothing (no <script src>, <link href>, or url_for('static', ...) names it).",
 					f.rel))
+			}
+		default:
+			// Flat-layout orphans: a .js/.css living beside .html files
+			// (no templates/static dirs) is subject to the same rule —
+			// three mini-bench tasks inlined a duplicate <script> and
+			// orphaned the companion file, invisible to the prefix-keyed
+			// rules above. Only fires when the project has HTML at all
+			// (a pure node/python lib's entry file is legitimately
+			// unreferenced).
+			ext := strings.ToLower(filepath.Ext(f.rel))
+			if (ext == ".js" || ext == ".css") && htmlCount > 0 {
+				if !strings.Contains(allOther(f.rel), filepath.Base(f.rel)) {
+					findings = append(findings, fmt.Sprintf(
+						"%s is referenced by nothing — if a page should load it, add the <script src>/<link href>; if its content was inlined instead, delete the file.",
+						f.rel))
+				}
+			}
+		}
+
+		// Referenced-but-missing templates: render_template('x') in .py,
+		// {% extends/include %} in templates. The snake fix session
+		// shipped an errorhandler rendering templates/404.html that did
+		// not exist — every 404 became a 500.
+		ext := strings.ToLower(filepath.Ext(f.rel))
+		var tmplRefs []string
+		if ext == ".py" {
+			for _, m := range reRenderTemplate.FindAllStringSubmatch(f.content, -1) {
+				tmplRefs = append(tmplRefs, m[1])
+			}
+		}
+		if ext == ".html" || ext == ".htm" || ext == ".jinja" || ext == ".jinja2" {
+			for _, m := range reJinjaRef.FindAllStringSubmatch(f.content, -1) {
+				tmplRefs = append(tmplRefs, m[1])
+			}
+		}
+		for _, name := range tmplRefs {
+			if strings.Contains(name, "{{") {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(workingDir, "templates", filepath.FromSlash(name))); err != nil {
+				findings = append(findings, fmt.Sprintf(
+					"%s references template %q, but templates/%s does not exist.",
+					f.rel, name, name))
+			}
+		}
+
+		// Route-contract check: fetch()/form-action URLs must correspond
+		// to a declared Flask route. Mini-bench t01 generated a JS
+		// frontend calling REST endpoints in a style the backend half
+		// implemented differently — page loads, halves can't talk.
+		if len(routeSet) > 0 && (ext == ".js" || ext == ".html" || ext == ".htm") {
+			seen := map[string]bool{}
+			for _, re := range []*regexp.Regexp{reFetchURL, reFormAction} {
+				for _, m := range re.FindAllStringSubmatch(f.content, -1) {
+					target := m[1]
+					if seen[target] || strings.HasPrefix(target, "/static/") {
+						continue
+					}
+					seen[target] = true
+					if !routeMatches(target) {
+						findings = append(findings, fmt.Sprintf(
+							"%s calls %q, but no Flask route matches it (routes: %s).",
+							f.rel, target, strings.Join(routeRaw, ", ")))
+					}
+				}
 			}
 		}
 	}

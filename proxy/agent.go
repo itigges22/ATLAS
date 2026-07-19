@@ -467,7 +467,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// require a structured verification field, just evidence in the
 			// loop that the agent ran something that exits non-zero on
 			// failure.
-			if userWantsVerification && !verifiedThisLoop && !ctx.YoloMode && gateBounces < maxGateBounces {
+			// Honesty gates run in EVERY permission mode. Yolo means "don't
+			// ask permission for destructive calls," not "skip completion
+			// checks" — the 2026-07-18 mini-bench ran unattended in yolo and
+			// shipped an ignored-red pytest done and a zero-write completion
+			// claim that these gates exist to bounce. Bounces stay capped by
+			// maxGateBounces, so unattended runs cannot loop on a gate.
+			if userWantsVerification && !verifiedThisLoop && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := verificationRejectionMessage(userMessage)
 				log.Printf("[agent] verification gate: bouncing done at turn %d (user prompt %q has fix-intent, no successful verification command this loop, bounce %d/%d)",
@@ -496,7 +502,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// - verification gate: fix prompt + no run_command verify → bounce
 			// - this gate: action prompt + no successful edit tool → bounce
 			// Both can fire on the same prompt (e.g. "rewrite X and verify").
-			if isActionIntentMessage(userMessage) && !madeProductiveChange && !ctx.YoloMode && gateBounces < maxGateBounces {
+			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
 				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop, bounce %d/%d)",
@@ -537,7 +543,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// we catch "fixed 1 of N" cases regardless of how the
 			// model worded the summary. Structural check is the same.
 			shouldCheck := claimsUniversal(parsed.Summary) || promptIsMultiIssue(userMessage)
-			if !ctx.YoloMode && shouldCheck && gateBounces < maxGateBounces {
+			if shouldCheck && gateBounces < maxGateBounces {
 				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Summary); gap != "" {
 					gateBounces++
 					log.Printf("[agent] claim-check gate: bouncing done at turn %d (bounce %d/%d) — %q",

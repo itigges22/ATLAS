@@ -143,3 +143,82 @@ func TestSessionManifestNoteAnnouncesOncePerFile(t *testing.T) {
 		t.Fatalf("new file should re-announce full set: %q", third)
 	}
 }
+
+func TestAssetLintFlatLayoutOrphan(t *testing.T) {
+	// Mini-bench t03/t07: flat layout (no templates/static), html inlines a
+	// duplicate <script> and orphans the companion .js.
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"index.html": "<html><script>function calculate(){}</script></html>",
+		"calc.js":    "function calculate(expression) { return 1; }",
+		"style.css":  "body { margin: 0; }",
+	})
+	findings := assetLintFindings(root)
+	if !findingsContaining(findings, "calc.js is referenced by nothing") {
+		t.Fatalf("flat orphan js not flagged: %v", findings)
+	}
+	if !findingsContaining(findings, "style.css is referenced by nothing") {
+		t.Fatalf("flat orphan css not flagged: %v", findings)
+	}
+}
+
+func TestAssetLintFlatLayoutQuietWhenWiredOrNoHTML(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"index.html": "<html><script src=\"calc.js\"></script><link href=\"style.css\"></html>",
+		"calc.js":    "function calculate(){}",
+		"style.css":  "body{}",
+	})
+	if f := assetLintFindings(root); len(f) != 0 {
+		t.Fatalf("wired flat project should be quiet: %v", f)
+	}
+	// A pure library with no HTML must not flag its entry file.
+	root2 := t.TempDir()
+	writeTree(t, root2, map[string]string{"index.js": "module.exports = 1;"})
+	if f := assetLintFindings(root2); len(f) != 0 {
+		t.Fatalf("no-HTML project should be quiet: %v", f)
+	}
+}
+
+func TestAssetLintMissingTemplateReference(t *testing.T) {
+	// Snake fix session: errorhandler renders templates/404.html which
+	// doesn't exist — every 404 became a 500.
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"app.py": "from flask import Flask, render_template\n" +
+			"@app.route('/')\ndef i(): return render_template('index.html')\n" +
+			"@app.errorhandler(404)\ndef nf(e): return render_template('404.html'), 404\n",
+		"templates/index.html": "<html>{% extends \"base.html\" %}</html>",
+	})
+	findings := assetLintFindings(root)
+	if !findingsContaining(findings, `references template "404.html"`) {
+		t.Fatalf("missing py-referenced template not flagged: %v", findings)
+	}
+	if !findingsContaining(findings, `references template "base.html"`) {
+		t.Fatalf("missing jinja extends target not flagged: %v", findings)
+	}
+}
+
+func TestAssetLintRouteContractMismatch(t *testing.T) {
+	// Mini-bench t01: JS calls REST endpoints the backend half never
+	// declared; page loads, halves can't talk.
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"app.py": "from flask import Flask, render_template\n" +
+			"@app.route('/')\ndef i(): return render_template('index.html')\n" +
+			"@app.route('/add', methods=['POST'])\ndef a(): return ''\n" +
+			"@app.route('/delete/<int:todo_id>', methods=['POST'])\ndef d(todo_id): return ''\n",
+		"templates/index.html": "<html><script src=\"/static/todo.js\"></script>" +
+			"<form action=\"/add\"></form></html>",
+		"static/todo.js": "fetch('/api/todos');\nfetch(`/delete/${id}`, {method:'POST'});\n",
+	})
+	findings := assetLintFindings(root)
+	if !findingsContaining(findings, `"/api/todos"`) {
+		t.Fatalf("unrouted fetch target not flagged: %v", findings)
+	}
+	for _, f := range findings {
+		if strings.Contains(f, `"/add"`) || strings.Contains(f, `"/delete/`) {
+			t.Fatalf("legitimately routed target flagged: %q", f)
+		}
+	}
+}
