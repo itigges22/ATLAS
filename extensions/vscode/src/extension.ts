@@ -1,10 +1,14 @@
 import * as vscode from 'vscode';
 import { ChatViewProvider, TOKEN_SECRET_KEY } from './ui/chatView';
+import { DiffProvider } from './ui/diffProvider';
 
 export function activate(context: vscode.ExtensionContext) {
-	const chat = new ChatViewProvider(context.extensionUri, context.secrets);
+	const diffs = new DiffProvider();
+	const chat = new ChatViewProvider(context.extensionUri, context.secrets, diffs);
 
 	context.subscriptions.push(
+		diffs.register(),
+
 		vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chat, {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),

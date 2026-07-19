@@ -3,6 +3,8 @@
 // also appended to a transcript so a re-created webview (sidebar closed and
 // reopened, window reload of the view) can be replayed from scratch.
 
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { AtlasApiError, AtlasClient } from '../client/atlasClient';
 import type {
@@ -14,6 +16,7 @@ import type {
 	ToolCallEventData,
 	ToolResultEventData,
 } from '../client/types';
+import { editTargetPath, predictEdit, type EditPrediction } from '../session/editPreview';
 import {
 	PendingPermission,
 	PermissionFlow,
@@ -21,6 +24,7 @@ import {
 	type PermissionChoice,
 } from '../session/permissionFlow';
 import { TurnManager } from '../session/turnManager';
+import { DiffProvider } from './diffProvider';
 
 /** SecretStorage key for the service token ('ATLAS: Set Service Token'). */
 export const TOKEN_SECRET_KEY = 'atlas.serviceToken';
@@ -30,9 +34,9 @@ type OutboundMessage =
 	| { type: 'userMessage'; text: string }
 	| { type: 'assistantDelta'; text: string }
 	| { type: 'toolCall'; name: string; detail: string }
-	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string }
+	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string; diffId?: number }
 	| { type: 'note'; text: string }
-	| { type: 'permissionPrompt'; id: number; tool: string; detail: string; message: string }
+	| { type: 'permissionPrompt'; id: number; tool: string; detail: string; message: string; canDiff: boolean; note?: string }
 	| { type: 'permissionResolved'; id: number; outcome: string }
 	| { type: 'turnDone' }
 	| { type: 'turnError'; message: string }
@@ -44,7 +48,28 @@ type InboundMessage =
 	| { type: 'ready' }
 	| { type: 'submit'; text: string }
 	| { type: 'cancel' }
-	| { type: 'permissionAnswer'; id: number; choice: PermissionChoice };
+	| { type: 'permissionAnswer'; id: number; choice: PermissionChoice }
+	| { type: 'viewPermissionDiff'; id: number }
+	| { type: 'viewAppliedDiff'; id: number };
+
+/** File state captured when a file-edit tool_call streams past, keyed by
+ * tool name FIFO (tool_result carries only the tool name — same matching
+ * scheme the webview uses for its chips). */
+interface EditSnapshot {
+	path: string;
+	before: string | undefined;
+}
+
+/** What a resolved "View change" chip button opens: the exact applied
+ * change (snapshot vs on-disk), falling back to edit_file's server-computed
+ * diff_preview when the file is not readable in this workspace. */
+interface AppliedDiff {
+	tool: string;
+	path: string;
+	before: string | undefined;
+	after: string | undefined;
+	preview?: string;
+}
 
 /** Condense tool args to a single short line for the tool chip. */
 function condenseArgs(args: unknown): string {
@@ -71,9 +96,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly permissions: PermissionFlow;
 	private readonly output: vscode.OutputChannel;
 
+	/** Pre-edit file states awaiting their tool_result, FIFO per tool name. */
+	private snapshots = new Map<string, EditSnapshot[]>();
+	/** Applied changes viewable from resolved tool chips, by diff id. */
+	private appliedDiffs = new Map<number, AppliedDiff>();
+	/** Permission-time predictions viewable while the prompt is open. */
+	private permissionDiffs = new Map<number, { tool: string; prediction: EditPrediction }>();
+	private nextDiffId = 1;
+	/** Hand-off slot: dispatch() computes the prediction, then handleRequest
+	 * synchronously calls back into showPermissionPrompt which claims it. */
+	private promptPrediction: EditPrediction | undefined;
+
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		private readonly secrets: vscode.SecretStorage,
+		private readonly diffs: DiffProvider,
 	) {
 		this.output = vscode.window.createOutputChannel('ATLAS');
 		this.permissions = new PermissionFlow(this.turns.sessionAllowedTools, {
@@ -106,6 +143,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					// Stale/settled ids are no-ops inside the flow (first answer wins).
 					this.permissions.settleById(message.id, message.choice);
 					break;
+				case 'viewPermissionDiff':
+					void this.openPermissionDiff(message.id);
+					break;
+				case 'viewAppliedDiff':
+					void this.openAppliedDiff(message.id);
+					break;
 			}
 		});
 	}
@@ -118,6 +161,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		this.turns.cancel();
 		this.turns.reset();
 		this.transcript = [];
+		this.snapshots.clear();
+		this.appliedDiffs.clear();
+		this.permissionDiffs.clear();
 		this.postTransient({ type: 'reset' });
 	}
 
@@ -142,7 +188,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		this.postTransient({ type: 'busy', value: true });
 		try {
 			for await (const event of this.turns.runTurn(client, message, mode)) {
-				this.dispatch(event.type, event.data, client);
+				await this.dispatch(event.type, event.data, client);
 			}
 			this.post({ type: 'turnDone' });
 		} catch (error) {
@@ -151,11 +197,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			// Any prompt still open has nothing left to answer — the proxy
 			// resolves pending requests when the turn ends.
 			this.permissions.endTurn();
+			this.snapshots.clear();
 			this.postTransient({ type: 'busy', value: false });
 		}
 	}
 
-	private dispatch(type: string, data: unknown, client: AtlasClient): void {
+	private async dispatch(type: string, data: unknown, client: AtlasClient): Promise<void> {
 		switch (type) {
 			case 'text': {
 				const payload = data as TextEventData;
@@ -167,22 +214,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'tool_call': {
 				const payload = data as ToolCallEventData;
 				this.post({ type: 'toolCall', name: payload.name, detail: condenseArgs(payload.args) });
+				// Snapshot the target now (before permission/execution) so a
+				// successful result can show the exact applied change. At
+				// tool_call time rather than permission time: accept-edits
+				// and yolo turns never raise a permission_request.
+				const target = editTargetPath(payload.name, payload.args);
+				if (target !== undefined) {
+					const before = await this.readLocalFile(target);
+					const queue = this.snapshots.get(payload.name) ?? [];
+					queue.push({ path: target, before });
+					this.snapshots.set(payload.name, queue);
+				}
 				break;
 			}
 			case 'tool_result': {
 				const payload = data as ToolResultEventData;
+				const diffId = await this.recordAppliedDiff(payload);
 				this.post({
 					type: 'toolResult',
 					tool: payload.tool,
 					success: payload.success,
 					elapsed: payload.elapsed,
 					error: payload.error,
+					diffId,
 				});
 				break;
 			}
 			case 'permission_request': {
 				const payload = data as PermissionRequestEventData;
-				this.permissions.handleRequest(client, this.turns.sessionId, payload);
+				// Predict the edit from the CURRENT local file so the prompt
+				// can offer "View Diff" before the user decides. ast_edit has
+				// no post-content in its result, so this is the only pre-view.
+				const target = editTargetPath(payload.tool_name, payload.args);
+				const current = target === undefined ? undefined : await this.readLocalFile(target);
+				this.promptPrediction = predictEdit(payload.tool_name, payload.args, current);
+				try {
+					this.permissions.handleRequest(client, this.turns.sessionId, payload);
+				} finally {
+					this.promptPrediction = undefined;
+				}
 				break;
 			}
 			case 'permission_denied': {
@@ -207,6 +277,60 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// Forward compatibility: unknown event types are logged, never fatal.
 				this.log(`unhandled event '${type}'`, data);
 		}
+	}
+
+	/** Consume the pending snapshot for a tool_result and, when there is
+	 * something to show, capture the on-disk "after" state and register a
+	 * viewable applied diff. Returns its id, or undefined. */
+	private async recordAppliedDiff(payload: ToolResultEventData): Promise<number | undefined> {
+		const queue = this.snapshots.get(payload.tool);
+		const snapshot = queue && queue.length > 0 ? queue.shift() : undefined;
+		if (!snapshot || !payload.success) {
+			return undefined;
+		}
+		// Read immediately: the proxy writes before emitting the result, and
+		// a later read could already include the NEXT edit to the same file.
+		const after = await this.readLocalFile(snapshot.path);
+		const preview =
+			payload.tool === 'edit_file' ? (payload.data as { diff_preview?: string } | undefined)?.diff_preview : undefined;
+		if (after === undefined && !preview) {
+			return undefined; // nothing viewable (likely a workspace mismatch)
+		}
+		const diffId = this.nextDiffId++;
+		this.appliedDiffs.set(diffId, { tool: payload.tool, path: snapshot.path, before: snapshot.before, after, preview });
+		return diffId;
+	}
+
+	private async openAppliedDiff(id: number): Promise<void> {
+		const applied = this.appliedDiffs.get(id);
+		if (!applied) {
+			return;
+		}
+		if (applied.after !== undefined) {
+			await this.diffs.openDiff(
+				`ATLAS: ${applied.tool} ${applied.path} (applied)`,
+				applied.path,
+				applied.before ?? '',
+				applied.after,
+			);
+		} else if (applied.preview) {
+			await this.diffs.openPreview(applied.path, applied.preview);
+		}
+	}
+
+	private async openPermissionDiff(id: number): Promise<void> {
+		const entry = this.permissionDiffs.get(id);
+		if (!entry) {
+			return;
+		}
+		const { tool, prediction } = entry;
+		const qualifier = prediction.kind === 'snippet' ? 'snippet' : prediction.approximate ? 'proposed · approximate' : 'proposed';
+		await this.diffs.openDiff(
+			`ATLAS: ${tool} ${prediction.path} (${qualifier})`,
+			prediction.path,
+			prediction.left,
+			prediction.right,
+		);
 	}
 
 	private handleTurnFailure(error: unknown): void {
@@ -235,33 +359,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * (buttons post permissionAnswer back) and a native notification. First
 	 * answer wins — PendingPermission.settle() ignores the loser. */
 	private showPermissionPrompt(pending: PendingPermission): void {
+		const prediction = this.promptPrediction;
+		if (prediction) {
+			this.permissionDiffs.set(pending.id, { tool: pending.request.tool_name, prediction });
+		}
 		this.post({
 			type: 'permissionPrompt',
 			id: pending.id,
 			tool: pending.request.tool_name,
 			detail: condenseArgs(pending.request.args),
 			message: pending.request.message || '',
+			canDiff: prediction !== undefined,
+			note: prediction?.note,
 		});
+		this.showPermissionNotification(pending, prediction !== undefined);
+	}
+
+	/** Native notification arm of the prompt. "View Diff" opens the diff and
+	 * re-raises the notification (a notification consumes itself on any
+	 * click) so the user can still answer from it. */
+	private showPermissionNotification(pending: PendingPermission, canDiff: boolean): void {
 		const label = pending.request.message || `ATLAS wants to run '${pending.request.tool_name}'.`;
-		void vscode.window
-			.showInformationMessage(label, 'Allow Once', 'Allow for Session', 'Deny')
-			.then((choice) => {
-				if (choice === undefined) {
-					return; // dismissed — the card (or the timeout) decides
+		const buttons = canDiff
+			? ['View Diff', 'Allow Once', 'Allow for Session', 'Deny']
+			: ['Allow Once', 'Allow for Session', 'Deny'];
+		void vscode.window.showInformationMessage(label, ...buttons).then((choice) => {
+			if (choice === undefined) {
+				return; // dismissed — the card (or the timeout) decides
+			}
+			if (choice === 'View Diff') {
+				void this.openPermissionDiff(pending.id);
+				if (!pending.isSettled) {
+					this.showPermissionNotification(pending, canDiff);
 				}
-				const map: Record<string, PermissionChoice> = {
-					'Allow Once': 'allow-once',
-					'Allow for Session': 'allow-session',
-					Deny: 'deny',
-				};
-				pending.settle(map[choice]);
-			});
+				return;
+			}
+			const map: Record<string, PermissionChoice> = {
+				'Allow Once': 'allow-once',
+				'Allow for Session': 'allow-session',
+				Deny: 'deny',
+			};
+			pending.settle(map[choice]);
+		});
 	}
 
 	/** Collapse the prompt card into its outcome line. A user deny renders no
 	 * extra row — the proxy's permission_denied event carries that (TUI
 	 * convention, avoids the duplicate). */
 	private resolvePermissionPrompt(pending: PendingPermission, reason: DismissReason): void {
+		this.permissionDiffs.delete(pending.id);
 		let outcome: string;
 		switch (reason) {
 			case 'answered':
@@ -282,6 +428,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'permissionResolved', id: pending.id, outcome });
 	}
 
+	/** Read a proxy-workspace-relative path from the local workspace folder.
+	 * undefined when there is no folder, the file does not exist, or it is
+	 * not readable as UTF-8 text. */
+	private async readLocalFile(target: string): Promise<string | undefined> {
+		let absolute: string;
+		if (path.isAbsolute(target)) {
+			absolute = target;
+		} else {
+			const folder = vscode.workspace.workspaceFolders?.[0];
+			if (!folder) {
+				return undefined;
+			}
+			absolute = path.join(folder.uri.fsPath, target);
+		}
+		try {
+			return await fs.readFile(absolute, 'utf8');
+		} catch {
+			return undefined;
+		}
+	}
 
 	private post(message: OutboundMessage): void {
 		this.transcript.push(message);

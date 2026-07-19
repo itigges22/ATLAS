@@ -134,6 +134,12 @@ body {
 	overflow-wrap: anywhere;
 }
 
+.permission-note {
+	font-style: italic;
+	font-size: 0.9em;
+	opacity: 0.8;
+}
+
 .permission-actions {
 	display: flex;
 	gap: 6px;
@@ -141,6 +147,19 @@ body {
 }
 
 .permission-actions .deny {
+	background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+}
+
+.permission-actions .view-diff {
+	background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+}
+
+.chip-diff {
+	margin-left: 6px;
+	padding: 1px 8px;
+	font-size: 0.9em;
 	background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
 	color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
 }

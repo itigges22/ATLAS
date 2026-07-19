@@ -2,7 +2,13 @@
 
 A VS Code client for the [ATLAS](https://github.com/itigges22/ATLAS) agent proxy — a thin UI layer wrapping `atlas-proxy`'s agent loop (chat, tool calls, permission gating, diffs) with no agent logic in the extension itself.
 
-**Status: Work in progress.** Tracking [issue #35](https://github.com/itigges22/ATLAS/issues/35). Currently scaffold-only — chat UI, permission flow, and diff rendering land in upcoming commits.
+**Status: Work in progress.** Tracking [issue #35](https://github.com/itigges22/ATLAS/issues/35). Chat, permission flow, and diff review are implemented; status bar and the workspace-mismatch warning land in upcoming commits.
+
+## Diff review
+
+* Permission prompts for `write_file` / `edit_file` / `ast_edit` offer **View Diff** — a side-by-side preview predicted client-side from the local file (`ast_edit` results carry no content, so its predictions use a best-effort selector splice and are labeled approximate).
+* After a successful edit, the tool chip offers **View change** — the exact applied diff (pre-call snapshot vs on-disk), which also compensates for approximate `ast_edit` predictions. Falls back to `edit_file`'s server-computed `diff_preview` when the file is not readable in this workspace.
+* `move_file` / `delete_file` / `run_command` prompt without a diff.
 
 ## How it works
 

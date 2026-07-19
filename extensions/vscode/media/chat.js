@@ -68,33 +68,43 @@
 		pendingChips.get(name).push(chip);
 	}
 
-	function resolveToolChip(tool, success, elapsed, error) {
+	function resolveToolChip(tool, success, elapsed, error, diffId) {
 		const queue = pendingChips.get(tool);
-		const chip = queue && queue.length > 0 ? queue.shift() : null;
+		let chip = queue && queue.length > 0 ? queue.shift() : null;
 		if (!chip) {
 			// Result without a rendered call (e.g. replay edge) — show standalone.
-			appendBlock('chip ' + (success ? 'ok' : 'fail'), (success ? '✓ ' : '✗ ') + tool + (error ? ': ' + error : ''));
-			return;
+			chip = appendBlock('chip ' + (success ? 'ok' : 'fail'), (success ? '✓ ' : '✗ ') + tool + (error ? ': ' + error : ''));
+		} else {
+			chip.classList.remove('pending');
+			chip.classList.add(success ? 'ok' : 'fail');
+			const status = chip.querySelector('.chip-status');
+			status.textContent = success ? '✓' : '✗';
+			if (elapsed) {
+				const time = document.createElement('span');
+				time.className = 'chip-elapsed';
+				time.textContent = elapsed;
+				chip.appendChild(time);
+			}
+			if (!success && error) {
+				const detail = document.createElement('div');
+				detail.className = 'chip-error';
+				detail.textContent = error;
+				chip.appendChild(detail);
+			}
 		}
-		chip.classList.remove('pending');
-		chip.classList.add(success ? 'ok' : 'fail');
-		const status = chip.querySelector('.chip-status');
-		status.textContent = success ? '✓' : '✗';
-		if (elapsed) {
-			const time = document.createElement('span');
-			time.className = 'chip-elapsed';
-			time.textContent = elapsed;
-			chip.appendChild(time);
-		}
-		if (!success && error) {
-			const detail = document.createElement('div');
-			detail.className = 'chip-error';
-			detail.textContent = error;
-			chip.appendChild(detail);
+		if (diffId !== undefined && diffId !== null) {
+			const view = document.createElement('button');
+			view.type = 'button';
+			view.className = 'chip-diff';
+			view.textContent = 'View change';
+			view.addEventListener('click', () => {
+				vscode.postMessage({ type: 'viewAppliedDiff', id: diffId });
+			});
+			chip.appendChild(view);
 		}
 	}
 
-	function addPermissionCard(id, tool, detail, message) {
+	function addPermissionCard(id, tool, detail, message, canDiff, note) {
 		const card = document.createElement('div');
 		card.className = 'permission-card';
 
@@ -115,9 +125,25 @@
 			args.textContent = detail;
 			card.appendChild(args);
 		}
+		if (note) {
+			const hint = document.createElement('div');
+			hint.className = 'permission-note';
+			hint.textContent = note;
+			card.appendChild(hint);
+		}
 
 		const actions = document.createElement('div');
 		actions.className = 'permission-actions';
+		if (canDiff) {
+			const view = document.createElement('button');
+			view.type = 'button';
+			view.className = 'view-diff';
+			view.textContent = 'View Diff';
+			view.addEventListener('click', () => {
+				vscode.postMessage({ type: 'viewPermissionDiff', id: id });
+			});
+			actions.appendChild(view);
+		}
 		const buttons = [
 			['Allow Once', 'allow-once'],
 			['Allow for Session', 'allow-session'],
@@ -190,7 +216,7 @@
 				addToolChip(message.name, message.detail);
 				break;
 			case 'toolResult':
-				resolveToolChip(message.tool, message.success, message.elapsed, message.error);
+				resolveToolChip(message.tool, message.success, message.elapsed, message.error, message.diffId);
 				break;
 			case 'note':
 				closeAssistantBubble();
@@ -198,7 +224,7 @@
 				break;
 			case 'permissionPrompt':
 				closeAssistantBubble();
-				addPermissionCard(message.id, message.tool, message.detail, message.message);
+				addPermissionCard(message.id, message.tool, message.detail, message.message, message.canDiff, message.note);
 				break;
 			case 'permissionResolved':
 				resolvePermissionCard(message.id, message.outcome);
