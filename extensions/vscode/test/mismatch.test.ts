@@ -43,14 +43,16 @@ describe('fileOpVerdict', () => {
 		expect(fileOpVerdict('write', absent, absent)).toBe('mismatch');
 	});
 
-	it('write: overwrite must bump mtime', () => {
+	it('write: overwrite with a bumped mtime is a match, equal mtime is inconclusive', () => {
 		expect(fileOpVerdict('write', at(1), at(2))).toBe('match');
-		expect(fileOpVerdict('write', at(1), at(1))).toBe('mismatch');
+		// Coarse-mtime filesystems can stamp a real change with the same
+		// time — never call that a wrong mount.
+		expect(fileOpVerdict('write', at(1), at(1))).toBe('inconclusive');
 	});
 
-	it('edit: changed mtime is a match, unchanged or vanished is a mismatch', () => {
+	it('edit: changed mtime is a match, equal is inconclusive, vanished is a mismatch', () => {
 		expect(fileOpVerdict('edit', at(1), at(2))).toBe('match');
-		expect(fileOpVerdict('edit', at(1), at(1))).toBe('mismatch');
+		expect(fileOpVerdict('edit', at(1), at(1))).toBe('inconclusive');
 		expect(fileOpVerdict('edit', at(1), absent)).toBe('mismatch');
 	});
 
@@ -131,11 +133,21 @@ describe('MismatchDetector', () => {
 		const { d, firedCount } = detector(stats);
 		await d.recordToolCall('edit_file', { path: 'a.py' });
 		await d.recordToolCall('edit_file', { path: 'b.py' });
-		stats.set('a.py', at(2)); // only the first edit landed
+		stats.set('a.py', at(2)); // first edit landed
+		stats.delete('b.py'); // second target vanished locally — clear contradiction
 		await d.recordToolResult('edit_file', true); // a.py -> match
 		expect(firedCount()).toBe(0);
-		await d.recordToolResult('edit_file', true); // b.py unchanged -> mismatch
+		await d.recordToolResult('edit_file', true); // b.py gone -> mismatch
 		expect(firedCount()).toBe(1);
+	});
+
+	it('stays silent when an edited file keeps an equal mtime (coarse-mtime fs)', async () => {
+		const stats = new Map<string, PathStat>([['a.py', at(1)]]);
+		const { d, firedCount } = detector(stats);
+		await d.recordToolCall('edit_file', { path: 'a.py' });
+		// stat unchanged: same mtime — inconclusive, never a warning
+		await d.recordToolResult('edit_file', true);
+		expect(firedCount()).toBe(0);
 	});
 
 	it('stays silent on inconclusive verdicts', async () => {

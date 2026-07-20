@@ -5,9 +5,10 @@
 // stat the target path inside the local workspace folder, and compare with
 // a pre-op stat captured at tool_call time:
 //
-//   write_file  -> the file must exist (and, if it pre-existed, have a
-//                  newer mtime)
-//   edit_file / ast_edit -> the file must exist with a changed mtime
+//   write_file  -> the file must exist (an overwrite with an unchanged
+//                  mtime is inconclusive, not proof of a wrong mount)
+//   edit_file / ast_edit -> the file must exist; unchanged mtime is
+//                  inconclusive (coarse-mtime filesystems)
 //   delete_file -> the file must be absent
 //   move_file   -> destination present, source absent
 //
@@ -79,7 +80,7 @@ export function fileOpVerdict(
 			if (!pre.exists) {
 				return 'match'; // file appeared where the proxy said it wrote
 			}
-			return changed(pre, post) ? 'match' : 'mismatch';
+			return mtimeVerdict(pre, post);
 		case 'edit':
 			if (!pre.exists) {
 				// The proxy edited a file this workspace never had — suspicious,
@@ -90,7 +91,7 @@ export function fileOpVerdict(
 			if (!post.exists) {
 				return 'mismatch';
 			}
-			return changed(pre, post) ? 'match' : 'mismatch';
+			return mtimeVerdict(pre, post);
 		case 'delete':
 			if (!pre.exists) {
 				return 'inconclusive'; // absent before and (presumably) after
@@ -107,8 +108,19 @@ export function fileOpVerdict(
 	}
 }
 
-function changed(pre: PathStat, post: PathStat): boolean {
-	return pre.mtimeMs === undefined || post.mtimeMs === undefined || post.mtimeMs !== pre.mtimeMs;
+/** mtime comparison for overwrite/edit kinds. Equal mtimes are
+ * 'inconclusive', not 'mismatch': coarse-mtime filesystems (FAT, some
+ * network mounts) can stamp a real change with the same time — exactly
+ * the granularity caveat in the header note. Missing mtimes can't tell
+ * either way. */
+function mtimeVerdict(pre: PathStat, post: PathStat): Verdict {
+	if (pre.mtimeMs === undefined || post.mtimeMs === undefined) {
+		return 'match'; // can't tell — conservative: no false mismatch
+	}
+	if (post.mtimeMs !== pre.mtimeMs) {
+		return 'match';
+	}
+	return 'inconclusive';
 }
 
 /** Pre-op stats captured at tool_call time, FIFO per tool name (same

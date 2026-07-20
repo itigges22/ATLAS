@@ -66,14 +66,22 @@ describe('predictEdit: write_file', () => {
 });
 
 describe('predictEdit: edit_file', () => {
-	it('old_str found: first occurrence replaced only', () => {
+	it('unique old_str: exact single-occurrence replacement', () => {
+		const p = predictEdit('edit_file', { path: 'a.txt', old_str: 'aa', new_str: 'bb' }, 'aa x cc')!;
+		expect(p).toMatchObject({ kind: 'file', approximate: false, right: 'bb x cc' });
+	});
+
+	it('multi-match without replace_all is approximate — the proxy rejects it', () => {
 		const p = predictEdit('edit_file', { path: 'a.txt', old_str: 'aa', new_str: 'bb' }, 'aa x aa')!;
-		expect(p).toMatchObject({ kind: 'file', approximate: false, right: 'bb x aa' });
+		expect(p).toMatchObject({ kind: 'file', approximate: true, right: 'bb x aa' });
+		expect(p.note).toContain('matches 2 locations');
+		expect(p.note).toContain('reject');
 	});
 
 	it('replace_all replaces every occurrence', () => {
 		const p = predictEdit('edit_file', { path: 'a.txt', old_str: 'aa', new_str: 'bb', replace_all: true }, 'aa x aa')!;
 		expect(p.right).toBe('bb x bb');
+		expect(p.approximate).toBe(false);
 	});
 
 	it('splices new_str literally (no $-pattern semantics)', () => {

@@ -391,7 +391,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			}
 			case 'v3_phase':
 			case 'v3_sandbox':
-			case 'v3_repair': {
+			case 'v3_repair':
+			// The long V3 stages (proxy/tools.go v3StageToEvent) share the same
+			// {stage, detail} shape — without these the progress line goes
+			// stale exactly where V3 is slowest.
+			case 'v3_plansearch':
+			case 'v3_divsampling':
+			case 'v3_select':
+			case 'v3_probe':
+			case 'v3_self_test':
+			case 'v3_plan': {
 				const payload = data as V3StageEventData;
 				if (typeof payload?.stage === 'string') {
 					this.postProgress(`V3: ${payload.stage}${payload.detail ? ` — ${payload.detail}` : ''}`);
@@ -427,7 +436,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			}
 			// High-volume / TUI-internal streams the panel deliberately drops:
 			// llm_token duplicates the JSON tool-call content, v3 token streams
-			// churn the DOM for no user signal, agent_lens_score fires per write.
+			// churn the DOM for no user signal, agent_lens_score fires per write,
+			// turn_start is loop bookkeeping.
+			case 'turn_start':
 			case 'llm_token':
 			case 'v3_token':
 			case 'v3_llm_start':

@@ -134,9 +134,24 @@ function predictEditFile(
 	}
 	// split/join instead of String.replace: the replacement string must be
 	// spliced literally ($& and friends have no meaning here).
-	const right = replaceAll
-		? current.split(oldStr).join(newStr)
-		: current.slice(0, index) + newStr + current.slice(index + oldStr.length);
+	if (replaceAll) {
+		return { path, kind: 'file', left: current, right: current.split(oldStr).join(newStr), approximate: false };
+	}
+	// Without replace_all the proxy requires a UNIQUE match and rejects the
+	// call otherwise (proxy/tools.go uniqueness check) — a first-occurrence
+	// splice labeled exact would show a diff that can never apply.
+	const count = current.split(oldStr).length - 1;
+	if (count > 1) {
+		return {
+			path,
+			kind: 'file',
+			left: current,
+			right: current.slice(0, index) + newStr + current.slice(index + oldStr.length),
+			approximate: true,
+			note: `old_str matches ${count} locations — the proxy requires a unique match and will reject this edit (showing the first occurrence)`,
+		};
+	}
+	const right = current.slice(0, index) + newStr + current.slice(index + oldStr.length);
 	return { path, kind: 'file', left: current, right, approximate: false };
 }
 
