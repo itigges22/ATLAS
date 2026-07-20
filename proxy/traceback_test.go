@@ -187,3 +187,44 @@ func TestMissingCommandSteerNoFalsePositive(t *testing.T) {
 		t.Errorf("expected no steer for clean output, got: %q", s)
 	}
 }
+
+// The broken-verification-command loop (TB2 2026-07-19, regex-chess): the
+// model verifies with `python3 -c "...; def f(): ..."` — a multi-statement
+// script that can't parse on a -c line — and the SyntaxError is in the
+// command, not the solution. Steer must move the test to a file.
+func TestBrokenInlineScriptSteerFires(t *testing.T) {
+	cmd := `python3 -c "import json, re; def all_legal_next_positions(fen): return []"`
+	out := "  File \"<string>\", line 1\n    import json, re; def all_legal\n                     ^\nSyntaxError: invalid syntax"
+	steer := brokenInlineScriptSteer(cmd, out)
+	if steer == "" || !strings.Contains(steer, "inline `-c`") || !strings.Contains(steer, ".py") {
+		t.Errorf("expected broken-inline-script steer, got: %q", steer)
+	}
+}
+
+// A syntax error in a REAL file (not a -c one-liner) must NOT match — that's
+// a solution bug tracebackSteer localizes, not a broken verify command.
+func TestBrokenInlineScriptSteerIgnoresRealFile(t *testing.T) {
+	cmd := `python3 solution.py`
+	out := "  File \"solution.py\", line 12\n    def f(\n         ^\nSyntaxError: invalid syntax"
+	if s := brokenInlineScriptSteer(cmd, out); s != "" {
+		t.Errorf("expected no steer for a real-file syntax error, got: %q", s)
+	}
+}
+
+// No SyntaxError at all → no steer.
+func TestBrokenInlineScriptSteerNoSyntaxError(t *testing.T) {
+	if s := brokenInlineScriptSteer(`python3 -c "print(1)"`, "1\n"); s != "" {
+		t.Errorf("expected no steer on clean output, got: %q", s)
+	}
+}
+
+// Truncation robustness: the sandbox clipped the output before the
+// "SyntaxError:" line, leaving only the "<string>" frame. The steer must
+// still fire (TB2 2026-07-19 regression — keyword gate missed this).
+func TestBrokenInlineScriptSteerTruncatedOutput(t *testing.T) {
+	cmd := `python3 -c "import json, re; def all_legal(fen): return []"`
+	out := `  File "<string>", line 1` + "\n" + `    import json, re; def all_legal(fen): return []`
+	if s := brokenInlineScriptSteer(cmd, out); s == "" {
+		t.Error("steer must fire on a <string> frame even when SyntaxError is truncated away")
+	}
+}

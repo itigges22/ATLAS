@@ -611,6 +611,10 @@ func TestIsActionIntentMessage(t *testing.T) {
 		"redesign templates/index.html for SaaS",
 		// May 10 prompt that motivated this gate:
 		"Rewrite templates/dashboard.html to display a clean SaaS-style metrics dashboard",
+		// TB2 round-2 prompt that motivated gating the text exit: the
+		// model narrated "I will now proceed to sanitize..." as a text
+		// response and quit with zero edits. Must classify as action.
+		"Please help sanitize my github repository of all API keys. Please find and remove all such information and replace it with placeholder values",
 	}
 	for _, m := range actionIntents {
 		if !isActionIntentMessage(m) {

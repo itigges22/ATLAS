@@ -117,6 +117,48 @@ func missingCommandSteer(output string) string {
 	return sb.String()
 }
 
+// brokenInlineScriptSteer catches the broken-verification-command loop: the
+// model tries to verify its solution with `python -c "<multi-statement
+// script>"` — a script containing a `def`/`for`/`if`/`class` body that can't
+// live on a single -c line — so the command fails with a SyntaxError in the
+// `-c` argument ITSELF, not in the file being tested. The model then re-runs
+// the same malformed command (observed TB2 2026-07-19, regex-chess: the
+// solution file re.json may be fine; the verify one-liner had `def` inline
+// and never parsed) until the repetition breaker ends the session with the
+// solution unverified. Steer it to move the test into a file. Keyed on a
+// syntax error in code compiled from a string ("<string>") plus an inline
+// -c/-command invocation, so a genuine syntax error in a real .py file (which
+// tracebackSteer handles) doesn't match. Returns "" otherwise.
+func brokenInlineScriptSteer(command, output string) string {
+	// Signal the inline script is the error site: Python attributes errors
+	// in code compiled from a string to "<string>"/"<stdin>" (a real file
+	// error names the file). This is robust to output truncation — the
+	// "<string>" frame is printed BEFORE the "SyntaxError:" line, so a
+	// clipped sandbox result keeps the frame but may drop the keyword
+	// (observed TB2 2026-07-19: the SyntaxError line was truncated away and
+	// the keyword-gated check missed the loop).
+	fromString := strings.Contains(output, `File "<string>"`) ||
+		strings.Contains(output, `File "<stdin>"`)
+	inlineFlag := strings.Contains(command, " -c ") ||
+		strings.Contains(command, " -c\"") ||
+		strings.Contains(command, "\t-c ")
+	if !fromString || !inlineFlag {
+		return ""
+	}
+	// If a REAL file frame also appears, the error is in a module the -c
+	// script imported, not the inline script itself — tracebackSteer
+	// localizes that. Don't misfire "move your test to a file" onto a
+	// genuine solution bug.
+	if reRealFileFrame.MatchString(output) {
+		return ""
+	}
+	return "[system note]: The error is in your inline `-c` script itself, not in the file you are testing — a multi-statement script (with a `def`/`for`/`if`/`class` body) cannot be written on a single `python -c` line. Your solution file may be correct; only the verification command is malformed. Write the test to a `.py` file with write_file, then run it with `run_command`: `python3 <testfile>.py`. Re-running the same `-c` one-liner will fail the same way."
+}
+
+// reRealFileFrame matches a traceback frame naming a real file (not the
+// <string>/<stdin> pseudo-files that -c/exec/eval produce).
+var reRealFileFrame = regexp.MustCompile(`File "[^<][^"]*"`)
+
 // missingFileSteer catches the case-typo loop: the model writes
 // `requirements.txt` then runs `pip install -r Requirements.txt`, gets "No
 // such file or directory", and re-runs the identical wrong command (observed:

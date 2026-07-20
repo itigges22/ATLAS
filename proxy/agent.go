@@ -577,6 +577,35 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// If the model wants to narrate before tool work, it should
 			// emit tool_call directly with the narration in the args or
 			// roll narration into the done.summary at the end.
+			//
+			// EXCEPT: text is an UNGATED exit, and on action-intent
+			// prompts models abandon work through it — observed live
+			// (TB2 round 2): "I will now proceed to sanitize the
+			// credentials in ray_cluster.yaml" as a text response, then
+			// session over, zero edits. Every completion gate lives in
+			// the done branch, so narrating-then-quitting bypassed them
+			// all. Apply the done-without-action gate here too: same
+			// condition, same bounce shape (assistant + tool-rejection
+			// pair, so no bare trailing assistant message for prefill
+			// to trip on). Conversational input never matches
+			// isActionIntentMessage, so chat replies still exit here.
+			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
+				gateBounces++
+				rejection := actionWithoutProductiveChangeMessage(userMessage)
+				log.Printf("[agent] text-exit action gate: bouncing text at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop, bounce %d/%d)",
+					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:    "assistant",
+					Content: response,
+				})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "action_gate",
+				})
+				continue
+			}
 			ctx.Stream("text", map[string]string{"content": parsed.Content})
 			ctx.Stream("done", map[string]string{"summary": ""})
 			return nil
@@ -829,22 +858,30 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				pendingRepeatCorrective = msg
 				ctx.RecentToolCalls = nil // reset so we don't re-fire
 				repeatDetections++
-				// The soft corrective is frequently ignored — a small model
-				// re-emits the identical failing call regardless (observed:
-				// the same `python -c "...)))"` typo run 4× after the actual
-				// edit had already landed). Hard-stop instead of nudging
-				// when EITHER the work is already done (productive change +
-				// the model is now spinning on verification) OR the same
-				// call has been detected as repeating twice (genuinely
-				// stuck, no progress to protect).
-				if madeProductiveChange {
-					log.Printf("[agent] repetition after a productive change — stopping (work landed; model looping on verification)")
-					ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
-					return nil
-				}
+				// Steer-before-kill ladder. On the FIRST detection, fall
+				// through: pendingRepeatCorrective is injected below and the
+				// loop continues, so the model gets an explicit nudge to
+				// change approach before we ever terminate. Only hard-stop
+				// on the SECOND detection — the model saw the steer and
+				// repeated anyway (genuinely stuck).
+				//
+				// The old code hard-stopped on the FIRST detection whenever
+				// madeProductiveChange was set ("work landed, model spinning
+				// on verification"). That mistook legitimate iteration for a
+				// loop: TB2 2026-07-19 showed models one nudge from finishing
+				// — regex-chess repeating a verify command that itself had a
+				// syntax error, polyglot mid-fix — killed with their solution
+				// on disk but unverified. A nudge first is the whole point:
+				// the broken-verify steer (below) can turn exactly these into
+				// completions.
 				if repeatDetections >= 2 {
-					log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
-					ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
+					if madeProductiveChange {
+						log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
+						ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
+					} else {
+						log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
+						ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
+					}
 					return nil
 				}
 			}
@@ -1181,7 +1218,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if scan == "\n" {
 					scan = result.Error
 				}
-				if steer := tracebackSteer(ctx, scan); steer != "" {
+				// The command text — needed by the broken-inline-script
+				// steer to tell a malformed verify one-liner (SyntaxError in
+				// the `-c` argument) apart from a real code bug.
+				var runArgs struct {
+					Command string `json:"command"`
+				}
+				_ = json.Unmarshal(parsed.Args, &runArgs)
+				if steer := brokenInlineScriptSteer(runArgs.Command, scan); steer != "" {
+					// Broken verification command: the SyntaxError is in the
+					// model's own inline `-c` test, not the solution. Steer it
+					// to move the test into a file instead of re-running the
+					// unparseable one-liner into the repetition breaker.
+					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+					log.Printf("[agent] broken-inline-script steer: verify command won't parse, directed to a test file")
+				} else if steer := tracebackSteer(ctx, scan); steer != "" {
 					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
 					log.Printf("[agent] traceback localization: steered to fix site")
 				} else if steer := missingModuleSteer(ctx, scan); steer != "" {

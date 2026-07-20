@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # jq/patch/zip/xz are the same class: small, ubiquitous in build
     # scripts, impossible to add later.
     git sqlite3 jq patch zip xz-utils \
+    # Binary-inspection tools. binutils (strings/objdump/readelf/nm)
+    # rides in with gcc, but `file` (type detection) and `xxd` (hex dump)
+    # are separate and are what the binary-file read guard points at.
+    file xxd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 LTS

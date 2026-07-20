@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### Agent-loop: stop killing iteration (Terminal-Bench 2.0 round 2, 2026-07-19)
+Re-analysis of a 20-task round found that nearly every "failure" was a stopping
+condition firing on *productive* work, not the model reaching its limit (turns
+are uncapped). Fixes:
+- **Repetition detector distinguishes iteration from reassertion.** `write_file`
+  repetition is now keyed on path + a whitespace-stripped content fingerprint:
+  rewriting a file with materially different content (fixing successive compiler
+  errors) is iteration and no longer counts as a loop; reasserting the same draft
+  still does.
+- **Steer before kill.** The repetition breaker injects a corrective note and
+  continues on the first detection, ending the session only if the model repeats
+  after the nudge. The old immediate hard-stop (including the
+  "productive change → stop" path) terminated models one nudge from finishing.
+- **Broken-inline-script steer.** A `python -c` verification one-liner that fails
+  with a SyntaxError in its own `-c` argument now steers the model to move the
+  test into a `.py` file, instead of letting it re-run the unparseable command
+  into the breaker with a possibly-correct solution on disk.
+- **Text-exit action gate.** The `text` response path is gated the same way
+  `done` is: on an action-intent prompt with no productive change, it bounces
+  instead of letting the model narrate its intent and quit having done nothing.
+- **Binary-file read guard.** `read_file` on a binary (a NUL byte in the head)
+  no longer returns garbage bytes — it returns a directed pointer to the right
+  tools (`strings`/`readelf`/`objdump`/`nm`/`file`/`xxd`), which the model
+  otherwise never reached for (it read a compiled ELF as text and gave up).
+  `file` and `xxd` added to the sandbox image (binutils already rode in with gcc).
+- **Fast-path writes during active iteration.** Once the model has written a
+  file and just saw it fail a run, the next write is a targeted fix — it now
+  skips the V3 pipeline (still syntax-gated) and writes directly, instead of
+  paying V3's multi-minute per-call latency (which on a mid-debug file often
+  "completes without result" anyway). This unthrottles edit-test-fix loops from
+  ~5 cycles in 25 min to run-speed. V3 still owns the first write of each file.
+
 ### Agent-loop hardening from the Terminal-Bench 2.0 dogfood round (2026-07-18)
 - **`atlas doctor` workspace-mount check** — new `workspace_mounts` check fails
   loudly when the proxy and sandbox bind different host directories as

@@ -178,6 +178,20 @@ func readFileTool() *ToolDef {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
 
+			// Binary-file guard: reading a compiled binary / image /
+			// archive as text returns garbage the model can't use, after
+			// which it gives up or loops (observed TB2 2026-07-19,
+			// extract-elf: read the ELF as text, never reached for the
+			// analysis tools that were installed). Point it at the right
+			// tools instead of handing back the raw bytes.
+			if isBinaryContent(data) {
+				return &ToolResult{
+					Success: false,
+					Error: fmt.Sprintf("read_file: %q is a binary file, not text — reading it as text is not useful. Inspect it with run_command instead: `strings %q` (printable strings), `readelf -a %q` or `objdump -d %q` (ELF headers / disassembly), `nm %q` (symbols), `file %q` (type), or `xxd %q | head` (hex dump).",
+						input.Path, input.Path, input.Path, input.Path, input.Path, input.Path, input.Path),
+				}, nil
+			}
+
 			lines := strings.Split(string(data), "\n")
 			totalLines := len(lines)
 
@@ -682,13 +696,31 @@ func writeFileTool() *ToolDef {
 			// V3 takes the model's content as baseline candidate, generates diverse
 			// alternatives via PlanSearch/DivSampling, build-verifies each, and
 			// selects the best. This is the intelligence layer.
-			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 {
+			//
+			// EXCEPT during an active edit-test-fix loop: once the model has
+			// written this file and just saw it fail a run, the next write is
+			// a targeted fix, and V3's full pipeline (minutes per call, and on
+			// a mid-debug file frequently "completes without result" and falls
+			// back anyway) throttles iteration to a handful of cycles. TB2
+			// 2026-07-19: polyglot got ~5 writes in 25 min, ~4 min of V3 stall
+			// each, when it needed 10-15 fast cycles. Fast-path (direct, still
+			// syntax-gated below) so the model can iterate at run speed. V3
+			// still owns the FIRST write of each file (the baseline generation
+			// where it adds value).
+			iterating := isActiveDebugIteration(ctx, input.Path)
+			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 && !iterating {
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
 				res, err := writeFileWithV3(path, input.Content, ctx)
 				if err == nil && res != nil && res.Success {
 					ctx.SessionWrites[input.Path] = true
 				}
 				return res, err
+			}
+			if iterating {
+				log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
+				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, synErr)}, nil
+				}
 			}
 			if ctx.BypassV3 {
 				log.Printf("[write_file] V3 bypassed (demo baseline pane) — direct write %s", input.Path)
@@ -702,6 +734,54 @@ func writeFileTool() *ToolDef {
 			return res, err
 		},
 	}
+}
+
+// isActiveDebugIteration reports whether the model is in a tight edit-
+// test-fix loop on `path`: it has already written this file this session
+// AND the most recent tool action was a run_command/run_background that
+// FAILED with output referencing this file. In that state the next write
+// is a targeted fix for an error the model just saw, so the full V3
+// pipeline only adds latency (and on a mid-debug file often "completes
+// without result"). Fast-path those writes so iteration runs at test
+// speed. The FIRST write of a file (SessionWrites false) still gets V3 —
+// that is where V3's generation adds value.
+func isActiveDebugIteration(ctx *AgentContext, path string) bool {
+	if ctx == nil || !ctx.SessionWrites[path] {
+		return false
+	}
+	base := filepath.Base(path)
+	for i := len(ctx.Messages) - 1; i >= 0; i-- {
+		m := ctx.Messages[i]
+		if m.Role != "tool" {
+			continue
+		}
+		// Only the MOST RECENT tool action counts: if the model's last
+		// step was a read or an edit rather than a failing run, it isn't
+		// mid-test-fix on this file.
+		if m.ToolName != "run_command" && m.ToolName != "run_background" {
+			return false
+		}
+		return strings.Contains(m.Content, `"success":false`) &&
+			strings.Contains(m.Content, base)
+	}
+	return false
+}
+
+// isBinaryContent reports whether data looks like a binary (non-text)
+// file. A NUL byte in the head is the reliable signal — text encodings
+// (UTF-8/ASCII) never contain NUL, while compiled binaries, images, and
+// archives are full of them. Scans a bounded head so a large file is cheap.
+func isBinaryContent(data []byte) bool {
+	n := len(data)
+	if n > 8000 {
+		n = 8000
+	}
+	for i := 0; i < n; i++ {
+		if data[i] == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // writeFileDirect writes content to disk atomically (write tmp + rename).

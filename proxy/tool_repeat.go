@@ -91,25 +91,58 @@ func writeFilePath(args json.RawMessage) string {
 	return wf.Path
 }
 
+// writeFileContentFingerprint returns a hash of the write_file content
+// with ALL whitespace removed, or "" if there's no content. Whitespace-
+// stripping makes the fingerprint stable across trivial reformatting (so
+// reasserting the same draft with cosmetic changes still collides) while
+// treating any material code change as different (so iterating toward a
+// fix — polyglot rewriting main.py.c to clear a line-30 syntax error —
+// produces a DIFFERENT fingerprint and is not counted as repetition).
+func writeFileContentFingerprint(args json.RawMessage) string {
+	var wf struct {
+		Content string `json:"content"`
+	}
+	if json.Unmarshal(args, &wf) != nil || wf.Content == "" {
+		return ""
+	}
+	var b []byte
+	for i := 0; i < len(wf.Content); i++ {
+		c := wf.Content[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			continue
+		}
+		b = append(b, c)
+	}
+	h := sha1.Sum(b)
+	return hex.EncodeToString(h[:])
+}
+
 // toolCallSignature computes a stable hash of a (tool_name, args)
 // tuple. Re-marshals args through encoding/json to canonicalize key
 // order and whitespace — important because the model sometimes emits
 // the same logical call with slightly different JSON formatting that
 // would defeat naive string-equality detection.
 //
-// write_file signatures are keyed on the target path alone: a
-// write_file is a whole-file replacement, so rewriting the SAME path
-// repeatedly is structural repetition even when each attempt's content
-// differs slightly. (Observed 2026-07-18: the model reasserted its
-// ~25-line app.py draft five times while V3 kept writing the verified
-// expansion — every attempt hashed differently, so the full-args
-// signature never matched and the detector slept through the loop.)
+// write_file signatures are keyed on target path + a whitespace-stripped
+// content fingerprint. Rewriting the SAME path with the SAME logical
+// content is reassertion (a real loop — observed 2026-07-18: the model
+// reasserted its ~25-line app.py draft five times while V3 wrote the
+// verified expansion). Rewriting the same path with MATERIALLY DIFFERENT
+// content is iteration (observed 2026-07-19 TB2: polyglot rewriting
+// main.py.c three times to clear successive compiler errors, killed by
+// the path-only key as if it were a loop). The content fingerprint
+// separates the two: reassertion collides, iteration diverges. Falls back
+// to path-only when there's no content to fingerprint.
 // edit_file/ast_edit keep full-args signatures: distinct surgical
 // edits to one file in close succession are legitimate iteration.
 func toolCallSignature(toolName string, args json.RawMessage) string {
 	if toolName == "write_file" {
 		if p := writeFilePath(args); p != "" {
-			h := sha1.Sum([]byte(toolName + "|path:" + p))
+			key := toolName + "|path:" + p
+			if fp := writeFileContentFingerprint(args); fp != "" {
+				key += "|c:" + fp
+			}
+			h := sha1.Sum([]byte(key))
 			return hex.EncodeToString(h[:])
 		}
 	}

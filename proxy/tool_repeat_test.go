@@ -34,23 +34,26 @@ func TestRepeatDetectorCanonicalizesJSONFormatting(t *testing.T) {
 	}
 }
 
-func TestWriteFileRepeatKeyedOnPathNotContent(t *testing.T) {
-	// The 2026-07-18 loop: the model fully rewrote app.py five times
-	// with slightly different content each attempt while V3 kept
-	// writing the verified expansion. Content-varying rewrites of the
-	// same path must still count as repetition.
+func TestWriteFileReassertionKeyedOnPathAndContent(t *testing.T) {
+	// The 2026-07-18 loop: the model reasserted the SAME app.py draft
+	// while V3 wrote the verified expansion. Reassertion = same logical
+	// content (whitespace/formatting aside) rewritten to the same path;
+	// it must still fire at the threshold. (Materially different content
+	// is iteration — TestWriteFileIterationNotRepeat — and must NOT fire.)
 	ctx := &AgentContext{}
 	for i := 0; i < 2; i++ {
+		// Same code, cosmetically reindented each attempt.
 		args := json.RawMessage(fmt.Sprintf(
-			`{"path":"app.py","content":"from flask import Flask # attempt %d"}`, i))
+			`{"path":"app.py","content":"from flask import Flask\n%sapp = Flask(__name__)"}`,
+			strings.Repeat(" ", i)))
 		if _, repeating := recordToolCall(ctx, "write_file", args); repeating {
 			t.Fatalf("fired at write %d, want threshold 3", i+1)
 		}
 	}
 	msg, repeating := recordToolCall(ctx, "write_file",
-		json.RawMessage(`{"path":"app.py","content":"completely different third draft"}`))
+		json.RawMessage(`{"path":"app.py","content":"from flask import Flask\napp = Flask(__name__)"}`))
 	if !repeating {
-		t.Fatal("3 rewrites of the same path with different content must fire")
+		t.Fatal("reassertion of the same logical content must fire")
 	}
 	if !strings.Contains(msg, "app.py") || !strings.Contains(msg, "rewritten") {
 		t.Fatalf("write-loop corrective should name the path and the rewrite pattern: %q", msg)
@@ -92,5 +95,46 @@ func TestWriteFileRepeatOutsideWindowDoesNotFire(t *testing.T) {
 	recordToolCall(ctx, "write_file", wf)
 	if _, repeating := recordToolCall(ctx, "write_file", wf); repeating {
 		t.Fatal("two in-window writes must not fire (threshold 3)")
+	}
+}
+
+// Iteration must NOT be flagged as repetition: rewriting the same file
+// with materially different content (fixing successive compiler errors)
+// produces different signatures, so the detector stays silent. Regression
+// for TB2 2026-07-19 (polyglot killed mid-fix by the path-only key).
+func TestWriteFileIterationNotRepeat(t *testing.T) {
+	ctx := &AgentContext{}
+	versions := []string{
+		`{"path":"main.py.c","content":"int main(){ return 0; }"}`,
+		`{"path":"main.py.c","content":"int main(){ printf(\"x\"); return 0; }"}`,
+		`{"path":"main.py.c","content":"#include <stdio.h>\nint main(){ printf(\"x\"); return 0; }"}`,
+	}
+	for i, v := range versions {
+		_, repeating := recordToolCall(ctx, "write_file", json.RawMessage(v))
+		if repeating {
+			t.Errorf("version %d: iteration flagged as repetition", i)
+		}
+	}
+}
+
+// Reassertion IS still caught: rewriting the same file with the same
+// logical content (only whitespace/formatting differs) collides on the
+// fingerprint and fires at the threshold. Protects the 2026-07-18 case.
+func TestWriteFileReassertionStillCaught(t *testing.T) {
+	ctx := &AgentContext{}
+	// Same non-whitespace content, cosmetically reformatted each time.
+	versions := []string{
+		`{"path":"app.py","content":"def f():\n    return 1"}`,
+		`{"path":"app.py","content":"def f():\n        return 1"}`,
+		`{"path":"app.py","content":"def f():\n\treturn 1"}`,
+	}
+	fired := false
+	for _, v := range versions {
+		if _, r := recordToolCall(ctx, "write_file", json.RawMessage(v)); r {
+			fired = true
+		}
+	}
+	if !fired {
+		t.Error("reassertion of the same logical content was not caught")
 	}
 }
