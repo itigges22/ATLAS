@@ -22,6 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # rides in with gcc, but `file` (type detection) and `xxd` (hex dump)
     # are separate and are what the binary-file read guard points at.
     file xxd \
+    # Archive tools a coding task commonly shells out to and can't
+    # apt-install at runtime (7z was the observed gap — crack-7z-hash
+    # dead-ended on "7z: command not found", and 7z is not pip-installable).
+    p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 LTS
