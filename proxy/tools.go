@@ -755,7 +755,7 @@ func writeFileTool() *ToolDef {
 			if iterating {
 				log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
 				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
-					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, synErr)}, nil
+					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, input.Content, synErr)}, nil
 				}
 				// #147 review finding #1: the fast-path skips V3 (and its
 				// structural veto), so it needs the same structural gate
@@ -1172,7 +1172,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if synErr, ok := checkFallbackSyntax(ctx, path, baselineContent); !ok {
 			log.Printf("[write_file] fallback content for %s failed syntax gate: %s", path, truncateStr(synErr, 120))
 			return &ToolResult{Success: false,
-				Error: fallbackSyntaxRejection(path, synErr)}, nil
+				Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
 		}
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
 		if errors.Is(err, context.DeadlineExceeded) {

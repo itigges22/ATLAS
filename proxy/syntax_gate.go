@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -98,14 +100,48 @@ func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool)
 	return first, false
 }
 
+// reSyntaxLineNo pulls a 1-based line number out of a Python syntax error
+// message ("... (file, line 13)" or "at line 13"), when present.
+var reSyntaxLineNo = regexp.MustCompile(`line (\d+)`)
+
 // fallbackSyntaxRejection builds the tool error handed back to the model
-// when the gate blocks a fallback write. Names the likely cause
-// (truncated tool call) and the recovery (resend complete content).
-func fallbackSyntaxRejection(path, syntaxErr string) string {
+// when the gate blocks a write. It DISTINGUISHES the two failure shapes,
+// because the old one-size message ("truncated — resend complete content")
+// is actively wrong for a genuine syntax bug in COMPLETE content and made
+// the model reassert the same broken text (TB2 2026-07-20,
+// pytorch-model-recovery: an f-string with nested quotes resent verbatim 5×):
+//   - truncation shape (unterminated string / unexpected EOF / "never
+//     closed") → the content really is cut off; resend it complete.
+//   - a mid-content syntax bug → point at the offending line (quoted from
+//     `content` when the error carries a line number) and tell the model to
+//     FIX that line, explicitly forbidding an identical resend.
+func fallbackSyntaxRejection(path, content, syntaxErr string) string {
+	low := strings.ToLower(syntaxErr)
+	truncationShape := strings.Contains(low, "unexpected eof") ||
+		strings.Contains(low, "was never closed") ||
+		strings.Contains(low, "unterminated") ||
+		strings.Contains(low, "expected an indented block")
+	if truncationShape {
+		return fmt.Sprintf(
+			"Your content for %s does not parse (%s) — this looks like a "+
+				"truncated tool call (content cut off mid-way). Retry write_file "+
+				"with the COMPLETE file content; if it is long, write it in full, "+
+				"not in fragments.", path, truncateStr(syntaxErr, 200))
+	}
+	// Genuine syntax bug: quote the offending line if we can locate it.
+	quoted := ""
+	if m := reSyntaxLineNo.FindStringSubmatch(syntaxErr); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n >= 1 {
+			if lines := strings.Split(content, "\n"); n <= len(lines) {
+				quoted = fmt.Sprintf(" The offending line %d is:\n%s\n", n, strings.TrimRight(lines[n-1], " \t"))
+			}
+		}
+	}
 	return fmt.Sprintf(
-		"V3 verification was unavailable and your content for %s does not "+
-			"parse (%s). The file was NOT written — this usually means the "+
-			"tool call was truncated mid-content. Retry write_file with the "+
-			"COMPLETE file content (if it is long, write the file in full, "+
-			"not in fragments).", path, truncateStr(syntaxErr, 200))
+		"Your content for %s has a syntax error (%s) — it was NOT written. The "+
+			"content is NOT truncated; it is complete but INVALID.%s Fix THAT "+
+			"specific error (e.g. a common cause is nested double-quotes inside "+
+			"an f-string — use single quotes for the inner string, or a temp "+
+			"variable). Do NOT resend the same content unchanged; it will fail "+
+			"identically.", path, truncateStr(syntaxErr, 200), quoted)
 }
