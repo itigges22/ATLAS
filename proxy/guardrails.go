@@ -470,6 +470,75 @@ var actionIntentWords = []string{
 // done-without-action gate uses this to bounce a `done` that wasn't
 // preceded by any productive write — which would otherwise pass
 // through silently because the fix-intent gate ignores feature work.
+// reOutputFilenameTok matches a filename-looking token: an optional
+// leading path, then name.ext (1-6 char extension). Captures group 1.
+var reOutputFilenameTok = regexp.MustCompile("[`\"']?((?:[~./]|\\.\\./)?[\\w./-]*\\.[A-Za-z][A-Za-z0-9]{0,5})[`\"']?")
+
+// reOutputWriteVerb matches the stems of verbs that mean "produce this
+// file" — used to tell a prompt's OUTPUT file from an INPUT file. `read`
+// is deliberately absent (it names an input).
+var reOutputWriteVerb = regexp.MustCompile(`(?i)\b(sav|writ|creat|output|generat|stor|produc|recover|dump)`)
+
+// reMustProduce matches the "<file> must exist / must contain" requirement
+// phrasing (TB2 merge-diff: "the file algo.py must exist in the merged
+// result"), which names a deliverable without a write verb. Checked in a
+// window AFTER the filename.
+var reMustProduce = regexp.MustCompile(`(?i)^\s*(must (exist|contain|include|be (creat|writt|present|generat)))`)
+
+// expectedOutputPaths extracts the file(s) a task prompt explicitly asks
+// the model to produce: a filename token preceded within ~70 chars by a
+// write/save/create/output verb. Grounded in the task text (many TB2 and
+// real prompts say "save your solution in X", "write the output to Y",
+// "create a JSON file Z"), so it can be checked against disk at the end.
+// Bounded to the first 2 to avoid over-steering on a chatty prompt.
+func expectedOutputPaths(msg string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range reOutputFilenameTok.FindAllStringSubmatchIndex(msg, -1) {
+		path := msg[m[2]:m[3]]
+		if path == "" || strings.Count(path, ".") == len(path) {
+			continue
+		}
+		start := m[0] - 70
+		if start < 0 {
+			start = 0
+		}
+		afterEnd := m[1] + 40
+		if afterEnd > len(msg) {
+			afterEnd = len(msg)
+		}
+		// Output signal: a write verb within ~70 chars before the filename,
+		// OR "must exist/contain" requirement phrasing right after it.
+		if !reOutputWriteVerb.MatchString(msg[start:m[0]]) &&
+			!reMustProduce.MatchString(msg[m[1]:afterEnd]) {
+			continue // input/incidental filename
+		}
+		if !seen[path] {
+			seen[path] = true
+			out = append(out, path)
+			if len(out) >= 2 {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// missingExpectedOutputs returns the expected output files that do not
+// exist on disk. Checks the resolved workspace path with os.Stat so it
+// counts a file created by ANY means (write_file OR a run_command that
+// redirected/generated it), not just write_file.
+func missingExpectedOutputs(ctx *AgentContext, expected []string) []string {
+	var missing []string
+	for _, p := range expected {
+		resolved := resolveAgentPath(ctx, p)
+		if _, err := os.Stat(resolved); err != nil {
+			missing = append(missing, p)
+		}
+	}
+	return missing
+}
+
 func isActionIntentMessage(msg string) bool {
 	lower := strings.ToLower(msg)
 	for _, w := range actionIntentWords {
@@ -485,6 +554,19 @@ func isActionIntentMessage(msg string) bool {
 // directive — points at the missing tool call, not abstract "you
 // haven't done enough." Mirror of verificationRejectionMessage's
 // shape.
+// expectedOutputMissingMessage tells the model the task's named output
+// file doesn't exist yet — the deliverable, not just "some change." Names
+// the file(s) so the steer is concrete and grounded in the task text.
+func expectedOutputMissingMessage(missing []string) string {
+	quoted := make([]string, len(missing))
+	for i, p := range missing {
+		quoted[i] = "`" + p + "`"
+	}
+	return "Cannot declare `done` yet — the task asks you to produce " +
+		strings.Join(quoted, " and ") +
+		", but that file does not exist yet. Exploring or writing a related file is not the deliverable. Write your solution to it now (with write_file, or a run_command that creates it — e.g. redirect output with `>`), then verify it and finish."
+}
+
 func actionWithoutProductiveChangeMessage(userMsg string) string {
 	return "Cannot declare `done` yet — the user asked you to make a change on disk (rewrite/create/add/implement/refactor/etc.) and you haven't emitted any successful write_file / edit_file / ast_edit / delete_file in this loop. Verification (running the server, curling the page) is NOT the task — it's how you confirm AFTER the change. Re-read the user's request, identify what file needs to change, and emit the appropriate edit tool. Then verify, then done."
 }

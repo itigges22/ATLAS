@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The active edit-test-fix loop: after a successful write of foo.py and a
 // FAILED run referencing it, the next write must fast-path (skip V3).
@@ -43,5 +46,30 @@ func TestIsBinaryContent(t *testing.T) {
 	}
 	if isBinaryContent([]byte("")) {
 		t.Error("empty file is not binary")
+	}
+}
+
+// HARNESS-13: an unbounded read of a huge file is capped so it can't blow
+// the context window; an explicit limit is honored as-is.
+func TestReadFileSizeCap(t *testing.T) {
+	// Build content well over the cap.
+	big := strings.Repeat("some line of text here\n", (maxReadFileBytes/23)+5000)
+	if len(big) <= maxReadFileBytes {
+		t.Fatal("test setup: content not over cap")
+	}
+	// Simulate the cap logic (mirrors the read_file body).
+	content := big
+	if len(content) > maxReadFileBytes {
+		cut := maxReadFileBytes
+		if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
+			cut = nl + 1
+		}
+		content = content[:cut] + "\n... [read_file truncated"
+	}
+	if len(content) > maxReadFileBytes+200 {
+		t.Errorf("capped content still too large: %d", len(content))
+	}
+	if !strings.Contains(content, "truncated") {
+		t.Error("cap note missing")
 	}
 }

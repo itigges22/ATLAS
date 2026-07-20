@@ -249,6 +249,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	editMissByPath := map[string]int{}
 	repeatDetections := 0         // hard-stop after the 2nd repeated-identical-call detection
 	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
+	// HARNESS-12: files the prompt explicitly asks the model to produce
+	// ("save your solution in X", "write the output to Y"). Checked
+	// against disk before `done` is allowed — a model can satisfy the
+	// generic action gate with a PARTIAL artifact (a .proto but not the
+	// server) or by exploring without ever committing the named output
+	// (TB2 2026-07-19: query-optimize ran 18 queries, never wrote sol.sql;
+	// kv-store wrote the proto, never the server; merge-diff looped
+	// without committing). Computed once from the prompt.
+	expectedOutputs := expectedOutputPaths(userMessage)
+	// One-shot: when a loop-stop is about to fire but the task's named
+	// deliverable was never written, steer toward it once instead of
+	// stopping (many hard tasks loop on run_command exploration and
+	// hard-stop without ever reaching the done/text exit where the
+	// expected-output gate lives — TB2 sqlite/merge-diff).
+	outputRescueUsed := false
 	// Used to soften the consecutiveErrors exit: post-write run_command failures
 	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
 	verifiedThisLoop := false // Set when a verification command (pytest, curl,
@@ -520,6 +535,27 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				continue
 			}
 
+			// HARNESS-12: expected-output gate. Distinct from the action
+			// gate — a partial artifact or pure exploration can satisfy
+			// "made a productive change" while the task's NAMED deliverable
+			// is still missing. Check it against disk (any creation method
+			// counts); bounce naming the missing file so the model commits
+			// its answer instead of finishing empty-handed.
+			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && gateBounces < maxGateBounces {
+				gateBounces++
+				rejection := expectedOutputMissingMessage(missing)
+				log.Printf("[agent] expected-output gate: bouncing done at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
+					turn, missing, gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "output_gate",
+				})
+				continue
+			}
+
 			// PC-197 — completion-claim verification. The model's done
 			// summary often contains universals ("all routes work",
 			// "fixed all bugs", "verified everything") that we can
@@ -603,6 +639,24 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
 					ToolCallID: fmt.Sprintf("call_%d", turn),
 					ToolName:   "action_gate",
+				})
+				continue
+			}
+			// HARNESS-12 on the text-exit path too: a partial artifact
+			// satisfies the action gate above (madeProductiveChange), but
+			// the named deliverable may still be missing (TB2: kv-store
+			// wrote the proto, narrated, and quit without the server).
+			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && gateBounces < maxGateBounces {
+				gateBounces++
+				rejection := expectedOutputMissingMessage(missing)
+				log.Printf("[agent] expected-output gate: bouncing text-exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
+					turn, missing, gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "output_gate",
 				})
 				continue
 			}
@@ -875,14 +929,25 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// the broken-verify steer (below) can turn exactly these into
 				// completions.
 				if repeatDetections >= 2 {
-					if madeProductiveChange {
-						log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
-						ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
+					// Output-rescue: if the task named a deliverable and it
+					// isn't on disk, the model is looping WITHOUT having
+					// committed its answer — steer toward the file once and
+					// keep going rather than hard-stopping empty-handed.
+					if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputRescueUsed {
+						outputRescueUsed = true
+						repeatDetections = 0
+						pendingRepeatCorrective = expectedOutputMissingMessage(missing)
+						log.Printf("[agent] repeat loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, missing)
 					} else {
-						log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
-						ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
+						if madeProductiveChange {
+							log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
+							ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
+						} else {
+							log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
+							ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
+						}
+						return nil
 					}
-					return nil
 				}
 			}
 
@@ -1115,6 +1180,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// a rolling window so if subsequent fails DO
 						// collapse onto one path, we still catch it.
 						consecutiveErrors = 0
+					} else if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputRescueUsed {
+						// Output-rescue (same as the repeat breaker): looping
+						// on failures without ever committing the named
+						// deliverable — steer toward it once before stopping.
+						outputRescueUsed = true
+						consecutiveErrors = 0
+						ctx.RecentFailurePaths = nil
+						ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: expectedOutputMissingMessage(missing)})
+						log.Printf("[agent] error loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, missing)
 					} else {
 						log.Printf("[agent] breaking error loop: %d consecutive failures on the same path %q at turn %d (productive=%v)",
 							consecutiveErrors, ctx.RecentFailurePaths[0], turn, madeProductiveChange)

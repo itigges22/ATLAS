@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -221,6 +222,26 @@ func readFileTool() *ToolDef {
 			}
 
 			content := sb.String()
+			// HARNESS-13: cap the returned BYTES so one huge read can't blow
+			// the model's context window. A model that gunzips a data file
+			// and read_files it (observed TB2 2026-07-19, gcode-to-text: a
+			// decompressed G-code file read with limit:100000 -> 2.26M tokens
+			// -> hard 400 exceed_context_size, which the force-trim retry
+			// can't fix because the single message alone overflows). The cap
+			// is UNCONDITIONAL: a line `limit` does not bound bytes (100k
+			// lines of G-code is enormous), so capping only unbounded reads
+			// left the hole open. Truncate at a line boundary and tell the
+			// model to narrow the range or process the file with a command.
+			if len(content) > maxReadFileBytes {
+				cut := maxReadFileBytes
+				if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
+					cut = nl + 1
+				}
+				shown := strings.Count(content[:cut], "\n")
+				content = content[:cut] + fmt.Sprintf(
+					"\n... [read_file truncated: showing the first %d of %d lines (%d bytes). This file is too large to read whole. Read a specific range with offset/limit, or process it with run_command (grep/awk/sed/head, or a python script) instead of loading it all into context.]",
+					shown, totalLines, len(data))
+			}
 			ctx.RecordFileRead(path, string(data))
 			// PC-194 — register the read so the pattern-matching gate
 			// on write_file knows the model has actually inspected a
@@ -766,6 +787,42 @@ func isActiveDebugIteration(ctx *AgentContext, path string) bool {
 	}
 	return false
 }
+
+// readFileByteCap returns the byte cap for a single read_file result.
+// Derived from the per-slot context so one read can't overflow it — and
+// sized for the WORST-CASE tokenization of ~1 token/char (dense content:
+// G-code, minified JS, base64), not the chars/4 average. A fixed 120 KB
+// cap was safe for prose but not dense content: TB2 gcode-to-text read a
+// capped 120 KB G-code page that still tokenized to 120k tokens and 400'd
+// the 32k slot. Half the per-slot context in bytes guarantees even
+// 1-token/char content uses at most half the window, leaving room for the
+// system prompt, tools, and reply; the force-trim retry (HARNESS-6) then
+// handles any residual pressure since no single message is huge. Clamped
+// to [16 KB, 200 KB]. Tunable via ATLAS_MAX_READ_BYTES.
+func readFileByteCap() int {
+	if v := envOr("ATLAS_MAX_READ_BYTES", ""); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	perSlot := 32768
+	if b := conversationTokenBudget(); b > 0 {
+		// budget already reserves reply + margin; treat it as a
+		// worst-case char cap (1 token/char) and take half for a
+		// single read so other context still fits.
+		perSlot = b
+	}
+	cap := perSlot / 2
+	if cap < 16_000 {
+		cap = 16_000
+	}
+	if cap > 200_000 {
+		cap = 200_000
+	}
+	return cap
+}
+
+var maxReadFileBytes = readFileByteCap()
 
 // isBinaryContent reports whether data looks like a binary (non-text)
 // file. A NUL byte in the head is the reliable signal — text encodings
