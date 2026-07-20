@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### CPU-torch images actually CPU-only again (2026-07-20)
+- The lens and v3-service Dockerfiles pre-install torch from the CPU-only
+  index, but their pin (2.12.1) had drifted behind requirements.txt
+  (2.13.0), so the requirements install silently "upgraded" torch from
+  PyPI and dragged the ~8 GB nvidia/cu* dependency stack into both
+  CPU-only images (lens 8.29 GB, v3 7.91 GB, vs ~3 GB intended). On a
+  43 GB host this also made full image rebuilds fail outright on disk
+  space. Pins aligned to 2.13.0; a new contract test
+  (tests/contracts/test_torch_cpu_pin.py) fails when either service's
+  Dockerfile torch pin diverges from its requirements.txt, or when the
+  pre-install loses the CPU index.
+
 ### Structural gate on every write path (#147 close-out, 2026-07-20)
 - **Coverage completed**: the `write_file` paths that still skipped the gate
   now run it — the V3 winner (including the baseline resurrection when the
