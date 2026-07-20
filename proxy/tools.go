@@ -232,6 +232,8 @@ func readFileTool() *ToolDef {
 			// lines of G-code is enormous), so capping only unbounded reads
 			// left the hole open. Truncate at a line boundary and tell the
 			// model to narrow the range or process the file with a command.
+			truncated := false
+			shownEnd := end // 1-past the last line actually returned
 			if len(content) > maxReadFileBytes {
 				cut := maxReadFileBytes
 				if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
@@ -241,8 +243,21 @@ func readFileTool() *ToolDef {
 				content = content[:cut] + fmt.Sprintf(
 					"\n... [read_file truncated: showing the first %d of %d lines (%d bytes). This file is too large to read whole. Read a specific range with offset/limit, or process it with run_command (grep/awk/sed/head, or a python script) instead of loading it all into context.]",
 					shown, totalLines, len(data))
+				truncated = true
+				shownEnd = start + shown
+				if shownEnd > totalLines {
+					shownEnd = totalLines
+				}
 			}
-			ctx.RecordFileRead(path, string(data))
+			// #147 review finding #10: on a truncated read the model only
+			// saw the head, so record ONLY that — otherwise the redundant-read
+			// dedup later asserts the whole file is in context and short-
+			// circuits a real re-read. Untruncated reads record the full bytes.
+			recorded := string(data)
+			if truncated {
+				recorded = strings.Join(lines[start:shownEnd], "\n")
+			}
+			ctx.RecordFileRead(path, recorded)
 			// PC-194 — register the read so the pattern-matching gate
 			// on write_file knows the model has actually inspected a
 			// sibling before generating a new file in the same dir.
@@ -267,7 +282,7 @@ func readFileTool() *ToolDef {
 				Content:    content,
 				TotalLines: totalLines,
 				StartLine:  start + 1,
-				EndLine:    end,
+				EndLine:    shownEnd, // #147 review #15: actual last line returned, not the pre-truncation end
 			}
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
@@ -742,6 +757,18 @@ func writeFileTool() *ToolDef {
 				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
 					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, synErr)}, nil
 				}
+				// #147 review finding #1: the fast-path skips V3 (and its
+				// structural veto), so it needs the same structural gate
+				// edit_file/ast_edit have — otherwise a fast-path rewrite that
+				// introduces render_template lands as verified and 500s. The
+				// original is the current on-disk content (this file was
+				// already written this session, which is what makes it
+				// iterating); a new unresolved call vs that disk state blocks.
+				diskContent, _ := os.ReadFile(path)
+				if introduced := editIntroducesUnresolved(ctx, path, string(diskContent), input.Content); len(introduced) > 0 {
+					log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", introduced, input.Path)
+					return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+				}
 			}
 			if ctx.BypassV3 {
 				log.Printf("[write_file] V3 bypassed (demo baseline pane) — direct write %s", input.Path)
@@ -783,9 +810,39 @@ func isActiveDebugIteration(ctx *AgentContext, path string) bool {
 			return false
 		}
 		return strings.Contains(m.Content, `"success":false`) &&
-			strings.Contains(m.Content, base)
+			mentionsFilename(m.Content, base)
 	}
 	return false
+}
+
+// mentionsFilename reports whether `base` appears in text as a whole
+// filename token, not as a substring of a longer name (#147 review finding
+// #12: a.py must not match data.py, main.py must not match domain.py). The
+// character on each side of a real occurrence must not be a filename
+// character (letter, digit, _, ., -), so `webapp.py` and `app.python` don't
+// count while `./app.py`, `"app.py"`, and ` app.py:12` do.
+func mentionsFilename(text, base string) bool {
+	if base == "" {
+		return false
+	}
+	isNameChar := func(b byte) bool {
+		return b == '_' || b == '.' || b == '-' ||
+			(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], base)
+		if j < 0 {
+			return false
+		}
+		start := i + j
+		end := start + len(base)
+		leftOK := start == 0 || !isNameChar(text[start-1])
+		rightOK := end == len(text) || !isNameChar(text[end])
+		if leftOK && rightOK {
+			return true
+		}
+		i = start + 1
+	}
 }
 
 // readFileByteCap returns the byte cap for a single read_file result.
@@ -812,9 +869,15 @@ func readFileByteCap() int {
 		// single read so other context still fits.
 		perSlot = b
 	}
+	// Half the per-slot budget: a single read uses at most half the window
+	// even at ~1 token/char. The lower clamp must stay AT OR BELOW that
+	// half — a fixed 16 KB floor could exceed a small-context slot's whole
+	// budget and re-introduce the overflow this cap exists to prevent
+	// (#147 review finding #6). 2 KB is a sane minimum and, since the token
+	// budget floors at 4000, never actually raises the derived value.
 	cap := perSlot / 2
-	if cap < 16_000 {
-		cap = 16_000
+	if cap < 2_000 {
+		cap = 2_000
 	}
 	if cap > 200_000 {
 		cap = 200_000
@@ -829,6 +892,17 @@ var maxReadFileBytes = readFileByteCap()
 // (UTF-8/ASCII) never contain NUL, while compiled binaries, images, and
 // archives are full of them. Scans a bounded head so a large file is cheap.
 func isBinaryContent(data []byte) bool {
+	// UTF-16/UTF-32 text legitimately contains NUL bytes; a Unicode BOM
+	// identifies it as text, not binary (#147 review finding #7).
+	if len(data) >= 2 {
+		b0, b1 := data[0], data[1]
+		if (b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF) { // UTF-16 LE/BE
+			return false
+		}
+	}
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF { // UTF-8 BOM
+		return false
+	}
 	n := len(data)
 	if n > 8000 {
 		n = 8000

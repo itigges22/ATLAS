@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -105,15 +106,17 @@ func writeFileContentFingerprint(args json.RawMessage) string {
 	if json.Unmarshal(args, &wf) != nil || wf.Content == "" {
 		return ""
 	}
-	var b []byte
-	for i := 0; i < len(wf.Content); i++ {
-		c := wf.Content[i]
-		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-			continue
-		}
-		b = append(b, c)
+	// Normalize each line to its LEADING indentation + trailing-trimmed
+	// body, then join with "\n". Leading whitespace is PRESERVED because in
+	// Python it is semantic: an indentation-only fix is a real change and
+	// must produce a different fingerprint, or it is misclassified as
+	// reassertion and the loop breaker kills a legitimate iteration (#147
+	// review finding #13). Trailing whitespace and CR are dropped as noise.
+	lines := strings.Split(wf.Content, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimRight(ln, " \t\r")
 	}
-	h := sha1.Sum(b)
+	h := sha1.Sum([]byte(strings.Join(lines, "\n")))
 	return hex.EncodeToString(h[:])
 }
 

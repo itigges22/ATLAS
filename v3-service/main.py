@@ -2729,6 +2729,84 @@ def _extract_python_top_level_defs(source: bytes) -> set:
     return names
 
 
+def _extract_python_bound_names(source: bytes) -> set:
+    """Every name BOUND anywhere in the file — assignment targets, function
+    and lambda parameters, for / with-as / except-as / comprehension
+    targets, walrus, global/nonlocal, and def/class names at any nesting.
+
+    Used to credit local callables so the structural resolver does NOT flag
+    a call to a local variable, function parameter, or loop variable as
+    unresolved (which would false-reject valid code — the #147 review's
+    top finding). Deliberately scope-BLIND: a name bound inside one
+    function is credited when called from another, which can miss a rare
+    genuine cross-function NameError. That false-negative is the correct
+    trade for a gate that BLOCKS writes — wrongly rejecting valid code is
+    far worse than letting an uncommon bug through.
+    """
+    if not _AST_EDIT_AVAILABLE:
+        return set()
+    try:
+        parser = _ts.Parser(_PY_LANG)
+        tree = parser.parse(source)
+    except Exception:
+        return set()
+
+    names = set()
+
+    def add_pattern(node):
+        # Recursively pull bare-identifier targets from a binding pattern
+        # (a, (b, c), *rest = ...). Skip subscript/attribute targets
+        # (a[0]=, a.b=) — those don't bind a NEW bare name.
+        if node is None:
+            return
+        if node.type == "identifier":
+            names.add(source[node.start_byte:node.end_byte].decode("utf-8", "replace"))
+            return
+        if node.type in ("subscript", "attribute"):
+            return
+        for c in node.children:
+            add_pattern(c)
+
+    stack = [tree.root_node]
+    while stack:
+        n = stack.pop()
+        t = n.type
+        if t in ("function_definition", "class_definition"):
+            nm = n.child_by_field_name("name")
+            if nm is not None and nm.type == "identifier":
+                names.add(source[nm.start_byte:nm.end_byte].decode("utf-8", "replace"))
+        if t in ("function_definition", "lambda"):
+            params = n.child_by_field_name("parameters")
+            if params is not None:
+                pstack = list(params.children)
+                while pstack:
+                    p = pstack.pop()
+                    if p.type == "identifier":
+                        names.add(source[p.start_byte:p.end_byte].decode("utf-8", "replace"))
+                    elif p.type in ("subscript", "attribute", "default_parameter",
+                                    "typed_parameter", "typed_default_parameter",
+                                    "list_splat_pattern", "dictionary_splat_pattern"):
+                        # descend, but a default_parameter's VALUE isn't a binding —
+                        # take only its leading identifier target.
+                        for c in p.children:
+                            if c.type == "identifier":
+                                names.add(source[c.start_byte:c.end_byte].decode("utf-8", "replace"))
+                                break
+                            pstack.append(c)
+        elif t in ("assignment", "augmented_assignment", "named_expression"):
+            add_pattern(n.child_by_field_name("left") or n.child_by_field_name("name"))
+        elif t in ("for_statement", "for_in_clause"):
+            add_pattern(n.child_by_field_name("left"))
+        elif t == "as_pattern":  # with ... as X / except ... as X
+            add_pattern(n.child_by_field_name("alias") or (n.children[-1] if n.children else None))
+        elif t in ("global_statement", "nonlocal_statement"):
+            for c in n.children:
+                if c.type == "identifier":
+                    names.add(source[c.start_byte:c.end_byte].decode("utf-8", "replace"))
+        stack.extend(n.children)
+    return names
+
+
 def build_project_symbols(file_map: dict) -> set:
     """Aggregate top-level function/class names across every .py file
     in file_map. Built once per V3 run, reused across all candidates."""
@@ -2768,6 +2846,10 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
         local_defs = _extract_python_top_level_defs(candidate_bytes)
         imports = _extract_python_imports(candidate_bytes)
         calls = _extract_python_call_targets(candidate_bytes)
+        # Bound names (locals, params, loop/with targets, nested defs) credit
+        # local callables so `fn = build(); fn()` is not flagged as a
+        # NameError — #147 review finding #4/#5. Scope-blind on purpose.
+        bound = _extract_python_bound_names(candidate_bytes)
     except Exception as e:
         return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
 
@@ -2786,6 +2868,8 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
         if name in local_defs:
             continue
         if name in imports:
+            continue
+        if name in bound:  # local var / param / loop target / nested def
             continue
         if name in PY_BUILTINS:
             continue

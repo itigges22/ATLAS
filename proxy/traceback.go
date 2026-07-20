@@ -41,7 +41,12 @@ var reMissingModule = regexp.MustCompile(`No module named '?([A-Za-z0-9_.]+)'?`)
 // requires the `sh: N:` prefix so a stray "<file>: not found" in program
 // output can't false-positive.
 var (
-	reCmdNotFoundBash = regexp.MustCompile(`([A-Za-z0-9._/+-]+): command not found`)
+	// Anchored to a real bash diagnostic — `bash: [line N: ]<cmd>: command
+	// not found` — so it can't fire on the string "X: command not found"
+	// appearing in ordinary program output (#147 review finding #9). Path
+	// prefixes on the shell name (/usr/bin/bash) and the `line N:` clause
+	// are both optional.
+	reCmdNotFoundBash = regexp.MustCompile(`(?m)(?:^|\s)(?:[\w./-]*/)?bash: (?:line \d+: )?([A-Za-z0-9._/+-]+): command not found`)
 	reCmdNotFoundSh   = regexp.MustCompile(`(?m)(?:^|\s)(?:/bin/)?sh: \d+: ([A-Za-z0-9._/+-]+): not found`)
 )
 
@@ -143,6 +148,14 @@ func brokenInlineScriptSteer(command, output string) string {
 		strings.Contains(command, " -c\"") ||
 		strings.Contains(command, "\t-c ")
 	if !fromString || !inlineFlag {
+		return ""
+	}
+	// If the -c script execs external code (exec(open(f).read()),
+	// eval/compile), a SyntaxError in THAT code is also attributed to
+	// "<string>" — the bug is in the exec'd file, not the one-liner, so
+	// "move your test to a file" is wrong advice (#147 review finding #11).
+	if strings.Contains(command, "exec(") || strings.Contains(command, "eval(") ||
+		strings.Contains(command, "compile(") {
 		return ""
 	}
 	// If a REAL file frame also appears, the error is in a module the -c

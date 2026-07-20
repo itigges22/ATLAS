@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Code-review hardening of the #147 / TB2 series (2026-07-20)
+An xhigh review of the unpromoted series found 15 correctness defects, all fixed:
+the structural resolver now tracks locally-bound names (params, loop/with
+targets, assignments) so it no longer false-rejects valid edits or vetoes valid
+candidates; the write_file iteration fast-path and the text-exit path got the
+structural / verification / completion-claim gates they were missing; the
+structural gate excludes the edited file's stale pre-edit content; the read cap
+floor no longer exceeds a small slot's budget and a truncated read records only
+what was shown (correct dedup + EndLine); UTF-16 BOM files read as text; the
+command-not-found and inline-script steers, the expected-output gate, the
+active-iteration filename match, and the write fingerprint were all de-noised
+against false positives.
+
 ### Structural gate on the edit path (#147, 2026-07-19)
 - An `ast_edit`/`edit_file` that introduced an unresolved direct call — e.g.
   `render_template` while the file imported only `render_template_string` —

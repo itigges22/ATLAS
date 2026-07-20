@@ -562,9 +562,9 @@ func expectedOutputMissingMessage(missing []string) string {
 	for i, p := range missing {
 		quoted[i] = "`" + p + "`"
 	}
-	return "Cannot declare `done` yet — the task asks you to produce " +
+	return "Before you finish — the task names " +
 		strings.Join(quoted, " and ") +
-		", but that file does not exist yet. Exploring or writing a related file is not the deliverable. Write your solution to it now (with write_file, or a run_command that creates it — e.g. redirect output with `>`), then verify it and finish."
+		" as a deliverable, but it does not exist on disk yet. If your code PRODUCES it when run, run your code now to generate it (do NOT hand-write a fabricated stand-in). If it is a file you author directly, write your solution to it. If you have genuinely already produced it elsewhere or it is not actually required, you may proceed."
 }
 
 func actionWithoutProductiveChangeMessage(userMsg string) string {

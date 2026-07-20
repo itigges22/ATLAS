@@ -42,9 +42,11 @@ func TestWriteFileReassertionKeyedOnPathAndContent(t *testing.T) {
 	// is iteration — TestWriteFileIterationNotRepeat — and must NOT fire.)
 	ctx := &AgentContext{}
 	for i := 0; i < 2; i++ {
-		// Same code, cosmetically reindented each attempt.
+		// Same code — only TRAILING whitespace/CR differs, which is noise and
+		// must still collide. (Leading indentation is semantic in Python and
+		// is deliberately NOT collapsed — TestWriteFileIndentationChangeIsIteration.)
 		args := json.RawMessage(fmt.Sprintf(
-			`{"path":"app.py","content":"from flask import Flask\n%sapp = Flask(__name__)"}`,
+			`{"path":"app.py","content":"from flask import Flask\napp = Flask(__name__)%s"}`,
 			strings.Repeat(" ", i)))
 		if _, repeating := recordToolCall(ctx, "write_file", args); repeating {
 			t.Fatalf("fired at write %d, want threshold 3", i+1)
@@ -117,16 +119,16 @@ func TestWriteFileIterationNotRepeat(t *testing.T) {
 	}
 }
 
-// Reassertion IS still caught: rewriting the same file with the same
-// logical content (only whitespace/formatting differs) collides on the
-// fingerprint and fires at the threshold. Protects the 2026-07-18 case.
+// Reassertion IS still caught: rewriting the same file with identical
+// code — only trailing whitespace / line-ending noise differs — collides
+// on the fingerprint and fires at the threshold. Protects the 2026-07-18 case.
 func TestWriteFileReassertionStillCaught(t *testing.T) {
 	ctx := &AgentContext{}
-	// Same non-whitespace content, cosmetically reformatted each time.
+	// Same code + same leading indentation; only trailing whitespace/CR varies.
 	versions := []string{
 		`{"path":"app.py","content":"def f():\n    return 1"}`,
-		`{"path":"app.py","content":"def f():\n        return 1"}`,
-		`{"path":"app.py","content":"def f():\n\treturn 1"}`,
+		`{"path":"app.py","content":"def f():\n    return 1  "}`,
+		`{"path":"app.py","content":"def f():\r\n    return 1\r"}`,
 	}
 	fired := false
 	for _, v := range versions {
@@ -136,5 +138,23 @@ func TestWriteFileReassertionStillCaught(t *testing.T) {
 	}
 	if !fired {
 		t.Error("reassertion of the same logical content was not caught")
+	}
+}
+
+// An indentation-only change is a REAL change in Python (iteration), so it
+// must NOT collide as reassertion (#147 review finding #13).
+func TestWriteFileIndentationChangeIsIteration(t *testing.T) {
+	ctx := &AgentContext{}
+	// A common fix: correcting a wrongly-indented body line. Different
+	// leading indentation -> different fingerprint -> not flagged.
+	versions := []string{
+		`{"path":"m.py","content":"def f():\nreturn 1"}`,        // broken indent
+		`{"path":"m.py","content":"def f():\n    return 1"}`,    // fixed (4)
+		`{"path":"m.py","content":"def f():\n        return 1"}`, // 8-space
+	}
+	for i, v := range versions {
+		if _, r := recordToolCall(ctx, "write_file", json.RawMessage(v)); r {
+			t.Fatalf("indentation change at write %d flagged as reassertion", i+1)
+		}
 	}
 }

@@ -46,20 +46,29 @@ func checkStructuralUnresolved(ctx *AgentContext, path, content string) ([]strin
 		return nil, false
 	}
 	payload := map[string]interface{}{"path": path, "source": content}
-	// Pass the files the model has read as project context so a call to a
-	// symbol defined elsewhere in the project is credited (more lenient =
-	// fewer false blocks); the render_template class is caught by the
-	// file's OWN imports regardless.
+	// Pass the OTHER files the model has read as project context so a call
+	// to a symbol defined elsewhere in the project is credited (more
+	// lenient = fewer false blocks). Crucially, EXCLUDE the file being
+	// edited: SnapshotFilesRead still holds its PRE-EDIT body, which would
+	// credit a top-level def the edit just deleted and let a genuine
+	// NameError through (#147 review finding #2). The edited file's current
+	// symbols come from `source`, which structural_score parses directly.
+	cleanTarget := filepath.Clean(path)
 	if pc := ctx.SnapshotFilesRead(); len(pc) > 0 {
 		rel := make(map[string]string, len(pc))
 		for p, c := range pc {
+			if filepath.Clean(p) == cleanTarget {
+				continue // don't credit the pre-edit self
+			}
 			r, err := filepath.Rel(ctx.WorkingDir, p)
 			if err != nil || r == "" {
 				r = p
 			}
 			rel[r] = c
 		}
-		payload["project_context"] = rel
+		if len(rel) > 0 {
+			payload["project_context"] = rel
+		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

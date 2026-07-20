@@ -73,3 +73,32 @@ func TestReadFileSizeCap(t *testing.T) {
 		t.Error("cap note missing")
 	}
 }
+
+// #147 review #7: a UTF-16 BOM identifies text even though it has NULs.
+func TestIsBinaryContentUTF16BOM(t *testing.T) {
+	if isBinaryContent([]byte{0xFF, 0xFE, 0x68, 0x00, 0x69, 0x00}) {
+		t.Error("UTF-16 LE (BOM) must be treated as text")
+	}
+	if isBinaryContent([]byte{0xFE, 0xFF, 0x00, 0x68}) {
+		t.Error("UTF-16 BE (BOM) must be treated as text")
+	}
+	if !isBinaryContent([]byte("\x7fELF\x00\x00garbage")) {
+		t.Error("ELF must still be binary")
+	}
+}
+
+// #147 review #12: filename match must be a whole token, not a substring.
+func TestMentionsFilename(t *testing.T) {
+	if mentionsFilename(`{"error":"data.py line 3"}`, "a.py") {
+		t.Error("a.py must not match inside data.py")
+	}
+	if mentionsFilename("domain.py failed", "main.py") {
+		t.Error("main.py must not match inside domain.py")
+	}
+	if !mentionsFilename(`{"error":"File \"app.py\", line 3"}`, "app.py") {
+		t.Error("app.py must match as a whole token")
+	}
+	if !mentionsFilename("python3 app.py:12: error", "app.py") {
+		t.Error("app.py must match when bounded by a colon")
+	}
+}

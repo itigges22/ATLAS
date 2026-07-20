@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeV3Structural returns the given unresolved names for source containing
@@ -77,5 +78,36 @@ func TestStructuralGateFailsOpen(t *testing.T) {
 	ctx2 := structCtx("http://example.invalid")
 	if _, ok := checkStructuralUnresolved(ctx2, "notes.txt", "render_template()"); ok {
 		t.Error("non-.py must not be checked")
+	}
+}
+
+// #147 review #2: the edited file's own (pre-edit) content must be excluded
+// from the project_context sent, so a deleted top-level def isn't credited
+// from stale state.
+func TestStructuralCheckExcludesEditedSelf(t *testing.T) {
+	var gotCtx map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]interface{}
+		_ = json.Unmarshal(raw, &body)
+		if pc, ok := body["project_context"].(map[string]interface{}); ok {
+			gotCtx = pc
+		} else {
+			gotCtx = map[string]interface{}{}
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"unresolved":[]}`))
+	}))
+	defer srv.Close()
+	ctx := &AgentContext{
+		V3URL: srv.URL, Ctx: context.Background(), WorkingDir: "/workspace",
+		FilesRead:     map[string]string{"/workspace/app.py": "def gone(): pass", "/workspace/util.py": "def helper(): pass"},
+		FileReadTimes: map[string]time.Time{"/workspace/app.py": time.Now(), "/workspace/util.py": time.Now()},
+	}
+	_, _ = checkStructuralUnresolved(ctx, "/workspace/app.py", "x = gone()")
+	if _, present := gotCtx["app.py"]; present {
+		t.Error("edited file app.py must be excluded from project_context")
+	}
+	if _, present := gotCtx["util.py"]; !present {
+		t.Error("other read files should still be included")
 	}
 }

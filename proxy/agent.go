@@ -247,7 +247,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// reproduce old_str byte-for-byte). This counter survives interleaved
 	// reads so we can force the ast_edit steer after the second miss.
 	editMissByPath := map[string]int{}
-	repeatDetections := 0         // hard-stop after the 2nd repeated-identical-call detection
+	repeatDetections := 0 // hard-stop after the 2nd repeated-identical-call detection
+	// Runaway backstop for content-varying write loops (#147 review finding
+	// #14): the content-fingerprint repeat detector, by design, does not
+	// catch a model that rewrites one file with materially different content
+	// every time and never converges. This counts total writes per path and
+	// escalates to the repeat corrective only at a threshold far above any
+	// realistic iteration (polyglot's healthiest run was ~10), so it stops a
+	// true runaway without regressing legitimate iteration.
+	writeCountByPath := map[string]int{}
+	const runawayWriteThreshold = 20
 	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
 	// HARNESS-12: files the prompt explicitly asks the model to produce
 	// ("save your solution in X", "write the output to Y"). Checked
@@ -264,6 +273,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// hard-stop without ever reaching the done/text exit where the
 	// expected-output gate lives — TB2 sqlite/merge-diff).
 	outputRescueUsed := false
+	// The expected-output done/text gate fires at most ONCE per session:
+	// a named deliverable might be PRODUCED AT RUNTIME by the model's code
+	// (not authored), so repeatedly bouncing a correct done would steer the
+	// model to fabricate a stand-in (#147 review finding #8). One reminder
+	// keeps the "did you forget the deliverable?" value without the loop.
+	outputGateUsed := false
 	// Used to soften the consecutiveErrors exit: post-write run_command failures
 	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
 	verifiedThisLoop := false // Set when a verification command (pytest, curl,
@@ -541,8 +556,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// is still missing. Check it against disk (any creation method
 			// counts); bounce naming the missing file so the model commits
 			// its answer instead of finishing empty-handed.
-			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && gateBounces < maxGateBounces {
+			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputGateUsed && gateBounces < maxGateBounces {
 				gateBounces++
+				outputGateUsed = true // fire once — see decl (#147 review #8)
 				rejection := expectedOutputMissingMessage(missing)
 				log.Printf("[agent] expected-output gate: bouncing done at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
 					turn, missing, gateBounces, maxGateBounces)
@@ -625,6 +641,27 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// pair, so no bare trailing assistant message for prefill
 			// to trip on). Conversational input never matches
 			// isActionIntentMessage, so chat replies still exit here.
+			//
+			// Verification gate on the text exit too (#147 review finding
+			// #3): a fix/verify-intent prompt must not be abandoned via a
+			// `text` narration ("I fixed and verified it") without a
+			// verification command having run — the same bounce the done
+			// branch applies. Without this, narrate-then-quit reported an
+			// unverified, possibly still-red fix as complete.
+			if userWantsVerification && !verifiedThisLoop && gateBounces < maxGateBounces {
+				gateBounces++
+				rejection := verificationRejectionMessage(userMessage)
+				log.Printf("[agent] text-exit verification gate: bouncing text at turn %d (fix-intent, no verification this loop, bounce %d/%d)",
+					turn, gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "verification_gate",
+				})
+				continue
+			}
 			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
@@ -646,8 +683,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// satisfies the action gate above (madeProductiveChange), but
 			// the named deliverable may still be missing (TB2: kv-store
 			// wrote the proto, narrated, and quit without the server).
-			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && gateBounces < maxGateBounces {
+			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputGateUsed && gateBounces < maxGateBounces {
 				gateBounces++
+				outputGateUsed = true // fire once — see decl (#147 review #8)
 				rejection := expectedOutputMissingMessage(missing)
 				log.Printf("[agent] expected-output gate: bouncing text-exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
 					turn, missing, gateBounces, maxGateBounces)
@@ -659,6 +697,25 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					ToolName:   "output_gate",
 				})
 				continue
+			}
+			// Completion-claim check on the text exit too (#147 review
+			// finding #3). The narration IS the completion claim here
+			// ("I fixed all the routes"), so scan parsed.Content — the
+			// same structural gap-check the done branch runs on the summary.
+			if (claimsUniversal(parsed.Content) || promptIsMultiIssue(userMessage)) && gateBounces < maxGateBounces {
+				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Content); gap != "" {
+					gateBounces++
+					log.Printf("[agent] text-exit claim-check: bouncing text at turn %d (bounce %d/%d) — %q",
+						turn, gateBounces, maxGateBounces, truncateStr(gap, 200))
+					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf(`{"success":false,"error":%q}`, gap),
+						ToolCallID: fmt.Sprintf("call_%d", turn),
+						ToolName:   "claim_check",
+					})
+					continue
+				}
 			}
 			ctx.Stream("text", map[string]string{"content": parsed.Content})
 			ctx.Stream("done", map[string]string{"summary": ""})
@@ -902,7 +959,24 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// execution so the corrective lands in the same iteration
 			// as the lens corrective if both trigger.
 			pendingRepeatCorrective := ""
-			if msg, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating {
+			// Runaway backstop (#147 review #14): count writes per path and
+			// force the repeat path once a single file is rewritten far more
+			// than any real iteration would.
+			runawayWrite := false
+			if parsed.Name == "write_file" {
+				if wp := writeFilePath(parsed.Args); wp != "" {
+					writeCountByPath[wp]++
+					if writeCountByPath[wp] == runawayWriteThreshold {
+						runawayWrite = true
+						log.Printf("[agent] runaway write backstop: %q rewritten %d times — escalating", wp, writeCountByPath[wp])
+					}
+				}
+			}
+			if msg, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
+				if runawayWrite && msg == "" {
+					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/ast_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
+				}
+				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
 				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
 				ctx.Stream("agent_repeat_intervention", map[string]interface{}{
 					"turn":   turn,

@@ -228,3 +228,28 @@ func TestBrokenInlineScriptSteerTruncatedOutput(t *testing.T) {
 		t.Error("steer must fire on a <string> frame even when SyntaxError is truncated away")
 	}
 }
+
+// #147 review #9: the bash command-not-found steer must require a real bash
+// diagnostic prefix, not fire on the phrase in ordinary program output.
+func TestMissingCommandSteerRequiresShellPrefix(t *testing.T) {
+	if s := missingCommandSteer("bash: line 1: git: command not found\n"); s == "" {
+		t.Error("real bash diagnostic must fire")
+	}
+	if s := missingCommandSteer("bash: git: command not found\n"); s == "" {
+		t.Error("bash diagnostic without line-number must fire")
+	}
+	// Program output that merely prints the phrase must NOT fire.
+	if s := missingCommandSteer(`print("mytool: command not found")` + "\nmytool: command not found\n"); s != "" {
+		t.Errorf("must not fire on program output: %q", s)
+	}
+}
+
+// #147 review #11: don't misfire on `python -c "exec(open('f').read())"` —
+// the SyntaxError is in file f, not the one-liner.
+func TestBrokenInlineScriptSteerSkipsExec(t *testing.T) {
+	cmd := `python3 -c "exec(open('solution.py').read())"`
+	out := "  File \"<string>\", line 1\n    def broken(\nSyntaxError: invalid syntax"
+	if s := brokenInlineScriptSteer(cmd, out); s != "" {
+		t.Errorf("must not fire when -c execs external code: %q", s)
+	}
+}

@@ -62,3 +62,55 @@ def test_project_symbol_credits_cross_file_call():
     struct = main.structural_score({"shared_util"}, code)
     assert struct["ok"]
     assert "shared_util" not in struct["unresolved_calls"], struct
+
+
+def test_local_variable_call_not_flagged():
+    # #147 review #4: fn is a local variable, not a top-level def — must NOT flag.
+    code = (
+        "def run():\n"
+        "    fn = build_pipeline()\n"
+        "    return fn()\n"
+        "def build_pipeline():\n    return lambda: 1\n"
+    )
+    struct = main.structural_score(set(), code)
+    assert struct["ok"]
+    assert "fn" not in struct["unresolved_calls"], struct
+
+
+def test_function_parameter_call_not_flagged():
+    code = "def apply(handler, evt):\n    return handler(evt)\n"
+    struct = main.structural_score(set(), code)
+    assert "handler" not in struct["unresolved_calls"], struct
+
+
+def test_loop_and_comprehension_target_not_flagged():
+    code = (
+        "def dispatch(handlers, evt):\n"
+        "    for h in handlers:\n"
+        "        h(evt)\n"
+        "    return [g() for g in handlers]\n"
+    )
+    struct = main.structural_score(set(), code)
+    assert "h" not in struct["unresolved_calls"], struct
+    assert "g" not in struct["unresolved_calls"], struct
+
+
+def test_with_as_target_not_flagged():
+    code = "def f():\n    with open('x') as fh:\n        return fh()\n"
+    struct = main.structural_score(set(), code)
+    assert "fh" not in struct["unresolved_calls"], struct
+
+
+def test_genuine_nameerror_still_flagged_amid_locals():
+    # render_template is neither imported, defined, bound, nor builtin —
+    # must still flag even though the file has locals.
+    code = (
+        "from flask import render_template_string\n"
+        "def index():\n"
+        "    tmpl = load()\n"
+        "    return render_template(tmpl)\n"
+        "def load():\n    return 'x'\n"
+    )
+    struct = main.structural_score(set(), code)
+    assert "render_template" in struct["unresolved_calls"], struct
+    assert "tmpl" not in struct["unresolved_calls"], struct
