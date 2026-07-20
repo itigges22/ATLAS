@@ -227,7 +227,16 @@ func assetLintFindings(workingDir string) []string {
 			if strings.Contains(name, "{{") {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(workingDir, "templates", filepath.FromSlash(name))); err != nil {
+			rel := filepath.FromSlash(name)
+			// A name escaping templates/ is dangling by definition (Jinja
+			// loaders refuse traversal) — report it WITHOUT the Stat probe,
+			// which stays contained to workingDir.
+			dangling := !filepath.IsLocal(rel)
+			if !dangling {
+				_, err := os.Stat(filepath.Join(workingDir, "templates", rel))
+				dangling = err != nil
+			}
+			if dangling {
 				findings = append(findings, fmt.Sprintf(
 					"%s references template %q, but templates/%s does not exist.",
 					f.rel, name, name))
@@ -274,8 +283,16 @@ func assetLintFindings(workingDir string) []string {
 			if target == "" || target == "/" {
 				continue
 			}
-			candidate := strings.TrimPrefix(target, "/")
-			if _, err := os.Stat(filepath.Join(workingDir, filepath.FromSlash(candidate))); err != nil {
+			rel := filepath.FromSlash(strings.TrimPrefix(target, "/"))
+			// A target escaping the workspace can't be served from it —
+			// report as dangling without the Stat probe (contained to
+			// workingDir).
+			dangling := !filepath.IsLocal(rel)
+			if !dangling {
+				_, err := os.Stat(filepath.Join(workingDir, rel))
+				dangling = err != nil
+			}
+			if dangling {
 				key := f.rel + "→" + target
 				if !seenDangling[key] {
 					seenDangling[key] = true
@@ -285,8 +302,15 @@ func assetLintFindings(workingDir string) []string {
 			}
 		}
 		for _, m := range reURLFor.FindAllStringSubmatch(f.content, -1) {
-			candidate := filepath.Join("static", filepath.FromSlash(m[1]))
-			if _, err := os.Stat(filepath.Join(workingDir, candidate)); err != nil {
+			rel := filepath.FromSlash(m[1])
+			// A filename escaping static/ 404s at runtime (Flask refuses
+			// traversal) — report as dangling without the Stat probe.
+			dangling := !filepath.IsLocal(rel)
+			if !dangling {
+				_, err := os.Stat(filepath.Join(workingDir, filepath.Join("static", rel)))
+				dangling = err != nil
+			}
+			if dangling {
 				key := f.rel + "→" + m[1]
 				if !seenDangling[key] {
 					seenDangling[key] = true

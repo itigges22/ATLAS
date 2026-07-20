@@ -25,15 +25,18 @@ class EmbeddingContractError(RuntimeError):
 # declared (legacy artifacts): both response shapes are accepted with a
 # warning, matching pre-contract behavior.
 _EMBEDDING_CONTRACT: Optional[dict] = None
-_legacy_shape_warned = False
+
+# One-time-warning latch for the legacy per-token path. A mutable holder
+# rather than a rebound global so callers reset it in place.
+_legacy_shape_warn = {"warned": False}
 
 
 def set_embedding_contract(contract: Optional[dict]) -> None:
     """Install (or clear) the embedding contract enforced by
     extract_embedding(). Called on weight load/reload."""
-    global _EMBEDDING_CONTRACT, _legacy_shape_warned
+    global _EMBEDDING_CONTRACT
     _EMBEDDING_CONTRACT = dict(contract) if contract else None
-    _legacy_shape_warned = False
+    _legacy_shape_warn["warned"] = False
 
 
 def get_embedding_contract() -> Optional[dict]:
@@ -117,7 +120,6 @@ def extract_embedding(text: str) -> List[float]:
     Returns:
         List of floats with model-native dimensionality.
     """
-    global _legacy_shape_warned
     contract = _EMBEDDING_CONTRACT
     # Under a normalized contract, request L2 normalization explicitly —
     # server defaults vary across llama.cpp revisions.
@@ -148,8 +150,8 @@ def extract_embedding(text: str) -> List[float]:
         if n_tokens == 0:
             raise ValueError("No token embeddings returned")
 
-        if contract is None and not _legacy_shape_warned:
-            _legacy_shape_warned = True
+        if contract is None and not _legacy_shape_warn["warned"]:
+            _legacy_shape_warn["warned"] = True
             logger.warning(
                 "per-token /embedding response mean-pooled without a "
                 "declared embedding_contract — if the loaded artifacts "

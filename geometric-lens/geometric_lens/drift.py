@@ -36,8 +36,8 @@ MIN_ABS_TOLERANCE = 0.1
 # energies, not coverage of the input space.
 REFERENCE_TEXTS = [
     "def add(a, b):\n    return a + b",
-    "class Stack:\n    def __init__(self):\n        self.items = []\n\n"
-    "    def push(self, item):\n        self.items.append(item)\n\n"
+    "class Stack:\n    def __init__(self):\n        self.items = []\n\n" +
+    "    def push(self, item):\n        self.items.append(item)\n\n" +
     "    def pop(self):\n        return self.items.pop()",
     "for i in range(10):\n    print(i * i)",
 ]

@@ -2574,30 +2574,21 @@ def symbol_index(file_map: dict, candidate_symbols: list, max_snippets: int = 3,
 #   4. Project-wide symbol (any function/class in any scanned file)
 # Anything that doesn't match → unresolved. Strict: 1+ unresolved → veto.
 
-PY_BUILTINS = frozenset({
-    # Subset of common builtins — anything heavily used in idiomatic
-    # Python that we don't want to false-positive on. Hand-curated to
-    # keep the set small; obscure builtins (intern, breakpoint,
-    # __import__) caught here are vanishingly rare in generated code.
-    "print", "len", "range", "str", "int", "float", "bool", "bytes", "bytearray",
-    "list", "dict", "tuple", "set", "frozenset", "complex",
-    "open", "input", "sum", "min", "max", "abs", "round", "pow", "divmod",
-    "type", "isinstance", "issubclass", "callable",
-    "getattr", "setattr", "hasattr", "delattr", "super",
-    "enumerate", "zip", "sorted", "reversed", "map", "filter", "any", "all",
-    "id", "vars", "dir", "iter", "next", "slice",
-    "ord", "chr", "hex", "oct", "bin", "repr", "format", "hash",
-    "eval", "exec", "compile", "globals", "locals",
-    "object", "classmethod", "staticmethod", "property",
-    # Common exception classes — frequently raised, treated as calls
-    "Exception", "BaseException", "ValueError", "TypeError", "KeyError",
-    "IndexError", "RuntimeError", "AttributeError", "ImportError",
-    "FileNotFoundError", "IOError", "OSError", "StopIteration",
-    "GeneratorExit", "NotImplementedError", "ZeroDivisionError",
-    "ArithmeticError", "OverflowError", "AssertionError", "LookupError",
-    "MemoryError", "NameError", "ReferenceError", "SyntaxError",
-    "SystemExit", "UnicodeError", "Warning", "DeprecationWarning",
-})
+# The COMPLETE builtin namespace, derived from the interpreter rather
+# than hand-curated. A previous curated subset was missing real builtins
+# (TimeoutError, ConnectionError, memoryview, breakpoint, ...), and any
+# gap here is a false VETO of valid code — `exit(1)` in a new file was
+# rejected as a would-be NameError. Site builtins (exit/quit/help/...)
+# are added explicitly so the set doesn't depend on how this interpreter
+# was started; over-crediting a shadowed builtin only makes the veto
+# more lenient, never blocks valid code.
+import builtins as _builtins_mod
+
+PY_BUILTINS = frozenset(
+    {n for n in dir(_builtins_mod) if not n.startswith("_")}
+    | {"exit", "quit", "help", "license", "copyright", "credits",
+       "__import__", "__build_class__"}
+)
 
 
 def _extract_python_imports(source: bytes) -> set:
@@ -2821,19 +2812,26 @@ def build_project_symbols(file_map: dict) -> set:
     return out
 
 
-def structural_score(project_symbols, candidate_code: str) -> dict:
+def structural_score(project_symbols, candidate_code: str,
+                     max_names: int = 10) -> dict:
     """Check a candidate for unresolved direct-identifier calls.
 
     project_symbols: set built by build_project_symbols(file_map). Pass
     {} or set() if the project is empty / unavailable — every call
     will fall through to imports/builtins/unresolved.
 
+    max_names caps the reported unresolved_calls list (telemetry-friendly
+    default); 0 returns every name — required by callers that DIFF the
+    lists (the proxy structural gate).
+
     Returns:
         ok: True if parse succeeded
         n_calls_total / n_unresolved: aggregate counts
-        unresolved_calls: list of unique unresolved names (capped at 10)
-        wildcard_imports: True if the candidate has `from x import *`,
-                          which makes the unresolved set a lower bound
+        unresolved_calls: list of unique unresolved names (capped at
+                          max_names unless max_names=0)
+        wildcard_imports: True if the candidate has `from x import *`
+                          (unresolved reporting is suppressed in that
+                          case, so the list is always empty then)
     """
     if not _AST_EDIT_AVAILABLE:
         return {"ok": False, "error": "tree-sitter not installed"}
@@ -2887,7 +2885,11 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
         "ok": True,
         "n_calls_total": len(calls),
         "n_unresolved": len(unresolved),
-        "unresolved_calls": unresolved[:10],
+        # max_names=0 returns the FULL list. The proxy's structural gate
+        # diffs original-vs-edited name lists; a truncated list makes that
+        # comparison unsound in both directions on files with more
+        # unresolved names than the cap.
+        "unresolved_calls": unresolved[:max_names] if max_names else unresolved,
         "wildcard_imports": has_wildcard,
         "n_local_defs": len(local_defs),
         "n_imports": len(imports),
@@ -3810,14 +3812,19 @@ class V3Handler(BaseHTTPRequestHandler):
         Response: {"ok": bool, "unresolved": ["render_template", ...],
                    "wildcard_imports": bool}
 
-        Used by the proxy's edit_file/ast_edit path to refuse writing a .py
-        file whose edit introduces a NameError — a direct call to a name the
-        file neither imports, defines, nor gets from builtins (#147:
-        render_template called with only render_template_string imported
-        landed as verified because the in-pipeline veto was skipped when no
-        project_context was sent). Same resolver as the V3 structural veto;
-        no execution. `ok:false` means the check couldn't run (tree-sitter
-        missing / parse error) — the caller treats that as pass (fail-open).
+        Used by the proxy's structural gate on edit_file, ast_edit, and the
+        write_file branches to refuse landing a .py file whose change
+        introduces a NameError — a direct call to a name the file neither
+        imports, defines, nor gets from builtins (#147: render_template
+        called with only render_template_string imported landed as verified
+        because the in-pipeline veto was skipped when no project_context was
+        sent). Same resolver as the V3 structural veto; no execution.
+        Returns the FULL unresolved list (no cap) — the proxy diffs
+        original-vs-edited lists and a truncated list makes that comparison
+        unsound. `ok:false` means the check couldn't run (tree-sitter
+        missing / non-UTF-8) — the caller treats that as pass (fail-open).
+        Malformed Python does NOT produce ok:false; tree-sitter parses it
+        tolerantly and returns a best-effort extraction.
         """
         content_len = int(self.headers.get("Content-Length", 0))
         try:
@@ -3827,7 +3834,7 @@ class V3Handler(BaseHTTPRequestHandler):
             return
         source = body.get("source", "") or ""
         project_symbols = build_project_symbols(body.get("project_context") or {})
-        struct = structural_score(project_symbols, source)
+        struct = structural_score(project_symbols, source, max_names=0)
         if not struct.get("ok"):
             # couldn't parse / tree-sitter unavailable → fail-open
             self._json_response(200, {"ok": False, "error": struct.get("error", "unavailable")})

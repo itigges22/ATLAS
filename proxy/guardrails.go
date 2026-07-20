@@ -525,18 +525,45 @@ func expectedOutputPaths(msg string) []string {
 }
 
 // missingExpectedOutputs returns the expected output files that do not
-// exist on disk. Checks the resolved workspace path with os.Stat so it
-// counts a file created by ANY means (write_file OR a run_command that
-// redirected/generated it), not just write_file.
+// exist on disk. Checks the resolved path with os.Stat so it counts a
+// file created by ANY means (write_file OR a run_command that
+// redirected/generated it), not just write_file. Stat probes are
+// contained to known roots — the workspace, plus the system temp dir
+// (host-verify tasks legitimately name /tmp outputs). A path outside
+// both is skipped: the gate only enforces deliverables it can check
+// without probing arbitrary prompt-derived paths.
 func missingExpectedOutputs(ctx *AgentContext, expected []string) []string {
 	var missing []string
+	roots := []string{filepath.Clean(ctx.WorkingDir), filepath.Clean(os.TempDir())}
 	for _, p := range expected {
 		resolved := resolveAgentPath(ctx, p)
-		if _, err := os.Stat(resolved); err != nil {
-			missing = append(missing, p)
+		for _, root := range roots {
+			rel, err := filepath.Rel(root, resolved)
+			if err != nil || !filepath.IsLocal(rel) {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+				missing = append(missing, p)
+			}
+			break // first containing root decides
 		}
 	}
 	return missing
+}
+
+// logPath escapes CR/LF in a request-derived value so a crafted name
+// can't forge additional log lines; logPaths is the slice form.
+func logPath(p string) string {
+	p = strings.ReplaceAll(p, "\n", `\n`)
+	return strings.ReplaceAll(p, "\r", `\r`)
+}
+
+func logPaths(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = logPath(p)
+	}
+	return out
 }
 
 func isActionIntentMessage(msg string) bool {

@@ -561,7 +561,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				outputGateUsed = true // fire once — see decl (#147 review #8)
 				rejection := expectedOutputMissingMessage(missing)
 				log.Printf("[agent] expected-output gate: bouncing done at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
-					turn, missing, gateBounces, maxGateBounces)
+					turn, logPaths(missing), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:       "tool",
@@ -688,7 +688,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				outputGateUsed = true // fire once — see decl (#147 review #8)
 				rejection := expectedOutputMissingMessage(missing)
 				log.Printf("[agent] expected-output gate: bouncing text-exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
-					turn, missing, gateBounces, maxGateBounces)
+					turn, logPaths(missing), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:       "tool",
@@ -1011,7 +1011,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						outputRescueUsed = true
 						repeatDetections = 0
 						pendingRepeatCorrective = expectedOutputMissingMessage(missing)
-						log.Printf("[agent] repeat loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, missing)
+						log.Printf("[agent] repeat loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 					} else {
 						if madeProductiveChange {
 							log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
@@ -1262,7 +1262,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						consecutiveErrors = 0
 						ctx.RecentFailurePaths = nil
 						ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: expectedOutputMissingMessage(missing)})
-						log.Printf("[agent] error loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, missing)
+						log.Printf("[agent] error loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 					} else {
 						log.Printf("[agent] breaking error loop: %d consecutive failures on the same path %q at turn %d (productive=%v)",
 							consecutiveErrors, ctx.RecentFailurePaths[0], turn, madeProductiveChange)

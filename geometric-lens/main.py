@@ -1210,7 +1210,7 @@ class LensScorePerStepRequest(BaseModel):
 def lens_score_text(request: LensScoreTextRequest):
     """Score a text string through the Geometric Lens. Returns raw and normalized energy."""
     try:
-        import geometric_lens.service as lens_service
+        from geometric_lens import service as lens_service
         from geometric_lens.embedding_extractor import extract_embedding
 
         if not lens_service.is_enabled():
@@ -1394,7 +1394,7 @@ def lens_retrain(request: LensRetrainRequest):
                     # fingerprint would (correctly) flag the new weights
                     # as drifted and wedge /ready.
                     try:
-                        import geometric_lens.service as _svc
+                        from geometric_lens import service as _svc
                         from geometric_lens.drift import write_fingerprint
                         write_fingerprint(
                             models_dir,

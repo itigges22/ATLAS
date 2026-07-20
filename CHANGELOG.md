@@ -4,6 +4,81 @@
 
 ## [Unreleased]
 
+### Structural gate on every write path (#147 close-out, 2026-07-20)
+- **Coverage completed**: the `write_file` paths that still skipped the gate
+  now run it — the V3 winner (including the baseline resurrection when the
+  pipeline returns nothing), the V3-error fallback (matters on `/generate`
+  timeouts when `/internal/structural_check` still answers), and the T0/T1
+  direct path (a sub-10-line `.py` calling an unimported name previously
+  landed ungated). The direct path gets the structural gate ONLY — a syntax
+  gate there would hard-block legitimate non-parsing T1 content (JSONC,
+  multi-doc/templated YAML, scaffold `.py` templates). `BypassV3` (demo
+  baseline pane) skips the direct-path gate so the baseline shows the raw
+  model; the edit-path and iteration fast-path gates run in all modes, as
+  before.
+- **False-block hardening** (two adversarial review rounds over this change):
+  the resolver's builtin set is now interpreter-derived instead of
+  hand-curated (the curated subset was missing `exit`, `TimeoutError`,
+  `ConnectionError`, `memoryview`, ... and would have vetoed valid new
+  files); `/internal/structural_check` returns the FULL unresolved list (the
+  gate diffs original-vs-edited lists, and the previous 10-name cap made
+  that comparison unsound in both directions); the gate's `project_context`
+  now also includes session-written `.py` files (truncated to 4 KB, like the
+  V3 builders) so it is never stricter than the in-pipeline veto it
+  backstops; a vetoed V3 winner falls back to the model's own gate-passing
+  baseline instead of rejecting (the offending call is V3-authored) — and
+  the fallback write lands with plain, non-V3 telemetry (no winning
+  score / phase / verification evidence and no "V3 complete" stream), so
+  the completion nudge never reports the unverified baseline as
+  V3-verified; write-path rejections use a `write_file`-flavored message
+  (the edit-flavored one steered models to `edit_file` on files that don't
+  exist); an unreadable existing original skips the gate instead of
+  counting every pre-existing call as introduced; the winner gate rechecks
+  cancellation after its HTTP round-trips so a mid-gate cancel lands
+  nothing on disk. The `write_file` iteration fast-path syntax gate now
+  applies the same healthy→broken rule as `edit_file` (it hard-blocked a
+  strict-invalid config — multi-doc YAML, JSONC — being iterated, and no
+  longer does).
+- **Gate correctness**: an original-side check failure (transient service
+  error; malformed Python is NOT this case — tree-sitter parses tolerantly)
+  is retried once and then fails open instead of counting every unresolved
+  name as newly introduced; a nil request context no longer panics; both V3
+  request builders exclude the target's own pre-edit snapshot from
+  `project_context` so the in-pipeline veto can't credit a def the write
+  deletes.
+- **Tests**: gate-level regression pair for the issue's scope item 3 with an
+  import-aware fake (delete-import blocked / import-elsewhere-in-file passes),
+  original-side fail-open with retry, nil-context, write-flavored rejection,
+  unreadable-original skip; endpoint-level coverage of
+  `/internal/structural_check`'s exact response contract including the
+  uncapped list; resolver tests for real builtins.
+- Known v1 limits (documented in the resolver, out of #147 scope): attribute
+  calls (`os.getcwd()` after deleting `import os`) and non-call name
+  references are not resolved; shell-redirection writes bypass all gates;
+  a tolerantly-parsed broken original can under-report its pre-existing
+  unresolved calls and block a one-error-at-a-time repair.
+
+### CodeQL: all 14 open alerts fixed (2026-07-20)
+- Expected-output and gate-rejection log lines escape CR/LF
+  (go/log-injection ×4); `missingExpectedOutputs` and the asset-lint `Stat`
+  probes are contained via `filepath.IsLocal` (go/path-injection ×4).
+  Containment keeps the enforcement signal: expected outputs are checked
+  against the workspace root AND the system temp dir (host-verify tasks
+  name `/tmp` outputs), and an asset reference escaping the workspace is
+  reported as dangling without being probed (it can't be served from the
+  workspace) rather than silently skipped.
+- The `asa → fit → doctor` import cycle (py/cyclic-import ×3) is broken by
+  extracting the shared `.env` resolution into `atlas/cli/env.py` (doctor
+  re-exports it; fit/lens/publish read it directly — monkeypatch
+  `atlas.cli.env` to steer those commands) and the GGUF header reader into
+  `atlas/cli/gguf.py`. The dotenv walk keeps its previous reach (7 hops
+  from `atlas/cli` = 8 from `atlas/cli/commands`), so it cannot newly pick
+  up an ancestor `.env` it never saw before.
+- geometric-lens style notes: `from geometric_lens import service` import
+  form, explicit `+` string concatenation in the drift probe texts, and the
+  legacy-shape warning latch became a mutated holder instead of a rebound
+  global.
+
 ### Code-review hardening of the #147 / TB2 series (2026-07-20)
 An xhigh review of the unpromoted series found 15 correctness defects, all fixed:
 the structural resolver now tracks locally-bound names (params, loop/with

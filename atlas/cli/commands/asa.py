@@ -127,10 +127,10 @@ def _gguf_block_count(path: str) -> int:
     n_layer. Keyed off general.architecture, so any GGUF works."""
     import struct
     try:
-        from atlas.cli.commands.fit import _read_gguf_kv
+        from atlas.cli.gguf import read_gguf_kv
         found = {}
         with open(path, "rb") as f:
-            for key, val in _read_gguf_kv(f):
+            for key, val in read_gguf_kv(f):
                 if key == "general.architecture" or key.endswith(".block_count"):
                     found[key] = val
                 arch = found.get("general.architecture")

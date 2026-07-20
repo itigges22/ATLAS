@@ -754,24 +754,56 @@ func writeFileTool() *ToolDef {
 			}
 			if iterating {
 				log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
+				// The file already exists this session; read its on-disk
+				// content once and run both gates against it with the
+				// healthy->broken rule edit_file uses — block only a NEWLY
+				// introduced defect, allow a repair-in-progress on
+				// already-broken content. Without the healthy->broken guard
+				// the syntax gate would hard-block content the strict checker
+				// rejects both before AND after (a multi-doc YAML or JSONC
+				// config being iterated), which is exactly why the T0/T1
+				// direct path below carries no syntax gate.
+				original, origOK := readOriginalForGate(path)
 				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
-					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, input.Content, synErr)}, nil
+					if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, original); wasHealthy {
+						return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, input.Content, synErr)}, nil
+					}
+					log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
 				}
 				// #147 review finding #1: the fast-path skips V3 (and its
 				// structural veto), so it needs the same structural gate
 				// edit_file/ast_edit have — otherwise a fast-path rewrite that
-				// introduces render_template lands as verified and 500s. The
-				// original is the current on-disk content (this file was
-				// already written this session, which is what makes it
-				// iterating); a new unresolved call vs that disk state blocks.
-				diskContent, _ := os.ReadFile(path)
-				if introduced := editIntroducesUnresolved(ctx, path, string(diskContent), input.Content); len(introduced) > 0 {
-					log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", introduced, input.Path)
-					return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+				// introduces render_template lands as verified and 500s. A new
+				// unresolved call vs the on-disk state blocks; an unreadable
+				// original skips the gate (fail open).
+				if origOK {
+					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+						log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
+					}
 				}
 			}
 			if ctx.BypassV3 {
 				log.Printf("[write_file] V3 bypassed (demo baseline pane) — direct write %s", input.Path)
+			}
+
+			// #147: the T0/T1 direct path skipped the structural gate — a
+			// sub-10-line .py calling an unimported name landed as verified,
+			// the same NameError class the edit path blocks. Structural gate
+			// ONLY (.py-scoped, healthy->broken, fail-open): a syntax gate
+			// here would hard-block legitimate non-parsing T1 content that
+			// this branch exists to handle (JSONC, multi-doc and templated
+			// YAML, scaffold .py templates). An unreadable existing original
+			// skips the gate (fail open) — treating it as empty would count
+			// every pre-existing call as introduced. BypassV3 stays ungated
+			// so the demo baseline pane shows the raw model.
+			if !iterating && !ctx.BypassV3 {
+				if original, ok := readOriginalForGate(path); ok {
+					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
+					}
+				}
 			}
 
 			// T1: Direct write — config, data, boilerplate
@@ -855,7 +887,7 @@ func mentionsFilename(text, base string) bool {
 // 1-token/char content uses at most half the window, leaving room for the
 // system prompt, tools, and reply; the force-trim retry (HARNESS-6) then
 // handles any residual pressure since no single message is huge. Clamped
-// to [16 KB, 200 KB]. Tunable via ATLAS_MAX_READ_BYTES.
+// to [2 KB, 200 KB]. Tunable via ATLAS_MAX_READ_BYTES.
 func readFileByteCap() int {
 	if v := envOr("ATLAS_MAX_READ_BYTES", ""); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
@@ -959,10 +991,18 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		WorkingDir:   ctx.WorkingDir,
 	}
 
-	// Add project context from files read during this session
+	// Add project context from files read during this session. The target
+	// file's own PRE-EDIT snapshot is excluded: its current symbols come
+	// from the baseline, and stale content would let the in-pipeline veto
+	// credit a def this write deletes (#147 review finding #2 — same rule
+	// as checkStructuralUnresolved).
+	cleanTarget := filepath.Clean(path)
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
 		for p, content := range filesRead {
+			if filepath.Clean(p) == cleanTarget {
+				continue
+			}
 			relPath, _ := filepath.Rel(ctx.WorkingDir, p)
 			if relPath == "" {
 				relPath = p
@@ -1174,6 +1214,16 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			return &ToolResult{Success: false,
 				Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
 		}
+		// #147: structural gate on the fallback too. It matters on the
+		// DeadlineExceeded case \u2014 /generate timed out but the service is
+		// up, so /internal/structural_check (own 5s timeout) still
+		// answers; when the service is genuinely down the gate fails open.
+		if original, ok := readOriginalForGate(path); ok {
+			if introduced := editIntroducesUnresolved(ctx, path, original, baselineContent); len(introduced) > 0 {
+				log.Printf("[write_file] fallback content introduces unresolved call(s) %v in %s \u2014 rejecting", logPaths(introduced), logPath(path))
+				return &ToolResult{Success: false, Error: structuralWriteRejection(path, introduced)}, nil
+			}
+		}
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
 		if errors.Is(err, context.DeadlineExceeded) {
 			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
@@ -1213,10 +1263,70 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		code = cleaned
 	}
 
-	// Stream V3 completion summary
+	// #147: authoritative structural gate on whatever is about to land —
+	// the in-pipeline veto only prunes phase-1 sandbox-passing candidates,
+	// so probe/repair returns, the energy fallback, and the baseline
+	// resurrection above can all deliver content that calls a name the
+	// file never binds. Same rule as the edit paths: original is the
+	// on-disk content (empty for a first write), only NEWLY unresolved
+	// calls block, and an unreadable existing original skips the gate.
+	// When the WINNER fails but the model's own baseline passes, write
+	// the baseline instead of rejecting: the offending call is V3-
+	// authored, and a rejection would blame the model for content it
+	// never wrote and cost a full pipeline retry per resend.
+	fellBack := false
+	if original, origOK := readOriginalForGate(path); origOK {
+		if introduced := editIntroducesUnresolved(ctx, path, original, code); len(introduced) > 0 {
+			if code != baselineContent {
+				if synErr, synOK := checkFallbackSyntax(ctx, path, baselineContent); !synOK {
+					return &ToolResult{Success: false,
+						Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
+				}
+				if intrBase := editIntroducesUnresolved(ctx, path, original, baselineContent); len(intrBase) == 0 {
+					log.Printf("[write_file] V3 winner introduces unresolved call(s) %v in %s — writing gate-passing baseline instead", logPaths(introduced), logPath(path))
+					if ctx.StreamFn != nil {
+						ctx.StreamFn("v3_progress", map[string]string{
+							"message": "  └─ V3 winner failed the structural gate — writing your version",
+						})
+					}
+					code = baselineContent
+					fellBack = true
+				} else {
+					introduced = intrBase // name what the MODEL can act on
+				}
+			}
+			if !fellBack {
+				log.Printf("[write_file] V3 result introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
+				return &ToolResult{Success: false, Error: structuralWriteRejection(path, introduced)}, nil
+			}
+		}
+	}
+
+	// The structural gate made HTTP calls; a user cancel during that window
+	// must not land content on disk (mirrors the RPG-regen recheck above).
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		log.Printf("[write_file] cancelled during structural gate — not writing %s", path)
+		return &ToolResult{
+			Success: false,
+			Error:   "write_file cancelled — no content was written",
+		}, nil
+	}
+
+	// A gate fallback wrote the model's own baseline, which was NOT
+	// V3-sandbox-verified (only syntax- and structural-checked). Report it
+	// as a plain direct write with no V3 metadata — the same honest
+	// reporting as the V3-unavailable fallback — so the vetoed winner's
+	// score/phase/evidence don't attach to unverified content and PC-044's
+	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
+	if fellBack {
+		return writeFileDirect(path, baselineContent)
+	}
+
+	// Stream V3 completion summary — after the gate, so a rejected write
+	// doesn't present as a successfully completed V3 stage.
 	if ctx.StreamFn != nil {
 		ctx.StreamFn("v3_progress", map[string]string{
-			"message": fmt.Sprintf("  \u2514\u2500\u2500\u2500\u2500 V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
+			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
 		})
 	}
 
@@ -1546,7 +1656,7 @@ func editFileTool() *ToolDef {
 			// write that NEWLY makes a name unresolved; a pre-existing one
 			// (mid-repair) is allowed, mirroring the syntax gate above.
 			if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
-				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", introduced, input.Path)
+				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
 				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
 			}
 
@@ -1847,7 +1957,7 @@ func astEditTool() *ToolDef {
 			// call unresolved (healthy->broken); a pre-existing one is left
 			// alone for repair-in-progress. Fail-open when the check can't run.
 			if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
-				log.Printf("[ast_edit] edit introduces unresolved call(s) %v in %s — rejecting", introduced, input.Path)
+				log.Printf("[ast_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
 				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
 			}
 
@@ -1908,9 +2018,15 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		Tier:         int(ctx.Tier),
 		WorkingDir:   ctx.WorkingDir,
 	}
+	// Exclude the target's own pre-edit snapshot from project context —
+	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
+	cleanTarget := filepath.Clean(path)
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
 		for p, c := range filesRead {
+			if filepath.Clean(p) == cleanTarget {
+				continue
+			}
 			rel, _ := filepath.Rel(ctx.WorkingDir, p)
 			if rel == "" {
 				rel = p
