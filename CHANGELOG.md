@@ -2,6 +2,11 @@
 
 > This changelog is maintained as a best-effort summary; for line-level detail and any gaps, see the commit history (`git log`) or the GitHub PR list.
 
+## [Unreleased]
+
+### VS Code extension
+- New `extensions/vscode/`: a zero-runtime-dependency VS Code client for the proxy HTTP API (#35) — chat sidebar with streamed turns, tool chips, and plan checklists; interactive permission flow (allow once / allow for session / deny, with pre-decision diff previews for `write_file` / `edit_file` / `ast_edit`); native diff review of applied changes; status bar from `/ready`; workspace-mismatch warning; service token in SecretStorage.
+
 ## [3.1.3] - 2026-07-06 — Maia
 
 ### Upgrade, rollback, and diagnostics

@@ -13,6 +13,7 @@ the documentation lives. For component internals see
 |---|---|---|
 | `proxy/` | Go agent loop: `/v1/agent`, grammar-constrained tool calls, gates, V3 routing, OpenAI passthrough | [proxy/README.md](../proxy/README.md) |
 | `tui/` | Bubbletea terminal client — the canonical chat front-end, consumes proxy SSE streams | — |
+| `extensions/` | IDE clients over the proxy HTTP API; `extensions/vscode/` is the VS Code extension (chat sidebar, permission flow, diff review) | [extensions/vscode/README.md](../extensions/vscode/README.md) |
 | `atlas/` | Python CLI package: `atlas` subcommand dispatch (init, doctor, tier, model, onboard, lens, asa, publish, bench, compose, tui, upgrade, rollback, diagnostics, artifact, config) and pipe-mode REPL | — |
 | `v3-service/` | Python HTTP wrapper for the V3 generation pipeline and the structural call-graph engine | — |
 | `geometric-lens/` | Scoring (C(x)/G(x)), RAG indexing and retrieval, confidence routing, pattern cache, ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
