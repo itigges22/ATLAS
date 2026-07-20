@@ -176,6 +176,40 @@
 		}
 	}
 
+	/** A denied call never gets a tool_result — consume its pending chip so
+	 * the next allowed call of the same tool pairs with its own chip. */
+	function denyToolChip(tool) {
+		const queue = pendingChips.get(tool);
+		const chip = queue && queue.length > 0 ? queue.shift() : null;
+		if (!chip) {
+			return;
+		}
+		chip.classList.remove('pending');
+		chip.classList.add('fail');
+		const status = chip.querySelector('.chip-status');
+		status.textContent = '✗';
+		const detail = document.createElement('div');
+		detail.className = 'chip-error';
+		detail.textContent = 'denied';
+		chip.appendChild(detail);
+	}
+
+	/** Turn-end backstop: calls rejected before execution (truncated args,
+	 * workspace-boundary gate) emit neither tool_result nor
+	 * permission_denied, so their chips would spin forever. */
+	function settleLeftoverChips() {
+		for (const queue of pendingChips.values()) {
+			for (const chip of queue) {
+				chip.classList.remove('pending');
+				const status = chip.querySelector('.chip-status');
+				if (status) {
+					status.textContent = '–';
+				}
+			}
+		}
+		pendingChips.clear();
+	}
+
 	function addPermissionCard(id, tool, detail, message, canDiff, note) {
 		const card = document.createElement('div');
 		card.className = 'permission-card';
@@ -297,6 +331,23 @@
 			case 'toolResult':
 				resolveToolChip(message.tool, message.success, message.elapsed, message.error, message.diffId);
 				break;
+			case 'toolDenied':
+				denyToolChip(message.tool);
+				break;
+			case 'doneSummary': {
+				// Final answer of a tool-shaped turn (done.summary) — assistant-
+				// style bubble with a "done" marker, distinct from streamed text.
+				closeAssistantBubble();
+				const bubble = appendBlock('msg assistant done-summary', '');
+				const marker = document.createElement('span');
+				marker.className = 'done-marker';
+				marker.textContent = 'done';
+				bubble.appendChild(marker);
+				const body = document.createElement('span');
+				body.textContent = message.text;
+				bubble.appendChild(body);
+				break;
+			}
 			case 'note':
 				closeAssistantBubble();
 				appendBlock('note', message.text);
@@ -323,10 +374,12 @@
 				break;
 			case 'turnDone':
 				closeAssistantBubble();
+				settleLeftoverChips();
 				setProgress('');
 				break;
 			case 'turnError':
 				closeAssistantBubble();
+				settleLeftoverChips();
 				setProgress('');
 				appendBlock('error-card', message.message);
 				break;

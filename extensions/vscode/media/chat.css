@@ -44,6 +44,18 @@ body {
 	background: var(--vscode-editor-inactiveSelectionBackground);
 }
 
+/* Final answer of a tool-shaped turn (done.summary). */
+.done-marker {
+	display: inline-block;
+	margin-right: 6px;
+	padding: 0 5px;
+	border-radius: 8px;
+	font-size: 0.8em;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	opacity: 0.85;
+}
+
 .chip {
 	align-self: flex-start;
 	font-size: 0.9em;

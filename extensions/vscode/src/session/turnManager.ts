@@ -70,6 +70,7 @@ export class TurnManager {
 		}
 
 		let assistantText = '';
+		let doneSummary = '';
 		try {
 			for await (const event of client.sendAgentTurn(request, abort.signal)) {
 				if (event.type === 'text') {
@@ -77,17 +78,27 @@ export class TurnManager {
 					if (typeof data?.content === 'string') {
 						assistantText += data.content;
 					}
+				} else if (event.type === 'done') {
+					// On a tool-shaped turn the model's final answer arrives ONLY
+					// here (proxy/agent.go) — no text event precedes it.
+					const data = event.data as { summary?: unknown };
+					if (typeof data?.summary === 'string') {
+						doneSummary = data.summary;
+					}
 				}
 				yield event;
 			}
 		} finally {
 			this.history.push({ role: 'user', content: message });
-			if (assistantText !== '') {
+			// Streamed text wins; the done summary stands in for it on
+			// tool-shaped turns so the next turn's history isn't silent.
+			const finalText = assistantText !== '' ? assistantText : doneSummary;
+			if (finalText !== '') {
 				// TUI convention: assistant history entries are re-wrapped in
 				// the {"type":"text","content":...} envelope (tui/chat.go).
 				this.history.push({
 					role: 'assistant',
-					content: JSON.stringify({ type: 'text', content: assistantText }),
+					content: JSON.stringify({ type: 'text', content: finalText }),
 				});
 			}
 			if (this.history.length > HISTORY_LIMIT) {

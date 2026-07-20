@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import { AtlasClient } from '../client/atlasClient';
 import type {
 	AgentLensInterventionEventData,
+	DoneEventData,
 	ErrorEventData,
 	LlmPromptProgressEventData,
 	PermissionDeniedEventData,
@@ -50,6 +51,8 @@ type OutboundMessage =
 	| { type: 'reasoningDelta'; text: string }
 	| { type: 'toolCall'; name: string; detail: string }
 	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string; diffId?: number }
+	| { type: 'toolDenied'; tool: string }
+	| { type: 'doneSummary'; text: string }
 	| { type: 'note'; text: string }
 	| { type: 'badge'; text: string }
 	| { type: 'permissionPrompt'; id: number; tool: string; detail: string; message: string; canDiff: boolean; note?: string }
@@ -318,6 +321,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// path renders NO row to avoid duplicating this event).
 				const payload = data as PermissionDeniedEventData;
 				this.permissions.handleDenied(payload.tool);
+				// A denied call gets NO tool_result (proxy/agent.go emits
+				// permission_denied then continues the loop), so every FIFO
+				// keyed on tool name must consume its entry here or the next
+				// allowed call of the same tool pairs with stale state.
+				this.snapshots.get(payload.tool)?.shift();
+				this.mismatch.recordDenied(payload.tool);
+				this.post({ type: 'toolDenied', tool: payload.tool });
 				this.post({ type: 'note', text: `Permission denied for '${payload.tool}'.` });
 				break;
 			}
@@ -390,9 +400,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				this.post({ type: 'turnError', message: payload.error || 'unknown stream error' });
 				break;
 			}
-			case 'done':
-				// Bubble finalization happens on generator completion.
+			case 'done': {
+				// On a tool-shaped turn the model's final answer arrives ONLY in
+				// this summary (proxy/agent.go) — render it like the TUI does
+				// (tui/model.go renders a chat row for non-empty summaries).
+				const payload = data as DoneEventData;
+				if (typeof payload?.summary === 'string' && payload.summary !== '') {
+					this.post({ type: 'doneSummary', text: payload.summary });
+				}
 				break;
+			}
 			// High-volume / TUI-internal streams the panel deliberately drops:
 			// llm_token duplicates the JSON tool-call content, v3 token streams
 			// churn the DOM for no user signal, agent_lens_score fires per write.

@@ -112,6 +112,43 @@ describe('TurnManager', () => {
 		expect(client.requests[1].history).toEqual([{ role: 'user', content: 'do it' }]);
 	});
 
+	it('uses done.summary as the assistant history entry on a tool-shaped turn', async () => {
+		// Tool-shaped turn: no text events, the answer arrives only in done.summary.
+		const client = fakeClient([
+			{ type: 'tool_call', data: { name: 'edit_file', args: {}, turn: 1 } },
+			{ type: 'tool_result', data: { tool: 'edit_file', success: true, data: {} } },
+			{ type: 'done', data: { summary: 'Fixed the off-by-one in pagination.' } },
+		]);
+		const turns = new TurnManager();
+
+		await drain(turns.runTurn(client, 'fix it', 'default'));
+		await drain(turns.runTurn(client, 'next', 'default'));
+
+		expect(client.requests[1].history).toEqual([
+			{ role: 'user', content: 'fix it' },
+			{
+				role: 'assistant',
+				content: JSON.stringify({ type: 'text', content: 'Fixed the off-by-one in pagination.' }),
+			},
+		]);
+	});
+
+	it('prefers streamed text over done.summary when both are present', async () => {
+		const client = fakeClient([
+			text('the streamed answer'),
+			{ type: 'done', data: { summary: 'a trailing summary' } },
+		]);
+		const turns = new TurnManager();
+
+		await drain(turns.runTurn(client, 'go', 'default'));
+		await drain(turns.runTurn(client, 'next', 'default'));
+
+		expect(client.requests[1].history!.at(-1)).toEqual({
+			role: 'assistant',
+			content: JSON.stringify({ type: 'text', content: 'the streamed answer' }),
+		});
+	});
+
 	it(`caps history at the most recent ${HISTORY_LIMIT} entries`, async () => {
 		const client = fakeClient([text('r'), done]);
 		const turns = new TurnManager();
