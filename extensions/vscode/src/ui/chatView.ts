@@ -226,13 +226,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 		const config = vscode.workspace.getConfiguration('atlas');
 		const mode = config.get<PermissionMode>('permissionMode', 'default');
+		// Host workspace root, like the TUI's host cwd (tui/model.go) — the
+		// proxy uses it for host-to-container path translation on Docker and
+		// resolves file ops against it on bare metal. "." only when there is
+		// no folder open (a chat-only session).
+		const workingDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.';
 		const client = await this.makeClient();
 
 		this.post({ type: 'userMessage', text: message });
 		this.postTransient({ type: 'busy', value: true });
 		this.statusBar?.setStreaming(true);
 		try {
-			for await (const event of this.turns.runTurn(client, message, mode)) {
+			for await (const event of this.turns.runTurn(client, message, mode, workingDir)) {
 				await this.dispatch(event.type, event.data, client);
 			}
 			this.post({ type: 'turnDone' });

@@ -27,6 +27,53 @@ export interface AtlasClientOptions {
 	token?: string;
 }
 
+/** Undici's dispatcher option as @types/node declares it on RequestInit —
+ * kept as a named alias so the cast below is self-documenting. */
+type FetchDispatcher = NonNullable<RequestInit['dispatcher']>;
+
+/** Undici publishes its global dispatcher under this well-known symbol
+ * (Node docs: getGlobalDispatcher). Read lazily — it only exists after
+ * the first fetch initializes undici. */
+const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+
+let agentStreamDispatcher: FetchDispatcher | undefined;
+let dispatcherProbed = false;
+
+/**
+ * Dispatcher for the /v1/agent stream with the body idle timeout disabled.
+ *
+ * While a permission_request is pending the proxy sends NOTHING on the
+ * agent stream (the heartbeat is only on /events), and the documented
+ * fail-safe is ATLAS_PERMISSION_TIMEOUT_SEC = 600s. Undici's default
+ * bodyTimeout (~300s idle) would kill the stream first. Zero-runtime-deps
+ * rules out importing undici, so build an Agent via the constructor of the
+ * global dispatcher instead; headersTimeout keeps its default (the TUI
+ * likewise uses a response-header timeout and no overall one).
+ *
+ * Returns undefined on runtimes without the undici global (fetch then
+ * behaves as before — degraded, not broken).
+ *
+ * Exported for tests only.
+ */
+export async function agentDispatcher(): Promise<FetchDispatcher | undefined> {
+	if (dispatcherProbed) {
+		return agentStreamDispatcher;
+	}
+	dispatcherProbed = true;
+	try {
+		// Force undici init without touching the network.
+		await fetch('data:,').catch(() => {});
+		const global = (globalThis as Record<symbol, unknown>)[GLOBAL_DISPATCHER];
+		if (global && typeof global === 'object') {
+			const Agent = global.constructor as new (options: object) => FetchDispatcher;
+			agentStreamDispatcher = new Agent({ bodyTimeout: 0 });
+		}
+	} catch {
+		agentStreamDispatcher = undefined;
+	}
+	return agentStreamDispatcher;
+}
+
 /** Error carrying the proxy's stable error envelope when one was parseable.
  * Callers switch on `code` (closed set), never on the human `detail`. */
 export class AtlasApiError extends Error {
@@ -87,12 +134,16 @@ export class AtlasClient {
 		request: AgentRequest,
 		signal?: AbortSignal,
 	): AsyncGenerator<ChatEvent, void, undefined> {
-		const response = await fetch(`${this.baseUrl}/v1/agent`, {
+		const init: RequestInit = {
 			method: 'POST',
 			headers: { ...this.headers(), Accept: 'text/event-stream' },
 			body: JSON.stringify(request),
 			signal,
-		});
+			// Long permission waits are silent on this stream; disable the
+			// body idle timeout so they outlive undici's ~300s default.
+			dispatcher: await agentDispatcher(),
+		};
+		const response = await fetch(`${this.baseUrl}/v1/agent`, init);
 		if (!response.ok) {
 			throw await toApiError(response);
 		}

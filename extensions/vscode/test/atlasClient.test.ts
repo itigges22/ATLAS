@@ -3,7 +3,7 @@
 // 404-as-success, error envelope, cancel/abort, /ready 200 and 503.
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { AtlasApiError, AtlasClient } from '../src/client/atlasClient';
+import { agentDispatcher, AtlasApiError, AtlasClient } from '../src/client/atlasClient';
 import type { AgentRequest, ChatEvent } from '../src/client/types';
 import { MockProxy } from './fixtures/mockProxy';
 
@@ -242,5 +242,35 @@ describe('AtlasClient base URL handling', () => {
 		const client = new AtlasClient({ baseUrl: `${mock.url}///` });
 		await client.getVersion();
 		expect(mock.requests[0].url).toBe('/version');
+	});
+});
+
+describe('agentDispatcher', () => {
+	it('builds a dispatcher with the body timeout disabled on Node', async () => {
+		// Node's fetch is undici-backed, so the global-dispatcher symbol must
+		// exist and yield a constructible Agent. On a non-undici runtime this
+		// would be undefined (graceful degradation) — but the extension host
+		// and CI are both Node, so assert the strong case.
+		const dispatcher = await agentDispatcher();
+		expect(dispatcher).toBeTypeOf('object');
+		// Memoized: the second call returns the same instance.
+		await expect(agentDispatcher()).resolves.toBe(dispatcher);
+	});
+
+	it('streams a full turn with the dispatcher attached', async () => {
+		// The happy-path turn above exercises sendAgentTurn, which now always
+		// passes the dispatcher — re-assert explicitly for clarity.
+		const mock = await startProxy({
+			agentEvents: [
+				{ type: 'text', data: { content: 'ok' } },
+				{ type: 'done', data: { summary: '' } },
+			],
+		});
+		const client = new AtlasClient({ baseUrl: mock.url });
+		const events: ChatEvent[] = [];
+		for await (const event of client.sendAgentTurn(BASE_REQUEST)) {
+			events.push(event);
+		}
+		expect(events.at(-1)?.type).toBe('done');
 	});
 });

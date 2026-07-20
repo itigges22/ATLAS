@@ -67,12 +67,14 @@ describe('TurnManager', () => {
 		const client = fakeClient([text('hi'), done]);
 		const turns = new TurnManager();
 
-		const events = await drain(turns.runTurn(client, 'hello', 'default'));
+		const events = await drain(turns.runTurn(client, 'hello', 'default', '/tmp/ws'));
 
 		expect(events).toHaveLength(2);
 		const request = client.requests[0];
 		expect(request.message).toBe('hello');
-		expect(request.working_dir).toBe('.');
+		// The caller's workspace root goes on the wire verbatim — the proxy
+		// uses it for host-to-container path translation (TUI sends its cwd).
+		expect(request.working_dir).toBe('/tmp/ws');
 		expect(request.mode).toBe('default');
 		expect(request.session_id).toMatch(/^[0-9a-f]{24}$/);
 		expect(request.history).toEqual([]);
@@ -83,8 +85,8 @@ describe('TurnManager', () => {
 	it('mints a fresh session_id per turn', async () => {
 		const client = fakeClient([done]);
 		const turns = new TurnManager();
-		await drain(turns.runTurn(client, 'one', 'default'));
-		await drain(turns.runTurn(client, 'two', 'default'));
+		await drain(turns.runTurn(client, 'one', 'default', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'two', 'default', '/tmp/ws'));
 		expect(client.requests[0].session_id).not.toBe(client.requests[1].session_id);
 	});
 
@@ -92,8 +94,8 @@ describe('TurnManager', () => {
 		const client = fakeClient([text('Hello '), text('world'), done]);
 		const turns = new TurnManager();
 
-		await drain(turns.runTurn(client, 'greet me', 'default'));
-		await drain(turns.runTurn(client, 'again', 'default'));
+		await drain(turns.runTurn(client, 'greet me', 'default', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'again', 'default', '/tmp/ws'));
 
 		expect(client.requests[1].history).toEqual([
 			{ role: 'user', content: 'greet me' },
@@ -105,8 +107,8 @@ describe('TurnManager', () => {
 		const client = fakeClient([{ type: 'error', data: { error: 'boom' } }]);
 		const turns = new TurnManager();
 
-		await drain(turns.runTurn(client, 'do it', 'default'));
-		await drain(turns.runTurn(client, 'retry', 'default'));
+		await drain(turns.runTurn(client, 'do it', 'default', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'retry', 'default', '/tmp/ws'));
 
 		// History sent on turn N covers turns < N only; turn 1 produced no text.
 		expect(client.requests[1].history).toEqual([{ role: 'user', content: 'do it' }]);
@@ -121,8 +123,8 @@ describe('TurnManager', () => {
 		]);
 		const turns = new TurnManager();
 
-		await drain(turns.runTurn(client, 'fix it', 'default'));
-		await drain(turns.runTurn(client, 'next', 'default'));
+		await drain(turns.runTurn(client, 'fix it', 'default', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'next', 'default', '/tmp/ws'));
 
 		expect(client.requests[1].history).toEqual([
 			{ role: 'user', content: 'fix it' },
@@ -140,8 +142,8 @@ describe('TurnManager', () => {
 		]);
 		const turns = new TurnManager();
 
-		await drain(turns.runTurn(client, 'go', 'default'));
-		await drain(turns.runTurn(client, 'next', 'default'));
+		await drain(turns.runTurn(client, 'go', 'default', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'next', 'default', '/tmp/ws'));
 
 		expect(client.requests[1].history!.at(-1)).toEqual({
 			role: 'assistant',
@@ -155,9 +157,9 @@ describe('TurnManager', () => {
 
 		// 25 turns × 2 entries (user + assistant) = 50 recorded > 40 cap.
 		for (let i = 0; i < 25; i++) {
-			await drain(turns.runTurn(client, `msg ${i}`, 'default'));
+			await drain(turns.runTurn(client, `msg ${i}`, 'default', '/tmp/ws'));
 		}
-		await drain(turns.runTurn(client, 'final', 'default'));
+		await drain(turns.runTurn(client, 'final', 'default', '/tmp/ws'));
 
 		const history = client.requests.at(-1)!.history!;
 		expect(history).toHaveLength(HISTORY_LIMIT);
@@ -177,8 +179,8 @@ describe('TurnManager', () => {
 		turns.sessionAllowedTools.add('edit_file');
 		turns.sessionAllowedTools.add('write_file');
 
-		await drain(turns.runTurn(client, 'one', 'default'));
-		await drain(turns.runTurn(client, 'two', 'default'));
+		await drain(turns.runTurn(client, 'one', 'default', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'two', 'default', '/tmp/ws'));
 
 		expect(client.requests[0].session_allowed_tools).toEqual(['edit_file', 'write_file']);
 		expect(client.requests[1].session_allowed_tools).toEqual(['edit_file', 'write_file']);
@@ -195,11 +197,11 @@ describe('TurnManager', () => {
 		};
 		const turns = new TurnManager();
 
-		const first = drain(turns.runTurn(client, 'slow', 'default'));
+		const first = drain(turns.runTurn(client, 'slow', 'default', '/tmp/ws'));
 		// Give the first generator a tick to start the stream.
 		await new Promise((resolve) => setImmediate(resolve));
 		expect(turns.busy).toBe(true);
-		await expect(drain(turns.runTurn(client, 'second', 'default'))).rejects.toThrow(/already in progress/);
+		await expect(drain(turns.runTurn(client, 'second', 'default', '/tmp/ws'))).rejects.toThrow(/already in progress/);
 
 		release();
 		await first;
@@ -218,7 +220,7 @@ describe('TurnManager', () => {
 		const consumed = (async () => {
 			const seen: ChatEvent[] = [];
 			try {
-				for await (const event of turns.runTurn(client, 'go', 'default')) {
+				for await (const event of turns.runTurn(client, 'go', 'default', '/tmp/ws')) {
 					seen.push(event);
 					turns.cancel();
 				}
@@ -245,7 +247,7 @@ describe('TurnManager', () => {
 		const turns = new TurnManager();
 
 		try {
-			for await (const _event of turns.runTurn(client, 'go', 'default')) {
+			for await (const _event of turns.runTurn(client, 'go', 'default', '/tmp/ws')) {
 				turns.cancel();
 			}
 		} catch {
@@ -257,7 +259,7 @@ describe('TurnManager', () => {
 			this.requests.push(request);
 			yield done;
 		};
-		await drain(turns.runTurn(client, 'next', 'default'));
+		await drain(turns.runTurn(client, 'next', 'default', '/tmp/ws'));
 		expect(client.requests[1].history).toEqual([
 			{ role: 'user', content: 'go' },
 			{ role: 'assistant', content: JSON.stringify({ type: 'text', content: 'half an ans' }) },
@@ -275,10 +277,10 @@ describe('TurnManager', () => {
 		const client = fakeClient([text('a'), done]);
 		const turns = new TurnManager();
 		turns.sessionAllowedTools.add('edit_file');
-		await drain(turns.runTurn(client, 'one', 'default'));
+		await drain(turns.runTurn(client, 'one', 'default', '/tmp/ws'));
 
 		turns.reset();
-		await drain(turns.runTurn(client, 'two', 'default'));
+		await drain(turns.runTurn(client, 'two', 'default', '/tmp/ws'));
 
 		const request = client.requests[1];
 		expect(request.history).toEqual([]);

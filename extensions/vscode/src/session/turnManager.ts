@@ -46,8 +46,17 @@ export class TurnManager {
 
 	/** Run one agent turn: mint a session id, send message + rolling history,
 	 * and yield the raw event stream. History is finalized in `finally` so it
-	 * updates on done, error, and cancel alike (partial assistant text kept). */
-	async *runTurn(client: TurnClient, message: string, mode: PermissionMode): AsyncGenerator<ChatEvent, void, undefined> {
+	 * updates on done, error, and cancel alike (partial assistant text kept).
+	 *
+	 * `workingDir` is the client's workspace root, like the TUI's host cwd
+	 * (tui/model.go): on Docker installs the proxy uses it for host-to-
+	 * container path translation; on bare metal file ops resolve against it. */
+	async *runTurn(
+		client: TurnClient,
+		message: string,
+		mode: PermissionMode,
+		workingDir: string,
+	): AsyncGenerator<ChatEvent, void, undefined> {
 		if (this.abort) {
 			throw new Error('a turn is already in progress');
 		}
@@ -58,9 +67,7 @@ export class TurnManager {
 
 		const request: AgentRequest = {
 			message,
-			// The proxy overrides working_dir with ATLAS_WORKSPACE_DIR; "." is
-			// the conventional client value (tui/chat.go).
-			working_dir: '.',
+			working_dir: workingDir,
 			mode,
 			session_id: this.activeSessionId,
 			history: [...this.history],
