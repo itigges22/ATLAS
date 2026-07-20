@@ -170,6 +170,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 	resolveWebviewView(view: vscode.WebviewView): void {
 		this.view = view;
+		// A post to a disposed webview throws and would kill the stream
+		// consumption loop mid-turn — drop the reference instead (post()
+		// already tolerates an absent view; the transcript replays later).
+		view.onDidDispose(() => {
+			if (this.view === view) {
+				this.view = undefined;
+			}
+		});
 		view.webview.options = {
 			enableScripts: true,
 			localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')],
@@ -231,12 +239,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// resolves file ops against it on bare metal. "." only when there is
 		// no folder open (a chat-only session).
 		const workingDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.';
-		const client = await this.makeClient();
 
 		this.post({ type: 'userMessage', text: message });
 		this.postTransient({ type: 'busy', value: true });
 		this.statusBar?.setStreaming(true);
 		try {
+			// Inside the try: a SecretStorage failure must surface as an error
+			// card, not make Send silently do nothing.
+			const client = await this.makeClient();
 			for await (const event of this.turns.runTurn(client, message, mode, workingDir)) {
 				await this.dispatch(event.type, event.data, client);
 			}
@@ -598,11 +608,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private resolveLocalPath(target: string): string | undefined {
+		// target comes from model-controlled tool args — never read outside
+		// the workspace folder. Absolute paths and `..` escapes are refused
+		// (the callers degrade gracefully: no diff / inconclusive verdict).
 		if (path.isAbsolute(target)) {
-			return target;
+			return undefined;
 		}
 		const folder = vscode.workspace.workspaceFolders?.[0];
-		return folder === undefined ? undefined : path.join(folder.uri.fsPath, target);
+		if (folder === undefined) {
+			return undefined;
+		}
+		const root = folder.uri.fsPath;
+		const absolute = path.resolve(root, target);
+		if (absolute !== root && !absolute.startsWith(root + path.sep)) {
+			return undefined;
+		}
+		return absolute;
 	}
 
 	/** Stat arm of the mismatch heuristic. Unresolvable (no folder) maps to

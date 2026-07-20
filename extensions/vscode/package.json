@@ -71,11 +71,13 @@
         "atlas.proxyUrl": {
           "type": "string",
           "default": "http://localhost:8090",
+          "scope": "machine-overridable",
           "description": "Base URL of the ATLAS proxy server."
         },
         "atlas.serviceToken": {
           "type": "string",
           "default": "",
+          "scope": "machine-overridable",
           "description": "Dev-override bearer token for the ATLAS proxy. Prefer the 'ATLAS: Set Service Token' command (stores in SecretStorage) — this field is plaintext in settings.json."
         },
         "atlas.permissionMode": {
@@ -86,6 +88,7 @@
             "yolo"
           ],
           "default": "default",
+          "scope": "machine-overridable",
           "enumDescriptions": [
             "Pause and prompt for every file-write tool call.",
             "Auto-allow edit/write tools, still prompt for other sensitive actions.",
