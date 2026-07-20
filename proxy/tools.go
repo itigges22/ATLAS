@@ -1466,6 +1466,16 @@ func editFileTool() *ToolDef {
 				log.Printf("[edit_file] %s still unparsable after edit (was already broken) — allowing repair-in-progress", input.Path)
 			}
 
+			// Structural gate (#147): a parse-clean edit can still introduce
+			// an unresolved direct call (render_template with only
+			// render_template_string imported) that 500s at runtime. Block a
+			// write that NEWLY makes a name unresolved; a pre-existing one
+			// (mid-repair) is allowed, mirroring the syntax gate above.
+			if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
+				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", introduced, input.Path)
+				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+			}
+
 			// Atomic write
 			tmpPath := path + ".atlas.tmp"
 			if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
@@ -1753,6 +1763,18 @@ func astEditTool() *ToolDef {
 					finalContent = improved
 					v3Out = meta
 				}
+			}
+
+			// Structural gate (#147): the AST splice guarantees the result
+			// parses, but not that its calls resolve — the observed failure
+			// was an ast_edit that introduced a render_template call with only
+			// render_template_string imported, which landed as verified and
+			// 500'd every request. Block a write that NEWLY makes a direct
+			// call unresolved (healthy->broken); a pre-existing one is left
+			// alone for repair-in-progress. Fail-open when the check can't run.
+			if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
+				log.Printf("[ast_edit] edit introduces unresolved call(s) %v in %s — rejecting", introduced, input.Path)
+				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
 			}
 
 			// Atomic write — same pattern as edit_file/write_file.

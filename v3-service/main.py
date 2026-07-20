@@ -1526,8 +1526,17 @@ class V3PipelineService:
         # generalizes to any language with explicit imports + named
         # functions (Go, Rust, JS/TS modules). Adding a language adds
         # implementation surface, not model-facing API surface.
-        if passing and files:
-            project_symbols = build_project_symbols(files)
+        if passing:
+            # #147: gate on `passing` alone, not `passing and files`. The
+            # edit path (improveContentWithV3) frequently sends no
+            # project_context, so `files` was empty and the whole veto was
+            # skipped — a NameError edit (render_template called with only
+            # render_template_string imported) sailed through and landed as
+            # verified. structural_score resolves against the candidate's
+            # OWN imports/defs/builtins, so it catches an unresolved direct
+            # call with empty project_symbols; project symbols only add
+            # lenient cross-file crediting.
+            project_symbols = build_project_symbols(files or {})
             kept = []
             for c in passing:
                 struct = structural_score(project_symbols, c.get("code", ""))
@@ -3191,6 +3200,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_outline()
         elif self.path == "/internal/pycheck":
             self._handle_pycheck()
+        elif self.path == "/internal/structural_check":
+            self._handle_structural_check()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -3704,6 +3715,45 @@ class V3Handler(BaseHTTPRequestHandler):
             if snippet:
                 msg += f" (offending line: {snippet})"
             self._json_response(200, {"ok": False, "error": msg, "line": e.lineno or 0})
+
+    def _handle_structural_check(self):
+        """POST /internal/structural_check — does every direct-identifier call
+        in this Python source resolve (local def, import, builtin, or a
+        supplied project symbol)?
+
+        Request:  {"path": "app.py", "source": "<file text>",
+                   "project_context": {"other.py": "..."}}   # optional
+        Response: {"ok": bool, "unresolved": ["render_template", ...],
+                   "wildcard_imports": bool}
+
+        Used by the proxy's edit_file/ast_edit path to refuse writing a .py
+        file whose edit introduces a NameError — a direct call to a name the
+        file neither imports, defines, nor gets from builtins (#147:
+        render_template called with only render_template_string imported
+        landed as verified because the in-pipeline veto was skipped when no
+        project_context was sent). Same resolver as the V3 structural veto;
+        no execution. `ok:false` means the check couldn't run (tree-sitter
+        missing / parse error) — the caller treats that as pass (fail-open).
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"ok": False, "error": f"invalid JSON body: {e}"})
+            return
+        source = body.get("source", "") or ""
+        project_symbols = build_project_symbols(body.get("project_context") or {})
+        struct = structural_score(project_symbols, source)
+        if not struct.get("ok"):
+            # couldn't parse / tree-sitter unavailable → fail-open
+            self._json_response(200, {"ok": False, "error": struct.get("error", "unavailable")})
+            return
+        self._json_response(200, {
+            "ok": True,
+            "unresolved": struct.get("unresolved_calls", []),
+            "n_unresolved": struct.get("n_unresolved", 0),
+            "wildcard_imports": struct.get("wildcard_imports", False),
+        })
 
     def _handle_outline(self):
         """POST /internal/outline — list a file's top-level functions/classes.

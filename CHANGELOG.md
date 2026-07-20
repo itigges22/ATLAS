@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Structural gate on the edit path (#147, 2026-07-19)
+- An `ast_edit`/`edit_file` that introduced an unresolved direct call — e.g.
+  `render_template` while the file imported only `render_template_string` —
+  parsed fine, passed V3 verification, and landed as verified; every request
+  then 500'd (NameError). The in-pipeline structural veto was gated off when the
+  edit sent no `project_context`, and `ast_edit` had no gate at all.
+- Fixes: the V3 structural veto now runs whenever candidates exist (not only
+  when project files are present), resolving against the candidate's own
+  imports; a new `/internal/structural_check` endpoint exposes the resolver;
+  and a proxy-side structural gate on both edit paths refuses a write that
+  *introduces* an unresolved direct call (healthy→broken, matching the syntax
+  gate — a pre-existing unresolved name mid-repair is allowed). Python-only,
+  fail-open when v3-service is unreachable.
+
 ### Agent-loop: commit the deliverable + read-size safety (TB2 rounds 5-6, 2026-07-19)
 - **Expected-output gate**: parse the prompt for the file the task asks the
   model to produce ("save your solution in X", "the file Z must exist") and
