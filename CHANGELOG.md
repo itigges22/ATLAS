@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### Agent-loop: commit the deliverable + read-size safety (TB2 rounds 5-6, 2026-07-19)
+- **Expected-output gate**: parse the prompt for the file the task asks the
+  model to produce ("save your solution in X", "the file Z must exist") and
+  check it against disk before allowing done/text exit — a partial artifact or
+  exploration-without-committing satisfies the generic action gate while the
+  named deliverable is still missing. Bounces naming the specific file.
+- **Loop-stop output-rescue**: the repeat/error breakers steer toward the named
+  deliverable once before hard-stopping (many hard tasks loop on run_command
+  and never reach the done/text exit where the gate lives).
+- **read_file byte cap**: a single read is capped at half the per-slot context
+  (worst-case ~1 token/char) so one huge read can't overflow the window — a
+  model that gunzipped a data file and read it whole hit 2.26M tokens and a hard
+  context-overflow 400 the force-trim retry couldn't fix. Unconditional (a line
+  limit doesn't bound bytes) and context-derived. Binary reads already return a
+  tool pointer instead of bytes.
+
 ### Agent-loop: stop killing iteration (Terminal-Bench 2.0 round 2, 2026-07-19)
 Re-analysis of a 20-task round found that nearly every "failure" was a stopping
 condition firing on *productive* work, not the model reaching its limit (turns
