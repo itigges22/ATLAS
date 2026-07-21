@@ -247,8 +247,38 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// reproduce old_str byte-for-byte). This counter survives interleaved
 	// reads so we can force the ast_edit steer after the second miss.
 	editMissByPath := map[string]int{}
-	repeatDetections := 0         // hard-stop after the 2nd repeated-identical-call detection
+	repeatDetections := 0 // hard-stop after the 2nd repeated-identical-call detection
+	// Runaway backstop for content-varying write loops (#147 review finding
+	// #14): the content-fingerprint repeat detector, by design, does not
+	// catch a model that rewrites one file with materially different content
+	// every time and never converges. This counts total writes per path and
+	// escalates to the repeat corrective only at a threshold far above any
+	// realistic iteration (polyglot's healthiest run was ~10), so it stops a
+	// true runaway without regressing legitimate iteration.
+	writeCountByPath := map[string]int{}
+	const runawayWriteThreshold = 20
 	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
+	// HARNESS-12: files the prompt explicitly asks the model to produce
+	// ("save your solution in X", "write the output to Y"). Checked
+	// against disk before `done` is allowed — a model can satisfy the
+	// generic action gate with a PARTIAL artifact (a .proto but not the
+	// server) or by exploring without ever committing the named output
+	// (TB2 2026-07-19: query-optimize ran 18 queries, never wrote sol.sql;
+	// kv-store wrote the proto, never the server; merge-diff looped
+	// without committing). Computed once from the prompt.
+	expectedOutputs := expectedOutputPaths(userMessage)
+	// One-shot: when a loop-stop is about to fire but the task's named
+	// deliverable was never written, steer toward it once instead of
+	// stopping (many hard tasks loop on run_command exploration and
+	// hard-stop without ever reaching the done/text exit where the
+	// expected-output gate lives — TB2 sqlite/merge-diff).
+	outputRescueUsed := false
+	// The expected-output done/text gate fires at most ONCE per session:
+	// a named deliverable might be PRODUCED AT RUNTIME by the model's code
+	// (not authored), so repeatedly bouncing a correct done would steer the
+	// model to fabricate a stand-in (#147 review finding #8). One reminder
+	// keeps the "did you forget the deliverable?" value without the loop.
+	outputGateUsed := false
 	// Used to soften the consecutiveErrors exit: post-write run_command failures
 	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
 	verifiedThisLoop := false // Set when a verification command (pytest, curl,
@@ -467,7 +497,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// require a structured verification field, just evidence in the
 			// loop that the agent ran something that exits non-zero on
 			// failure.
-			if userWantsVerification && !verifiedThisLoop && !ctx.YoloMode && gateBounces < maxGateBounces {
+			// Honesty gates run in EVERY permission mode. Yolo means "don't
+			// ask permission for destructive calls," not "skip completion
+			// checks" — the 2026-07-18 mini-bench ran unattended in yolo and
+			// shipped an ignored-red pytest done and a zero-write completion
+			// claim that these gates exist to bounce. Bounces stay capped by
+			// maxGateBounces, so unattended runs cannot loop on a gate.
+			if userWantsVerification && !verifiedThisLoop && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := verificationRejectionMessage(userMessage)
 				log.Printf("[agent] verification gate: bouncing done at turn %d (user prompt %q has fix-intent, no successful verification command this loop, bounce %d/%d)",
@@ -496,7 +532,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// - verification gate: fix prompt + no run_command verify → bounce
 			// - this gate: action prompt + no successful edit tool → bounce
 			// Both can fire on the same prompt (e.g. "rewrite X and verify").
-			if isActionIntentMessage(userMessage) && !madeProductiveChange && !ctx.YoloMode && gateBounces < maxGateBounces {
+			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
 				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop, bounce %d/%d)",
@@ -510,6 +546,28 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
 					ToolCallID: fmt.Sprintf("call_%d", turn),
 					ToolName:   "action_gate",
+				})
+				continue
+			}
+
+			// HARNESS-12: expected-output gate. Distinct from the action
+			// gate — a partial artifact or pure exploration can satisfy
+			// "made a productive change" while the task's NAMED deliverable
+			// is still missing. Check it against disk (any creation method
+			// counts); bounce naming the missing file so the model commits
+			// its answer instead of finishing empty-handed.
+			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputGateUsed && gateBounces < maxGateBounces {
+				gateBounces++
+				outputGateUsed = true // fire once — see decl (#147 review #8)
+				rejection := expectedOutputMissingMessage(missing)
+				log.Printf("[agent] expected-output gate: bouncing done at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
+					turn, logPaths(missing), gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "output_gate",
 				})
 				continue
 			}
@@ -537,7 +595,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// we catch "fixed 1 of N" cases regardless of how the
 			// model worded the summary. Structural check is the same.
 			shouldCheck := claimsUniversal(parsed.Summary) || promptIsMultiIssue(userMessage)
-			if !ctx.YoloMode && shouldCheck && gateBounces < maxGateBounces {
+			if shouldCheck && gateBounces < maxGateBounces {
 				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Summary); gap != "" {
 					gateBounces++
 					log.Printf("[agent] claim-check gate: bouncing done at turn %d (bounce %d/%d) — %q",
@@ -571,6 +629,94 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// If the model wants to narrate before tool work, it should
 			// emit tool_call directly with the narration in the args or
 			// roll narration into the done.summary at the end.
+			//
+			// EXCEPT: text is an UNGATED exit, and on action-intent
+			// prompts models abandon work through it — observed live
+			// (TB2 round 2): "I will now proceed to sanitize the
+			// credentials in ray_cluster.yaml" as a text response, then
+			// session over, zero edits. Every completion gate lives in
+			// the done branch, so narrating-then-quitting bypassed them
+			// all. Apply the done-without-action gate here too: same
+			// condition, same bounce shape (assistant + tool-rejection
+			// pair, so no bare trailing assistant message for prefill
+			// to trip on). Conversational input never matches
+			// isActionIntentMessage, so chat replies still exit here.
+			//
+			// Verification gate on the text exit too (#147 review finding
+			// #3): a fix/verify-intent prompt must not be abandoned via a
+			// `text` narration ("I fixed and verified it") without a
+			// verification command having run — the same bounce the done
+			// branch applies. Without this, narrate-then-quit reported an
+			// unverified, possibly still-red fix as complete.
+			if userWantsVerification && !verifiedThisLoop && gateBounces < maxGateBounces {
+				gateBounces++
+				rejection := verificationRejectionMessage(userMessage)
+				log.Printf("[agent] text-exit verification gate: bouncing text at turn %d (fix-intent, no verification this loop, bounce %d/%d)",
+					turn, gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "verification_gate",
+				})
+				continue
+			}
+			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
+				gateBounces++
+				rejection := actionWithoutProductiveChangeMessage(userMessage)
+				log.Printf("[agent] text-exit action gate: bouncing text at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop, bounce %d/%d)",
+					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:    "assistant",
+					Content: response,
+				})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "action_gate",
+				})
+				continue
+			}
+			// HARNESS-12 on the text-exit path too: a partial artifact
+			// satisfies the action gate above (madeProductiveChange), but
+			// the named deliverable may still be missing (TB2: kv-store
+			// wrote the proto, narrated, and quit without the server).
+			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputGateUsed && gateBounces < maxGateBounces {
+				gateBounces++
+				outputGateUsed = true // fire once — see decl (#147 review #8)
+				rejection := expectedOutputMissingMessage(missing)
+				log.Printf("[agent] expected-output gate: bouncing text-exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
+					turn, logPaths(missing), gateBounces, maxGateBounces)
+				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+				ctx.Messages = append(ctx.Messages, AgentMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+					ToolCallID: fmt.Sprintf("call_%d", turn),
+					ToolName:   "output_gate",
+				})
+				continue
+			}
+			// Completion-claim check on the text exit too (#147 review
+			// finding #3). The narration IS the completion claim here
+			// ("I fixed all the routes"), so scan parsed.Content — the
+			// same structural gap-check the done branch runs on the summary.
+			if (claimsUniversal(parsed.Content) || promptIsMultiIssue(userMessage)) && gateBounces < maxGateBounces {
+				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Content); gap != "" {
+					gateBounces++
+					log.Printf("[agent] text-exit claim-check: bouncing text at turn %d (bounce %d/%d) — %q",
+						turn, gateBounces, maxGateBounces, truncateStr(gap, 200))
+					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf(`{"success":false,"error":%q}`, gap),
+						ToolCallID: fmt.Sprintf("call_%d", turn),
+						ToolName:   "claim_check",
+					})
+					continue
+				}
+			}
 			ctx.Stream("text", map[string]string{"content": parsed.Content})
 			ctx.Stream("done", map[string]string{"summary": ""})
 			return nil
@@ -695,7 +841,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// stub app.py, realized it needed render-module
 						// wiring, and got blocked from fixing it.
 						sessionOwned := ctx.SessionWrites[wfInput.Path]
-						if existingLines > 5 && !looksCorruptedOnDisk(existingPath, string(existing)) && !sessionOwned {
+						corrupted := looksCorruptedOnDisk(existingPath, string(existing))
+						if existingLines > 5 && !corrupted && !sessionOwned {
 							// GH #39: when the existing file is .py or .html
 							// and the model is replacing the whole thing,
 							// ast_edit is the right tool — selector-based
@@ -728,7 +875,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							continue
 						}
 						if existingLines > 5 {
-							log.Printf("[agent] PC-201: allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
+							// Name the actual carveout — the corrupted-file
+							// message on a session-owned overwrite sent a
+							// loop diagnosis down the wrong path (2026-07-18).
+							if corrupted {
+								log.Printf("[agent] PC-201: allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
+							} else {
+								log.Printf("[agent] allowing write_file on session-owned %s (%d lines, self-iteration carveout)", wfInput.Path, existingLines)
+							}
 						}
 					}
 				}
@@ -805,7 +959,24 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// execution so the corrective lands in the same iteration
 			// as the lens corrective if both trigger.
 			pendingRepeatCorrective := ""
-			if msg, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating {
+			// Runaway backstop (#147 review #14): count writes per path and
+			// force the repeat path once a single file is rewritten far more
+			// than any real iteration would.
+			runawayWrite := false
+			if parsed.Name == "write_file" {
+				if wp := writeFilePath(parsed.Args); wp != "" {
+					writeCountByPath[wp]++
+					if writeCountByPath[wp] == runawayWriteThreshold {
+						runawayWrite = true
+						log.Printf("[agent] runaway write backstop: %q rewritten %d times — escalating", wp, writeCountByPath[wp])
+					}
+				}
+			}
+			if msg, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
+				if runawayWrite && msg == "" {
+					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/ast_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
+				}
+				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
 				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
 				ctx.Stream("agent_repeat_intervention", map[string]interface{}{
 					"turn":   turn,
@@ -815,23 +986,42 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				pendingRepeatCorrective = msg
 				ctx.RecentToolCalls = nil // reset so we don't re-fire
 				repeatDetections++
-				// The soft corrective is frequently ignored — a small model
-				// re-emits the identical failing call regardless (observed:
-				// the same `python -c "...)))"` typo run 4× after the actual
-				// edit had already landed). Hard-stop instead of nudging
-				// when EITHER the work is already done (productive change +
-				// the model is now spinning on verification) OR the same
-				// call has been detected as repeating twice (genuinely
-				// stuck, no progress to protect).
-				if madeProductiveChange {
-					log.Printf("[agent] repetition after a productive change — stopping (work landed; model looping on verification)")
-					ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
-					return nil
-				}
+				// Steer-before-kill ladder. On the FIRST detection, fall
+				// through: pendingRepeatCorrective is injected below and the
+				// loop continues, so the model gets an explicit nudge to
+				// change approach before we ever terminate. Only hard-stop
+				// on the SECOND detection — the model saw the steer and
+				// repeated anyway (genuinely stuck).
+				//
+				// The old code hard-stopped on the FIRST detection whenever
+				// madeProductiveChange was set ("work landed, model spinning
+				// on verification"). That mistook legitimate iteration for a
+				// loop: TB2 2026-07-19 showed models one nudge from finishing
+				// — regex-chess repeating a verify command that itself had a
+				// syntax error, polyglot mid-fix — killed with their solution
+				// on disk but unverified. A nudge first is the whole point:
+				// the broken-verify steer (below) can turn exactly these into
+				// completions.
 				if repeatDetections >= 2 {
-					log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
-					ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
-					return nil
+					// Output-rescue: if the task named a deliverable and it
+					// isn't on disk, the model is looping WITHOUT having
+					// committed its answer — steer toward the file once and
+					// keep going rather than hard-stopping empty-handed.
+					if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputRescueUsed {
+						outputRescueUsed = true
+						repeatDetections = 0
+						pendingRepeatCorrective = expectedOutputMissingMessage(missing)
+						log.Printf("[agent] repeat loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
+					} else {
+						if madeProductiveChange {
+							log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
+							ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
+						} else {
+							log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
+							ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
+						}
+						return nil
+					}
 				}
 			}
 
@@ -1064,6 +1254,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// a rolling window so if subsequent fails DO
 						// collapse onto one path, we still catch it.
 						consecutiveErrors = 0
+					} else if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputRescueUsed {
+						// Output-rescue (same as the repeat breaker): looping
+						// on failures without ever committing the named
+						// deliverable — steer toward it once before stopping.
+						outputRescueUsed = true
+						consecutiveErrors = 0
+						ctx.RecentFailurePaths = nil
+						ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: expectedOutputMissingMessage(missing)})
+						log.Printf("[agent] error loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 					} else {
 						log.Printf("[agent] breaking error loop: %d consecutive failures on the same path %q at turn %d (productive=%v)",
 							consecutiveErrors, ctx.RecentFailurePaths[0], turn, madeProductiveChange)
@@ -1167,7 +1366,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if scan == "\n" {
 					scan = result.Error
 				}
-				if steer := tracebackSteer(ctx, scan); steer != "" {
+				// The command text — needed by the broken-inline-script
+				// steer to tell a malformed verify one-liner (SyntaxError in
+				// the `-c` argument) apart from a real code bug.
+				var runArgs struct {
+					Command string `json:"command"`
+				}
+				_ = json.Unmarshal(parsed.Args, &runArgs)
+				if steer := brokenInlineScriptSteer(runArgs.Command, scan); steer != "" {
+					// Broken verification command: the SyntaxError is in the
+					// model's own inline `-c` test, not the solution. Steer it
+					// to move the test into a file instead of re-running the
+					// unparseable one-liner into the repetition breaker.
+					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+					log.Printf("[agent] broken-inline-script steer: verify command won't parse, directed to a test file")
+				} else if steer := tracebackSteer(ctx, scan); steer != "" {
 					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
 					log.Printf("[agent] traceback localization: steered to fix site")
 				} else if steer := missingModuleSteer(ctx, scan); steer != "" {
@@ -1177,12 +1390,48 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					// repetition breaker.
 					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
 					log.Printf("[agent] missing-module steer: directed to install dependency")
+				} else if steer := missingCommandSteer(scan); steer != "" {
+					// Missing-binary recovery: the sandbox image lacks the
+					// command and can't apt-install it (non-root, read-only).
+					// Say so and point at the escape hatches, instead of the
+					// model re-running into the breaker or giving up.
+					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+					log.Printf("[agent] missing-command steer: named the unavailable binary")
 				} else if steer := missingFileSteer(ctx, scan); steer != "" {
 					// Case-typo recovery: command referenced a file whose name
 					// differs only in case from a real workspace file. Name the
 					// correct file so the model stops re-running the wrong name.
 					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
 					log.Printf("[agent] missing-file localization: steered to correct case")
+				}
+			}
+
+			// Cross-file coherence signals after a successful mutation:
+			// the session file manifest (so later files reference earlier
+			// ones instead of re-creating them) and the asset-graph lint
+			// (orphaned templates/static files, dangling refs). Both are
+			// advisory [system note]s — never blockers.
+			if result.Success &&
+				(parsed.Name == "write_file" || parsed.Name == "edit_file" ||
+					parsed.Name == "ast_edit" || parsed.Name == "move_file" ||
+					parsed.Name == "delete_file") {
+				if note := sessionManifestNote(ctx); note != "" {
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:    "user",
+						Content: "[system note]: " + note,
+					})
+					log.Printf("[agent] session manifest announced (%d files)", len(ctx.SessionWrites))
+				}
+				if note := assetLintNote(ctx); note != "" {
+					ctx.Messages = append(ctx.Messages, AgentMessage{
+						Role:    "user",
+						Content: "[system note]: " + note,
+					})
+					ctx.Stream("asset_lint", map[string]interface{}{
+						"turn":   turn,
+						"detail": note,
+					})
+					log.Printf("[agent] asset lint: %s", truncateStr(note, 160))
 				}
 			}
 
@@ -1249,6 +1498,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 // callLLMConstrained calls the LLM with json_schema or grammar constraint.
 // Returns the raw response text and token count.
 //
+// isContextOverflow reports whether an LLM-call error is llama-server's
+// exceed_context_size_error 400 (prompt tokens > per-slot n_ctx). Matched
+// on the error body text — model-agnostic, keyed to llama.cpp's stable
+// error type string with the human message as fallback.
+func isContextOverflow(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "exceed_context_size") ||
+		strings.Contains(s, "exceeds the available context size")
+}
+
 // PC-043: When the model emits zero tokens (raw_len=0) — usually after a
 // tool result message under a constrained JSON grammar — we retry
 // inline once with a bumped temperature and a transient "continue"
@@ -1269,6 +1531,19 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 	messages, grammar := buildStepRequest(ctx)
 
 	content, tokens, err := callLLMOnceWithGrammar(ctx, messages, 0.3, grammar)
+	if isContextOverflow(err) {
+		// The real prompt exceeded the per-slot context despite the
+		// budget estimate (dense content under-counts at chars/4).
+		// Recover instead of hard-killing the session: force-trim the
+		// conversation to the minimum window (system + pins + 8-tail)
+		// and retry once. The trim persists on ctx.Messages — the
+		// conversation genuinely no longer fits, so shrinking it is
+		// the correct durable state, not just a retry hack.
+		log.Printf("[agent] context overflow from llama-server — force-trimming to minimum window and retrying")
+		ctx.Messages = trimMessages(ctx.Messages, 8)
+		messages, grammar = buildStepRequest(ctx)
+		content, tokens, err = callLLMOnceWithGrammar(ctx, messages, 0.3, grammar)
+	}
 	if err != nil {
 		return "", tokens, err
 	}
@@ -2169,7 +2444,13 @@ func conversationTokenBudget() int {
 	// model-agnostic re-encode cost (SWA models re-process the prompt each
 	// turn) is bounded by the slot itself; deploys that need it smaller can
 	// still set ATLAS_AGENT_HISTORY_BUDGET.
-	budget := perSlot - agentMaxTokens() - 2048
+	// Reserve: the model's reply (max_tokens), a fixed margin for
+	// system-prompt growth, and a proportional tokenizer-slack margin.
+	// estTokens is chars/4, which UNDER-counts dense content (code,
+	// JSON-escaped tool results run closer to 3 chars/token) — without
+	// the proportional slack the estimate can pass while the real
+	// prompt exceeds the slot (observed: 32844 real vs 32768 slot).
+	budget := perSlot - agentMaxTokens() - 2048 - perSlot/8
 	if budget < 4000 {
 		budget = 4000 // floor: tiny-context deploys still keep a usable window
 	}
@@ -2227,22 +2508,59 @@ func parallelSlots() int {
 	return slots
 }
 
+// pinnedIndices returns the two message indices trimMessages will keep
+// regardless of the tail window: the most recent user message (the task)
+// and the most recent file-content tool result (the file being edited).
+// Either is -1 when absent. Shared by trimMessages (which re-injects
+// them) and budgetedKeepLast (which must COUNT them — see below).
+func pinnedIndices(msgs []AgentMessage) (pinIdx, filePinIdx int) {
+	pinIdx, filePinIdx = -1, -1
+	for i := len(msgs) - 1; i >= 1; i-- {
+		if msgs[i].Role == "user" {
+			pinIdx = i
+			break
+		}
+	}
+	for i := len(msgs) - 1; i >= 1; i-- {
+		if msgs[i].Role == "tool" && (msgs[i].ToolName == "read_file" || msgs[i].ToolName == "outline_file") &&
+			!strings.Contains(msgs[i].Content, "You already read") { // skip dedup pointers — they carry no content
+			filePinIdx = i
+			break
+		}
+	}
+	return pinIdx, filePinIdx
+}
+
 // budgetedKeepLast returns how many trailing messages trimMessages should
-// keep so the kept set (system + pinned user + tail) fits the token budget.
-// Floored at 8 (never trim more aggressively than the old fixed rule); when
-// the whole conversation fits, returns len(msgs) so nothing is trimmed.
+// keep so the kept set (system + pinned user + pinned file + tail) fits the
+// token budget. Floored at 8 (never trim more aggressively than the old
+// fixed rule); when the whole conversation fits, returns len(msgs) so
+// nothing is trimmed.
+//
+// The pinned messages MUST be pre-counted here: trimMessages re-injects
+// them even when they fall outside the tail window, so a budget that
+// ignored them under-counted the real prompt by the size of the pinned
+// read_file — observed live as a llama-server 400 exceed_context_size
+// (32844 > 32768 per-slot) hard-killing a TB2 bench session.
 func budgetedKeepLast(msgs []AgentMessage) int {
 	if len(msgs) == 0 {
 		return 0
 	}
 	budget := conversationTokenBudget()
-	used := 0
-	if len(msgs) > 0 {
-		used += estTokens(msgs[0].Content) // system prompt is always kept
+	used := estTokens(msgs[0].Content) // system prompt is always kept
+	pinIdx, filePinIdx := pinnedIndices(msgs)
+	if pinIdx >= 1 {
+		used += estTokens(msgs[pinIdx].Content)
+	}
+	if filePinIdx >= 1 && filePinIdx != pinIdx {
+		used += estTokens(msgs[filePinIdx].Content)
 	}
 	keep := 0
 	for i := len(msgs) - 1; i >= 1; i-- {
-		t := estTokens(msgs[i].Content)
+		t := 0
+		if i != pinIdx && i != filePinIdx { // already counted above
+			t = estTokens(msgs[i].Content)
+		}
 		if used+t > budget && keep >= 8 {
 			break
 		}
@@ -2269,31 +2587,19 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 		return msgs
 	}
 
-	pinIdx := -1
-	for i := len(msgs) - 1; i >= 1; i-- {
-		if msgs[i].Role == "user" {
-			pinIdx = i
-			break
-		}
-	}
-
-	// Pin the most-recent file-content tool result (read_file / outline_file)
-	// so the file the model is working on never gets trimmed out from under it.
-	// Without this, a long agent loop drops the file content, the model edits
-	// BLIND, and a weak model then hallucinates symbols and old_str that
-	// aren't in the file (observed live: ast_edit function:count_items and
-	// edit_file old_str="return len(items)" against a file containing neither,
-	// with the model literally reasoning "I don't see the file content"). The
-	// exploration-budget breaker compounds it by telling the model it "has
-	// full project context" when the content was already trimmed.
-	filePinIdx := -1
-	for i := len(msgs) - 1; i >= 1; i-- {
-		if msgs[i].Role == "tool" && (msgs[i].ToolName == "read_file" || msgs[i].ToolName == "outline_file") &&
-			!strings.Contains(msgs[i].Content, "You already read") { // skip dedup pointers — they carry no content
-			filePinIdx = i
-			break
-		}
-	}
+	// Pins (shared scan with budgetedKeepLast, which counts them): the
+	// most-recent user message — the task — and the most-recent
+	// file-content tool result (read_file / outline_file), so the file the
+	// model is working on never gets trimmed out from under it. Without
+	// the file pin, a long agent loop drops the file content, the model
+	// edits BLIND, and a weak model then hallucinates symbols and old_str
+	// that aren't in the file (observed live: ast_edit
+	// function:count_items and edit_file old_str="return len(items)"
+	// against a file containing neither, with the model literally
+	// reasoning "I don't see the file content"). The exploration-budget
+	// breaker compounds it by telling the model it "has full project
+	// context" when the content was already trimmed.
+	pinIdx, filePinIdx := pinnedIndices(msgs)
 
 	tailStart := len(msgs) - keepLast
 	out := make([]AgentMessage, 0, keepLast+3)

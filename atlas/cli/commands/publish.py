@@ -162,10 +162,10 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     model_file = model_label + ".gguf"
     size_gb = 0.0
     try:
-        from atlas.cli.commands import doctor
-        model_file = doctor.MODEL_FILE
-        base = (doctor.MODEL_DIR if os.path.isabs(doctor.MODEL_DIR)
-                else os.path.join(atlas_root, doctor.MODEL_DIR))
+        from atlas.cli import env as cli_env
+        model_file = cli_env.MODEL_FILE
+        base = (cli_env.MODEL_DIR if os.path.isabs(cli_env.MODEL_DIR)
+                else os.path.join(atlas_root, cli_env.MODEL_DIR))
         size_gb = round(os.path.getsize(
             os.path.join(base, model_file)) / (1024 ** 3), 1)
     except Exception:

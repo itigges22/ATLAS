@@ -394,8 +394,8 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `read_file` | Read a file and return its contents with line numbers |
 | `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Cheaper than `read_file` for orienting in a large file. |
 | `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
-| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. The wrong tool for >10 lines of change — switch to `ast_edit`. |
-| `ast_edit` | Surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. |
+| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `ast_edit`. |
+| `ast_edit` | Surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. Same structural gate as `edit_file` on the composed post-edit `.py` file. |
 | `delete_file` | Remove a file (or an empty directory) from the workspace |
 | `move_file` | Rename/move a file within the workspace (`source` → `destination`) |
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
@@ -714,6 +714,28 @@ Parse-check Python source without executing it (pure `compile()`). Used by the p
 ```json
 {"ok": false, "error": "SyntaxError at line 3: invalid syntax (offending line: def foo(:)", "line": 3}
 ```
+
+### POST /internal/structural_check
+
+Resolve every direct-identifier call in a Python source against its local defs, imports, bound names, builtins, and (optionally) supplied project symbols — without executing it. Used by the proxy's structural gate (#147) on the `.py` write paths (`edit_file`, `ast_edit`, and the `write_file` branches; under BypassV3 only the non-iterating T0/T1 direct `write_file` is excepted) to refuse content that introduces a `NameError`: a call to a name the file never binds parses fine but 500s at request time.
+
+**Request:**
+```json
+{
+  "path": "app.py",
+  "source": "<composed post-edit file text>",
+  "project_context": {"other.py": "..."}
+}
+```
+
+`project_context` is optional additive leniency: top-level defs from those files are credited so a cross-file symbol is not flagged. The caller excludes the edited file's own pre-edit body (its current symbols come from `source`).
+
+**Response:**
+```json
+{"ok": true, "unresolved": ["render_template"], "n_unresolved": 1, "wildcard_imports": false}
+```
+
+`ok: false` means the check could not run (tree-sitter unavailable, non-UTF-8 source) and the caller fails open. Malformed Python does not produce `ok: false` — tree-sitter parses tolerantly. `unresolved` is the complete list (no cap): the caller diffs original-vs-edited lists, and a truncated list would make that comparison unsound. `wildcard_imports: true` reports that the source contains `from x import *`; unresolved reporting is suppressed in that case (the wildcard may supply any name), so it always accompanies an empty `unresolved`.
 
 ### POST /internal/call_graph
 

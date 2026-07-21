@@ -21,6 +21,13 @@ spec:
     metadata:
       labels: {app: atlas-proxy}
     spec:
+      # Run as the hostPath owner's uid/gid (same rationale as compose's
+      # ATLAS_PROXY_UID): the proxy writes /workspace via the hostPath
+      # mount, and the image's baked-in non-root user (uid 1001) can't
+      # write operator-owned host dirs.
+      securityContext:
+        runAsUser: ${ATLAS_PROXY_UID}
+        runAsGroup: ${ATLAS_PROXY_GID}
       containers:
       - name: proxy
         image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-proxy:${ATLAS_IMAGE_TAG}

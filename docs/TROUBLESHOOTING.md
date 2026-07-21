@@ -66,6 +66,8 @@ Exact error strings and symptoms, mapped to their entries.
 | `RPC failed; curl 56` / `early EOF` / `fetch-pack: invalid index-pack output` | [llama.cpp Clone Times Out](#llamacpp-clone-times-out) |
 | `error loading model: unknown (model) architecture '…'` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
 | `error: patch failed:` / `patch does not apply` | [Rebuilding llama.cpp](#rebuilding-llamacpp-new-model-architecture-or-patch-drift) |
+| `open /workspace/....atlas.tmp: permission denied` on every write | [Proxy Can't Write the Workspace](#proxy-cant-write-the-workspace-atlastmp-permission-denied) |
+| Agent insists a file "does not exist" that's right there; `read_file` and `run_command` disagree | [Agent Says Files Don't Exist That Are Right There](#agent-says-files-dont-exist-that-are-right-there-workspace-mount-split) |
 | Permission denied on mounted volumes / model files (Fedora/RHEL) | [SELinux Blocking Container Access](#selinux-blocking-container-access-fedorarhel) |
 | `"sandbox": false` in proxy health (manual container setup) | [Sandbox Unreachable](#sandbox-unreachable) |
 | `"sandbox": false` in proxy health (Compose stack) | [Sandbox Unreachable (health check)](#sandbox-unreachable-health-check) |
@@ -94,6 +96,7 @@ Exact error strings and symptoms, mapped to their entries.
 | `You have full project context in the system prompt. Do not read more files.` | [Exploration Budget Warning](#exploration-budget-warning) |
 | `"lens": false` / "Lens unavailable — verification disabled" | [Lens Not Loaded / Unavailable](#lens-not-loaded--unavailable) |
 | Every candidate scores `cx_energy: 0.0`, `gx_score: 0.5` | [All Scores Near 0.5](#all-scores-near-05) |
+| Scores plausible but off-scale; `fingerprint_ok: false` / `drifted: true` | [Embedding-convention drift](#scores-look-plausible-but-are-wildly-off-scale-embedding-convention-drift) |
 | "embedding extraction failed" in lens logs | [Embedding Extraction Fails](#embedding-extraction-fails) |
 | 503 `models directory is mounted read-only` on retrain | [`/internal/lens/retrain` Returns 503](#internallensretrain-returns-503-models-directory-is-mounted-read-only) |
 | Sandbox returns `"error_type": "Timeout"` | [Code Execution Timeout](#code-execution-timeout) |
@@ -382,6 +385,43 @@ The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfil
 Prefer regenerating the patch over pinning to an older SHA — pinning backward means missing upstream fixes.
 
 After the rebuild loads the model, the Geometric Lens still needs retraining for the new model — see [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
+
+### Proxy Can't Write the Workspace (`.atlas.tmp: permission denied`)
+
+**Symptom:** Every `write_file`/`edit_file` fails with `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` (the agent then wanders looking for "a writable subdirectory"). Lens training samples also stop banking (`/data/lens_training` writes fail in proxy logs).
+
+**Cause:** The atlas-proxy image runs as a baked-in non-root user (uid 1001, `atlas`), but the host directories bind-mounted at `/workspace` (`ATLAS_PROJECT_DIR`) and `/data/lens_training` are owned by the operator's uid. Reads work (mode 755); every write is denied. Installs whose `.env` predates `ATLAS_PROXY_UID` hit this after pulling a hardened proxy image.
+
+**Fix:** run the proxy as the invoking user, the same way the sandbox already does:
+
+```bash
+# add your ids to .env (atlas init --reconfigure also writes these now)
+echo "ATLAS_PROXY_UID=$(id -u)" >> .env
+echo "ATLAS_PROXY_GID=$(id -g)" >> .env
+docker compose up -d --no-deps --force-recreate atlas-proxy
+```
+
+Verify: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` succeeds (then remove the file). K3s deployments render the same ids into the proxy Pod's `securityContext` via `scripts/generate-manifests.sh`.
+
+### Agent Says Files Don't Exist That Are Right There (workspace mount split)
+
+**Symptom:** Agent sessions insist a file "does not exist" even though it's plainly in the project directory — `read_file` fails while `run_command` (`ls`, `cat`) sees the file fine, or vice versa. Sessions give up early ("It seems the file X does not exist"), writes never land in the project, and every `/health` endpoint is green.
+
+**Cause:** The proxy and the sandbox bind-mount **different host directories** as `/workspace`. File tools (`read_file`/`write_file`/`edit_file`) are served by the proxy against *its* mount; `run_command` executes in the *sandbox's* mount. Compose resolves the mount source from `ATLAS_PROJECT_DIR` (default: the compose working directory) **per container at creation time** — so recreating one container from a different directory, or with a different `.env`, silently splits them. Nothing fails at startup; the agent just operates split-brained.
+
+**Diagnose:** `atlas doctor` — the `workspace_mounts` check compares both mounts and fails with the two host paths when they differ. By hand:
+
+```bash
+docker inspect atlas-atlas-proxy-1 --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+docker inspect atlas-sandbox-1     --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+```
+
+**Fix:** pin `ATLAS_PROJECT_DIR` in `.env` to your project directory, then recreate both containers together:
+
+```bash
+echo "ATLAS_PROJECT_DIR=/path/to/your/project" >> .env
+docker compose up -d --force-recreate atlas-proxy sandbox
+```
 
 ### SELinux Blocking Container Access (Fedora/RHEL)
 
@@ -802,6 +842,28 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 ```
 
 If `enabled: false` or `cx_energy: 0.0`, the models aren't loaded. This is expected for a fresh install — model weights are not included in the repository and must be trained or downloaded from [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+
+### Scores Look Plausible but Are Wildly Off-Scale (embedding-convention drift)
+
+**Symptom:** Everything reports healthy — pods `Ready`, `/health` 200, `gx-score` returns in-range-looking `gx_score` with a `likely_correct` verdict — but `cx_energy` is orders of magnitude off its calibrated range (e.g. ~600 when the model's pass/fail means are ~20-30). A gated benchmark launched in this state produces a complete, plausible, entirely invalid result.
+
+**Cause:** The embed server is serving a different `/embedding` convention than the one the Geometric Lens `C(x)`/`G(x)` artifacts were trained on — typically per-token instead of pooled, or unnormalized instead of L2-normalized (‖v‖≈60 instead of ~1). Same dimensionality, wrong distribution; the cost-field MLP extrapolates to a huge energy and `cx_normalized` saturates. This happens after rebuilding the serving stack without `--pooling mean` (llama-server has no `--embd-normalize` server flag; the lens requests L2 normalization per-call via `embd_normalize` in the `/embedding` body).
+
+**Verify:** the lens re-scores a stored fingerprint at boot and on every reload/retrain. Check `/ready` and `/health`:
+```bash
+curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
+```
+`fingerprint_ok: false` with a `fingerprint_error` naming expected-vs-observed energy is the drift signal — `/ready` returns 503 and scored responses carry `"drifted": true` with all `calibrated` flags forced false, so nothing downstream can mistake them for trustworthy.
+
+**Fix:**
+1. Confirm the embed server's convention. A pooled+normalized server returns a flat vector with ‖v‖≈1:
+   ```bash
+   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+   ```
+   `shape per_token` or `norm` far from 1.0 means the server is misconfigured.
+2. Set `ATLAS_EMBED_POOLING=mean` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags.
+3. After the server serves the correct convention, the boot self-test's fingerprint check passes and `/ready` returns 200. If the artifacts predate the fingerprint, a retrain (`atlas lens retrain`) writes one and stamps the `embedding_contract` into `model_identity.json`.
 
 ### Embedding Extraction Fails
 

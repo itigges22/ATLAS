@@ -162,11 +162,29 @@ if [ -f "$ATLAS_CONTROL_VECTOR" ]; then
   fi
 fi
 
+# Embedding convention for the Geometric Lens. The C(x)/G(x) artifacts
+# are trained on a specific /embedding convention; serving a different
+# one shifts every energy while all health checks stay green (the
+# 2026-07-15 bench incident: a rebuilt server defaulted to per-token
+# unnormalized output, C(x) served ~600 against a calibrated ~20-30).
+# Pin pooling here rather than inheriting llama.cpp's default so the
+# shipped calibrated artifacts reproduce; L2 normalization is requested
+# per-call by the lens (`embd_normalize` in the /embedding body —
+# llama-server has no `--embd-normalize` server flag). The lens enforces
+# the same convention at load time via model_identity.json's
+# embedding_contract and refuses to serve on mismatch. `--pooling` is
+# server-global in llama.cpp, so the last-layer per-token PRM path
+# (extract_per_token, score-per-step with no explicit layer) needs
+# pooling=none instead; the layer-tapped per-step path uses the PC-202
+# hidden-states extension and is unaffected by pooling.
+ATLAS_EMBED_POOLING="${ATLAS_EMBED_POOLING:-mean}"
+
 echo "=== ATLAS llama-server — $MODEL_BASENAME ==="
 echo "  Backend: $ATLAS_BACKEND${ATLAS_GPU_INDEX:+ (GPU index=$ATLAS_GPU_INDEX)}"
 echo "  Model: $MODEL_FILE"
 echo "  Context: $CTX_LENGTH | KV: K=$KV_CACHE_K V=$KV_CACHE_V | Parallel: $PARALLEL | Batch: $BATCH_SIZE/$UBATCH_SIZE"
 echo "  Embeddings: ENABLED (model self-embeddings for the Geometric Lens)"
+echo "  Embed convention: pooling=$ATLAS_EMBED_POOLING (normalization is per-request via embd_normalize)"
 echo "  Slot save path: $SLOT_SAVE_PATH"
 echo "  ASA steering: $CVECTOR_STATUS"
 echo "  GPU fit: --fit off — the model, KV cache, and compute buffers must"
@@ -190,6 +208,7 @@ if [ -s "$TOKEN_FILE" ]; then
   echo "Internal auth: enabled (api-key-file)"
 fi
 
+
 exec /usr/local/bin/llama-server \
   -m "$MODEL_FILE" \
   -c "$CTX_LENGTH" \
@@ -207,6 +226,7 @@ exec /usr/local/bin/llama-server \
   --slot-save-path "$SLOT_SAVE_PATH" \
   --ctx-checkpoints 0 \
   --embeddings \
+  --pooling "$ATLAS_EMBED_POOLING" \
   --jinja \
   "${CVECTOR_FLAGS[@]}" \
   "${API_KEY_FLAGS[@]}"

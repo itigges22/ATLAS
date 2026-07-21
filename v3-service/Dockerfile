@@ -1,5 +1,5 @@
 # python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+FROM docker.io/python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
 WORKDIR /app
 
 # Install system deps
@@ -8,11 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 # Install Python deps before copying source so code edits do not invalidate
 # the expensive Torch/tree-sitter layers during local image rebuilds.
 # Versions are pinned in requirements.txt for reproducible builds. Torch
-# comes from the CPU-only index first so pip cannot pick a CUDA/NCCL wheel
-# on linux/arm64; the remaining pinned deps (tree-sitter grammars) resolve
-# from PyPI.
+# comes from the CPU-only index first so pip cannot pick a CUDA/NCCL wheel;
+# the remaining pinned deps (tree-sitter grammars) resolve from PyPI. The
+# version here MUST match requirements.txt's torch pin (contract-tested):
+# a mismatch makes the second pip "upgrade" torch from PyPI, silently
+# dragging the ~8 GB nvidia/cu* dependency stack into a CPU-only image.
 COPY v3-service/requirements.txt /tmp/v3-requirements.txt
-RUN pip install --no-cache-dir torch==2.12.1 \
+RUN pip install --no-cache-dir torch==2.13.0 \
         --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r /tmp/v3-requirements.txt
 
@@ -24,6 +26,10 @@ COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
 # Pure stdlib + the tree-sitter grammars installed above; no extra deps.
 COPY v3-service/graph/ /app/graph/
+# V3.2 RPG-style planning (issue #120): wavelet substrate + RPG construction.
+# Pure stdlib — no extra pip installs needed.
+COPY v3-service/wavelet/ /app/wavelet/
+COPY v3-service/rpg.py /app/rpg.py
 
 # Non-root application account created inside this image. The V3 service
 # writes nothing to the container fs at runtime (telemetry disabled; it

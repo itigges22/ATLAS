@@ -1072,7 +1072,8 @@ class V3PipelineService:
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
             file_path: str = "", build_command: str = "",
-            working_dir: str = "/workspace") -> Dict[str, Any]:
+            working_dir: str = "/workspace",
+            constraints: List[str] = None) -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -1086,10 +1087,15 @@ class V3PipelineService:
             build_command: Optional project build command to run against an
                 ephemeral candidate overlay after syntax/self-tests pass.
             working_dir: Container workspace root used by the sandbox overlay.
+            constraints: raw constraint strings from the request. When the V3.2
+                RPG planner is active (issue #120) these carry the node's planned
+                signatures, used by the RPG signature veto below. Backward
+                compatible — defaults to none, leaving existing callers unchanged.
         """
         start = time.time()
         events = []
         files = files or {}
+        constraints = constraints or []
 
         # PC-048: derive language from the target file's extension. Used
         # only by smoke_compile_check below to pick the right syntax
@@ -1520,8 +1526,17 @@ class V3PipelineService:
         # generalizes to any language with explicit imports + named
         # functions (Go, Rust, JS/TS modules). Adding a language adds
         # implementation surface, not model-facing API surface.
-        if passing and files:
-            project_symbols = build_project_symbols(files)
+        if passing:
+            # #147: gate on `passing` alone, not `passing and files`. The
+            # edit path (improveContentWithV3) frequently sends no
+            # project_context, so `files` was empty and the whole veto was
+            # skipped — a NameError edit (render_template called with only
+            # render_template_string imported) sailed through and landed as
+            # verified. structural_score resolves against the candidate's
+            # OWN imports/defs/builtins, so it catches an unresolved direct
+            # call with empty project_symbols; project symbols only add
+            # lenient cross-file crediting.
+            project_symbols = build_project_symbols(files or {})
             kept = []
             for c in passing:
                 struct = structural_score(project_symbols, c.get("code", ""))
@@ -1588,6 +1603,59 @@ class V3PipelineService:
                     cg_kept.append(c)
                 if cg_kept:  # only prune when at least one candidate survives
                     passing = cg_kept
+
+        # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
+        # When the RPG planner is active, the request constraints carry the
+        # node's planned signatures. Extend the #39-pt-1 veto from "imports
+        # survive" to "the planned interface exists": reject sandbox-passing
+        # candidates that don't define the planned functions. Additive and
+        # conservative — only fires when the flag is on AND constraints carry
+        # planned signatures, and never empties the candidate set (so it can't
+        # do worse than the flat path; a fully-failing set falls through intact
+        # to phase-3 repair).
+        if passing and constraints:
+            try:
+                from wavelet import rpg_planning_enabled as _rpg_on
+                _rpg_active = _rpg_on()
+            except Exception:
+                _rpg_active = False
+            if _rpg_active:
+                try:
+                    import rpg as _rpgmod
+                    planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
+                except Exception:
+                    planned_sigs = []
+                if planned_sigs:
+                    sig_kept = []
+                    vetoed = []  # (candidate, missing) — emitted only if the prune applies
+                    for c in passing:
+                        # Guarded per-candidate like the call-graph veto: an
+                        # unexpected parser error must skip the veto for that
+                        # candidate, not fail the whole /v3/generate request.
+                        try:
+                            missing = _rpgmod.missing_planned_signatures(
+                                c.get("code", ""), planned_sigs, file_path)
+                        except Exception as ve:
+                            print(f"  [rpg] signature check failed on cand "
+                                  f"{c.get('index')}: {ve} — keeping candidate",
+                                  flush=True)
+                            missing = []
+                        if missing:
+                            vetoed.append((c, missing))
+                            continue
+                        sig_kept.append(c)
+                    # Only prune when at least one candidate realizes the plan
+                    # — and only announce vetoes that actually took effect
+                    # (when every candidate drifts, all of them survive).
+                    if sig_kept:
+                        passing = sig_kept
+                        for c, missing in vetoed:
+                            emit("rpg_signature_veto",
+                                 f"Candidate {c['index']} sandbox-passed but missing "
+                                 f"planned signature(s): {', '.join(missing[:3])}",
+                                 index=c["index"], missing=missing[:5])
+                            print(f"  [rpg] vetoed cand {c['index']} — missing: {missing[:5]}",
+                                  flush=True)
 
         # ===== CANDIDATE SELECTION =====
         if passing:
@@ -2136,6 +2204,70 @@ def generate_plan(
 
     emit("plan_start", f"generating {n_candidates} candidate plans")
 
+    # V3.2 RPG-style architecture-first planning (issue #120), flag-gated by
+    # ATLAS_RPG_PLANNING. Strictly additive: on any failure (flag off, modules
+    # missing, model output unusable) we fall through to the flat planner below.
+    # Pre-bound so a partial import failure can never leave a name unbound
+    # on the guarded paths below (py/uninitialized-local-variable).
+    decompose_project = decompose_file_map = _rpg_mod = None
+    try:
+        from wavelet import rpg_planning_enabled, decompose_project, decompose_file_map
+        import rpg as _rpg_mod
+        _rpg_on = rpg_planning_enabled()
+    except Exception:
+        _rpg_on = False
+    if _rpg_on:
+        try:
+            # Build the coarse structural band that seeds the proposal stage.
+            # Prefer the in-memory project_context the proxy already sent — the
+            # v3-service container has no project volume mount, so reading
+            # working_dir off disk only works in non-container / dev setups.
+            # Fall back to a disk scan when no context was passed.
+            coarse_map = None
+            try:
+                if project_context:
+                    coarse_map = [
+                        {"label": p.label, "filename": p.filename}
+                        for p in decompose_file_map(project_context, limit=30)
+                    ]
+                elif working_dir and os.path.isdir(working_dir):
+                    coarse_map = [
+                        {"label": p.label, "filename": p.filename}
+                        for p in decompose_project(working_dir, limit=30)
+                    ]
+            except Exception as ce:
+                emit("rpg_coarse_error", f"coarse decomposition failed: {ce}")
+            rpg_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
+            rpg_llm = LLMAdapter(progress_callback=progress_callback, thinking=rpg_thinking)
+
+            def _complete(prompt, temperature, mt, seed):
+                raw, _, _ = rpg_llm(prompt, temperature, mt, seed)
+                return raw
+
+            result = _rpg_mod.construct_rpg(
+                user_message=user_message,
+                complete_fn=_complete,
+                project_context=project_context,
+                coarse_map=coarse_map,
+                max_tokens=(8192 if rpg_thinking else 2048),
+                emit=emit,
+            )
+            if result.ok and result.plan and result.plan.get("steps"):
+                plan = dict(result.plan)
+                plan["candidates_tested"] = 1
+                plan["winning_score"] = result.score
+                plan["winning_index"] = 0
+                plan["reasons"] = ["RPG two-stage plan"] + result.issues
+                plan["rpg"] = result.rpg.to_dict()
+                emit("plan_selected",
+                     f"RPG plan ({len(plan['steps'])} steps, score={result.score:.2f})",
+                     index=0, score=result.score, steps=len(plan["steps"]))
+                return plan
+            emit("rpg_fallback",
+                 f"RPG not usable (stage={result.stage_reached}); using flat planner")
+        except Exception as re_:
+            emit("rpg_error", f"RPG planning failed: {re_}; using flat planner")
+
     # PC-206: thinking-aware infrastructure shipped — planner CAN run with
     # Template-level reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
     # because empirically on the reference local model + this codebase's
@@ -2442,30 +2574,21 @@ def symbol_index(file_map: dict, candidate_symbols: list, max_snippets: int = 3,
 #   4. Project-wide symbol (any function/class in any scanned file)
 # Anything that doesn't match → unresolved. Strict: 1+ unresolved → veto.
 
-PY_BUILTINS = frozenset({
-    # Subset of common builtins — anything heavily used in idiomatic
-    # Python that we don't want to false-positive on. Hand-curated to
-    # keep the set small; obscure builtins (intern, breakpoint,
-    # __import__) caught here are vanishingly rare in generated code.
-    "print", "len", "range", "str", "int", "float", "bool", "bytes", "bytearray",
-    "list", "dict", "tuple", "set", "frozenset", "complex",
-    "open", "input", "sum", "min", "max", "abs", "round", "pow", "divmod",
-    "type", "isinstance", "issubclass", "callable",
-    "getattr", "setattr", "hasattr", "delattr", "super",
-    "enumerate", "zip", "sorted", "reversed", "map", "filter", "any", "all",
-    "id", "vars", "dir", "iter", "next", "slice",
-    "ord", "chr", "hex", "oct", "bin", "repr", "format", "hash",
-    "eval", "exec", "compile", "globals", "locals",
-    "object", "classmethod", "staticmethod", "property",
-    # Common exception classes — frequently raised, treated as calls
-    "Exception", "BaseException", "ValueError", "TypeError", "KeyError",
-    "IndexError", "RuntimeError", "AttributeError", "ImportError",
-    "FileNotFoundError", "IOError", "OSError", "StopIteration",
-    "GeneratorExit", "NotImplementedError", "ZeroDivisionError",
-    "ArithmeticError", "OverflowError", "AssertionError", "LookupError",
-    "MemoryError", "NameError", "ReferenceError", "SyntaxError",
-    "SystemExit", "UnicodeError", "Warning", "DeprecationWarning",
-})
+# The COMPLETE builtin namespace, derived from the interpreter rather
+# than hand-curated. A previous curated subset was missing real builtins
+# (TimeoutError, ConnectionError, memoryview, breakpoint, ...), and any
+# gap here is a false VETO of valid code — `exit(1)` in a new file was
+# rejected as a would-be NameError. Site builtins (exit/quit/help/...)
+# are added explicitly so the set doesn't depend on how this interpreter
+# was started; over-crediting a shadowed builtin only makes the veto
+# more lenient, never blocks valid code.
+import builtins as _builtins_mod
+
+PY_BUILTINS = frozenset(
+    {n for n in dir(_builtins_mod) if not n.startswith("_")}
+    | {"exit", "quit", "help", "license", "copyright", "credits",
+       "__import__", "__build_class__"}
+)
 
 
 def _extract_python_imports(source: bytes) -> set:
@@ -2597,6 +2720,84 @@ def _extract_python_top_level_defs(source: bytes) -> set:
     return names
 
 
+def _extract_python_bound_names(source: bytes) -> set:
+    """Every name BOUND anywhere in the file — assignment targets, function
+    and lambda parameters, for / with-as / except-as / comprehension
+    targets, walrus, global/nonlocal, and def/class names at any nesting.
+
+    Used to credit local callables so the structural resolver does NOT flag
+    a call to a local variable, function parameter, or loop variable as
+    unresolved (which would false-reject valid code — the #147 review's
+    top finding). Deliberately scope-BLIND: a name bound inside one
+    function is credited when called from another, which can miss a rare
+    genuine cross-function NameError. That false-negative is the correct
+    trade for a gate that BLOCKS writes — wrongly rejecting valid code is
+    far worse than letting an uncommon bug through.
+    """
+    if not _AST_EDIT_AVAILABLE:
+        return set()
+    try:
+        parser = _ts.Parser(_PY_LANG)
+        tree = parser.parse(source)
+    except Exception:
+        return set()
+
+    names = set()
+
+    def add_pattern(node):
+        # Recursively pull bare-identifier targets from a binding pattern
+        # (a, (b, c), *rest = ...). Skip subscript/attribute targets
+        # (a[0]=, a.b=) — those don't bind a NEW bare name.
+        if node is None:
+            return
+        if node.type == "identifier":
+            names.add(source[node.start_byte:node.end_byte].decode("utf-8", "replace"))
+            return
+        if node.type in ("subscript", "attribute"):
+            return
+        for c in node.children:
+            add_pattern(c)
+
+    stack = [tree.root_node]
+    while stack:
+        n = stack.pop()
+        t = n.type
+        if t in ("function_definition", "class_definition"):
+            nm = n.child_by_field_name("name")
+            if nm is not None and nm.type == "identifier":
+                names.add(source[nm.start_byte:nm.end_byte].decode("utf-8", "replace"))
+        if t in ("function_definition", "lambda"):
+            params = n.child_by_field_name("parameters")
+            if params is not None:
+                pstack = list(params.children)
+                while pstack:
+                    p = pstack.pop()
+                    if p.type == "identifier":
+                        names.add(source[p.start_byte:p.end_byte].decode("utf-8", "replace"))
+                    elif p.type in ("subscript", "attribute", "default_parameter",
+                                    "typed_parameter", "typed_default_parameter",
+                                    "list_splat_pattern", "dictionary_splat_pattern"):
+                        # descend, but a default_parameter's VALUE isn't a binding —
+                        # take only its leading identifier target.
+                        for c in p.children:
+                            if c.type == "identifier":
+                                names.add(source[c.start_byte:c.end_byte].decode("utf-8", "replace"))
+                                break
+                            pstack.append(c)
+        elif t in ("assignment", "augmented_assignment", "named_expression"):
+            add_pattern(n.child_by_field_name("left") or n.child_by_field_name("name"))
+        elif t in ("for_statement", "for_in_clause"):
+            add_pattern(n.child_by_field_name("left"))
+        elif t == "as_pattern":  # with ... as X / except ... as X
+            add_pattern(n.child_by_field_name("alias") or (n.children[-1] if n.children else None))
+        elif t in ("global_statement", "nonlocal_statement"):
+            for c in n.children:
+                if c.type == "identifier":
+                    names.add(source[c.start_byte:c.end_byte].decode("utf-8", "replace"))
+        stack.extend(n.children)
+    return names
+
+
 def build_project_symbols(file_map: dict) -> set:
     """Aggregate top-level function/class names across every .py file
     in file_map. Built once per V3 run, reused across all candidates."""
@@ -2611,19 +2812,26 @@ def build_project_symbols(file_map: dict) -> set:
     return out
 
 
-def structural_score(project_symbols, candidate_code: str) -> dict:
+def structural_score(project_symbols, candidate_code: str,
+                     max_names: int = 10) -> dict:
     """Check a candidate for unresolved direct-identifier calls.
 
     project_symbols: set built by build_project_symbols(file_map). Pass
     {} or set() if the project is empty / unavailable — every call
     will fall through to imports/builtins/unresolved.
 
+    max_names caps the reported unresolved_calls list (telemetry-friendly
+    default); 0 returns every name — required by callers that DIFF the
+    lists (the proxy structural gate).
+
     Returns:
         ok: True if parse succeeded
         n_calls_total / n_unresolved: aggregate counts
-        unresolved_calls: list of unique unresolved names (capped at 10)
-        wildcard_imports: True if the candidate has `from x import *`,
-                          which makes the unresolved set a lower bound
+        unresolved_calls: list of unique unresolved names (capped at
+                          max_names unless max_names=0)
+        wildcard_imports: True if the candidate has `from x import *`
+                          (unresolved reporting is suppressed in that
+                          case, so the list is always empty then)
     """
     if not _AST_EDIT_AVAILABLE:
         return {"ok": False, "error": "tree-sitter not installed"}
@@ -2636,6 +2844,10 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
         local_defs = _extract_python_top_level_defs(candidate_bytes)
         imports = _extract_python_imports(candidate_bytes)
         calls = _extract_python_call_targets(candidate_bytes)
+        # Bound names (locals, params, loop/with targets, nested defs) credit
+        # local callables so `fn = build(); fn()` is not flagged as a
+        # NameError — #147 review finding #4/#5. Scope-blind on purpose.
+        bound = _extract_python_bound_names(candidate_bytes)
     except Exception as e:
         return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
 
@@ -2655,6 +2867,8 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
             continue
         if name in imports:
             continue
+        if name in bound:  # local var / param / loop target / nested def
+            continue
         if name in PY_BUILTINS:
             continue
         if name in (project_symbols or set()):
@@ -2671,7 +2885,11 @@ def structural_score(project_symbols, candidate_code: str) -> dict:
         "ok": True,
         "n_calls_total": len(calls),
         "n_unresolved": len(unresolved),
-        "unresolved_calls": unresolved[:10],
+        # max_names=0 returns the FULL list. The proxy's structural gate
+        # diffs original-vs-edited name lists; a truncated list makes that
+        # comparison unsound in both directions on files with more
+        # unresolved names than the cap.
+        "unresolved_calls": unresolved[:max_names] if max_names else unresolved,
         "wildcard_imports": has_wildcard,
         "n_local_defs": len(local_defs),
         "n_imports": len(imports),
@@ -3068,6 +3286,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_outline()
         elif self.path == "/internal/pycheck":
             self._handle_pycheck()
+        elif self.path == "/internal/structural_check":
+            self._handle_structural_check()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -3230,6 +3450,7 @@ class V3Handler(BaseHTTPRequestHandler):
                 file_path=file_path,  # PC-048: language-aware smoke check
                 build_command=build_command,
                 working_dir=working_dir or "/workspace",
+                constraints=constraints,  # V3.2: RPG signature veto (issue #120)
             )
         except ClientDisconnected as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
@@ -3253,6 +3474,30 @@ class V3Handler(BaseHTTPRequestHandler):
             "total_time_ms": result.get("total_time_ms", 0.0),
             "verification_evidence": result.get("verification_evidence", []),
         }
+
+        # V3.2 RPG (issue #120): report which planned signatures the WINNING
+        # code failed to realize, so the proxy's re-plan loop can react (the
+        # signature veto rejects failing candidates mid-pipeline, but the
+        # winner can still drift when every candidate fell short and one was
+        # kept anyway). Flag-gated and conservative — empty unless RPG is on,
+        # constraints carry signatures, and a planned function is genuinely
+        # absent from parseable code.
+        try:
+            from wavelet import rpg_planning_enabled as _rpg_on
+            _rpg_active = _rpg_on()
+        except Exception:
+            _rpg_active = False
+        if _rpg_active and response["code"] and constraints:
+            try:
+                import rpg as _rpgmod
+                planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
+                missing = _rpgmod.missing_planned_signatures(
+                    response["code"], planned_sigs, file_path)
+                if missing:
+                    response["rpg_signature_missing"] = missing
+            except Exception as _e:
+                print(f"  [rpg] drift check skipped: {_e}", flush=True)
+
         final = json.dumps(response)
         try:
             self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
@@ -3556,6 +3801,50 @@ class V3Handler(BaseHTTPRequestHandler):
             if snippet:
                 msg += f" (offending line: {snippet})"
             self._json_response(200, {"ok": False, "error": msg, "line": e.lineno or 0})
+
+    def _handle_structural_check(self):
+        """POST /internal/structural_check — does every direct-identifier call
+        in this Python source resolve (local def, import, builtin, or a
+        supplied project symbol)?
+
+        Request:  {"path": "app.py", "source": "<file text>",
+                   "project_context": {"other.py": "..."}}   # optional
+        Response: {"ok": bool, "unresolved": ["render_template", ...],
+                   "wildcard_imports": bool}
+
+        Used by the proxy's structural gate on edit_file, ast_edit, and the
+        write_file branches to refuse landing a .py file whose change
+        introduces a NameError — a direct call to a name the file neither
+        imports, defines, nor gets from builtins (#147: render_template
+        called with only render_template_string imported landed as verified
+        because the in-pipeline veto was skipped when no project_context was
+        sent). Same resolver as the V3 structural veto; no execution.
+        Returns the FULL unresolved list (no cap) — the proxy diffs
+        original-vs-edited lists and a truncated list makes that comparison
+        unsound. `ok:false` means the check couldn't run (tree-sitter
+        missing / non-UTF-8) — the caller treats that as pass (fail-open).
+        Malformed Python does NOT produce ok:false; tree-sitter parses it
+        tolerantly and returns a best-effort extraction.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"ok": False, "error": f"invalid JSON body: {e}"})
+            return
+        source = body.get("source", "") or ""
+        project_symbols = build_project_symbols(body.get("project_context") or {})
+        struct = structural_score(project_symbols, source, max_names=0)
+        if not struct.get("ok"):
+            # couldn't parse / tree-sitter unavailable → fail-open
+            self._json_response(200, {"ok": False, "error": struct.get("error", "unavailable")})
+            return
+        self._json_response(200, {
+            "ok": True,
+            "unresolved": struct.get("unresolved_calls", []),
+            "n_unresolved": struct.get("n_unresolved", 0),
+            "wildcard_imports": struct.get("wildcard_imports", False),
+        })
 
     def _handle_outline(self):
         """POST /internal/outline — list a file's top-level functions/classes.

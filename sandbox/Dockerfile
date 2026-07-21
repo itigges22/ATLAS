@@ -1,5 +1,5 @@
 # python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+FROM docker.io/python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
 WORKDIR /app
 
 # Install system dependencies and language runtimes
@@ -10,6 +10,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     # Node.js (via nodesource)
     curl ca-certificates gnupg unzip \
+    # Common CLI tools. The sandbox runs non-root on a read-only fs, so
+    # nothing can be apt-installed at runtime — anything a coding task
+    # commonly shells out to must be baked in. git and sqlite3 were the
+    # two observed gaps (TB2 bench 2026-07-18: `git clone` and
+    # `sqlite3 .recover` both dead-ended with "command not found");
+    # jq/patch/zip/xz are the same class: small, ubiquitous in build
+    # scripts, impossible to add later.
+    git sqlite3 jq patch zip xz-utils \
+    # Binary-inspection tools. binutils (strings/objdump/readelf/nm)
+    # rides in with gcc, but `file` (type detection) and `xxd` (hex dump)
+    # are separate and are what the binary-file read guard points at.
+    file xxd \
+    # Archive tools a coding task commonly shells out to and can't
+    # apt-install at runtime (7z was the observed gap — crack-7z-hash
+    # dead-ended on "7z: command not found", and 7z is not pip-installable).
+    p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 LTS

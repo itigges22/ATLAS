@@ -139,6 +139,16 @@ type demoModel struct {
 	v3SelectedIdx int
 	activePane    string // "raw" | "v3" — which side keys apply to
 
+	// Per-pane scrollback. Chat panes scroll in rows up from the bottom
+	// (renderChatPane's convention; 0 = follow live output). The V3
+	// output-review file body scrolls in rows down from the top. The
+	// *Total fields capture line totals from the last View so key/wheel
+	// input can clamp without re-rendering.
+	rawScroll, v3Scroll int
+	rawTotal, v3Total   int
+	fileScroll          int
+	fileTotal           int
+
 	events chan demoEvent
 
 	ctx    context.Context
@@ -534,11 +544,65 @@ func (m *demoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q", "esc":
 			m.cancel()
 			return m, tea.Quit
+		case "tab", "shift+tab":
+			// Which pane scroll keys target; in output review this is
+			// also the side file-cycling keys apply to.
+			if m.activePane == "raw" {
+				m.activePane = "v3"
+			} else {
+				m.activePane = "raw"
+			}
+			return m, nil
+		case "pgup":
+			m.scrollActive(10)
+			return m, nil
+		case "pgdown":
+			m.scrollActive(-10)
+			return m, nil
+		case "ctrl+home":
+			m.scrollActive(1 << 30)
+			return m, nil
+		case "ctrl+end":
+			m.scrollActiveToEnd()
+			return m, nil
+		case "up", "down":
+			// Line-step scrolling only in output review — during
+			// streaming the panes follow the live output.
+			if m.outputMode {
+				if msg.String() == "up" {
+					m.scrollActive(1)
+				} else {
+					m.scrollActive(-1)
+				}
+				return m, nil
+			}
 		}
 		if m.outputMode {
 			m.handleOutputKey(msg.String())
 			return m, nil
 		}
+
+	case tea.MouseMsg:
+		// Wheel scrolls the pane under the cursor; focus follows so
+		// subsequent keys target the same side.
+		if msg.Action == tea.MouseActionPress {
+			var delta int
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				delta = 3
+			case tea.MouseButtonWheelDown:
+				delta = -3
+			default:
+				return m, nil
+			}
+			if msg.X < m.width/2 {
+				m.activePane = "raw"
+			} else {
+				m.activePane = "v3"
+			}
+			m.scrollActive(delta)
+		}
+		return m, nil
 
 	case demoBatchMsg:
 		// Apply every event in this batch before returning so View only
@@ -698,7 +762,7 @@ func (m *demoModel) View() string {
 		v3Pane := m.renderOutputPane("v3", colW, bodyH)
 		row = lipgloss.JoinHorizontal(lipgloss.Top, rawPane, v3Pane)
 		footer = demoStatusStyle.Render(
-			"output review  ·  tab: switch side  ·  n/p (or ←/→): cycle file  ·  1-9: jump  ·  q: quit  ·  active: " + m.activePane)
+			"output review  ·  tab: switch side  ·  n/p (or ←/→): cycle file  ·  1-9: jump  ·  ↑/↓ pgup/pgdn/wheel: scroll  ·  q: quit  ·  active: " + m.activePane)
 	} else {
 		rawTitle := demoRawTitleStyle.Render(m.rawTitle()) + "  " +
 			demoStatusStyle.Render(streamStatus(m.rawChild, m.rawDone, m.rawEverStreamed, m.rawErr))
@@ -721,10 +785,11 @@ func (m *demoModel) View() string {
 			v3ChatH--
 		}
 
-		rawChat, _, _, _, _, _ := renderChatPane(m.rawChild.chat, m.rawChild.chatRenderer,
-			rawChatH, colW-4, 0)
-		v3Chat, _, _, _, _, _ := renderChatPane(m.v3Child.chat, m.v3Child.chatRenderer,
-			v3ChatH, colW-4, 0)
+		rawChat, _, _, rawTotal, _, _ := renderChatPane(m.rawChild.chat, m.rawChild.chatRenderer,
+			rawChatH, colW-4, m.rawScroll)
+		v3Chat, _, _, v3Total, _, _ := renderChatPane(m.v3Child.chat, m.v3Child.chatRenderer,
+			v3ChatH, colW-4, m.v3Scroll)
+		m.rawTotal, m.v3Total = rawTotal, v3Total
 
 		rawBody := rawTitle + "\n\n" + rawChat
 		if rawThink != "" {
@@ -738,7 +803,8 @@ func (m *demoModel) View() string {
 		v3Pane := demoPaneStyle.Width(colW).Height(bodyH).Render(v3Body)
 
 		row = lipgloss.JoinHorizontal(lipgloss.Top, rawPane, v3Pane)
-		footer = demoStatusStyle.Render("recording demo  ·  ctrl+c to abort")
+		footer = demoStatusStyle.Render(
+			"recording demo  ·  pgup/pgdn/wheel: scroll (tab switches side)  ·  ctrl+c to abort")
 	}
 
 	return header + "\n" + row + "\n" + footer
@@ -824,14 +890,50 @@ func scanSandbox(root string) []string {
 // handleOutputKey routes navigation in output-review mode. Tab cycles
 // the active pane between sides; n/p (or arrow keys) cycles files
 // within the active pane; 1-9 jumps.
+// scrollActive adjusts the focused pane's scroll position by delta rows
+// (positive = toward older/earlier content). Chat panes are
+// bottom-anchored (rows up from the live tail); the output-review file
+// body is top-anchored, so the sign flips there.
+func (m *demoModel) scrollActive(delta int) {
+	clamp := func(v, max int) int {
+		if max < 0 {
+			max = 0
+		}
+		if v > max {
+			v = max
+		}
+		if v < 0 {
+			v = 0
+		}
+		return v
+	}
+	if m.outputMode && m.activePane == "v3" {
+		m.fileScroll = clamp(m.fileScroll-delta, m.fileTotal)
+		return
+	}
+	if m.activePane == "raw" {
+		m.rawScroll = clamp(m.rawScroll+delta, m.rawTotal)
+	} else {
+		m.v3Scroll = clamp(m.v3Scroll+delta, m.v3Total)
+	}
+}
+
+// scrollActiveToEnd jumps the focused pane to its natural "end": the
+// live tail for chat panes, the last window for the file body.
+func (m *demoModel) scrollActiveToEnd() {
+	if m.outputMode && m.activePane == "v3" {
+		m.fileScroll = 1 << 30 // clamped to the last window at render
+		return
+	}
+	if m.activePane == "raw" {
+		m.rawScroll = 0
+	} else {
+		m.v3Scroll = 0
+	}
+}
+
 func (m *demoModel) handleOutputKey(key string) {
 	switch key {
-	case "tab", "shift+tab":
-		if m.activePane == "raw" {
-			m.activePane = "v3"
-		} else {
-			m.activePane = "raw"
-		}
 	case "right", "l", "n", " ":
 		m.cycleActiveFile(+1)
 	case "left", "h", "p":
@@ -860,11 +962,13 @@ func (m *demoModel) cycleActiveFile(delta int) {
 		return
 	}
 	m.v3SelectedIdx = (m.v3SelectedIdx + delta + len(files)) % len(files)
+	m.fileScroll = 0
 }
 
 func (m *demoModel) setActiveIdx(i int) {
 	if m.activePane == "v3" {
 		m.v3SelectedIdx = i
+		m.fileScroll = 0
 	}
 }
 
@@ -875,11 +979,16 @@ func (m *demoModel) setActiveIdx(i int) {
 // which side keys apply to.
 func (m *demoModel) renderOutputPane(side string, w, h int) string {
 	if side == "raw" {
-		chat, _, _, _, _, _ := renderChatPane(
-			m.rawChild.chat, m.rawChild.chatRenderer, h-3, w-4, 0,
+		chat, _, _, total, _, _ := renderChatPane(
+			m.rawChild.chat, m.rawChild.chatRenderer, h-3, w-4, m.rawScroll,
 		)
+		m.rawTotal = total
 		body := demoRawTitleStyle.Render(m.rawTitle()+"  ·  RESPONSE") + "\n\n" + chat
-		return demoPaneStyle.Width(w).Height(h).Render(body)
+		border := lipgloss.Color("240")
+		if m.activePane == side {
+			border = lipgloss.Color("11")
+		}
+		return demoPaneStyle.BorderForeground(border).Width(w).Height(h).Render(body)
 	}
 	sandbox := m.v3Sandbox
 	files := m.v3Files
@@ -921,7 +1030,7 @@ func (m *demoModel) renderOutputPane(side string, w, h int) string {
 	body := ""
 	if len(files) > 0 && selected < len(files) {
 		fpath := filepath.Join(m.workingDir, sandbox, files[selected])
-		body = readFileForDisplay(fpath, bodyHeight, w-4)
+		body, m.fileTotal = readFileForDisplay(fpath, bodyHeight, w-4, m.fileScroll)
 	}
 
 	border := lipgloss.Color("240")
@@ -936,38 +1045,79 @@ func (m *demoModel) renderOutputPane(side string, w, h int) string {
 	return pane
 }
 
-// readFileForDisplay reads up to maxLines lines and trims them to maxCols.
-// Big files get a tail truncation note. Binary files are flagged.
-func readFileForDisplay(path string, maxLines, maxCols int) string {
+// readFileForDisplay returns a maxLines window of the file starting
+// `offset` lines from the top (clamped to the file), lines trimmed to
+// maxCols, plus the file's total line count for scroll clamping. Rows
+// above/below the window are noted so it's obvious there's more to
+// scroll. Binary files are flagged; reading caps at maxScanLines so a
+// generated monster file can't stall the render loop.
+func readFileForDisplay(path string, maxLines, maxCols, offset int) (string, int) {
 	const sniffBytes = 512
+	const maxScanLines = 5000
 	f, err := os.Open(path)
 	if err != nil {
-		return demoStatusStyle.Render(fmt.Sprintf("(cannot read: %v)", err))
+		return demoStatusStyle.Render(fmt.Sprintf("(cannot read: %v)", err)), 0
 	}
 	defer f.Close()
 	sniff := make([]byte, sniffBytes)
 	n, _ := f.Read(sniff)
 	for _, b := range sniff[:n] {
 		if b == 0 {
-			return demoStatusStyle.Render("(binary file)")
+			return demoStatusStyle.Render("(binary file)"), 0
 		}
 	}
 	_, _ = f.Seek(0, 0)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	var lines []string
-	for scanner.Scan() {
+	for scanner.Scan() && len(lines) < maxScanLines {
 		line := scanner.Text()
 		if maxCols > 0 && len(line) > maxCols {
 			line = line[:maxCols-1] + "…"
 		}
 		lines = append(lines, line)
-		if len(lines) >= maxLines {
-			lines = append(lines, demoStatusStyle.Render(fmt.Sprintf("… (truncated to %d lines)", maxLines)))
-			break
-		}
 	}
-	return strings.Join(lines, "\n")
+	total := len(lines)
+
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	// Largest start whose window still reaches EOF: +1 reserves the
+	// above-note row any non-zero start displays.
+	maxStart := total - maxLines + 1
+	if maxStart < 0 || total <= maxLines {
+		maxStart = 0
+	}
+	if offset > maxStart {
+		offset = maxStart
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	// The above/below notes each take a display row from the window.
+	avail := maxLines
+	if offset > 0 && avail > 1 {
+		avail--
+	}
+	end := offset + avail
+	if end > total {
+		end = total
+	}
+	if end < total && avail > 1 {
+		avail--
+		end = offset + avail
+	}
+	var parts []string
+	if offset > 0 {
+		parts = append(parts, demoStatusStyle.Render(
+			fmt.Sprintf("… +%d lines above (pgup)", offset)))
+	}
+	parts = append(parts, lines[offset:end]...)
+	if end < total {
+		parts = append(parts, demoStatusStyle.Render(
+			fmt.Sprintf("… +%d lines below (pgdn)", total-end)))
+	}
+	return strings.Join(parts, "\n"), total
 }
 
 // runDemo launches the demo subprogram in the same terminal session.
@@ -984,7 +1134,14 @@ func runDemo(proxyURL, workingDir, length string) error {
 	if err != nil {
 		return err
 	}
-	prog := tea.NewProgram(model, tea.WithAltScreen())
+	// Mouse gating mirrors the primary TUI (main.go): wheel-scroll of
+	// the demo panes needs cell-motion reporting, opt out with
+	// ATLAS_TUI_MOUSE=off to keep the terminal's native selection.
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if strings.ToLower(envOr("ATLAS_TUI_MOUSE", "on")) != "off" {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	prog := tea.NewProgram(model, opts...)
 	_, err = prog.Run()
 	return err
 }

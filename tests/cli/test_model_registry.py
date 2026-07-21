@@ -438,3 +438,34 @@ def test_lens_artifacts_present_skips_unsupported_models(tmp_path):
     state = model_registry.lens_artifacts_present(m, str(tmp_path))
     assert state["ok"] is True
     assert state["expected_files"] == []
+
+
+def test_by_model_file_matches_basename_and_case():
+    m = model_registry.by_model_file("/models/gemma-4-12b-it-Q4_K_M.gguf")
+    assert m is not None and m.name == "gemma-4-12b-it-Q4_K_M"
+    assert model_registry.by_model_file("GEMMA-4-12B-IT-q4_k_m.GGUF") is m \
+        or model_registry.by_model_file("GEMMA-4-12B-IT-q4_k_m.GGUF").name \
+        == m.name
+    assert model_registry.by_model_file("not-a-registered-model.gguf") is None
+    assert model_registry.by_model_file("") is None
+
+
+def test_artifact_download_hint_for_supported_kinds():
+    hint = model_registry.artifact_download_hint(
+        "/models/gemma-4-12b-it-Q4_K_M.gguf", "asa")
+    assert "atlas model install-artifacts gemma-4-12b-it-Q4_K_M" in hint
+    assert model_registry.artifact_download_hint(
+        "gemma-4-12b-it-Q4_K_M.gguf", "lens") != ""
+    assert model_registry.artifact_download_hint("unknown.gguf", "asa") == ""
+
+
+def test_artifact_download_hint_empty_without_urls(monkeypatch):
+    """A registry entry whose kind isn't 'supported' with a URL base must
+    produce no hint — nothing downloadable was claimed."""
+    from dataclasses import replace
+    entry = model_registry.by_name("gemma-4-12b-it-Q4_K_M")
+    stripped = replace(entry, asa_status="no-artifacts",
+                       asa_artifact_url_base=None)
+    monkeypatch.setattr(model_registry, "REGISTRY", [stripped])
+    assert model_registry.artifact_download_hint(
+        "gemma-4-12b-it-Q4_K_M.gguf", "asa") == ""

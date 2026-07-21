@@ -611,6 +611,10 @@ func TestIsActionIntentMessage(t *testing.T) {
 		"redesign templates/index.html for SaaS",
 		// May 10 prompt that motivated this gate:
 		"Rewrite templates/dashboard.html to display a clean SaaS-style metrics dashboard",
+		// TB2 round-2 prompt that motivated gating the text exit: the
+		// model narrated "I will now proceed to sanitize..." as a text
+		// response and quit with zero edits. Must classify as action.
+		"Please help sanitize my github repository of all API keys. Please find and remove all such information and replace it with placeholder values",
 	}
 	for _, m := range actionIntents {
 		if !isActionIntentMessage(m) {
@@ -909,5 +913,66 @@ func TestLooksCorruptedOnDiskDetectsProsePreamble(t *testing.T) {
 	md := "# Title\n\n```python\nprint('hi')\n```\n"
 	if looksCorruptedOnDisk("README.md", md) {
 		t.Error("markdown file with fence should NOT be flagged")
+	}
+}
+
+// HARNESS-12: extract the task's named output file(s) from the prompt,
+// and ignore input filenames (no write-verb nearby).
+func TestExpectedOutputPaths(t *testing.T) {
+	cases := map[string][]string{
+		"Please save your solution in the file sol.sql":              {"sol.sql"},
+		"Recover the rows and create a JSON file in recover.json":    {"recover.json"},
+		"Write the output to out.txt":                                {"out.txt"},
+		"create a file called out.html that survives the filter":     {"out.html"},
+		"read the file input.txt and write the result to output.txt": {"output.txt"},
+		"I have a sqlite database in trunc.db that was corrupted":    nil,
+		"optimize the query in my-sql-query.sql, save it in sol.sql": {"sol.sql"},
+	}
+	for prompt, want := range cases {
+		got := expectedOutputPaths(prompt)
+		// output.txt case: input.txt must be excluded, output.txt included.
+		if prompt[:4] == "read" {
+			if len(got) != 1 || got[0] != "output.txt" {
+				t.Errorf("%q: got %v, want [output.txt] (input.txt must be excluded)", prompt, got)
+			}
+			continue
+		}
+		if want == nil {
+			if len(got) != 0 {
+				t.Errorf("%q: got %v, want none (input file, no write verb)", prompt, got)
+			}
+			continue
+		}
+		found := false
+		for _, g := range got {
+			if g == want[0] {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%q: got %v, want to include %v", prompt, got, want)
+		}
+	}
+}
+
+func TestExpectedOutputMissingMessage(t *testing.T) {
+	m := expectedOutputMissingMessage([]string{"sol.sql"})
+	if !strings.Contains(m, "`sol.sql`") || !strings.Contains(m, "does not exist") {
+		t.Errorf("message should name the file and say it's missing: %q", m)
+	}
+}
+
+// HARNESS-12 refinement: "the file X must exist / must contain" names a
+// deliverable without a write verb (TB2 merge-diff).
+func TestExpectedOutputMustExistPhrasing(t *testing.T) {
+	got := expectedOutputPaths("the final repository must include repo/algo.py. The file repo/algo.py must exist in the merged result and must contain a function named map")
+	found := false
+	for _, g := range got {
+		if g == "repo/algo.py" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected repo/algo.py from must-exist phrasing, got %v", got)
 	}
 }

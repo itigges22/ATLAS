@@ -470,6 +470,38 @@ def all_models() -> List[Model]:
     return list(REGISTRY)
 
 
+def by_model_file(model_file: str) -> Optional[Model]:
+    """Look up a model by its gguf filename. Tolerates a full path
+    (basename is compared) and case differences — callers pass whatever
+    llama-server's /props reported as the loaded model."""
+    base = str(model_file or "").replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if not base:
+        return None
+    for m in REGISTRY:
+        if m.model_file.casefold() == base:
+            return m
+    return None
+
+
+def artifact_download_hint(model_name: str, kind: str) -> str:
+    """One-sentence pointer at `atlas model install-artifacts` when the
+    registry carries downloadable artifacts of `kind` ("lens" | "asa")
+    for the loaded model; empty string when there is nothing to download.
+    The check commands append this to needs-build reasons so users reach
+    the published artifact before a local retrain."""
+    m = by_model_file(model_name)
+    if m is None:
+        return ""
+    status = getattr(m, f"{kind}_status", "")
+    if (status == "supported"
+            and getattr(m, f"{kind}_artifact_url_base", None)
+            and getattr(m, f"{kind}_artifact_files", None)):
+        return (f" Published artifacts for this model exist: "
+                f"`atlas model install-artifacts {m.name}` downloads and "
+                f"hash-verifies them — no local retrain needed.")
+    return ""
+
+
 def models_for_tier(tier_name: str) -> List[Model]:
     """All models registered against a tier (not just the default)."""
     return [m for m in REGISTRY if m.tier == tier_name]

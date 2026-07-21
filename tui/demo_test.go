@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -335,5 +336,91 @@ func TestDemoPromptStatusUsesRealSlotProgress(t *testing.T) {
 	}
 	if got := streamStatus(child, false, false, nil); got != "processing prompt 25%" {
 		t.Fatalf("status = %q, want current wire-format percentage", got)
+	}
+}
+
+func TestDemoScrollActiveTargetsFocusedPane(t *testing.T) {
+	m := &demoModel{activePane: "v3", rawTotal: 100, v3Total: 100}
+	m.scrollActive(10)
+	if m.v3Scroll != 10 || m.rawScroll != 0 {
+		t.Fatalf("v3Scroll=%d rawScroll=%d, want 10/0", m.v3Scroll, m.rawScroll)
+	}
+	m.activePane = "raw"
+	m.scrollActive(10)
+	m.scrollActive(-3)
+	if m.rawScroll != 7 {
+		t.Fatalf("rawScroll=%d, want 7", m.rawScroll)
+	}
+	// Clamped to the last-rendered total on over-scroll, floor at zero.
+	m.scrollActive(1 << 30)
+	if m.rawScroll != 100 {
+		t.Fatalf("rawScroll=%d, want clamp at total 100", m.rawScroll)
+	}
+	m.scrollActive(-1 << 30)
+	if m.rawScroll != 0 {
+		t.Fatalf("rawScroll=%d, want floor 0", m.rawScroll)
+	}
+}
+
+func TestDemoScrollActiveFileBodyInOutputMode(t *testing.T) {
+	m := &demoModel{activePane: "v3", outputMode: true, fileTotal: 50}
+	// File body is top-anchored: pgup (positive delta) moves toward the
+	// start, so from 0 it stays clamped at 0.
+	m.scrollActive(10)
+	if m.fileScroll != 0 {
+		t.Fatalf("fileScroll=%d, want 0 after pgup at top", m.fileScroll)
+	}
+	m.scrollActive(-10)
+	if m.fileScroll != 10 {
+		t.Fatalf("fileScroll=%d, want 10 after pgdn", m.fileScroll)
+	}
+	m.scrollActiveToEnd()
+	if m.fileScroll != 1<<30 {
+		t.Fatalf("fileScroll=%d, want end sentinel", m.fileScroll)
+	}
+	// Chat panes still scroll when the raw side is focused.
+	m.activePane = "raw"
+	m.rawTotal = 40
+	m.scrollActive(5)
+	if m.rawScroll != 5 {
+		t.Fatalf("rawScroll=%d, want 5", m.rawScroll)
+	}
+}
+
+func TestReadFileForDisplayWindowsAndCounts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "line-%02d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Window at the top: no above-note, below-note present.
+	body, total := readFileForDisplay(path, 10, 80, 0)
+	if total != 40 {
+		t.Fatalf("total=%d, want 40", total)
+	}
+	if !strings.Contains(body, "line-01") || strings.Contains(body, "lines above") {
+		t.Fatalf("top window wrong:\n%s", body)
+	}
+	if !strings.Contains(body, "lines below") {
+		t.Fatalf("top window missing below-note:\n%s", body)
+	}
+
+	// Mid-file offset shows both notes and the offset line.
+	body, _ = readFileForDisplay(path, 10, 80, 15)
+	if !strings.Contains(body, "line-16") ||
+		!strings.Contains(body, "lines above") ||
+		!strings.Contains(body, "lines below") {
+		t.Fatalf("mid window wrong:\n%s", body)
+	}
+
+	// Over-scroll clamps to the last window and reaches the final line.
+	body, _ = readFileForDisplay(path, 10, 80, 9999)
+	if !strings.Contains(body, "line-40") || strings.Contains(body, "lines below") {
+		t.Fatalf("tail window wrong:\n%s", body)
 	}
 }

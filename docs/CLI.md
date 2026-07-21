@@ -36,7 +36,7 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 |---|---|
 | `atlas init` | First-run wizard: probes hardware, picks a model, writes `.env` + `secrets/api-keys.json`. |
 | `atlas tier` | Hardware probe + tier classification (NVIDIA / AMD / Apple Silicon detection). `atlas tier list` shows the full tier table; `atlas tier fit` sizes the runtime (context / KV type / ubatch) for the configured model + GPU (see below). |
-| `atlas doctor` | Install diagnostic. GPU runtime, container health, endpoint reachability. Prints each result as it completes; `--json` buffers into one machine-readable document. |
+| `atlas doctor` | Install diagnostic. GPU runtime, container health, endpoint reachability, workspace-mount alignment (proxy and sandbox must bind the same host dir as `/workspace` — a silent split sends file tools and `run_command` to different filesystems). Prints each result as it completes; `--json` buffers into one machine-readable document. |
 | `atlas model list \| recommend \| install \| install-artifacts \| verify \| remove` | Model registry operations. `recommend` names the best registry model for this hardware; `install --url <hf>` fetches an **unregistered** model (drop-in / BYO); `install-artifacts <name>` fetches a registered model's published lens + ASA artifacts. |
 | `atlas onboard` | Guided drop-in for a new model: arch check, rebuild gate, lens-retrain guidance (see below). |
 | `atlas bench` | Generate + self-label candidates for the loaded model (baseline benchmark). Feeds `atlas lens build --from-results` (see below). |
@@ -194,7 +194,7 @@ the last message; pass an integer for the last N messages).
 | `/mouse on\|off` | Toggle mouse capture (off lets you copy text) |
 | `/copy [N]` | Copy the last N chat messages (default 1) to the clipboard — native clipboard tool first (`wl-copy`/`xclip`/`xsel`/`pbcopy`), OSC52 escape as the fallback (covers SSH) |
 | `/yank [N]` | Alias for `/copy` |
-| `/demo [short\|medium\|long]` | Exit to the split-pane recording demo: base agent vs V3, same proxy/model (default `medium`) |
+| `/demo [short\|medium\|long]` | Exit to the split-pane recording demo: base agent vs V3, same proxy/model (default `medium`). Both panes scroll: mouse wheel targets the pane under the cursor, `PgUp`/`PgDn` the focused side (`Tab` switches focus); in output review `↑`/`↓` line-steps and the file body scrolls the same way. |
 | `/quit` | Exit (same as `Ctrl+D`) |
 
 The `/add /drop /context` set is TUI-side state — file paths are
@@ -603,7 +603,7 @@ Verdict + exit code:
 | Verdict | Exit | Meaning |
 |---|---|---|
 | `compat` | 0 | Artifacts exist and accept this model's embedding dim. Ready to score. |
-| `needs-build` | 1 | Model loads but no cost_field.pt at the right dim. Run `atlas lens build`. |
+| `needs-build` | 1 | Model loads but no cost_field.pt at the right dim. The reason offers `atlas model install-artifacts <name>` when the registry has published artifacts for the loaded model; otherwise run `atlas lens build`. |
 | `incompatible` | 2 | Can't probe — llama-server unreachable, `/embedding` silent, etc. |
 
 Reports the model's embedding dim, layer count, hidden-states-patch status, the artifact dir it checked, and the artifact's own input dim. JSON mode produces a stable shape (`verdict`, `reason`, `probe.*`, `artifact_dir`, `artifact_dim`, `matched_model`, `exit_code`).
@@ -726,7 +726,7 @@ Verdict + exit code:
 | Verdict | Exit | Meaning |
 |---|---|---|
 | `compat` | 0 | Vector present + dim matches model. Ready for `--control-vector-scaled`. |
-| `needs-build` | 1 | No vector, or dim mismatched (vector was trained for a different model). |
+| `needs-build` | 1 | No vector, missing/mismatched `.model` marker, or dim mismatch. The reason offers `atlas model install-artifacts <name>` when the registry has a published vector for the loaded model; otherwise run `atlas asa build`. |
 | `incompatible` | 2 | llama-server unreachable. |
 
 Reports the vector's dim, layer count (from GGUF metadata), and the `model_hint` baked in by `build_steering_vector.py`. Resolves container-relative paths (`/models/x.gguf` on llama-server) to host-visible paths by trying `$ATLAS_MODELS_DIR` (shell env, then the Docker `.env`) and then `<atlas_root>/models/` — running `atlas asa check` on the host needs no manual path translation.
@@ -746,6 +746,8 @@ atlas asa build --limit 50                       # smoke test (50 pairs, ~1 min)
 atlas asa build --container atlas-geometric-lens-1   # override container name
 atlas asa build --dry-run                        # stage but don't run
 ```
+
+Model depth comes from llama-server's `/props` (`n_layer`); llama-server builds that omit it fall back to `<arch>.block_count` read from the model GGUF's header on the host. `--layer` is only needed when neither source is available (e.g. the model file isn't host-visible).
 
 Full 1000-pair training run takes ~25 min on the canonical RTX 5060 Ti. Smoke-test (`--limit 50`) is the fast path for validating the build pipeline works end-to-end before committing to the full run.
 

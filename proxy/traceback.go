@@ -36,6 +36,20 @@ var (
 // import form (`ModuleNotFoundError: No module named 'flask'`).
 var reMissingModule = regexp.MustCompile(`No module named '?([A-Za-z0-9_.]+)'?`)
 
+// Missing-binary shapes. bash spells it out ("bash: line 1: git: command
+// not found"); dash/sh abbreviates ("sh: 1: git: not found") — the sh form
+// requires the `sh: N:` prefix so a stray "<file>: not found" in program
+// output can't false-positive.
+var (
+	// Anchored to a real bash diagnostic — `bash: [line N: ]<cmd>: command
+	// not found` — so it can't fire on the string "X: command not found"
+	// appearing in ordinary program output (#147 review finding #9). Path
+	// prefixes on the shell name (/usr/bin/bash) and the `line N:` clause
+	// are both optional.
+	reCmdNotFoundBash = regexp.MustCompile(`(?m)(?:^|\s)(?:[\w./-]*/)?bash: (?:line \d+: )?([A-Za-z0-9._/+-]+): command not found`)
+	reCmdNotFoundSh   = regexp.MustCompile(`(?m)(?:^|\s)(?:/bin/)?sh: \d+: ([A-Za-z0-9._/+-]+): not found`)
+)
+
 // missingModuleSteer catches the uninstalled-dependency loop: the model runs
 // `python -m flask run` (or `python app.py`), the sandbox reports the package
 // isn't installed, and the model re-runs the identical command until the
@@ -78,6 +92,85 @@ func missingModuleSteer(ctx *AgentContext, output string) string {
 	sb.WriteString("Re-running the command before installing will fail exactly the same way.")
 	return sb.String()
 }
+
+// missingCommandSteer catches the missing-binary loop: the model runs a
+// command whose binary isn't in the sandbox image (`git clone ...` →
+// "bash: line 1: git: command not found"), then either re-runs it
+// identically into the repetition breaker or gives up outright (both
+// observed on the TB2 bench, 2026-07-18: git and sqlite3). The sandbox
+// runs non-root on a read-only base fs, so `apt-get install` can NEVER
+// work at runtime — without this steer the model has no way to know
+// that, and suggesting apt-get would just start a different loop. The
+// steer states the constraint and points at the escape hatches that DO
+// work: pip-installable equivalents (~/.local is writable, `python3 -m X`
+// avoids PATH issues) or a different approach with the preinstalled
+// toolchains. Returns "" when the output names no missing command.
+func missingCommandSteer(output string) string {
+	var cmd string
+	if m := reCmdNotFoundBash.FindStringSubmatch(output); m != nil {
+		cmd = m[1]
+	} else if m := reCmdNotFoundSh.FindStringSubmatch(output); m != nil {
+		cmd = m[1]
+	}
+	if cmd == "" {
+		return ""
+	}
+	cmd = filepath.Base(cmd) // "/usr/bin/foo: command not found" → foo
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[system note]: The command failed because `%s` is not installed in the sandbox, and system packages CANNOT be installed at runtime (non-root, read-only base — apt-get/sudo will not work). Re-running the same command will fail identically. ", cmd)
+	sb.WriteString("Instead: if a Python equivalent exists, `pip install <package>` works (invoke it as `python3 -m <module>` to avoid PATH issues); otherwise use one of the preinstalled toolchains (python3/pip, node/npm, go, cargo, ruby, php, java) or accomplish the step a different way.")
+	return sb.String()
+}
+
+// brokenInlineScriptSteer catches the broken-verification-command loop: the
+// model tries to verify its solution with `python -c "<multi-statement
+// script>"` — a script containing a `def`/`for`/`if`/`class` body that can't
+// live on a single -c line — so the command fails with a SyntaxError in the
+// `-c` argument ITSELF, not in the file being tested. The model then re-runs
+// the same malformed command (observed TB2 2026-07-19, regex-chess: the
+// solution file re.json may be fine; the verify one-liner had `def` inline
+// and never parsed) until the repetition breaker ends the session with the
+// solution unverified. Steer it to move the test into a file. Keyed on a
+// syntax error in code compiled from a string ("<string>") plus an inline
+// -c/-command invocation, so a genuine syntax error in a real .py file (which
+// tracebackSteer handles) doesn't match. Returns "" otherwise.
+func brokenInlineScriptSteer(command, output string) string {
+	// Signal the inline script is the error site: Python attributes errors
+	// in code compiled from a string to "<string>"/"<stdin>" (a real file
+	// error names the file). This is robust to output truncation — the
+	// "<string>" frame is printed BEFORE the "SyntaxError:" line, so a
+	// clipped sandbox result keeps the frame but may drop the keyword
+	// (observed TB2 2026-07-19: the SyntaxError line was truncated away and
+	// the keyword-gated check missed the loop).
+	fromString := strings.Contains(output, `File "<string>"`) ||
+		strings.Contains(output, `File "<stdin>"`)
+	inlineFlag := strings.Contains(command, " -c ") ||
+		strings.Contains(command, " -c\"") ||
+		strings.Contains(command, "\t-c ")
+	if !fromString || !inlineFlag {
+		return ""
+	}
+	// If the -c script execs external code (exec(open(f).read()),
+	// eval/compile), a SyntaxError in THAT code is also attributed to
+	// "<string>" — the bug is in the exec'd file, not the one-liner, so
+	// "move your test to a file" is wrong advice (#147 review finding #11).
+	if strings.Contains(command, "exec(") || strings.Contains(command, "eval(") ||
+		strings.Contains(command, "compile(") {
+		return ""
+	}
+	// If a REAL file frame also appears, the error is in a module the -c
+	// script imported, not the inline script itself — tracebackSteer
+	// localizes that. Don't misfire "move your test to a file" onto a
+	// genuine solution bug.
+	if reRealFileFrame.MatchString(output) {
+		return ""
+	}
+	return "[system note]: The error is in your inline `-c` script itself, not in the file you are testing — a multi-statement script (with a `def`/`for`/`if`/`class` body) cannot be written on a single `python -c` line. Your solution file may be correct; only the verification command is malformed. Write the test to a `.py` file with write_file, then run it with `run_command`: `python3 <testfile>.py`. Re-running the same `-c` one-liner will fail the same way."
+}
+
+// reRealFileFrame matches a traceback frame naming a real file (not the
+// <string>/<stdin> pseudo-files that -c/exec/eval produce).
+var reRealFileFrame = regexp.MustCompile(`File "[^<][^"]*"`)
 
 // missingFileSteer catches the case-typo loop: the model writes
 // `requirements.txt` then runs `pip install -r Requirements.txt`, gets "No
