@@ -3,8 +3,8 @@
 Verifies an ATLAS install is healthy end-to-end. Runs ~20 checks across
 the host environment, the docker stack, and a live request through the
 proxy: individual checks (docker, compose, nvidia, model_file,
-lens_weights, sqlite_state, image_skew, tier_match (PC-055),
-tier_constraints (PC-055.1), asa_steering (BiasBusters #4),
+lens_weights, sqlite_state, workspace_mounts, image_skew, tier_match
+(PC-055), tier_constraints (PC-055.1), asa_steering (BiasBusters #4),
 e2e_smoke), five per-container state checks (one per service in
 `EXPECTED_SERVICES`), and five per-endpoint health checks. Designed to
 be the answer to "is it really working?" — both for humans (pretty
@@ -62,77 +62,15 @@ def _supports_unicode() -> bool:
 UNICODE_OK = _supports_unicode()
 DASH       = "—" if UNICODE_OK else "--"
 
-def _read_dotenv() -> Dict[str, str]:
-    """Parse the compose .env (the Docker deployment's source of truth) by
-    walking up from this file. Lets the model/dir checks reflect what's actually
-    configured when the shell env doesn't export ATLAS_MODEL_FILE."""
-    cur = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(8):
-        envp = os.path.join(cur, ".env")
-        if os.path.exists(envp):
-            out: Dict[str, str] = {}
-            try:
-                with open(envp, encoding="utf-8-sig") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("export "):
-                            line = line[len("export "):].lstrip()
-                        if line and not line.startswith("#") and "=" in line:
-                            k, v = line.split("=", 1)
-                            # Drop a whitespace-preceded inline comment.
-                            stripped = v.lstrip()
-                            if stripped.startswith("#") and stripped != v:
-                                # Empty value followed by an inline comment
-                                # ("KEY= # note") parses as empty.
-                                v = ""
-                            else:
-                                v = stripped
-                                head, hash_sep, _ = v.partition("#")
-                                if hash_sep and head and head[-1] in " \t":
-                                    v = head
-                            out[k.strip()] = v.strip().strip('"').strip("'")
-            except OSError:
-                # An unreadable optional .env is treated as absent; doctor
-                # continues with process-environment values and diagnostics.
-                pass
-            return out
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    return {}
-
-
-_ENV = _read_dotenv()
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name) or _ENV.get(name)
-    if raw in (None, ""):
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-# Defaults — shell env first, then the compose .env's port keys. Model
-# selection has no vendor fallback: the installer must choose a concrete
-# model explicitly.
-PROXY_URL    = compose_config.service_url("proxy",   values=_ENV)
-LLAMA_URL    = compose_config.service_url("llama",   values=_ENV)
-LENS_URL     = compose_config.service_url("lens",    values=_ENV)
-SANDBOX_URL  = compose_config.service_url("sandbox", values=_ENV)
-V3_URL       = compose_config.service_url("v3",      values=_ENV)
-MODEL_DIR    = os.environ.get("ATLAS_MODELS_DIR")  or _ENV.get("ATLAS_MODELS_DIR", "./models")
-MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE")  or _ENV.get("ATLAS_MODEL_FILE", "")
-MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME")  or _ENV.get("ATLAS_MODEL_NAME", "local-model")
-LLAMA_PORT   = _env_int("ATLAS_LLAMA_PORT", 8080)
-# Match docker-compose.yml's `${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}`
-# host-side bind-mount source so doctor checks the same directory the
-# container will actually receive.
-LENS_MODELS_DIR = (os.environ.get("ATLAS_LENS_MODELS")
-                   or _ENV.get("ATLAS_LENS_MODELS")
-                   or "./geometric-lens/geometric_lens/models")
+# Env-derived defaults live in atlas.cli.env (shared with fit, lens,
+# publish); re-imported here so doctor.MODEL_FILE-style access keeps
+# working. Monkeypatching doctor.<NAME> steers doctor's own checks only —
+# fit/lens/publish read atlas.cli.env directly, so patch that module to
+# steer them.
+from atlas.cli.env import (
+    _ENV, PROXY_URL, LLAMA_URL, LENS_URL, SANDBOX_URL, V3_URL,
+    MODEL_DIR, MODEL_FILE, MODEL_NAME, LLAMA_PORT, LENS_MODELS_DIR,
+)
 
 EXPECTED_SERVICES = [
     "llama-server", "geometric-lens",
@@ -1053,6 +991,54 @@ def check_tier_match() -> CheckResult:
         f"hardware (under-utilized but safe)")
 
 
+def check_workspace_mounts(services: List[Dict]) -> CheckResult:
+    """Proxy and sandbox must bind the SAME host directory as /workspace.
+
+    The proxy serves read_file/write_file against ITS /workspace while
+    run_command executes in the SANDBOX's /workspace. When the two
+    containers are recreated at different times with different
+    ATLAS_PROJECT_DIR values (or one from a different cwd), they silently
+    bind different host directories — file tools then operate on a
+    different filesystem than shell commands, the agent is told files
+    that exist "don't exist", and nothing else detects it (every /health
+    passes). Observed live 2026-07-18: proxy bound to the repo, sandbox
+    to the project dir; every agent session gave up believing its files
+    were missing.
+    """
+    names: Dict[str, str] = {}
+    for s in services:
+        svc = s.get("Service", "")
+        if svc in ("atlas-proxy", "sandbox") and s.get("State") == "running":
+            names[svc] = s.get("Name") or ""
+    if len(names) < 2:
+        return CheckResult("workspace_mounts", "skip",
+            "proxy or sandbox not running (see container checks)")
+    fmt = '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+    sources: Dict[str, str] = {}
+    for svc, cname in names.items():
+        rc, out, err = _run(["docker", "inspect", cname, "--format", fmt])
+        if rc != 0:
+            return CheckResult("workspace_mounts", "skip",
+                f"docker inspect {cname} failed", (err or out)[:200])
+        sources[svc] = out.strip()
+    proxy_src = sources.get("atlas-proxy", "")
+    sandbox_src = sources.get("sandbox", "")
+    if not proxy_src or not sandbox_src:
+        return CheckResult("workspace_mounts", "warn",
+            "no /workspace bind mount found on proxy or sandbox",
+            f"proxy={proxy_src or '(none)'} sandbox={sandbox_src or '(none)'}")
+    if os.path.realpath(proxy_src) == os.path.realpath(sandbox_src):
+        return CheckResult("workspace_mounts", "pass",
+            f"proxy and sandbox share {proxy_src}")
+    return CheckResult("workspace_mounts", "fail",
+        "proxy and sandbox bind DIFFERENT host dirs as /workspace "
+        f"{DASH} file tools and run_command are operating on different "
+        "filesystems (agent sessions will see missing files)",
+        f"proxy={proxy_src} sandbox={sandbox_src} {DASH} set "
+        "ATLAS_PROJECT_DIR to your project directory in .env, then "
+        "`docker compose up -d --force-recreate atlas-proxy sandbox`")
+
+
 def check_image_skew(services: List[Dict]) -> CheckResult:
     """PC-052 follow-up: warn if the 5 atlas-* images aren't on the same tag."""
     atlas_imgs = [s.get("Image", "") for s in services
@@ -1351,6 +1337,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the lens container answered above; skips cleanly otherwise.
     if any(r.status == "pass" for r in container_results):
         _add(check_sqlite_state())
+
+    # 9.5. Workspace mount alignment — proxy file tools and sandbox
+    # run_command must see the same host directory as /workspace, or the
+    # agent operates split-brained (reads/writes one dir, runs commands
+    # in another) with every /health still green.
+    _add(check_workspace_mounts(services))
 
     # 10. Image-tag skew (PC-052)
     _add(check_image_skew(services))

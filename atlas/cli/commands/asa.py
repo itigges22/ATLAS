@@ -47,6 +47,7 @@ from typing import List, Optional
 
 from atlas.cli import compose as compose_config
 from atlas.cli.commands import lens as lens_module  # for shared helpers
+from atlas.cli.commands import model_registry
 
 
 # Output primitives — mirror lens.py for cross-module UX consistency.
@@ -118,6 +119,26 @@ def _atlas_root() -> str:
     """Reuse lens.py's resolution so both subcommand families walk up the
     same way."""
     return lens_module._atlas_root()
+
+
+def _gguf_block_count(path: str) -> int:
+    """Model depth from the GGUF header (`<arch>.block_count`), 0 on any
+    failure. Fallback for llama-server builds whose /props carries no
+    n_layer. Keyed off general.architecture, so any GGUF works."""
+    import struct
+    try:
+        from atlas.cli.gguf import read_gguf_kv
+        found = {}
+        with open(path, "rb") as f:
+            for key, val in read_gguf_kv(f):
+                if key == "general.architecture" or key.endswith(".block_count"):
+                    found[key] = val
+                arch = found.get("general.architecture")
+                if arch and f"{arch}.block_count" in found:
+                    return int(found[f"{arch}.block_count"])
+    except (OSError, ValueError, struct.error):
+        return 0
+    return 0
 
 
 def _canonical_model_identity(value: Optional[str]) -> str:
@@ -257,6 +278,9 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
     configured = _configured_vector_path(atlas_root)
     vpath = _host_resolve_vector_path(configured, atlas_root)
     meta = _read_cvector_meta(vpath)
+    # Appended to every needs-build reason: when the registry has a
+    # published vector for the loaded model, downloading beats retraining.
+    dl_hint = model_registry.artifact_download_hint(probe.model_name, "asa")
     v = ASACheckVerdict(
         verdict="needs-build",
         reason=meta["error"] or "no control vector at " + vpath,
@@ -271,7 +295,8 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
 
     if not meta["present"]:
         v.reason = (f"no control vector at {vpath}. Run `atlas asa build` "
-                    f"to train one, or drop a pre-built .gguf at the path.")
+                    f"to train one, or drop a pre-built .gguf at the path."
+                    f"{dl_hint}")
         return v
 
     marker_path = vpath + ".model"
@@ -284,13 +309,15 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
     if not v.vector_model_marker:
         v.reason = (f"control vector is present but {marker_path} is missing. "
                     "The inference entrypoint will keep it disabled; run "
-                    "`atlas asa build` to create a verified vector and marker.")
+                    "`atlas asa build` to create a verified vector and marker."
+                    f"{dl_hint}")
         return v
     if (selected_model and _canonical_model_identity(v.vector_model_marker)
             != _canonical_model_identity(selected_model)):
         v.reason = (f"control vector is marked for {v.vector_model_marker!r}, "
                     f"but llama-server has {selected_model!r} loaded. The "
-                    "entrypoint will keep it disabled; run `atlas asa build`.")
+                    "entrypoint will keep it disabled; run `atlas asa build`."
+                    f"{dl_hint}")
         return v
 
     if meta["dim"] is None:
@@ -312,7 +339,7 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
         v.reason = (f"Dim mismatch: control vector at {vpath} is "
                     f"{meta['dim']}-dim, but model emits {probe.embedding_dim}-dim "
                     f"residuals. Vector was trained for a different model; "
-                    f"run `atlas asa build` to retrain.")
+                    f"run `atlas asa build` to retrain.{dl_hint}")
         return v
 
     v.verdict = "compat"
@@ -358,6 +385,11 @@ def _emit_check(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  model marker: {v.vector_model_marker or '(missing)'}")
     _safe_print("")
     _safe_print(f"  {v.reason}")
+    if v.verdict != "compat":
+        _safe_print("")
+        _safe_print("  This is the ASA-only view. `atlas doctor` runs the "
+                    "full stack diagnosis (service health, auth, disk, "
+                    "lens/ASA state) if the fix above isn't enough.")
     return v.exit_code
 
 
@@ -439,12 +471,24 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                 f"container running")
     layer = args.layer
     if layer is None:
-        if not probe.n_layers:
+        n_layers = probe.n_layers
+        if not n_layers and probe.model_name:
+            # Some llama-server builds omit n_layer from /props; read
+            # <arch>.block_count from the model's GGUF header instead.
+            model_host = _host_resolve_vector_path(probe.model_name, atlas_root)
+            if os.path.isfile(model_host):
+                n_layers = _gguf_block_count(model_host)
+                if n_layers:
+                    _safe_print(f"  model depth {n_layers} read from GGUF "
+                                f"header ({os.path.basename(model_host)})")
+        if not n_layers:
             _safe_print(f"  {RED if color else ''}can't derive an ASA layer: "
-                        f"llama-server did not report model depth. Pass "
-                        f"--layer explicitly.{RESET if color else ''}")
+                        f"llama-server did not report model depth and the "
+                        f"model GGUF was not readable on this host. Pass "
+                        f"--layer explicitly (e.g. --layer 36 for a 48-layer "
+                        f"model: depth × 0.75).{RESET if color else ''}")
             return 2
-        layer = max(1, round(probe.n_layers * 0.75))
+        layer = max(1, round(n_layers * 0.75))
     if (args.model and probe.model_name
             and _canonical_model_identity(args.model)
             != _canonical_model_identity(probe.model_name)):

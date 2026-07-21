@@ -51,10 +51,16 @@ def test_architecture_header_matches():
 def test_changelog_top_entry_matches():
     version = _truth()
     text = (REPO / "CHANGELOG.md").read_text()
-    m = re.search(r"^## \[([^\]]+)\]", text, re.M)
-    assert m, "CHANGELOG.md must contain a '## [X.Y.Z]' release heading"
-    assert m.group(1) == version, (
-        f"CHANGELOG.md top entry is [{m.group(1)}], "
+    # An optional leading [Unreleased] section (Keep-a-Changelog
+    # convention for merged-but-untagged work) sits above the release
+    # entries; the version sync-check applies to the first RELEASE
+    # heading below it.
+    headings = re.findall(r"^## \[([^\]]+)\]", text, re.M)
+    assert headings, "CHANGELOG.md must contain a '## [X.Y.Z]' release heading"
+    releases = [h for h in headings if h.lower() != "unreleased"]
+    assert releases, "CHANGELOG.md must contain a release heading besides [Unreleased]"
+    assert releases[0] == version, (
+        f"CHANGELOG.md top release entry is [{releases[0]}], "
         f"pyproject.toml says {version} — add the release entry")
 
 

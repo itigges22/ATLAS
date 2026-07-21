@@ -390,6 +390,17 @@ def _configured_lens_models_dir(atlas_root: str) -> Optional[str]:
 
 
 def _check_model(arg: Optional[str], atlas_root: str) -> CheckVerdict:
+    """Probe + verdict, with the registry download hint appended to any
+    needs-build reason — when published lens artifacts exist for the
+    loaded model, downloading beats retraining."""
+    v = _check_model_inner(arg, atlas_root)
+    if v.verdict == "needs-build":
+        v.reason += model_registry.artifact_download_hint(
+            v.probe.model_name, "lens")
+    return v
+
+
+def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
     """The actual probe + verdict logic. Pure function for testability."""
     probe = probe_llama()
     if not probe.reachable:
@@ -576,6 +587,11 @@ def _emit_check(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  registry hit: {v.matched_model}")
     _safe_print("")
     _safe_print(f"  {v.reason}")
+    if v.verdict != "compat":
+        _safe_print("")
+        _safe_print("  This is the lens-only view. `atlas doctor` runs the "
+                    "full stack diagnosis (service health, auth, disk, "
+                    "lens/ASA state) if the fix above isn't enough.")
     return v.exit_code
 
 
@@ -2008,10 +2024,10 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     model_file = ""
     size_gb = 0.0
     try:
-        from atlas.cli.commands import doctor
-        model_file = doctor.MODEL_FILE
-        base = (doctor.MODEL_DIR if os.path.isabs(doctor.MODEL_DIR)
-                else os.path.join(atlas_root, doctor.MODEL_DIR))
+        from atlas.cli import env as cli_env
+        model_file = cli_env.MODEL_FILE
+        base = (cli_env.MODEL_DIR if os.path.isabs(cli_env.MODEL_DIR)
+                else os.path.join(atlas_root, cli_env.MODEL_DIR))
         size_gb = round(os.path.getsize(
             os.path.join(base, model_file)) / (1024 ** 3), 1)
     except Exception:

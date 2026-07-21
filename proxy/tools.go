@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -178,6 +179,20 @@ func readFileTool() *ToolDef {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
 
+			// Binary-file guard: reading a compiled binary / image /
+			// archive as text returns garbage the model can't use, after
+			// which it gives up or loops (observed TB2 2026-07-19,
+			// extract-elf: read the ELF as text, never reached for the
+			// analysis tools that were installed). Point it at the right
+			// tools instead of handing back the raw bytes.
+			if isBinaryContent(data) {
+				return &ToolResult{
+					Success: false,
+					Error: fmt.Sprintf("read_file: %q is a binary file, not text — reading it as text is not useful. Inspect it with run_command instead: `strings %q` (printable strings), `readelf -a %q` or `objdump -d %q` (ELF headers / disassembly), `nm %q` (symbols), `file %q` (type), or `xxd %q | head` (hex dump).",
+						input.Path, input.Path, input.Path, input.Path, input.Path, input.Path, input.Path),
+				}, nil
+			}
+
 			lines := strings.Split(string(data), "\n")
 			totalLines := len(lines)
 
@@ -207,7 +222,42 @@ func readFileTool() *ToolDef {
 			}
 
 			content := sb.String()
-			ctx.RecordFileRead(path, string(data))
+			// HARNESS-13: cap the returned BYTES so one huge read can't blow
+			// the model's context window. A model that gunzips a data file
+			// and read_files it (observed TB2 2026-07-19, gcode-to-text: a
+			// decompressed G-code file read with limit:100000 -> 2.26M tokens
+			// -> hard 400 exceed_context_size, which the force-trim retry
+			// can't fix because the single message alone overflows). The cap
+			// is UNCONDITIONAL: a line `limit` does not bound bytes (100k
+			// lines of G-code is enormous), so capping only unbounded reads
+			// left the hole open. Truncate at a line boundary and tell the
+			// model to narrow the range or process the file with a command.
+			truncated := false
+			shownEnd := end // 1-past the last line actually returned
+			if len(content) > maxReadFileBytes {
+				cut := maxReadFileBytes
+				if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
+					cut = nl + 1
+				}
+				shown := strings.Count(content[:cut], "\n")
+				content = content[:cut] + fmt.Sprintf(
+					"\n... [read_file truncated: showing the first %d of %d lines (%d bytes). This file is too large to read whole. Read a specific range with offset/limit, or process it with run_command (grep/awk/sed/head, or a python script) instead of loading it all into context.]",
+					shown, totalLines, len(data))
+				truncated = true
+				shownEnd = start + shown
+				if shownEnd > totalLines {
+					shownEnd = totalLines
+				}
+			}
+			// #147 review finding #10: on a truncated read the model only
+			// saw the head, so record ONLY that — otherwise the redundant-read
+			// dedup later asserts the whole file is in context and short-
+			// circuits a real re-read. Untruncated reads record the full bytes.
+			recorded := string(data)
+			if truncated {
+				recorded = strings.Join(lines[start:shownEnd], "\n")
+			}
+			ctx.RecordFileRead(path, recorded)
 			// PC-194 — register the read so the pattern-matching gate
 			// on write_file knows the model has actually inspected a
 			// sibling before generating a new file in the same dir.
@@ -232,7 +282,7 @@ func readFileTool() *ToolDef {
 				Content:    content,
 				TotalLines: totalLines,
 				StartLine:  start + 1,
-				EndLine:    end,
+				EndLine:    shownEnd, // #147 review #15: actual last line returned, not the pre-truncation end
 			}
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
@@ -682,7 +732,19 @@ func writeFileTool() *ToolDef {
 			// V3 takes the model's content as baseline candidate, generates diverse
 			// alternatives via PlanSearch/DivSampling, build-verifies each, and
 			// selects the best. This is the intelligence layer.
-			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 {
+			//
+			// EXCEPT during an active edit-test-fix loop: once the model has
+			// written this file and just saw it fail a run, the next write is
+			// a targeted fix, and V3's full pipeline (minutes per call, and on
+			// a mid-debug file frequently "completes without result" and falls
+			// back anyway) throttles iteration to a handful of cycles. TB2
+			// 2026-07-19: polyglot got ~5 writes in 25 min, ~4 min of V3 stall
+			// each, when it needed 10-15 fast cycles. Fast-path (direct, still
+			// syntax-gated below) so the model can iterate at run speed. V3
+			// still owns the FIRST write of each file (the baseline generation
+			// where it adds value).
+			iterating := isActiveDebugIteration(ctx, input.Path)
+			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 && !iterating {
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
 				res, err := writeFileWithV3(path, input.Content, ctx)
 				if err == nil && res != nil && res.Success {
@@ -690,8 +752,58 @@ func writeFileTool() *ToolDef {
 				}
 				return res, err
 			}
+			if iterating {
+				log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
+				// The file already exists this session; read its on-disk
+				// content once and run both gates against it with the
+				// healthy->broken rule edit_file uses — block only a NEWLY
+				// introduced defect, allow a repair-in-progress on
+				// already-broken content. Without the healthy->broken guard
+				// the syntax gate would hard-block content the strict checker
+				// rejects both before AND after (a multi-doc YAML or JSONC
+				// config being iterated), which is exactly why the T0/T1
+				// direct path below carries no syntax gate.
+				original, origOK := readOriginalForGate(path)
+				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+					if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, original); wasHealthy {
+						return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, input.Content, synErr)}, nil
+					}
+					log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
+				}
+				// #147 review finding #1: the fast-path skips V3 (and its
+				// structural veto), so it needs the same structural gate
+				// edit_file/ast_edit have — otherwise a fast-path rewrite that
+				// introduces render_template lands as verified and 500s. A new
+				// unresolved call vs the on-disk state blocks; an unreadable
+				// original skips the gate (fail open).
+				if origOK {
+					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+						log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
+					}
+				}
+			}
 			if ctx.BypassV3 {
 				log.Printf("[write_file] V3 bypassed (demo baseline pane) — direct write %s", input.Path)
+			}
+
+			// #147: the T0/T1 direct path skipped the structural gate — a
+			// sub-10-line .py calling an unimported name landed as verified,
+			// the same NameError class the edit path blocks. Structural gate
+			// ONLY (.py-scoped, healthy->broken, fail-open): a syntax gate
+			// here would hard-block legitimate non-parsing T1 content that
+			// this branch exists to handle (JSONC, multi-doc and templated
+			// YAML, scaffold .py templates). An unreadable existing original
+			// skips the gate (fail open) — treating it as empty would count
+			// every pre-existing call as introduced. BypassV3 stays ungated
+			// so the demo baseline pane shows the raw model.
+			if !iterating && !ctx.BypassV3 {
+				if original, ok := readOriginalForGate(path); ok {
+					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
+					}
+				}
 			}
 
 			// T1: Direct write — config, data, boilerplate
@@ -702,6 +814,137 @@ func writeFileTool() *ToolDef {
 			return res, err
 		},
 	}
+}
+
+// isActiveDebugIteration reports whether the model is in a tight edit-
+// test-fix loop on `path`: it has already written this file this session
+// AND the most recent tool action was a run_command/run_background that
+// FAILED with output referencing this file. In that state the next write
+// is a targeted fix for an error the model just saw, so the full V3
+// pipeline only adds latency (and on a mid-debug file often "completes
+// without result"). Fast-path those writes so iteration runs at test
+// speed. The FIRST write of a file (SessionWrites false) still gets V3 —
+// that is where V3's generation adds value.
+func isActiveDebugIteration(ctx *AgentContext, path string) bool {
+	if ctx == nil || !ctx.SessionWrites[path] {
+		return false
+	}
+	base := filepath.Base(path)
+	for i := len(ctx.Messages) - 1; i >= 0; i-- {
+		m := ctx.Messages[i]
+		if m.Role != "tool" {
+			continue
+		}
+		// Only the MOST RECENT tool action counts: if the model's last
+		// step was a read or an edit rather than a failing run, it isn't
+		// mid-test-fix on this file.
+		if m.ToolName != "run_command" && m.ToolName != "run_background" {
+			return false
+		}
+		return strings.Contains(m.Content, `"success":false`) &&
+			mentionsFilename(m.Content, base)
+	}
+	return false
+}
+
+// mentionsFilename reports whether `base` appears in text as a whole
+// filename token, not as a substring of a longer name (#147 review finding
+// #12: a.py must not match data.py, main.py must not match domain.py). The
+// character on each side of a real occurrence must not be a filename
+// character (letter, digit, _, ., -), so `webapp.py` and `app.python` don't
+// count while `./app.py`, `"app.py"`, and ` app.py:12` do.
+func mentionsFilename(text, base string) bool {
+	if base == "" {
+		return false
+	}
+	isNameChar := func(b byte) bool {
+		return b == '_' || b == '.' || b == '-' ||
+			(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], base)
+		if j < 0 {
+			return false
+		}
+		start := i + j
+		end := start + len(base)
+		leftOK := start == 0 || !isNameChar(text[start-1])
+		rightOK := end == len(text) || !isNameChar(text[end])
+		if leftOK && rightOK {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+// readFileByteCap returns the byte cap for a single read_file result.
+// Derived from the per-slot context so one read can't overflow it — and
+// sized for the WORST-CASE tokenization of ~1 token/char (dense content:
+// G-code, minified JS, base64), not the chars/4 average. A fixed 120 KB
+// cap was safe for prose but not dense content: TB2 gcode-to-text read a
+// capped 120 KB G-code page that still tokenized to 120k tokens and 400'd
+// the 32k slot. Half the per-slot context in bytes guarantees even
+// 1-token/char content uses at most half the window, leaving room for the
+// system prompt, tools, and reply; the force-trim retry (HARNESS-6) then
+// handles any residual pressure since no single message is huge. Clamped
+// to [2 KB, 200 KB]. Tunable via ATLAS_MAX_READ_BYTES.
+func readFileByteCap() int {
+	if v := envOr("ATLAS_MAX_READ_BYTES", ""); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	perSlot := 32768
+	if b := conversationTokenBudget(); b > 0 {
+		// budget already reserves reply + margin; treat it as a
+		// worst-case char cap (1 token/char) and take half for a
+		// single read so other context still fits.
+		perSlot = b
+	}
+	// Half the per-slot budget: a single read uses at most half the window
+	// even at ~1 token/char. The lower clamp must stay AT OR BELOW that
+	// half — a fixed 16 KB floor could exceed a small-context slot's whole
+	// budget and re-introduce the overflow this cap exists to prevent
+	// (#147 review finding #6). 2 KB is a sane minimum and, since the token
+	// budget floors at 4000, never actually raises the derived value.
+	cap := perSlot / 2
+	if cap < 2_000 {
+		cap = 2_000
+	}
+	if cap > 200_000 {
+		cap = 200_000
+	}
+	return cap
+}
+
+var maxReadFileBytes = readFileByteCap()
+
+// isBinaryContent reports whether data looks like a binary (non-text)
+// file. A NUL byte in the head is the reliable signal — text encodings
+// (UTF-8/ASCII) never contain NUL, while compiled binaries, images, and
+// archives are full of them. Scans a bounded head so a large file is cheap.
+func isBinaryContent(data []byte) bool {
+	// UTF-16/UTF-32 text legitimately contains NUL bytes; a Unicode BOM
+	// identifies it as text, not binary (#147 review finding #7).
+	if len(data) >= 2 {
+		b0, b1 := data[0], data[1]
+		if (b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF) { // UTF-16 LE/BE
+			return false
+		}
+	}
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF { // UTF-8 BOM
+		return false
+	}
+	n := len(data)
+	if n > 8000 {
+		n = 8000
+	}
+	for i := 0; i < n; i++ {
+		if data[i] == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // writeFileDirect writes content to disk atomically (write tmp + rename).
@@ -748,10 +991,18 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		WorkingDir:   ctx.WorkingDir,
 	}
 
-	// Add project context from files read during this session
+	// Add project context from files read during this session. The target
+	// file's own PRE-EDIT snapshot is excluded: its current symbols come
+	// from the baseline, and stale content would let the in-pipeline veto
+	// credit a def this write deletes (#147 review finding #2 — same rule
+	// as checkStructuralUnresolved).
+	cleanTarget := filepath.Clean(path)
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
 		for p, content := range filesRead {
+			if filepath.Clean(p) == cleanTarget {
+				continue
+			}
 			relPath, _ := filepath.Rel(ctx.WorkingDir, p)
 			if relPath == "" {
 				relPath = p
@@ -764,11 +1015,45 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 	}
 
+	// Files this session WROTE are project context too — previously only
+	// files the model had read were included, so written-but-never-read
+	// siblings were invisible to candidate generation (2026-07-18: V3
+	// generated an app.py blind to the session's own templates/index.html
+	// and static/game.js, and the winner inlined its page, orphaning
+	// both). Disk content wins over any stale read snapshot: the on-disk
+	// version is what verification produced.
+	for rel := range ctx.SessionWrites {
+		if rel == "" {
+			continue
+		}
+		abs := resolveAgentPath(ctx, rel)
+		if abs == path {
+			continue // the file being generated is the baseline, not context
+		}
+		data, rerr := os.ReadFile(abs)
+		if rerr != nil {
+			continue
+		}
+		content := string(data)
+		if len(content) > 4000 {
+			content = content[:4000] + "\n... (truncated)"
+		}
+		if req.ProjectContext == nil {
+			req.ProjectContext = make(map[string]string)
+		}
+		req.ProjectContext[rel] = content
+	}
+
 	// Add project info if available
 	if ctx.Project != nil {
 		req.Framework = ctx.Project.Framework
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
+
+	// V3.2 RPG (issue #120): if this file maps to an RPG node, thread the
+	// node's planned interface (signatures, input/output edges) into the
+	// generation request. Empty for the flat planner.
+	req.Constraints = planConstraintsForTarget(ctx, path)
 
 	// Tell the user V3 is taking over so they don't think the file
 	// vanished. write_file with V3 holds the disk write until V3 picks
@@ -919,14 +1204,48 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 				Error:   "write_file cancelled — no content was written",
 			}, nil
 		}
-		// Fallback to direct write if V3 service unavailable
+		// Fallback to direct write if V3 service unavailable — but never
+		// land content the sandbox confirms is broken: a truncated tool
+		// call writing a SyntaxError to disk with success=true is how the
+		// mini-bench got its two broken files (t06/t09).
 		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
+		if synErr, ok := checkFallbackSyntax(ctx, path, baselineContent); !ok {
+			log.Printf("[write_file] fallback content for %s failed syntax gate: %s", path, truncateStr(synErr, 120))
+			return &ToolResult{Success: false,
+				Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
+		}
+		// #147: structural gate on the fallback too. It matters on the
+		// DeadlineExceeded case \u2014 /generate timed out but the service is
+		// up, so /internal/structural_check (own 5s timeout) still
+		// answers; when the service is genuinely down the gate fails open.
+		if original, ok := readOriginalForGate(path); ok {
+			if introduced := editIntroducesUnresolved(ctx, path, original, baselineContent); len(introduced) > 0 {
+				log.Printf("[write_file] fallback content introduces unresolved call(s) %v in %s \u2014 rejecting", logPaths(introduced), logPath(path))
+				return &ToolResult{Success: false, Error: structuralWriteRejection(path, introduced)}, nil
+			}
+		}
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
 		if errors.Is(err, context.DeadlineExceeded) {
 			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
 		}
 		ctx.Stream("text", map[string]string{"content": msg})
 		return writeFileDirect(path, baselineContent)
+	}
+
+	// V3.2 RPG (issue #120): automatic node-local regeneration on drift. When
+	// the winning candidate missed its planned signatures, retry once with the
+	// missing signatures injected as a hard constraint before accepting it.
+	// No-op when RPG is off (req.Constraints empty) or there was no drift.
+	v3Result = regenerateOnDrift(ctx, req, v3Result)
+	// The regen is a second full V3 run — recheck cancellation before the
+	// disk write, mirroring the main call's abort path above: a user cancel
+	// during the retry window must not land content on disk.
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		log.Printf("[write_file] cancelled during RPG regen — not writing %s", path)
+		return &ToolResult{
+			Success: false,
+			Error:   "write_file cancelled — no content was written",
+		}, nil
 	}
 
 	// Write the winning candidate (or baseline if V3 didn't improve)
@@ -944,10 +1263,70 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		code = cleaned
 	}
 
-	// Stream V3 completion summary
+	// #147: authoritative structural gate on whatever is about to land —
+	// the in-pipeline veto only prunes phase-1 sandbox-passing candidates,
+	// so probe/repair returns, the energy fallback, and the baseline
+	// resurrection above can all deliver content that calls a name the
+	// file never binds. Same rule as the edit paths: original is the
+	// on-disk content (empty for a first write), only NEWLY unresolved
+	// calls block, and an unreadable existing original skips the gate.
+	// When the WINNER fails but the model's own baseline passes, write
+	// the baseline instead of rejecting: the offending call is V3-
+	// authored, and a rejection would blame the model for content it
+	// never wrote and cost a full pipeline retry per resend.
+	fellBack := false
+	if original, origOK := readOriginalForGate(path); origOK {
+		if introduced := editIntroducesUnresolved(ctx, path, original, code); len(introduced) > 0 {
+			if code != baselineContent {
+				if synErr, synOK := checkFallbackSyntax(ctx, path, baselineContent); !synOK {
+					return &ToolResult{Success: false,
+						Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
+				}
+				if intrBase := editIntroducesUnresolved(ctx, path, original, baselineContent); len(intrBase) == 0 {
+					log.Printf("[write_file] V3 winner introduces unresolved call(s) %v in %s — writing gate-passing baseline instead", logPaths(introduced), logPath(path))
+					if ctx.StreamFn != nil {
+						ctx.StreamFn("v3_progress", map[string]string{
+							"message": "  └─ V3 winner failed the structural gate — writing your version",
+						})
+					}
+					code = baselineContent
+					fellBack = true
+				} else {
+					introduced = intrBase // name what the MODEL can act on
+				}
+			}
+			if !fellBack {
+				log.Printf("[write_file] V3 result introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
+				return &ToolResult{Success: false, Error: structuralWriteRejection(path, introduced)}, nil
+			}
+		}
+	}
+
+	// The structural gate made HTTP calls; a user cancel during that window
+	// must not land content on disk (mirrors the RPG-regen recheck above).
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		log.Printf("[write_file] cancelled during structural gate — not writing %s", path)
+		return &ToolResult{
+			Success: false,
+			Error:   "write_file cancelled — no content was written",
+		}, nil
+	}
+
+	// A gate fallback wrote the model's own baseline, which was NOT
+	// V3-sandbox-verified (only syntax- and structural-checked). Report it
+	// as a plain direct write with no V3 metadata — the same honest
+	// reporting as the V3-unavailable fallback — so the vetoed winner's
+	// score/phase/evidence don't attach to unverified content and PC-044's
+	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
+	if fellBack {
+		return writeFileDirect(path, baselineContent)
+	}
+
+	// Stream V3 completion summary — after the gate, so a rejected write
+	// doesn't present as a successfully completed V3 stage.
 	if ctx.StreamFn != nil {
 		ctx.StreamFn("v3_progress", map[string]string{
-			"message": fmt.Sprintf("  \u2514\u2500\u2500\u2500\u2500 V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
+			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
 		})
 	}
 
@@ -972,6 +1351,16 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	result.WinningScore = v3Result.WinningScore
 	result.PhaseSolved = v3Result.PhaseSolved
 	result.VerificationEvidence = v3Result.VerificationEvidence
+
+	// V3.2 RPG drift loop (issue #120): if the winning code failed to realize
+	// the node's planned signatures, surface the drift + downstream subgraph.
+	// Gated on req.Constraints, not only the response field: RPG is active
+	// for this file exactly when the plan supplied constraints, so a rogue
+	// or stale v3-service emitting rpg_signature_missing unconditionally
+	// can't fire drift events while the flag is off.
+	if len(req.Constraints) > 0 && len(v3Result.RPGSignatureMissing) > 0 {
+		reportRPGDrift(ctx, path, v3Result.RPGSignatureMissing)
+	}
 
 	return result, nil
 }
@@ -1241,6 +1630,34 @@ func editFileTool() *ToolDef {
 					newContent = improved
 					v3Out = meta
 				}
+			}
+
+			// Syntax gate on the composed result. A truncated new_str (or a
+			// string-level edit that broke the file) must not land when V3
+			// verification didn't run or failed — same class as the
+			// write_file fallback gate (mini-bench t06/t09). Semantics:
+			// an edit must not INTRODUCE breakage — when the ORIGINAL
+			// content already fails to parse, a still-failing result is a
+			// permitted repair-in-progress (fixing one error at a time),
+			// so the gate only blocks healthy→broken transitions.
+			if synErr, ok := checkFallbackSyntax(ctx, path, newContent); !ok {
+				if _, origOK := checkFallbackSyntax(ctx, path, content); origOK {
+					log.Printf("[edit_file] edited content for %s failed syntax gate: %s", input.Path, truncateStr(synErr, 120))
+					return &ToolResult{Success: false, Error: fmt.Sprintf(
+						"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
+						input.Path, truncateStr(synErr, 200))}, nil
+				}
+				log.Printf("[edit_file] %s still unparsable after edit (was already broken) — allowing repair-in-progress", input.Path)
+			}
+
+			// Structural gate (#147): a parse-clean edit can still introduce
+			// an unresolved direct call (render_template with only
+			// render_template_string imported) that 500s at runtime. Block a
+			// write that NEWLY makes a name unresolved; a pre-existing one
+			// (mid-repair) is allowed, mirroring the syntax gate above.
+			if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
+				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
 			}
 
 			// Atomic write
@@ -1532,6 +1949,18 @@ func astEditTool() *ToolDef {
 				}
 			}
 
+			// Structural gate (#147): the AST splice guarantees the result
+			// parses, but not that its calls resolve — the observed failure
+			// was an ast_edit that introduced a render_template call with only
+			// render_template_string imported, which landed as verified and
+			// 500'd every request. Block a write that NEWLY makes a direct
+			// call unresolved (healthy->broken); a pre-existing one is left
+			// alone for repair-in-progress. Fail-open when the check can't run.
+			if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
+				log.Printf("[ast_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+			}
+
 			// Atomic write — same pattern as edit_file/write_file.
 			tmpPath := path + ".atlas.tmp"
 			if err := os.WriteFile(tmpPath, []byte(finalContent), 0644); err != nil {
@@ -1589,9 +2018,15 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		Tier:         int(ctx.Tier),
 		WorkingDir:   ctx.WorkingDir,
 	}
+	// Exclude the target's own pre-edit snapshot from project context —
+	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
+	cleanTarget := filepath.Clean(path)
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
 		for p, c := range filesRead {
+			if filepath.Clean(p) == cleanTarget {
+				continue
+			}
 			rel, _ := filepath.Rel(ctx.WorkingDir, p)
 			if rel == "" {
 				rel = p
@@ -1606,6 +2041,8 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		req.Framework = ctx.Project.Framework
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
+	// V3.2 RPG (issue #120): thread RPG node constraints for this target, if any.
+	req.Constraints = planConstraintsForTarget(ctx, path)
 
 	// Same callback logic as the write_file V3 path: tokens forward to
 	// the dedicated v3_token SSE event so the TUI updates one streaming
@@ -1665,6 +2102,20 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	})
 	if err != nil {
 		return "", V3EditMetadata{}, err
+	}
+
+	// V3.2 RPG (issue #120): same drift handling as the write_file path. If the
+	// edited result missed its planned signatures, retry once, then surface any
+	// surviving drift. No-op when RPG is off (req.Constraints empty; the
+	// drift report shares that gate so a rogue response field alone can't
+	// fire it). The regen is a second full V3 run — recheck cancellation
+	// before accepting content, mirroring the write path.
+	v3Result = regenerateOnDrift(ctx, req, v3Result)
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		return "", V3EditMetadata{}, fmt.Errorf("edit cancelled during RPG regen: %w", ctx.Ctx.Err())
+	}
+	if len(req.Constraints) > 0 && len(v3Result.RPGSignatureMissing) > 0 {
+		reportRPGDrift(ctx, path, v3Result.RPGSignatureMissing)
 	}
 
 	if ctx.StreamFn != nil {

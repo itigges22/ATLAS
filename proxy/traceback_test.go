@@ -144,3 +144,112 @@ func TestTracebackSteerSkipsStdlib(t *testing.T) {
 		t.Errorf("should NOT point at stdlib, got: %s", steer)
 	}
 }
+
+// The missing-binary loop (TB2 bench 2026-07-18): `git clone ...` in a
+// sandbox without git. The steer must name the binary, state that
+// apt-get can't work (non-root, read-only), and point at alternatives.
+func TestMissingCommandSteerBashForm(t *testing.T) {
+	out := "bash: line 1: git: command not found\n"
+	steer := missingCommandSteer(out)
+	if !strings.Contains(steer, "`git`") || !strings.Contains(steer, "CANNOT be installed") {
+		t.Errorf("expected missing-command steer naming git, got: %q", steer)
+	}
+	if strings.Contains(steer, "apt-get install") {
+		t.Errorf("steer must not suggest apt-get install (impossible in sandbox): %q", steer)
+	}
+}
+
+// dash/sh abbreviates: "sh: 1: sqlite3: not found".
+func TestMissingCommandSteerShForm(t *testing.T) {
+	out := "sh: 1: sqlite3: not found\n"
+	steer := missingCommandSteer(out)
+	if !strings.Contains(steer, "`sqlite3`") {
+		t.Errorf("expected steer naming sqlite3, got: %q", steer)
+	}
+}
+
+// A full path is reduced to its basename.
+func TestMissingCommandSteerPathBasename(t *testing.T) {
+	out := "bash: line 3: /usr/local/bin/terraform: command not found\n"
+	steer := missingCommandSteer(out)
+	if !strings.Contains(steer, "`terraform`") {
+		t.Errorf("expected basename terraform, got: %q", steer)
+	}
+}
+
+// Bare "<name>: not found" without an sh prefix must NOT fire — program
+// output legitimately prints "config.yaml: not found" shapes.
+func TestMissingCommandSteerNoFalsePositive(t *testing.T) {
+	if s := missingCommandSteer("config.yaml: not found\n"); s != "" {
+		t.Errorf("expected no steer for non-shell not-found line, got: %q", s)
+	}
+	if s := missingCommandSteer("all tests passed\n"); s != "" {
+		t.Errorf("expected no steer for clean output, got: %q", s)
+	}
+}
+
+// The broken-verification-command loop (TB2 2026-07-19, regex-chess): the
+// model verifies with `python3 -c "...; def f(): ..."` — a multi-statement
+// script that can't parse on a -c line — and the SyntaxError is in the
+// command, not the solution. Steer must move the test to a file.
+func TestBrokenInlineScriptSteerFires(t *testing.T) {
+	cmd := `python3 -c "import json, re; def all_legal_next_positions(fen): return []"`
+	out := "  File \"<string>\", line 1\n    import json, re; def all_legal\n                     ^\nSyntaxError: invalid syntax"
+	steer := brokenInlineScriptSteer(cmd, out)
+	if steer == "" || !strings.Contains(steer, "inline `-c`") || !strings.Contains(steer, ".py") {
+		t.Errorf("expected broken-inline-script steer, got: %q", steer)
+	}
+}
+
+// A syntax error in a REAL file (not a -c one-liner) must NOT match — that's
+// a solution bug tracebackSteer localizes, not a broken verify command.
+func TestBrokenInlineScriptSteerIgnoresRealFile(t *testing.T) {
+	cmd := `python3 solution.py`
+	out := "  File \"solution.py\", line 12\n    def f(\n         ^\nSyntaxError: invalid syntax"
+	if s := brokenInlineScriptSteer(cmd, out); s != "" {
+		t.Errorf("expected no steer for a real-file syntax error, got: %q", s)
+	}
+}
+
+// No SyntaxError at all → no steer.
+func TestBrokenInlineScriptSteerNoSyntaxError(t *testing.T) {
+	if s := brokenInlineScriptSteer(`python3 -c "print(1)"`, "1\n"); s != "" {
+		t.Errorf("expected no steer on clean output, got: %q", s)
+	}
+}
+
+// Truncation robustness: the sandbox clipped the output before the
+// "SyntaxError:" line, leaving only the "<string>" frame. The steer must
+// still fire (TB2 2026-07-19 regression — keyword gate missed this).
+func TestBrokenInlineScriptSteerTruncatedOutput(t *testing.T) {
+	cmd := `python3 -c "import json, re; def all_legal(fen): return []"`
+	out := `  File "<string>", line 1` + "\n" + `    import json, re; def all_legal(fen): return []`
+	if s := brokenInlineScriptSteer(cmd, out); s == "" {
+		t.Error("steer must fire on a <string> frame even when SyntaxError is truncated away")
+	}
+}
+
+// #147 review #9: the bash command-not-found steer must require a real bash
+// diagnostic prefix, not fire on the phrase in ordinary program output.
+func TestMissingCommandSteerRequiresShellPrefix(t *testing.T) {
+	if s := missingCommandSteer("bash: line 1: git: command not found\n"); s == "" {
+		t.Error("real bash diagnostic must fire")
+	}
+	if s := missingCommandSteer("bash: git: command not found\n"); s == "" {
+		t.Error("bash diagnostic without line-number must fire")
+	}
+	// Program output that merely prints the phrase must NOT fire.
+	if s := missingCommandSteer(`print("mytool: command not found")` + "\nmytool: command not found\n"); s != "" {
+		t.Errorf("must not fire on program output: %q", s)
+	}
+}
+
+// #147 review #11: don't misfire on `python -c "exec(open('f').read())"` —
+// the SyntaxError is in file f, not the one-liner.
+func TestBrokenInlineScriptSteerSkipsExec(t *testing.T) {
+	cmd := `python3 -c "exec(open('solution.py').read())"`
+	out := "  File \"<string>\", line 1\n    def broken(\nSyntaxError: invalid syntax"
+	if s := brokenInlineScriptSteer(cmd, out); s != "" {
+		t.Errorf("must not fire when -c execs external code: %q", s)
+	}
+}

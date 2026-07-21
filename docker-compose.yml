@@ -57,6 +57,13 @@ services:
       # behavior; the entrypoint comments confirm --parallel 4 at 40k
       # per slot fits within budget on a 16 GB card.
       - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-131072}
+      # Embedding pooling for the Geometric Lens (`--pooling`). Pinned so
+      # a rebuilt serving stack can't silently switch convention and
+      # invalidate every score (the 2026-07-15 bench incident). L2
+      # normalization is requested per-call by the lens (`embd_normalize`
+      # in the /embedding body); the lens enforces both via
+      # model_identity.json's embedding_contract.
+      - ATLAS_EMBED_POOLING=${ATLAS_EMBED_POOLING:-mean}
       # Canonical ATLAS_* names take precedence; the nested legacy fallback
       # keeps .env files generated before the rename working during upgrade.
       - PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}
@@ -139,6 +146,10 @@ services:
       # Structural call-graph reasoning (#39, experimental, default off). Read by
       # call_graph_enabled() inside this process, so it must be forwarded here.
       - ATLAS_CALL_GRAPH=${ATLAS_CALL_GRAPH:-0}
+      # V3.2 RPG-style planning (#120, experimental, default off). Read by
+      # rpg_planning_enabled() inside this process, so it must be forwarded
+      # here, not only to the proxy.
+      - ATLAS_RPG_PLANNING=${ATLAS_RPG_PLANNING:-0}
       # Plan-generation thinking mode (read inside this process — must be
       # forwarded here or setting it in .env has no effect).
       - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-}
@@ -196,11 +207,18 @@ services:
     # change. /workspace is bind-mounted writable, so per-project
     # install targets like node_modules/, target/, vendor/ work
     # against the user's lockfile without any of these tmpfs at all.
+    # The Python trio (/tmp, .local, .cache) is env-tunable: a single
+    # `pip install pandas pyarrow` unpacks >256M into .local and builds
+    # in /tmp, so the old fixed 256M/1G caps died with "No space left on
+    # device" (TB2 bench 2026-07-18). tmpfs size is a ceiling, not a
+    # reservation — raising it costs nothing until bytes are written,
+    # and written bytes count against mem_limit, which stays the real
+    # backstop.
     tmpfs:
-      - /tmp:size=1G                 # /tmp itself (pip download dir, mktemp targets, /tmp/sandbox lives inside)
+      - /tmp:size=${ATLAS_SANDBOX_TMP_SIZE:-2G}    # /tmp itself (pip download/build dir, mktemp targets, /tmp/sandbox lives inside)
       - /home/sandbox:size=128M      # dotfiles + misc config the toolchains scatter
-      - /home/sandbox/.local:size=256M   # Python: pip install --user
-      - /home/sandbox/.cache:size=256M   # generic cache root (pip wheel cache, ruff, mypy)
+      - /home/sandbox/.local:size=${ATLAS_SANDBOX_PIP_SIZE:-1G}   # Python: pip install --user (pandas+pyarrow+numpy alone ~400M)
+      - /home/sandbox/.cache:size=${ATLAS_SANDBOX_CACHE_SIZE:-512M}   # generic cache root (pip wheel cache, ruff, mypy)
       - /home/sandbox/.npm:size=256M     # Node: npm cache
       - /home/sandbox/.cargo:size=512M   # Rust: crate downloads (CARGO_HOME; toolchain stays read-only in /opt)
       - /home/sandbox/go:size=512M       # Go: module cache + bin (GOPATH)
@@ -278,6 +296,14 @@ services:
     restart: unless-stopped
     build:
       context: ./proxy
+    # Run as the invoking user (same rationale as the sandbox's
+    # ATLAS_SANDBOX_UID): the proxy writes to two host bind mounts —
+    # /workspace (write_file/edit_file targets) and /data/lens_training
+    # (lens sample banking). The image's baked-in non-root user (uid 1001)
+    # can't write host dirs owned by the operator, which fails every file
+    # write with `permission denied` on the .atlas.tmp temp file.
+    # `atlas init` writes the invoking user's ids into .env.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
       - ATLAS_GRAMMAR_MODE=${ATLAS_GRAMMAR_MODE:-strict}
       - ATLAS_PROXY_PORT=8090

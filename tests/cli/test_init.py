@@ -74,8 +74,14 @@ def test_yes_skip_download_writes_env_and_keys(tmp_path, monkeypatch, capsys):
                 "ATLAS_CTX_SIZE", "ATLAS_GHCR_OWNER", "ATLAS_IMAGE_TAG",
                 "ATLAS_LLAMA_PORT", "ATLAS_PARALLEL_SLOTS",
                 "ATLAS_KV_TYPE_K", "ATLAS_KV_TYPE_V",
-                "ATLAS_BACKEND", "ATLAS_GPU_VENDOR", "ATLAS_GPU_INDEX"):
+                "ATLAS_BACKEND", "ATLAS_GPU_VENDOR", "ATLAS_GPU_INDEX",
+                "ATLAS_PROXY_UID", "ATLAS_PROXY_GID"):
         assert f"{key}=" in body, f"missing {key} in .env"
+
+    # Proxy runs as the invoking user so it can write the /workspace and
+    # lens_training bind mounts (the image's baked-in uid 1001 can't).
+    assert f"ATLAS_PROXY_UID={os.getuid()}" in body
+    assert f"ATLAS_PROXY_GID={os.getgid()}" in body
 
     # Default models_dir is ./models when it equals atlas_root/models.
     assert "ATLAS_MODELS_DIR=./models" in body
