@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc344_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split('\\n')\n    \n    T = data[0]\n    N = int(data[1])\n    \n    bags = []\n    for i in range(2, len(data)):\n        if not data[i]:\n            continue\n        parts = data[i].split()\n        A_i = int(parts[0])\n        strings = parts[1:]\n        bags.append(strings)\n    \n    # DP[i] = minimum cost to form the first i characters of T\n    dp = [float('inf')] * (len(T) + 1)\n    dp[0] = 0\n    \n    for i in range(1, N + 1):\n        new_dp = [float('inf')] * (len(T) + 1)\n        for j in range(len(T) + 1):\n            if dp[j] != float('inf'):\n                # Option 1: Do nothing\n                new_dp[j] = min(new_dp[j], dp[j])\n        \n        for s in bags[i - 1]:\n            for j in range(len(T) + 1):\n                if dp[j] != float('inf'):\n                    if T.startswith(s, j):\n                        new_dp[j + len(s)] = min(new_dp[j + len(s)], dp[j] + 1)\n        dp = new_dp\n    \n    result = dp[len(T)]\n    print(result if result != float('inf') else -1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4664,
+  "total_time_ms": 81372.563123703,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2253,
+    "s_star_triggered": true
+  }
+}

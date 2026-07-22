@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc359_e",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    H = list(map(int, data[1:]))\n    res = []\n    prev = 0\n    for h in H:\n        res.append(prev + h + 1)\n        prev += h + 1\n    print(' '.join(map(str, res)))\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53057,
+  "total_time_ms": 935185.971736908,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1235,
+    "self_tests_generated": 5
+  }
+}

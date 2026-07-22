@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc363_e",
+  "passed": false,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    H = int(data[idx]); idx += 1\n    W = int(data[idx]); idx += 1\n    Y = int(data[idx]); idx += 1\n\n    A = []\n    for _ in range(H):\n        row = list(map(int, data[idx:idx+W]))\n        A.append(row)\n        idx += W\n\n    # Initialize a priority queue with all the cells, sorted by elevation\n    heap = []\n    for i in range(H):\n        for j in range(W):\n            heapq.heappush(heap, (A[i][j], i, j))\n\n    # Result array\n    result = [0] * Y\n\n    # Track how many cells are still above sea level\n    remaining = H * W\n\n    # Track which cells have been processed\n    visited = [[False] * W for _ in range(H)]\n\n    # Process the heap\n    year = 0\n    while heap and year < Y:\n        level, i, j = heapq.heappop(heap)\n        if visited[i][j]:\n            continue\n\n        # If this cell is already sunk, skip\n        if level <= year:\n            continue\n\n        # Mark this cell as sunk\n        visited[i][j] = True\n        remaining -= 1\n\n        # If this is the first year, we only process cells that are adjacent to the sea\n        if year == 0:\n            if i == 0 or j == 0 or i == H - 1 or j == W - 1:\n                # This cell is on the border, so it's adjacent to the sea\n                pass\n            else:\n                continue\n\n        # Otherwise, process the cell and its neighbors\n        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:\n            ni, nj = i + dx, j + dy\n            if 0 <= ni < H and 0 <= nj < W and not visited[ni][nj]:\n                heapq.heappush(heap, (A[ni][nj], ni, nj))\n\n        # Update the result for this year\n        result[year] = remaining\n        year += 1\n\n    # Fill the rest of the result with the last known value\n    for i in range(year, Y):\n        result[i] = remaining\n\n    # Print the result\n    for val in result:\n        print(val)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 2410,
+  "total_time_ms": 43149.70064163208,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1828
+  }
+}

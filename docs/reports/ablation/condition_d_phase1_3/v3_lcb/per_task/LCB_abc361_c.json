@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc361_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    # We need to keep N-K elements\n    required_length = N - K\n    \n    # Sort the array\n    A_sorted = sorted(A)\n    \n    # Use sliding window on sorted array to find the minimum difference\n    min_diff = float('inf')\n    for i in range(len(A_sorted) - required_length + 1):\n        current_diff = A_sorted[i + required_length - 1] - A_sorted[i]\n        if current_diff < min_diff:\n            min_diff = current_diff\n    \n    print(min_diff)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1960,
+  "total_time_ms": 34706.4995765686,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1697
+  }
+}

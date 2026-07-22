@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc302_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef read_input():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [sys.stdin.readline().strip() for _ in range(H)]\n    return H, W, grid\n\ndef is_collinear_equal_spacing(cells):\n    # Check if centers are collinear and equally spaced\n    # Cells are tuples (i, j)\n    x = [i for i, j in cells]\n    y = [j for i, j in cells]\n    \n    # Check if all points are collinear\n    # Using vector cross product\n    for i in range(2, 5):\n        dx1 = x[1] - x[0]\n        dy1 = y[1] - y[0]\n        dx2 = x[i] - x[0]\n        dy2 = y[i] - y[0]\n        if dx1 * dy2 != dx2 * dy1:\n            return False\n    \n    # Check if spacing is equal\n    dx = x[1] - x[0]\n    dy = y[1] - y[0]\n    for i in range(2, 5):\n        if x[i] - x[i-1] != dx or y[i] - y[i-1] != dy:\n            return False\n    return True\n\ndef find_sequence(H, W, grid):\n    # Search for 's', 'n', 'u', 'k', 'e' in order\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == 's':\n                # Try all 8 directions\n                directions = [(-1, -1), (-1, 0), (-1, 1),\n                                (0, -1), (0, 1),\n                                (1, -1), (1, 0), (1, 1)]\n                for dx, dy in directions:\n                    cells = [(i, j)]\n                    curr_i, curr_j = i, j\n                    valid = True\n                    for _ in range(4):\n                        curr_i += dx\n                        curr_j += dy\n                        if 0 <= curr_i < H and 0 <= curr_j < W:\n                            cells.append((curr_i, curr_j))\n                        else:\n                            valid = False\n                            break\n                    if valid:\n                        # Check letters\n                        letters = [grid[i][j] for i, j in cells]\n                        if letters == ['s', 'n', 'u', 'k', 'e']:\n                            if is_collinear_equal_spacing(cells):\n                                return cells\n    return None\n\ndef main():\n    H, W, grid = read_input()\n    result = find_sequence(H, W, grid)\n    for r, c in result:\n        print(r + 1, c + 1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2697,
+  "total_time_ms": 45041.016817092896,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2116
+  }
+}

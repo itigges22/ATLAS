@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3334",
+  "passed": true,
+  "code": "class Solution:\n    def minimumBoxes(self, apple: List[int], capacity: List[int]) -> int:\n        total_apples = sum(apple)\n        capacity.sort(reverse=True)\n        count = 0\n        current = 0\n        for cap in capacity:\n            current += cap\n            count += 1\n            if current >= total_apples:\n                return count\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 95,
+  "total_time_ms": 1525.2254009246826,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

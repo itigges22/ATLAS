@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc303_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    H = int(data[2])\n    K = int(data[3])\n    S = data[4]\n    \n    items = set()\n    for i in range(M):\n        x = int(data[5 + 2 * i])\n        y = int(data[6 + 2 * i])\n        items.add((x, y))\n    \n    x, y = 0, 0\n    for move in S:\n        # Consume 1 health\n        H -= 1\n        if H < 0:\n            print(\"No\")\n            return\n        \n        # Move\n        if move == 'R':\n            x += 1\n        elif move == 'L':\n            x -= 1\n        elif move == 'U':\n            y += 1\n        elif move == 'D':\n            y -= 1\n        \n        # Check for item\n        if (x, y) in items:\n            if H < K:\n                H = K\n    \n    print(\"Yes\")\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7257,
+  "total_time_ms": 101416.85128211975,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2898,
+    "s_star_triggered": true
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2876",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfEmployeesWhoMetTarget(self, hours: List[int], target: int) -> int:\n        return sum(1 for h in hours if h >= target)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 51,
+  "total_time_ms": 941.1776065826416,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

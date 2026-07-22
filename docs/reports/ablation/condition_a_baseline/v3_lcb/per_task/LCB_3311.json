@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3311",
+  "passed": true,
+  "code": "class Solution:\n    def returnToBoundaryCount(self, nums: List[int]) -> int:\n        position = 0\n        count = 0\n        for num in nums:\n            position += num\n            if position == 0:\n                count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1089.6718502044678,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

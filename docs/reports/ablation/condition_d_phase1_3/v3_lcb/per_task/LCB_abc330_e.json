@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc330_e",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    \n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    from collections import defaultdict\n    \n    count = defaultdict(int)\n    for num in A:\n        count[num] += 1\n    \n    def get_mex():\n        mex = 0\n        while count[mex] > 0:\n            mex += 1\n        return mex\n    \n    for _ in range(Q):\n        i = int(data[idx]) - 1  # 0-based index\n        idx += 1\n        x = int(data[idx])\n        idx += 1\n        \n        old_val = A[i]\n        new_val = x\n        \n        # Remove old value from count\n        count[old_val] -= 1\n        if count[old_val] == 0:\n            del count[old_val]\n        \n        # Add new value to count\n        count[new_val] += 1\n        \n        # Update array\n        A[i] = new_val\n        \n        # Compute and print mex\n        print(get_mex())\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2218,
+  "total_time_ms": 38355.379819869995,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1953
+  }
+}

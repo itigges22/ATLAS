@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3384",
+  "passed": true,
+  "code": "class Solution:\n    def minimumOperationsToMakeKPeriodic(self, word: str, k: int) -> int:\n        from collections import Counter\n\n        # Split the word into substrings of length k\n        substrings = [word[i:i + k] for i in range(0, len(word), k)]\n\n        # Count the frequency of each substring\n        freq = Counter(substrings)\n\n        # The most frequent substring is the one we want to reuse\n        max_freq = max(freq.values())\n\n        # The number of operations needed is total blocks - max_freq\n        return len(substrings) - max_freq",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 2365,
+  "total_time_ms": 38671.24366760254,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2271
+  }
+}

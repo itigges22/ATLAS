@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc325_e",
+  "passed": true,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = int(data[1])\n    B = int(data[2])\n    C = int(data[3])\n    \n    D = []\n    index = 4\n    for _ in range(N):\n        row = list(map(int, data[index:index + N]))\n        D.append(row)\n        index += N\n    \n    # We need to find the minimum time from city 1 to city N\n    # We can switch from car to train only once, and only in a city\n    # So we can model this as two states: using car, or using train\n    \n    # dist_car[i] = minimum time to reach city i using car\n    # dist_train[i] = minimum time to reach city i using train\n    dist_car = [float('inf')] * N\n    dist_train = [float('inf')] * N\n    \n    dist_car[0] = 0  # Starting at city 1 (0-indexed)\n    \n    # Priority queue for Dijkstra's algorithm\n    # Each element is (distance, city, mode) where mode is 0 for car, 1 for train\n    pq = []\n    heapq.heappush(pq, (0, 0, 0))  # Start with city 0 (city 1), using car\n    \n    while pq:\n        current_dist, u, mode = heapq.heappop(pq)\n        \n        if mode == 0 and current_dist > dist_car[u]:\n            continue\n        if mode == 1 and current_dist > dist_train[u]:\n            continue\n        \n        # Try to go to all other cities\n        for v in range(N):\n            if u == v:\n                continue\n            cost_car = D[u][v] * A\n            cost_train = D[u][v] * B + C\n            \n            if mode == 0:  # Currently using car\n                new_dist = current_dist + cost_car\n                if new_dist < dist_car[v]:\n                    dist_car[v] = new_dist\n                    heapq.heappush(pq, (new_dist, v, 0))\n                # Switch to train at city v\n                new_dist_train = current_dist + cost_train\n                if new_dist_train < dist_train[v]:\n                    dist_train[v] = new_dist_train\n                    heapq.heappush(pq, (new_dist_train, v, 1))\n            else:  # Currently using train, can't switch back\n                new_dist = current_dist + cost_train\n                if new_dist < dist_train[v]:\n                    dist_train[v] = new_dist\n                    heapq.heappush(pq, (new_dist, v, 1))\n    \n    # The answer is the minimum of dist_car[N-1] and dist_train[N-1]\n    print(min(dist_car[N-1], dist_train[N-1]))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1734,
+  "total_time_ms": 29045.793056488037,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1229
+  }
+}

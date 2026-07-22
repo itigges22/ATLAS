@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2808",
+  "passed": false,
+  "code": "",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1992,
+  "total_time_ms": 33387.67147064209,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1881
+  }
+}

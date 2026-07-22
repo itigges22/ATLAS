@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc344_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().splitlines()\n    \n    T = data[0]\n    N = int(data[1])\n    bags = []\n    for i in range(2, N + 2):\n        parts = data[i].split()\n        A_i = int(parts[0])\n        strings = parts[1:]\n        bags.append(strings)\n    \n    len_T = len(T)\n    # dp[i] = minimum cost to build the first i characters of T\n    dp = [float('inf')] * (len_T + 1)\n    dp[0] = 0\n\n    for i in range(1, N + 1):\n        new_dp = [float('inf')] * (len_T + 1)\n        for j in range(len_T + 1):\n            if dp[j] != float('inf'):\n                # Option 1: do nothing\n                new_dp[j] = min(new_dp[j], dp[j])\n        # Option 2: choose a string from bag i\n        for j in range(len_T + 1):\n            if dp[j] != float('inf'):\n                for s in bags[i - 1]:\n                    if T.startswith(s, j):\n                        new_j = j + len(s)\n                        if new_dp[new_j] > dp[j] + 1:\n                            new_dp[new_j] = dp[j] + 1\n        dp = new_dp\n\n    result = dp[len_T]\n    print(result if result != float('inf') else -1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 5571.788311004639,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

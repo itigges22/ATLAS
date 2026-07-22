@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3320",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def maxOperations(self, nums: List[int]) -> int:\n        if len(nums) < 2:\n            return 0\n        \n        # The score is fixed as the sum of the first two elements\n        target_score = nums[0] + nums[1]\n        operations = 1\n        i = 2\n        \n        while i + 1 < len(nums):\n            if nums[i] + nums[i + 1] == target_score:\n                operations += 1\n                i += 2\n            else:\n                break\n        \n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1166,
+  "total_time_ms": 18177.613735198975,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1006
+  }
+}

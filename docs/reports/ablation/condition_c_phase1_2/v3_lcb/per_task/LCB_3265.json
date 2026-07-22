@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3265",
+  "passed": true,
+  "code": "from typing import List\nfrom collections import defaultdict\n\nclass Solution:\n    def maximumSubarraySum(self, nums: List[int], k: int) -> int:\n        value_indices = defaultdict(list)\n        n = len(nums)\n        max_sum = float('-inf')\n\n        # Store indices of each value\n        for i, num in enumerate(nums):\n            value_indices[num].append(i)\n\n        # Prefix sum array\n        prefix = [0] * (n + 1)\n        for i in range(n):\n            prefix[i + 1] = prefix[i] + nums[i]\n\n        # Check all valid subarrays\n        for i in range(n):\n            target1 = nums[i] + k\n            target2 = nums[i] - k\n\n            # Check for subarrays where nums[i] - nums[j] == k\n            for j in value_indices.get(target1, []):\n                if j > i:\n                    subarray_sum = prefix[j + 1] - prefix[i]\n                    max_sum = max(max_sum, subarray_sum)\n\n            # Check for subarrays where nums[j] - nums[i] == k\n            for j in value_indices.get(target2, []):\n                if j > i:\n                    subarray_sum = prefix[j + 1] - prefix[i]\n                    max_sum = max(max_sum, subarray_sum)\n\n        return max_sum if max_sum != float('-inf') else 0",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6930,
+  "total_time_ms": 114047.2342967987,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4644,
+    "s_star_triggered": true
+  }
+}

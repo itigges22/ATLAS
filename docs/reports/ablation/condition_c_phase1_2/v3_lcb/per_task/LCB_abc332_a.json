@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc332_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, S, K = map(int, input().split())\ntotal_price = 0\nfor _ in range(N):\n    p, q = map(int, input().split())\n    total_price += p * q\n\nif total_price >= S:\n    print(total_price)\nelse:\n    print(total_price + K)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 82,
+  "total_time_ms": 1538.0995273590088,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

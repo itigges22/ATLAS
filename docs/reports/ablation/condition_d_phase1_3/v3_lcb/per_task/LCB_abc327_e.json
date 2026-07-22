@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc327_e",
+  "passed": true,
+  "code": "import sys\nimport math\nfrom itertools import combinations\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    P = list(map(int, data[1:]))\n\n    max_rating = -float('inf')\n\n    for k in range(1, N + 1):\n        for selected in combinations(P, k):\n            numerator = 0.0\n            denominator = 0.0\n            for j in range(k):\n                weight = (0.9) ** (k - j - 1)\n                numerator += weight * selected[j]\n                denominator += weight\n            rating = (numerator / denominator) - (1200 / math.sqrt(k))\n            if rating > max_rating:\n                max_rating = rating\n\n    print(f\"{max_rating:.15f}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 24772,
+  "total_time_ms": 371363.1911277771,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2102,
+    "self_tests_generated": 3
+  }
+}

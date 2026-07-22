@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc322_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    result = [0] * N\n    j = 0  # Pointer for firework days\n    \n    for i in range(1, N + 1):\n        while j < M and A[j] < i:\n            j += 1\n        result[i - 1] = A[j] - i\n    \n    for res in result:\n        print(res)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 993,
+  "total_time_ms": 16768.327951431274,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 841
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc365_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n\n    # Define the winning move for each Aoki's move\n    win_move = {'R': 'P', 'P': 'S', 'S': 'R'}\n\n    # Define the losing move for each Aoki's move\n    lose_move = {'R': 'S', 'P': 'R', 'S': 'P'}\n\n    # DP table: dp[i][m] = max wins up to i-th game with move m\n    # m can be 'R', 'P', 'S'\n    dp = [{} for _ in range(N)]\n\n    # Initialize the first move\n    for move in ['R', 'P', 'S']:\n        if move != win_move[S[0]] and move != lose_move[S[0]]:\n            # Takahashi must not lose, so this move is invalid\n            continue\n        dp[0][move] = 1 if move == win_move[S[0]] else 0\n\n    # Fill the DP table\n    for i in range(1, N):\n        for prev_move in ['R', 'P', 'S']:\n            if prev_move not in dp[i-1]:\n                continue\n            for curr_move in ['R', 'P', 'S']:\n                if curr_move == prev_move:\n                    continue  # Consecutive moves must be different\n                # Check if Takahashi loses\n                if curr_move == lose_move[S[i]]:\n                    continue\n                # Update dp[i][curr_move]\n                dp[i][curr_move] = max(dp[i].get(curr_move, 0), dp[i-1][prev_move] + (1 if curr_move == win_move[S[i]] else 0))\n\n    # Find the maximum number of wins in the last game\n    print(max(dp[N-1].values()))\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2242,
+  "total_time_ms": 37376.16157531738,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1852
+  }
+}

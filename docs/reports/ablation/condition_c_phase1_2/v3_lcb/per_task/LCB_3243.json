@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3243",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfPowerfulInt(self, start: int, finish: int, limit: int, s: str) -> int:\n        from itertools import product\n\n        def is_valid(num: int) -> bool:\n            # Check if all digits of num are <= limit\n            return all(int(digit) <= limit for digit in str(num))\n\n        def has_suffix(num: int, suffix: str) -> bool:\n            # Check if the number ends with the given suffix\n            return str(num).endswith(suffix)\n\n        def generate_numbers_with_suffix(suffix: str, limit: int, max_length: int) -> set:\n            # Generate all numbers with the given suffix, all digits <= limit, and length <= max_length\n            result = set()\n            suffix_len = len(suffix)\n            for length in range(suffix_len, max_length + 1):\n                prefix_len = length - suffix_len\n                for prefix in product(range(limit + 1), repeat=prefix_len):\n                    # Convert prefix to integer\n                    prefix_str = ''.join(map(str, prefix))\n                    num_str = prefix_str + suffix\n                    num = int(num_str)\n                    result.add(num)\n            return result\n\n        # Determine the maximum length of numbers to consider\n        max_length = len(str(finish))\n        # Generate all numbers with the suffix s, all digits <= limit\n        candidates = generate_numbers_with_suffix(s, limit, max_length)\n\n        # Count how many of these candidates are in the [start, finish] range\n        count = 0\n        for num in candidates:\n            if start <= num <= finish:\n                count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7555,
+  "total_time_ms": 126660.10808944702,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7300
+  }
+}

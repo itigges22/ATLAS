@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2844",
+  "passed": true,
+  "code": "class Solution:\n    def sumOfSquares(self, nums: List[int]) -> int:\n        n = len(nums)\n        result = 0\n        for i in range(1, n + 1):\n            if n % i == 0:\n                result += nums[i - 1] ** 2\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 933,
+  "total_time_ms": 15456.754207611084,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 850
+  }
+}

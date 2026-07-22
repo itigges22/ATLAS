@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3411",
+  "passed": false,
+  "code": "class Solution:\n    def findProductsOfElements(self, queries: List[List[int]]) -> List[int]:\n        import sys\n        sys.setrecursionlimit(1000000)\n\n        # Precompute the powerful array for numbers up to a certain limit\n        # Since queries can go up to 1e15, we cannot precompute all values\n        # Instead, we compute the powerful array for a number on the fly\n\n        def get_powerful_array(x):\n            # Get the binary representation of x\n            binary = bin(x)[2:]\n            # Extract the positions of 1s\n            powers = [2 ** i for i in range(len(binary) - 1, -1, -1) if binary[len(binary) - 1 - i] == '1']\n            return powers\n\n        def get_element_at_index(index):\n            # Find the number i such that the cumulative length of powerful arrays up to i is >= index\n            # This is a binary search problem\n            low = 1\n            high = 10**18  # A large enough upper bound\n            while low < high:\n                mid = (low + high) // 2\n                # Compute the total number of elements in big_nums up to mid\n                total = 0\n                for i in range(1, mid + 1):\n                    total += len(get_powerful_array(i))\n                    if total > index:\n                        break\n                if total < index:\n                    low = mid + 1\n                else:\n                    high = mid\n            i = low\n            # Now find the exact position in the powerful array of i\n            total = 0\n            for num in range(1, i):\n                total += len(get_powerful_array(num))\n            offset = index - total\n            return get_powerful_array(i)[offset]\n\n        answer = []\n        for from_i, to_i, mod in queries:\n            product = 1\n            for idx in range(from_i, to_i + 1):\n                element = get_element_at_index(idx)\n                product = (product * element) % mod\n            answer.append(product)\n        return answer",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 14366,
+  "total_time_ms": 301265.25235176086,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 13764
+  }
+}

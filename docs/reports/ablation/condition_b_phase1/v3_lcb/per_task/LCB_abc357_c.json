@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc357_c",
+  "passed": true,
+  "code": "import sys\nimport functools\n\ndef main():\n    N = int(sys.stdin.readline())\n    size = 3 ** N\n\n    @functools.lru_cache(maxsize=None)\n    def generate_carpet(k):\n        if k == 0:\n            return [[\"#\"]]\n        prev = generate_carpet(k - 1)\n        size_prev = len(prev)\n        carpet = []\n        for i in range(3):\n            for row in range(size_prev):\n                new_row = []\n                for j in range(3):\n                    if i == 1 and j == 1:\n                        new_row.extend(['.'] * size_prev)\n                    else:\n                        new_row.extend(prev[row])\n                carpet.append(new_row)\n        return carpet\n\n    carpet = generate_carpet(N)\n    for row in carpet:\n        print(''.join(row))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1643,
+  "total_time_ms": 27678.07173728943,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1458
+  }
+}

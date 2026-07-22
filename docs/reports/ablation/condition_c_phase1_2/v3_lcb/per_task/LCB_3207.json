@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3207",
+  "passed": true,
+  "code": "class Solution:\n    def findMinimumOperations(self, s1: str, s2: str, s3: str) -> int:\n        # Find the common prefix of all three strings\n        min_len = min(len(s1), len(s2), len(s3))\n        common_prefix = \"\"\n        for i in range(min_len):\n            if s1[i] == s2[i] == s3[i]:\n                common_prefix += s1[i]\n            else:\n                break\n        \n        if not common_prefix:\n            return -1\n        \n        # Calculate the number of operations needed to make all strings equal to the common prefix\n        ops = 0\n        for s in [s1, s2, s3]:\n            ops += len(s) - len(common_prefix)\n        \n        return ops",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3586,
+  "total_time_ms": 57498.79789352417,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1294,
+    "s_star_triggered": true
+  }
+}

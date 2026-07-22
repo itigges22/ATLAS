@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3422",
+  "passed": true,
+  "code": "class Solution:\n    def valueAfterKSeconds(self, n: int, k: int) -> int:\n        MOD = 10**9 + 7\n        a = [1] * n\n        \n        for _ in range(k):\n            for j in range(1, n):\n                a[j] = (a[j] + a[j - 1]) % MOD\n        \n        return a[-1]",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1238,
+  "total_time_ms": 20552.37054824829,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1140
+  }
+}

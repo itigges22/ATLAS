@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc358_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    M = int(input[1])\n    A = list(map(int, input[2:2+N]))\n    B = list(map(int, input[2+N:2+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    j = 0\n    total = 0\n    for b in B:\n        while j < len(A) and A[j] < b:\n            j += 1\n        if j >= len(A):\n            print(-1)\n            return\n        total += A[j]\n        j += 1\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 16955,
+  "total_time_ms": 262463.9539718628,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 939,
+    "self_tests_generated": 5
+  }
+}

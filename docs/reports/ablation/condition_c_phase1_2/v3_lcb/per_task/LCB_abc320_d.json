@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc320_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque, defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    # Build graph\n    graph = defaultdict(list)\n    index = 2\n    for _ in range(M):\n        A = int(data[index])\n        B = int(data[index + 1])\n        X = int(data[index + 2])\n        Y = int(data[index + 3])\n        graph[A].append((B, X, Y))\n        graph[B].append((A, -X, -Y))\n        index += 4\n    \n    # Coordinates\n    coords = [None] * (N + 1)\n    coords[1] = (0, 0)\n    \n    # BFS to determine coordinates\n    visited = [False] * (N + 1)\n    queue = deque()\n    queue.append(1)\n    visited[1] = True\n    \n    while queue:\n        u = queue.popleft()\n        for v, dx, dy in graph[u]:\n            if not visited[v]:\n                coords[v] = (coords[u][0] + dx, coords[u][1] + dy)\n                visited[v] = True\n                queue.append(v)\n    \n    # Output results\n    for i in range(1, N + 1):\n        if coords[i] is not None:\n            print(coords[i][0], coords[i][1])\n        else:\n            print(\"undecidable\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 5424,
+  "total_time_ms": 88874.48906898499,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2940,
+    "s_star_triggered": true
+  }
+}

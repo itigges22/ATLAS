@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc330_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read input from standard input\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    L = int(input[1])\n    A = list(map(int, input[2:2+N]))\n\n    # Count how many scores are greater than or equal to L\n    count = 0\n    for score in A:\n        if score >= L:\n            count += 1\n\n    # Print the result\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5352,
+  "total_time_ms": 88990.03481864929,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3190,
+    "s_star_triggered": true
+  }
+}

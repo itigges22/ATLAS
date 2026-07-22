@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc301_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import Counter\n\ndef main():\n    S = sys.stdin.readline().strip()\n    T = sys.stdin.readline().strip()\n\n    count_S = Counter(S)\n    count_T = Counter(T)\n\n    at_S = count_S['@']\n    at_T = count_T['@']\n\n    del count_S['@']\n    del count_T['@']\n\n    # Allowed characters (excluding @)\n    allowed = set('atcoder')\n\n    # Check if all characters in count_S and count_T are allowed\n    for char in count_S:\n        if char not in allowed:\n            print(\"No\")\n            return\n    for char in count_T:\n        if char not in allowed:\n            print(\"No\")\n            return\n\n    # Combine the counts of non-@ characters\n    combined = count_S + count_T\n\n    # Total number of @s available\n    total_at = at_S + at_T\n\n    # Check if the combined count can be covered by the total @s\n    for char, cnt in combined.items():\n        if cnt > total_at:\n            print(\"No\")\n            return\n\n    print(\"Yes\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 61239,
+  "total_time_ms": 909202.2924423218,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 6816,
+    "self_tests_generated": 4
+  }
+}

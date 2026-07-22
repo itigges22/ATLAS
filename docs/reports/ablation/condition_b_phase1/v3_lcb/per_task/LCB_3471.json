@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3471",
+  "passed": true,
+  "code": "class Solution:\n    def minimumAverage(self, nums: List[int]) -> float:\n        averages = []\n        while nums:\n            minElement = min(nums)\n            maxElement = max(nums)\n            avg = (minElement + maxElement) / 2\n            averages.append(avg)\n            nums.remove(minElement)\n            nums.remove(maxElement)\n        return min(averages)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1090,
+  "total_time_ms": 17693.507432937622,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1000
+  }
+}

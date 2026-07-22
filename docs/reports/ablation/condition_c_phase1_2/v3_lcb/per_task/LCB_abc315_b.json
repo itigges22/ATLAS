@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc315_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nM = int(input())\nD = list(map(int, input().split()))\ntotal_days = sum(D)\nmiddle = (total_days + 1) // 2\n\ncurrent = 0\nfor i in range(M):\n    current += D[i]\n    if current >= middle:\n        print(i + 1, middle - (current - D[i]))\n        break",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 92,
+  "total_time_ms": 1776.8986225128174,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

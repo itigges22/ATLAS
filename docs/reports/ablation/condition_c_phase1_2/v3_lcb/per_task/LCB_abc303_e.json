@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc303_e",
+  "passed": false,
+  "code": "import sys\nimport threading\nfrom collections import deque, defaultdict\n\ndef main():\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    edges = [[] for _ in range(N + 1)]\n    for _ in range(N - 1):\n        u, v = map(int, sys.stdin.readline().split())\n        edges[u].append(v)\n        edges[v].append(u)\n\n    # Step 1: Find all leaves (degree 1 nodes)\n    leaves = [i for i in range(1, N + 1) if len(edges[i]) == 1]\n\n    # Step 2: Find all nodes with degree 2 (possible centers of stars)\n    degree = [0] * (N + 1)\n    for i in range(1, N + 1):\n        degree[i] = len(edges[i])\n\n    # Step 3: Find all centers of stars\n    centers = []\n    for i in range(1, N + 1):\n        if degree[i] >= 2:\n            # Check if all neighbors of i are leaves\n            is_center = True\n            for neighbor in edges[i]:\n                if degree[neighbor] != 1:\n                    is_center = False\n                    break\n            if is_center:\n                centers.append(i)\n\n    # Step 4: For each center, count the number of leaves connected to it\n    levels = []\n    for center in centers:\n        count = 0\n        for neighbor in edges[center]:\n            if degree[neighbor] == 1:\n                count += 1\n        levels.append(count)\n\n    # Step 5: Sort the levels and print\n    levels.sort()\n    print(' '.join(map(str, levels)))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 4969,
+  "total_time_ms": 81701.23505592346,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4609
+  }
+}

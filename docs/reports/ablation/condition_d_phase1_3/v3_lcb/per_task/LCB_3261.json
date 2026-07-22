@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3261",
+  "passed": false,
+  "code": "class Solution:\n    def minOrAfterOperations(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        res = 0\n        for i in range(30, -1, -1):\n            mask = (1 << i)\n            cnt = 0\n            curr = 0\n            for num in nums:\n                curr &= num\n                if (curr & mask) == 0:\n                    cnt += 1\n                    curr = 0\n            if cnt > k:\n                res |= mask\n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 47892,
+  "total_time_ms": 909888.0314826965,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1474,
+    "self_tests_generated": 5
+  }
+}

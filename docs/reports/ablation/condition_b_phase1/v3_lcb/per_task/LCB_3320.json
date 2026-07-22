@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3320",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def maxOperations(self, nums: List[int]) -> int:\n        if len(nums) < 2:\n            return 0\n        \n        # Try all possible target sums derived from the first two elements\n        possible_sums = set()\n        possible_sums.add(nums[0] + nums[1])\n        \n        max_ops = 0\n        for target_sum in possible_sums:\n            current_sum = target_sum\n            ops = 0\n            i = 0\n            while i + 1 < len(nums):\n                if nums[i] + nums[i + 1] == current_sum:\n                    ops += 1\n                    i += 2\n                else:\n                    break\n            max_ops = max(max_ops, ops)\n        \n        return max_ops",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1312,
+  "total_time_ms": 21281.004667282104,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1152
+  }
+}

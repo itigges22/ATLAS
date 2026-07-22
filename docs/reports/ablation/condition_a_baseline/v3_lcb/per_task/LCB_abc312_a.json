@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc312_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\nvalid_strings = {\"ACE\", \"BDF\", \"CEG\", \"DFA\", \"EGB\", \"FAC\", \"GBD\"}\nprint(\"Yes\" if S in valid_strings else \"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1014.3475532531738,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

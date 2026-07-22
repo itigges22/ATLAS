@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2915",
+  "passed": true,
+  "code": "from typing import List\nfrom collections import defaultdict\n\nclass Solution:\n    def countInterestingSubarrays(self, nums: List[int], modulo: int, k: int) -> int:\n        count = 0\n        prefix = 0\n        freq = defaultdict(int)\n        freq[0] = 1  # To handle cases where cnt % modulo == k starts from 0\n\n        for num in nums:\n            # Count how many numbers in the current subarray satisfy num % modulo == k\n            if num % modulo == k:\n                prefix += 1\n            # Check how many previous prefix counts satisfy (prefix - current) % modulo == k\n            count += freq[(prefix - k) % modulo]\n            freq[prefix % modulo] += 1\n\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1786,
+  "total_time_ms": 31469.06089782715,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1610
+  }
+}

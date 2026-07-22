@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3291",
+  "passed": false,
+  "code": "class Solution:\n    def canSortArray(self, nums: List[int]) -> bool:\n        # Group elements by the number of set bits\n        groups = []\n        current_group = []\n        for num in nums:\n            bits = bin(num).count('1')\n            if not current_group or bin(current_group[0]).count('1') == bits:\n                current_group.append(num)\n            else:\n                groups.append(current_group)\n                current_group = [num]\n        groups.append(current_group)\n        \n        # Check if each group is sorted\n        for group in groups:\n            if sorted(group) != group:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 52588,
+  "total_time_ms": 812662.73021698,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1447,
+    "self_tests_generated": 5
+  }
+}

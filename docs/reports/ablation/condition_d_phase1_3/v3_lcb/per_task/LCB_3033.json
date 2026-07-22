@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3033",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, s1: str, s2: str, x: int) -> int:\n        # Step 1: Identify differing positions between s1 and s2\n        diff = [i for i in range(len(s1)) if s1[i] != s2[i]]\n        \n        # Step 2: Check if the number of differing positions is even\n        if len(diff) % 2 != 0:\n            return -1\n        \n        # Step 3: Use dynamic programming to find the minimum cost\n        n = len(diff)\n        dp = [float('inf')] * (n + 1)\n        dp[0] = 0\n        \n        for i in range(1, n + 1):\n            # Case 1: Use the first operation (cost x) to flip two differing bits\n            if i >= 2:\n                dp[i] = min(dp[i], dp[i-2] + x)\n            \n            # Case 2: Use the second operation (cost 1) to flip adjacent differing bits\n            if i >= 2 and abs(diff[i-1] - diff[i-2]) == 1:\n                dp[i] = min(dp[i], dp[i-2] + 1)\n        \n        return dp[n] if dp[n] != float('inf') else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1711,
+  "total_time_ms": 24882.205963134766,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1499
+  }
+}

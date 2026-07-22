@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3468",
+  "passed": false,
+  "code": "class Solution:\n    def getEncryptedString(self, s: str, k: int) -> str:\n        n = len(s)\n        result = []\n        for i in range(n):\n            # Compute the shifted index using modular arithmetic\n            shifted_index = (i + k) % n\n            result.append(s[shifted_index])\n        return ''.join(result)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 35165,
+  "total_time_ms": 811685.1832866669,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 860,
+    "self_tests_generated": 5
+  }
+}

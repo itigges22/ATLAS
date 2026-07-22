@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2884",
+  "passed": true,
+  "code": "class Solution:\n    def longestValidSubstring(self, word: str, forbidden: List[str]) -> int:\n        from collections import defaultdict\n\n        # Step 1: Create a set of forbidden substrings for O(1) lookup\n        forbidden_set = set(forbidden)\n        max_len = 0\n        n = len(word)\n        # Step 2: Use sliding window to check substrings\n        left = 0\n        # Step 3: Check only the last 10 characters in the window for forbidden substrings\n        for right in range(n):\n            # Check all substrings ending at right with length up to 10\n            for l in range(right, max(right - 9, left - 1), -1):\n                substring = word[l:right + 1]\n                if substring in forbidden_set:\n                    left = l + 1\n                    break\n            max_len = max(max_len, right - left + 1)\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7131,
+  "total_time_ms": 116265.67053794861,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4864,
+    "s_star_triggered": true
+  }
+}

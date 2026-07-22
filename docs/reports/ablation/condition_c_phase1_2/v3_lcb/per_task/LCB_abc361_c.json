@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc361_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    A.sort()\n    \n    min_diff = float('inf')\n    \n    # We need to keep N - K elements\n    for i in range(K + 1):\n        if i > N - K:\n            break\n        j = i + (N - K)\n        if j > N:\n            break\n        current_diff = A[j - 1] - A[i]\n        if current_diff < min_diff:\n            min_diff = current_diff\n    \n    print(min_diff)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4895,
+  "total_time_ms": 81574.15509223938,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4668
+  }
+}

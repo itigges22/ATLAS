@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2955",
+  "passed": true,
+  "code": "class Solution:\n    def accountBalanceAfterPurchase(self, purchaseAmount: int) -> int:\n        # Find the nearest multiple of 10\n        remainder = purchaseAmount % 10\n        if remainder < 5:\n            roundedAmount = purchaseAmount - remainder\n        else:\n            roundedAmount = purchaseAmount + (10 - remainder)\n        \n        # Subtract from initial balance of 100\n        return 100 - roundedAmount",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1197,
+  "total_time_ms": 19394.12236213684,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1117
+  }
+}

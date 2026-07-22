@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/abc312_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    left = 1\n    right = 10**18  # A sufficiently large upper bound\n    \n    def is_valid(X):\n        # Number of sellers who can sell at X\n        sellers = bisect.bisect_right(A, X)\n        # Number of buyers who can buy at X\n        buyers = len(B) - bisect.bisect_left(B, X)\n        return sellers >= buyers\n    \n    answer = 10**18\n    while left <= right:\n        mid = (left + right) // 2\n        if is_valid(mid):\n            answer = mid\n            right = mid - 1\n        else:\n            left = mid + 1\n    print(answer)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "refinement",
+  "candidates_generated": 3,
+  "total_tokens": 32302,
+  "total_time_ms": 478655.3273200989,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1041,
+    "self_tests_generated": 5,
+    "refinement_iterations": 1
+  }
+}

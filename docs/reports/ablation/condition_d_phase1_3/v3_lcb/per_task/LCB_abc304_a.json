@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\npeople = []\n\nfor _ in range(n):\n    name, age = input().split()\n    age = int(age)\n    people.append((name, age))\n\n# Find the index of the youngest person\nyoungest_index = 0\nfor i in range(1, n):\n    if people[i][1] < people[youngest_index][1]:\n        youngest_index = i\n\n# Starting from the youngest, print names in clockwise order\nfor i in range(n):\n    index = (youngest_index + i) % n\n    print(people[index][0])",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 760,
+  "total_time_ms": 15526.218891143799,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 620
+  }
+}

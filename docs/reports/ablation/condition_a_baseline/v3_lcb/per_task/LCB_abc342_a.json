@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc342_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\n# Find the character that appears only once\nunique_char = None\nfor char in S:\n    if S.count(char) == 1:\n        unique_char = char\n        break\n\n# Find the index of the unique character\nfor i, char in enumerate(S):\n    if char == unique_char:\n        print(i + 1)\n        break",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1410.2685451507568,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

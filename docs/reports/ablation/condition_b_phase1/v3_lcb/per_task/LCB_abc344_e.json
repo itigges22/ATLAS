@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc344_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n\n    Q = int(data[idx])\n    idx += 1\n\n    # Map from value to its index in the list\n    value_to_index = {A[i]: i for i in range(N)}\n    # Map from value to its next value\n    next_val = {}\n    # Map from value to its previous value\n    prev_val = {}\n\n    # Initialize next and prev maps\n    for i in range(N):\n        if i < N - 1:\n            next_val[A[i]] = A[i + 1]\n        else:\n            next_val[A[i]] = None\n        if i > 0:\n            prev_val[A[i]] = A[i - 1]\n        else:\n            prev_val[A[i]] = None\n\n    for _ in range(Q):\n        query_type = data[idx]\n        idx += 1\n        if query_type == '1':\n            x = int(data[idx])\n            idx += 1\n            y = int(data[idx])\n            idx += 1\n\n            # Insert y after x\n            next_val[y] = next_val[x]\n            prev_val[y] = x\n            if next_val[x] is not None:\n                next_val[x] = y\n                prev_val[next_val[x]] = y\n            else:\n                next_val[x] = y\n                prev_val[y] = x\n\n            value_to_index[y] = value_to_index[x] + 1\n        else:\n            x = int(data[idx])\n            idx += 1\n\n            # Remove x\n            prev_x = prev_val[x]\n            next_x = next_val[x]\n            if prev_x is not None:\n                next_val[prev_x] = next_x\n            else:\n                # x is the head\n                pass\n            if next_x is not None:\n                prev_val[next_x] = prev_x\n            else:\n                # x is the tail\n                pass\n\n            # Remove from maps\n            del value_to_index[x]\n            del next_val[x]\n            del prev_val[x]\n\n    # Reconstruct the list\n    result = []\n    current = None\n    for val in value_to_index:\n        if prev_val.get(val, None) is None:\n            current = val\n            break\n    while current is not None:\n        result.append(current)\n        current = next_val.get(current, None)\n\n    print(' '.join(map(str, result)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2102,
+  "total_time_ms": 35996.56081199646,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1517
+  }
+}

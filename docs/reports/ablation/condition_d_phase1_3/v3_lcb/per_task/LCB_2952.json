@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2952",
+  "passed": false,
+  "code": "class Solution:\n    def minimumTime(self, nums1: List[int], nums2: List[int], x: int) -> int:\n        n = len(nums1)\n        total_sum = sum(nums1)\n        if total_sum <= x:\n            return 0\n\n        # Pair (nums1[i], nums2[i]) and sort by nums2[i] in descending order\n        combined = sorted(zip(nums1, nums2), key=lambda x: -x[1])\n        nums1_sorted, nums2_sorted = zip(*combined)\n\n        # Prefix sums for nums1 and nums2\n        prefix_sum1 = [0] * (n + 1)\n        prefix_sum2 = [0] * (n + 1)\n        for i in range(n):\n            prefix_sum1[i + 1] = prefix_sum1[i] + nums1_sorted[i]\n            prefix_sum2[i + 1] = prefix_sum2[i] + nums2_sorted[i]\n\n        # Try resetting k elements\n        for k in range(1, n + 1):\n            # Total sum after k seconds, considering resets\n            total = total_sum + (prefix_sum2[k] * k) - (prefix_sum1[k] + prefix_sum2[k] * (k * (k - 1)) // 2)\n            if total <= x:\n                return k\n\n        return -1",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53043,
+  "total_time_ms": 839830.4958343506,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1614,
+    "self_tests_generated": 5
+  }
+}

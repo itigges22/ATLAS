@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc322_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn, m = map(int, input().split())\ns = input().strip()\nt = input().strip()\n\nis_prefix = t[:n] == s\nis_suffix = t[-n:] == s\n\nif is_prefix and is_suffix:\n    print(0)\nelif is_prefix:\n    print(1)\nelif is_suffix:\n    print(2)\nelse:\n    print(3)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 97,
+  "total_time_ms": 1484.0104579925537,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

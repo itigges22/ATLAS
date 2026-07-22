@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc338_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    chords = []\n    index = 1\n    for _ in range(N):\n        a = int(data[index])\n        b = int(data[index + 1])\n        index += 2\n        if a > b:\n            a, b = b, a\n        chords.append((a, b))\n    \n    # Sort chords by their starting point\n    chords.sort()\n    \n    # Use a stack to detect intersections\n    stack = []\n    for a, b in chords:\n        # Check if the current chord intersects with the top of the stack\n        while stack:\n            prev_a, prev_b = stack[-1]\n            if prev_a < a < prev_b < b:\n                print(\"Yes\")\n                return\n            elif prev_a < b < prev_b < a:\n                print(\"Yes\")\n                return\n            else:\n                break\n        stack.append((a, b))\n    \n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1081,
+  "total_time_ms": 37893.06664466858,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 717
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc310_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import product\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = int(data[1])\n    M = int(data[2])\n    \n    incompatible = set()\n    for i in range(M):\n        a = int(data[3 + 2*i])\n        b = int(data[4 + 2*i])\n        incompatible.add((a, b))\n        incompatible.add((b, a))\n    \n    # Generate all possible team assignments\n    # Each player can be assigned to any of T teams\n    # But we need to count only assignments where no incompatible pair is in the same team\n    # Also, each team must have at least one player\n    \n    count = 0\n    for assignment in product(range(T), repeat=N):\n        # Check if any incompatible pair is in the same team\n        valid = True\n        for a, b in incompatible:\n            if assignment[a-1] == assignment[b-1]:\n                valid = False\n                break\n        if not valid:\n            continue\n        \n        # Check if all teams are non-empty\n        teams = set(assignment)\n        if len(teams) < T:\n            continue\n        \n        count += 1\n    \n    print(count)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 291,
+  "total_time_ms": 34595.20626068115,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3153",
+  "passed": true,
+  "code": "class Solution:\n    def maxSum(self, nums: List[int], k: int) -> int:\n        MOD = 10**9 + 7\n        \n        # Count the number of bits for each position\n        bit_counts = [0] * 32\n        for num in nums:\n            for i in range(32):\n                if num & (1 << i):\n                    bit_counts[i] += 1\n        \n        # Build the largest k numbers by concentrating bits\n        result = []\n        for _ in range(k):\n            num = 0\n            for i in range(32):\n                if bit_counts[i] > 0:\n                    num |= (1 << i)\n                    bit_counts[i] -= 1\n            result.append(num)\n        \n        # Calculate the sum of squares\n        total = 0\n        for num in result:\n            total = (total + num * num) % MOD\n        \n        return total",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1590,
+  "total_time_ms": 26693.567276000977,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1365
+  }
+}

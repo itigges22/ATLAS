@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc348_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\nresult = []\nfor i in range(1, n + 1):\n    if i % 3 == 0:\n        result.append('x')\n    else:\n        result.append('o')\nprint(''.join(result))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 987.8759384155273,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

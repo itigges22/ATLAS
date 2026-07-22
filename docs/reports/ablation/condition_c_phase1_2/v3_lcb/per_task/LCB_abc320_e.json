@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc320_e",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    events = []\n    idx = 2\n    for _ in range(M):\n        T = int(data[idx])\n        W = int(data[idx+1])\n        S = int(data[idx+2])\n        events.append((T, W, S))\n        idx += 3\n    \n    # Initialize available people (original positions 1 to N)\n    available = []\n    for i in range(1, N+1):\n        heapq.heappush(available, i)\n    \n    # Priority queue for people who are out and will return\n    returning = []\n    \n    # Array to store the total noodles each person has received\n    result = [0] * (N + 1)  # 1-based indexing\n    \n    event_idx = 0\n    while event_idx < M:\n        T, W, S = events[event_idx]\n        \n        # Process all returning people whose return time <= current event time\n        while returning and returning[0][0] <= T:\n            return_time, person = heapq.heappop(returning)\n            heapq.heappush(available, person)\n        \n        # If there are available people, assign noodles to the front person\n        if available:\n            person = heapq.heappop(available)\n            result[person] += W\n            heapq.heappush(returning, (T + S, person))\n        \n        event_idx += 1\n    \n    for i in range(1, N+1):\n        print(result[i])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7843,
+  "total_time_ms": 353175.66299438477,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5367,
+    "s_star_triggered": true
+  }
+}

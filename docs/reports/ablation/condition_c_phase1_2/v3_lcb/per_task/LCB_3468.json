@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3468",
+  "passed": false,
+  "code": "class Solution:\n    def getEncryptedString(self, s: str, k: int) -> str:\n        n = len(s)\n        result = []\n        for i in range(n):\n            new_index = (i + k) % n\n            result.append(s[new_index])\n        return ''.join(result)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3246,
+  "total_time_ms": 52058.9337348938,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3169
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc311_e",
+  "passed": false,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    N = int(data[2])\n    \n    holes = set()\n    for i in range(N):\n        a = int(data[3 + 2*i])\n        b = int(data[4 + 2*i])\n        holes.add((a, b))\n    \n    # Preprocess: for each row, store sorted list of columns with holes\n    row_holes = [[] for _ in range(H+1)]\n    for a, b in holes:\n        row_holes[a].append(b)\n    for i in range(H+1):\n        row_holes[i].sort()\n    \n    result = 0\n    \n    # For each row, for each column, find the maximum square size starting at (i, j)\n    dp = [[0]*(W+1) for _ in range(H+1)]\n    \n    for i in range(H, 0, -1):\n        for j in range(W, 0, -1):\n            if (i, j) in holes:\n                dp[i][j] = 0\n            else:\n                dp[i][j] = 1 + min(dp[i+1][j], dp[i][j+1], dp[i+1][j+1])\n                result += dp[i][j]\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 331,
+  "total_time_ms": 5402.458906173706,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

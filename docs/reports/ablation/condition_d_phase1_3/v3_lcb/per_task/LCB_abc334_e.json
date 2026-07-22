@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc334_e",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\nMOD = 998244353\n\ndef main():\n    sys.setrecursionlimit(1 << 25)\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [list(sys.stdin.readline().strip()) for _ in range(H)]\n    \n    visited = [[False] * W for _ in range(H)]\n    components = []\n    dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n    \n    comp_id = 0\n    comp_map = {}  # (x, y) -> component id\n    \n    def bfs(i, j):\n        q = deque()\n        q.append((i, j))\n        visited[i][j] = True\n        comp = [(i, j)]\n        while q:\n            x, y = q.popleft()\n            for dx, dy in dirs:\n                nx, ny = x + dx, y + dy\n                if 0 <= nx < H and 0 <= ny < W and not visited[nx][ny] and grid[nx][ny] == '#':\n                    visited[nx][ny] = True\n                    comp.append((nx, ny))\n                    q.append((nx, ny))\n        return comp\n    \n    num_components = 0\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#' and not visited[i][j]:\n                comp = bfs(i, j)\n                for (x, y) in comp:\n                    comp_map[(x, y)] = comp_id\n                comp_id += 1\n                num_components += 1\n    \n    total = 0\n    red_cells = 0\n    \n    def get_neighbors(x, y):\n        res = set()\n        for dx, dy in dirs:\n            nx, ny = x + dx, y + dy\n            if 0 <= nx < H and 0 <= ny < W:\n                if grid[nx][ny] == '#':\n                    res.add(comp_map[(nx, ny)])\n        return res\n    \n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '.':\n                red_cells += 1\n                neighbors = get_neighbors(i, j)\n                unique_neighbors = len(set(neighbors))\n                new_components = num_components - unique_neighbors + 1\n                total += new_components\n    \n    if red_cells == 0:\n        print(0)\n        return\n    \n    def extended_gcd(a, b):\n        if a == 0:\n            return (b, 0, 1)\n        else:\n            g, y, x = extended_gcd(b % a, a)\n            return (g, x - (b // a) * y, y)\n    \n    def modinv(a, mod):\n        g, x, y = extended_gcd(a, mod)\n        if g != 1:\n            return None\n        else:\n            return x % mod\n    \n    inv_denominator = modinv(red_cells, MOD)\n    result = (total * inv_denominator) % MOD\n    print(result)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3677,
+  "total_time_ms": 54886.943340301514,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2793
+  }
+}

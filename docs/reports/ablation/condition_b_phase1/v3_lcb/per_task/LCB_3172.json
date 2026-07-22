@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3172",
+  "passed": true,
+  "code": "class Solution:\n    def differenceOfSums(self, n: int, m: int) -> int:\n        # Calculate sum of numbers divisible by m\n        k = n // m\n        sum_divisible = m * k * (k + 1) // 2\n        \n        # Calculate sum of all numbers from 1 to n\n        total_sum = n * (n + 1) // 2\n        \n        # num1 = total_sum - sum_divisible\n        # num2 = sum_divisible\n        # return num1 - num2\n        return (total_sum - sum_divisible) - sum_divisible",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1028,
+  "total_time_ms": 15916.90182685852,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 940
+  }
+}

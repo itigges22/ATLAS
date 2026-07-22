@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3106",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def lengthOfLongestSubsequence(self, nums: List[int], target: int) -> int:\n        dp = [-1] * (target + 1)\n        dp[0] = 0  # Base case: sum 0 with 0 elements\n\n        for num in nums:\n            for t in range(target, num - 1, -1):\n                if dp[t - num] != -1:\n                    dp[t] = max(dp[t], dp[t - num] + 1)\n\n        return dp[target]",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 132,
+  "total_time_ms": 2035.0935459136963,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

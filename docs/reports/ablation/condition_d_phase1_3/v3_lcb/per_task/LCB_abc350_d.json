@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc350_d",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N, M = map(int, sys.stdin.readline().split())\n    graph = [[] for _ in range(N + 1)]\n    for _ in range(M):\n        a, b = map(int, sys.stdin.readline().split())\n        graph[a].append(b)\n        graph[b].append(a)\n\n    visited = [False] * (N + 1)\n    total = 0\n\n    for i in range(1, N + 1):\n        if not visited[i]:\n            q = deque()\n            q.append(i)\n            visited[i] = True\n            count = 0\n            while q:\n                u = q.popleft()\n                count += 1\n                for v in graph[u]:\n                    if not visited[v]:\n                        visited[v] = True\n                        q.append(v)\n            total += count * (count - 1) // 2\n\n    print(total - M)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1351,
+  "total_time_ms": 24801.788806915283,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1128
+  }
+}

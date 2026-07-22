@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc324_e",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = data[1]\n    S = data[2:2+N]\n    \n    # Precompute prefix and suffix counts for each string\n    prefix = []\n    suffix = []\n    \n    for s in S:\n        # Count of characters in s\n        cnt = [0] * 26\n        for c in s:\n            cnt[ord(c) - ord('a')] += 1\n        \n        # Prefix: count of characters up to each position\n        pre = [0] * 26\n        for c in s:\n            pre[ord(c) - ord('a')] += 1\n        prefix.append(pre)\n        \n        # Suffix: count of characters from each position to end\n        suf = [0] * 26\n        for c in reversed(s):\n            suf[ord(c) - ord('a')] += 1\n        suffix.append(suf)\n    \n    # Precompute for T\n    t_len = len(T)\n    t_cnt = [0] * 26\n    for c in T:\n        t_cnt[ord(c) - ord('a')] += 1\n    \n    # For each string, precompute how much of T it can cover as a prefix or suffix\n    # We'll store for each string:\n    # - how much of T it can cover as a prefix (prefix_coverage)\n    # - how much of T it can cover as a suffix (suffix_coverage)\n    \n    prefix_coverage = []\n    suffix_coverage = []\n    \n    for s in S:\n        # How much of T can be covered as a prefix\n        i = 0\n        for c in s:\n            if i < t_len and c == T[i]:\n                i += 1\n        prefix_coverage.append(i)\n        \n        # How much of T can be covered as a suffix\n        i = t_len - 1\n        for c in reversed(s):\n            if i >= 0 and c == T[i]:\n                i -= 1\n        suffix_coverage.append(t_len - 1 - i)\n    \n    # Now, for each pair (i, j), check if prefix_coverage[i] + suffix_coverage[j] >= len(T)\n    count = 0\n    for i in range(N):\n        for j in range(N):\n            if prefix_coverage[i] + suffix_coverage[j] >= len(T):\n                count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 8175.6134033203125,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

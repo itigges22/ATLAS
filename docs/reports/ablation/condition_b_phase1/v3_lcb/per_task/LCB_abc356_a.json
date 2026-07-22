@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc356_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef reverse_subarray():\n    import sys\n    input = sys.stdin.read\n    N, L, R = map(int, input().split())\n    A = list(range(1, N + 1))\n    # In-place reversal of subarray from L-1 to R-1\n    A[L-1:R] = A[L-1:R][::-1]\n    print(' '.join(map(str, A)))\n\nreverse_subarray()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 729,
+  "total_time_ms": 12329.09607887268,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 660
+  }
+}

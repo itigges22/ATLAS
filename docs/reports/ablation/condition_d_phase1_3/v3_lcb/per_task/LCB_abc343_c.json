@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc343_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_palindrome(n):\n    s = str(n)\n    return s == s[::-1]\n\ndef main():\n    N = int(sys.stdin.readline())\n    max_cube = 0\n    x = 1\n    while True:\n        cube = x ** 3\n        if cube > N:\n            break\n        if is_palindrome(cube):\n            max_cube = cube\n        x += 1\n    print(max_cube)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1518,
+  "total_time_ms": 25700.65450668335,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1398
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc308_d",
+  "passed": true,
+  "code": "import sys\nfrom collections import deque\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [sys.stdin.readline().strip() for _ in range(H)]\n    target = \"snuke\"\n    visited = [[[False] * 5 for _ in range(W)] for _ in range(H)]\n    queue = deque()\n    if grid[0][0] != target[0]:\n        print(\"No\")\n        return\n    queue.append((0, 0, 0))\n    visited[0][0][0] = True\n\n    while queue:\n        i, j, t = queue.popleft()\n        if i == H - 1 and j == W - 1:\n            print(\"Yes\")\n            return\n        next_t = (t + 1) % 5\n        target_char = target[next_t]\n        for di, dj in [(-1, 0), (1, 0), (0, -1), (0, 1)]:\n            ni, nj = i + di, j + dj\n            if 0 <= ni < H and 0 <= nj < W:\n                if not visited[ni][nj][next_t] and grid[ni][nj] == target_char:\n                    visited[ni][nj][next_t] = True\n                    queue.append((ni, nj, next_t))\n    print(\"No\")\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1827,
+  "total_time_ms": 28654.465675354004,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1519
+  }
+}

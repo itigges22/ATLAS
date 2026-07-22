@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc351_d",
+  "passed": false,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [list(sys.stdin.readline().strip()) for _ in range(H)]\n\n    # Precompute cells with magnets\n    magnets = set()\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#':\n                magnets.add((i, j))\n\n    # Directions: up, down, left, right\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n\n    # Check if a cell is blocked (has a magnet in adjacent cells)\n    def is_blocked(i, j):\n        for di, dj in directions:\n            ni, nj = i + di, j + dj\n            if 0 <= ni < H and 0 <= nj < W:\n                if (ni, nj) in magnets:\n                    return True\n        return False\n\n    # BFS to find the size of the connected component\n    def bfs(start_i, start_j):\n        visited = set()\n        queue = deque()\n        queue.append((start_i, start_j))\n        visited.add((start_i, start_j))\n        count = 0\n\n        while queue:\n            i, j = queue.popleft()\n            count += 1\n            for di, dj in directions:\n                ni, nj = i + di, j + dj\n                if 0 <= ni < H and 0 <= nj < W:\n                    if (ni, nj) not in magnets and (ni, nj) not in visited and not is_blocked(ni, nj):\n                        visited.add((ni, nj))\n                        queue.append((ni, nj))\n        return count\n\n    max_freedom = 0\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '.':\n                max_freedom = max(max_freedom, bfs(i, j))\n    print(max_freedom)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 461,
+  "total_time_ms": 6720.795154571533,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

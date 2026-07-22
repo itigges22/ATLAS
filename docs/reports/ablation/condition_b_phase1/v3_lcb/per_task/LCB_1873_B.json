@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/1873_B",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    t = int(data[0])\n    index = 1\n    \n    results = []\n    \n    for _ in range(t):\n        n = int(data[index])\n        index += 1\n        a = list(map(int, data[index:index + n]))\n        index += n\n        \n        max_product = 0\n        \n        for i in range(n):\n            new_a = a.copy()\n            new_a[i] += 1\n            product = 1\n            for num in new_a:\n                product *= num\n            max_product = max(max_product, product)\n        \n        results.append(str(max_product))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1642,
+  "total_time_ms": 23868.78204345703,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1509
+  }
+}

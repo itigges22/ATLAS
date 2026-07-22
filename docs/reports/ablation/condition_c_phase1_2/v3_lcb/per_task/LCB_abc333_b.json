@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc333_b",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\n# Define the coordinates of the regular pentagon vertices\n# Assume the pentagon is centered at the origin with radius 1\nangle = 2 * math.pi / 5\npoints = {\n    'A': (1, 0),\n    'B': (math.cos(angle), math.sin(angle)),\n    'C': (math.cos(2 * angle), math.sin(2 * angle)),\n    'D': (math.cos(3 * angle), math.sin(3 * angle)),\n    'E': (math.cos(4 * angle), math.sin(4 * angle))\n}\n\ndef distance(p1, p2):\n    return math.hypot(p1[0] - p2[0], p1[1] - p2[1])\n\ndef main():\n    input = sys.stdin.read().strip()\n    s_line = input[:2]\n    t_line = input[2:]\n\n    s1, s2 = s_line[0], s_line[1]\n    t1, t2 = t_line[0], t_line[1]\n\n    d1 = distance(points[s1], points[s2])\n    d2 = distance(points[t1], points[t2])\n\n    if abs(d1 - d2) < 1e-9:\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 308,
+  "total_time_ms": 4443.371295928955,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

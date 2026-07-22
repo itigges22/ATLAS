@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3019",
+  "passed": true,
+  "code": "class Solution:\n    def furthestDistanceFromOrigin(self, moves: str) -> int:\n        left = 0\n        right = 0\n        underscore = 0\n\n        for move in moves:\n            if move == 'L':\n                left += 1\n            elif move == 'R':\n                right += 1\n            else:\n                underscore += 1\n\n        return abs(left - right) + underscore",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1008,
+  "total_time_ms": 17335.46757698059,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 928
+  }
+}

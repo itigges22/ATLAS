@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc362_c",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    L = []\n    R = []\n    idx = 1\n    for _ in range(N):\n        L.append(int(data[idx]))\n        R.append(int(data[idx + 1]))\n        idx += 2\n\n    total_min = sum(L)\n    total_max = sum(R)\n\n    if total_min > 0 or total_max < 0:\n        print(\"No\")\n        return\n\n    # We need to adjust the values so that the sum is 0\n    # Start with all L_i\n    X = L[:]\n    current_sum = total_min\n\n    # Adjust values to reach sum 0\n    for i in range(N):\n        if current_sum == 0:\n            break\n        if current_sum < 0:\n            # Need to increase X[i]\n            delta = -current_sum\n            add = min(delta, R[i] - X[i])\n            X[i] += add\n            current_sum += add\n        else:\n            # Need to decrease X[i]\n            delta = current_sum\n            subtract = min(delta, X[i] - L[i])\n            X[i] -= subtract\n            current_sum -= subtract\n\n    print(\"Yes\")\n    print(' '.join(map(str, X)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 55938,
+  "total_time_ms": 901235.7025146484,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1588,
+    "self_tests_generated": 5
+  }
+}

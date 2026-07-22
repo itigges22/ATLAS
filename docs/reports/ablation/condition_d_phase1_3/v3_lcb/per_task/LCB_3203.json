@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3203",
+  "passed": false,
+  "code": "class Solution:\n    def canMakePalindromeQueries(self, s: str, queries: List[List[int]]) -> List[bool]:\n        n = len(s)\n        half = n // 2\n        from collections import Counter\n\n        # Precompute prefix sums for each character\n        prefix = [Counter() for _ in range(n + 1)]\n        for i in range(n):\n            prefix[i + 1] = prefix[i].copy()\n            prefix[i + 1][s[i]] += 1\n\n        def get_count(l, r, ch):\n            return prefix[r + 1][ch] - prefix[l][ch]\n\n        answer = []\n        for a, b, c, d in queries:\n            # Count characters in the first half and second half\n            left = Counter()\n            for i in range(half):\n                left[s[i]] += 1\n\n            right = Counter()\n            for i in range(half, n):\n                right[s[i]] += 1\n\n            # Get the characters in the ranges we can rearrange\n            left_range = Counter()\n            for i in range(a, b + 1):\n                left_range[s[i]] += 1\n\n            right_range = Counter()\n            for i in range(c, d + 1):\n                right_range[s[i]] += 1\n\n            # Subtract the ranges from the left and right\n            for ch in left_range:\n                left[ch] -= left_range[ch]\n                if left[ch] == 0:\n                    del left[ch]\n\n            for ch in right_range:\n                right[ch] -= right_range[ch]\n                if right[ch] == 0:\n                    del right[ch]\n\n            # Check if left and right can be made equal\n            if left == right:\n                answer.append(True)\n            else:\n                answer.append(False)\n\n        return answer",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 62199,
+  "total_time_ms": 1047606.260061264,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2596,
+    "self_tests_generated": 5
+  }
+}

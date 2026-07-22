@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc343_a",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nA, B = map(int, input().split())\nsum_ab = A + B\nfor i in range(10):\n    if i != sum_ab:\n        print(i)\n        break",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54937,
+  "total_time_ms": 897342.8831100464,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 991,
+    "self_tests_generated": 5
+  }
+}

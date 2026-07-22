@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc328_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, X = map(int, input().split())\nscores = list(map(int, input().split()))\ntotal = sum(s for s in scores if s <= X)\nprint(total)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 967.0395851135254,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

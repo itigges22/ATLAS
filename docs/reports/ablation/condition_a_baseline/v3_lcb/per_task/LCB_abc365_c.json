@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc365_c",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:]))\n\n    total = sum(A)\n    if total <= M:\n        print(\"infinite\")\n        return\n\n    A.sort()\n    prefix_sum = [0] * (N + 1)\n    for i in range(N):\n        prefix_sum[i + 1] = prefix_sum[i] + A[i]\n\n    low = 0\n    high = A[-1]\n    answer = 0\n\n    while low <= high:\n        mid = (low + high) // 2\n        # Calculate total subsidy with limit mid\n        total_subsidy = 0\n        i = 0\n        while i < N and A[i] <= mid:\n            total_subsidy += A[i]\n            i += 1\n        total_subsidy += mid * (N - i)\n\n        if total_subsidy <= M:\n            answer = mid\n            low = mid + 1\n        else:\n            high = mid - 1\n\n    print(answer)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4124.728202819824,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

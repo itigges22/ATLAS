@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3154",
+  "passed": true,
+  "code": "class Solution:\n    def maximumTripletValue(self, nums: List[int]) -> int:\n        max_val = 0\n        n = len(nums)\n        for i in range(n):\n            for j in range(i + 1, n):\n                for k in range(j + 1, n):\n                    current_val = (nums[i] - nums[j]) * nums[k]\n                    if current_val > max_val:\n                        max_val = current_val\n        return max_val",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1603,
+  "total_time_ms": 24749.801635742188,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1491
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc346_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\na = list(map(int, input().split()))\nb = []\nfor i in range(n - 1):\n    b.append(str(a[i] * a[i + 1]))\nprint(' '.join(b))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 64,
+  "total_time_ms": 1046.3809967041016,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

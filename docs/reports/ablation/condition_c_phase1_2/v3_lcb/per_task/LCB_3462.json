@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3462",
+  "passed": false,
+  "code": "class Solution:\n    def doesAliceWin(self, s: str) -> bool:\n        vowels = {'a', 'e', 'i', 'o', 'u'}\n        vowel_count = 0\n        for ch in s:\n            if ch in vowels:\n                vowel_count += 1\n        # Alice wins if the total number of vowels is odd\n        return vowel_count % 2 == 1",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 2795,
+  "total_time_ms": 44440.5517578125,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2723
+  }
+}

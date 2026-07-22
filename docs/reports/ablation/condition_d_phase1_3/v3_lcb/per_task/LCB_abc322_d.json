@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc322_d",
+  "passed": true,
+  "code": "import sys\nimport itertools\n\ndef read_polyominoes():\n    polyominoes = []\n    for _ in range(3):\n        poly = []\n        for _ in range(4):\n            line = sys.stdin.readline().strip()\n            poly.append(list(line))\n        polyominoes.append(poly)\n    return polyominoes\n\ndef get_cells(poly):\n    cells = []\n    for i in range(4):\n        for j in range(4):\n            if poly[i][j] == '#':\n                cells.append((i, j))\n    return cells\n\ndef rotate(poly):\n    return [list(row) for row in zip(*poly[::-1])]\n\ndef translate(poly, dx, dy):\n    new_poly = [['.' for _ in range(4)] for _ in range(4)]\n    for i in range(4):\n        for j in range(4):\n            if poly[i][j] == '#':\n                ni, nj = i + dx, j + dy\n                if 0 <= ni < 4 and 0 <= nj < 4:\n                    new_poly[ni][nj] = '#'\n    return new_poly\n\ndef generate_transformations(poly):\n    transformations = []\n    # Generate all rotations\n    for _ in range(4):\n        # Generate all translations\n        for dx in range(-4, 4):\n            for dy in range(-4, 4):\n                transformed = translate(poly, dx, dy)\n                cells = get_cells(transformed)\n                if len(cells) > 0:  # Skip empty transformations\n                    transformations.append(cells)\n        poly = rotate(poly)\n    return transformations\n\ndef is_connected(cells):\n    if not cells:\n        return False\n    visited = set()\n    queue = [cells[0]]\n    while queue:\n        x, y = queue.pop(0)\n        if (x, y) in visited:\n            continue\n        visited.add((x, y))\n        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:\n            nx, ny = x + dx, y + dy\n            if (nx, ny) in cells:\n                queue.append((nx, ny))\n    return len(visited) == len(cells)\n\ndef solve():\n    polyominoes = read_polyominoes()\n    transformations = [generate_transformations(p) for p in polyominoes]\n\n    for t1 in transformations[0]:\n        if not is_connected(t1):\n            continue\n        for t2 in transformations[1]:\n            if not is_connected(t2):\n                continue\n            combined = set(t1 + t2)\n            if len(combined) != len(t1) + len(t2):\n                continue  # Overlap\n            for t3 in transformations[2]:\n                if not is_connected(t3):\n                    continue\n                combined_all = set(t1 + t2 + t3)\n                if len(combined_all) == 16 and all(0 <= x < 4 and 0 <= y < 4 for x, y in combined_all):\n                    print(\"Yes\")\n                    return\n    print(\"No\")\n\nsolve()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 25669,
+  "total_time_ms": 438035.1903438568,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2905,
+    "self_tests_generated": 5
+  }
+}

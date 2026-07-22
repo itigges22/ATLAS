@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc328_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    s = sys.stdin.readline().strip()\n    stack = []\n    for char in s:\n        stack.append(char)\n        if len(stack) >= 3 and stack[-3:] == ['A', 'B', 'C']:\n            stack.pop()\n            stack.pop()\n            stack.pop()\n    print(''.join(stack))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 904,
+  "total_time_ms": 15617.290258407593,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 804
+  }
+}

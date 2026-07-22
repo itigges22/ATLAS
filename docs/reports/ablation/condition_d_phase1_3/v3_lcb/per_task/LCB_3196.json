@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3196",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def maxFrequencyScore(self, nums: List[int], k: int) -> int:\n        nums.sort()\n        n = len(nums)\n        left = 0\n        max_freq = 0\n        total_ops = 0\n\n        for right in range(n):\n            total_ops += nums[right] - nums[right // 2]\n\n            while total_ops > k:\n                total_ops -= nums[right] - nums[left]\n                left += 1\n\n            max_freq = max(max_freq, right - left + 1)\n\n        return max_freq",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 46351,
+  "total_time_ms": 742682.4998855591,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1288,
+    "self_tests_generated": 5
+  }
+}

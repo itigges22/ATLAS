@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc346_d",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    S = data[1]\n    C = list(map(int, data[2:]))\n    \n    # We need exactly one pair of adjacent equal characters\n    # So, the string must have exactly one place where T[i] == T[i+1]\n    \n    # We will consider all possible positions for the equal pair\n    # For each possible position i (from 0 to N-2), we will:\n    # - Make T[i] == T[i+1]\n    # - Make sure all other adjacent pairs are different\n    \n    min_cost = float('inf')\n    \n    for i in range(N - 1):\n        # We will make T[i] == T[i+1]\n        # So we need to make sure that all other adjacent pairs are different\n        \n        # We will try both possibilities for T[i] and T[i+1]\n        for val in [0, 1]:\n            cost = 0\n            # Set T[i] and T[i+1] to val\n            if S[i] != str(val):\n                cost += C[i]\n            if S[i+1] != str(val):\n                cost += C[i+1]\n            \n            # Now, for all other positions j != i, j != i+1, we need T[j] != T[j+1]\n            # So we will set T[j] and T[j+1] to be different\n            for j in range(N - 1):\n                if j == i or j == i + 1:\n                    continue\n                # We need T[j] != T[j+1]\n                # So we can choose either T[j] = 0 and T[j+1] = 1 or vice versa\n                # We will choose the one with minimal cost\n                cost1 = 0\n                if S[j] != '0':\n                    cost1 += C[j]\n                if S[j+1] != '1':\n                    cost1 += C[j+1]\n                cost2 = 0\n                if S[j] != '1':\n                    cost2 += C[j]\n                if S[j+1] != '0':\n                    cost2 += C[j+1]\n                cost += min(cost1, cost2)\n            \n            min_cost = min(min_cost, cost)\n    \n    print(min_cost)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 46344,
+  "total_time_ms": 1124869.7345256805,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1295,
+    "self_tests_generated": 2
+  }
+}

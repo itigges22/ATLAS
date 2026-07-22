@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc336_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N = int(sys.stdin.readline())\n    count = 0\n    while N & 1 == 0:\n        count += 1\n        N >>= 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1114,
+  "total_time_ms": 18252.00915336609,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1035
+  }
+}

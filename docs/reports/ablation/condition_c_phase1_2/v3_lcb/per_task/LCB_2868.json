@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2868",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def continuousSubarrays(self, nums: List[int]) -> int:\n        n = len(nums)\n        count = 0\n        left = 0\n        # Use a sorted list to maintain the window elements\n        from bisect import insort, bisect_left, bisect_right\n\n        # Auxiliary data structure to maintain window elements\n        window = []\n\n        for right in range(n):\n            # Insert current element into the sorted window\n            insort(window, nums[right])\n\n            # Check if the window is valid (max - min <= 2)\n            while window[-1] - window[0] > 2:\n                # Remove the leftmost element from the window\n                left_val = nums[left]\n                index = bisect_left(window, left_val)\n                window.pop(index)\n                left += 1\n\n            # All subarrays ending at 'right' and starting from 'left' to 'right' are valid\n            count += right - left + 1\n\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7354,
+  "total_time_ms": 115405.62510490417,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5002,
+    "s_star_triggered": true
+  }
+}

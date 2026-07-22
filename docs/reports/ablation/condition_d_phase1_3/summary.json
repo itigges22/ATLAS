@@ -1,0 +1,22 @@
+{
+  "condition": "D",
+  "name": "+Phase1+3",
+  "description": "Phase 1 + PR-CoT repair/refinement (no adaptive K)",
+  "enable_phase1": true,
+  "enable_phase2": false,
+  "enable_phase3": true,
+  "enable_feedback": false,
+  "total_tasks": 599,
+  "passed_tasks": 447,
+  "pass_rate": 0.7462437395659433,
+  "total_tokens": 9323932,
+  "wall_time_s": 169881.19175624847,
+  "phase_breakdown": {
+    "phase1": 405,
+    "pr_cot": 36,
+    "refinement": 6,
+    "derivation": 0,
+    "none": 152,
+    "error": 0
+  }
+}

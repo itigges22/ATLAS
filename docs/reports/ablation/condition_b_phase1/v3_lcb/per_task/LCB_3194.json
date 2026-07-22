@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3194",
+  "passed": true,
+  "code": "class Solution:\n    def findWordsContaining(self, words: List[str], x: str) -> List[int]:\n        result = []\n        for i, word in enumerate(words):\n            if x in word:\n                result.append(i)\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 903,
+  "total_time_ms": 14801.96213722229,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 854
+  }
+}

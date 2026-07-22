@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc320_d",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import defaultdict, deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    edges = []\n    index = 2\n    for _ in range(M):\n        A = int(data[index])\n        B = int(data[index+1])\n        X = int(data[index+2])\n        Y = int(data[index+3])\n        edges.append((A, B, X, Y))\n        index += 4\n    \n    # Build graph\n    graph = defaultdict(list)\n    for A, B, X, Y in edges:\n        graph[A].append((B, X, Y))\n        graph[B].append((A, -X, -Y))\n    \n    # Coordinates\n    coords = [None] * (N + 1)  # 1-based indexing\n    coords[1] = (0, 0)\n    \n    # BFS to determine coordinates\n    visited = [False] * (N + 1)\n    queue = deque([1])\n    visited[1] = True\n    \n    while queue:\n        u = queue.popleft()\n        for v, dx, dy in graph[u]:\n            if coords[v] is None:\n                coords[v] = (coords[u][0] + dx, coords[u][1] + dy)\n                visited[v] = True\n                queue.append(v)\n    \n    for i in range(1, N + 1):\n        if coords[i] is None:\n            print(\"undecidable\")\n        else:\n            print(coords[i][0], coords[i][1])\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 5117.237567901611,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

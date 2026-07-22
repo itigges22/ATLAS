@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc303_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    X = int(data[0])\n    Y = int(data[1])\n    Z = int(data[2])\n    S = data[3]\n\n    n = len(S)\n    # dp[i][0] = minimum time to type first i characters with Caps Lock off\n    # dp[i][1] = minimum time to type first i characters with Caps Lock on\n    dp = [[float('inf')] * 2 for _ in range(n + 1)]\n    dp[0][0] = 0  # Initially, Caps Lock is off\n    dp[0][1] = float('inf')  # Not possible to start with Caps Lock on\n\n    for i in range(1, n + 1):\n        current_char = S[i - 1]\n        # Case 1: current Caps Lock state is off\n        if dp[i - 1][0] != float('inf'):\n            # Option 1: press 'a' key (cost X)\n            if current_char == 'a':\n                dp[i][0] = min(dp[i][0], dp[i - 1][0] + X)\n            else:  # current_char == 'A'\n                dp[i][0] = min(dp[i][0], dp[i - 1][0] + Y)\n\n            # Option 2: toggle Caps Lock (cost Z) and press 'a' (cost X)\n            dp[i][1] = min(dp[i][1], dp[i - 1][0] + Z + X)\n\n            # Option 3: toggle Caps Lock (cost Z) and press 'a' and Shift (cost Y)\n            dp[i][1] = min(dp[i][1], dp[i - 1][0] + Z + Y)\n\n        # Case 2: current Caps Lock state is on\n        if dp[i - 1][1] != float('inf'):\n            # Option 1: press 'a' key (cost X)\n            if current_char == 'A':\n                dp[i][1] = min(dp[i][1], dp[i - 1][1] + X)\n            else:  # current_char == 'a'\n                dp[i][1] = min(dp[i][1], dp[i - 1][1] + Y)\n\n            # Option 2: toggle Caps Lock (cost Z) and press 'a' (cost X)\n            dp[i][0] = min(dp[i][0], dp[i - 1][1] + Z + X)\n\n            # Option 3: toggle Caps Lock (cost Z) and press 'a' and Shift (cost Y)\n            dp[i][0] = min(dp[i][0], dp[i - 1][1] + Z + Y)\n\n    print(min(dp[n][0], dp[n][1]))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22716,
+  "total_time_ms": 368948.7433433533,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 764,
+    "self_tests_generated": 5
+  }
+}

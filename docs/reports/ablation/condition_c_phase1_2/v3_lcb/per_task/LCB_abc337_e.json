@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc337_e",
+  "passed": false,
+  "code": "import sys\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.readline\n    N = int(input())\n    M = math.ceil(math.log2(N))\n    print(M)\n    sys.stdout.flush()\n\n    # Prepare the binary representation for each bottle\n    friends_bottles = []\n    for i in range(1, N + 1):\n        bits = []\n        for j in range(M):\n            if (i >> j) & 1:\n                bits.append(1)\n            else:\n                bits.append(0)\n        friends_bottles.append(bits)\n\n    # Distribute bottles to friends based on binary representation\n    for j in range(M):\n        bottles = []\n        for i in range(1, N + 1):\n            if friends_bottles[i - 1][j] == 1:\n                bottles.append(i)\n        print(len(bottles), end=' ')\n        print(' '.join(map(str, bottles)))\n        sys.stdout.flush()\n\n    # Read the result string\n    S = input().strip()\n    X = 0\n    for j in range(M):\n        if S[j] == '1':\n            X += (1 << j)\n    print(X)\n    sys.stdout.flush()\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5788,
+  "total_time_ms": 107623.03447723389,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5560
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc314_f",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import defaultdict\n\nMOD = 998244353\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    matches = []\n    for _ in range(N - 1):\n        p, q = map(int, sys.stdin.readline().split())\n        matches.append((p, q))\n\n    # We will use Union-Find with size tracking\n    parent = list(range(N + 1))\n    size = [1] * (N + 1)\n\n    # For each match, we will store the two teams involved\n    # We will also track for each player, the number of times their team wins\n    # We will use a dictionary to accumulate the expected values\n    expected = [0] * (N + 1)\n\n    # We will use a list to store the matches in the order they are processed\n    # We will also track for each match, the two teams involved\n    # We will use a Union-Find structure to track the size of each team\n    # We will also use a dictionary to track the expected value for each team\n\n    # We will process the matches in the order given\n    for p, q in matches:\n        # Find the root of p and q\n        root_p = find(parent, p)\n        root_q = find(parent, q)\n\n        # Get the sizes of the two teams\n        a = size[root_p]\n        b = size[root_q]\n\n        # The probability that the team with p wins is a / (a + b)\n        # The probability that the team with q wins is b / (a + b)\n        # We will add these probabilities to the expected values of the players in the respective teams\n\n        # We will use modular inverses to compute the probabilities\n        inv_a_plus_b = pow(a + b, MOD - 2, MOD)\n        prob_p = a * inv_a_plus_b % MOD\n        prob_q = b * inv_a_plus_b % MOD\n\n        # Add the probabilities to the expected values of the players in the respective teams\n        for player in range(1, N + 1):\n            if find(parent, player) == root_p:\n                expected[player] = (expected[player] + prob_p) % MOD\n            elif find(parent, player) == root_q:\n                expected[player] = (expected[player] + prob_q) % MOD\n\n        # Union the two teams\n        parent[root_q] = root_p\n        size[root_p] += size[root_q]\n\n    # Print the expected values for each player\n    print(' '.join(map(str, expected[1:N + 1])))\n\ndef find(parent, x):\n    if parent[x] != x:\n        parent[x] = find(parent, parent[x])\n    return parent[x]\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 11138.136625289917,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

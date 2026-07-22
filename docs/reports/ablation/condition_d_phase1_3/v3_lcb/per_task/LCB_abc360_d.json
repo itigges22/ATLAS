@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc360_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = int(data[1])\n    S = data[2]\n    X = list(map(int, data[3:]))\n    \n    left = []\n    right = []\n    \n    for i in range(N):\n        if S[i] == '0':\n            left.append(X[i])\n        else:\n            right.append(X[i])\n    \n    left.sort()\n    right.sort()\n    \n    res = 0\n    \n    # Count pairs where left ant passes right ant\n    for x in left:\n        idx = bisect.bisect_right(right, x + T)\n        res += idx\n    \n    # Count pairs where right ant passes left ant\n    for x in right:\n        idx = bisect.bisect_left(left, x - T)\n        res += (len(left) - idx)\n    \n    print(res)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 52796,
+  "total_time_ms": 832864.3097877502,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 679,
+    "self_tests_generated": 5
+  }
+}

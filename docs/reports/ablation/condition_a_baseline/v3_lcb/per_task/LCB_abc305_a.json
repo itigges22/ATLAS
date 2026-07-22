@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc305_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN = int(input())\nstation_distance = 5\nnearest = (N // station_distance) * station_distance\nif N % station_distance > station_distance // 2:\n    nearest += station_distance\nprint(nearest)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1302.966594696045,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

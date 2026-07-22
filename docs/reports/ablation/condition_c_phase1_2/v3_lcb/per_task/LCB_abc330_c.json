@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc330_c",
+  "passed": true,
+  "code": "import sys\nimport math\n\ndef main():\n    D = int(sys.stdin.readline())\n    min_diff = float('inf')\n    max_x = int(math.isqrt(D)) + 1\n\n    for x in range(max_x):\n        x_sq = x * x\n        y_sq = D - x_sq\n        y = int(math.isqrt(y_sq))\n        for dy in [0, 1]:\n            y_val = y + dy\n            current_sum = x_sq + y_val * y_val\n            diff = abs(current_sum - D)\n            if diff < min_diff:\n                min_diff = diff\n            if min_diff == 0:\n                print(0)\n                return\n\n    print(min_diff)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 171,
+  "total_time_ms": 2868.4682846069336,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3423",
+  "passed": true,
+  "code": "from typing import List\n\nMOD = 10**9 + 7\n\nclass SegmentTreeNode:\n    def __init__(self, left, right):\n        self.left = left\n        self.right = right\n        self.left_child = None\n        self.right_child = None\n        self.max_sum = 0\n        self.include = 0\n        self.exclude = 0\n\nclass Solution:\n    def maximumSumSubsequence(self, nums: List[int], queries: List[List[int]]) -> int:\n        n = len(nums)\n        self.root = self.build_tree(nums, 0, n - 1)\n        result = 0\n\n        for pos, x in queries:\n            nums[pos] = x\n            self.update(self.root, pos, x)\n            result = (result + self.root.max_sum) % MOD\n\n        return result\n\n    def build_tree(self, nums, left, right):\n        node = SegmentTreeNode(left, right)\n        if left == right:\n            node.include = nums[left]\n            node.exclude = 0\n            node.max_sum = max(node.include, node.exclude)\n            return node\n        mid = (left + right) // 2\n        node.left_child = self.build_tree(nums, left, mid)\n        node.right_child = self.build_tree(nums, mid + 1, right)\n        self.push_up(node)\n        return node\n\n    def update(self, node, index, value):\n        if node.left == node.right == index:\n            node.include = value\n            node.exclude = 0\n            node.max_sum = max(node.include, node.exclude)\n            return\n        if index <= node.left_child.right:\n            self.update(node.left_child, index, value)\n        else:\n            self.update(node.right_child, index, value)\n        self.push_up(node)\n\n    def push_up(self, node):\n        left = node.left_child\n        right = node.right_child\n        node.include = max(left.include, left.exclude) + max(right.include, right.exclude)\n        node.exclude = max(left.include, left.exclude) + max(right.include, right.exclude)\n        node.max_sum = max(node.include, node.exclude)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2357,
+  "total_time_ms": 36456.11214637756,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2153
+  }
+}

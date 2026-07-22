@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc325_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = int(data[1])\n    B = int(data[2])\n    C = int(data[3])\n    \n    D = []\n    idx = 4\n    for _ in range(N):\n        row = list(map(int, data[idx:idx+N]))\n        D.append(row)\n        idx += N\n    \n    # Dijkstra's algorithm with two states: car and train\n    # dist[i][0] = shortest time to city i using car\n    # dist[i][1] = shortest time to city i using train\n    INF = float('inf')\n    dist = [[INF] * 2 for _ in range(N)]\n    dist[0][0] = 0  # start at city 1 (index 0) using car\n    \n    # Priority queue: (distance, city, mode)\n    pq = [(0, 0, 0)]  # (distance, city, mode: 0 for car, 1 for train)\n    \n    while pq:\n        d, u, mode = heapq.heappop(pq)\n        if d > dist[u][mode]:\n            continue\n        \n        # If using car, can switch to train at this city\n        if mode == 0:\n            new_d = d\n            if dist[u][1] > new_d:\n                dist[u][1] = new_d\n                heapq.heappush(pq, (new_d, u, 1))\n        \n        # Explore all neighbors\n        for v in range(N):\n            if u == v:\n                continue\n            # Car to car\n            cost_car = D[u][v] * A\n            new_d = d + cost_car\n            if dist[v][0] > new_d:\n                dist[v][0] = new_d\n                heapq.heappush(pq, (new_d, v, 0))\n            \n            # Car to train\n            if mode == 0:\n                cost_train = D[u][v] * B + C\n                new_d = d + cost_train\n                if dist[v][1] > new_d:\n                    dist[v][1] = new_d\n                    heapq.heappush(pq, (new_d, v, 1))\n            \n            # Train to train\n            if mode == 1:\n                cost_train = D[u][v] * B + C\n                new_d = d + cost_train\n                if dist[v][1] > new_d:\n                    dist[v][1] = new_d\n                    heapq.heappush(pq, (new_d, v, 1))\n    \n    print(min(dist[N-1][0], dist[N-1][1]))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 12483.368158340454,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

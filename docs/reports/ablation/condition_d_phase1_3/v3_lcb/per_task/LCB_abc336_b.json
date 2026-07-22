@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc336_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef count_trailing_zeros(n):\n    count = 0\n    while n % 2 == 0:\n        count += 1\n        n //= 2\n    return count\n\nif __name__ == \"__main__\":\n    N = int(input())\n    print(count_trailing_zeros(N))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1203,
+  "total_time_ms": 20532.469272613525,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1124
+  }
+}

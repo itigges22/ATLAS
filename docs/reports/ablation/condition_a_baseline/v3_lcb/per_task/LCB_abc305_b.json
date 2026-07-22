@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc305_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\npoints = ['A', 'B', 'C', 'D', 'E', 'F', 'G']\ndistances = [3, 1, 4, 1, 5, 9]\n\np, q = input().split()\nindex_p = points.index(p)\nindex_q = points.index(q)\n\nstart = min(index_p, index_q)\nend = max(index_p, index_q)\n\ntotal_distance = sum(distances[start:end])\nprint(total_distance)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1722.9011058807373,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

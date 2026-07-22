@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3234",
+  "passed": true,
+  "code": "class Solution:\n    def getGoodIndices(self, variables: List[List[int]], target: int) -> List[int]:\n        result = []\n        for i, (a, b, c, m) in enumerate(variables):\n            # Compute (a^b % 10)^c % m\n            first_part = pow(a, b, 10)\n            second_part = pow(first_part, c, m)\n            if second_part == target:\n                result.append(i)\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4395,
+  "total_time_ms": 71424.18360710144,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2105,
+    "s_star_triggered": true
+  }
+}

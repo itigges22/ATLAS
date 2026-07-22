@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2891",
+  "passed": true,
+  "code": "class Solution:\n    def maximumBeauty(self, nums: List[int], k: int) -> int:\n        nums.sort()\n        left = 0\n        max_beauty = 0\n\n        for right in range(len(nums)):\n            # Move left pointer to ensure nums[left] + k <= nums[right] - k\n            while nums[left] + k < nums[right] - k:\n                left += 1\n\n            # Update max_beauty with the size of the current window\n            max_beauty = max(max_beauty, right - left + 1)\n\n        return max_beauty",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3274,
+  "total_time_ms": 51221.084117889404,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1042,
+    "s_star_triggered": true
+  }
+}

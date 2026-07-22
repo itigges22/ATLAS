@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3324",
+  "passed": false,
+  "code": "class Solution:\n    def isPossibleToSplit(self, nums: List[int]) -> bool:\n        from collections import Counter\n        count = Counter(nums)\n        for v in count.values():\n            if v > 2:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 66,
+  "total_time_ms": 1041.8081283569336,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

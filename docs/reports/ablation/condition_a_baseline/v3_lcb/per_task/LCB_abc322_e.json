@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc322_e",
+  "passed": true,
+  "code": "import sys\nimport itertools\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    P = int(data[2])\n    \n    plans = []\n    idx = 3\n    for _ in range(N):\n        C = int(data[idx])\n        A = list(map(int, data[idx+1:idx+1+K]))\n        plans.append((C, A))\n        idx += K + 1\n    \n    # We need to find a subset of plans such that sum of A's >= P for all K parameters\n    # Try all subsets (up to 2^100 which is too big)\n    # But since N <= 100 and K <= 5, we can use a DP approach with state (k1, k2, ..., kk)\n    \n    # Initialize DP: dp[params] = min cost to reach that state\n    from collections import defaultdict\n    dp = defaultdict(lambda: float('inf'))\n    dp[tuple([0]*K)] = 0\n    \n    for cost, a in plans:\n        new_dp = dp.copy()\n        for state in dp:\n            new_state = list(state)\n            for i in range(K):\n                new_state[i] += a[i]\n            new_state = tuple(new_state)\n            if new_dp[new_state] > dp[state] + cost:\n                new_dp[new_state] = dp[state] + cost\n        dp = new_dp\n    \n    # Check all states in dp to see if any state has all parameters >= P\n    min_cost = float('inf')\n    for state in dp:\n        if all(state[i] >= P for i in range(K)):\n            if dp[state] < min_cost:\n                min_cost = dp[state]\n    \n    if min_cost == float('inf'):\n        print(-1)\n    else:\n        print(min_cost)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 8094.505310058594,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

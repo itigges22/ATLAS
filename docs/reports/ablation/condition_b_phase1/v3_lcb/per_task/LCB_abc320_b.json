@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc320_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef max_palindrome_length(s):\n    def expand_around_center(left, right):\n        while left >= 0 and right < len(s) and s[left] == s[right]:\n            left -= 1\n            right += 1\n        return right - left - 1  # Length of the palindrome\n\n    max_len = 0\n    for i in range(len(s)):\n        # Odd length palindromes\n        len1 = expand_around_center(i, i)\n        # Even length palindromes\n        len2 = expand_around_center(i, i + 1)\n        max_len = max(max_len, len1, len2)\n    return max_len\n\nif __name__ == \"__main__\":\n    import sys\n    s = sys.stdin.readline().strip()\n    print(max_palindrome_length(s))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 774,
+  "total_time_ms": 14855.967998504639,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 638
+  }
+}

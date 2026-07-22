@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc352_d",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    P = list(map(int, data[2:]))\n    \n    pos = [0] * (N + 1)\n    for i in range(N):\n        pos[P[i]] = i\n    \n    min_diff = float('inf')\n    \n    # For each possible starting value a of the consecutive sequence\n    for a in range(1, N - K + 2):\n        # The values we need to find are a, a+1, ..., a+K-1\n        indices = []\n        for val in range(a, a + K):\n            indices.append(pos[val])\n        \n        # Sort the indices to find the minimal i_K - i_1\n        indices.sort()\n        diff = indices[-1] - indices[0]\n        min_diff = min(min_diff, diff)\n    \n    print(min_diff)\n\nmain()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22762,
+  "total_time_ms": 375626.44720077515,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1318,
+    "self_tests_generated": 5
+  }
+}

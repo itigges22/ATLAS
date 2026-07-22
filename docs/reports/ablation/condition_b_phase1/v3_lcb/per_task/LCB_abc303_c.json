@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc303_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    idx = 0\n    N = int(data[idx]); idx += 1\n    M = int(data[idx]); idx += 1\n    H = int(data[idx]); idx += 1\n    K = int(data[idx]); idx += 1\n    S = data[idx]; idx += 1\n\n    items = set()\n    for _ in range(M):\n        x = int(data[idx]); idx += 1\n        y = int(data[idx]); idx += 1\n        items.add((x, y))\n\n    x, y = 0, 0\n    for move in S:\n        # Move\n        if move == 'R':\n            x += 1\n        elif move == 'L':\n            x -= 1\n        elif move == 'U':\n            y += 1\n        elif move == 'D':\n            y -= 1\n\n        H -= 1\n        if H < 0:\n            print(\"No\")\n            return\n\n        if (x, y) in items and H < K:\n            H = K\n            items.remove((x, y))  # Remove item to avoid reusing it\n\n    print(\"Yes\")\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1012,
+  "total_time_ms": 16817.046642303467,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 730
+  }
+}

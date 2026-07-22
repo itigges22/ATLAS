@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3396",
+  "passed": false,
+  "code": "class Solution:\n    def isValid(self, word: str) -> bool:\n        if len(word) < 3:\n            return False\n        \n        vowels = set(\"aeiouAEIOU\")\n        has_vowel = False\n        has_consonant = False\n        valid_chars = set(\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\")\n        \n        for char in word:\n            if char not in valid_chars:\n                return False\n            if char in vowels:\n                has_vowel = True\n            elif char.isalpha():\n                has_consonant = True\n        \n        return has_vowel and has_consonant",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 45315,
+  "total_time_ms": 713837.5496864319,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 552,
+    "self_tests_generated": 5
+  }
+}

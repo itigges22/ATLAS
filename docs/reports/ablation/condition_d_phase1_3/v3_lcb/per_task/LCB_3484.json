@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3484",
+  "passed": false,
+  "code": "class Solution:\n    def getSmallestString(self, s: str) -> str:\n        s = list(s)\n        for i in range(len(s) - 1):\n            if (int(s[i]) % 2 == int(s[i + 1]) % 2) and s[i] > s[i + 1]:\n                s[i], s[i + 1] = s[i + 1], s[i]\n                break\n        return ''.join(s)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 44875,
+  "total_time_ms": 1034347.9833602905,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1058,
+    "self_tests_generated": 5
+  }
+}

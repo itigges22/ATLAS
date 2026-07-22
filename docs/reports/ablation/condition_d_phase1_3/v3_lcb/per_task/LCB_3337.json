@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3337",
+  "passed": true,
+  "code": "class Solution:\n    def countSubstrings(self, s: str, c: str) -> int:\n        count = 0\n        for char in s:\n            if char == c:\n                count += 1\n        return count * (count + 1) // 2",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1042,
+  "total_time_ms": 17436.241388320923,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 970
+  }
+}

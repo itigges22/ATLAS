@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc355_c",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = int(data[1])\n    A = list(map(int, data[2:2+T]))\n    \n    # Map from value to (row, col)\n    pos = {}\n    for i in range(N):\n        for j in range(N):\n            val = N * (i) + (j + 1)\n            pos[val] = (i, j)\n    \n    # Counters for rows, cols, diagonals\n    row_count = [0] * N\n    col_count = [0] * N\n    diag1_count = 0\n    diag2_count = 0\n    \n    for turn in range(T):\n        val = A[turn]\n        i, j = pos[val]\n        \n        # Update row count\n        row_count[i] += 1\n        if row_count[i] == N:\n            print(turn + 1)\n            return\n        \n        # Update column count\n        col_count[j] += 1\n        if col_count[j] == N:\n            print(turn + 1)\n            return\n        \n        # Update diagonal counts\n        if i == j:\n            diag1_count += 1\n            if diag1_count == N:\n                print(turn + 1)\n                return\n        if i + j == N - 1:\n            diag2_count += 1\n            if diag2_count == N:\n                print(turn + 1)\n                return\n    \n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2431,
+  "total_time_ms": 38863.436460494995,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2078
+  }
+}

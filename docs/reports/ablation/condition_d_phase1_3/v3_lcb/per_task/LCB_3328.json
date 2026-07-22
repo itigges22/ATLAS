@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3328",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, k: int) -> int:\n        if k == 1:\n            return 0\n        # Try all possible numbers of duplicates\n        min_ops = float('inf')\n        for m in range(1, int(k**0.5) + 2):\n            # m is the number of copies (including original)\n            # We need to reach sum >= k with m elements\n            # Each element should be at least ceil(k / m)\n            target = (k + m - 1) // m\n            ops = (target - 1) + (m - 1)\n            min_ops = min(min_ops, ops)\n        return min_ops",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1225,
+  "total_time_ms": 23567.92640686035,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1066
+  }
+}

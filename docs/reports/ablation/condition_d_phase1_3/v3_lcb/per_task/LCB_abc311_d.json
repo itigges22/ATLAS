@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc311_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nfrom collections import deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    grid = data[2:]\n    \n    visited = [[False] * M for _ in range(N)]\n    queue = deque()\n    queue.append((1, 1))  # (2,2) in 0-based index is (1,1)\n    visited[1][1] = True\n    count = 0\n    \n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # up, down, left, right\n    \n    while queue:\n        i, j = queue.popleft()\n        count += 1\n        \n        for di, dj in directions:\n            ni, nj = i, j\n            while True:\n                next_i = ni + di\n                next_j = nj + dj\n                if 0 <= next_i < N and 0 <= next_j < M and grid[next_i][next_j] == '.':\n                    ni, nj = next_i, next_j\n                else:\n                    break\n            if not visited[ni][nj]:\n                visited[ni][nj] = True\n                queue.append((ni, nj))\n    \n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 54412,
+  "total_time_ms": 894607.1307659149,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1195,
+    "self_tests_generated": 5
+  }
+}

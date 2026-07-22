@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc330_e",
+  "passed": false,
+  "code": "import sys\nimport threading\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    \n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    freq = defaultdict(int)\n    for num in A:\n        freq[num] += 1\n    \n    mex = 0\n    while freq[mex] > 0:\n        mex += 1\n    \n    for _ in range(Q):\n        i = int(data[idx]) - 1\n        idx += 1\n        x = int(data[idx])\n        idx += 1\n        \n        old_val = A[i]\n        new_val = x\n        \n        if freq[old_val] == 1:\n            del freq[old_val]\n        else:\n            freq[old_val] -= 1\n        \n        freq[new_val] += 1\n        A[i] = new_val\n        \n        while freq[mex] > 0:\n            mex += 1\n        \n        print(mex)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 265,
+  "total_time_ms": 4244.351625442505,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

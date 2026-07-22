@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc352_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, X, Y, Z = map(int, input().split())\nif X < Y:\n    # Inbound train: X to Y, increasing stations\n    if X < Z < Y:\n        print(\"Yes\")\n    else:\n        print(\"No\")\nelse:\n    # Outbound train: X to Y, decreasing stations\n    if Y < Z < X:\n        print(\"Yes\")\n    else:\n        print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1306,
+  "total_time_ms": 19618.41607093811,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1218
+  }
+}

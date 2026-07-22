@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3479",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfSubstrings(self, s: str) -> int:\n        n = len(s)\n        # Prefix sums for ones and zeros\n        prefix_ones = [0] * (n + 1)\n        prefix_zeros = [0] * (n + 1)\n\n        for i in range(n):\n            prefix_ones[i + 1] = prefix_ones[i] + (1 if s[i] == '1' else 0)\n            prefix_zeros[i + 1] = prefix_zeros[i] + (1 if s[i] == '0' else 0)\n\n        count = 0\n        # Iterate over all possible substrings\n        for i in range(n):\n            for j in range(i, n):\n                ones = prefix_ones[j + 1] - prefix_ones[i]\n                zeros = prefix_zeros[j + 1] - prefix_zeros[i]\n                if ones >= zeros * zeros:\n                    count += 1\n\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6291,
+  "total_time_ms": 96798.50101470947,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4064,
+    "s_star_triggered": true
+  }
+}

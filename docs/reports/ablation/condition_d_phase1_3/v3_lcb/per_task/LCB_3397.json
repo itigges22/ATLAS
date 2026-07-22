@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3397",
+  "passed": false,
+  "code": "class Solution:\n    def addedInteger(self, nums1: List[int], nums2: List[int]) -> int:\n        # Calculate the difference between corresponding elements\n        # Since nums2 is nums1 with x added, x = nums2[i] - nums1[i]\n        # We can take the difference of any element since all elements have the same x\n        return nums2[0] - nums1[0]",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 42409,
+  "total_time_ms": 646676.1691570282,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 981,
+    "self_tests_generated": 1
+  }
+}

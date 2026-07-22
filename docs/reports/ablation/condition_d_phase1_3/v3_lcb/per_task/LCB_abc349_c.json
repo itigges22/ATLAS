@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc349_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_airport_code(S, T):\n    # Check for case 1: T is a subsequence of S (case-insensitive)\n    def is_subsequence(s, t):\n        it = iter(s)\n        return all(c in it for c in t)\n    \n    if is_subsequence(S, T.lower()):\n        return True\n\n    # Check for case 2: T[:2] is a subsequence of S and T[2] == 'X'\n    if T[2] != 'X':\n        return False\n\n    # Check if T[:2] is a subsequence of S (case-insensitive)\n    if is_subsequence(S, T[:2].lower()):\n        return True\n\n    return False\n\ndef main():\n    S = sys.stdin.readline().strip()\n    T = sys.stdin.readline().strip()\n    if is_airport_code(S, T):\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22420,
+  "total_time_ms": 316559.4758987427,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1600,
+    "self_tests_generated": 5
+  }
+}

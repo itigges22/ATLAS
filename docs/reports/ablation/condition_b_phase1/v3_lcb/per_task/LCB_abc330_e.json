@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc330_e",
+  "passed": true,
+  "code": "import sys\nimport bisect\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    \n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    # Frequency map\n    freq = defaultdict(int)\n    for num in A:\n        freq[num] += 1\n    \n    # Sorted list of unique elements\n    sorted_unique = sorted(set(A))\n    \n    # For mex, we need to find the smallest non-negative integer not in the array\n    # We maintain a sorted list of unique elements and use binary search to find mex\n    # We also maintain a set of all non-negative integers present in the array\n    \n    # We use a set to track all non-negative integers present in the array\n    present = set()\n    for num in A:\n        if num >= 0:\n            present.add(num)\n    \n    # Now process queries\n    for _ in range(Q):\n        i = int(data[idx]) - 1  # 0-based index\n        idx += 1\n        x = int(data[idx])\n        idx += 1\n        \n        old_val = A[i]\n        new_val = x\n        \n        # Update frequency map\n        if freq[old_val] == 1:\n            del freq[old_val]\n        else:\n            freq[old_val] -= 1\n        \n        # Update present set\n        if old_val >= 0:\n            if freq[old_val] == 0:\n                present.discard(old_val)\n        \n        # Add new value\n        A[i] = new_val\n        freq[new_val] += 1\n        if new_val >= 0:\n            present.add(new_val)\n        \n        # Compute mex\n        mex = 0\n        while mex in present:\n            mex += 1\n        \n        print(mex)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2389,
+  "total_time_ms": 40186.46693229675,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2124
+  }
+}

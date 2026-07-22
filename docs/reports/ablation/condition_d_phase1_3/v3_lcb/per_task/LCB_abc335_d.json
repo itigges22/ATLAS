@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc335_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N = int(sys.stdin.readline())\n    center = (N + 1) // 2\n    grid = [[0 for _ in range(N)] for _ in range(N)]\n    grid[center - 1][center - 1] = 'T'\n\n    # Spiral order\n    directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]\n    dir_idx = 0\n    x, y = 0, 0\n    num = 1\n\n    while num <= N * N - 1:\n        grid[x][y] = num\n        num += 1\n        next_x = x + directions[dir_idx][0]\n        next_y = y + directions[dir_idx][1]\n        if 0 <= next_x < N and 0 <= next_y < N and grid[next_x][next_y] == 0:\n            x, y = next_x, next_y\n        else:\n            dir_idx = (dir_idx + 1) % 4\n            x += directions[dir_idx][0]\n            y += directions[dir_idx][1]\n\n    for row in grid:\n        print(' '.join(map(str, row)))\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1544,
+  "total_time_ms": 27621.838569641113,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1266
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2872",
+  "passed": true,
+  "code": "class Solution:\n    def maxArrayValue(self, nums: List[int]) -> int:\n        n = len(nums)\n        # Traverse from right to left\n        for i in range(n - 2, -1, -1):\n            # If current element is <= next element, merge them\n            if nums[i] <= nums[i + 1]:\n                nums[i] += nums[i + 1]\n        # The maximum value is the maximum in the modified array\n        return max(nums)",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 2148,
+  "total_time_ms": 33797.04475402832,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2039
+  }
+}

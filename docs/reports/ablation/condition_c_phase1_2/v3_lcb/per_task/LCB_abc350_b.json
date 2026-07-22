@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc350_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, Q = map(int, input().split())\ntreatments = list(map(int, input().split()))\n\n# Initialize a list to represent the presence of teeth in each hole\nteeth = [True] * (N + 1)  # Using 1-based indexing\n\nfor t in treatments:\n    teeth[t] = not teeth[t]\n\n# Count the number of True values (i.e., teeth present)\nprint(sum(teeth[1:]))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 111,
+  "total_time_ms": 2099.5683670043945,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

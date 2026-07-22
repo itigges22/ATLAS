@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3243",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfPowerfulInt(self, start: int, finish: int, limit: int, s: str) -> int:\n        from itertools import product\n\n        s_len = len(s)\n        s_num = int(s)\n\n        def count_valid_numbers(up_to: int) -> int:\n            count = 0\n            # Generate all possible prefixes\n            for prefix_len in range(0, len(str(up_to)) - s_len + 1):\n                for digits in product(range(limit + 1), repeat=prefix_len):\n                    # Skip leading zero for non-zero length prefixes\n                    if prefix_len > 0 and digits[0] == 0:\n                        continue\n                    prefix = ''.join(map(str, digits))\n                    num_str = prefix + s\n                    num = int(num_str)\n                    if num <= up_to:\n                        count += 1\n            return count\n\n        # Count numbers up to finish\n        total_finish = count_valid_numbers(finish)\n        # Count numbers up to start - 1\n        total_start_minus_1 = count_valid_numbers(start - 1)\n        # Result is the difference\n        return total_finish - total_start_minus_1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2022,
+  "total_time_ms": 35601.90391540527,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1747
+  }
+}

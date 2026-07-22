@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc342_d",
+  "passed": false,
+  "code": "import sys\nimport math\nfrom collections import defaultdict\n\ndef is_square(x):\n    if x == 0:\n        return True\n    s = int(math.isqrt(x))\n    return s * s == x\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    square_count = defaultdict(int)\n    count = 0\n\n    for num in A:\n        if num == 0:\n            count += square_count[num]\n            square_count[num] += 1\n        else:\n            root = int(math.isqrt(num))\n            if root * root == num:\n                count += square_count[num]\n                square_count[num] += 1\n            else:\n                square_free = num\n                while square_free > 1 and int(math.isqrt(square_free)) ** 2 == square_free:\n                    square_free //= int(math.isqrt(square_free)) ** 2\n                square_count[square_free] += 1\n\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 243,
+  "total_time_ms": 4090.510368347168,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

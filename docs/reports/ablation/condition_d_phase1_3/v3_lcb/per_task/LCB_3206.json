@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3206",
+  "passed": true,
+  "code": "class Solution:\n    def findIntersectionValues(self, nums1: List[int], nums2: List[int]) -> List[int]:\n        set1 = set(nums1)\n        set2 = set(nums2)\n        \n        count1 = sum(1 for num in nums1 if num in set2)\n        count2 = sum(1 for num in nums2 if num in set1)\n        \n        return [count1, count2]",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1114,
+  "total_time_ms": 15449.476957321167,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1012
+  }
+}

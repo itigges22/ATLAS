@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc326_e",
+  "passed": true,
+  "code": "import sys\nimport math\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    # Precompute factorials and inverse factorials modulo MOD\n    fact = [1] * (N + 1)\n    for i in range(1, N + 1):\n        fact[i] = fact[i - 1] * i % MOD\n\n    inv_fact = [1] * (N + 1)\n    inv_fact[N] = pow(fact[N], MOD - 2, MOD)\n    for i in range(N - 1, -1, -1):\n        inv_fact[i] = inv_fact[i + 1] * (i + 1) % MOD\n\n    # dp[i] = expected value starting from x = i\n    dp = [0] * (N + 1)\n\n    for i in range(N - 1, -1, -1):\n        # We are at x = i, and we roll the die\n        # For each y > i, we pay A[y] and move to x = y\n        # The probability of rolling y is 1/N\n        # So the expected value is sum_{y > i} (A[y] + dp[y]) / N\n        total = 0\n        for y in range(i + 1, N + 1):\n            total = (total + A[y - 1] + dp[y]) % MOD\n        dp[i] = total * pow(N, MOD - 2, MOD) % MOD\n\n    print(dp[0])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2204,
+  "total_time_ms": 38035.26473045349,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1815
+  }
+}

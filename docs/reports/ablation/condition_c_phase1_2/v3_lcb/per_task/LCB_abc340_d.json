@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc340_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = [0] * (N)\n    B = [0] * (N)\n    X = [0] * (N)\n    \n    idx = 1\n    for i in range(1, N):\n        A[i] = int(data[idx])\n        B[i] = int(data[idx + 1])\n        X[i] = int(data[idx + 2])\n        idx += 3\n    \n    # dp[i] = minimum time to reach stage i\n    dp = [float('inf')] * (N + 1)\n    dp[1] = 0\n    \n    # Use a priority queue to process stages in order of minimum time\n    # (stage, time)\n    heap = []\n    heapq.heappush(heap, (0, 1))\n    \n    while heap:\n        time, i = heapq.heappop(heap)\n        if time > dp[i]:\n            continue\n        if i == N:\n            print(time)\n            return\n        # Option 1: Clear stage i and go to i+1\n        if i < N:\n            new_time = time + A[i]\n            if new_time < dp[i + 1]:\n                dp[i + 1] = new_time\n                heapq.heappush(heap, (new_time, i + 1))\n        # Option 2: Clear stage i and go to X_i\n        if i < N:\n            new_time = time + B[i]\n            if new_time < dp[X[i]]:\n                dp[X[i]] = new_time\n                heapq.heappush(heap, (new_time, X[i]))\n    \n    print(dp[N])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 2425,
+  "total_time_ms": 38222.74422645569,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2158
+  }
+}

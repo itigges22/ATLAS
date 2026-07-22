@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc356_e",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    A.sort()\n    res = 0\n\n    for i in range(N):\n        for j in range(i + 1, N):\n            max_val = A[j]\n            min_val = A[i]\n            res += max_val // min_val\n\n    print(res)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1584,
+  "total_time_ms": 26440.48261642456,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1457
+  }
+}

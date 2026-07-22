@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc341_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\nresult = '10' * n + '1'\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 37,
+  "total_time_ms": 817.1582221984863,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

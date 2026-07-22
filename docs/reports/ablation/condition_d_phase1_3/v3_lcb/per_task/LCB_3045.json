@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3045",
+  "passed": true,
+  "code": "class Solution:\n    def minimumRightShifts(self, nums: List[int]) -> int:\n        n = len(nums)\n        # Find the pivot point where nums[i] > nums[i+1]\n        pivot = -1\n        for i in range(n - 1):\n            if nums[i] > nums[i + 1]:\n                pivot = i\n                break\n        \n        # If no pivot is found, the array is already sorted\n        if pivot == -1:\n            return 0\n        \n        # Check if the array can be rotated to form a sorted array\n        # The part after the pivot must be sorted and the last element must be <= first element\n        if nums[-1] > nums[0]:\n            return -1\n        \n        # Check if the array from pivot+1 to end is sorted\n        for i in range(pivot + 1, n - 1):\n            if nums[i] > nums[i + 1]:\n                return -1\n        \n        # The number of right shifts needed is (n - pivot - 1)\n        return n - pivot - 1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 953,
+  "total_time_ms": 15816.320180892944,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 866
+  }
+}

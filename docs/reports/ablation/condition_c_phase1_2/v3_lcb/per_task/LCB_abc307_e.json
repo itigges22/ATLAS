@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc307_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nMOD = 998244353\n\ndef main():\n    input = sys.stdin.read\n    N, M = map(int, input().split())\n    \n    if N == 1:\n        print(M)\n        return\n    \n    # For a circle, the number of valid colorings is (M-1)^N + (-1)^N * (M-1)\n    # This formula is derived from combinatorics and inclusion-exclusion\n    # Time complexity: O(1)\n    result = pow(M - 1, N, MOD)\n    if N % 2 == 0:\n        result = (result + (M - 1)) % MOD\n    else:\n        result = (result - (M - 1)) % MOD\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3201,
+  "total_time_ms": 53186.32197380066,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 522,
+    "s_star_triggered": true
+  }
+}

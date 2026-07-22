@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc318_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    \n    D = [[0] * (N + 1) for _ in range(N + 1)]\n    \n    for i in range(1, N):\n        for j in range(i + 1, N + 1):\n            D[i][j] = int(data[idx])\n            idx += 1\n    \n    # Bitmask DP for maximum weight matching\n    # dp[mask] = maximum weight of matching for the subset of vertices represented by mask\n    dp = [0] * (1 << N)\n    \n    for mask in range(1 << N):\n        # Try all pairs of vertices that are not used in the mask\n        # and are not already used\n        for i in range(N):\n            if not (mask & (1 << i)):\n                for j in range(i + 1, N):\n                    if not (mask & (1 << j)):\n                        new_mask = mask | (1 << i) | (1 << j)\n                        dp[new_mask] = max(dp[new_mask], dp[mask] + D[i + 1][j + 1])\n    \n    print(dp[(1 << N) - 1])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22729,
+  "total_time_ms": 426486.26708984375,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 841,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc338_a",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\nif len(S) == 0:\n    print(\"No\")\nelif S[0].isupper() and S[1:].islower():\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 64,
+  "total_time_ms": 1024.0991115570068,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

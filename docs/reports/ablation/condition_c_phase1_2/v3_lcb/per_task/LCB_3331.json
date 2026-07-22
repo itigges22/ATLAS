@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3331",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, nums: List[int], k: int) -> int:\n        # Count how many elements are less than k\n        count_less = sum(1 for num in nums if num < k)\n        return count_less",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 66,
+  "total_time_ms": 1201.1051177978516,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

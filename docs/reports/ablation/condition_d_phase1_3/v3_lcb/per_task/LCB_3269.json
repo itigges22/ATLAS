@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3269",
+  "passed": true,
+  "code": "class Solution:\n    def countMatchingSubarrays(self, nums: List[int], pattern: List[int]) -> int:\n        n, m = len(nums), len(pattern)\n        count = 0\n        for i in range(n - m):\n            match = True\n            for k in range(m):\n                if pattern[k] == 1 and nums[i + k + 1] <= nums[i + k]:\n                    match = False\n                    break\n                if pattern[k] == 0 and nums[i + k + 1] != nums[i + k]:\n                    match = False\n                    break\n                if pattern[k] == -1 and nums[i + k + 1] >= nums[i + k]:\n                    match = False\n                    break\n            if match:\n                count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1428,
+  "total_time_ms": 22738.802433013916,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1246
+  }
+}

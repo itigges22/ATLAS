@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3184",
+  "passed": true,
+  "code": "from bisect import bisect_right\nfrom typing import List\n\nclass Solution:\n    def maxBalancedSubsequenceSum(self, nums: List[int]) -> int:\n        n = len(nums)\n        # We will use a coordinate compression technique for the key (nums[i] - i)\n        key = [nums[i] - i for i in range(n)]\n        sorted_key = sorted(set(key))\n        key_to_index = {k: i for i, k in enumerate(sorted_key)}\n        \n        # dp[i] will store the maximum sum for a subsequence ending with key = sorted_key[i]\n        dp = [0] * len(sorted_key)\n        \n        # We will use a Fenwick Tree (Binary Indexed Tree) to efficiently query and update\n        class FenwickTree:\n            def __init__(self, size):\n                self.N = size\n                self.tree = [0] * (self.N + 1)\n            \n            def update(self, idx, value):\n                idx += 1  # 1-based indexing\n                while idx <= self.N:\n                    self.tree[idx] = max(self.tree[idx], value)\n                    idx += idx & -idx\n            \n            def query(self, idx):\n                idx += 1  # 1-based indexing\n                res = 0\n                while idx > 0:\n                    res = max(res, self.tree[idx])\n                    idx -= idx & -idx\n                return res\n        \n        ft = FenwickTree(len(sorted_key))\n        \n        max_sum = float('-inf')\n        for i in range(n):\n            k = key[i]\n            idx = key_to_index[k]\n            # Query the maximum sum for all keys <= k\n            val = ft.query(idx)\n            current_sum = nums[i] + val if val != 0 else nums[i]\n            max_sum = max(max_sum, current_sum)\n            # Update the Fenwick Tree with the current key and current_sum\n            ft.update(idx, current_sum)\n        \n        return max_sum",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2715,
+  "total_time_ms": 47349.934101104736,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2290
+  }
+}

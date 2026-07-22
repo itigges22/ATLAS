@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3329",
+  "passed": true,
+  "code": "class Solution:\n    def longestCommonPrefix(self, arr1: List[int], arr2: List[int]) -> int:\n        # Build trie for arr1\n        trie = {}\n        for num in arr1:\n            node = trie\n            for ch in str(num):\n                if ch not in node:\n                    node[ch] = {}\n                node = node[ch]\n        \n        # Check prefixes in arr2 against trie\n        max_len = 0\n        for num in arr2:\n            node = trie\n            for i, ch in enumerate(str(num)):\n                if ch not in node:\n                    break\n                node = node[ch]\n                max_len = max(max_len, i + 1)\n        \n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1419,
+  "total_time_ms": 21893.630743026733,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1236
+  }
+}

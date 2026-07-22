@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/2881",
+  "passed": false,
+  "code": "class Solution:\n    def splitWordsBySeparator(self, words: List[str], separator: str) -> List[str]:\n        result = []\n        for word in words:\n            split_result = word.split(separator)\n            filtered = [s for s in split_result if s]\n            result.extend(filtered)\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 44009,
+  "total_time_ms": 719355.889081955,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1085,
+    "self_tests_generated": 0,
+    "self_test_fallback": true
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc346_e",
+  "passed": false,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    M = int(data[2])\n    \n    row_ops = []\n    col_ops = []\n    \n    idx = 3\n    for _ in range(M):\n        T = int(data[idx])\n        A = int(data[idx+1])\n        X = int(data[idx+2])\n        if T == 1:\n            row_ops.append((A, X))\n        else:\n            col_ops.append((A, X))\n        idx += 3\n    \n    last_row = [0] * (H + 1)\n    last_col = [0] * (W + 1)\n    \n    for a, x in row_ops:\n        last_row[a] = x\n    for a, x in col_ops:\n        last_col[a] = x\n    \n    color_count = defaultdict(int)\n    \n    for r in range(1, H + 1):\n        row_color = last_row[r]\n        for c in range(1, W + 1):\n            col_color = last_col[c]\n            if row_color != 0:\n                color_count[row_color] += 1\n            elif col_color != 0:\n                color_count[col_color] += 1\n            else:\n                color_count[0] += 1\n    \n    sorted_colors = sorted(color_count.items())\n    \n    print(len(sorted_colors))\n    for color, count in sorted_colors:\n        print(f\"{color} {count}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53948,
+  "total_time_ms": 1356898.5052108765,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1936,
+    "self_tests_generated": 5
+  }
+}

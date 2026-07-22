@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc341_b",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    S = []\n    T = []\n    for i in range(N-1):\n        S.append(int(data[N+1 + 2*i]))\n        T.append(int(data[N+1 + 2*i + 1]))\n    \n    for i in range(N-1):\n        # How many times can we perform the operation from i to i+1\n        # We can use A[i] to exchange as many times as possible\n        times = A[i] // S[i]\n        A[i+1] += times * T[i]\n        A[i] -= times * S[i]\n    \n    print(A[-1])\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 4651.624441146851,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

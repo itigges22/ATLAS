@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3412",
+  "passed": true,
+  "code": "class Solution:\n    def findPermutationDifference(self, s: str, t: str) -> int:\n        # Create a dictionary to map each character to its index in s\n        char_to_index = {char: idx for idx, char in enumerate(s)}\n        \n        # Calculate the permutation difference\n        total_diff = 0\n        for idx, char in enumerate(t):\n            total_diff += abs(idx - char_to_index[char])\n        \n        return total_diff",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1055,
+  "total_time_ms": 18028.743505477905,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 985
+  }
+}

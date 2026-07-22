@@ -1,0 +1,22 @@
+{
+  "condition": "C",
+  "name": "+Phase1+2",
+  "description": "Phase 1 + Lens-driven adaptive K, ReASC, S* tiebreaking + feedback",
+  "enable_phase1": true,
+  "enable_phase2": true,
+  "enable_phase3": false,
+  "enable_feedback": true,
+  "total_tasks": 599,
+  "passed_tasks": 403,
+  "pass_rate": 0.672787979966611,
+  "total_tokens": 1744611,
+  "wall_time_s": 32368.61441540718,
+  "phase_breakdown": {
+    "phase1": 403,
+    "pr_cot": 0,
+    "refinement": 0,
+    "derivation": 0,
+    "none": 196,
+    "error": 0
+  }
+}

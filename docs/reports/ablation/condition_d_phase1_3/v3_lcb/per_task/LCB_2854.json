@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2854",
+  "passed": true,
+  "code": "class Solution:\n    def minimizeConcatenatedLength(self, words: List[str]) -> int:\n        n = len(words)\n        # dp[i][s][e] = min length of string after processing first i+1 words, starting with 's' and ending with 'e'\n        dp = [[[float('inf')] * 26 for _ in range(26)] for __ in range(n)]\n        \n        # Initialize with the first word\n        first_word = words[0]\n        start_char = ord(first_word[0]) - ord('a')\n        end_char = ord(first_word[-1]) - ord('a')\n        dp[0][start_char][end_char] = len(first_word)\n        \n        for i in range(1, n):\n            curr = words[i]\n            curr_start = ord(curr[0]) - ord('a')\n            curr_end = ord(curr[-1]) - ord('a')\n            curr_len = len(curr)\n            \n            for prev_start in range(26):\n                for prev_end in range(26):\n                    if dp[i-1][prev_start][prev_end] == float('inf'):\n                        continue\n                    prev_len = dp[i-1][prev_start][prev_end]\n                    \n                    # Option 1: join previous string with current word\n                    new_start = prev_start\n                    new_end = curr_end\n                    new_len = prev_len + curr_len\n                    if prev_end == curr_start:\n                        new_len -= 1\n                    dp[i][new_start][new_end] = min(dp[i][new_start][new_end], new_len)\n                    \n                    # Option 2: join current word with previous string\n                    new_start = curr_start\n                    new_end = prev_end\n                    new_len = prev_len + curr_len\n                    if curr_end == prev_start:\n                        new_len -= 1\n                    dp[i][new_start][new_end] = min(dp[i][new_start][new_end], new_len)\n        \n        # Find the minimum length among all possible start and end characters\n        result = float('inf')\n        for s in range(26):\n            for e in range(26):\n                result = min(result, dp[n-1][s][e])\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2332,
+  "total_time_ms": 37962.02635765076,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1987
+  }
+}

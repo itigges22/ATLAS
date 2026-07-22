@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3166",
+  "passed": false,
+  "code": "from collections import Counter\nfrom math import gcd\n\nclass Solution:\n    def minGroupsForValidAssignment(self, nums: List[int]) -> int:\n        count = Counter(nums)\n        values = list(count.values())\n        \n        # Find the maximum possible group size that divides all frequencies\n        max_group_size = values[0]\n        for v in values[1:]:\n            max_group_size = gcd(max_group_size, v)\n        \n        # Calculate the minimum number of groups\n        return sum(v // max_group_size for v in values)",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 3394,
+  "total_time_ms": 58734.56358909607,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3272
+  }
+}

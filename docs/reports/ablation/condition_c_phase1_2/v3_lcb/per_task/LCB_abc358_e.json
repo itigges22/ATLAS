@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc358_e",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    K = int(data[0])\n    C = list(map(int, data[1:]))\n    \n    # dp[i][j] = number of strings of length i with j letters used so far\n    # We use two 1D arrays for space optimization\n    prev = [0] * (K + 1)\n    curr = [0] * (K + 1)\n    \n    # Base case: empty string\n    prev[0] = 1\n    \n    for i in range(1, K + 1):\n        for j in range(K + 1):\n            curr[j] = 0\n        for j in range(K + 1):\n            if prev[j] == 0:\n                continue\n            for c in range(26):\n                if j + 1 > C[c]:\n                    continue\n                curr[j + 1] = (curr[j + 1] + prev[j]) % MOD\n    \n        prev, curr = curr, prev\n    \n    # Sum all lengths from 1 to K\n    result = sum(prev[1:]) % MOD\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 4072,
+  "total_time_ms": 138216.8517112732,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3715
+  }
+}

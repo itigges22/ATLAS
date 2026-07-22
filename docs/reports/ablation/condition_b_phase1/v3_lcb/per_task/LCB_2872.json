@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2872",
+  "passed": true,
+  "code": "class Solution:\n    def maxArrayValue(self, nums: List[int]) -> int:\n        n = len(nums)\n        max_val = nums[-1]\n        current_sum = nums[-1]\n        \n        for i in range(n - 2, -1, -1):\n            if nums[i] <= current_sum:\n                current_sum += nums[i]\n            else:\n                current_sum = nums[i]\n            max_val = max(max_val, current_sum)\n        \n        return max_val",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1118,
+  "total_time_ms": 18071.170568466187,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1009
+  }
+}

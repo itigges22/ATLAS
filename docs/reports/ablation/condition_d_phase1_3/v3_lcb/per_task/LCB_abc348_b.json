@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc348_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    points = []\n    index = 1\n    for i in range(N):\n        x = int(data[index])\n        y = int(data[index + 1])\n        points.append((x, y))\n        index += 2\n    \n    result = []\n    for i in range(N):\n        x1, y1 = points[i]\n        max_dist = -1\n        farthest_id = i + 1\n        for j in range(N):\n            if i == j:\n                continue\n            x2, y2 = points[j]\n            dist = math.sqrt((x1 - x2)**2 + (y1 - y2)**2)\n            if dist > max_dist:\n                max_dist = dist\n                farthest_id = j + 1\n            elif dist == max_dist:\n                if j + 1 < farthest_id:\n                    farthest_id = j + 1\n        result.append(farthest_id)\n    \n    for res in result:\n        print(res)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1236,
+  "total_time_ms": 21057.643175125122,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 993
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2954",
+  "passed": true,
+  "code": "from collections import defaultdict\nfrom typing import List\n\nclass Solution:\n    def maxSum(self, nums: List[int], m: int, k: int) -> int:\n        n = len(nums)\n        if k > n:\n            return 0\n\n        freq = defaultdict(int)\n        distinct = 0\n        max_sum = 0\n        current_sum = 0\n\n        # Initialize the first window\n        for i in range(k):\n            current_sum += nums[i]\n            freq[nums[i]] += 1\n\n        if len(freq) >= m:\n            max_sum = current_sum\n\n        # Slide the window\n        for i in range(k, n):\n            removed = nums[i - k]\n            added = nums[i]\n\n            current_sum += added - removed\n\n            freq[removed] -= 1\n            if freq[removed] == 0:\n                del freq[removed]\n            freq[added] += 1\n\n            if len(freq) >= m:\n                max_sum = max(max_sum, current_sum)\n\n        return max_sum",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1730,
+  "total_time_ms": 27527.22430229187,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1501
+  }
+}

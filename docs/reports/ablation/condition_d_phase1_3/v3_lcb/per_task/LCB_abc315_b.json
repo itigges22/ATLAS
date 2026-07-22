@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc315_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read input\n    M = int(sys.stdin.readline())\n    D = list(map(int, sys.stdin.readline().split()))\n    \n    total_days = sum(D)\n    target = (total_days + 1) // 2  # Middle day\n    \n    current = 0\n    for i in range(M):\n        if current + D[i] >= target:\n            # Found the month and day\n            a = i + 1\n            b = target - current\n            print(f\"{a} {b}\")\n            return\n        current += D[i]\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 557,
+  "total_time_ms": 11265.406131744385,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 465
+  }
+}

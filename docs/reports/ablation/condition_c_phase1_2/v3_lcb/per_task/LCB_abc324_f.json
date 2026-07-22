@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc324_f",
+  "passed": false,
+  "code": "import sys\nimport math\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    edges = []\n    graph = defaultdict(list)\n    \n    idx = 2\n    for _ in range(M):\n        u = int(data[idx])\n        v = int(data[idx+1])\n        b = int(data[idx+2])\n        c = int(data[idx+3])\n        edges.append((u, v, b, c))\n        graph[u].append((v, b, c))\n        idx += 4\n    \n    # We want to maximize (sum b) / (sum c) along a path from 1 to N\n    # This is equivalent to maximizing (sum b - k * sum c) for some k\n    # We can use binary search on k to find the maximum value of (sum b - k * sum c)\n    \n    # Binary search on k\n    low = 0.0\n    high = 1e7  # A sufficiently large upper bound\n    eps = 1e-10  # Precision for binary search\n    answer = 0.0\n    \n    # Bellman-Ford with modified weights for binary search\n    def check(k):\n        dist = [ -math.inf ] * (N + 1)\n        dist[1] = 0.0\n        for _ in range(N - 1):\n            updated = False\n            for u in graph:\n                for (v, b, c) in graph[u]:\n                    new_dist = dist[u] + (b - k * c)\n                    if new_dist > dist[v]:\n                        dist[v] = new_dist\n                        updated = True\n            if not updated:\n                break\n        return dist[N] > -math.inf\n    \n    # Binary search\n    for _ in range(100):\n        mid = (low + high) / 2\n        if check(mid):\n            answer = mid\n            low = mid\n        else:\n            high = mid\n    \n    print(f\"{answer:.15f}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5128,
+  "total_time_ms": 88323.60482215881,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4759
+  }
+}

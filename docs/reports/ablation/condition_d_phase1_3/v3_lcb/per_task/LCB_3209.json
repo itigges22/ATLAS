@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3209",
+  "passed": true,
+  "code": "class Solution:\n    def minimumCoins(self, prices: List[int]) -> int:\n        n = len(prices)\n        dp = [float('inf')] * (n + 1)\n        dp[0] = 0  # Base case: 0 cost to buy 0 fruits\n\n        for i in range(1, n + 1):\n            # Option 1: Buy the i-th fruit (1-indexed), paying prices[i-1]\n            # Then, you can take the next i fruits for free\n            # So, the next i fruits (i+1 to i+i) can be taken for free\n            # So, we can update dp[i + i] to be min(dp[i + i], dp[i-1] + prices[i-1])\n            # But we need to consider all positions up to n\n            for j in range(i, min(n, i + i) + 1):\n                dp[j] = min(dp[j], dp[i - 1] + prices[i - 1])\n\n            # Option 2: Take the i-th fruit for free (if allowed by a previous purchase)\n            # This is already handled by the dp transitions above\n\n        return dp[n]",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22889,
+  "total_time_ms": 363112.6277446747,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 950,
+    "self_tests_generated": 5
+  }
+}

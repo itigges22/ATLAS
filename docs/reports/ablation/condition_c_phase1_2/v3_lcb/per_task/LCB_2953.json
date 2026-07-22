@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2953",
+  "passed": false,
+  "code": "class Solution:\n    def countPairs(self, coordinates: List[List[int]], k: int) -> int:\n        from collections import defaultdict\n\n        count = 0\n        freq = defaultdict(int)\n\n        for x, y in coordinates:\n            for x1 in range(x ^ k, x ^ (k + 1), 1):\n                for y1 in range(y ^ (k - (x ^ x1)), y ^ (k - (x ^ x1)) + 1, 1):\n                    count += freq[(x1, y1)]\n            freq[(x, y)] += 1\n\n        return count",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 2673,
+  "total_time_ms": 52464.38717842102,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2533
+  }
+}

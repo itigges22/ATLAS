@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2954",
+  "passed": true,
+  "code": "class Solution:\n    def maxSum(self, nums: List[int], m: int, k: int) -> int:\n        if len(nums) < k:\n            return 0\n        \n        from collections import defaultdict\n\n        count = defaultdict(int)\n        distinct = 0\n        max_sum = 0\n        current_sum = sum(nums[:k])\n\n        # Initialize the first window\n        for num in nums[:k]:\n            if count[num] == 0:\n                distinct += 1\n            count[num] += 1\n\n        if distinct >= m:\n            max_sum = current_sum\n\n        # Slide the window\n        for i in range(k, len(nums)):\n            # Remove the element leaving the window\n            left = nums[i - k]\n            count[left] -= 1\n            if count[left] == 0:\n                distinct -= 1\n\n            # Add the new element entering the window\n            right = nums[i]\n            if count[right] == 0:\n                distinct += 1\n            count[right] += 1\n\n            # Update current sum\n            current_sum = current_sum - left + right\n\n            # Check if current window is almost unique\n            if distinct >= m:\n                max_sum = max(max_sum, current_sum)\n\n        return max_sum",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 8228,
+  "total_time_ms": 128848.04463386536,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5839,
+    "s_star_triggered": true
+  }
+}

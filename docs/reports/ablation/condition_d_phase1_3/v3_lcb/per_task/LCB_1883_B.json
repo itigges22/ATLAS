@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/1883_B",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import Counter\n\ndef can_form_palindrome(n, k, s):\n    count = Counter(s)\n    m = n - k  # number of characters left after removal\n\n    if m < 1:\n        return False\n\n    odd_count = 0\n    for freq in count.values():\n        if freq % 2 != 0:\n            odd_count += 1\n\n    # To form a palindrome:\n    # - If m is even, all character counts must be even\n    # - If m is odd, exactly one character count must be odd\n    # We can remove characters to adjust the odd counts\n\n    # We can reduce the number of odd counts by removing characters\n    # We can remove up to k characters to fix the odd counts\n    # So, if the number of odd counts is <= 1 + k, it's possible\n    # But also, we need to ensure that the total number of characters is at least m\n\n    # We can only have at most one odd count in the final string\n    # So, if odd_count > 1, we need to remove (odd_count - 1) characters\n    # and we must have enough characters to do that (i.e., odd_count - 1 <= k)\n\n    if odd_count > 1:\n        if (odd_count - 1) <= k:\n            return True\n        else:\n            return False\n    else:\n        return True\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    t = int(data[0])\n    index = 1\n    results = []\n\n    for _ in range(t):\n        n = int(data[index])\n        k = int(data[index + 1])\n        index += 2\n        s = data[index]\n        index += 1\n        if can_form_palindrome(n, k, s):\n            results.append(\"YES\")\n        else:\n            results.append(\"NO\")\n\n    print(\"\\n\".join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 27531,
+  "total_time_ms": 442668.24221611023,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1728,
+    "self_tests_generated": 5
+  }
+}

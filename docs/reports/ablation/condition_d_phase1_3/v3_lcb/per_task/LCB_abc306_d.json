@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc306_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    courses = []\n    idx = 1\n    for _ in range(N):\n        X = int(data[idx])\n        Y = int(data[idx + 1])\n        courses.append((X, Y))\n        idx += 2\n\n    # dp[0] = max tastiness when in healthy state\n    # dp[1] = max tastiness when in upset state\n    dp = [0, -float('inf')]\n\n    for X, Y in courses:\n        new_dp = [0, 0]\n        # If current state is healthy\n        if dp[0] != -float('inf'):\n            # Option 1: skip the course\n            new_dp[0] = max(new_dp[0], dp[0])\n            # Option 2: eat the course\n            if X == 0:\n                new_dp[0] = max(new_dp[0], dp[0] + Y)\n            else:\n                new_dp[1] = max(new_dp[1], dp[0] + Y)\n        # If current state is upset\n        if dp[1] != -float('inf'):\n            # Option 1: skip the course\n            new_dp[1] = max(new_dp[1], dp[1])\n            # Option 2: eat the course\n            if X == 0:\n                new_dp[0] = max(new_dp[0], dp[1] + Y)\n            else:\n                # Eating poison when upset leads to death, so not allowed\n                pass\n        dp = new_dp\n\n    print(max(dp))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1983,
+  "total_time_ms": 34122.60437011719,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1489
+  }
+}

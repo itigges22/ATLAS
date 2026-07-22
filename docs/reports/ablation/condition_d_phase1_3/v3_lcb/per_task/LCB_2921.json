@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2921",
+  "passed": false,
+  "code": "class Solution:\n    def countSteppingNumbers(self, low: str, high: str) -> int:\n        MOD = 10**9 + 7\n\n        def countSteppingNumbersUpTo(s: str) -> int:\n            n = len(s)\n            dp = [[[0] * 10 for _ in range(2)] for _ in range(n + 1)]\n            dp[0][0][0] = 1\n\n            for i in range(1, n + 1):\n                for tight in range(2):\n                    for prev in range(10):\n                        if dp[i - 1][tight][prev] == 0:\n                            continue\n                        max_digit = int(s[i - 1]) if tight else 9\n                        for d in range(0, max_digit + 1):\n                            new_tight = tight and (d == max_digit)\n                            if prev == 0 and d == 0:\n                                continue\n                            if prev == 0 and d != 0:\n                                dp[i][new_tight][d] = (dp[i][new_tight][d] + dp[i - 1][tight][prev]) % MOD\n                            else:\n                                if abs(d - prev) == 1:\n                                    dp[i][new_tight][d] = (dp[i][new_tight][d] + dp[i - 1][tight][prev]) % MOD\n            total = 0\n            for tight in range(2):\n                for d in range(10):\n                    total = (total + dp[n][tight][d]) % MOD\n            return total\n\n        def countSteppingNumbersLessThan(s: str) -> int:\n            n = len(s)\n            dp = [[[0] * 10 for _ in range(2)] for _ in range(n + 1)]\n            dp[0][0][0] = 1\n\n            for i in range(1, n + 1):\n                for tight in range(2):\n                    for prev in range(10):\n                        if dp[i - 1][tight][prev] == 0:\n                            continue\n                        max_digit = int(s[i - 1]) if tight else 9\n                        for d in range(0, max_digit):\n                            new_tight = tight and (d == max_digit)\n                            if prev == 0 and d == 0:\n                                continue\n                            if prev == 0 and d != 0:\n                                dp[i][new_tight][d] = (dp[i][new_tight][d] + dp[i - 1][tight][prev]) % MOD\n                            else:\n                                if abs(d - prev) == 1:\n                                    dp[i][new_tight][d] = (dp[i][new_tight][d] + dp[i - 1][tight][prev]) % MOD\n            total = 0\n            for tight in range(2):\n                for d in range(10):\n                    total = (total + dp[n][tight][d]) % MOD\n            return total\n\n        def countSteppingNumbersBetween(low: str, high: str) -> int:\n            return (countSteppingNumbersUpTo(high) - countSteppingNumbersLessThan(low) + MOD) % MOD\n\n        return countSteppingNumbersBetween(low, high)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49286,
+  "total_time_ms": 819935.0554943085,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1829,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc355_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n    \n    C = sorted(A + B)\n    \n    # Check if any two consecutive elements in C are both in A\n    for i in range(len(C) - 1):\n        if C[i] in A and C[i+1] in A:\n            print(\"Yes\")\n            return\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1041,
+  "total_time_ms": 13986.941814422607,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 881
+  }
+}

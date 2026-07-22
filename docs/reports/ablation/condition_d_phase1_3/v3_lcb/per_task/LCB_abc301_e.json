@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc301_e",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    T = int(data[2])\n    grid = data[3:H+3]\n    \n    start = None\n    goal = None\n    candies = []\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == 'S':\n                start = (i, j)\n            elif grid[i][j] == 'G':\n                goal = (i, j)\n            elif grid[i][j] == 'o':\n                candies.append((i, j))\n    \n    # Directions: up, right, down, left\n    directions = [(-1, 0), (0, 1), (1, 0), (0, -1)]\n    \n    # Use a priority queue to maximize collected candies\n    # We use a visited set to avoid revisiting the same state with fewer candies\n    # We represent collected candies as a bitmask (since there are at most 18 candies)\n    # Each candy can be represented as a bit in an integer\n    # So we map each candy position to a unique bit index\n    candy_to_bit = {}\n    for idx, (i, j) in enumerate(candies):\n        candy_to_bit[(i, j)] = idx\n    \n    visited = dict()  # (i, j) -> max_candies_collected_so_far\n    heap = []\n    heapq.heappush(heap, (0, start[0], start[1], 0))  # (steps, i, j, bitmask)\n    \n    max_candies = -1\n    \n    while heap:\n        steps, i, j, collected = heapq.heappop(heap)\n        \n        if (i, j) == goal:\n            max_candies = bin(collected).count('1')\n            continue\n        \n        if steps >= T:\n            continue\n        \n        for dx, dy in directions:\n            ni, nj = i + dx, j + dy\n            if 0 <= ni < H and 0 <= nj < W and grid[ni][nj] != '#':\n                new_steps = steps + 1\n                new_collected = collected\n                if (ni, nj) in candy_to_bit:\n                    bit = candy_to_bit[(ni, nj)]\n                    new_collected |= (1 << bit)\n                \n                if new_steps <= T:\n                    if (ni, nj) not in visited or visited[(ni, nj)] < bin(new_collected).count('1'):\n                        visited[(ni, nj)] = bin(new_collected).count('1')\n                        heapq.heappush(heap, (new_steps, ni, nj, new_collected))\n    \n    print(max_candies if max_candies != -1 else -1)\n\nmain()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 23604,
+  "total_time_ms": 454277.09197998047,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1434,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc312_f",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    items = []\n    idx = 2\n    for _ in range(N):\n        T = int(data[idx])\n        X = int(data[idx + 1])\n        items.append((T, X))\n        idx += 2\n\n    # Separate items by type\n    pull_tabs = []\n    regular_cans = []\n    openers = []\n\n    for T, X in items:\n        if T == 0:\n            pull_tabs.append(X)\n        elif T == 1:\n            regular_cans.append(X)\n        else:\n            openers.append(X)\n\n    # Sort pull tabs in descending order\n    pull_tabs.sort(reverse=True)\n    # Sort regular cans in descending order\n    regular_cans.sort(reverse=True)\n    # Sort openers in descending order\n    openers.sort(reverse=True)\n\n    # Precompute prefix sums\n    pull_prefix = []\n    sum_pull = 0\n    for x in pull_tabs:\n        sum_pull += x\n        pull_prefix.append(sum_pull)\n\n    regular_prefix = []\n    sum_regular = 0\n    for x in regular_cans:\n        sum_regular += x\n        regular_prefix.append(sum_regular)\n\n    opener_prefix = []\n    sum_opener = 0\n    for x in openers:\n        sum_opener += x\n        opener_prefix.append(sum_opener)\n\n    # Now, try all possible combinations of pull tabs, regular cans, and openers\n    max_happiness = 0\n\n    # Try all possible numbers of pull tabs (k)\n    for k in range(0, min(M, len(pull_tabs)) + 1):\n        if k > len(pull_tabs):\n            continue\n        pull_happiness = pull_prefix[k - 1] if k > 0 else 0\n        remaining = M - k\n        # Try all possible numbers of openers (o)\n        for o in range(0, min(remaining, len(openers)) + 1):\n            if o > len(openers):\n                continue\n            opener_capacity = opener_prefix[o - 1] if o > 0 else 0\n            remaining_after_opener = remaining - o\n            # Now, try to take as many regular cans as possible, up to the opener capacity\n            r = min(remaining_after_opener, len(regular_cans), opener_capacity)\n            regular_happiness = regular_prefix[r - 1] if r > 0 else 0\n            total = pull_happiness + regular_happiness\n            if total > max_happiness:\n                max_happiness = total\n\n    print(max_happiness)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6522,
+  "total_time_ms": 105958.76383781433,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5802
+  }
+}

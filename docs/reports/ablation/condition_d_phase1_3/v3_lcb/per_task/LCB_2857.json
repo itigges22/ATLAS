@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2857",
+  "passed": false,
+  "code": "class Solution:\n    def distanceTraveled(self, mainTank: int, additionalTank: int) -> int:\n        distance = 0\n        while mainTank > 0:\n            # Determine how much fuel can be used in this step\n            use = min(5, mainTank)\n            distance += use * 10\n            mainTank -= use\n            \n            # Check if we can transfer fuel from additional tank\n            if mainTank % 5 == 0 and additionalTank > 0:\n                mainTank += 1\n                additionalTank -= 1\n        return distance",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 61016,
+  "total_time_ms": 959051.1682033539,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 789,
+    "self_tests_generated": 5
+  }
+}

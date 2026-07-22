@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2802",
+  "passed": true,
+  "code": "class Solution:\n    def punishmentNumber(self, n: int) -> int:\n        def can_partition(s: str, target: int) -> bool:\n            if not s:\n                return False\n            if s == str(target):\n                return True\n            for i in range(1, len(s)):\n                left = int(s[:i])\n                if left > target:\n                    continue\n                if can_partition(s[i:], target - left):\n                    return True\n            return False\n\n        total = 0\n        for i in range(1, n + 1):\n            square = i * i\n            square_str = str(square)\n            if can_partition(square_str, i):\n                total += square\n        return total",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1661,
+  "total_time_ms": 26565.675258636475,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1504
+  }
+}

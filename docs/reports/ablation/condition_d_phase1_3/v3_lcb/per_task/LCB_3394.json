@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3394",
+  "passed": true,
+  "code": "class Solution:\n    def minEnd(self, n: int, x: int) -> int:\n        # We need to construct an array of size n with:\n        # 1. Strictly increasing elements\n        # 2. Bitwise AND of all elements equals x\n        # 3. Minimize the last element\n\n        # Start with x as the first element\n        # Then, add n-1 elements that are strictly increasing and preserve the bits of x\n\n        # We can construct the array by starting with x and adding numbers of the form x | i\n        # where i is a number that does not interfere with the bits of x\n\n        # We can use a greedy approach by generating numbers that are strictly increasing and preserve the bits of x\n\n        res = []\n        current = x\n        res.append(current)\n\n        for i in range(1, n):\n            # We want to find the next number greater than current that preserves the bits of x\n            # We can do this by incrementing current and checking if (current & x) == x\n            while (current & x) != x or current in res:\n                current += 1\n            res.append(current)\n\n        return res[-1]",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1531,
+  "total_time_ms": 26500.4825592041,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1332
+  }
+}

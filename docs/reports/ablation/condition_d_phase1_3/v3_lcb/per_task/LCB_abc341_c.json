@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc341_c",
+  "passed": true,
+  "code": "import sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    H = int(data[0])\n    W = int(data[1])\n    N = int(data[2])\n    T = data[3]\n    grid = data[4:4+H]\n\n    current_positions = set()\n\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '.':\n                x, y = i, j\n                valid = True\n                for move in T:\n                    if move == 'L':\n                        y -= 1\n                    elif move == 'R':\n                        y += 1\n                    elif move == 'U':\n                        x -= 1\n                    elif move == 'D':\n                        x += 1\n                    if x < 0 or x >= H or y < 0 or y >= W or grid[x][y] == '#':\n                        valid = False\n                        break\n                if valid:\n                    current_positions.add((x, y))\n    \n    print(len(current_positions))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 21143,
+  "total_time_ms": 483614.7723197937,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 802,
+    "self_tests_generated": 1
+  }
+}

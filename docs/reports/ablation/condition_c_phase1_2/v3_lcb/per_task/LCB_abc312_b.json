@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc312_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_tak_code(grid, i, j):\n    # Check top-left 3x3 is all black\n    for x in range(3):\n        for y in range(3):\n            if grid[i + x][j + y] != '#':\n                return False\n\n    # Check bottom-right 3x3 is all black\n    for x in range(3):\n        for y in range(3):\n            if grid[i + 6 + x][j + 6 + y] != '#':\n                return False\n\n    # Check adjacent cells to top-left 3x3 are white\n    for x in range(-1, 4):\n        for y in range(-1, 4):\n            if (x == 0 and y == 0) or (x == 1 and y == 0) or (x == 2 and y == 0) or \\\n               (x == 0 and y == 1) or (x == 1 and y == 1) or (x == 2 and y == 1) or \\\n               (x == 0 and y == 2) or (x == 1 and y == 2) or (x == 2 and y == 2):\n                continue\n            if 0 <= i + x < 9 and 0 <= j + y < 9:\n                if grid[i + x][j + y] != '.':\n                    return False\n\n    # Check adjacent cells to bottom-right 3x3 are white\n    for x in range(-1, 4):\n        for y in range(-1, 4):\n            if (x == 0 and y == 0) or (x == 1 and y == 0) or (x == 2 and y == 0) or \\\n               (x == 0 and y == 1) or (x == 1 and y == 1) or (x == 2 and y == 1) or \\\n               (x == 0 and y == 2) or (x == 1 and y == 2) or (x == 2 and y == 2):\n                continue\n            if 0 <= i + x < 9 and 0 <= j + y < 9:\n                if grid[i + x][j + y] != '.':\n                    return False\n\n    return True\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    M = int(input[1])\n    grid = input[2:N+2]\n\n    result = []\n    for i in range(N - 8):\n        for j in range(M - 8):\n            if is_tak_code(grid, i, j):\n                result.append((i + 1, j + 1))\n\n    for i, j in result:\n        print(f\"{i} {j}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 636,
+  "total_time_ms": 8576.382398605347,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

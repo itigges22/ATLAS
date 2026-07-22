@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc318_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    rectangles = []\n    index = 1\n    \n    for _ in range(N):\n        A = int(data[index])\n        B = int(data[index+1])\n        C = int(data[index+2])\n        D = int(data[index+3])\n        rectangles.append((A, B, C, D))\n        index += 4\n    \n    # Initialize a grid to track coverage\n    grid = [[0 for _ in range(101)] for _ in range(101)]\n    \n    for A, B, C, D in rectangles:\n        for x in range(A, B):\n            for y in range(C, D):\n                grid[x][y] += 1\n    \n    # Count cells covered at least once\n    S = sum(1 for row in grid for cell in row if cell > 0)\n    print(S)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1522,
+  "total_time_ms": 21918.755054473877,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1292
+  }
+}

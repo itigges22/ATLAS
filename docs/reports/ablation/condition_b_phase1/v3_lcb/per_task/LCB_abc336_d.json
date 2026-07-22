@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc336_d",
+  "passed": true,
+  "code": "import sys\n\ndef is_possible(A, k):\n    n = len(A)\n    # The pyramid sequence of size k has length 2k - 1\n    # We need to find a subsequence of length 2k - 1 in A\n    # such that the values match the pyramid pattern.\n    # We can remove elements from the start and end, so we check for a window of length 2k - 1\n    # and check if it can be transformed into the pyramid sequence.\n\n    for i in range(n - (2*k - 1) + 1):\n        valid = True\n        for j in range(k - 1):\n            if A[i + j] < j + 1 or A[i + (2*k - 1 - 1 - j)] < j + 1:\n                valid = False\n                break\n        if valid:\n            return True\n    return False\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    A = list(map(int, input[1:N+1]))\n    \n    low = 1\n    high = N\n    answer = 1\n\n    while low <= high:\n        mid = (low + high) // 2\n        if is_possible(A, mid):\n            answer = mid\n            low = mid + 1\n        else:\n            high = mid - 1\n\n    print(answer)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2577,
+  "total_time_ms": 44079.45895195007,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2393
+  }
+}

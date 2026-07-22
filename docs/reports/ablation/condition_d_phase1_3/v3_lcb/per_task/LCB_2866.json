@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2866",
+  "passed": true,
+  "code": "class Solution:\n    def longestAlternatingSubarray(self, nums: List[int], threshold: int) -> int:\n        max_len = 0\n        n = len(nums)\n        \n        for l in range(n):\n            if nums[l] > threshold:\n                continue\n            if nums[l] % 2 != 0:\n                continue\n            current_len = 1\n            for r in range(l + 1, n):\n                if nums[r] > threshold:\n                    break\n                if nums[r] % 2 == nums[r - 1] % 2:\n                    break\n                current_len += 1\n            max_len = max(max_len, current_len)\n        \n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1478,
+  "total_time_ms": 24862.40792274475,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1331
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc318_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    D = int(data[1])\n    P = int(data[2])\n    F = list(map(int, data[3:]))\n\n    # Sort F in descending order to use the most expensive days with passes\n    F.sort(reverse=True)\n\n    total_cost = 0\n    passes_used = 0\n\n    # For each batch of D passes, use them on the D most expensive days\n    for i in range(0, N, D):\n        # Use passes on the next D most expensive days\n        cost_with_pass = P\n        cost_without_pass = sum(F[i:i+D])\n        if cost_with_pass < cost_without_pass:\n            total_cost += cost_with_pass\n            passes_used += D\n        else:\n            total_cost += cost_without_pass\n\n    print(total_cost)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 973,
+  "total_time_ms": 18891.692876815796,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 621
+  }
+}

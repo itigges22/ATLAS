@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc354_c",
+  "passed": false,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    cards = []\n    for i in range(N):\n        A = int(data[1 + 2*i])\n        C = int(data[2 + 2*i])\n        cards.append((A, C, i+1))  # (strength, cost, original index)\n\n    # Sort cards by strength\n    cards.sort()\n    # We will maintain a list of (cost, original index) sorted by cost\n    # This will help us efficiently check if a card can be discarded\n    result = []\n    # We will also maintain a list of (cost, original index) sorted by cost\n    # This will help us efficiently check if a card can be discarded\n    sorted_costs = []\n\n    for A, C, idx in cards:\n        # Check if this card can be discarded\n        # We need to find if there exists a card with higher strength and lower cost\n        # Since cards are sorted by strength, we can check the sorted_costs list\n        # If there is a card with lower cost than current, then current card can be discarded\n        # So we need to find the first cost in sorted_costs that is less than current C\n        pos = bisect.bisect_left(sorted_costs, (C, idx))\n        if pos < len(sorted_costs):\n            # There is a card with lower cost and higher strength, so discard current card\n            continue\n        else:\n            # This card cannot be discarded, add it to the result\n            result.append((idx, A, C))\n            # Insert current card's cost into sorted_costs\n            bisect.insort_left(sorted_costs, (C, idx))\n\n    # Sort the result by original index\n    result.sort()\n    # Output\n    print(len(result))\n    print(' '.join(str(idx) for idx, _, _ in result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 432,
+  "total_time_ms": 7813.254594802856,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

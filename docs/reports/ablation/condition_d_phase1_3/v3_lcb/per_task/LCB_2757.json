@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2757",
+  "passed": false,
+  "code": "class Solution:\n    def count(self, num1: str, num2: str, min_sum: int, max_sum: int) -> int:\n        MOD = 10**9 + 7\n\n        def digit_sum(n: str) -> int:\n            return sum(int(c) for c in n)\n\n        def count_less_or_equal(n: str, target_sum: int) -> int:\n            n = list(map(int, n))\n            dp = [0] * (len(n) + 1)\n            dp[0] = 1\n            for i in range(len(n)):\n                for j in range(10):\n                    if j <= n[i]:\n                        dp[i + 1] += dp[i]\n                        if j != 0:\n                            dp[i + 1] += dp[i] * (j - 1)\n                        dp[i + 1] %= MOD\n            return dp[len(n)]\n\n        def count_in_range(n: str, min_s: int, max_s: int) -> int:\n            return (count_less_or_equal(n, max_s) - count_less_or_equal(n, min_s - 1)) % MOD\n\n        return (count_in_range(num2, min_sum, max_sum) - count_in_range(num1, min_sum, max_sum) + MOD) % MOD",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 48099,
+  "total_time_ms": 984843.1425094604,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 5504,
+    "self_tests_generated": 5
+  }
+}

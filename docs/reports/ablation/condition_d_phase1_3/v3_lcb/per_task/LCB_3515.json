@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3515",
+  "passed": false,
+  "code": "class Solution:\n    def canAliceWin(self, nums: List[int]) -> bool:\n        single_sum = 0\n        double_sum = 0\n        \n        for num in nums:\n            if num < 10:\n                single_sum += num\n            else:\n                double_sum += num\n        \n        return single_sum > double_sum or double_sum > single_sum",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 37684,
+  "total_time_ms": 814466.7716026306,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 973,
+    "self_tests_generated": 5
+  }
+}

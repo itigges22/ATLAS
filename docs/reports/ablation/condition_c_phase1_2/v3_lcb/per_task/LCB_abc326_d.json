@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc326_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import permutations\n\ndef solve():\n    N = int(sys.stdin.readline())\n    R = sys.stdin.readline().strip()\n    C = sys.stdin.readline().strip()\n\n    # Each row must contain exactly one A, B, C\n    # Each column must contain exactly one A, B, C\n    # Leftmost character in row i must be R[i]\n    # Topmost character in column j must be C[j]\n\n    # We will try to fill the grid with backtracking\n    grid = [['.' for _ in range(N)] for _ in range(N)]\n    result = None\n\n    def is_valid(grid):\n        # Check rows\n        for i in range(N):\n            chars = set()\n            leftmost = None\n            for j in range(N):\n                if grid[i][j] != '.':\n                    chars.add(grid[i][j])\n                    if leftmost is None:\n                        leftmost = grid[i][j]\n            if len(chars) != 3 or leftmost != R[i]:\n                return False\n\n        # Check columns\n        for j in range(N):\n            chars = set()\n            topmost = None\n            for i in range(N):\n                if grid[i][j] != '.':\n                    chars.add(grid[i][j])\n                    if topmost is None:\n                        topmost = grid[i][j]\n            if len(chars) != 3 or topmost != C[j]:\n                return False\n\n        return True\n\n    def backtrack(row):\n        nonlocal result\n        if row == N:\n            if is_valid(grid):\n                result = [\"\".join(row) for row in grid]\n            return True\n        for col in range(N):\n            if grid[row][col] == '.':\n                for ch in ['A', 'B', 'C']:\n                    # Check if character is already in row or column\n                    if ch in grid[row] or ch in [grid[i][col] for i in range(N)]:\n                        continue\n                    grid[row][col] = ch\n                    if backtrack(row + 1):\n                        return True\n                    grid[row][col] = '.'\n        return False\n\n    if backtrack(0):\n        print(\"Yes\")\n        for line in result:\n            print(line)\n    else:\n        print(\"No\")",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5606,
+  "total_time_ms": 91354.19487953186,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5142
+  }
+}

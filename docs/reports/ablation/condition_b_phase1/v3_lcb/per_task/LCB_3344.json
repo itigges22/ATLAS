@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3344",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumDistance(self, points: List[List[int]]) -> int:\n        # Precompute (x + y) and (x - y) for all points\n        x_plus_y = [x + y for x, y in points]\n        x_minus_y = [x - y for x, y in points]\n\n        # Sort the values to find max and min\n        max_x_plus_y = max(x_plus_y)\n        min_x_plus_y = min(x_plus_y)\n        max_x_minus_y = max(x_minus_y)\n        min_x_minus_y = min(x_minus_y)\n\n        # Compute the maximum Manhattan distance for the full set\n        full_max = max(max_x_plus_y - min_x_plus_y, max_x_minus_y - min_x_minus_y)\n\n        # Now, for each point, remove it and recompute the max distance\n        # We need to find the minimum of these max distances\n\n        min_result = float('inf')\n\n        for i in range(len(points)):\n            # Remove the i-th point\n            # Recompute max and min of (x + y) and (x - y) without the i-th point\n            current_x_plus_y = x_plus_y[i]\n            current_x_minus_y = x_minus_y[i]\n\n            # Find max and min of x_plus_y without the i-th point\n            new_max_x_plus_y = max([val for idx, val in enumerate(x_plus_y) if idx != i])\n            new_min_x_plus_y = min([val for idx, val in enumerate(x_plus_y) if idx != i])\n\n            # Find max and min of x_minus_y without the i-th point\n            new_max_x_minus_y = max([val for idx, val in enumerate(x_minus_y) if idx != i])\n            new_min_x_minus_y = min([val for idx, val in enumerate(x_minus_y) if idx != i])\n\n            # Compute the max distance without the i-th point\n            current_max = max(new_max_x_plus_y - new_min_x_plus_y, new_max_x_minus_y - new_min_x_minus_y)\n\n            # Update the minimum result\n            min_result = min(min_result, current_max)\n\n        return min_result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2037,
+  "total_time_ms": 32064.31245803833,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1860
+  }
+}

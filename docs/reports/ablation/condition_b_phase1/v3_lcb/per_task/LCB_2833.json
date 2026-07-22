@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2833",
+  "passed": true,
+  "code": "from bisect import bisect_left, bisect_right\nfrom collections import defaultdict\nfrom typing import List\n\nclass Solution:\n    def countServers(self, n: int, logs: List[List[int]], x: int, queries: List[int]) -> List[int]:\n        # Sort logs by time\n        logs.sort(key=lambda log: log[1])\n        \n        # Create a sorted list of times and a dictionary to map server_id to list of times\n        time_list = []\n        server_times = defaultdict(list)\n        \n        for server_id, time in logs:\n            server_times[server_id].append(time)\n        \n        # Sort server times\n        for server_id in server_times:\n            server_times[server_id].sort()\n        \n        # Prepare result\n        result = []\n        \n        # Process each query\n        for q in queries:\n            start = q - x\n            end = q\n            count = 0\n            \n            # Count servers that have no requests in [start, end]\n            for server_id in range(1, n + 1):\n                times = server_times.get(server_id, [])\n                # Use binary search to check if any time in [start, end]\n                left = bisect_left(times, start)\n                right = bisect_right(times, end)\n                if left >= right:\n                    count += 1\n            \n            result.append(count)\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1710,
+  "total_time_ms": 27891.26682281494,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1419
+  }
+}

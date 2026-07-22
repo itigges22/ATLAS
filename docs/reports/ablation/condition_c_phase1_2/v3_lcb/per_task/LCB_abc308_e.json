@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc308_e",
+  "passed": true,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef mex(a, b, c):\n    s = {a, b, c}\n    for i in range(4):\n        if i not in s:\n            return i\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    S = data[N+1]\n\n    # Precompute positions for M, E, X\n    m_pos = []\n    e_pos = []\n    x_pos = []\n    for i in range(N):\n        if S[i] == 'M':\n            m_pos.append(i)\n        elif S[i] == 'E':\n            e_pos.append(i)\n        elif S[i] == 'X':\n            x_pos.append(i)\n\n    # Find all MEX triplets\n    total = 0\n    for m in m_pos:\n        for e in e_pos:\n            if e <= m:\n                continue\n            for x in x_pos:\n                if x <= e:\n                    continue\n                # Check if i < j < k\n                if m < e < x:\n                    total += mex(A[m], A[e], A[x])\n\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 287,
+  "total_time_ms": 4314.418077468872,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

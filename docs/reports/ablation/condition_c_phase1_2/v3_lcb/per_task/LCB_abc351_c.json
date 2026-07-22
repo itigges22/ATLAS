@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc351_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    # We will use a deque to simulate the sequence\n    seq = deque()\n\n    for a in A:\n        # Add the current ball (size is 2^a)\n        seq.append(a)\n\n        # Process the sequence\n        while len(seq) >= 2:\n            # Get the last two elements\n            last = seq[-1]\n            second_last = seq[-2]\n\n            if last != second_last:\n                break\n            else:\n                # Remove the last two elements\n                seq.pop()\n                seq.pop()\n                # Add the new ball with size = 2^(last + 1)\n                seq.append(last + 1)\n\n    print(len(seq))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 212,
+  "total_time_ms": 4159.951686859131,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3387",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def minOperationsToMakeMedianK(self, nums: List[int], k: int) -> int:\n        nums.sort()\n        n = len(nums)\n        median_index = (n - 1) // 2  # For both odd and even lengths, this gives the correct median index\n        operations = 0\n\n        # Only need to adjust the median element to k\n        operations += abs(nums[median_index] - k)\n\n        return operations",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1275,
+  "total_time_ms": 21533.792734146118,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1188
+  }
+}

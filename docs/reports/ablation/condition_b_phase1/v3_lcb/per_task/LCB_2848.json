@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2848",
+  "passed": true,
+  "code": "from typing import List\nfrom functools import lru_cache\n\nclass Solution:\n    def specialPerm(self, nums: List[int]) -> int:\n        MOD = 10**9 + 7\n        n = len(nums)\n        \n        @lru_cache(maxsize=None)\n        def dp(pos, mask):\n            if mask == (1 << n) - 1:\n                return 1\n            total = 0\n            for i in range(n):\n                if not (mask & (1 << i)):\n                    if pos == -1 or (nums[i] % nums[pos] == 0 or nums[pos] % nums[i] == 0):\n                        total += dp(i, mask | (1 << i))\n                        total %= MOD\n            return total\n        \n        return dp(-1, 0)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1546,
+  "total_time_ms": 24880.054235458374,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1358
+  }
+}

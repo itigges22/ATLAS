@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc319_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N = int(sys.stdin.readline())\n    result = []\n    for i in range(N + 1):\n        min_j = None\n        for j in range(1, 10):\n            if N % j == 0:\n                quotient = N // j\n                if i % quotient == 0:\n                    if min_j is None or j < min_j:\n                        min_j = j\n        if min_j is not None:\n            result.append(str(min_j))\n        else:\n            result.append('-')\n    print(''.join(result))\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1324,
+  "total_time_ms": 22165.12703895569,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1128
+  }
+}

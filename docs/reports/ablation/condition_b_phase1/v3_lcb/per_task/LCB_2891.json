@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2891",
+  "passed": true,
+  "code": "class Solution:\n    def maximumBeauty(self, nums: List[int], k: int) -> int:\n        events = []\n        for num in nums:\n            events.append((num - k, 1))\n            events.append((num + k + 1, -1))\n        events.sort()\n        max_beauty = 0\n        current = 0\n        for _, delta in events:\n            current += delta\n            max_beauty = max(max_beauty, current)\n        return max_beauty",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1374,
+  "total_time_ms": 23270.073413848877,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1257
+  }
+}

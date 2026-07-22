@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/abc307_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n\n    # Stack to track indices of '('\n    stack = []\n    # List to mark characters to be removed\n    to_remove = [False] * N\n\n    for i in range(N):\n        if S[i] == '(':\n            stack.append(i)\n        elif S[i] == ')':\n            if stack:\n                start = stack.pop()\n                # Mark all characters from start to i as to be removed\n                for j in range(start, i + 1):\n                    to_remove[j] = True\n\n    # Build the result string by skipping characters marked for removal\n    result = ''.join([S[i] for i in range(N) if not to_remove[i]])\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "refinement",
+  "candidates_generated": 3,
+  "total_tokens": 42247,
+  "total_time_ms": 664894.5753574371,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 814,
+    "self_tests_generated": 2,
+    "refinement_iterations": 2
+  }
+}

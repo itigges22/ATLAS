@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3291",
+  "passed": false,
+  "code": "class Solution:\n    def canSortArray(self, nums: List[int]) -> bool:\n        # Precompute the number of set bits for each element\n        set_bits = [bin(num).count('1') for num in nums]\n        \n        # Group elements by their set bit count\n        groups = {}\n        for i in range(len(nums)):\n            bit_count = set_bits[i]\n            if bit_count not in groups:\n                groups[bit_count] = []\n            groups[bit_count].append(nums[i])\n        \n        # For each group, sort the elements (since they can be rearranged among themselves)\n        for key in groups:\n            groups[key].sort()\n        \n        # Reconstruct the sorted array based on the groups\n        sorted_nums = []\n        for key in sorted(groups.keys()):\n            sorted_nums.extend(groups[key])\n        \n        # Check if the reconstructed array matches the sorted version of the original\n        return sorted_nums == sorted(nums)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 4053,
+  "total_time_ms": 66459.23662185669,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3905
+  }
+}

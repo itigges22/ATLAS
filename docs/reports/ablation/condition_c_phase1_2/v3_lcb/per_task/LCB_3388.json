@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3388",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfRightTriangles(self, grid: List[List[int]]) -> int:\n        rows, cols = len(grid), len(grid[0])\n        row_counts = [0] * rows\n        col_counts = [0] * cols\n\n        for i in range(rows):\n            for j in range(cols):\n                if grid[i][j]:\n                    row_counts[i] += 1\n                    col_counts[j] += 1\n\n        count = 0\n        for i in range(rows):\n            for j in range(cols):\n                if grid[i][j]:\n                    count += (row_counts[i] - 1) * (col_counts[j] - 1)\n\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4905,
+  "total_time_ms": 71506.0122013092,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2654,
+    "s_star_triggered": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3262",
+  "passed": true,
+  "code": "class Solution:\n    def largestPerimeter(self, nums: List[int]) -> int:\n        nums.sort()\n        total = sum(nums)\n        for i in range(len(nums) - 1, 1, -1):\n            if nums[i] < total - nums[i]:\n                return total\n            total -= nums[i]\n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 85,
+  "total_time_ms": 1790.6384468078613,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

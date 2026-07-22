@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc349_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nfrom collections import Counter\n\nS = input().strip()\ncount = Counter(S)\nfreq = Counter(count.values())\n\nvalid = True\nfor i in freq:\n    if freq[i] != 0 and freq[i] != 2:\n        valid = False\n        break\n\nprint(\"Yes\" if valid else \"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1506.2854290008545,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

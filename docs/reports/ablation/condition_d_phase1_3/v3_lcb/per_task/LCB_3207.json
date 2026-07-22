@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3207",
+  "passed": true,
+  "code": "class Solution:\n    def findMinimumOperations(self, s1: str, s2: str, s3: str) -> int:\n        # Find the longest common prefix among the three strings\n        lcp = \"\"\n        for chars in zip(s1, s2, s3):\n            if chars[0] == chars[1] == chars[2]:\n                lcp += chars[0]\n            else:\n                break\n        \n        # If no common prefix, return -1\n        if not lcp:\n            return -1\n        \n        # Calculate operations needed to truncate each string to the length of the LCP\n        ops = 0\n        for s in [s1, s2, s3]:\n            ops += len(s) - len(lcp)\n        \n        return ops",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1162,
+  "total_time_ms": 18285.33983230591,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 987
+  }
+}

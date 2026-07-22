@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3345",
+  "passed": false,
+  "code": "from typing import List\nfrom collections import defaultdict\n\nclass Solution:\n    def sumOfPower(self, nums: List[int], k: int) -> int:\n        MOD = 10**9 + 7\n        n = len(nums)\n        dp = defaultdict(int)\n        dp[0] = 1  # Base case: empty subsequence has sum 0\n\n        for num in nums:\n            new_dp = dp.copy()\n            for s in dp:\n                new_s = s + num\n                new_dp[new_s] = (new_dp[new_s] + dp[s]) % MOD\n            dp = new_dp\n\n        return dp[k] % MOD",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 67154,
+  "total_time_ms": 1000413.6397838593,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1110,
+    "self_tests_generated": 5
+  }
+}

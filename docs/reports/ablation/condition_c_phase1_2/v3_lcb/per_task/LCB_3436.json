@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3436",
+  "passed": true,
+  "code": "class Solution:\n    def minimumDifference(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        min_diff = float('inf')\n        current_or = 0\n        \n        for i in range(n):\n            current_or = 0\n            for j in range(i, n):\n                current_or |= nums[j]\n                min_diff = min(min_diff, abs(k - current_or))\n        \n        return min_diff",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4412,
+  "total_time_ms": 72486.40608787537,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2461,
+    "s_star_triggered": true
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc314_f",
+  "passed": false,
+  "code": "import sys\nimport threading\n\nMOD = 998244353\nMAXN = 2 * 10**5 + 10\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    edges = []\n    for _ in range(N - 1):\n        p, q = map(int, sys.stdin.readline().split())\n        edges.append((p, q))\n\n    parent = list(range(N + 1))\n    size = [1] * (N + 1)\n    expected = [0] * (N + 1)\n\n    def find(u):\n        while parent[u] != u:\n            parent[u] = parent[parent[u]]\n            u = parent[u]\n        return u\n\n    def union(u, v):\n        u_root = find(u)\n        v_root = find(v)\n        if u_root == v_root:\n            return\n        if size[u_root] < size[v_root]:\n            u_root, v_root = v_root, u_root\n        parent[v_root] = u_root\n        size[u_root] += size[v_root]\n\n    for p, q in edges:\n        u_root = find(p)\n        v_root = find(q)\n        a = size[u_root]\n        b = size[v_root]\n        prob_u = a / (a + b)\n        prob_v = b / (a + b)\n        expected[u_root] += prob_u\n        expected[v_root] += prob_v\n        union(p, q)\n\n    result = []\n    for i in range(1, N + 1):\n        root = find(i)\n        result.append(expected[root])\n    \n    # Modular inverse of denominator\n    inv_denominator = pow(N, MOD - 2, MOD)\n    result = [int((x * inv_denominator) % MOD) for x in result]\n    print(' '.join(map(str, result)))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 56193,
+  "total_time_ms": 979871.2041378021,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1174,
+    "self_tests_generated": 5
+  }
+}

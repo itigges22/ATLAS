@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc363_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nR = int(input())\n\nif 1 <= R <= 99:\n    target = 100\nelif 100 <= R <= 199:\n    target = 200\nelif 200 <= R <= 299:\n    target = 300\n\nprint(target - R)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 87,
+  "total_time_ms": 1633.589506149292,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_d",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    Q = int(data[idx])\n    idx += 1\n    queries = []\n    for _ in range(Q):\n        l = int(data[idx])\n        r = int(data[idx+1])\n        queries.append((l, r))\n        idx += 2\n\n    # Build prefix sum array for total sleep time up to each time point\n    prefix = [0] * (N + 1)\n    for i in range(1, (N + 1) // 2):\n        start = A[2 * i - 1]\n        end = A[2 * i]\n        prefix[end] += end - start\n        prefix[A[2 * i + 1]] += 0  # No change for wake-up time\n\n    # Build the prefix sum array\n    for i in range(1, N + 1):\n        prefix[i] += prefix[i - 1]\n\n    # Process queries\n    results = []\n    for l, r in queries:\n        # Total sleep time from 0 to r\n        total_r = prefix[r]\n        # Total sleep time from 0 to l\n        total_l = prefix[l]\n        # Sleep time between l and r\n        results.append(str(total_r - total_l))\n\n    print(\"\\n\".join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 7821,
+  "total_time_ms": 131657.89890289307,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7330
+  }
+}

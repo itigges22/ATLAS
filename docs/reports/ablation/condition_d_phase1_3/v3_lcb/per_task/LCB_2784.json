@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2784",
+  "passed": false,
+  "code": "class Solution:\n    def sumOfPower(self, nums: List[int]) -> int:\n        MOD = 10**9 + 7\n        nums.sort()\n        n = len(nums)\n        res = 0\n        prefix_sum = 0\n        \n        for i in range(n):\n            current_max = nums[i]\n            power = (current_max * current_max) % MOD\n            power = (power * current_max) % MOD\n            res = (res + power) % MOD\n            \n            # Add contribution from all previous elements as min\n            prefix_sum = (prefix_sum + nums[i]) % MOD\n            res = (res + (power * prefix_sum) % MOD) % MOD\n        \n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50209,
+  "total_time_ms": 806480.9517860413,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1804,
+    "self_tests_generated": 5
+  }
+}

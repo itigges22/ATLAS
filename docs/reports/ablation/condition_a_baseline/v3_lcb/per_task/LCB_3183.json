@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3183",
+  "passed": true,
+  "code": "class Solution:\n    def findKOr(self, nums: List[int], k: int) -> int:\n        bit_count = [0] * 32  # To count set bits for each of the 32 bits\n        for num in nums:\n            for i in range(32):\n                if num & (1 << i):\n                    bit_count[i] += 1\n        result = 0\n        for i in range(32):\n            if bit_count[i] >= k:\n                result |= (1 << i)\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2123.262643814087,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

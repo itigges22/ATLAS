@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc355_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nA, B = map(int, input().split())\n\n# The two witnesses say A and B are not the culprit\n# So the possible culprits are those not in {A, B}\n\npossible_culprits = set([1, 2, 3]) - {A, B}\n\nif len(possible_culprits) == 1:\n    print(possible_culprits.pop())\nelse:\n    print(-1)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 109,
+  "total_time_ms": 1910.2163314819336,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc357_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\nupper_count = 0\nlower_count = 0\n\nfor char in S:\n    if char.isupper():\n        upper_count += 1\n    else:\n        lower_count += 1\n\nif upper_count > lower_count:\n    print(S.upper())\nelse:\n    print(S.lower())",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 940,
+  "total_time_ms": 15060.443878173828,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 868
+  }
+}

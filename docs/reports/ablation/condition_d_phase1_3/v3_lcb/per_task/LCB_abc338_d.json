@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc338_d",
+  "passed": false,
+  "code": "import sys\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    X = list(map(int, data[2:2+M]))\n    \n    # Precompute the minimal distance between consecutive points in X\n    # Since the islands form a ring, the minimal distance between i and j is min(|i-j|, N - |i-j|)\n    def dist(a, b):\n        return min(abs(a - b), N - abs(a - b))\n    \n    total = 0\n    for i in range(M - 1):\n        total += dist(X[i], X[i + 1])\n    \n    # Now, we need to find the bridge that, when removed, causes the minimal increase in the total distance\n    # The worst case is when the tour goes through the bridge that is removed\n    # So, we need to find the maximum distance between consecutive points in X that is less than N/2\n    # Because if we remove the bridge that is part of the shortest path between two consecutive points in X, the distance will increase by (N - d)\n    # So, we need to find the maximum d where d is the minimal distance between consecutive points in X\n    # Then, the minimal total length is total + (N - max_d)\n    \n    max_d = 0\n    for i in range(M - 1):\n        d = dist(X[i], X[i + 1])\n        if d > max_d:\n            max_d = d\n    \n    print(total + (N - max_d))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 47642,
+  "total_time_ms": 2216585.156440735,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 5050,
+    "self_tests_generated": 5
+  }
+}

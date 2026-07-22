@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3047",
+  "passed": false,
+  "code": "from collections import defaultdict\nimport math\nfrom typing import List\n\nclass Solution:\n    def maximumSum(self, nums: List[int]) -> int:\n        n = len(nums)\n        max_sum = 0\n\n        # Function to get square-free part of a number\n        def square_free_part(x):\n            i = 2\n            while i * i <= x:\n                while x % (i * i) == 0:\n                    x //= (i * i)\n                i += 1\n            return x\n\n        # Group numbers by their square-free part\n        groups = defaultdict(list)\n        for i in range(n):\n            sf = square_free_part(nums[i])\n            groups[sf].append(nums[i])\n\n        # For each group, compute the sum of all elements in the group\n        for group in groups.values():\n            max_sum = max(max_sum, sum(group))\n\n        return max_sum",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1678,
+  "total_time_ms": 29303.68685722351,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1478
+  }
+}

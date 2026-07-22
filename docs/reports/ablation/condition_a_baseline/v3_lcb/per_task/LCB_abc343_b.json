@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc343_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    index = 1\n    adj_matrix = []\n    \n    for _ in range(N):\n        row = list(map(int, data[index:index+N]))\n        adj_matrix.append(row)\n        index += N\n    \n    for i in range(N):\n        neighbors = [j + 1 for j in range(N) if adj_matrix[i][j] == 1]\n        print(' '.join(map(str, neighbors)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2149.484634399414,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

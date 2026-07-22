@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc315_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    H = int(data[0])\n    W = int(data[1])\n    grid = data[2:2+H]\n    \n    # Convert grid to a 2D list of characters\n    grid = [list(row) for row in grid]\n    \n    # Track which cookies are still present\n    present = [[True for _ in range(W)] for _ in range(H)]\n    \n    # Mark cookies to be removed\n    while True:\n        to_remove = set()\n        # Step 1: Mark rows\n        for i in range(H):\n            # Only consider present cookies in the row\n            row_chars = [grid[i][j] for j in range(W) if present[i][j]]\n            if len(row_chars) >= 2 and len(set(row_chars)) == 1:\n                for j in range(W):\n                    if present[i][j]:\n                        to_remove.add((i, j))\n        \n        # Step 2: Mark columns\n        for j in range(W):\n            # Only consider present cookies in the column\n            col_chars = [grid[i][j] for i in range(H) if present[i][j]]\n            if len(col_chars) >= 2 and len(set(col_chars)) == 1:\n                for i in range(H):\n                    if present[i][j]:\n                        to_remove.add((i, j))\n        \n        # Step 3: Check if any marked cookies\n        if not to_remove:\n            break\n        \n        # Remove marked cookies\n        for i, j in to_remove:\n            present[i][j] = False\n    \n    # Count remaining cookies\n    count = 0\n    for i in range(H):\n        for j in range(W):\n            if present[i][j]:\n                count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 32076,
+  "total_time_ms": 577713.3114337921,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1755,
+    "self_tests_generated": 2
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc330_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    L = int(data[1])\n    R = int(data[2])\n    A = list(map(int, data[3:]))\n    \n    result = []\n    for a in A:\n        if a < L:\n            result.append(L)\n        elif a > R:\n            result.append(R)\n        else:\n            result.append(a)\n    print(' '.join(map(str, result)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 140,
+  "total_time_ms": 1981.2707901000977,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

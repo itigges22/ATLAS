@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc307_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import product\n\ndef read_sheet():\n    h, w = map(int, sys.stdin.readline().split())\n    sheet = [sys.stdin.readline().strip() for _ in range(h)]\n    return sheet\n\ndef get_black_positions(sheet):\n    return [(i, j) for i, row in enumerate(sheet) for j, cell in enumerate(row) if cell == '#']\n\ndef can_create_x(A, B, X):\n    A_black = get_black_positions(A)\n    B_black = get_black_positions(B)\n    X_black = get_black_positions(X)\n\n    # Try all possible positions for A and B on an infinite sheet\n    # We'll consider positions where A and B are placed such that their black squares are within a bounding box\n    # We'll try all possible positions for A and B within a reasonable range\n    max_offset = 10\n    for dx_a, dy_a in product(range(-max_offset, max_offset + 1), repeat=2):\n        for dx_b, dy_b in product(range(-max_offset, max_offset + 1), repeat=2):\n            # Compute positions of A and B on the infinite sheet\n            pos_a = [(i + dx_a, j + dy_a) for i, j in A_black]\n            pos_b = [(i + dx_b, j + dy_b) for i, j in B_black]\n            all_black = set(pos_a + pos_b)\n\n            # Try all possible cutout positions\n            for cut_x in range(-max_offset, max_offset + 1):\n                for cut_y in range(-max_offset, max_offset + 1):\n                    cut_black = set((i + cut_x, j + cut_y) for i, j in X_black)\n                    if cut_black.issubset(all_black):\n                        # Check if the cutout matches X\n                        match = True\n                        for i, j in X_black:\n                            if (i + cut_x, j + cut_y) not in all_black:\n                                match = False\n                                break\n                        if match:\n                            return \"Yes\"\n    return \"No\"\n\ndef main():\n    A = read_sheet()\n    B = read_sheet()\n    X = read_sheet()\n    print(can_create_x(A, B, X))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 498,
+  "total_time_ms": 50297.250270843506,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc310_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n    A = [int(c) for c in S]\n    \n    total = 0\n    for i in range(N):\n        current = A[i]\n        for j in range(i, N):\n            if i == j:\n                current = A[i]\n            else:\n                current = 1 - (current & A[j])\n            total += current\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1182,
+  "total_time_ms": 22831.94327354431,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1048
+  }
+}

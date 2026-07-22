@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2833",
+  "passed": true,
+  "code": "from collections import defaultdict\nimport bisect\n\nclass Solution:\n    def countServers(self, n: int, logs: List[List[int]], x: int, queries: List[int]) -> List[int]:\n        # Sort logs by time\n        logs.sort(key=lambda log: log[1])\n        \n        # Group server_ids by their times\n        time_to_servers = defaultdict(list)\n        for server_id, time in logs:\n            time_to_servers[time].append(server_id)\n        \n        # Sort the times for binary search\n        sorted_times = sorted(time_to_servers.keys())\n        \n        # Precompute prefix sums for server counts\n        prefix = [0] * (len(sorted_times) + 1)\n        for i in range(len(sorted_times)):\n            prefix[i + 1] = prefix[i] + len(time_to_servers[sorted_times[i]])\n        \n        res = []\n        for q in queries:\n            left = q - x\n            # Binary search for left and right bounds\n            l = bisect.bisect_left(sorted_times, left)\n            r = bisect.bisect_right(sorted_times, q)\n            \n            # Number of servers that received requests in [left, q]\n            cnt = prefix[r] - prefix[l]\n            res.append(n - cnt)\n        \n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2243,
+  "total_time_ms": 38564.48745727539,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1963
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc308_f",
+  "passed": false,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    P = list(map(int, data[2:2+N]))\n    L = list(map(int, data[2+N:2+N+M]))\n    D = list(map(int, data[2+N+M:2+N+2*M]))\n    \n    # Sort coupons by discount (descending) and L (ascending)\n    coupons = sorted(zip(L, D), key=lambda x: (-x[1], x[0]))\n    \n    # Sort items by price (ascending)\n    P.sort()\n    \n    # Use a max-heap to keep track of available discounts\n    discount_heap = []\n    total = 0\n    coupon_idx = 0\n    \n    for price in P:\n        # Add all coupons that can be applied to this price\n        while coupon_idx < M and coupons[coupon_idx][0] <= price:\n            L_i, D_i = coupons[coupon_idx]\n            heapq.heappush(discount_heap, -D_i)  # Use max-heap\n            coupon_idx += 1\n        \n        # Use the best available discount\n        if discount_heap:\n            best_discount = -heapq.heappop(discount_heap)\n            total += price - best_discount\n        else:\n            total += price\n    \n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 324,
+  "total_time_ms": 5222.794055938721,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

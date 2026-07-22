@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc329_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    S = data[1]\n\n    seen = set()\n    i = 0\n    while i < N:\n        j = i\n        while j < N and S[j] == S[i]:\n            j += 1\n        length = j - i\n        for k in range(1, length + 1):\n            seen.add(S[i] * k)\n        i = j\n\n    print(len(seen))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22425,
+  "total_time_ms": 325138.01312446594,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 849,
+    "self_tests_generated": 3
+  }
+}

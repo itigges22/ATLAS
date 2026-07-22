@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc344_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport itertools\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().splitlines()\n    \n    T = data[0]\n    N = int(data[1])\n    \n    bags = []\n    for i in range(2, len(data)):\n        parts = data[i].split()\n        A_i = int(parts[0])\n        strings = parts[1:]\n        bags.append(strings)\n    \n    len_T = len(T)\n    dp = [float('inf')] * (len_T + 1)\n    dp[0] = 0\n    \n    for i in range(N):\n        new_dp = [float('inf')] * (len_T + 1)\n        for pos in range(len_T + 1):\n            if dp[pos] != float('inf'):\n                # Do nothing\n                new_dp[pos] = min(new_dp[pos], dp[pos])\n                # Choose a string from bag i\n                for s in bags[i]:\n                    s_len = len(s)\n                    if pos + s_len <= len_T and T[pos:pos + s_len] == s:\n                        new_dp[pos + s_len] = min(new_dp[pos + s_len], dp[pos] + 1)\n        dp = new_dp\n    \n    result = dp[len_T] if dp[len_T] != float('inf') else -1\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1111,
+  "total_time_ms": 18529.364347457886,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 823
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc351_c",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    \n    stack = []\n    \n    for a in A:\n        # Calculate the size of the current ball\n        size = 1 << a  # Equivalent to 2^a\n        \n        # Push the current ball to the stack\n        stack.append(size)\n        \n        # Check if the top two elements can be merged\n        while len(stack) >= 2 and stack[-1] == stack[-2]:\n            # Merge the two balls\n            merged = stack.pop() + stack.pop()\n            stack.append(merged)\n    \n    print(len(stack))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1200,
+  "total_time_ms": 24285.506010055542,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 982
+  }
+}

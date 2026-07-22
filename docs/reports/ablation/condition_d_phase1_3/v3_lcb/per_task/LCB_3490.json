@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3490",
+  "passed": false,
+  "code": "class Solution:\n    def maximumLength(self, nums: List[int]) -> int:\n        even = 0\n        odd = 0\n        for num in nums:\n            if num % 2 == 0:\n                even += 1\n            else:\n                odd += 1\n        return max(even, odd)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 42909,
+  "total_time_ms": 1000634.9406242371,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1041,
+    "self_tests_generated": 5
+  }
+}

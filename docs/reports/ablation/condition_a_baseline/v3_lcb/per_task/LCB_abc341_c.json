@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc341_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    N = int(data[2])\n    T = data[3]\n    \n    grid = data[4:4+H]\n    \n    # Directions: L, R, U, D\n    dir_map = {'L': (0, -1), 'R': (0, 1), 'U': (-1, 0), 'D': (1, 0)}\n    \n    # Initialize possible positions\n    possible_positions = set()\n    \n    # Try each cell as the starting position\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#':\n                continue\n            # Check if all positions along the path are land\n            x, y = i, j\n            valid = True\n            for move in T:\n                dx, dy = dir_map[move]\n                nx, ny = x + dx, y + dy\n                if 0 <= nx < H and 0 <= ny < W and grid[nx][ny] == '.':\n                    x, y = nx, ny\n                else:\n                    valid = False\n                    break\n            if valid:\n                possible_positions.add((x, y))\n    \n    print(len(possible_positions))\n    \nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 7150.439500808716,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

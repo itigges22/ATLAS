@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc310_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import product\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    T = int(data[1])\n    M = int(data[2])\n    \n    incompatible = set()\n    for i in range(M):\n        a = int(data[3 + 2*i]) - 1\n        b = int(data[4 + 2*i]) - 1\n        incompatible.add((a, b))\n        incompatible.add((b, a))\n    \n    # Generate all valid team assignments using backtracking\n    result = 0\n    team_assignments = [0] * N  # 0-based team indices\n\n    def is_valid(assignment):\n        for a, b in incompatible:\n            if assignment[a] == assignment[b]:\n                return False\n        return True\n\n    def backtrack(pos, teams_used):\n        nonlocal result\n        if pos == N:\n            if len(set(teams_used)) == T:\n                result += 1\n            return\n        for team in range(T):\n            team_assignments[pos] = team\n            if is_valid(team_assignments):\n                backtrack(pos + 1, teams_used + [team])\n            else:\n                continue\n\n    backtrack(0, [])\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 48725,
+  "total_time_ms": 932230.7934761047,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 730,
+    "self_tests_generated": 5
+  }
+}

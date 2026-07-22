@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc363_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef nth_palindrome(n):\n    if n == 1:\n        return 0\n    length = len(str(n))\n    half_length = (length + 1) // 2\n    prefix = 10**(half_length - 1)\n    prefix += n - 1\n    prefix_str = str(prefix)\n    if length % 2 == 0:\n        return int(prefix_str + prefix_str[::-1])\n    else:\n        return int(prefix_str + prefix_str[-2::-1])\n\ndef main():\n    n = int(sys.stdin.readline())\n    print(nth_palindrome(n))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 57412,
+  "total_time_ms": 1046729.2761802673,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 561,
+    "self_tests_generated": 5
+  }
+}

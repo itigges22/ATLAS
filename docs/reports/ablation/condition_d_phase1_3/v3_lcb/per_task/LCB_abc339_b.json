@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc339_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    H, W, N = map(int, sys.stdin.readline().split())\n    grid = [['.' for _ in range(W)] for _ in range(H)]\n    \n    # Directions: up, right, down, left\n    directions = [(-1, 0), (0, 1), (1, 0), (0, -1)]\n    dir_idx = 0  # Start facing up\n    r, c = 0, 0  # Start at (1, 1) which is (0, 0) in 0-based index\n\n    for _ in range(N):\n        if grid[r][c] == '.':\n            grid[r][c] = '#'\n            dir_idx = (dir_idx + 1) % 4\n        else:\n            grid[r][c] = '.'\n            dir_idx = (dir_idx - 1) % 4\n\n        dr, dc = directions[dir_idx]\n        r = (r + dr) % H\n        c = (c + dc) % W\n\n    for row in grid:\n        print(''.join(row))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1084,
+  "total_time_ms": 32344.965934753418,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 821
+  }
+}

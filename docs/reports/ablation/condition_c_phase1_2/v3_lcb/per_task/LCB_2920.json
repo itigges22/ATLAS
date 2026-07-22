@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2920",
+  "passed": true,
+  "code": "from typing import List\nfrom collections import defaultdict\n\nclass Solution:\n    def minimumSeconds(self, nums: List[int]) -> int:\n        n = len(nums)\n        if n == 0:\n            return 0\n        if all(x == nums[0] for x in nums):\n            return 0\n        \n        positions = defaultdict(list)\n        for i, num in enumerate(nums):\n            positions[num].append(i)\n        \n        max_distance = 0\n        for num, indices in positions.items():\n            for i in range(1, len(indices)):\n                distance = (indices[i] - indices[i - 1] - 1 + n) % n\n                max_distance = max(max_distance, distance)\n            # Also check the wrap-around distance between last and first\n            distance = (indices[0] + n - indices[-1] - 1) % n\n            max_distance = max(max_distance, distance)\n        \n        return (max_distance + 1) // 2",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7612,
+  "total_time_ms": 127123.05021286011,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5260,
+    "s_star_triggered": true
+  }
+}

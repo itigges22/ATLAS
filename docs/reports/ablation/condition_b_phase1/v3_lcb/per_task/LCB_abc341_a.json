@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc341_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\nresult = ''\nfor i in range(2 * n + 1):\n    if i % 2 == 0:\n        result += '1'\n    else:\n        result += '0'\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 336,
+  "total_time_ms": 6088.271617889404,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 299
+  }
+}

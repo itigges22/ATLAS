@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2850",
+  "passed": true,
+  "code": "class Solution:\n    def longestString(self, x: int, y: int, z: int) -> int:\n        # We can alternate between \"AA\" and \"BB\" as long as we don't have 2 of the same in a row\n        # The maximum number of \"AA\" and \"BB\" we can use is 2 * min(x, y) + (1 if x != y else 0)\n        # Each \"AA\" or \"BB\" contributes 2 to the length\n        # Each \"AB\" contributes 2 to the length and can be placed anywhere\n        return 2 * (2 * min(x, y) + (1 if x != y else 0) + z)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1980,
+  "total_time_ms": 31534.734964370728,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1816
+  }
+}

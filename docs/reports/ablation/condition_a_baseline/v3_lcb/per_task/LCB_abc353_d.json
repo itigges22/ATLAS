@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc353_d",
+  "passed": true,
+  "code": "import sys\nimport threading\n\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    # Precompute the contribution of each number when placed before others\n    # We will compute for each A_i, the contribution of A_i * 10^len(A_j) + A_j\n    # So we need to compute for each A_i, the sum over all A_j (j > i) of (A_i * 10^len(A_j) + A_j)\n    # We can split this into two parts: A_i * 10^len(A_j) and A_j\n\n    # Precompute the powers of 10 modulo MOD\n    max_len = len(str(max(A)))\n    pow10 = [1] * (max_len + 1)\n    for i in range(1, max_len + 1):\n        pow10[i] = (pow10[i - 1] * 10) % MOD\n\n    # Precompute for each number, its length and its value\n    len_A = [len(str(x)) for x in A]\n    A_values = A\n\n    # We will use prefix sums for the two parts\n    # sum_Aj: prefix sum of A_j\n    # sum_10_lenAj: prefix sum of 10^len(A_j)\n\n    sum_Aj = [0] * (N + 1)\n    sum_10_lenAj = [0] * (N + 1)\n\n    for i in range(N):\n        sum_Aj[i + 1] = (sum_Aj[i] + A_values[i]) % MOD\n        l = len_A[i]\n        sum_10_lenAj[i + 1] = (sum_10_lenAj[i] + pow10[l]) % MOD\n\n    result = 0\n    for i in range(N):\n        l = len_A[i]\n        # For all j > i, contribution from A_i * 10^len(A_j) is A_i * (sum_10_lenAj[N] - sum_10_lenAj[i + 1])\n        part1 = (A_values[i] * (sum_10_lenAj[N] - sum_10_lenAj[i + 1])) % MOD\n        # Contribution from A_j is (sum_Aj[N] - sum_Aj[i + 1])\n        part2 = (sum_Aj[N] - sum_Aj[i + 1]) % MOD\n        result = (result + part1 + part2) % MOD\n\n    print(result)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 9631.353378295898,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

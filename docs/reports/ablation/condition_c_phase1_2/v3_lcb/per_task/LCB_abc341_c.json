@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc341_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    H = int(data[0])\n    W = int(data[1])\n    N = int(data[2])\n    T = data[3]\n    grid = data[4:4+H]\n\n    # Initialize possible positions\n    possible_positions = set()\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '.':\n                possible_positions.add((i, j))\n\n    # Simulate the moves\n    for pos in list(possible_positions):\n        i, j = pos\n        valid = True\n        for move in T:\n            if move == 'L':\n                ni, nj = i, j - 1\n            elif move == 'R':\n                ni, nj = i, j + 1\n            elif move == 'U':\n                ni, nj = i - 1, j\n            else:  # 'D'\n                ni, nj = i + 1, j\n            if not (0 <= ni < H and 0 <= nj < W) or grid[ni][nj] == '#':\n                valid = False\n                break\n            i, j = ni, nj\n        if valid:\n            possible_positions.add((i, j))\n\n    print(len(possible_positions))",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 298,
+  "total_time_ms": 4387.780427932739,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

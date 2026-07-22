@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3231",
+  "passed": true,
+  "code": "class Solution:\n    def minimumAddedCoins(self, coins: List[int], target: int) -> int:\n        coins.sort()\n        res = 0\n        reach = 0\n        i = 0\n        n = len(coins)\n        \n        while reach < target:\n            if i < n and coins[i] <= reach + 1:\n                reach += coins[i]\n                i += 1\n            else:\n                res += 1\n                reach += reach + 1\n        \n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1359,
+  "total_time_ms": 23247.5368976593,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1234
+  }
+}

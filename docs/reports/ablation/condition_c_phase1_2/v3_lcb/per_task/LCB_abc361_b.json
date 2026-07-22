@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc361_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read input\n    coords = list(map(int, sys.stdin.read().split()))\n    a, b, c, d, e, f = coords[:6]\n    g, h, i, j, k, l = coords[6:]\n\n    # Compute the overlap along each axis\n    x_overlap = max(0, min(d, j) - max(a, g))\n    y_overlap = max(0, min(e, k) - max(b, h))\n    z_overlap = max(0, min(f, l) - max(c, i))\n\n    # Check if all overlaps are positive\n    if x_overlap > 0 and y_overlap > 0 and z_overlap > 0:\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4456,
+  "total_time_ms": 69371.37579917908,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2024,
+    "s_star_triggered": true
+  }
+}

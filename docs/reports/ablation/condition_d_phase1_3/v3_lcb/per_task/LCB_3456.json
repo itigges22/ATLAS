@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3456",
+  "passed": true,
+  "code": "class Solution:\n    def maximumLength(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        dp = [[0] * (k + 1) for _ in range(n)]\n\n        for i in range(n):\n            for j in range(k + 1):\n                dp[i][j] = 1  # At least one element can be taken\n                for l in range(i):\n                    if nums[i] == nums[l]:\n                        dp[i][j] = max(dp[i][j], dp[l][j] + 1)\n                    else:\n                        if j > 0:\n                            dp[i][j] = max(dp[i][j], dp[l][j - 1] + 1)\n        return max(max(row) for row in dp)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1552,
+  "total_time_ms": 46418.42603683472,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1376
+  }
+}

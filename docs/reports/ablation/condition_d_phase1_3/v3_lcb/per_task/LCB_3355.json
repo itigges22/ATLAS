@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3355",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumLevels(self, possible: List[int]) -> int:\n        n = len(possible)\n        # Convert possible to points: 1 -> +1, 0 -> -1\n        points = [1 if x == 1 else -1 for x in possible]\n        \n        # Precompute prefix sums\n        prefix = [0] * (n + 1)\n        for i in range(n):\n            prefix[i + 1] = prefix[i] + points[i]\n        \n        # Alice plays first k levels, Bob plays the rest (n - k)\n        # Alice's score: prefix[k]\n        # Bob's score: prefix[n] - prefix[k]\n        # We need prefix[k] > (prefix[n] - prefix[k])\n        # => 2 * prefix[k] > prefix[n]\n        for k in range(1, n):\n            if 2 * prefix[k] > prefix[n]:\n                return k\n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1074,
+  "total_time_ms": 20618.828058242798,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 853
+  }
+}

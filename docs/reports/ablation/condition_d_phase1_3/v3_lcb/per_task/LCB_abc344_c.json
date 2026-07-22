@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc344_c",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    M = int(data[idx])\n    idx += 1\n    B = list(map(int, data[idx:idx+M]))\n    idx += M\n    L = int(data[idx])\n    idx += 1\n    C = list(map(int, data[idx:idx+L]))\n    idx += L\n    Q = int(data[idx])\n    idx += 1\n    X = list(map(int, data[idx:idx+Q]))\n    \n    # Precompute all possible sums of A and B\n    sum_ab = set()\n    for a in A:\n        for b in B:\n            sum_ab.add(a + b)\n    \n    # Sort C for binary search\n    C.sort()\n    \n    # Process each query\n    result = []\n    for x in X:\n        # For each sum_ab, check if x - sum_ab exists in C\n        found = False\n        for s in sum_ab:\n            target = x - s\n            if bisect.bisect_left(C, target) < len(C) and C[bisect.bisect_left(C, target)] == target:\n                found = True\n                break\n        result.append(\"Yes\" if found else \"No\")\n    \n    print(\"\\n\".join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1524,
+  "total_time_ms": 42522.077322006226,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1181
+  }
+}

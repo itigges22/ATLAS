@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc341_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef count_valid_numbers(x, N, M):\n    # Count numbers <= x divisible by N or M but not both\n    count_N = x // N\n    count_M = x // M\n    count_both = x // (N * M // gcd(N, M))\n    return count_N + count_M - 2 * count_both\n\ndef gcd(a, b):\n    while b:\n        a, b = b, a % b\n    return a\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    N, M, K = map(int, input().split())\n    \n    # Binary search bounds\n    low = 1\n    high = 10**18  # A safe upper bound\n\n    while low < high:\n        mid = (low + high) // 2\n        cnt = count_valid_numbers(mid, N, M)\n        if cnt < K:\n            low = mid + 1\n        else:\n            high = mid\n    print(low)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1294,
+  "total_time_ms": 21011.22999191284,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1102
+  }
+}

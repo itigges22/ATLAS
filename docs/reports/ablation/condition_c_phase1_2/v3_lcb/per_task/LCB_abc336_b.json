@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc336_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef ctz(n):\n    count = 0\n    while n & 1 == 0:\n        count += 1\n        n >>= 1\n    return count\n\ndef main():\n    N = int(sys.stdin.readline())\n    print(ctz(N))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 85,
+  "total_time_ms": 1259.1776847839355,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

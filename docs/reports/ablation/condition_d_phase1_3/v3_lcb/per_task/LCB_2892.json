@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2892",
+  "passed": false,
+  "code": "class Solution:\n    def isGood(self, nums: List[int]) -> bool:\n        n = max(nums)\n        if len(nums) != n + 1:\n            return False\n        \n        freq = {}\n        for num in nums:\n            freq[num] = freq.get(num, 0) + 1\n        \n        for i in range(1, n):\n            if freq.get(i, 0) != 1:\n                return False\n        \n        if freq.get(n, 0) != 2:\n            return False\n        \n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49951,
+  "total_time_ms": 764563.5368824005,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1104,
+    "self_tests_generated": 5
+  }
+}

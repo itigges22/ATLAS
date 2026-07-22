@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc327_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+M]))\n    B = list(map(int, data[2+M:2+2*M]))\n    \n    # Build graph\n    graph = [[] for _ in range(N + 1)]\n    for i in range(M):\n        u = A[i]\n        v = B[i]\n        graph[u].append(v)\n        graph[v].append(u)\n    \n    # Color array: 0 = unvisited, 1 = black, -1 = white\n    color = [0] * (N + 1)\n    \n    # BFS for bipartition check\n    for i in range(1, N + 1):\n        if color[i] == 0:\n            queue = deque()\n            queue.append(i)\n            color[i] = 1\n            while queue:\n                u = queue.popleft()\n                for v in graph[u]:\n                    if color[v] == 0:\n                        color[v] = -color[u]\n                        queue.append(v)\n                    elif color[v] == color[u]:\n                        print(\"No\")\n                        return\n    print(\"Yes\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1565,
+  "total_time_ms": 26000.245094299316,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1286
+  }
+}

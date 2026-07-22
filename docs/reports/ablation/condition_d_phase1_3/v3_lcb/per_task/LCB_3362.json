@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3362",
+  "passed": false,
+  "code": "class Solution:\n    def medianOfUniquenessArray(self, nums: List[int]) -> int:\n        from collections import defaultdict\n\n        n = len(nums)\n        freq = defaultdict(int)\n        unique_count = 0\n        left = 0\n        result = []\n\n        for right in range(n):\n            freq[nums[right]] += 1\n            if freq[nums[right]] == 1:\n                unique_count += 1\n            # Shrink the window from the left to maintain distinct elements\n            while freq[nums[right]] > 1:\n                freq[nums[left]] -= 1\n                if freq[nums[left]] == 0:\n                    unique_count -= 1\n                left += 1\n            # All subarrays ending at 'right' with distinct elements\n            result.append(unique_count)\n\n        result.sort()\n        m = len(result)\n        return result[m // 2]",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 55226,
+  "total_time_ms": 1369226.983308792,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1394,
+    "self_tests_generated": 5
+  }
+}

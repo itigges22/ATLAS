@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3411",
+  "passed": true,
+  "code": "class Solution:\n    def findProductsOfElements(self, queries: List[List[int]]) -> List[int]:\n        import sys\n        sys.setrecursionlimit(1000000)\n\n        # Precompute the powerful array for numbers up to a certain limit\n        # We'll use a dictionary to store the powerful array for each number\n        powerful = {}\n        power_of_two = 1\n        index = 0\n        big_nums = []\n\n        # Precompute powerful arrays for numbers up to a certain limit\n        # We'll use a dictionary to store the powerful array for each number\n        # We'll also build the big_nums array incrementally\n\n        # Since queries can have up to 1e15, we can't precompute all elements\n        # Instead, we'll compute the powerful array for a number on the fly\n\n        def get_powerful_array(x):\n            if x in powerful:\n                return powerful[x]\n            res = []\n            power = 1\n            while x > 0:\n                if x & 1:\n                    res.append(power)\n                x >>= 1\n                power <<= 1\n            powerful[x] = res\n            return res\n\n        # Function to get the value at index i in big_nums\n        def get_value_at_index(i):\n            nonlocal index\n            while index <= i:\n                # Compute powerful array for the next number\n                next_num = index + 1\n                pa = get_powerful_array(next_num)\n                for val in pa:\n                    big_nums.append(val)\n                index += 1\n            return big_nums[i]\n\n        answer = []\n        for from_i, to_i, mod_i in queries:\n            product = 1\n            for i in range(from_i, to_i + 1):\n                val = get_value_at_index(i)\n                product = (product * val) % mod_i\n            answer.append(product)\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2575,
+  "total_time_ms": 44174.091815948486,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2234
+  }
+}

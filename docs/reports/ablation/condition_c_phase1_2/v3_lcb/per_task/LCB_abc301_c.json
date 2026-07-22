@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc301_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import Counter\n\ndef main():\n    S = sys.stdin.readline().strip()\n    T = sys.stdin.readline().strip()\n\n    # Count characters in S and T\n    count_S = Counter(S)\n    count_T = Counter(T)\n\n    # Define the set of characters that can replace '@'\n    replaceable = {'a', 't', 'c', 'o', 'd', 'e', 'r'}\n\n    # Calculate the difference between S and T\n    diff = Counter()\n    for char in count_S:\n        diff[char] += count_S[char]\n    for char in count_T:\n        diff[char] -= count_T[char]\n\n    # Check if the difference can be covered by replacing '@'s\n    for char, cnt in diff.items():\n        if cnt > 0:\n            # Need to replace '@' with this character\n            if char in replaceable:\n                if count_S['@'] >= cnt:\n                    count_S['@'] -= cnt\n                else:\n                    print(\"No\")\n                    return\n            else:\n                print(\"No\")\n                return\n        elif cnt < 0:\n            # Need to replace '@' with this character in the other string\n            char_needed = -cnt\n            if char in replaceable:\n                if count_T['@'] >= char_needed:\n                    count_T['@'] -= char_needed\n                else:\n                    print(\"No\")\n                    return\n            else:\n                print(\"No\")\n                return\n\n    # Check if remaining '@'s can be replaced with any of the allowed characters\n    # This is always possible since we can replace them with any of the allowed characters\n    print(\"Yes\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 374,
+  "total_time_ms": 6521.044492721558,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3230",
+  "passed": true,
+  "code": "class Solution:\n    def removeAlmostEqualCharacters(self, word: str) -> int:\n        n = len(word)\n        operations = 0\n        i = 0\n        while i < n - 1:\n            # Check if current and next character are almost-equal\n            if abs(ord(word[i]) - ord(word[i + 1])) <= 1:\n                # Change the next character to a non-almost-equal character\n                operations += 1\n                i += 2  # Skip the next character as it's now fixed\n            else:\n                i += 1\n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1469,
+  "total_time_ms": 25242.188692092896,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1254
+  }
+}

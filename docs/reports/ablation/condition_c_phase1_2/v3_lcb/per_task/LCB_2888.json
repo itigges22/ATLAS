@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2888",
+  "passed": true,
+  "code": "class Solution:\n    def minimumIndex(self, nums: List[int]) -> int:\n        # Step 1: Identify the dominant element\n        from collections import Counter\n        count = Counter(nums)\n        dominant = None\n        for num, freq in count.items():\n            if freq * 2 > len(nums):\n                dominant = num\n                break\n        \n        # Step 2: Count the frequency of the dominant element in the entire array\n        total_dominant = count[dominant]\n        \n        # Step 3: Iterate from left to right, maintaining the count of the dominant element in the left subarray\n        left_count = 0\n        for i in range(len(nums)):\n            if nums[i] == dominant:\n                left_count += 1\n            # Step 4: Check if both subarrays have the same dominant element\n            left_len = i + 1\n            right_len = len(nums) - i - 1\n            if left_count * 2 > left_len and (total_dominant - left_count) * 2 > right_len:\n                # Step 5: Return the first valid index i\n                return i\n        \n        # Step 6: If no valid index is found, return -1\n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6680,
+  "total_time_ms": 109850.78692436218,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4326,
+    "s_star_triggered": true
+  }
+}

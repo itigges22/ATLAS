@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc332_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    S = data[2]\n\n    logo_shirts = 0\n    plain_shirts = M\n    current_plain = 0\n    current_logo = 0\n\n    for day in S:\n        if day == '0':\n            # Wash all shirts\n            current_plain = 0\n            current_logo = 0\n        elif day == '1':\n            # Can wear plain or logo\n            if current_plain > 0:\n                current_plain -= 1\n            elif current_logo > 0:\n                current_logo -= 1\n            else:\n                # Need to buy a logo shirt\n                logo_shirts += 1\n                current_logo -= 1\n        elif day == '2':\n            # Must wear logo\n            if current_logo > 0:\n                current_logo -= 1\n            else:\n                # Need to buy a logo shirt\n                logo_shirts += 1\n                current_logo -= 1\n        # After using a shirt, increment the count of available shirts\n        if day != '0':\n            current_plain += 1\n            current_logo += 1\n\n    print(logo_shirts)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 306,
+  "total_time_ms": 4990.653038024902,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "condition": "A",
+  "name": "Baseline",
+  "description": "All V3 features OFF \u2014 V2-style single generation",
+  "enable_phase1": false,
+  "enable_phase2": false,
+  "enable_phase3": false,
+  "total_tasks": 599,
+  "passed_tasks": 329,
+  "pass_rate": 0.5492487479131887,
+  "total_tokens": 210680,
+  "wall_time_s": 2093.030614376068,
+  "phase_breakdown": {
+    "phase1": 329,
+    "pr_cot": 0,
+    "refinement": 0,
+    "derivation": 0,
+    "none": 270,
+    "error": 0
+  }
+}

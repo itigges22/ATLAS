@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3408",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfSpecialChars(self, word: str) -> int:\n        lower_set = set()\n        upper_set = set()\n        count = 0\n\n        for char in word:\n            if char.islower():\n                lower_set.add(char)\n            else:\n                upper_set.add(char.lower())\n\n        for char in upper_set:\n            if char in lower_set:\n                count += 1\n\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1592.2086238861084,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

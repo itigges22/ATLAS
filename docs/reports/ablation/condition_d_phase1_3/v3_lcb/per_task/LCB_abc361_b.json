@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc361_b",
+  "passed": true,
+  "code": "# Read input\na, b, c, d, e, f = map(int, input().split())\ng, h, i, j, k, l = map(int, input().split())\n\n# Check for overlap on each axis\nx_overlap = max(a, g) < min(d, j)\ny_overlap = max(b, h) < min(e, k)\nz_overlap = max(c, i) < min(f, l)\n\n# If there is overlap on all axes, print \"Yes\", else \"No\"\nif x_overlap and y_overlap and z_overlap:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1855,
+  "total_time_ms": 31235.093355178833,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1548
+  }
+}

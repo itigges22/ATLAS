@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3413",
+  "passed": true,
+  "code": "class Solution:\n    def findWinningPlayer(self, skills: List[int], k: int) -> int:\n        max_skill = skills[0]\n        current_streak = 0\n        max_index = 0\n\n        for i in range(1, len(skills)):\n            if skills[i] > max_skill:\n                max_skill = skills[i]\n                max_index = i\n                current_streak = 1\n            else:\n                current_streak += 1\n\n            if current_streak == k:\n                return max_index\n\n        return max_index",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1209,
+  "total_time_ms": 21310.218334197998,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1071
+  }
+}

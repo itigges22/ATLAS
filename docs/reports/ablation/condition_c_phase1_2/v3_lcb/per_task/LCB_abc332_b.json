@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc332_b",
+  "passed": true,
+  "code": "# Read input\nK, G, M = map(int, input().split())\n\n# Initialize the amounts of water in the glass and the mug\nglass = 0\nmug = 0\n\n# Perform K operations\nfor _ in range(K):\n    # Step 1: If the glass is filled, discard it\n    if glass == G:\n        glass = 0\n    # Step 2: Else, if the mug is empty, fill it\n    elif mug == 0:\n        mug = M\n    # Step 3: Else, transfer water from the mug to the glass\n    else:\n        transfer = min(mug, G - glass)\n        glass += transfer\n        mug -= transfer\n\n# Output the result\nprint(glass, mug)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 172,
+  "total_time_ms": 2854.06756401062,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

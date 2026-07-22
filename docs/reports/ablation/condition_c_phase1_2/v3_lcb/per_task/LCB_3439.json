@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3439",
+  "passed": false,
+  "code": "from typing import List\nfrom collections import defaultdict, deque\n\nclass Solution:\n    def minimumDiameterAfterMerge(self, edges1: List[List[int]], edges2: List[List[int]]) -> int:\n        def compute_diameter(n, edges):\n            # Build the tree\n            tree = defaultdict(list)\n            for u, v in edges:\n                tree[u].append(v)\n                tree[v].append(u)\n\n            # First BFS to find one end of the longest path\n            def bfs(start):\n                visited = [False] * n\n                queue = deque()\n                queue.append((start, -1, 0))\n                farthest_node = start\n                max_dist = 0\n                while queue:\n                    node, parent, dist = queue.popleft()\n                    if dist > max_dist:\n                        max_dist = dist\n                        farthest_node = node\n                    for neighbor in tree[node]:\n                        if neighbor != parent and not visited[neighbor]:\n                            visited[neighbor] = True\n                            queue.append((neighbor, node, dist + 1))\n                return farthest_node, max_dist\n\n            # First BFS to find one end of the longest path\n            u, _ = bfs(0)\n            # Second BFS to find the other end and get the diameter\n            v, diameter = bfs(u)\n            return diameter\n\n        # Compute diameters of both trees\n        diameter1 = compute_diameter(len(edges1) + 1, edges1)\n        diameter2 = compute_diameter(len(edges2) + 1, edges2)\n\n        # The new diameter is the max of:\n        # 1. diameter1\n        # 2. diameter2\n        # 3. (diameter1 // 2 + diameter2 // 2 + 1)\n        return max(diameter1, diameter2, (diameter1 // 2 + diameter2 // 2 + 1))",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 8544,
+  "total_time_ms": 138555.66215515137,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7765
+  }
+}

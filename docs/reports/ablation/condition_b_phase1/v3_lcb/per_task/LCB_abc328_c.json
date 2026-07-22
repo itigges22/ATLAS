@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc328_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    Q = int(data[1])\n    S = data[2]\n    \n    # Preprocess prefix array\n    prefix = [0] * (N)\n    for i in range(N - 1):\n        if S[i] == S[i + 1]:\n            prefix[i] = 1\n        else:\n            prefix[i] = 0\n    \n    # Compute prefix sums\n    for i in range(1, N):\n        prefix[i] += prefix[i - 1]\n    \n    # Process queries\n    results = []\n    index = 3\n    for _ in range(Q):\n        l = int(data[index])\n        r = int(data[index + 1])\n        index += 2\n        \n        # Calculate the number of adjacent duplicates in [l, r)\n        if l == 1:\n            res = prefix[r - 2]\n        else:\n            res = prefix[r - 2] - prefix[l - 2]\n        results.append(str(res))\n    \n    print(\"\\n\".join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1251,
+  "total_time_ms": 21438.575744628906,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1048
+  }
+}

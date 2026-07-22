@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc343_e",
+  "passed": false,
+  "code": "import sys\n\ndef main():\n    V1, V2, V3 = map(int, sys.stdin.readline().split())\n\n    # Volume of a single cube\n    cube_vol = 7 * 7 * 7\n\n    # Total volume of all cubes\n    total_vol = V1 + V2 + V3\n\n    # Check if the total volume is valid\n    if total_vol > 3 * cube_vol:\n        print(\"No\")\n        return\n\n    # Try placing the cubes in a way that overlaps are controlled\n    # Place first cube at (0, 0, 0)\n    a1, b1, c1 = 0, 0, 0\n\n    # Place second cube at (0, 6, 0) to overlap on y-axis\n    a2, b2, c2 = 0, 6, 0\n\n    # Place third cube at (6, 0, 0) to overlap on x-axis\n    a3, b3, c3 = 6, 0, 0\n\n    # Compute the volumes\n    # Volume of intersection of all three cubes\n    overlap_all = 1 * 1 * 7  # (6-7) in x, (6-7) in y, full z\n\n    # Volume of intersection of exactly two cubes\n    overlap_two = 2 * 1 * 7  # Two regions of (0-6) in one axis, (6-7) in another\n\n    # Volume of exactly one cube\n    overlap_one = cube_vol - overlap_two - overlap_all\n\n    if overlap_one == V1 and overlap_two == V2 and overlap_all == V3:\n        print(\"Yes\")\n        print(f\"{a1} {b1} {c1} {a2} {b2} {c2} {a3} {b3} {c3}\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49866,
+  "total_time_ms": 1546932.1022033691,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 7337,
+    "self_tests_generated": 5
+  }
+}

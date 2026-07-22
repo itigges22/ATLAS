@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2877",
+  "passed": false,
+  "code": "class Solution:\n    def minimumString(self, a: str, b: str, c: str) -> str:\n        def merge(s1: str, s2: str) -> str:\n            if s2 in s1:\n                return s1\n            if s1 in s2:\n                return s2\n            for i in range(min(len(s1), len(s2)), -1, -1):\n                if s1.endswith(s2[:i]):\n                    return s1 + s2[i:]\n            return s1 + s2\n\n        candidates = set()\n        from itertools import permutations\n        for order in permutations([a, b, c]):\n            merged = merge(merge(order[0], order[1]), order[2])\n            candidates.add(merged)\n\n        return min(candidates)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50793,
+  "total_time_ms": 800318.8240528107,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1623,
+    "self_tests_generated": 5
+  }
+}

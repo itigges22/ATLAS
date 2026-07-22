@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc313_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    sys.setrecursionlimit(10000)\n    N, M = map(int, sys.stdin.readline().split())\n    relations = []\n    for _ in range(M):\n        A, B = map(int, sys.stdin.readline().split())\n        relations.append((A, B))\n\n    # Build adjacency list for graph\n    graph = defaultdict(list)\n    for A, B in relations:\n        graph[A].append(B)\n\n    # Function to perform DFS and find all reachable nodes\n    def dfs(node, visited, reachable):\n        visited.add(node)\n        for neighbor in graph[node]:\n            if neighbor not in visited:\n                reachable.add(neighbor)\n                dfs(neighbor, visited, reachable)\n\n    # For each node, find all nodes it can reach (i.e., it is stronger than them)\n    reachability = {}\n    for node in range(1, N + 1):\n        visited = set()\n        reachable = set()\n        dfs(node, visited, reachable)\n        reachability[node] = reachable\n\n    # Find all candidates that could be the strongest\n    candidates = []\n    for node in range(1, N + 1):\n        # A node is a candidate if it can reach all other nodes\n        if len(reachability[node]) == N - 1:\n            candidates.append(node)\n\n    if len(candidates) == 1:\n        print(candidates[0])\n    else:\n        print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3949,
+  "total_time_ms": 66359.17901992798,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3635
+  }
+}

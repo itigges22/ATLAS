@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc315_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\nvowels = {'a', 'e', 'i', 'o', 'u'}\nresult = ''.join([char for char in S if char not in vowels])\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 956,
+  "total_time_ms": 15713.37628364563,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 900
+  }
+}

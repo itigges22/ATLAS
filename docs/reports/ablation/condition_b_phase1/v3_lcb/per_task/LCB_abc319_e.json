@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc319_e",
+  "passed": true,
+  "code": "import sys\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    X = int(data[idx])\n    idx += 1\n    Y = int(data[idx])\n    idx += 1\n    \n    P = []\n    T = []\n    for _ in range(N - 1):\n        P.append(int(data[idx]))\n        idx += 1\n        T.append(int(data[idx]))\n        idx += 1\n    \n    Q = int(data[idx])\n    idx += 1\n    queries = []\n    for _ in range(Q):\n        queries.append(int(data[idx]))\n        idx += 1\n    \n    # Precompute earliest arrival times for each bus stop\n    # dp[i] = earliest arrival time at bus stop i\n    dp = [0] * N\n    dp[0] = X  # arrival time at bus stop 1\n    \n    for i in range(N - 1):\n        # Compute the earliest departure time from bus stop i\n        # If arrival time is a multiple of P[i], use it, else wait for next multiple\n        p = P[i]\n        t = T[i]\n        arrival_time = dp[i]\n        if arrival_time % p == 0:\n            departure_time = arrival_time\n        else:\n            departure_time = ((arrival_time // p) + 1) * p\n        # Arrive at bus stop i+1 at departure_time + t\n        dp[i + 1] = departure_time + t\n    \n    # Add Y to the arrival time at bus stop N to get the final time\n    final_times = [dp[i] + Y for i in range(N)]\n    \n    # Process queries\n    results = []\n    for q in queries:\n        # The earliest arrival time at bus stop 1 is q + X\n        # Then compute the earliest arrival time at bus stop N\n        # Since dp is precomputed, we can directly use final_times[0] with q + X\n        arrival_time = q + X\n        # Now simulate the process using the precomputed dp\n        current_time = arrival_time\n        for i in range(N - 1):\n            p = P[i]\n            t = T[i]\n            if current_time % p == 0:\n                departure_time = current_time\n            else:\n                departure_time = ((current_time // p) + 1) * p\n            current_time = departure_time + t\n        results.append(str(current_time + Y))\n    \n    print(\"\\n\".join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 21228,
+  "total_time_ms": 203173.97785186768,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 5856
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    W = int(data[idx]); idx += 1\n    H = int(data[idx]); idx += 1\n    N = int(data[idx]); idx += 1\n    \n    p = []\n    q = []\n    for _ in range(N):\n        p.append(int(data[idx]))\n        q.append(int(data[idx + 1]))\n        idx += 2\n    \n    A = int(data[idx]); idx += 1\n    a = list(map(int, data[idx:idx + A]))\n    idx += A\n    \n    B = int(data[idx]); idx += 1\n    b = list(map(int, data[idx:idx + B]))\n    idx += B\n    \n    # Add boundaries\n    a = [0] + a + [W]\n    b = [0] + b + [H]\n    \n    # For each strawberry, find which grid cell it is in\n    from bisect import bisect_left\n    \n    count = [0] * ((A + 1) * (B + 1))\n    \n    for i in range(N):\n        # Find x interval\n        x_idx = bisect_left(a, p[i]) - 1\n        # Find y interval\n        y_idx = bisect_left(b, q[i]) - 1\n        cell = x_idx * (B + 1) + y_idx\n        count[cell] += 1\n    \n    min_straw = min(count)\n    max_straw = max(count)\n    \n    print(f\"{min_straw} {max_straw}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4248,
+  "total_time_ms": 67682.53946304321,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3846
+  }
+}

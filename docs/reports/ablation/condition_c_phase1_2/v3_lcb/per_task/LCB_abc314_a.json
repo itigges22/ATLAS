@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc314_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\npi_str = \"3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679\"\n\nN = int(input())\n\n# Truncate the string to N decimal places, preserving trailing zeros\nresult = pi_str[:N + 2]  # +2 to include the decimal point and N digits\n\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5196,
+  "total_time_ms": 79795.42517662048,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2950,
+    "s_star_triggered": true
+  }
+}

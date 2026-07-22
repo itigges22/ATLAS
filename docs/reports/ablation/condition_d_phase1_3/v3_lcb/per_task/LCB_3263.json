@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3263",
+  "passed": true,
+  "code": "class Solution:\n    def minimumCost(self, nums: List[int]) -> int:\n        n = len(nums)\n        min_total = float('inf')\n        \n        # Iterate over all possible ways to split the array into 3 parts\n        # First split: i is the end of the first subarray\n        for i in range(1, n - 1):\n            # Second split: j is the end of the second subarray\n            for j in range(i + 1, n):\n                # The three subarrays are:\n                # nums[0:i], nums[i:j], nums[j:]\n                cost = nums[0] + nums[i] + nums[j]\n                min_total = min(min_total, cost)\n        \n        return min_total",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1560,
+  "total_time_ms": 26392.515897750854,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1348
+  }
+}

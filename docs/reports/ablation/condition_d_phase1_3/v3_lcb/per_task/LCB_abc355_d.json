@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc355_d",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    intervals = []\n    for i in range(N):\n        l = int(data[1 + 2*i])\n        r = int(data[2 + 2*i])\n        intervals.append((l, r))\n    \n    # Sort intervals by their start points\n    intervals.sort()\n    l_list = [x[0] for x in intervals]\n    r_list = [x[1] for x in intervals]\n    \n    # Count total number of pairs\n    total_pairs = N * (N - 1) // 2\n    \n    # Count number of non-overlapping pairs\n    non_overlapping = 0\n    \n    for i in range(N):\n        l_i = intervals[i][0]\n        r_i = intervals[i][1]\n        # Find the first interval whose start is > r_i\n        r_ptr = bisect.bisect_right(l_list, r_i)\n        non_overlapping += (N - r_ptr)\n    \n    print(total_pairs - non_overlapping)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 20251,
+  "total_time_ms": 311431.60581588745,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1266,
+    "self_tests_generated": 5
+  }
+}

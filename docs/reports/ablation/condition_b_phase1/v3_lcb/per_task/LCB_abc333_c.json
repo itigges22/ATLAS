@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc333_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import combinations_with_replacement\n\ndef generate_repunits(max_digits):\n    repunits = []\n    num = 0\n    for _ in range(max_digits):\n        num = num * 10 + 1\n        repunits.append(num)\n    return repunits\n\ndef main():\n    N = int(sys.stdin.readline())\n    max_digits = 20  # Sufficient for N up to 333\n    repunits = generate_repunits(max_digits)\n    \n    sums_set = set()\n    for combo in combinations_with_replacement(repunits, 3):\n        total = sum(combo)\n        sums_set.add(total)\n    \n    sorted_sums = sorted(sums_set)\n    print(sorted_sums[N - 1])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1958,
+  "total_time_ms": 29712.79525756836,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1740
+  }
+}

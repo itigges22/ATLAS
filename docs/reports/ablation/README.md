@@ -1,28 +1,16 @@
 # V3 Ablation Study — Raw Results
 
-This documents the per-task pass/fail data from the ATLAS V3.0 ablation study on
-LiveCodeBench (599 tasks). These are the raw traces behind the published 74.6%
-pass@1 result.
-
-## Where the data lives
-
-Conditions A–D are published on HuggingFace under
-[`benchmarks/v3_ablation/`](https://huggingface.co/datasets/itigges22/ATLAS/tree/main/benchmarks/v3_ablation),
-in the same `<condition>/v3_lcb/per_task/*.json` layout described below. Condition E
-is in this directory, at `condition_e_full/`.
-
-Per-run embedding traces for every condition are on HuggingFace under
-[`ablation_traces/`](https://huggingface.co/datasets/itigges22/ATLAS/tree/main/ablation_traces).
+This directory contains the per-task pass/fail data from the ATLAS V3.0 ablation study on LiveCodeBench (599 tasks). These are the raw traces behind the published 74.6% pass@1 result.
 
 ## Ablation Conditions
 
-| Condition | HuggingFace path | Phases Active | Pass@1 | Tasks | Description |
-|-----------|------------------|---------------|--------|-------|-------------|
-| **A** | `benchmarks/v3_ablation/condition_a_baseline/` | None | **54.9%** (329/599) | 599 | Baseline: frozen Qwen3-14B, no V3 pipeline |
-| **B** | `benchmarks/v3_ablation/condition_b_phase1/` | Phase 1 | **67.3%** (403/599) | 599 | +PlanSearch, DivSampling, Budget Forcing |
-| **C** | `benchmarks/v3_ablation/condition_c_phase1_2/` | Phase 1+2 | **67.3%** (403/599) | 599 | +Blend-ASC, ReASC, S* tiebreaking |
-| **D** | `benchmarks/v3_ablation/condition_d_phase1_3/` | Phase 1+3 | **74.6%** (447/599) | 599 | +PR-CoT Repair, Refinement Loop, Derivation Chains |
-| **E** | `condition_e_full/` (this directory) | All | Partial | 94 | Full pipeline (discontinued — OOM at scale) |
+| Condition | Directory | Phases Active | Pass@1 | Tasks | Description |
+|-----------|-----------|---------------|--------|-------|-------------|
+| **A** | `condition_a_baseline/` | None | **54.9%** (329/599) | 599 | Baseline: frozen Qwen3-14B, no V3 pipeline |
+| **B** | `condition_b_phase1/` | Phase 1 | **67.3%** (403/599) | 599 | +PlanSearch, DivSampling, Budget Forcing |
+| **C** | `condition_c_phase1_2/` | Phase 1+2 | **67.3%** (403/599) | 599 | +Blend-ASC, ReASC, S* tiebreaking |
+| **D** | `condition_d_phase1_3/` | Phase 1+3 | **74.6%** (447/599) | 599 | +PR-CoT Repair, Refinement Loop, Derivation Chains |
+| **E** | `condition_e_full/` | All | Partial | 94 | Full pipeline (discontinued — OOM at scale) |
 
 ## Key Findings
 
@@ -101,19 +89,10 @@ python benchmark/v3_runner.py \
 
 ## Computing Pass@1 from Raw Data
 
-Fetch a condition, then count passes:
-
-```bash
-huggingface-cli download itigges22/ATLAS \
-  --repo-type dataset \
-  --include "benchmarks/v3_ablation/condition_d_phase1_3/*" \
-  --local-dir ./ablation_data
-```
-
 ```python
 import json, glob
 
-condition = "./ablation_data/benchmarks/v3_ablation/condition_d_phase1_3"
+condition = "condition_d_phase1_3"
 tasks = glob.glob(f"{condition}/v3_lcb/per_task/*.json")
 passed = sum(1 for t in tasks if json.load(open(t)).get("passed", False))
 total = len(tasks)

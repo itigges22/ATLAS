@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc318_c",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    D = int(input[1])\n    P = int(input[2])\n    F = list(map(int, input[3:3+N]))\n    \n    F.sort(reverse=True)\n    \n    total = 0\n    i = 0\n    while i < N:\n        j = i + D\n        chunk = F[i:j]\n        sum_chunk = sum(chunk)\n        if P < sum_chunk:\n            total += P\n        else:\n            total += sum_chunk\n        i = j\n    \n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22159,
+  "total_time_ms": 356521.0771560669,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 722,
+    "self_tests_generated": 5
+  }
+}

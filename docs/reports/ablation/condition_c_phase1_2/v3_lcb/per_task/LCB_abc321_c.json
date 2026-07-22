@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc321_c",
+  "passed": false,
+  "code": "import sys\nimport itertools\n\ndef generate_321_like_numbers():\n    digits = '0123456789'\n    numbers = []\n\n    # Generate all combinations of digits in strictly decreasing order\n    for length in range(1, 11):  # Max length is 10 (digits 9 to 0)\n        for combo in itertools.combinations(digits, length):\n            # Skip combinations that include '0' as the first digit\n            if combo[-1] == '0' and length > 1:\n                continue\n            # Convert the combination to a number\n            num_str = ''.join(combo)\n            num = int(num_str)\n            numbers.append(num)\n\n    # Sort the numbers\n    numbers.sort()\n    return numbers\n\ndef main():\n    K = int(sys.stdin.readline())\n    numbers = generate_321_like_numbers()\n    print(numbers[K - 1])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 3148,
+  "total_time_ms": 55625.099658966064,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2962
+  }
+}

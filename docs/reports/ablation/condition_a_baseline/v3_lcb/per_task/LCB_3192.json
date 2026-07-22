@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3192",
+  "passed": true,
+  "code": "class Solution:\n    def maximumXorProduct(self, a: int, b: int, n: int) -> int:\n        MOD = 10**9 + 7\n        max_val = 0\n        for x in range(0, 1 << n):\n            val = ((a ^ x) * (b ^ x)) % MOD\n            if val > max_val:\n                max_val = val\n        return max_val",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1728.0075550079346,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

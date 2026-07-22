@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc304_c",
+  "passed": true,
+  "code": "import sys\nimport math\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    D = float(data[1])\n    \n    coords = []\n    for i in range(N):\n        x = int(data[2 + 2 * i])\n        y = int(data[3 + 2 * i])\n        coords.append((x, y))\n    \n    infected = [False] * N\n    infected[0] = True  # Person 1 is infected\n    \n    queue = deque([0])\n    \n    while queue:\n        current = queue.popleft()\n        for i in range(N):\n            if not infected[i]:\n                dx = coords[current][0] - coords[i][0]\n                dy = coords[current][1] - coords[i][1]\n                distance = math.sqrt(dx * dx + dy * dy)\n                if distance <= D:\n                    infected[i] = True\n                    queue.append(i)\n    \n    for result in infected:\n        print(\"Yes\" if result else \"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3701.5864849090576,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

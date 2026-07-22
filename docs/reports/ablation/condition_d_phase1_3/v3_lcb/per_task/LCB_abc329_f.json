@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc329_f",
+  "passed": true,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n\n    C = list(map(int, data[idx:idx+N]))\n    idx += N\n\n    # Each box will store a set of colors\n    boxes = [set() for _ in range(N+1)]\n    for i in range(N):\n        boxes[i+1].add(C[i])\n\n    for _ in range(Q):\n        a = int(data[idx])\n        idx += 1\n        b = int(data[idx])\n        idx += 1\n\n        # Move all balls from a to b\n        if a == b:\n            print(len(boxes[b]))\n            continue\n\n        # Merge set a into set b\n        boxes[b] |= boxes[a]\n        boxes[a].clear()\n\n        print(len(boxes[b]))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1250,
+  "total_time_ms": 22552.875757217407,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1021
+  }
+}

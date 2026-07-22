@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc365_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nY = int(input())\n\nif Y % 4 != 0:\n    print(365)\nelif Y % 100 != 0:\n    print(366)\nelif Y % 400 != 0:\n    print(365)\nelse:\n    print(366)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 947,
+  "total_time_ms": 14395.498752593994,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 864
+  }
+}

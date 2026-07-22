@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3395",
+  "passed": true,
+  "code": "class Solution:\n    def minAnagramLength(self, s: str) -> int:\n        from math import gcd\n        from functools import reduce\n\n        n = len(s)\n        freq = [0] * 26\n\n        # Count frequency of each character in s\n        for ch in s:\n            freq[ord(ch) - ord('a')] += 1\n\n        # Find the greatest common divisor (GCD) of all frequencies\n        def compute_gcd(a, b):\n            return gcd(a, b)\n\n        total_gcd = reduce(compute_gcd, freq, 0)\n\n        # The minimum length of t is n // total_gcd\n        return n // total_gcd",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1392,
+  "total_time_ms": 21388.29207420349,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1243
+  }
+}

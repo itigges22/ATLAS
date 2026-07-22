@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3199",
+  "passed": true,
+  "code": "class Solution:\n    def distributeCandies(self, n: int, limit: int) -> int:\n        count = 0\n        for x in range(0, limit + 1):\n            for y in range(0, limit + 1):\n                z = n - x - y\n                if 0 <= z <= limit:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 900,
+  "total_time_ms": 14114.037990570068,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 804
+  }
+}

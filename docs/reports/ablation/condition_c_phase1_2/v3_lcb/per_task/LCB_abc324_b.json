@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc324_b",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    N = int(sys.stdin.readline())\n    if N == 0:\n        print(\"No\")\n        return\n    while N % 2 == 0:\n        N //= 2\n    while N % 3 == 0:\n        N //= 3\n    if N == 1:\n        print(\"Yes\")\n    else:\n        print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 104,
+  "total_time_ms": 1657.8855514526367,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

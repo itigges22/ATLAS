@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3453",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def validStrings(self, n: int) -> List[str]:\n        # Base cases\n        if n == 1:\n            return [\"0\", \"1\"]\n        \n        # DP table: dp[i][j] stores all valid strings of length i ending with j (0 or 1)\n        dp = [{} for _ in range(n)]\n        \n        # Initialize for length 1\n        dp[0][0] = [\"0\"]\n        dp[0][1] = [\"1\"]\n        \n        # Fill DP table\n        for i in range(1, n):\n            # For ending with 0, previous string must end with 1\n            if 1 in dp[i - 1]:\n                dp[i][0] = [s + \"0\" for s in dp[i - 1][1]]\n            # For ending with 1, previous string can end with 0 or 1\n            if 0 in dp[i - 1]:\n                dp[i][1] = [s + \"1\" for s in dp[i - 1][0]]\n            if 1 in dp[i - 1]:\n                dp[i][1].extend([s + \"1\" for s in dp[i - 1][1]])\n        \n        # Combine all valid strings of length n\n        result = []\n        if 0 in dp[n - 1]:\n            result.extend(dp[n - 1][0])\n        if 1 in dp[n - 1]:\n            result.extend(dp[n - 1][1])\n        \n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3943,
+  "total_time_ms": 61592.86022186279,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3772
+  }
+}

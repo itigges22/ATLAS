@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc362_d",
+  "passed": true,
+  "code": "import sys\nimport heapq\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    \n    graph = [[] for _ in range(N)]\n    index = 2 + N\n    for _ in range(M):\n        u = int(data[index]) - 1\n        v = int(data[index+1]) - 1\n        b = int(data[index+2])\n        graph[u].append((v, b))\n        graph[v].append((u, b))\n        index += 3\n    \n    # Dijkstra's algorithm\n    dist = [float('inf')] * N\n    dist[0] = A[0]  # Starting from vertex 1 (0-indexed)\n    heap = [(dist[0], 0)]\n    \n    while heap:\n        current_dist, u = heapq.heappop(heap)\n        if current_dist > dist[u]:\n            continue\n        for v, b in graph[u]:\n            new_dist = dist[u] + A[v] + b\n            if new_dist < dist[v]:\n                dist[v] = new_dist\n                heapq.heappush(heap, (new_dist, v))\n    \n    # Output results for i=2 to N (1-indexed)\n    result = [str(dist[i]) for i in range(1, N)]\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2073,
+  "total_time_ms": 34490.17953872681,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1730
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3394",
+  "passed": false,
+  "code": "class Solution:\n    def minEnd(self, n: int, x: int) -> int:\n        # We need to construct an array of size n with strictly increasing elements\n        # such that the bitwise AND of all elements is x.\n        # The minimum possible value of the last element is what we're looking for.\n\n        # The key idea is to construct the array such that:\n        # - The first element is x.\n        # - The rest of the elements are chosen to be greater than the previous one,\n        #   and the bitwise AND of all elements remains x.\n\n        # We can construct the array as follows:\n        # nums[0] = x\n        # nums[i] = nums[i-1] + 1 for i >= 1\n\n        # The last element will be x + (n - 1)\n        return x + (n - 1)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1581,
+  "total_time_ms": 27027.27222442627,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1385
+  }
+}

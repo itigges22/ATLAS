@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3203",
+  "passed": false,
+  "code": "class Solution:\n    def canMakePalindromeQueries(self, s: str, queries: List[List[int]]) -> List[bool]:\n        n = len(s)\n        half = n // 2\n        from collections import Counter\n\n        # Precompute prefix sums for each character\n        prefix = [Counter() for _ in range(n + 1)]\n        for i in range(n):\n            prefix[i + 1] = prefix[i].copy()\n            prefix[i + 1][s[i]] += 1\n\n        def get_count(l, r, ch):\n            return prefix[r + 1][ch] - prefix[l][ch]\n\n        answer = []\n        for a, b, c, d in queries:\n            # Count characters in the first half that are not in the rearrangeable regions\n            left = Counter()\n            for i in range(half):\n                if not (a <= i <= b):\n                    left[s[i]] += 1\n\n            # Count characters in the second half that are not in the rearrangeable regions\n            right = Counter()\n            for i in range(half, n):\n                if not (c <= i <= d):\n                    right[s[i]] += 1\n\n            # Check if left and right can be mirrored\n            is_possible = True\n            for ch in left:\n                if left[ch] != right.get(ch, 0):\n                    is_possible = False\n                    break\n            answer.append(is_possible)\n\n        return answer",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 317,
+  "total_time_ms": 5372.886896133423,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2878",
+  "passed": false,
+  "code": "class Solution:\n    def checkArray(self, nums: List[int], k: int) -> bool:\n        n = len(nums)\n        diff = [0] * (n + 1)\n        for i in range(n):\n            # Apply the effect of previous operations\n            nums[i] -= diff[i]\n            if nums[i] < 0:\n                return False\n            if nums[i] > 0:\n                # Apply operation on subarray starting at i\n                if i + k > n:\n                    return False\n                nums[i + k] += nums[i]\n                diff[i] += nums[i]\n                diff[i + k] -= nums[i]\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 56244,
+  "total_time_ms": 906568.927526474,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1224,
+    "self_tests_generated": 5
+  }
+}

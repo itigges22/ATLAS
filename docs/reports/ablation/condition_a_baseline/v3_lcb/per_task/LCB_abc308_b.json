@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc308_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    C = data[2:2+N]\n    \n    D = data[2+N:2+N+M]\n    \n    P = list(map(int, data[2+N+M:]))\n    P0 = P[0]\n    P_dict = {D[i]: P[i+1] for i in range(M)}\n    \n    total = 0\n    for color in C:\n        if color in P_dict:\n            total += P_dict[color]\n        else:\n            total += P0\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2437.2711181640625,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

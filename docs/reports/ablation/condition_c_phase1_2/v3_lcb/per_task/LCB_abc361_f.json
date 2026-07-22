@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc361_f",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\ndef main():\n    N = int(sys.stdin.readline())\n    if N < 2:\n        print(0)\n        return\n\n    seen = set()\n    max_base = int(N ** (1/2)) + 1\n\n    for a in range(2, max_base + 1):\n        b = 2\n        while True:\n            power = a ** b\n            if power > N:\n                break\n            seen.add(power)\n            b += 1\n\n    print(len(seen) + 1)  # +1 for x = 1\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 150,
+  "total_time_ms": 6792.315721511841,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

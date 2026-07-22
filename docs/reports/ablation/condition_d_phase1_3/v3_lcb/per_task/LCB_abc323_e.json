@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc323_e",
+  "passed": false,
+  "code": "import sys\nimport math\n\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    X = int(data[1])\n    T = list(map(int, data[2:2+N]))\n    \n    # dp[t] = probability that at time t, we are at the start of a song\n    dp = [0] * (X + 1)\n    dp[0] = 1  # At time 0, we are at the start of a song\n    \n    for t in range(X + 1):\n        for i in range(N):\n            ti = T[i]\n            if t + ti <= X:\n                dp[t + ti] = (dp[t + ti] + dp[t] * pow(N, MOD - 2, MOD)) % MOD\n    \n    # We want the probability that song 1 is playing at X + 0.5 seconds\n    # That means the current song started at time s, and s + T[0] > X + 0.5\n    # => s <= X + 0.5 - T[0] => s <= X - T[0] + 0.5\n    # So s can be from 0 to floor(X - T[0] + 0.5)\n    # => s <= X - T[0]\n    # So we sum dp[s] for all s such that s + T[0] > X + 0.5\n    # => s > X + 0.5 - T[0] => s >= X - T[0] + 1\n    # So we sum dp[s] for s in [X - T[0] + 1, X]\n    # But if T[0] > X + 0.5, then no song can be playing at X + 0.5\n    # So we check if T[0] > X + 0.5\n    result = 0\n    if T[0] <= X + 0.5:\n        start = max(0, X - T[0] + 1)\n        for s in range(start, X + 1):\n            result = (result + dp[s]) % MOD\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 60998,
+  "total_time_ms": 1039225.3375053406,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1899,
+    "self_tests_generated": 5
+  }
+}

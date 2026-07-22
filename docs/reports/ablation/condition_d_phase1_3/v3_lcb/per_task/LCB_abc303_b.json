@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc303_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    \n    adjacent_pairs = set()\n    \n    index = 2\n    for _ in range(M):\n        for j in range(N - 1):\n            a = data[index + j]\n            b = data[index + j + 1]\n            if a < b:\n                adjacent_pairs.add((a, b))\n            else:\n                adjacent_pairs.add((b, a))\n        index += N\n    \n    total_pairs = N * (N - 1) // 2\n    bad_mood_pairs = total_pairs - len(adjacent_pairs)\n    print(bad_mood_pairs)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 875,
+  "total_time_ms": 15637.474060058594,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 690
+  }
+}

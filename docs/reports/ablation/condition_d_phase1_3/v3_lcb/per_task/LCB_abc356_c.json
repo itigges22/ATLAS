@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc356_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n    K = int(data[idx])\n    idx += 1\n    \n    tests = []\n    for _ in range(M):\n        C_i = int(data[idx])\n        idx += 1\n        A_i = list(map(int, data[idx:idx + C_i]))\n        idx += C_i\n        R_i = data[idx]\n        idx += 1\n        tests.append((A_i, R_i))\n    \n    count = 0\n    # Iterate over all possible key configurations (real/dummy)\n    for config in range(1 << N):\n        real_count = bin(config).count('1')\n        valid = True\n        for A_i, R_i in tests:\n            inserted_real = 0\n            for key in A_i:\n                if (config >> (key - 1)) & 1:\n                    inserted_real += 1\n            if R_i == 'o':\n                if inserted_real < K:\n                    valid = False\n                    break\n            else:  # R_i == 'x'\n                if inserted_real >= K:\n                    valid = False\n                    break\n        if valid:\n            count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1986,
+  "total_time_ms": 34630.11837005615,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1709
+  }
+}

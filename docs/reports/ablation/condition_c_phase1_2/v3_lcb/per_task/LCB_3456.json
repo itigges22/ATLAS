@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3456",
+  "passed": false,
+  "code": "from typing import List\nfrom functools import lru_cache\n\nclass Solution:\n    def maximumLength(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        \n        @lru_cache(maxsize=None)\n        def dp(i, last_val, mismatches):\n            if i == n:\n                return 0\n            # Option 1: skip current element\n            skip = dp(i + 1, last_val, mismatches)\n            # Option 2: take current element\n            new_mismatches = mismatches + (0 if nums[i] == last_val else 1)\n            take = 1 + dp(i + 1, nums[i], new_mismatches) if new_mismatches <= k else -1\n            return max(skip, take)\n        \n        return dp(0, -1, 0)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5318,
+  "total_time_ms": 84313.50708007812,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5126
+  }
+}

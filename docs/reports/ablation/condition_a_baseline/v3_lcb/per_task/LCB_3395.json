@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3395",
+  "passed": true,
+  "code": "class Solution:\n    def minAnagramLength(self, s: str) -> int:\n        from collections import Counter\n\n        n = len(s)\n        freq = Counter(s)\n\n        # The minimum possible length of t is the least common multiple (LCM)\n        # of the frequencies of the characters in s.\n        # However, since t must be an anagram of some substring of s, we need to find\n        # the smallest length that can evenly divide the frequencies of all characters.\n\n        # We can try all possible lengths from 1 to n and check if it's possible\n        # to split the string into anagrams of length l.\n        for l in range(1, n + 1):\n            if n % l == 0:\n                # Check if each character's frequency is divisible by (n // l)\n                valid = True\n                for count in freq.values():\n                    if count % (n // l) != 0:\n                        valid = False\n                        break\n                if valid:\n                    return l\n        return n",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3897.514820098877,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

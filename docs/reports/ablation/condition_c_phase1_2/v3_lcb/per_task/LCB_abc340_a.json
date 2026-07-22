@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc340_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nA, B, D = map(int, input().split())\nsequence = list(range(A, B + 1, D))\nprint(' '.join(map(str, sequence)))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 51,
+  "total_time_ms": 2016.2432193756104,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

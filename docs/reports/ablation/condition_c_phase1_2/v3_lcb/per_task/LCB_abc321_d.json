@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc321_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    P = int(data[2])\n    \n    A = list(map(int, data[3:3+N]))\n    B = list(map(int, data[3+N:3+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    total = 0\n    j = M - 1\n    \n    for a in A:\n        while j >= 0 and a + B[j] > P:\n            j -= 1\n        count = M - j\n        total += (a + B[j]) * count\n        total += (P - (a + B[j])) * (N - count)\n    \n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 202,
+  "total_time_ms": 3265.085220336914,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

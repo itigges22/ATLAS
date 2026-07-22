@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc303_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    X = int(data[0])\n    Y = int(data[1])\n    Z = int(data[2])\n    S = data[3]\n\n    # Define the three possible key states: (caps_lock_state, shift_used)\n    # caps_lock_state: 0 for off, 1 for on\n    # shift_used: 0 for not used, 1 for used\n    # We will use a priority queue (min-heap) for Dijkstra's algorithm\n    import heapq\n\n    # State: (time_spent, caps_lock_state, shift_used, index)\n    # We use a priority queue to explore the shortest time path\n    heap = [(0, 0, 0, 0)]\n    visited = set()\n\n    while heap:\n        time, caps, shift, idx = heapq.heappop(heap)\n        if (caps, shift, idx) in visited:\n            continue\n        visited.add((caps, shift, idx))\n\n        if idx == len(S):\n            print(time)\n            return\n\n        # Action 1: Press only 'a' key\n        # Determine the character to be added\n        if caps == 0:\n            char = 'a'\n        else:\n            char = 'A'\n        if S[idx] == char:\n            # Press only 'a' key\n            new_time = time + X\n            new_caps = caps\n            new_shift = 0\n            heapq.heappush(heap, (new_time, new_caps, new_shift, idx + 1))\n        else:\n            # Press 'a' and Shift\n            new_time = time + Y\n            new_caps = caps\n            new_shift = 1\n            heapq.heappush(heap, (new_time, new_caps, new_shift, idx + 1))\n\n        # Action 2: Press 'a' and Shift\n        if caps == 0:\n            char = 'A'\n        else:\n            char = 'a'\n        if S[idx] == char:\n            new_time = time + Y\n            new_caps = caps\n            new_shift = 1\n            heapq.heappush(heap, (new_time, new_caps, new_shift, idx + 1))\n        else:\n            # Press only 'a' key\n            new_time = time + X\n            new_caps = caps\n            new_shift = 0\n            heapq.heappush(heap, (new_time, new_caps, new_shift, idx + 1))\n\n        # Action 3: Toggle Caps Lock\n        new_caps = 1 - caps\n        new_time = time + Z\n        new_shift = shift\n        heapq.heappush(heap, (new_time, new_caps, new_shift, idx))\n\n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 8109,
+  "total_time_ms": 116434.13043022156,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3599,
+    "s_star_triggered": true
+  }
+}

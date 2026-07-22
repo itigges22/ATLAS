@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3114",
+  "passed": true,
+  "code": "class Solution:\n    def maximumSumOfHeights(self, maxHeights: List[int]) -> int:\n        n = len(maxHeights)\n        max_sum = 0\n\n        # Try each index as the peak of the mountain\n        for peak in range(n):\n            heights = [0] * n\n            # Set the peak to the maximum allowed value\n            heights[peak] = maxHeights[peak]\n\n            # Build increasing sequence to the left of the peak\n            for i in range(peak - 1, -1, -1):\n                heights[i] = min(maxHeights[i], heights[i + 1])\n\n            # Build decreasing sequence to the right of the peak\n            for i in range(peak + 1, n):\n                heights[i] = min(maxHeights[i], heights[i - 1])\n\n            # Check if the configuration is a mountain\n            is_mountain = True\n            # Check non-decreasing part (from start to peak)\n            for i in range(1, peak + 1):\n                if heights[i] < heights[i - 1]:\n                    is_mountain = False\n                    break\n            # Check non-increasing part (from peak to end)\n            for i in range(peak, n - 1):\n                if heights[i + 1] > heights[i]:\n                    is_mountain = False\n                    break\n\n            if is_mountain:\n                max_sum = max(max_sum, sum(heights))\n\n        return max_sum",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 21692,
+  "total_time_ms": 323920.6621646881,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1693,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc357_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\nMOD = 998244353\n\ndef main():\n    N = int(sys.stdin.read())\n    length = len(str(N))\n    \n    # We want to compute V_N = N concatenated N times mod MOD\n    # V_N = N * 10^{length*(N-1)} + N * 10^{length*(N-2)} + ... + N\n    # This can be written as N * (10^{length*(N-1)} + 10^{length*(N-2)} + ... + 1)\n    # Which is N * (pow(10, length * N, MOD) - 1) // (pow(10, length, MOD) - 1)\n    \n    # Compute pow(10, length, MOD)\n    pow10_len = pow(10, length, MOD)\n    \n    # Compute pow(10, length * N, MOD)\n    pow10_len_N = pow(10, length * N, MOD)\n    \n    # Compute numerator: pow10_len_N - 1\n    numerator = (pow10_len_N - 1) % MOD\n    \n    # Compute denominator: pow10_len - 1\n    denominator = (pow10_len - 1) % MOD\n    \n    # Compute modular inverse of denominator\n    inv_denominator = pow(denominator, MOD - 2, MOD)\n    \n    # Compute total value\n    total = (N % MOD) * (numerator * inv_denominator % MOD) % MOD\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1341,
+  "total_time_ms": 80972.90515899658,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1185
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3422",
+  "passed": true,
+  "code": "class Solution:\n    def valueAfterKSeconds(self, n: int, k: int) -> int:\n        MOD = 10**9 + 7\n        dp = [[1] * (n) for _ in range(k + 1)]\n        \n        for t in range(1, k + 1):\n            for i in range(1, n):\n                dp[t][i] = (dp[t][i - 1] + dp[t - 1][i]) % MOD\n        \n        return dp[k][n - 1]",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4010,
+  "total_time_ms": 64203.126430511475,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3882
+  }
+}

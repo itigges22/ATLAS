@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2878",
+  "passed": false,
+  "code": "class Solution:\n    def checkArray(self, nums: List[int], k: int) -> bool:\n        n = len(nums)\n        diff = [0] * (n + 1)  # Difference array to track decrements\n        decrements = 0  # Total decrements applied so far\n\n        for i in range(n):\n            decrements += diff[i]\n            current = nums[i] - decrements\n\n            if current < 0:\n                return False\n\n            if i + k <= n:\n                # Apply decrement to subarray starting at i\n                decrements += current\n                diff[i + k] -= current\n\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 4540,
+  "total_time_ms": 77276.18932723999,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4391
+  }
+}

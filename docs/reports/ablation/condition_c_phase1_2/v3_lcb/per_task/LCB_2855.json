@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2855",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def maximumJumps(self, nums: List[int], target: int) -> int:\n        n = len(nums)\n        dp = [-1] * n\n        dp[0] = 0  # Starting at index 0 with 0 jumps\n\n        for i in range(n):\n            if dp[i] == -1:\n                continue\n            for j in range(i + 1, n):\n                if -target <= nums[j] - nums[i] <= target:\n                    if dp[j] < dp[i] + 1:\n                        dp[j] = dp[i] + 1\n\n        return dp[-1] if dp[-1] != 0 else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 4998,
+  "total_time_ms": 79814.87560272217,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 2718,
+    "s_star_triggered": true
+  }
+}

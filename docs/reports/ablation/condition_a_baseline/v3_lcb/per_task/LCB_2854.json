@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2854",
+  "passed": true,
+  "code": "class Solution:\n    def minimizeConcatenatedLength(self, words: List[str]) -> int:\n        from collections import defaultdict\n\n        n = len(words)\n        # dp[i][c] = (min_length, first_char, last_char)\n        # dp[i] represents the state after processing first i words\n        dp = [defaultdict(lambda: float('inf')) for _ in range(n + 1)]\n\n        # Initialize with the first word\n        first_word = words[0]\n        dp[1][(first_word[0], first_word[-1])] = len(first_word)\n\n        for i in range(2, n + 1):\n            word = words[i - 1]\n            w_len = len(word)\n            w_first = word[0]\n            w_last = word[-1]\n\n            for (f, l), length in dp[i - 1].items():\n                # Option 1: join previous string with current word\n                new_first = f\n                new_last = w_last\n                new_length = length + w_len\n                if l == w_first:\n                    new_length -= 1\n                dp[i][(new_first, new_last)] = min(dp[i][(new_first, new_last)], new_length)\n\n                # Option 2: join current word with previous string\n                new_first = w_first\n                new_last = l\n                new_length = length + w_len\n                if w_last == f:\n                    new_length -= 1\n                dp[i][(new_first, new_last)] = min(dp[i][(new_first, new_last)], new_length)\n\n        return min(dp[n].values())",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 5670.359134674072,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

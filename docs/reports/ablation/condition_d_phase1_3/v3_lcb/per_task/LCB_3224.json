@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3224",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfSequence(self, n: int, sick: List[int]) -> int:\n        MOD = 10**9 + 7\n        k = len(sick)\n        if k == 0:\n            return 0\n        if k == n:\n            return 1\n\n        # Precompute factorials and inverse factorials modulo MOD\n        max_n = n\n        fact = [1] * (max_n + 1)\n        for i in range(1, max_n + 1):\n            fact[i] = fact[i - 1] * i % MOD\n\n        # Compute combinations C(n, k) = fact[n] * inv_fact[k] * inv_fact[n - k] % MOD\n        def comb(n, k):\n            if k < 0 or k > n:\n                return 0\n            return fact[n] * pow(fact[k], MOD - 2, MOD) * pow(fact[n - k], MOD - 2, MOD) % MOD\n\n        res = 1\n        prev = -1\n        for i in range(len(sick)):\n            start = sick[i]\n            if prev != -1:\n                gap = start - prev - 1\n                if gap > 0:\n                    res = res * comb(gap + 1, 1) % MOD\n            prev = start\n\n        # Handle the last segment\n        last = n - 1\n        gap = last - sick[-1]\n        if gap > 0:\n            res = res * comb(gap + 1, 1) % MOD\n\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2522,
+  "total_time_ms": 42455.50274848938,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2213
+  }
+}

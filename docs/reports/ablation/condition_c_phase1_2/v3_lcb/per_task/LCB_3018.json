@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3018",
+  "passed": false,
+  "code": "class Solution:\n    def canMakeSubsequence(self, str1: str, str2: str) -> bool:\n        # Two pointers approach to check if str2 is a subsequence of str1 after at most one operation\n        i, j = 0, 0\n        n, m = len(str1), len(str2)\n        \n        while i < n and j < m:\n            # Check if current character in str1 can be incremented to match str2[j]\n            if ord(str1[i]) + 1 == ord(str2[j]) or (str1[i] == 'z' and str2[j] == 'a'):\n                j += 1\n            i += 1\n        \n        return j == m",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5273,
+  "total_time_ms": 80348.57630729675,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5094
+  }
+}

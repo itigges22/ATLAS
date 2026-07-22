@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc344_e",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n\n    Q = int(data[idx])\n    idx += 1\n\n    # Map from value to its index in the list\n    value_to_index = {A[i]: i for i in range(N)}\n    # Map from value to its next value\n    next_val = {}\n    # Map from value to its previous value\n    prev_val = {}\n\n    # Initialize next and prev maps\n    for i in range(N):\n        if i < N - 1:\n            next_val[A[i]] = A[i + 1]\n        else:\n            next_val[A[i]] = None\n        if i > 0:\n            prev_val[A[i]] = A[i - 1]\n        else:\n            prev_val[A[i]] = None\n\n    for _ in range(Q):\n        query_type = data[idx]\n        idx += 1\n        if query_type == '1':\n            x = int(data[idx])\n            idx += 1\n            y = int(data[idx])\n            idx += 1\n\n            # Insert y after x\n            next_val[x] = y\n            prev_val[y] = x\n            next_val[y] = next_val[x]\n            if next_val[x] is not None:\n                prev_val[next_val[x]] = y\n            next_val[x] = y\n            value_to_index[y] = value_to_index[x] + 1\n\n        elif query_type == '2':\n            x = int(data[idx])\n            idx += 1\n\n            # Remove x\n            prev_x = prev_val[x]\n            next_x = next_val[x]\n            if prev_x is not None:\n                next_val[prev_x] = next_x\n            if next_x is not None:\n                prev_val[next_x] = prev_x\n            del value_to_index[x]\n            del next_val[x]\n            del prev_val[x]\n\n    # Reconstruct the list from the head\n    result = []\n    head = None\n    for key in value_to_index:\n        if prev_val.get(key, None) is None:\n            head = key\n            break\n    current = head\n    while current is not None:\n        result.append(str(current))\n        current = next_val[current]\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 550,
+  "total_time_ms": 11738.877296447754,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

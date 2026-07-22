@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc352_d",
+  "passed": false,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    K = int(data[1])\n    P = list(map(int, data[2:]))\n\n    pos = [0] * (N + 1)\n    for i in range(N):\n        pos[P[i]] = i\n\n    min_diff = float('inf')\n    window = []\n    for i in range(1, N + 1):\n        bisect.insort(window, pos[i])\n        if len(window) > K:\n            window.pop(0)\n        if len(window) == K:\n            diff = window[-1] - window[0]\n            if diff < min_diff:\n                min_diff = diff\n    print(min_diff)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 185,
+  "total_time_ms": 3161.458730697632,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2785",
+  "passed": true,
+  "code": "class Solution:\n    def semiOrderedPermutation(self, nums: List[int]) -> int:\n        n = len(nums)\n        pos1 = nums.index(1)\n        posn = nums.index(n)\n        \n        # Swap 1 to the front\n        swaps = pos1\n        \n        # Adjust position of n after swapping 1\n        if posn < pos1:\n            posn += 1\n        \n        # Swap n to the end\n        swaps += (n - 1 - posn)\n        \n        return swaps",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1446,
+  "total_time_ms": 24878.679752349854,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1324
+  }
+}

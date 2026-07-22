@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc348_d",
+  "passed": true,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    H = int(data[idx])\n    idx += 1\n    W = int(data[idx])\n    idx += 1\n    \n    grid = []\n    for _ in range(H):\n        grid.append(data[idx])\n        idx += 1\n    \n    N = int(data[idx])\n    idx += 1\n    \n    medicines = []\n    for _ in range(N):\n        r = int(data[idx]) - 1\n        idx += 1\n        c = int(data[idx]) - 1\n        idx += 1\n        e = int(data[idx])\n        idx += 1\n        medicines.append((r, c, e))\n    \n    start = None\n    goal = None\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == 'S':\n                start = (i, j)\n            elif grid[i][j] == 'T':\n                goal = (i, j)\n    \n    # Dijkstra's algorithm\n    dist = [[-1 for _ in range(W)] for _ in range(H)]\n    pq = []\n    heapq.heappush(pq, (0, start[0], start[1]))\n    dist[start[0]][start[1]] = 0\n    \n    dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n    \n    while pq:\n        energy, x, y = heapq.heappop(pq)\n        if (x, y) == goal:\n            print(\"Yes\")\n            return\n        if dist[x][y] < energy:\n            continue\n        for dx, dy in dirs:\n            nx, ny = x + dx, y + dy\n            if 0 <= nx < H and 0 <= ny < W and grid[nx][ny] != '#':\n                if dist[nx][ny] < energy - 1:\n                    dist[nx][ny] = energy - 1\n                    heapq.heappush(pq, (energy - 1, nx, ny))\n        # Check for medicine\n        for r, c, e in medicines:\n            if (x, y) == (r, c):\n                if dist[x][y] < e:\n                    dist[x][y] = e\n                    heapq.heappush(pq, (e, x, y))\n    \n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3050,
+  "total_time_ms": 48828.85456085205,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2499
+  }
+}

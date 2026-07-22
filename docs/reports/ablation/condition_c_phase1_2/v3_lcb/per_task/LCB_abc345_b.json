@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc345_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    X = int(sys.stdin.readline())\n    print((X + 9) // 10)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 55,
+  "total_time_ms": 1198.3404159545898,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

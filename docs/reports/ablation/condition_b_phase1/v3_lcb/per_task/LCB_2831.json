@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2831",
+  "passed": true,
+  "code": "class Solution:\n    def countBeautifulPairs(self, nums: List[int]) -> int:\n        count = 0\n        n = len(nums)\n        for i in range(n):\n            first_digit = int(str(nums[i])[0])\n            for j in range(i + 1, n):\n                last_digit = int(str(nums[j])[-1])\n                if self.gcd(first_digit, last_digit) == 1:\n                    count += 1\n        return count\n\n    def gcd(self, x: int, y: int) -> int:\n        while y:\n            x, y = y, x % y\n        return x",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1183,
+  "total_time_ms": 19317.68774986267,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1066
+  }
+}

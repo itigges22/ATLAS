@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc329_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\nprint(' '.join(S))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 29,
+  "total_time_ms": 1365.0612831115723,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

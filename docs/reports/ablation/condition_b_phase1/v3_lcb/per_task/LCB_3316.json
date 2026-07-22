@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3316",
+  "passed": true,
+  "code": "class Solution:\n    def sumOfPowers(self, nums: List[int], k: int) -> int:\n        MOD = 10**9 + 7\n        n = len(nums)\n        nums.sort()\n        result = 0\n        \n        from itertools import combinations\n        \n        for subseq in combinations(nums, k):\n            min_diff = float('inf')\n            for i in range(len(subseq)):\n                for j in range(i + 1, len(subseq)):\n                    min_diff = min(min_diff, abs(subseq[i] - subseq[j]))\n            result = (result + min_diff) % MOD\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1623,
+  "total_time_ms": 26313.18974494934,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1482
+  }
+}

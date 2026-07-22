@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc348_e",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    edges = [[] for _ in range(N)]\n    for _ in range(N - 1):\n        a, b = map(int, sys.stdin.readline().split())\n        edges[a - 1].append(b - 1)\n        edges[b - 1].append(a - 1)\n    C = list(map(int, sys.stdin.readline().split()))\n\n    # First pass: compute subtree sums and total distance from root (0)\n    total = [0] * N\n    subtree_sum = [0] * N\n\n    def dfs(u, parent):\n        subtree_sum[u] = C[u]\n        for v in edges[u]:\n            if v != parent:\n                dfs(v, u)\n                subtree_sum[u] += subtree_sum[v]\n                total[u] += total[v] + subtree_sum[v]\n        return\n\n    dfs(0, -1)\n\n    # Second pass: compute total distance for all nodes\n    def dfs2(u, parent):\n        for v in edges[u]:\n            if v != parent:\n                total[v] = total[u] - subtree_sum[v] + (subtree_sum[0] - subtree_sum[v])\n                dfs2(v, u)\n        return\n\n    dfs2(0, -1)\n\n    print(min(total))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1236,
+  "total_time_ms": 21648.51212501526,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 832
+  }
+}

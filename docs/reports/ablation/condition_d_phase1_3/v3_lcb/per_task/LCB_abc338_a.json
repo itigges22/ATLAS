@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc338_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\nif len(S) == 0:\n    print(\"No\")\nelse:\n    first_char = S[0]\n    rest_chars = S[1:]\n\n    # Check if first character is uppercase\n    if not first_char.isupper():\n        print(\"No\")\n    else:\n        # Check if rest of the string is empty or all lowercase\n        if rest_chars == \"\" or rest_chars.islower():\n            print(\"Yes\")\n        else:\n            print(\"No\")",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 11744,
+  "total_time_ms": 181818.9353942871,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 977,
+    "self_tests_generated": 2
+  }
+}

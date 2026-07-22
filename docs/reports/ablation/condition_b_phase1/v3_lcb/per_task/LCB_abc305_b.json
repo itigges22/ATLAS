@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc305_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\n# Define the distances between adjacent points\ndistances = [3, 1, 4, 1, 5, 9]\n\n# Create a prefix sum array\nprefix_sum = [0]  # Starting from point A\nfor d in distances:\n    prefix_sum.append(prefix_sum[-1] + d)\n\n# Map each point to its index (A=0, B=1, ..., G=6)\npoint_to_index = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6}\n\n# Read input\np, q = sys.stdin.read().split()\n\n# Get indices of p and q\ni = point_to_index[p]\nj = point_to_index[q]\n\n# Compute distance using prefix sum array\ndistance = abs(prefix_sum[i] - prefix_sum[j])\n\n# Output the result\nprint(distance)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1389,
+  "total_time_ms": 23662.333488464355,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1275
+  }
+}

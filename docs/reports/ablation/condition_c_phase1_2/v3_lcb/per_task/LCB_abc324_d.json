@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc324_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\nfrom itertools import permutations\n\ndef main():\n    N = int(sys.stdin.readline())\n    S = sys.stdin.readline().strip()\n\n    # Generate all perfect squares with length N\n    # The maximum number with N digits is 10^N - 1\n    max_num = 10 ** N\n    min_num = 10 ** (N - 1) if N > 1 else 0\n    squares = set()\n    for i in range(int(math.isqrt(min_num)), int(math.isqrt(max_num)) + 1):\n        square = i * i\n        squares.add(str(square))\n\n    # Generate all unique permutations of the digits in S\n    unique_perms = set(permutations(S))\n\n    count = 0\n    for perm in unique_perms:\n        num_str = ''.join(perm)\n        if num_str in squares:\n            count += 1\n\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 2917,
+  "total_time_ms": 108386.44814491272,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2662
+  }
+}

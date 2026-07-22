@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3055",
+  "passed": false,
+  "code": "class Solution:\n    def maximumOddBinaryNumber(self, s: str) -> str:\n        count_ones = s.count('1')\n        return '1' * (count_ones - 1) + '0' * (len(s) - count_ones) + '1'",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3381,
+  "total_time_ms": 52047.410011291504,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3312
+  }
+}

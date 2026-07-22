@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3114",
+  "passed": true,
+  "code": "class Solution:\n    def maximumSumOfHeights(self, maxHeights: List[int]) -> int:\n        n = len(maxHeights)\n        max_sum = 0\n\n        for peak in range(n):\n            # Build the mountain with peak at 'peak'\n            heights = [0] * n\n            # Non-decreasing up to peak\n            heights[peak] = maxHeights[peak]\n            for i in range(peak - 1, -1, -1):\n                heights[i] = min(maxHeights[i], heights[i + 1])\n            # Non-increasing after peak\n            for i in range(peak + 1, n):\n                heights[i] = min(maxHeights[i], heights[i - 1])\n            # Check if it's a valid mountain\n            valid = True\n            for i in range(1, peak + 1):\n                if heights[i - 1] > heights[i]:\n                    valid = False\n                    break\n            for i in range(peak, n - 1):\n                if heights[i] < heights[i + 1]:\n                    valid = False\n                    break\n            if valid:\n                max_sum = max(max_sum, sum(heights))\n\n        return max_sum",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1999,
+  "total_time_ms": 31277.081966400146,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1758
+  }
+}

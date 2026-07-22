@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc331_e",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx]); idx += 1\n    M = int(data[idx]); idx += 1\n    L = int(data[idx]); idx += 1\n    \n    a = list(map(int, data[idx:idx+N]))\n    idx += N\n    b = list(map(int, data[idx:idx+M]))\n    idx += M\n    \n    forbidden = set()\n    for _ in range(L):\n        c = int(data[idx]) - 1\n        d = int(data[idx+1]) - 1\n        forbidden.add((c, d))\n        idx += 2\n    \n    # Sort main dishes in descending order\n    a_sorted = sorted([(a[i], i) for i in range(N)], reverse=True)\n    # Sort side dishes in descending order\n    b_sorted = sorted([(b[j], j) for j in range(M)], reverse=True)\n    \n    # Use a max-heap (simulated with negative values) to find the maximum sum\n    # We'll try top K main dishes and top K side dishes, where K is small\n    K = 200\n    top_a = a_sorted[:K]\n    top_b = b_sorted[:K]\n    \n    max_price = 0\n    # Check all combinations of top K main and side dishes\n    for ai, i in top_a:\n        for bj, j in top_b:\n            if (i, j) not in forbidden:\n                max_price = max(max_price, ai + bj)\n    \n    print(max_price)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 378,
+  "total_time_ms": 6360.760450363159,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

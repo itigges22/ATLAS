@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2827",
+  "passed": false,
+  "code": "class Solution:\n    def canTraverseAllPairs(self, nums: List[int]) -> bool:\n        from math import gcd\n        from collections import defaultdict\n\n        def find(parent, x):\n            if parent[x] != x:\n                parent[x] = find(parent, parent[x])\n            return parent[x]\n\n        def union(parent, rank, x, y):\n            root_x = find(parent, x)\n            root_y = find(parent, y)\n            if root_x == root_y:\n                return\n            if rank[root_x] > rank[root_y]:\n                parent[root_y] = root_x\n            else:\n                parent[root_x] = root_y\n                if rank[root_x] == rank[root_y]:\n                    rank[root_y] += 1\n\n        # Edge case: if nums has only one element, it's trivially connected\n        if len(nums) == 1:\n            return True\n\n        # Find all prime factors for each number\n        max_num = max(nums)\n        prime_factors = defaultdict(set)\n        for i, num in enumerate(nums):\n            temp = num\n            for p in range(2, int(temp**0.5) + 1):\n                while temp % p == 0:\n                    prime_factors[p].add(i)\n                    temp //= p\n            if temp > 1:\n                prime_factors[temp].add(i)\n\n        # Union-Find setup\n        parent = {}\n        rank = {}\n        for i in range(len(nums)):\n            parent[i] = i\n            rank[i] = 1\n\n        # Union indices by their prime factors\n        for primes in prime_factors.values():\n            indices = list(primes)\n            if len(indices) < 2:\n                continue\n            first = indices[0]\n            for idx in indices[1:]:\n                union(parent, rank, first, idx)\n\n        # Check if all indices are in the same set\n        root = find(parent, 0)\n        for i in range(1, len(nums)):\n            if find(parent, i) != root:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 2558,
+  "total_time_ms": 41535.48574447632,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2229
+  }
+}

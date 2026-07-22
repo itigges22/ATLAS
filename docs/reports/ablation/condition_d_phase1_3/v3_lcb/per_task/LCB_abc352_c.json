@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc352_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = []\n    B = []\n    for i in range(N):\n        A.append(int(data[1 + 2 * i]))\n        B.append(int(data[2 + 2 * i]))\n    \n    # Sort the giants based on (B_i - A_i) in descending order\n    # This ensures that the giants with the largest head-shoulder difference are placed lower\n    # So that the topmost giant has the maximum possible head height\n    combined = list(zip(A, B))\n    combined.sort(key=lambda x: (x[1] - x[0]), reverse=True)\n    \n    total_A = 0\n    max_head = 0\n    for a, b in combined:\n        total_A += a\n        max_head = max(max_head, total_A + b - a)\n    \n    print(max_head)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 47267,
+  "total_time_ms": 767753.2920837402,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1001,
+    "self_tests_generated": 5
+  }
+}

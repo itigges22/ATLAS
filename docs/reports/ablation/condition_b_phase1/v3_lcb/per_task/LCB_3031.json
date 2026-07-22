@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3031",
+  "passed": true,
+  "code": "class Solution:\n    def constructProductMatrix(self, grid: List[List[int]]) -> List[List[int]]:\n        n, m = len(grid), len(grid[0])\n        product = 1\n        zero_count = 0\n        zero_positions = []\n\n        # First pass: compute total product and count zeros\n        for i in range(n):\n            for j in range(m):\n                if grid[i][j] == 0:\n                    zero_count += 1\n                    zero_positions.append((i, j))\n                else:\n                    product *= grid[i][j]\n\n        # Second pass: compute product matrix\n        result = [[0] * m for _ in range(n)]\n        for i in range(n):\n            for j in range(m):\n                if zero_count > 1:\n                    result[i][j] = 0\n                elif zero_count == 1 and (i, j) in zero_positions:\n                    result[i][j] = 0\n                else:\n                    result[i][j] = product // grid[i][j] if grid[i][j] != 0 else 0\n\n        # Apply modulo 12345\n        mod = 12345\n        for i in range(n):\n            for j in range(m):\n                result[i][j] %= mod\n\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1838,
+  "total_time_ms": 30428.197145462036,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1659
+  }
+}

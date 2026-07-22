@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc357_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nMOD = 998244353\n\ndef mod_pow(base, exp, mod):\n    result = 1\n    base = base % mod\n    while exp > 0:\n        if exp % 2 == 1:\n            result = (result * base) % mod\n        base = (base * base) % mod\n        exp //= 2\n    return result\n\ndef solve():\n    N = int(sys.stdin.readline())\n    L = len(str(N))\n    power = mod_pow(10, L, MOD)\n    numerator = (mod_pow(power, N, MOD) - 1) % MOD\n    denominator = (power - 1) % MOD\n    inv_denominator = pow(denominator, MOD - 2, MOD)\n    result = (numerator * inv_denominator) % MOD\n    result = (result * N) % MOD\n    print(result)\n\nsolve()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1090,
+  "total_time_ms": 79082.3860168457,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 934
+  }
+}

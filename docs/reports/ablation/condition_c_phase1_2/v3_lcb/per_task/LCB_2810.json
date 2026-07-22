@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2810",
+  "passed": false,
+  "code": "class Solution:\n    def minCost(self, nums: List[int], x: int) -> int:\n        n = len(nums)\n        res = float('inf')\n        for i in range(n):\n            curr_min = min(nums[(j + i) % n] for j in range(n))\n            res = min(res, curr_min + x * i)\n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1549,
+  "total_time_ms": 25500.22602081299,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1458
+  }
+}

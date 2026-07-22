@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3327",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumMoves(self, nums: List[int], k: int, maxChanges: int) -> int:\n        ones = [i for i, val in enumerate(nums) if val == 1]\n        n = len(nums)\n        res = float('inf')\n        left = 0\n        changes_used = 0\n        total_moves = 0\n\n        for right in range(len(ones)):\n            # Calculate the number of changes needed to collect ones[right]\n            changes_needed = ones[right] - ones[(right + len(ones) - 1) % len(ones)]\n            changes_needed = min(changes_needed, maxChanges - changes_used)\n            changes_used += changes_needed\n            total_moves += changes_needed\n\n            # If we have collected k ones, update the result\n            if right - left + 1 == k:\n                res = min(res, total_moves)\n                # Move the left pointer forward\n                changes_used -= (ones[left + 1] - ones[left])\n                total_moves -= (ones[left + 1] - ones[left])\n                left += 1\n\n        return res",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 57046,
+  "total_time_ms": 947888.7560367584,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1747,
+    "self_tests_generated": 5
+  }
+}

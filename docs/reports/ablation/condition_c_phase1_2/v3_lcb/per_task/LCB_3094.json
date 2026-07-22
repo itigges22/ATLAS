@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3094",
+  "passed": true,
+  "code": "from collections import Counter\nfrom typing import List\n\nclass Solution:\n    def minOperations(self, nums: List[int]) -> int:\n        count = Counter(nums)\n        operations = 0\n        \n        for v in count.values():\n            if v == 1:\n                return -1\n            operations += v // 3\n            if v % 3 != 0:\n                operations += 1\n        \n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 99,
+  "total_time_ms": 1630.6912899017334,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

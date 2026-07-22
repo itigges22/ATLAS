@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3184",
+  "passed": true,
+  "code": "from bisect import bisect_left, bisect_right\nfrom collections import defaultdict\n\nclass SegmentTree:\n    def __init__(self, start, end):\n        self.start = start\n        self.end = end\n        self.left = None\n        self.right = None\n        self.max_sum = float('-inf')\n\n    def update(self, index, value):\n        if self.start == self.end:\n            self.max_sum = max(self.max_sum, value)\n            return\n        mid = (self.start + self.end) // 2\n        if index <= mid:\n            if not self.left:\n                self.left = SegmentTree(self.start, mid)\n            self.left.update(index, value)\n        else:\n            if not self.right:\n                self.right = SegmentTree(mid + 1, self.end)\n            self.right.update(index, value)\n        self.max_sum = max(self.left.max_sum if self.left else float('-inf'), self.right.max_sum if self.right else float('-inf'))\n\n    def query(self, l, r):\n        if r < self.start or l > self.end:\n            return float('-inf')\n        if l <= self.start and self.end <= r:\n            return self.max_sum\n        return max(self.left.query(l, r) if self.left else float('-inf'), self.right.query(l, r) if self.right else float('-inf'))\n\nclass Solution:\n    def maxBalancedSubsequenceSum(self, nums: List[int]) -> int:\n        n = len(nums)\n        keys = [nums[i] - i for i in range(n)]\n        min_key, max_key = min(keys), max(keys)\n\n        # Coordinate compression\n        sorted_keys = sorted(set(keys))\n        key_to_index = {key: i for i, key in enumerate(sorted_keys)}\n\n        # Initialize segment tree\n        st = SegmentTree(0, len(sorted_keys) - 1)\n\n        max_total = float('-inf')\n        for i in range(n):\n            key = keys[i]\n            idx = key_to_index[key]\n            current_val = nums[i]\n            # Query max sum for keys <= current key\n            max_prev = st.query(0, idx)\n            current_sum = max(current_val, current_val + max_prev)\n            max_total = max(max_total, current_sum)\n            st.update(idx, current_sum)\n\n        return max_total",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 8849,
+  "total_time_ms": 141540.71021080017,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 8593
+  }
+}

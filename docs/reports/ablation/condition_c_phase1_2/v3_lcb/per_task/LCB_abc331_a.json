@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc331_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nM, D = map(int, input().split())\ny, m, d = map(int, input().split())\n\nif d < D:\n    print(y, m, d + 1)\nelse:\n    if m < M:\n        print(y, m + 1, 1)\n    else:\n        print(y + 1, 1, 1)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 90,
+  "total_time_ms": 1431.6258430480957,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

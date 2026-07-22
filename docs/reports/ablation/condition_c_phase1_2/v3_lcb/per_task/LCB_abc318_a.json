@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc318_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, M, P = map(int, input().split())\nif M > N:\n    print(0)\nelse:\n    count = (N - M) // P + 1\n    print(count)",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5218,
+  "total_time_ms": 87637.23587989807,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3028,
+    "s_star_triggered": true
+  }
+}

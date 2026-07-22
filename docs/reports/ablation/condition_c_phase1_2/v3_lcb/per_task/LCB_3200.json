@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3200",
+  "passed": true,
+  "code": "class Solution:\n    def stringCount(self, n: int) -> int:\n        MOD = 10**9 + 7\n        \n        # Precompute factorials and inverse factorials up to n\n        max_n = n\n        fact = [1] * (max_n + 1)\n        inv_fact = [1] * (max_n + 1)\n        \n        for i in range(1, max_n + 1):\n            fact[i] = fact[i - 1] * i % MOD\n        \n        inv_fact[max_n] = pow(fact[max_n], MOD - 2, MOD)\n        for i in range(max_n - 1, -1, -1):\n            inv_fact[i] = inv_fact[i + 1] * (i + 1) % MOD\n        \n        # Total number of strings of length n\n        total = pow(26, n, MOD)\n        \n        # Inclusion-exclusion principle to count bad strings\n        # Bad1: strings with no 'l'\n        bad1 = pow(25, n, MOD)\n        \n        # Bad2: strings with less than 2 'e's (0 or 1 'e')\n        bad2 = (pow(25, n, MOD) + n * pow(25, n - 1, MOD)) % MOD\n        \n        # Bad3: strings with no 't'\n        bad3 = pow(25, n, MOD)\n        \n        # Overlap: no 'l' and no 't'\n        bad13 = pow(24, n, MOD)\n        \n        # Overlap: no 'l' and less than 2 'e's\n        bad12 = (pow(24, n, MOD) + n * pow(24, n - 1, MOD)) % MOD\n        \n        # Overlap: no 't' and less than 2 'e's\n        bad32 = (pow(24, n, MOD) + n * pow(24, n - 1, MOD)) % MOD\n        \n        # Overlap: no 'l', no 't', and less than 2 'e's\n        bad123 = (pow(23, n, MOD) + n * pow(23, n - 1, MOD)) % MOD\n        \n        # Apply inclusion-exclusion\n        bad = (bad1 + bad2 + bad3 - bad13 - bad12 - bad32 + bad123) % MOD\n        \n        # Good strings = total - bad\n        good = (total - bad) % MOD\n        \n        return good",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 3068,
+  "total_time_ms": 41188.12608718872,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2507
+  }
+}

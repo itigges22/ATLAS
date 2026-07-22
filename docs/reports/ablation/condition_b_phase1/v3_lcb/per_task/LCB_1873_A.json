@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/1873_A",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nt = int(input())\nfor _ in range(t):\n    s = input().strip()\n    if s == \"abc\":\n        print(\"YES\")\n        continue\n    # Check if exactly two characters are out of place\n    diff = sum(1 for i in range(3) if s[i] != \"abc\"[i])\n    if diff == 2:\n        print(\"YES\")\n    else:\n        print(\"NO\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1199,
+  "total_time_ms": 19043.21026802063,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1044
+  }
+}

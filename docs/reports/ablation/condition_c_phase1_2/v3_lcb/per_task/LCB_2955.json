@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2955",
+  "passed": true,
+  "code": "class Solution:\n    def accountBalanceAfterPurchase(self, purchaseAmount: int) -> int:\n        # Round to nearest multiple of 10, choosing the larger one if equidistant\n        roundedAmount = round(purchaseAmount / 10) * 10\n        return 100 - roundedAmount",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 80,
+  "total_time_ms": 1322.4048614501953,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

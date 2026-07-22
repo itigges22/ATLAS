@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3176",
+  "passed": true,
+  "code": "class Solution:\n    def minimumSum(self, nums: List[int]) -> int:\n        min_sum = -1\n        n = len(nums)\n        for i in range(n):\n            for j in range(i + 1, n):\n                for k in range(j + 1, n):\n                    if nums[i] < nums[j] and nums[k] < nums[j]:\n                        current_sum = nums[i] + nums[j] + nums[k]\n                        if min_sum == -1 or current_sum < min_sum:\n                            min_sum = current_sum\n        return min_sum",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4364,
+  "total_time_ms": 63596.10414505005,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4222
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3437",
+  "passed": true,
+  "code": "from typing import List\nfrom collections import Counter\n\nclass Solution:\n    def maximumTotalDamage(self, power: List[int]) -> int:\n        # Count the frequency of each power value\n        freq = Counter(power)\n        \n        # Sort the unique power values\n        sorted_powers = sorted(freq.keys())\n        \n        # dp[i] will store the maximum total damage up to the i-th power value\n        dp = [0] * len(sorted_powers)\n        \n        # prev[i] will store the index of the last power value that can be included with sorted_powers[i]\n        prev = [0] * len(sorted_powers)\n        \n        # Initialize the first element\n        dp[0] = sorted_powers[0] * freq[sorted_powers[0]]\n        \n        for i in range(1, len(sorted_powers)):\n            current_power = sorted_powers[i]\n            current_value = current_power * freq[current_power]\n            \n            # Find the largest index j where sorted_powers[j] <= current_power - 3\n            low, high = 0, i - 1\n            j = -1\n            while low <= high:\n                mid = (low + high) // 2\n                if sorted_powers[mid] <= current_power - 3:\n                    j = mid\n                    low = mid + 1\n                else:\n                    high = mid - 1\n            \n            if j != -1:\n                dp[i] = max(dp[i - 1], dp[j] + current_value)\n            else:\n                dp[i] = max(dp[i - 1], current_value)\n            \n            prev[i] = j\n        \n        return dp[-1]",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1699,
+  "total_time_ms": 79281.22305870056,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1496
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3421",
+  "passed": true,
+  "code": "class Solution:\n    def countCompleteDayPairs(self, hours: List[int]) -> int:\n        count = 0\n        n = len(hours)\n        for i in range(n):\n            for j in range(i + 1, n):\n                if (hours[i] + hours[j]) % 24 == 0:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 91,
+  "total_time_ms": 1285.841703414917,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

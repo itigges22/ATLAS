@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc324_c",
+  "passed": true,
+  "code": "import sys\n\ndef is_valid(s, t_prime):\n    len_s = len(s)\n    len_t = len(t_prime)\n    \n    # Check if lengths differ by more than 1\n    if abs(len_s - len_t) > 1:\n        return False\n    \n    # Case 1: Same length (could be one edit: replace or same)\n    if len_s == len_t:\n        diff = 0\n        for a, b in zip(s, t_prime):\n            if a != b:\n                diff += 1\n                if diff > 1:\n                    return False\n        return diff <= 1\n    \n    # Case 2: s is longer by 1 (could be insert in t_prime)\n    elif len_s == len_t + 1:\n        i = 0\n        j = 0\n        diff = 0\n        while i < len_s and j < len_t:\n            if s[i] == t_prime[j]:\n                i += 1\n                j += 1\n            else:\n                i += 1\n                diff += 1\n                if diff > 1:\n                    return False\n        return True\n    \n    # Case 3: s is shorter by 1 (could be delete in t_prime)\n    elif len_s == len_t - 1:\n        i = 0\n        j = 0\n        diff = 0\n        while i < len_s and j < len_t:\n            if s[i] == t_prime[j]:\n                i += 1\n                j += 1\n            else:\n                j += 1\n                diff += 1\n                if diff > 1:\n                    return False\n        return True\n    \n    return False\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    T_prime = input[1]\n    S_list = input[2:]\n    \n    result = []\n    for idx, s in enumerate(S_list, 1):\n        if is_valid(s, T_prime):\n            result.append(idx)\n    \n    print(len(result))\n    if result:\n        print(' '.join(map(str, result)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1721,
+  "total_time_ms": 28552.021503448486,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1394
+  }
+}

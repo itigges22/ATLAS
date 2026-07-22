@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2730",
+  "passed": true,
+  "code": "class Solution:\n    def maximumOr(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        prefix = [0] * n\n        suffix = [0] * n\n\n        prefix[0] = nums[0]\n        for i in range(1, n):\n            prefix[i] = prefix[i - 1] | nums[i]\n\n        suffix[n - 1] = nums[n - 1]\n        for i in range(n - 2, -1, -1):\n            suffix[i] = suffix[i + 1] | nums[i]\n\n        max_or = 0\n        for i in range(n):\n            current = (prefix[i - 1] if i > 0 else 0) | (nums[i] << k) | (suffix[i + 1] if i < n - 1 else 0)\n            max_or = max(max_or, current)\n        return max_or",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1541,
+  "total_time_ms": 24208.883047103882,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1328
+  }
+}

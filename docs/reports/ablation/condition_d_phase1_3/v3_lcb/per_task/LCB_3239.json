@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3239",
+  "passed": true,
+  "code": "from collections import deque\n\nclass Solution:\n    def minimumOperationsToMakeEqual(self, x: int, y: int) -> int:\n        if x == y:\n            return 0\n        \n        visited = set()\n        queue = deque()\n        queue.append((x, 0))\n        visited.add(x)\n        \n        while queue:\n            current, steps = queue.popleft()\n            \n            if current == y:\n                return steps\n            \n            # Generate next states\n            next_states = []\n            if current % 11 == 0:\n                next_states.append(current // 11)\n            if current % 5 == 0:\n                next_states.append(current // 5)\n            next_states.append(current + 1)\n            next_states.append(current - 1)\n            \n            for next_val in next_states:\n                if next_val not in visited and 0 <= next_val <= 10000:\n                    visited.add(next_val)\n                    queue.append((next_val, steps + 1))\n        \n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1628,
+  "total_time_ms": 25554.786920547485,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1404
+  }
+}

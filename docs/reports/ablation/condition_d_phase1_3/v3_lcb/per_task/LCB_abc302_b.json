@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc302_b",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    grid = data[2:2+H]\n    \n    # Directions: 8 possible directions (horizontal, vertical, diagonal)\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]\n    \n    # Find the positions of 's', 'n', 'u', 'k', 'e'\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == 's':\n                # Try all directions from this 's'\n                for dx, dy in directions:\n                    x, y = i, j\n                    path = [(x, y)]\n                    for c in ['n', 'u', 'k', 'e']:\n                        x += dx\n                        y += dy\n                        if 0 <= x < H and 0 <= y < W and grid[x][y] == c:\n                            path.append((x, y))\n                        else:\n                            break\n                    if len(path) == 5:\n                        # Check if centers are on a common line at regular intervals\n                        # Check if the points are collinear and equally spaced\n                        # Extract coordinates\n                        coords = [(r, c) for r, c in path]\n                        # Check collinearity\n                        valid = True\n                        for i in range(2, 5):\n                            # Check if (coords[i][0] - coords[i-1][0]) == (coords[i-1][0] - coords[i-2][0])\n                            # and same for y\n                            if (coords[i][0] - coords[i-1][0]) != (coords[i-1][0] - coords[i-2][0]) or \\\n                               (coords[i][1] - coords[i-1][1]) != (coords[i-1][1] - coords[i-2][1]):\n                                valid = False\n                                break\n                        if valid:\n                            for r, c in coords:\n                                print(r+1, c+1)\n                            return\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1990,
+  "total_time_ms": 33512.75992393494,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1489
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc325_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [sys.stdin.readline().strip() for _ in range(H)]\n    \n    visited = [[False for _ in range(W)] for _ in range(H)]\n    count = 0\n\n    def bfs(r, c):\n        queue = deque()\n        queue.append((r, c))\n        visited[r][c] = True\n        while queue:\n            x, y = queue.popleft()\n            for dx in (-1, 0, 1):\n                for dy in (-1, 0, 1):\n                    nx, ny = x + dx, y + dy\n                    if 0 <= nx < H and 0 <= ny < W and not visited[nx][ny] and grid[nx][ny] == '#':\n                        visited[nx][ny] = True\n                        queue.append((nx, ny))\n\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#' and not visited[i][j]:\n                bfs(i, j)\n                count += 1\n\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 998,
+  "total_time_ms": 156401.44681930542,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 713
+  }
+}

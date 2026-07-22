@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc301_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N = int(sys.stdin.readline())\n    S = sys.stdin.readline().strip()\n    \n    count_t = 0\n    count_a = 0\n    t_reached_majority = False\n    a_reached_majority = False\n    winner = ''\n\n    for char in S:\n        if char == 'T':\n            count_t += 1\n            if not t_reached_majority and count_t > count_a:\n                t_reached_majority = True\n                winner = 'T'\n        else:\n            count_a += 1\n            if not a_reached_majority and count_a > count_t:\n                a_reached_majority = True\n                winner = 'A'\n\n    if count_t > count_a:\n        print('T')\n    elif count_a > count_t:\n        print('A')\n    else:\n        print(winner)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1134,
+  "total_time_ms": 17515.37275314331,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 982
+  }
+}

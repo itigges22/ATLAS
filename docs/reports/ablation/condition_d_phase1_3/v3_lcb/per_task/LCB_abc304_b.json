@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_b",
+  "passed": true,
+  "code": "import math\n\ndef truncate_number(N):\n    if N <= 999:\n        return N\n    elif 1000 <= N <= 9999:\n        return N // 10 * 10\n    elif 10000 <= N <= 99999:\n        return N // 100 * 100\n    elif 100000 <= N <= 999999:\n        return N // 1000 * 1000\n    elif 1000000 <= N <= 9999999:\n        return N // 10000 * 10000\n    elif 10000000 <= N <= 99999999:\n        return N // 100000 * 100000\n    elif 100000000 <= N <= 999999999:\n        return N // 1000000 * 1000000\n\ndef main():\n    N = int(input())\n    print(truncate_number(N))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2129,
+  "total_time_ms": 30210.08038520813,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1864
+  }
+}

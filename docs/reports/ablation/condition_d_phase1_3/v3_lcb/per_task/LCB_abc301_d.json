@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc301_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    S, N = input().split()\n    N = int(N)\n    max_val = -1\n    bits = len(S)\n    # Generate all possible replacements for '?'\n    from itertools import product\n    replacements = product([0, 1], repeat=S.count('?'))\n    # Iterate through all possibilities\n    for rep in replacements:\n        temp = list(S)\n        idx = 0\n        for i in range(len(temp)):\n            if temp[i] == '?':\n                temp[i] = str(rep[idx])\n                idx += 1\n        val = int(''.join(temp), 2)\n        if val <= N and val > max_val:\n            max_val = val\n    print(max_val)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 952,
+  "total_time_ms": 17006.38461112976,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 764
+  }
+}

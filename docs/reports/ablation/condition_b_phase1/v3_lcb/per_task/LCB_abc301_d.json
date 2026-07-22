@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc301_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1000000)\n    S = sys.stdin.readline().strip()\n    N = int(sys.stdin.readline())\n\n    length = len(S)\n    max_val = 0\n    found = False\n\n    def backtrack(pos, current_val, has_question):\n        nonlocal max_val, found\n        if pos == length:\n            if current_val <= N:\n                if current_val > max_val:\n                    max_val = current_val\n                    found = True\n            return\n\n        bit = S[pos]\n        if bit == '?':\n            # Try 0\n            backtrack(pos + 1, current_val << 1, has_question or True)\n            # Try 1\n            backtrack(pos + 1, (current_val << 1) | 1, has_question or True)\n        else:\n            # Try the fixed bit\n            new_val = (current_val << 1) | int(bit)\n            backtrack(pos + 1, new_val, has_question)\n\n    backtrack(0, 0, False)\n\n    print(max_val if found else -1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 17769,
+  "total_time_ms": 162301.89633369446,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1871
+  }
+}

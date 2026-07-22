@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc334_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import bisect\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    Q = int(data[1])\n    R = list(map(int, data[2:2+N]))\n    \n    # Sort the list of reindeer requirements\n    R.sort()\n    \n    # Compute prefix sums\n    prefix_sums = []\n    s = 0\n    for r in R:\n        s += r\n        prefix_sums.append(s)\n    \n    # Process queries\n    results = []\n    for i in range(Q):\n        X = int(data[2 + N + i])\n        # Use binary search to find the maximum number of sleighs\n        count = bisect.bisect_right(prefix_sums, X)\n        results.append(str(count))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 4396,
+  "total_time_ms": 69036.74101829529,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4246
+  }
+}

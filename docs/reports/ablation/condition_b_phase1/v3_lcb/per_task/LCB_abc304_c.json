@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc304_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    D = float(data[1])\n    \n    coords = []\n    for i in range(N):\n        x = int(data[2 + 2 * i])\n        y = int(data[3 + 2 * i])\n        coords.append((x, y))\n    \n    # Initialize infected status\n    infected = [False] * N\n    infected[0] = True  # Person 1 is infected initially\n    \n    # Brute-force approach: check pairwise distances between all infected and uninfected people\n    for _ in range(N):\n        changed = False\n        for i in range(N):\n            if infected[i]:\n                for j in range(N):\n                    if not infected[j]:\n                        dx = coords[i][0] - coords[j][0]\n                        dy = coords[i][1] - coords[j][1]\n                        dist = math.sqrt(dx * dx + dy * dy)\n                        if dist <= D:\n                            infected[j] = True\n                            changed = True\n        if not changed:\n            break  # No more infections possible\n    \n    for status in infected:\n        print(\"Yes\" if status else \"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1009,
+  "total_time_ms": 16855.834245681763,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 774
+  }
+}

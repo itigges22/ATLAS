@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc319_e",
+  "passed": true,
+  "code": "import sys\nimport math\nimport bisect\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n\n    N = int(data[idx]); idx += 1\n    X = int(data[idx]); idx += 1\n    Y = int(data[idx]); idx += 1\n\n    P = []\n    T = []\n    for _ in range(N - 1):\n        p = int(data[idx]); idx += 1\n        t = int(data[idx]); idx += 1\n        P.append(p)\n        T.append(t)\n\n    Q = int(data[idx]); idx += 1\n    queries = []\n    for _ in range(Q):\n        queries.append(int(data[idx])); idx += 1\n\n    # Preprocessing: For each bus stop i, precompute the next departure time for each possible remainder modulo P_i\n    # For each bus stop i, we store a list of next departure times for each possible remainder (0 to P_i - 1)\n    # This allows us to quickly compute the next bus departure time for any given arrival time at bus stop i\n\n    next_departures = []\n    for i in range(N - 1):\n        p = P[i]\n        t = T[i]\n        departures = []\n        for rem in range(p):\n            # For a given remainder, the next departure time is rem + k * p\n            # The time to reach bus stop i+1 is (rem + k * p) + t\n            # We want to find the minimal such time\n            # The minimal time is rem + t if rem + t >= rem (which it always is)\n            # So the minimal time to reach i+1 is rem + t\n            departures.append(rem + t)\n        next_departures.append(departures)\n\n    # For each query, simulate the journey\n    results = []\n    for q in queries:\n        current_time = q + X  # Time to reach bus stop 1\n        for i in range(N - 1):\n            p = P[i]\n            t = T[i]\n            rem = current_time % p\n            # Find the next departure time from bus stop i\n            # It is the smallest time >= current_time that is a multiple of p\n            # That is, if current_time % p == 0, then it's current_time\n            # Else, it's current_time + (p - rem)\n            next_departure = current_time + (p - rem) if rem != 0 else current_time\n            # Time to reach bus stop i+1\n            current_time = next_departure + t\n        results.append(current_time + Y)\n\n    for res in results:\n        print(res)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 6030,
+  "total_time_ms": 82178.83038520813,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 5360
+  }
+}

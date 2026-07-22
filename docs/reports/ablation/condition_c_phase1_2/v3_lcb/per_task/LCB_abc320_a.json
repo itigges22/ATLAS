@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc320_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nA, B = map(int, input().split())\nresult = A ** B + B ** A\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3662,
+  "total_time_ms": 102302.36911773682,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 1543,
+    "s_star_triggered": true
+  }
+}

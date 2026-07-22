@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/3414",
+  "passed": false,
+  "code": "class Solution:\n    def waysToReachStair(self, k: int) -> int:\n        if k == 0:\n            return 2\n        from collections import deque\n        visited = set()\n        queue = deque()\n        queue.append((1, 0, 0))  # (current stair, jump, last_operation)\n        visited.add((1, 0))\n        result = 0\n\n        while queue:\n            stair, jump, last_op = queue.popleft()\n            if stair == k:\n                result += 1\n            # Go down\n            if last_op != 1 and stair > 0:\n                new_stair = stair - 1\n                if (new_stair, jump) not in visited:\n                    visited.add((new_stair, jump))\n                    queue.append((new_stair, jump, 1))\n            # Go up\n            new_stair = stair + (1 << jump)\n            if (new_stair, jump + 1) not in visited:\n                visited.add((new_stair, jump + 1))\n                queue.append((new_stair, jump + 1, 2))\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 38905,
+  "total_time_ms": 842056.3659667969,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1615,
+    "self_tests_generated": 5,
+    "refinement_error": "LLM call failed after 4 retries: HTTP Error 400: Bad Request"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc309_d",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N1 = int(data[idx])\n    idx += 1\n    N2 = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n    \n    total_nodes = N1 + N2\n    graph = [[] for _ in range(total_nodes + 1)]  # 1-based indexing\n    \n    for _ in range(M):\n        a = int(data[idx])\n        idx += 1\n        b = int(data[idx])\n        idx += 1\n        graph[a].append(b)\n        graph[b].append(a)\n    \n    # BFS from node 1\n    dist1 = [-1] * (total_nodes + 1)\n    q = deque()\n    q.append(1)\n    dist1[1] = 0\n    while q:\n        u = q.popleft()\n        for v in graph[u]:\n            if dist1[v] == -1:\n                dist1[v] = dist1[u] + 1\n                q.append(v)\n    \n    # BFS from node (N1 + N2)\n    distN = [-1] * (total_nodes + 1)\n    q = deque()\n    q.append(total_nodes)\n    distN[total_nodes] = 0\n    while q:\n        u = q.popleft()\n        for v in graph[u]:\n            if distN[v] == -1:\n                distN[v] = distN[u] + 1\n                q.append(v)\n    \n    # Find max distance from 1 to any node in component 1\n    max_dist1 = max(dist1[1:N1+1])\n    \n    # Find max distance from N1+N2 to any node in component 2\n    max_distN = max(distN[N1+1:total_nodes+1])\n    \n    # The maximum possible shortest path after adding one edge\n    print(max_dist1 + max_distN + 1)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1580,
+  "total_time_ms": 24167.63138771057,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1154
+  }
+}

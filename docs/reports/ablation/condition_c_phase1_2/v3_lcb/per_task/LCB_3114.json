@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3114",
+  "passed": true,
+  "code": "class Solution:\n    def maximumSumOfHeights(self, maxHeights: List[int]) -> int:\n        n = len(maxHeights)\n        max_sum = 0\n\n        for peak in range(n):\n            # Build the heights array with peak at 'peak'\n            heights = [0] * n\n            # Left side: non-decreasing up to peak\n            heights[peak] = maxHeights[peak]\n            for i in range(peak - 1, -1, -1):\n                heights[i] = min(maxHeights[i], heights[i + 1])\n            # Right side: non-increasing from peak\n            for i in range(peak + 1, n):\n                heights[i] = min(maxHeights[i], heights[i - 1])\n            # Compute the sum\n            current_sum = sum(heights)\n            if current_sum > max_sum:\n                max_sum = current_sum\n\n        return max_sum",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6709,
+  "total_time_ms": 106751.2481212616,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6467
+  }
+}

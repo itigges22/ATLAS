@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc344_b",
+  "passed": false,
+  "code": "# Read all input lines until the end of input\nnumbers = []\nfor line in iter(input, ''):\n    numbers.append(int(line))\n\n# Print the numbers in reverse order\nfor num in reversed(numbers):\n    print(num)",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 58,
+  "total_time_ms": 1343.8100814819336,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc321_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN = input().strip()\nfor i in range(len(N) - 1):\n    if N[i] <= N[i + 1]:\n        print(\"No\")\n        break\nelse:\n    print(\"Yes\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1358.6504459381104,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

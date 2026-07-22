@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2837",
+  "passed": true,
+  "code": "class Solution:\n    def makeTheIntegerZero(self, num1: int, num2: int) -> int:\n        for k in range(1, 61):\n            target = num1 - k * num2\n            if target < k:\n                continue\n            # Check if target can be represented as sum of k distinct powers of 2\n            bits = bin(target).count('1')\n            if bits <= k:\n                return k\n        return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1999,
+  "total_time_ms": 32739.134073257446,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1887
+  }
+}

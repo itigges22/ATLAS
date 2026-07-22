@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc314_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read().split()\n    idx = 0\n    N = int(input[idx])\n    idx += 1\n    people = []\n    for _ in range(N):\n        C_i = int(input[idx])\n        idx += 1\n        bets = list(map(int, input[idx:idx + C_i]))\n        idx += C_i\n        people.append((bets, C_i))\n    X = int(input[idx])\n    idx += 1\n\n    min_bets = float('inf')\n    candidates = []\n\n    for i in range(N):\n        bets, C_i = people[i]\n        if X in bets:\n            if C_i < min_bets:\n                min_bets = C_i\n                candidates = [i + 1]\n            elif C_i == min_bets:\n                candidates.append(i + 1)\n\n    print(len(candidates))\n    if candidates:\n        print(' '.join(map(str, sorted(candidates))))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1688,
+  "total_time_ms": 25079.36668395996,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1423
+  }
+}

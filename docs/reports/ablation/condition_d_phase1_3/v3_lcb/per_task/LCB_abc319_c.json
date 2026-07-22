@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc319_c",
+  "passed": false,
+  "code": "import sys\nimport itertools\n\ndef main():\n    grid = [list(map(int, sys.stdin.readline().split())) for _ in range(3)]\n    lines = [\n        # Rows\n        [(0, 0), (0, 1), (0, 2)],\n        [(1, 0), (1, 1), (1, 2)],\n        [(2, 0), (2, 1), (2, 2)],\n        # Columns\n        [(0, 0), (1, 0), (2, 0)],\n        [(0, 1), (1, 1), (2, 1)],\n        [(0, 2), (1, 2), (2, 2)],\n        # Diagonals\n        [(0, 0), (1, 1), (2, 2)],\n        [(0, 2), (1, 1), (2, 0)]\n    ]\n\n    total = 0\n    valid = 0\n\n    # Generate all permutations of the 9 cells\n    for perm in itertools.permutations(range(9)):\n       \u5931\u671b = False\n        # For each line, check if the first two cells in the permutation are the same, and the third is different\n        for line in lines:\n            indices = [cell for cell in line]\n            seen_indices = [i for i in indices if i in perm[:2]]\n            if len(seen_indices) == 2:\n                # Check if the first two seen cells have the same value\n                val1 = grid[seen_indices[0] // 3][seen_indices[0] % 3]\n                val2 = grid[seen_indices[1] // 3][seen_indices[1] % 3]\n                if val1 == val2:\n                    # Check if the third cell has a different value\n                    third_index = [i for i in indices if i not in seen_indices][0]\n                    val3 = grid[third_index // 3][third_index % 3]\n                    if val3 != val1:\n                        \u5931\u671b = True\n                        break\n        if not \u5931\u671b:\n            valid += 1\n        total += 1\n\n    print(valid / total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49197,
+  "total_time_ms": 821486.5355491638,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1139,
+    "self_tests_generated": 5
+  }
+}

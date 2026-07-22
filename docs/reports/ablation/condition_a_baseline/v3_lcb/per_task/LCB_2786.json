@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2786",
+  "passed": true,
+  "code": "class Solution:\n    def longestSemiRepetitiveSubstring(self, s: str) -> int:\n        max_len = 1\n        n = len(s)\n        for i in range(n):\n            for j in range(i + 1, n):\n                substr = s[i:j + 1]\n                if self.is_semi_repetitive(substr):\n                    max_len = max(max_len, j - i + 1)\n        return max_len\n\n    def is_semi_repetitive(self, t: str) -> bool:\n        count = 0\n        for i in range(len(t) - 1):\n            if t[i] == t[i + 1]:\n                count += 1\n                if count > 1:\n                    return False\n        return True",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2508.4195137023926,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

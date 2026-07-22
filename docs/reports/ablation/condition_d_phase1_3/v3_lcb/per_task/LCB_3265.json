@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3265",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def maximumSubarraySum(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        prefix_sum = [0] * (n + 1)\n        for i in range(n):\n            prefix_sum[i + 1] = prefix_sum[i] + nums[i]\n        \n        max_sum = float('-inf')\n        seen = dict()\n\n        for j in range(1, n + 1):\n            for i in range(j - k, j + k + 1):\n                if 0 <= i < j:\n                    if abs(nums[i] - nums[j - 1]) == k:\n                        current_sum = prefix_sum[j] - prefix_sum[i]\n                        max_sum = max(max_sum, current_sum)\n        \n        return max_sum if max_sum != float('-inf') else 0",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50788,
+  "total_time_ms": 782783.8680744171,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1225,
+    "self_tests_generated": 5
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc302_f",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque, defaultdict\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    M = int(data[idx])\n    idx += 1\n\n    sets = []\n    element_to_sets = defaultdict(list)\n\n    for _ in range(N):\n        A = int(data[idx])\n        idx += 1\n        elements = list(map(int, data[idx:idx + A]))\n        idx += A\n        sets.append(elements)\n        for e in elements:\n            element_to_sets[e].append(len(sets) - 1)\n\n    # Check if any set already contains both 1 and M\n    for s in sets:\n        if 1 in s and M in s:\n            print(0)\n            return\n\n    # Build graph: sets are nodes, edges between sets that share an element\n    graph = [[] for _ in range(N)]\n    element_to_sets_list = [set() for _ in range(M + 1)]\n    for i in range(N):\n        for e in sets[i]:\n            element_to_sets_list[e].add(i)\n\n    for e in range(1, M + 1):\n        if len(element_to_sets_list[e]) > 1:\n            sets_list = list(element_to_sets_list[e])\n            for i in range(len(sets_list)):\n                for j in range(i + 1, len(sets_list)):\n                    graph[sets_list[i]].append(sets_list[j])\n                    graph[sets_list[j]].append(sets_list[i])\n\n    # BFS to find minimum operations to merge sets containing 1 and M\n    from_1 = [-1] * N\n    from_M = [-1] * N\n\n    q = deque()\n    for s in element_to_sets_list[1]:\n        q.append(s)\n        from_1[s] = 0\n    while q:\n        u = q.popleft()\n        for v in graph[u]:\n            if from_1[v] == -1:\n                from_1[v] = from_1[u] + 1\n                q.append(v)\n\n    q = deque()\n    for s in element_to_sets_list[M]:\n        q.append(s)\n        from_M[s] = 0\n    while q:\n        u = q.popleft()\n        for v in graph[u]:\n            if from_M[v] == -1:\n                from_M[v] = from_M[u] + 1\n                q.append(v)\n\n    min_ops = float('inf')\n    for i in range(N):\n        if from_1[i] != -1 and from_M[i] != -1:\n            min_ops = min(min_ops, from_1[i] + from_M[i])\n\n    if min_ops == float('inf'):\n        print(-1)\n    else:\n        print(min_ops)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1826,
+  "total_time_ms": 29669.26407814026,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1239
+  }
+}

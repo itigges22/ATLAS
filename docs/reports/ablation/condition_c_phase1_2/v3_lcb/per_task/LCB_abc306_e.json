@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc306_e",
+  "passed": false,
+  "code": "import sys\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    Q = int(data[2])\n    \n    A = [0] * N\n    heap = []\n    \n    idx = 3\n    for i in range(Q):\n        X = int(data[idx]) - 1\n        Y = int(data[idx + 1])\n        idx += 2\n        \n        # Update the value at position X\n        old_val = A[X]\n        A[X] = Y\n        \n        # If old_val was in the heap, we need to remove it\n        # Since we can't efficiently remove from a heap, we'll just add the new value\n        # and keep track of the heap size\n        # We'll use a max-heap by inverting the values\n        heapq.heappush(heap, -Y)\n        \n        # If the heap size exceeds K, pop the smallest (which is the largest in original values)\n        if len(heap) > K:\n            heapq.heappop(heap)\n        \n        # The sum of the top K elements is the sum of the negative values in the heap\n        print(-sum(heap))\n        \nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 289,
+  "total_time_ms": 5337.637901306152,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

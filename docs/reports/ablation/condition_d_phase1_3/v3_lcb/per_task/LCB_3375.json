@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3375",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def findKthSmallest(self, coins: List[int], k: int) -> int:\n        def count_less_equal(x: int) -> int:\n            total = 0\n            for coin in coins:\n                total += x // coin\n            return total\n\n        left = 1\n        right = max(coins) * k\n\n        while left < right:\n            mid = (left + right) // 2\n            cnt = count_less_equal(mid)\n            if cnt < k:\n                left = mid + 1\n            else:\n                right = mid\n\n        return left",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 58284,
+  "total_time_ms": 932574.1381645203,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1290,
+    "self_tests_generated": 5
+  }
+}

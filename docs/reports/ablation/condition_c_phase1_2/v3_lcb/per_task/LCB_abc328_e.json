@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc328_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport itertools\n\ndef find(parent, x):\n    if parent[x] != x:\n        parent[x] = find(parent, parent[x])\n    return parent[x]\n\ndef union(parent, rank, x, y):\n    x_root = find(parent, x)\n    y_root = find(parent, y)\n    if x_root == y_root:\n        return False\n    if rank[x_root] < rank[y_root]:\n        parent[x_root] = y_root\n    else:\n        parent[y_root] = x_root\n        if rank[x_root] == rank[y_root]:\n            rank[x_root] += 1\n    return True\n\ndef kruskal(n, edges):\n    edges = sorted(edges, key=lambda x: x[2])\n    parent = list(range(n + 1))\n    rank = [0] * (n + 1)\n    total_weight = 0\n    for u, v, w in edges:\n        if union(parent, rank, u, v):\n            total_weight += w\n    return total_weight\n\ndef main():\n    input = sys.stdin.read().split()\n    idx = 0\n    N = int(input[idx]); idx += 1\n    M = int(input[idx]); idx += 1\n    K = int(input[idx]); idx += 1\n    edges = []\n    for _ in range(M):\n        u = int(input[idx]); idx += 1\n        v = int(input[idx]); idx += 1\n        w = int(input[idx]); idx += 1\n        edges.append((u, v, w))\n    # Generate all possible spanning trees\n    min_cost = K  # Initialize with maximum possible value\n    for subset in itertools.combinations(edges, N - 1):\n        parent = list(range(N + 1))\n        rank = [0] * (N + 1)\n        is_tree = True\n        for u, v, _ in subset:\n            if find(parent, u) == find(parent, v):\n                is_tree = False\n                break\n            union(parent, rank, u, v)\n        if is_tree:\n            total_weight = sum(w for _, _, w in subset)\n            cost = total_weight % K\n            if cost < min_cost:\n                min_cost = cost\n    print(min_cost)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 9060,
+  "total_time_ms": 226245.16987800598,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6292,
+    "s_star_triggered": true
+  }
+}

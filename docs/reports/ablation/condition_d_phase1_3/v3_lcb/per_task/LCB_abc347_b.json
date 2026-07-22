@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc347_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    S = input().strip()\n    unique_substrings = set()\n\n    n = len(S)\n    for i in range(n):\n        for j in range(i + 1, n + 1):\n            substring = S[i:j]\n            unique_substrings.add(substring)\n\n    print(len(unique_substrings))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 483,
+  "total_time_ms": 9252.922773361206,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 418
+  }
+}

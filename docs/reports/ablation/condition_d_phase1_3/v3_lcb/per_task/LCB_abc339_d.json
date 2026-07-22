@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc339_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import deque\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    grid = data[1:N+1]\n\n    # Find positions of the two players\n    players = []\n    for i in range(N):\n        for j in range(N):\n            if grid[i][j] == 'P':\n                players.append((i, j))\n    start1, start2 = players\n\n    # Directions: up, down, left, right\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n\n    # BFS to find minimum steps\n    visited = set()\n    queue = deque()\n    queue.append((start1, start2, 0))\n    visited.add((start1, start2))\n\n    while queue:\n        pos1, pos2, steps = queue.popleft()\n        if pos1 == pos2:\n            print(steps)\n            return\n        for dx, dy in directions:\n            new_pos1 = (pos1[0] + dx, pos1[1] + dy)\n            new_pos2 = (pos2[0] + dx, pos2[1] + dy)\n            # Check if new positions are valid\n            valid1 = 0 <= new_pos1[0] < N and 0 <= new_pos1[1] < N and grid[new_pos1[0]][new_pos1[1]] != '#'\n            valid2 = 0 <= new_pos2[0] < N and 0 <= new_pos2[1] < N and grid[new_pos2[0]][new_pos2[1]] != '#'\n            if valid1 and valid2:\n                if (new_pos1, new_pos2) not in visited:\n                    visited.add((new_pos1, new_pos2))\n                    queue.append((new_pos1, new_pos2, steps + 1))\n            elif valid1 or valid2:\n                # One player can't move, the other can\n                if valid1:\n                    if (new_pos1, pos2) not in visited:\n                        visited.add((new_pos1, pos2))\n                        queue.append((new_pos1, pos2, steps + 1))\n                else:\n                    if (pos1, new_pos2) not in visited:\n                        visited.add((pos1, new_pos2))\n                        queue.append((pos1, new_pos2, steps + 1))\n    print(-1)\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2297,
+  "total_time_ms": 61685.702085494995,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1754
+  }
+}

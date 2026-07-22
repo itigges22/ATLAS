@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc355_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n    \n    C = sorted(A + B)\n    \n    # Check for consecutive elements from A\n    for i in range(len(C) - 1):\n        if (C[i] in A) and (C[i+1] in A):\n            print(\"Yes\")\n            return\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 157,
+  "total_time_ms": 2370.0757026672363,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc333_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nsys.setrecursionlimit(1 << 25)\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    edges = data[1:]\n    \n    # Build the tree as an adjacency list\n    tree = [[] for _ in range(N + 1)]\n    for i in range(N - 1):\n        u = int(edges[2 * i])\n        v = int(edges[2 * i + 1])\n        tree[u].append(v)\n        tree[v].append(u)\n    \n    # We need to find the minimum number of operations to delete node 1\n    # This is equivalent to finding the number of nodes in the longest path from node 1 to a leaf\n    # So we perform a DFS to find the longest path from node 1\n    \n    def dfs(node, parent):\n        max_depth = 0\n        for neighbor in tree[node]:\n            if neighbor != parent:\n                depth = dfs(neighbor, node)\n                max_depth = max(max_depth, depth)\n        return max_depth + 1\n    \n    result = dfs(1, -1)\n    print(result)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 69640,
+  "total_time_ms": 1144358.2110404968,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 665,
+    "self_tests_generated": 5
+  }
+}

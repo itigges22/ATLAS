@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3018",
+  "passed": false,
+  "code": "class Solution:\n    def canMakeSubsequence(self, str1: str, str2: str) -> bool:\n        i = 0  # Pointer for str1\n        j = 0  # Pointer for str2\n        n, m = len(str1), len(str2)\n        \n        while i < n and j < m:\n            # Check if current character in str1 can be transformed to match str2[j]\n            if ord(str1[i]) == ord(str2[j]):\n                j += 1\n                i += 1\n            elif ord(str1[i]) + 1 == ord(str2[j]):\n                j += 1\n                i += 1\n            elif ord(str1[i]) == ord('z') and ord(str2[j]) == ord('a'):\n                j += 1\n                i += 1\n            else:\n                i += 1\n        \n        return j == m",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 52372,
+  "total_time_ms": 825942.7697658539,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1255,
+    "self_tests_generated": 5
+  }
+}

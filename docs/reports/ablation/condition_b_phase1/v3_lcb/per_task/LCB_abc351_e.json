@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc351_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    points = []\n    idx = 1\n    for _ in range(N):\n        x = int(data[idx])\n        y = int(data[idx + 1])\n        points.append((x, y))\n        idx += 2\n    \n    # Precompute all pairwise distances\n    dist = {}\n    total = 0\n    \n    for i in range(N):\n        x1, y1 = points[i]\n        for j in range(i + 1, N):\n            x2, y2 = points[j]\n            # Compute the distance based on the movement rules\n            dx = abs(x1 - x2)\n            dy = abs(y1 - y2)\n            # The minimum number of jumps is max(dx, dy)\n            # If dx + dy is odd, it's impossible (since each jump changes x and y by \u00b11, total change is even)\n            if (dx + dy) % 2 != 0:\n                d = 0\n            else:\n                d = max(dx, dy)\n            dist[(i, j)] = d\n            total += d\n    \n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 893,
+  "total_time_ms": 15248.645782470703,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 680
+  }
+}

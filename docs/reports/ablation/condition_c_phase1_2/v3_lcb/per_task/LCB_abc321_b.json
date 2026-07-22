@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc321_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    X = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    # Try all possible scores from 0 to 100\n    for score in range(0, 101):\n        temp = A + [score]\n        temp.sort()\n        total = sum(temp[1:-1])  # Exclude first and last\n        if total >= X:\n            print(score)\n            return\n    print(-1)\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 148,
+  "total_time_ms": 2557.27481842041,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "phase": "v3_lcb",
+  "total_tasks": 599,
+  "passed_tasks": 447,
+  "pass_rate": 0.7462437395659433,
+  "phase_breakdown": {
+    "phase1": 405,
+    "pr_cot": 36,
+    "refinement": 6,
+    "derivation": 0,
+    "none": 152,
+    "error": 0
+  }
+}

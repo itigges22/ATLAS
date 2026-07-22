@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2854",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minimizeConcatenatedLength(self, words: List[str]) -> int:\n        n = len(words)\n        C = 26\n        \n        # dp[i][first][last] = minimum length of the string after processing first i words\n        # with first character 'first' and last character 'last'\n        dp = [[[float('inf')] * C for _ in range(C)] for __ in range(n)]\n        \n        # Initialize with the first word\n        first_char = ord(words[0][0]) - ord('a')\n        last_char = ord(words[0][-1]) - ord('a')\n        dp[0][first_char][last_char] = len(words[0])\n        \n        for i in range(1, n):\n            curr_word = words[i]\n            first = ord(curr_word[0]) - ord('a')\n            last = ord(curr_word[-1]) - ord('a')\n            word_len = len(curr_word)\n            \n            for prev_first in range(C):\n                for prev_last in range(C):\n                    if dp[i-1][prev_first][prev_last] == float('inf'):\n                        continue\n                    # Case 1: join previous string with current word\n                    new_first = prev_first\n                    new_last = last\n                    new_len = dp[i-1][prev_first][prev_last] + word_len\n                    if prev_last == first:\n                        new_len -= 1\n                    dp[i][new_first][new_last] = min(dp[i][new_first][new_last], new_len)\n                    \n                    # Case 2: join current word with previous string\n                    new_first = first\n                    new_last = prev_last\n                    new_len = dp[i-1][prev_first][prev_last] + word_len\n                    if prev_first == last:\n                        new_len -= 1\n                    dp[i][new_first][new_last] = min(dp[i][new_first][new_last], new_len)\n        \n        # Find the minimum length after processing all words\n        result = float('inf')\n        for first in range(C):\n            for last in range(C):\n                result = min(result, dp[n-1][first][last])\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 6806,
+  "total_time_ms": 110490.09394645691,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 4383,
+    "s_star_triggered": true
+  }
+}

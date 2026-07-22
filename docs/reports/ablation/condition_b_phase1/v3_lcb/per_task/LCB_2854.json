@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2854",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minimizeConcatenatedLength(self, words: List[str]) -> int:\n        n = len(words)\n        # dp[i][first][last] = min length of the string formed by the first i+1 words\n        # with first character 'first' and last character 'last'\n        dp = [{} for _ in range(n)]\n        \n        # Initialize the first word\n        first_char = words[0][0]\n        last_char = words[0][-1]\n        dp[0][(first_char, last_char)] = len(words[0])\n        \n        for i in range(1, n):\n            curr_word = words[i]\n            curr_first = curr_word[0]\n            curr_last = curr_word[-1]\n            curr_len = len(curr_word)\n            \n            for (prev_first, prev_last), prev_total_len in dp[i-1].items():\n                # Option 1: join previous string with current word\n                if prev_last == curr_first:\n                    new_total_len = prev_total_len + curr_len - 1\n                else:\n                    new_total_len = prev_total_len + curr_len\n                key = (prev_first, curr_last)\n                if key in dp[i]:\n                    dp[i][key] = min(dp[i][key], new_total_len)\n                else:\n                    dp[i][key] = new_total_len\n                \n                # Option 2: join current word with previous string\n                if curr_last == prev_first:\n                    new_total_len = prev_total_len + curr_len - 1\n                else:\n                    new_total_len = prev_total_len + curr_len\n                key = (curr_first, prev_last)\n                if key in dp[i]:\n                    dp[i][key] = min(dp[i][key], new_total_len)\n                else:\n                    dp[i][key] = new_total_len\n        \n        # Find the minimum length in the last dp state\n        return min(dp[-1].values())",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2490,
+  "total_time_ms": 41660.29334068298,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2133
+  }
+}

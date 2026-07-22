@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3402",
+  "passed": false,
+  "code": "class Solution:\n    def minCostToEqualizeArray(self, nums: List[int], cost1: int, cost2: int) -> int:\n        MOD = 10**9 + 7\n        target = max(nums)\n        total = 0\n        for num in nums:\n            total += (target - num) * cost1\n        return total % MOD",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49597,
+  "total_time_ms": 821949.7354030609,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1556,
+    "self_tests_generated": 5
+  }
+}

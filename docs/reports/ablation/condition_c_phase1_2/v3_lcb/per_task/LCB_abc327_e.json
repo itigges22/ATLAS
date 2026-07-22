@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc327_e",
+  "passed": true,
+  "code": "import sys\nimport math\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    P = list(map(int, data[1:]))\n\n    # Precompute powers of 0.9 for efficiency\n    max_k = N\n    pow_0_9 = [1.0] * (max_k + 1)\n    for i in range(1, max_k + 1):\n        pow_0_9[i] = pow_0_9[i - 1] * 0.9\n\n    # DP table: dp[i] = (sum_weighted, sum_weight, k) for subsequences ending at i\n    dp = [None] * N\n    max_rating = -float('inf')\n\n    for i in range(N):\n        # Initialize with just P[i]\n        weighted_sum = P[i]\n        weight_sum = 1.0\n        k = 1\n        dp[i] = (weighted_sum, weight_sum, k)\n        max_rating = max(max_rating, (weighted_sum / weight_sum) - 1200 / math.sqrt(k))\n\n        # Consider extending subsequences ending at j < i\n        for j in range(i):\n            if dp[j] is not None:\n                weighted_sum_new = dp[j][0] * 0.9 + P[i]\n                weight_sum_new = dp[j][1] * 0.9 + 1.0\n                k_new = dp[j][2] + 1\n                dp[i] = (weighted_sum_new, weight_sum_new, k_new)\n                rating = (weighted_sum_new / weight_sum_new) - 1200 / math.sqrt(k_new)\n                max_rating = max(max_rating, rating)\n\n    print(f\"{max_rating:.15f}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7482,
+  "total_time_ms": 123300.07839202881,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7273
+  }
+}

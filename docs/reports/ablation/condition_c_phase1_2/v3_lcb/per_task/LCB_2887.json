@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2887",
+  "passed": false,
+  "code": "class Solution:\n    def sortVowels(self, s: str) -> str:\n        vowels = []\n        # First pass: collect vowels and note their positions\n        vowel_indices = []\n        for i, char in enumerate(s):\n            if char.lower() in {'a', 'e', 'i', 'o', 'u'}:\n                vowels.append(char)\n                vowel_indices.append(i)\n        \n        # Sort vowels by their ASCII values\n        vowels.sort()\n        \n        # Second pass: build the result string\n        result = list(s)\n        for idx, pos in enumerate(vowel_indices):\n            result[pos] = vowels[idx]\n        \n        return ''.join(result)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3528,
+  "total_time_ms": 55741.92667007446,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3383
+  }
+}

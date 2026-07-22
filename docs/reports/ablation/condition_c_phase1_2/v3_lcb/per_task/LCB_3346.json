@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3346",
+  "passed": false,
+  "code": "class Solution:\n    def getSmallestString(self, s: str, k: int) -> str:\n        n = len(s)\n        # dp[i][k] = smallest string for first i characters with total distance k\n        dp = [[''] * (k + 1) for _ in range(n + 1)]\n        dp[0][0] = ''\n\n        for i in range(1, n + 1):\n            for dist in range(k + 1):\n                if dp[i - 1][dist] != '':\n                    # Try changing s[i-1] to any character\n                    for c in range(ord('a'), ord('z') + 1):\n                        cost = min(abs(c - ord(s[i - 1])), 26 - abs(c - ord(s[i - 1])))\n                        if dist + cost <= k:\n                            new_str = dp[i - 1][dist] + chr(c)\n                            if dp[i][dist + cost] == '' or new_str < dp[i][dist + cost]:\n                                dp[i][dist + cost] = new_str\n\n        # Find the lexicographically smallest string among all possible distances\n        result = min(dp[n][dist] for dist in range(k + 1) if dp[n][dist] != '')\n        return result",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 4987,
+  "total_time_ms": 83612.7302646637,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4870
+  }
+}

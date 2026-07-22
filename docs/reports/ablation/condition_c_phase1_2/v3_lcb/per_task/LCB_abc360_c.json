@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc360_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    W = list(map(int, data[N+1:2*N+1]))\n    \n    # Create a mapping from box to list of items in it\n    box_to_items = {}\n    for i in range(N):\n        box = A[i]\n        if box not in box_to_items:\n            box_to_items[box] = []\n        box_to_items[box].append(i)\n    \n    # For each box, if there is more than one item, we need to move all but one\n    # We will keep the item with the largest weight in the box (to minimize cost)\n    # The rest will be moved\n    total_cost = 0\n    \n    for box in box_to_items:\n        items = box_to_items[box]\n        if len(items) == 1:\n            continue\n        # Keep the item with the maximum weight\n        max_weight = max(W[i] for i in items)\n        # Add the cost of moving all other items\n        for i in items:\n            if W[i] != max_weight:\n                total_cost += W[i]\n    \n    print(total_cost)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6845,
+  "total_time_ms": 119213.52362632751,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6638
+  }
+}

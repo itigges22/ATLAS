@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc363_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef nth_palindrome(n):\n    if n == 1:\n        return 0\n    n -= 2  # Adjust for 0 and 1-digit palindromes\n\n    length = 1\n    while True:\n        half_length = (length + 1) // 2\n        count = 9 * 10 ** (half_length - 1)\n        if n < count:\n            break\n        n -= count\n        length += 1\n\n    half = 10 ** (half_length - 1) + n\n    half_str = str(half)\n    if length % 2 == 0:\n        return int(half_str + half_str[::-1])\n    else:\n        return int(half_str + half_str[-2::-1])\n\ndef main():\n    n = int(sys.stdin.readline())\n    print(nth_palindrome(n))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1203,
+  "total_time_ms": 20665.241718292236,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1074
+  }
+}

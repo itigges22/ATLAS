@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc326_a",
+  "passed": true,
+  "code": "# Read input\nX, Y = map(int, input().split())\n\n# Calculate the difference\ndiff = Y - X\n\n# Check if the move is within the stairs usage range\nif -3 <= diff <= 2:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1503.2100677490234,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

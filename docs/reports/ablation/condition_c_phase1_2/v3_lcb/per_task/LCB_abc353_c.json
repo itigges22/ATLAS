@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc353_c",
+  "passed": true,
+  "code": "import sys\ninput = sys.stdin.read\n\nMOD = 10**8\n\ndef main():\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n    \n    total = 0\n    count = {}\n    \n    for a in A:\n        for b in count:\n            total += (a + b) % MOD\n        count[a] = count.get(a, 0) + 1\n    \n    print(total)\n\nmain()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 116,
+  "total_time_ms": 2193.43638420105,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

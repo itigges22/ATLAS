@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3517",
+  "passed": true,
+  "code": "from collections import deque\n\nclass Solution:\n    def shortestDistanceAfterQueries(self, n: int, queries: List[List[int]]) -> List[int]:\n        graph = [[] for _ in range(n)]\n        for i in range(n - 1):\n            graph[i].append(i + 1)\n        answer = []\n        for u, v in queries:\n            graph[u].append(v)\n            dist = [float('inf')] * n\n            dist[0] = 0\n            q = deque([0])\n            while q:\n                node = q.popleft()\n                for neighbor in graph[node]:\n                    if dist[neighbor] > dist[node] + 1:\n                        dist[neighbor] = dist[node] + 1\n                        q.append(neighbor)\n            answer.append(dist[n - 1])\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1450,
+  "total_time_ms": 22634.870052337646,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1267
+  }
+}

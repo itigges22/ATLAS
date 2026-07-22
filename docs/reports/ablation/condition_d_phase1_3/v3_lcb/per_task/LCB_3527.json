@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3527",
+  "passed": false,
+  "code": "from collections import defaultdict\nfrom typing import List\n\nclass Solution:\n    def numberOfAlternatingGroups(self, colors: List[int], queries: List[List[int]]) -> List[int]:\n        n = len(colors)\n        freq = defaultdict(int)\n        count = 0\n\n        # Preprocess to count alternating groups\n        for i in range(n):\n            if colors[i] != colors[(i + 1) % n]:\n                count += 1\n        # Since the circle wraps around, we need to divide by 2 to avoid double-counting\n        count //= 2\n        freq[count] = 1\n\n        answer = []\n\n        # Process queries\n        for q in queries:\n            if q[0] == 1:\n                size = q[1]\n                answer.append(freq.get(size, 0))\n            else:\n                index, color = q[1], q[2]\n                # Check if the color at index is changing\n                if colors[index] == color:\n                    continue\n                # Update the color\n                colors[index] = color\n                # Rebuild the frequency map\n                freq.clear()\n                count = 0\n                for i in range(n):\n                    if colors[i] != colors[(i + 1) % n]:\n                        count += 1\n                count //= 2\n                freq[count] = 1\n\n        return answer",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 58108,
+  "total_time_ms": 1500420.1185703278,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1655,
+    "self_tests_generated": 5
+  }
+}

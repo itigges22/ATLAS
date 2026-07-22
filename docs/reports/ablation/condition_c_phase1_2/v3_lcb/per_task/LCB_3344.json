@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3344",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumDistance(self, points: List[List[int]]) -> int:\n        # Precompute the values of x + y and x - y for all points\n        x_plus_y = [x + y for x, y in points]\n        x_minus_y = [x - y for x, y in points]\n\n        # Find the max and min of x + y and x - y\n        max_x_plus_y = max(x_plus_y)\n        min_x_plus_y = min(x_plus_y)\n        max_x_minus_y = max(x_minus_y)\n        min_x_minus_y = min(x_minus_y)\n\n        # Compute the maximum Manhattan distance for the full set of points\n        full_max = max(max_x_plus_y - min_x_plus_y, max_x_minus_y - min_x_minus_y)\n\n        # Now, for each point, simulate its removal\n        min_result = float('inf')\n        for i in range(len(points)):\n            # Remove the i-th point\n            # Recompute max and min of x + y and x - y without the i-th point\n            current_max_x_plus_y = max([x_plus_y[j] for j in range(len(x_plus_y)) if j != i])\n            current_min_x_plus_y = min([x_plus_y[j] for j in range(len(x_plus_y)) if j != i])\n            current_max_x_minus_y = max([x_minus_y[j] for j in range(len(x_minus_y)) if j != i])\n            current_min_x_minus_y = min([x_minus_y[j] for j in range(len(x_minus_y)) if j != i])\n\n            # Compute the maximum Manhattan distance after removing the i-th point\n            current_max = max(current_max_x_plus_y - current_min_x_plus_y, current_max_x_minus_y - current_min_x_minus_y)\n\n            # Update the minimum result\n            min_result = min(min_result, current_max)\n\n        return min_result",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 8997,
+  "total_time_ms": 132288.31434249878,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 8867
+  }
+}

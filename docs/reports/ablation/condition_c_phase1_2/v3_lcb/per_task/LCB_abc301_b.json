@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc301_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    while True:\n        all_diff_1 = True\n        for i in range(len(A) - 1):\n            if abs(A[i] - A[i + 1]) != 1:\n                all_diff_1 = False\n                break\n        if all_diff_1:\n            break\n        # Find the first pair with difference not 1\n        for i in range(len(A) - 1):\n            if abs(A[i] - A[i + 1]) != 1:\n                # Insert numbers between A[i] and A[i+1]\n                if A[i] < A[i + 1]:\n                    to_insert = list(range(A[i] + 1, A[i + 1]))\n                else:\n                    to_insert = list(range(A[i] - 1, A[i + 1], -1))\n                A = A[:i + 1] + to_insert + A[i + 1:]\n                break\n\n    print(' '.join(map(str, A)))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 278,
+  "total_time_ms": 3744.8956966400146,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

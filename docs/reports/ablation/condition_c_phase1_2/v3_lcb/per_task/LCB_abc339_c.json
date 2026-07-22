@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc339_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n    \n    current = 0\n    min_passengers = 0\n    for a in A:\n        current += a\n        if current < 0:\n            min_passengers += -current\n            current = 0\n    print(min_passengers)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 125,
+  "total_time_ms": 2080.7275772094727,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

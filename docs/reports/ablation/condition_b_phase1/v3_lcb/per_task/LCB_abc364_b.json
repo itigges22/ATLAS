@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc364_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    H, W = map(int, sys.stdin.readline().split())\n    S_i, S_j = map(int, sys.stdin.readline().split())\n    grid = [sys.stdin.readline().strip() for _ in range(H)]\n    X = sys.stdin.readline().strip()\n\n    # Convert to 0-based index\n    S_i -= 1\n    S_j -= 1\n\n    # Directions: L, R, U, D\n    directions = {\n        'L': (0, -1),\n        'R': (0, 1),\n        'U': (-1, 0),\n        'D': (1, 0)\n    }\n\n    for move in X:\n        dx, dy = directions[move]\n        new_i = S_i + dx\n        new_j = S_j + dy\n\n        # Check if the new position is within bounds and the cell is empty\n        if 0 <= new_i < H and 0 <= new_j < W and grid[new_i][new_j] == '.':\n            S_i, S_j = new_i, new_j\n\n    # Convert back to 1-based index\n    print(S_i + 1, S_j + 1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1426,
+  "total_time_ms": 22753.311157226562,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1193
+  }
+}

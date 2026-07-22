@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3428",
+  "passed": true,
+  "code": "class Solution:\n    def duplicateNumbersXOR(self, nums: List[int]) -> int:\n        count = {}\n        for num in nums:\n            count[num] = count.get(num, 0) + 1\n        result = 0\n        for num, freq in count.items():\n            if freq == 2:\n                result ^= num\n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 907,
+  "total_time_ms": 15573.94027709961,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 818
+  }
+}

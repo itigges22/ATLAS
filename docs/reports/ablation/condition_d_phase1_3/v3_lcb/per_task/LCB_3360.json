@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3360",
+  "passed": false,
+  "code": "from collections import Counter\nimport heapq\n\nclass Solution:\n    def minimumDeletions(self, word: str, k: int) -> int:\n        freq = list(Counter(word).values())\n        freq.sort()\n        n = len(freq)\n        min_deletions = float('inf')\n        \n        # Try each frequency as the base\n        for i in range(n):\n            base = freq[i]\n            current_deletions = 0\n            for j in range(n):\n                if j == i:\n                    continue\n                if freq[j] < base:\n                    current_deletions += freq[j]\n                elif freq[j] - base > k:\n                    current_deletions += freq[j] - base\n            min_deletions = min(min_deletions, current_deletions)\n        \n        return min_deletions",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 57432,
+  "total_time_ms": 927881.3331127167,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1653,
+    "self_tests_generated": 5
+  }
+}

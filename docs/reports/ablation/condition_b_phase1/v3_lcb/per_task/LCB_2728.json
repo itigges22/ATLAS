@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2728",
+  "passed": true,
+  "code": "class Solution:\n    def matrixSum(self, nums: List[List[int]]) -> int:\n        score = 0\n        # Sort each row in descending order\n        for row in nums:\n            row.sort(reverse=True)\n        # Iterate through each column and find the max in each column\n        for col in zip(*nums):\n            score += max(col)\n        return score",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1217,
+  "total_time_ms": 21367.7077293396,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1127
+  }
+}

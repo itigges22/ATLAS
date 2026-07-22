@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc326_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    A.sort()\n    \n    max_count = 0\n    left = 0\n    \n    for right in range(N):\n        while A[right] - A[left] >= M:\n            left += 1\n        max_count = max(max_count, right - left + 1)\n    \n    print(max_count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 935,
+  "total_time_ms": 16777.058839797974,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 789
+  }
+}

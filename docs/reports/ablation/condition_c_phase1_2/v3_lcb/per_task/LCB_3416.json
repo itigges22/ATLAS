@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3416",
+  "passed": true,
+  "code": "class Solution:\n    def sumDigitDifferences(self, nums: List[int]) -> int:\n        n = len(nums)\n        if n < 2:\n            return 0\n        \n        # Convert each number to a string to easily access digits\n        str_nums = [str(num) for num in nums]\n        length = len(str_nums[0])\n        \n        total = 0\n        \n        # Iterate over each digit position\n        for i in range(length):\n            # Count the frequency of each digit at position i\n            freq = {}\n            for num in str_nums:\n                digit = num[i]\n                freq[digit] = freq.get(digit, 0) + 1\n            \n            # Calculate the number of pairs with different digits\n            # For each digit, the number of pairs with other digits is count * (n - count)\n            for count in freq.values():\n                total += count * (n - count)\n        \n        return total // 2  # Each pair is counted twice",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 3997,
+  "total_time_ms": 64587.80217170715,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3819
+  }
+}

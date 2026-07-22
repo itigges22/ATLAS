@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc332_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    N, M = map(int, sys.stdin.readline().split())\n    S = sys.stdin.readline().strip()\n\n    # Track the availability of plain and logo T-shirts\n    plain_available = M\n    logo_available = 0\n    # Track used T-shirts (we need to know when they become available)\n    plain_used = set()\n    logo_used = set()\n\n    for day in range(N):\n        if S[day] == '0':\n            # Wash all used T-shirts\n            plain_available = M\n            logo_available = 0\n            plain_used = set()\n            logo_used = set()\n        elif S[day] == '1':\n            # Can wear plain or logo\n            if plain_available > 0:\n                plain_available -= 1\n            elif logo_available > 0:\n                logo_available -= 1\n            else:\n                # Need to buy a logo T-shirt\n                logo_available -= 1\n        elif S[day] == '2':\n            # Must wear logo\n            if logo_available > 0:\n                logo_available -= 1\n            else:\n                # Need to buy a logo T-shirt\n                logo_available -= 1\n\n    print(-logo_available)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 994,
+  "total_time_ms": 18098.62446784973,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 752
+  }
+}

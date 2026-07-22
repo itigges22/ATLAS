@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc337_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    H = int(data[0])\n    W = int(data[1])\n    K = int(data[2])\n    grid = data[3:3+H]\n\n    min_ops = float('inf')\n\n    # Check rows\n    for i in range(H):\n        row = grid[i]\n        for j in range(W - K + 1):\n            ops = 0\n            valid = True\n            for k in range(K):\n                cell = row[j + k]\n                if cell == 'x':\n                    valid = False\n                    break\n                elif cell == '.':\n                    ops += 1\n            if valid and ops < min_ops:\n                min_ops = ops\n\n    # Check columns\n    for j in range(W):\n        for i in range(H - K + 1):\n            ops = 0\n            valid = True\n            for k in range(K):\n                cell = grid[i + k][j]\n                if cell == 'x':\n                    valid = False\n                    break\n                elif cell == '.':\n                    ops += 1\n            if valid and ops < min_ops:\n                min_ops = ops\n\n    if min_ops == float('inf'):\n        print(-1)\n    else:\n        print(min_ops)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "pr_cot",
+  "candidates_generated": 3,
+  "total_tokens": 22465,
+  "total_time_ms": 357945.37925720215,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1100,
+    "self_tests_generated": 5
+  }
+}

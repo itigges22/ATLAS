@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc314_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    \n    people = []\n    for _ in range(N):\n        C_i = int(data[idx])\n        idx += 1\n        bets = list(map(int, data[idx:idx + C_i]))\n        idx += C_i\n        people.append((C_i, bets))\n    \n    X = int(data[idx])\n    \n    # Single-pass approach to find min C_i among those who bet on X\n    min_c = None\n    candidates = []\n    \n    for i in range(N):\n        C_i, bets = people[i]\n        if X in bets:\n            if min_c is None or C_i < min_c:\n                min_c = C_i\n                candidates = [i + 1]\n            elif C_i == min_c:\n                candidates.append(i + 1)\n    \n    # Output\n    print(len(candidates))\n    if candidates:\n        print(' '.join(map(str, sorted(candidates))))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1517,
+  "total_time_ms": 25779.934883117676,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1252
+  }
+}

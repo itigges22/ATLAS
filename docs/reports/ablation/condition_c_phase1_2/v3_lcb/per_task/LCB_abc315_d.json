@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc315_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    H = int(data[0])\n    W = int(data[1])\n    grid = data[2:H+2]\n\n    # Convert grid to a list of lists for easier manipulation\n    grid = [list(row) for row in grid]\n\n    while True:\n        marked = set()\n\n        # Mark rows\n        for i in range(H):\n            row = grid[i]\n            if len(set(row)) == 1:\n                for j in range(W):\n                    marked.add((i, j))\n\n        # Mark columns\n        for j in range(W):\n            column = [grid[i][j] for i in range(H)]\n            if len(set(column)) == 1:\n                for i in range(H):\n                    marked.add((i, j))\n\n        if not marked:\n            break\n\n        # Remove marked cookies\n        for i, j in marked:\n            grid[i][j] = '.'\n\n    # Count remaining cookies\n    count = 0\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] != '.':\n                count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 276,
+  "total_time_ms": 94167.83428192139,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "standard"
+  }
+}

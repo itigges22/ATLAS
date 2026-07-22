@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc365_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\na = list(map(int, input().split()))\nmax_val = max(a)\nsecond_max = max([x for x in a if x != max_val])\nprint(a.index(second_max) + 1)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 64,
+  "total_time_ms": 1096.1923599243164,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3220",
+  "passed": true,
+  "code": "class Solution:\n    def countTestedDevices(self, batteryPercentages: List[int]) -> int:\n        tested = 0\n        n = len(batteryPercentages)\n        for i in range(n):\n            if batteryPercentages[i] > 0:\n                tested += 1\n                for j in range(i + 1, n):\n                    batteryPercentages[j] = max(0, batteryPercentages[j] - 1)\n        return tested",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 109,
+  "total_time_ms": 1696.807622909546,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

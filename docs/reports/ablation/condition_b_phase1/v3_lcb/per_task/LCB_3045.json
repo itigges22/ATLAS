@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3045",
+  "passed": true,
+  "code": "class Solution:\n    def minimumRightShifts(self, nums: List[int]) -> int:\n        n = len(nums)\n        # Find the index where nums[i] > nums[i+1]\n        pivot = -1\n        for i in range(n - 1):\n            if nums[i] > nums[i + 1]:\n                pivot = i\n                break\n        if pivot == -1:\n            return 0  # Already sorted\n        # Check if the array is rotated sorted\n        for i in range(pivot + 1, n - 1):\n            if nums[i] > nums[i + 1]:\n                return -1\n        # Check if the last element is <= first element\n        if nums[-1] > nums[0]:\n            return -1\n        return n - pivot - 1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1030,
+  "total_time_ms": 16843.656301498413,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 845
+  }
+}

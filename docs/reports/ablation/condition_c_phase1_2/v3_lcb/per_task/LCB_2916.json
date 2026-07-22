@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/2916",
+  "passed": false,
+  "code": "class Solution:\n    def canSplitArray(self, nums: List[int], m: int) -> bool:\n        n = len(nums)\n        # If the array length is 1, it's already split\n        if n == 1:\n            return True\n        \n        # Check if every adjacent pair has a sum >= m\n        for i in range(n - 1):\n            if nums[i] + nums[i + 1] < m:\n                return False\n        return True",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 113,
+  "total_time_ms": 1919.4717407226562,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

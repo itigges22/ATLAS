@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc323_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport math\n\nMOD = 998244353\n\ndef modinv(a, mod):\n    return pow(a, mod - 2, mod)\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    X = int(data[1])\n    T = list(map(int, data[2:2+N]))\n    \n    # We want to find the probability that song 1 is playing at X + 0.5 seconds\n    # This is equivalent to finding the probability that the total time up to the start of song 1 is <= X + 0.5 < total time up to the end of song 1\n    # So we want the total time up to the start of song 1 to be in [X + 0.5 - T[0], X + 0.5)\n    \n    # Let's define dp[t] as the probability that the total time is exactly t seconds\n    # We need to compute dp[t] for t in [0, X + T[0]]\n    \n    max_time = X + T[0]\n    dp = [0] * (max_time + 1)\n    dp[0] = 1  # Initially, time is 0\n    \n    for t in range(0, max_time + 1):\n        if dp[t] == 0:\n            continue\n        for i in range(N):\n            nt = t + T[i]\n            if nt > max_time:\n                continue\n            dp[nt] = (dp[nt] + dp[t] * modinv(N, MOD)) % MOD\n    \n    # Now, we want the total time up to the start of song 1 to be in [X + 0.5 - T[0], X + 0.5)\n    # So we want the total time to be in [X - T[0] + 0.5, X + 0.5)\n    # Since we are working with integers, we can convert this to:\n    # total_time in [X - T[0] + 1, X]\n    \n    lower = X - T[0] + 1\n    upper = X\n    \n    if lower < 0:\n        lower = 0\n    \n    res = 0\n    for t in range(lower, upper + 1):\n        res = (res + dp[t] * modinv(N, MOD)) % MOD\n    \n    print(res)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7938,
+  "total_time_ms": 137773.15545082092,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7262
+  }
+}

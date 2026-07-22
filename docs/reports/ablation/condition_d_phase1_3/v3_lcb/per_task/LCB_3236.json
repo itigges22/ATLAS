@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3236",
+  "passed": true,
+  "code": "class Solution:\n    def missingInteger(self, nums: List[int]) -> int:\n        i = 1\n        while i < len(nums) and nums[i] == nums[i - 1] + 1:\n            i += 1\n        sum_prefix = sum(nums[:i])\n        while sum_prefix in nums:\n            sum_prefix += 1\n        return sum_prefix",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1080,
+  "total_time_ms": 17220.447301864624,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 990
+  }
+}

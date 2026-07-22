@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc347_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\ndef count_unique_substrings(s):\n    substrings = set()\n    n = len(s)\n    for i in range(n):\n        for j in range(i + 1, n + 1):\n            substrings.add(s[i:j])\n    return len(substrings)\n\nif __name__ == \"__main__\":\n    import sys\n    s = sys.stdin.readline().strip()\n    print(count_unique_substrings(s))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1483.405351638794,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

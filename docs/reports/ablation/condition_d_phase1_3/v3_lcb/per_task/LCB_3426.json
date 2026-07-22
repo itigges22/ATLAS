@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3426",
+  "passed": true,
+  "code": "class Solution:\n    def minimumChairs(self, s: str) -> int:\n        current_people = 0\n        max_chairs = 0\n        for event in s:\n            if event == 'E':\n                current_people += 1\n                max_chairs = max(max_chairs, current_people)\n            else:\n                current_people -= 1\n        return max_chairs",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1009,
+  "total_time_ms": 28928.979635238647,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 914
+  }
+}

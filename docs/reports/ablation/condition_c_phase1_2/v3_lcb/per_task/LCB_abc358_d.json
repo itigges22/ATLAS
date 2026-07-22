@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc358_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    total = 0\n    j = 0\n    for b in B:\n        while j < N and A[j] < b:\n            j += 1\n        if j >= N:\n            print(-1)\n            return\n        total += A[j]\n        j += 1\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6646,
+  "total_time_ms": 113996.10114097595,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6415
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc364_d",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    \n    a = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    queries = []\n    for _ in range(Q):\n        b = int(data[idx])\n        k = int(data[idx+1])\n        queries.append((b, k))\n        idx += 2\n    \n    a.sort()\n    \n    for b, k in queries:\n        pos = bisect.bisect_left(a, b)\n        left = a[:pos]\n        right = a[pos:]\n        dist = []\n        for x in left:\n            dist.append(abs(x - b))\n        for x in right:\n            dist.append(abs(x - b))\n        dist.sort()\n        print(dist[k-1])\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1165,
+  "total_time_ms": 39062.519550323486,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 828
+  }
+}

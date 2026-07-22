@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3306",
+  "passed": true,
+  "code": "import heapq\nfrom typing import List\n\nclass Solution:\n    def unmarkedSumArray(self, nums: List[int], queries: List[List[int]]) -> List[int]:\n        n = len(nums)\n        marked = [False] * n\n        total_sum = sum(nums)\n        answer = []\n\n        # Create a priority queue (min-heap) of tuples (value, index)\n        heap = []\n        for i in range(n):\n            heapq.heappush(heap, (nums[i], i))\n\n        for index, k in queries:\n            # Mark the element at index if not already marked\n            if not marked[index]:\n                marked[index] = True\n                total_sum -= nums[index]\n\n            # Mark k smallest unmarked elements\n            count = 0\n            temp = []\n            while count < k and heap:\n                val, i = heapq.heappop(heap)\n                if not marked[i]:\n                    marked[i] = True\n                    total_sum -= val\n                    count += 1\n                else:\n                    # If already marked, push back to heap\n                    temp.append((val, i))\n            # Push back the elements that were already marked\n            for val, i in temp:\n                heapq.heappush(heap, (val, i))\n\n            answer.append(total_sum)\n\n        return answer",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5400,
+  "total_time_ms": 85417.10066795349,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5116
+  }
+}

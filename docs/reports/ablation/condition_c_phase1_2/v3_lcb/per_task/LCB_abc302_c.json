@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc302_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom itertools import permutations\n\ndef is_valid_sequence(seq):\n    for i in range(len(seq) - 1):\n        diff = sum(1 for a, b in zip(seq[i], seq[i+1]) if a != b\n        if diff != 1:\n            return False\n    return True\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    M = int(input[1])\n    strings = input[2:]\n\n    for perm in permutations(strings):\n        if is_valid_sequence(perm):\n            print(\"Yes\")\n            return\n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 154,
+  "total_time_ms": 2294.8522567749023,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

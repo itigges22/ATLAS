@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3494",
+  "passed": false,
+  "code": "from typing import List\n\nclass Solution:\n    def minimumCost(self, m: int, n: int, horizontalCut: List[int], verticalCut: List[int]) -> int:\n        # Sort the cuts in descending order\n        horizontalCut.sort(reverse=True)\n        verticalCut.sort(reverse=True)\n        \n        # Initialize total cost\n        total_cost = 0\n        \n        # Number of horizontal cuts made so far\n        h_cuts = 0\n        # Number of vertical cuts made so far\n        v_cuts = 0\n        \n        # Iterate until all pieces are 1x1\n        while h_cuts < m - 1 or v_cuts < n - 1:\n            # Determine which cut to make next\n            if h_cuts < m - 1 and (v_cuts >= n - 1 or horizontalCut[h_cuts] >= verticalCut[v_cuts]):\n                total_cost += horizontalCut[h_cuts]\n                h_cuts += 1\n            elif v_cuts < n - 1:\n                total_cost += verticalCut[v_cuts]\n                v_cuts += 1\n        \n        return total_cost",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 5842,
+  "total_time_ms": 92292.47283935547,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5608
+  }
+}

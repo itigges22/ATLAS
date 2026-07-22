@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc336_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    def is_possible(k):\n        # Check if a pyramid sequence of size k can be formed\n        # The pyramid sequence is [1, 2, ..., k-1, k, k-1, ..., 2, 1]\n        # We need to check if there exists a subarray of length 2k-1 in A\n        # such that each element in the subarray is >= the corresponding value in the pyramid sequence\n        for i in range(k - 1, N - (k - 1)):\n            for j in range(2 * k - 1):\n                pos = i + j - (k - 1)\n                if A[pos] < (j + 1) if j < k else A[pos] < (2 * k - j - 1):\n                    break\n            else:\n                return True\n        return False\n\n    # Binary search for the maximum k\n    low = 1\n    high = N\n    answer = 1\n    while low <= high:\n        mid = (low + high) // 2\n        if is_possible(mid):\n            answer = mid\n            low = mid + 1\n        else:\n            high = mid - 1\n    print(answer)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1301,
+  "total_time_ms": 23853.10387611389,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 978
+  }
+}

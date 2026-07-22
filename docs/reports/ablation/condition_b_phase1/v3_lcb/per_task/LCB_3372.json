@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3372",
+  "passed": true,
+  "code": "class Solution:\n    def longestMonotonicSubarray(self, nums: List[int]) -> int:\n        if not nums:\n            return 0\n\n        max_len = 1\n        current_incr = 1\n        current_decr = 1\n\n        for i in range(1, len(nums)):\n            if nums[i] > nums[i - 1]:\n                current_incr = current_incr + 1\n                current_decr = 1\n            elif nums[i] < nums[i - 1]:\n                current_decr = current_decr + 1\n                current_incr = 1\n            else:\n                current_incr = 1\n                current_decr = 1\n\n            max_len = max(max_len, current_incr, current_decr)\n\n        return max_len",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1180,
+  "total_time_ms": 17175.551652908325,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1016
+  }
+}

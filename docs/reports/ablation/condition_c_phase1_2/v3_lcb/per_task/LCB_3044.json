@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3044",
+  "passed": true,
+  "code": "class Solution:\n    def minOperations(self, nums: List[int], k: int) -> int:\n        collected = set()\n        operations = 0\n        for num in reversed(nums):\n            if num <= k:\n                collected.add(num)\n                if len(collected) == k:\n                    return operations + 1\n            operations += 1\n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 89,
+  "total_time_ms": 1427.729845046997,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

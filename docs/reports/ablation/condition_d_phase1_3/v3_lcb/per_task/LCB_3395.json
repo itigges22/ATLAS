@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3395",
+  "passed": true,
+  "code": "class Solution:\n    def minAnagramLength(self, s: str) -> int:\n        from collections import Counter\n\n        n = len(s)\n        total_count = Counter(s)\n\n        # The minimum length of t must be a divisor of n\n        # We check all possible divisors of n in increasing order\n        for length in range(1, n + 1):\n            if n % length != 0:\n                continue\n            # Check if the total count can be divided into n / length groups\n            # Each group must have the same character count\n            valid = True\n            for count in total_count.values():\n                if count % (n // length) != 0:\n                    valid = False\n                    break\n            if valid:\n                return length\n        return n",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1271,
+  "total_time_ms": 22007.492065429688,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1026
+  }
+}

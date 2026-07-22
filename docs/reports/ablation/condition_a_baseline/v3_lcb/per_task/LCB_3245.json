@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3245",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def beautifulIndices(self, s: str, a: str, b: str, k: int) -> List[int]:\n        # Find all indices where a appears in s\n        a_indices = [i for i in range(len(s) - len(a) + 1) if s[i:i+len(a)] == a]\n        # Find all indices where b appears in s\n        b_indices = [i for i in range(len(s) - len(b) + 1) if s[i:i+len(b)] == b]\n        \n        # For each index in a_indices, check if there's a b index within k distance\n        result = []\n        for i in a_indices:\n            # Use binary search to find if any b index is within [i - k, i + k]\n            left, right = 0, len(b_indices)\n            while left < right:\n                mid = (left + right) // 2\n                if b_indices[mid] < i - k:\n                    left = mid + 1\n                else:\n                    right = mid\n            if left < len(b_indices) and b_indices[left] - i <= k:\n                result.append(i)\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 3685.9359741210938,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

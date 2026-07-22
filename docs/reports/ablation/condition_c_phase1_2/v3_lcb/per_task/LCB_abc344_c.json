@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc344_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nimport itertools\n\ndef main():\n    input = sys.stdin.read().split()\n    ptr = 0\n\n    N = int(input[ptr])\n    ptr += 1\n    A = list(map(int, input[ptr:ptr+N]))\n    ptr += N\n\n    M = int(input[ptr])\n    ptr += 1\n    B = list(map(int, input[ptr:ptr+M]))\n    ptr += M\n\n    L = int(input[ptr])\n    ptr += 1\n    C = list(map(int, input[ptr:ptr+L]))\n    ptr += L\n\n    Q = int(input[ptr])\n    ptr += 1\n    X = list(map(int, input[ptr:ptr+Q]))\n    ptr += Q\n\n    # Precompute all possible sums of one element from A, B, and C\n    sum_abc = set()\n    for a in A:\n        for b in B:\n            for c in C:\n                sum_abc.add(a + b + c)\n\n    # Answer each query in O(1) time\n    for x in X:\n        print(\"Yes\" if x in sum_abc else \"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 5535,
+  "total_time_ms": 69908.20789337158,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1084,
+    "s_star_triggered": true
+  }
+}

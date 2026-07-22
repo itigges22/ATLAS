@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc330_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    grid = data[1:]\n    \n    o_positions = []\n    for i in range(N):\n        for j in range(N):\n            if grid[i][j] == 'o':\n                o_positions.append((i, j))\n    \n    count = 0\n    for i in range(len(o_positions)):\n        for j in range(i + 1, len(o_positions)):\n            for k in range(j + 1, len(o_positions)):\n                a, b, c = o_positions[i], o_positions[j], o_positions[k]\n                rows = set([a[0], b[0], c[0]])\n                cols = set([a[1], b[1], c[1]])\n                if len(rows) == 2 and len(cols) == 2:\n                    count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1267,
+  "total_time_ms": 20611.453533172607,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1039
+  }
+}

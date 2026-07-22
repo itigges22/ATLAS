@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc311_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn, d = map(int, input().split())\nschedules = [input().strip() for _ in range(n)]\n\n# For each day, check if all people are free\nfree_days = []\nfor j in range(d):\n    all_free = True\n    for i in range(n):\n        if schedules[i][j] == 'x':\n            all_free = False\n            break\n    free_days.append(1 if all_free else 0)\n\n# Find the longest consecutive sequence of free days\nmax_streak = current_streak = 0\nfor day in free_days:\n    if day == 1:\n        current_streak += 1\n        max_streak = max(max_streak, current_streak)\n    else:\n        current_streak = 0\n\nprint(max_streak)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2749.906063079834,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

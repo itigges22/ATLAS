@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc359_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    A = list(map(int, input[1:]))\n    \n    positions = {}\n    for idx, color in enumerate(A):\n        if color not in positions:\n            positions[color] = []\n        positions[color].append(idx + 1)  # positions are 1-based\n    \n    count = 0\n    for color in range(1, N + 1):\n        pos1, pos2 = positions[color]\n        if abs(pos1 - pos2) == 2:\n            count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1390,
+  "total_time_ms": 26655.840635299683,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1233
+  }
+}

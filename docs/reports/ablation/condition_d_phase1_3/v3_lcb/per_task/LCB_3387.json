@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3387",
+  "passed": false,
+  "code": "class Solution:\n    def minOperationsToMakeMedianK(self, nums: List[int], k: int) -> int:\n        nums.sort()\n        n = len(nums)\n        median_index = (n - 1) // 2\n        return abs(nums[median_index] - k)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 47656,
+  "total_time_ms": 743082.8037261963,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 682,
+    "self_tests_generated": 5
+  }
+}

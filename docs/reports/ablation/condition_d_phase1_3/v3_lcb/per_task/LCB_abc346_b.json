@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc346_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    W, B = map(int, sys.stdin.readline().split())\n    pattern = \"wbwbwwbwbwbw\"\n    length = len(pattern)\n    \n    # We need to check all possible substrings of length W + B in the repeated pattern\n    # Since the pattern repeats every 12 characters, we can check all possible substrings\n    # of length W + B in the first 2 * (W + B) characters of the pattern\n    # This ensures we cover all possible starting positions due to periodicity\n    \n    target_length = W + B\n    if target_length == 0:\n        print(\"No\")\n        return\n    \n    # Generate a long enough string of the pattern\n    extended_pattern = pattern * (2 * target_length)\n    \n    # Check all substrings of length target_length\n    for i in range(len(extended_pattern) - target_length + 1):\n        substring = extended_pattern[i:i + target_length]\n        count_w = substring.count('w')\n        count_b = substring.count('b')\n        if count_w == W and count_b == B:\n            print(\"Yes\")\n            return\n    \n    print(\"No\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1509,
+  "total_time_ms": 42628.59058380127,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1237
+  }
+}

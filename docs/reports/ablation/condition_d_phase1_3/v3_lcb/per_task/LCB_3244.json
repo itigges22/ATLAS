@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3244",
+  "passed": false,
+  "code": "class Solution:\n    def minimumArrayLength(self, nums: List[int]) -> int:\n        nums.sort()\n        min_val = nums[0]\n        count = 0\n        for num in nums:\n            if num == min_val:\n                count += 1\n            else:\n                break\n        return count",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50328,
+  "total_time_ms": 840236.5505695343,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1537,
+    "self_tests_generated": 5
+  }
+}

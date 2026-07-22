@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc359_d",
+  "passed": true,
+  "code": "import sys\nimport itertools\nfrom collections import deque\n\nMOD = 998244353\n\ndef is_palindrome(s):\n    return s == s[::-1]\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    K = int(data[1])\n    S = data[2]\n\n    # Precompute all palindromes of length K\n    palindromes = set()\n    for bits in itertools.product(['A', 'B'], repeat=K):\n        s = ''.join(bits)\n        if is_palindrome(s):\n            palindromes.add(s)\n\n    # DP table: dp[i][state] = number of ways to fill first i characters with state\n    # state is a tuple of last K-1 characters\n    dp = [{} for _ in range(N+1)]\n    dp[0][()] = 1\n\n    for i in range(N):\n        current_char = S[i]\n        for state in dp[i]:\n            count = dp[i][state]\n            for c in ['A', 'B'] if current_char == '?' else [current_char]:\n                new_state = state + (c,)\n                if len(new_state) > K:\n                    new_state = new_state[1:]\n                # Check if the new substring of length K is a palindrome\n                if len(new_state) == K:\n                    if ''.join(new_state) in palindromes:\n                        continue\n                dp[i+1][new_state] = (dp[i+1].get(new_state, 0) + count) % MOD\n\n    result = sum(dp[N].values()) % MOD\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 6197.164535522461,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

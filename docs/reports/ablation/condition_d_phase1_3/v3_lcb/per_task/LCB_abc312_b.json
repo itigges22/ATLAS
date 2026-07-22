@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc312_b",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_tak_code(grid, i, j):\n    # Check top-left 3x3 region\n    for row in range(3):\n        for col in range(3):\n            if grid[i + row][j + col] != '#':\n                return False\n\n    # Check bottom-right 3x3 region\n    for row in range(3):\n        for col in range(3):\n            if grid[i + row + 6][j + col + 6] != '#':\n                return False\n\n    # Check adjacent cells around top-left 3x3\n    for row in range(3):\n        for col in range(3):\n            for dr in [-1, 0, 1]:\n                for dc in [-1, 0, 1]:\n                    r = i + row + dr\n                    c = j + col + dc\n                    if 0 <= r < 9 and 0 <= c < 9:\n                        if (r < 3 or c < 3) and grid[r][c] != '#':\n                            return False\n                        if (r >= 6 or c >= 6) and grid[r][c] != '#':\n                            return False\n                        if (r < 3 and c >= 3) or (r >= 6 and c < 6):\n                            if grid[r][c] != '.':\n                                return False\n\n    # Check adjacent cells around bottom-right 3x3\n    for row in range(3):\n        for col in range(3):\n            for dr in [-1, 0, 1]:\n                for dc in [-1, 0, 1]:\n                    r = i + row + dr + 6\n                    c = j + col + dc + 6\n                    if 0 <= r < 9 and 0 <= c < 9:\n                        if (r < 3 or c < 3) and grid[r][c] != '#':\n                            return False\n                        if (r >= 6 or c >= 6) and grid[r][c] != '#':\n                            return False\n                        if (r < 3 and c >= 3) or (r >= 6 and c < 6):\n                            if grid[r][c] != '.':\n                                return False\n\n    return True\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    M = int(input[1])\n    grid = input[2:N+2]\n\n    result = []\n    for i in range(N - 8):\n        for j in range(M - 8):\n            if is_tak_code(grid, i, j):\n                result.append(f\"{i + 1} {j + 1}\")\n\n    for line in result:\n        print(line)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 56770,
+  "total_time_ms": 892648.5195159912,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2204,
+    "self_tests_generated": 1
+  }
+}

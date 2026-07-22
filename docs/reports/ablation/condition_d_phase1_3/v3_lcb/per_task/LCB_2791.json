@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2791",
+  "passed": true,
+  "code": "class Solution:\n    def circularGameLosers(self, n: int, k: int) -> List[int]:\n        current = 0  # 0-based index for the first friend\n        visited = set()\n        visited.add(current)\n        \n        i = 1\n        while True:\n            current = (current + i * k) % n\n            if current in visited:\n                break\n            visited.add(current)\n            i += 1\n        \n        losers = []\n        for i in range(n):\n            if i not in visited:\n                losers.append(i + 1)  # Convert back to 1-based indexing\n        \n        return losers",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1455,
+  "total_time_ms": 25091.782808303833,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1341
+  }
+}

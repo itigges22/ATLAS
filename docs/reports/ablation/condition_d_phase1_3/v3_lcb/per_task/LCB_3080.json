@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3080",
+  "passed": true,
+  "code": "class Solution:\n    def maxSubarrays(self, nums: List[int]) -> int:\n        n = len(nums)\n        if n == 0:\n            return 0\n\n        # Initialize dp array where dp[i] is the minimum score to split the first i elements\n        dp = [float('inf')] * (n + 1)\n        dp[0] = 0  # Base case: 0 score for 0 elements\n\n        # Track the number of subarrays\n        count = [0] * (n + 1)\n\n        for i in range(1, n + 1):\n            current_and = nums[i - 1]\n            min_score = float('inf')\n            max_count = 0\n\n            # Try all possible subarrays ending at i\n            for j in range(i - 1, -1, -1):\n                current_and &= nums[j]\n                score = current_and\n                if dp[j] + score < min_score:\n                    min_score = dp[j] + score\n                    max_count = count[j] + 1\n\n            dp[i] = min_score\n            count[i] = max_count\n\n        return count[n]",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1450,
+  "total_time_ms": 24574.443340301514,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1367
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc346_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n    H = int(data[idx]); idx += 1\n    W = int(data[idx]); idx += 1\n    M = int(data[idx]); idx += 1\n\n    row_color = [0] * (H + 1)  # 1-based indexing\n    col_color = [0] * (W + 1)\n    row_time = [0] * (H + 1)\n    col_time = [0] * (W + 1)\n\n    for i in range(1, M + 1):\n        T = int(data[idx]); idx += 1\n        A = int(data[idx]); idx += 1\n        X = int(data[idx]); idx += 1\n        if T == 1:\n            row_color[A] = X\n            row_time[A] = i\n        else:\n            col_color[A] = X\n            col_time[A] = i\n\n    color_count = defaultdict(int)\n\n    for r in range(1, H + 1):\n        r_color = row_color[r]\n        r_time = row_time[r]\n        for c in range(1, W + 1):\n            c_color = col_color[c]\n            c_time = col_time[c]\n            if r_time >= c_time:\n                color_count[r_color] += 1\n            else:\n                color_count[c_color] += 1\n\n    print(len(color_count))\n    for color in sorted(color_count):\n        print(f\"{color} {color_count[color]}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2467,
+  "total_time_ms": 36688.459157943726,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1968
+  }
+}

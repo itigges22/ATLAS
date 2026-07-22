@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3373",
+  "passed": true,
+  "code": "class Solution:\n    def maximumPrimeDifference(self, nums: List[int]) -> int:\n        def is_prime(n):\n            if n < 2:\n                return False\n            if n == 2:\n                return True\n            if n % 2 == 0:\n                return False\n            for i in range(3, int(n**0.5) + 1, 2):\n                if n % i == 0:\n                    return False\n            return True\n\n        first = -1\n        last = -1\n\n        for i, num in enumerate(nums):\n            if is_prime(num):\n                if first == -1:\n                    first = i\n                last = i\n\n        return last - first",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 881,
+  "total_time_ms": 13120.076179504395,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 766
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc301_a",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nn = int(input())\ns = input()\n\nt_count = 0\na_count = 0\n\nfor char in s:\n    if char == 'T':\n        t_count += 1\n    else:\n        a_count += 1\n\nif t_count > a_count:\n    print('T')\nelif a_count > t_count:\n    print('A')\nelse:\n    # They have the same number of wins, check who reached it first\n    t_reach = s.find('T')\n    a_reach = s.find('A')\n    if t_reach < a_reach:\n        print('T')\n    else:\n        print('A')",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 152,
+  "total_time_ms": 2307.187080383301,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

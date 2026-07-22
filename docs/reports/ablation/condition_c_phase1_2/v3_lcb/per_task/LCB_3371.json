@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3371",
+  "passed": true,
+  "code": "class Solution:\n    def sumOfTheDigitsOfHarshadNumber(self, x: int) -> int:\n        digit_sum = sum(int(d) for d in str(x))\n        if x % digit_sum == 0:\n            return digit_sum\n        else:\n            return -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 73,
+  "total_time_ms": 1017.9178714752197,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

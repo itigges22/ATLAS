@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc335_c",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\ninput = sys.stdin.read\n\ndef main():\n    data = input().split()\n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n\n    # Initialize positions: part i is at (i, 0)\n    positions = [(i, 0) for i in range(1, N + 1)]\n\n    output = []\n\n    for _ in range(Q):\n        query_type = data[idx]\n        idx += 1\n        if query_type == '1':\n            C = data[idx]\n            idx += 1\n            # Move head\n            x, y = positions[0]\n            if C == 'R':\n                x += 1\n            elif C == 'L':\n                x -= 1\n            elif C == 'U':\n                y += 1\n            elif C == 'D':\n                y -= 1\n            positions[0] = (x, y)\n            # Update other parts\n            for i in range(1, N):\n                positions[i] = positions[i - 1]\n        elif query_type == '2':\n            p = int(data[idx])\n            idx += 1\n            output.append(f\"{positions[p - 1][0]} {positions[p - 1][1]}\")\n\n    print('\\n'.join(output))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 6553,
+  "total_time_ms": 107145.51591873169,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6218
+  }
+}

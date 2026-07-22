@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc352_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, X, Y, Z = map(int, input().split())\n\n# Check if Z is between X and Y (inclusive) in the direction of travel\nif (X < Y and (X < Z < Y)) or (X > Y and (Y < Z < X)):\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 88,
+  "total_time_ms": 1692.267656326294,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

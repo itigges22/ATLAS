@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3141",
+  "passed": true,
+  "code": "from typing import List\nimport bisect\n\nclass Solution:\n    def minSizeSubarray(self, nums: List[int], target: int) -> int:\n        n = len(nums)\n        prefix_sums = [0] * (n + 1)\n        for i in range(n):\n            prefix_sums[i + 1] = prefix_sums[i] + nums[i]\n        \n        total_sum = prefix_sums[-1]\n        min_len = float('inf')\n        res = float('inf')\n\n        # Step 1: Check for subarrays within a single copy of nums\n        # Using sliding window\n        left = 0\n        current_sum = 0\n        for right in range(n):\n            current_sum += nums[right]\n            while current_sum > target and left <= right:\n                current_sum -= nums[left]\n                left += 1\n            if current_sum == target:\n                res = min(res, right - left + 1)\n\n        # Step 2: Check for subarrays that span multiple copies of nums\n        # We can use prefix_sums and binary search\n        for i in range(n):\n            # We want to find j such that prefix_sums[j] + (target - (prefix_sums[j] - prefix_sums[i])) == target\n            # That is, prefix_sums[j] - prefix_sums[i] == target - k * total_sum\n            # We can try k = 0 and k = 1\n            for k in [0, 1]:\n                remaining = target - (prefix_sums[i] - k * total_sum)\n                if remaining < 0:\n                    continue\n                # Binary search for the smallest j > i such that prefix_sums[j] == remaining\n                idx = bisect.bisect_left(prefix_sums, remaining, i + 1, n + 1)\n                if idx <= n and prefix_sums[idx] == remaining:\n                    res = min(res, idx - i)\n\n        return res if res != float('inf') else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2002,
+  "total_time_ms": 34010.95938682556,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1705
+  }
+}

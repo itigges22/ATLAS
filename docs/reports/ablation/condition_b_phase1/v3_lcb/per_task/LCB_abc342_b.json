@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc342_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    P = list(map(int, data[1:N+1]))\n    Q = int(data[N+1])\n    queries = list(map(int, data[N+2:]))\n    \n    # Create a dictionary to map person number to their position in the line\n    position = {person: idx + 1 for idx, person in enumerate(P)}\n    \n    # Process each query\n    result = []\n    for i in range(Q):\n        A = queries[2*i]\n        B = queries[2*i + 1]\n        if position[A] < position[B]:\n            result.append(str(A))\n        else:\n            result.append(str(B))\n    \n    print('\\n'.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 822,
+  "total_time_ms": 13746.578931808472,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 614
+  }
+}

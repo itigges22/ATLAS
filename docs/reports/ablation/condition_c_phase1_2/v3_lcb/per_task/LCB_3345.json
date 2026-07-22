@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3345",
+  "passed": false,
+  "code": "from typing import List\n\nMOD = 10**9 + 7\n\nclass Solution:\n    def sumOfPower(self, nums: List[int], k: int) -> int:\n        n = len(nums)\n        dp = [0] * (k + 1)\n        dp[0] = 1  # Base case: one way to make sum 0 (take nothing)\n\n        for num in nums:\n            for i in range(k, num - 1, -1):\n                dp[i] = (dp[i] + dp[i - num]) % MOD\n\n        return dp[k]",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 3437,
+  "total_time_ms": 56962.47124671936,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 3286
+  }
+}

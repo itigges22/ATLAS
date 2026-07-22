@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3376",
+  "passed": true,
+  "code": "class Solution:\n    def stringIndices(self, wordsContainer: List[str], wordsQuery: List[str]) -> List[int]:\n        from collections import defaultdict\n\n        # Preprocess wordsContainer to map suffixes to the best candidate\n        suffix_map = defaultdict(lambda: (float('inf'), float('inf'), -1))  # (length, index, original index)\n        for idx, word in enumerate(wordsContainer):\n            length = len(word)\n            for i in range(1, length + 1):\n                suffix = word[-i:]\n                current_length, _, current_idx = suffix_map[suffix]\n                if length < current_length or (length == current_length and idx < current_idx):\n                    suffix_map[suffix] = (length, idx, idx)\n\n        ans = []\n        for query in wordsQuery:\n            max_suffix = \"\"\n            for i in range(1, len(query) + 1):\n                suffix = query[-i:]\n                if suffix in suffix_map:\n                    length, idx, original_idx = suffix_map[suffix]\n                    if i > len(max_suffix):\n                        max_suffix = suffix\n                        best_length, best_idx, best_original_idx = length, idx, original_idx\n                    elif i == len(max_suffix):\n                        if length < best_length or (length == best_length and idx < best_original_idx):\n                            best_length, best_idx, best_original_idx = length, idx, original_idx\n            ans.append(best_original_idx)\n\n        return ans",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7651,
+  "total_time_ms": 129357.77378082275,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 7336
+  }
+}

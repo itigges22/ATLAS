@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2810",
+  "passed": true,
+  "code": "class Solution:\n    def minCost(self, nums: List[int], x: int) -> int:\n        n = len(nums)\n        min_cost = float('inf')\n        \n        # For each possible number of operations (up to n-1)\n        for k in range(n):\n            current_cost = 0\n            # For each position i, find the minimum cost of the i-th type after up to k operations\n            for i in range(n):\n                # The i-th type can be found at position (i - k) % n after k operations\n                # We need to find the minimum cost among all positions that can become the i-th type\n                # after up to k operations\n                min_val = float('inf')\n                for j in range(k + 1):\n                    pos = (i - j) % n\n                    min_val = min(min_val, nums[pos])\n                current_cost += min_val\n            # Add the cost of performing k operations\n            current_cost += k * x\n            min_cost = min(min_cost, current_cost)\n        \n        return min_cost",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1463,
+  "total_time_ms": 24268.930912017822,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1372
+  }
+}

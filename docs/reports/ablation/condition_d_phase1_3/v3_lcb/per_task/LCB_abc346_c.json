@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc346_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    K = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    present = set(A)\n    total = K * (K + 1) // 2\n    for x in present:\n        if 1 <= x <= K:\n            total -= x\n    print(total)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1026,
+  "total_time_ms": 33063.79723548889,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 902
+  }
+}

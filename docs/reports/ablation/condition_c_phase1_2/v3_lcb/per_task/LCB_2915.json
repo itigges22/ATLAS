@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/2915",
+  "passed": true,
+  "code": "from typing import List\n\nclass Solution:\n    def countInterestingSubarrays(self, nums: List[int], modulo: int, k: int) -> int:\n        prefix_counts = [0]\n        for num in nums:\n            prefix_counts.append(prefix_counts[-1] + (1 if num % modulo == k else 0))\n        \n        count = 0\n        for i in range(len(prefix_counts)):\n            for j in range(i + 1, len(prefix_counts)):\n                if (prefix_counts[j] - prefix_counts[i]) % modulo == k:\n                    count += 1\n        return count",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 6420,
+  "total_time_ms": 107441.64800643921,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4124,
+    "s_star_triggered": true
+  }
+}

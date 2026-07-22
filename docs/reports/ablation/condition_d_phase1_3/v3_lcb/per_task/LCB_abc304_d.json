@@ -1,0 +1,16 @@
+{
+  "task_id": "LCB/abc304_d",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport bisect\nimport sys\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    W = int(data[idx]); idx += 1\n    H = int(data[idx]); idx += 1\n    N = int(data[idx]); idx += 1\n    \n    p = []\n    q = []\n    for _ in range(N):\n        p.append(int(data[idx])); idx += 1\n        q.append(int(data[idx])); idx += 1\n    \n    A = int(data[idx]); idx += 1\n    a = list(map(int, data[idx:idx+A]))\n    idx += A\n    \n    B = int(data[idx]); idx += 1\n    b = list(map(int, data[idx:idx+B]))\n    idx += B\n    \n    # Add boundaries for binary search\n    a = [0] + a + [W]\n    b = [0] + b + [H]\n    \n    # Count strawberries in each region\n    from collections import defaultdict\n    count = defaultdict(int)\n    \n    for i in range(N):\n        # Find the region for (p[i], q[i])\n        x = p[i]\n        y = q[i]\n        \n        # Find the index in a where x is between a[i] and a[i+1]\n        x_idx = bisect.bisect_left(a, x)\n        # Find the index in b where y is between b[j] and b[j+1]\n        y_idx = bisect.bisect_left(b, y)\n        \n        # Use (x_idx, y_idx) as the key for the region\n        count[(x_idx, y_idx)] += 1\n    \n    # Now, find the min and max number of strawberries in any region\n    min_strawberries = float('inf')\n    max_strawberries = 0\n    \n    for v in count.values():\n        min_strawberries = min(min_strawberries, v)\n        max_strawberries = max(max_strawberries, v)\n    \n    # Also consider regions with zero strawberries\n    total_regions = (A + 1) * (B + 1)\n    if len(count) < total_regions:\n        min_strawberries = 0\n    \n    print(f\"{min_strawberries} {max_strawberries}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "refinement",
+  "candidates_generated": 3,
+  "total_tokens": 42680,
+  "total_time_ms": 713730.7033538818,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1324,
+    "self_tests_generated": 5,
+    "refinement_iterations": 2
+  }
+}

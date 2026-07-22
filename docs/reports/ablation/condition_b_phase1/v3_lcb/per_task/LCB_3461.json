@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3461",
+  "passed": true,
+  "code": "class Solution:\n    def minimumArea(self, grid: List[List[int]]) -> int:\n        rows = len(grid)\n        cols = len(grid[0])\n        \n        min_row = float('inf')\n        max_row = -1\n        min_col = float('inf')\n        max_col = -1\n        \n        for i in range(rows):\n            for j in range(cols):\n                if grid[i][j] == 1:\n                    min_row = min(min_row, i)\n                    max_row = max(max_row, i)\n                    min_col = min(min_col, j)\n                    max_col = max(max_col, j)\n        \n        return (max_row - min_row + 1) * (max_col - min_col + 1)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1114,
+  "total_time_ms": 15343.8880443573,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 949
+  }
+}

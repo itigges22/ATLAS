@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc333_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport threading\nfrom collections import deque\n\ndef main():\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    tree = [[] for _ in range(N + 1)]\n    for _ in range(N - 1):\n        u, v = map(int, sys.stdin.readline().split())\n        tree[u].append(v)\n        tree[v].append(u)\n\n    # Step 1: Find the path from root (1) to the farthest leaf\n    # Using BFS to find the farthest node from 1\n    visited = [False] * (N + 1)\n    q = deque()\n    q.append((1, 0))  # (node, depth)\n    visited[1] = True\n    farthest_node = 1\n    max_depth = 0\n\n    while q:\n        node, depth = q.popleft()\n        if depth > max_depth:\n            max_depth = depth\n            farthest_node = node\n        for neighbor in tree[node]:\n            if not visited[neighbor]:\n                visited[neighbor] = True\n                q.append((neighbor, depth + 1))\n\n    # Step 2: Find the path from root (1) to farthest_node using BFS\n    visited = [False] * (N + 1)\n    q = deque()\n    q.append((1, []))  # (node, path)\n    visited[1] = True\n    path = []\n\n    while q:\n        node, p = q.popleft()\n        if node == farthest_node:\n            path = p + [node]\n            break\n        for neighbor in tree[node]:\n            if not visited[neighbor]:\n                visited[neighbor] = True\n                q.append((neighbor, p + [node]))\n\n    # Step 3: Count the number of nodes in the path that are not leaves\n    # A node is not a leaf if it has more than one child in the tree\n    # We need to count how many nodes in the path have more than one child\n    count = 0\n    for node in path:\n        if len(tree[node]) > 1:\n            count += 1\n    print(count)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 1205,
+  "total_time_ms": 20459.951162338257,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 927
+  }
+}

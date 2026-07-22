@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/3442",
+  "passed": true,
+  "code": "class Solution:\n    def maxTotalReward(self, rewardValues: List[int]) -> int:\n        rewardValues.sort()\n        n = len(rewardValues)\n        dp = set()\n        dp.add(0)\n        for r in rewardValues:\n            new_dp = set()\n            for x in dp:\n                if x < r:\n                    new_dp.add(x + r)\n            dp.update(new_dp)\n        return max(dp)",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1418.8873767852783,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

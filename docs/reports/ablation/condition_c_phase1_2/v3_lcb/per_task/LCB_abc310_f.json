@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc310_f",
+  "passed": false,
+  "code": "import sys\nimport itertools\nfrom collections import defaultdict\n\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    # We need to compute the probability that there exists a subset of dice whose sum is exactly 10\n    # We will use inclusion-exclusion principle and dynamic programming\n\n    # Total number of outcomes\n    total = 1\n    for a in A:\n        total = total * a % MOD\n\n    # We will compute the number of outcomes where no subset sums to 10\n    # Then subtract from total to get the desired count\n\n    # dp[i] = number of ways to get sum i using some subset of dice\n    max_sum = 10\n    dp = [0] * (max_sum + 1)\n    dp[0] = 1  # empty subset\n\n    for a in A:\n        new_dp = dp[:]\n        for s in range(max_sum + 1):\n            if dp[s]:\n                if s + a <= max_sum:\n                    new_dp[s + a] = (new_dp[s + a] + dp[s]) % MOD\n        dp = new_dp\n\n    # The number of outcomes where no subset sums to 10\n    bad = dp[10]\n\n    # The answer is (total - bad) / total mod MOD\n    numerator = (total - bad) % MOD\n    denominator = total\n\n    # Compute modular inverse of denominator\n    inv_denominator = pow(denominator, MOD - 2, MOD)\n\n    result = (numerator * inv_denominator) % MOD\n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 396,
+  "total_time_ms": 6377.307176589966,
+  "telemetry": {
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

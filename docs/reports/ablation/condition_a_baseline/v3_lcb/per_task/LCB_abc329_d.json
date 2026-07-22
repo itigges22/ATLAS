@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc329_d",
+  "passed": true,
+  "code": "import sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+M]))\n    \n    counts = [0] * (N + 1)\n    current_winner = 0\n    max_votes = 0\n    \n    for vote in A:\n        counts[vote] += 1\n        if counts[vote] > max_votes:\n            max_votes = counts[vote]\n            current_winner = vote\n        elif counts[vote] == max_votes:\n            if vote < current_winner:\n                current_winner = vote\n        print(current_winner)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 2591.0651683807373,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

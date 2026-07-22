@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc309_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nA, B = map(int, input().split())\n\ngrid = [\n    [1, 2, 3],\n    [4, 5, 6],\n    [7, 8, 9]\n]\n\npos_A = None\npos_B = None\n\nfor i in range(3):\n    for j in range(3):\n        if grid[i][j] == A:\n            pos_A = (i, j)\n        if grid[i][j] == B:\n            pos_B = (i, j)\n\nif pos_A[0] == pos_B[0] and abs(pos_A[1] - pos_B[1]) == 1:\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 647,
+  "total_time_ms": 10693.903923034668,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 582
+  }
+}

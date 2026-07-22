@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc328_b",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef is_repdigit(num):\n    if num < 10:\n        return True\n    digit = num % 10\n    num //= 10\n    while num > 0:\n        if num % 10 != digit:\n            return False\n        num //= 10\n    return True\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    D = list(map(int, input[1:N+1]))\n    \n    count = 0\n    for month in range(1, N+1):\n        for day in range(1, D[month-1]+1):\n            if is_repdigit(month * 100 + day):\n                count += 1\n    print(count)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 5,
+  "total_tokens": 1817,
+  "total_time_ms": 27089.66636657715,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 1669
+  }
+}

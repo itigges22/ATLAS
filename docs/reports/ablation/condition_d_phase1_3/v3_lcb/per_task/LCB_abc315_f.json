@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc315_f",
+  "passed": false,
+  "code": "import sys\nimport math\nimport heapq\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    coords = [(int(data[i*2+1]), int(data[i*2+2])) for i in range(N))]\n    \n    # Precompute distances between all pairs\n    dist = [[0.0]*N for _ in range(N)]\n    for i in range(N):\n        for j in range(N):\n            dx = coords[i][0] - coords[j][0]\n            dy = coords[i][1] - coords[j][1]\n            dist[i][j] = math.hypot(dx, dy)\n    \n    # dp[i][c] = minimum distance to reach checkpoint i with c checkpoints skipped\n    INF = float('inf')\n    dp = [[INF]*N for _ in range(N)]\n    dp[0][0] = 0.0\n    \n    for i in range(N):\n        for c in range(N):\n            if dp[i][c] == INF:\n                continue\n            # Try to go to next checkpoint\n            if i + 1 < N:\n                dp[i+1][c] = min(dp[i+1][c], dp[i][c] + dist[i][i+1])\n            # Try to skip current checkpoint\n            if i + 1 < N:\n                dp[i+1][c+1] = min(dp[i+1][c+1], dp[i][c] + dist[i][i+1])\n    \n    # Find the minimum s = total distance + penalty\n    min_s = INF\n    for c in range(N):\n        penalty = 2 ** (c - 1) if c > 0 else 0\n        min_s = min(min_s, dp[N-1][c] + penalty)\n    \n    print(f\"{min_s:.20f}\")\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 48534,
+  "total_time_ms": 793558.3233833313,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1209,
+    "self_tests_generated": 5
+  }
+}

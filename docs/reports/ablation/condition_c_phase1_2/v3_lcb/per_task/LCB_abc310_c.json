@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc310_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    strings = data[1:]\n    \n    unique_sticks = set()\n    \n    for s in strings:\n        rev = s[::-1]\n        # Use the lexicographically smaller of s and its reverse\n        unique_sticks.add(min(s, rev))\n    \n    print(len(unique_sticks))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 123,
+  "total_time_ms": 2079.1094303131104,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

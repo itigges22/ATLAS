@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/1899_C",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef max_alternating_parity_subarray_sum(arr):\n    max_sum = current_sum = arr[0]\n    prev_parity = arr[0] % 2\n\n    for i in range(1, len(arr)):\n        current_parity = arr[i] % 2\n        if current_parity != prev_parity:\n            current_sum += arr[i]\n            max_sum = max(max_sum, current_sum)\n            prev_parity = current_parity\n        else:\n            current_sum = arr[i]\n            max_sum = max(max_sum, current_sum)\n            prev_parity = current_parity\n\n    return max_sum\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n    t = int(data[idx])\n    idx += 1\n    results = []\n    for _ in range(t):\n        n = int(data[idx])\n        idx += 1\n        arr = list(map(int, data[idx:idx + n]))\n        idx += n\n        result = max_alternating_parity_subarray_sum(arr)\n        results.append(str(result))\n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 267,
+  "total_time_ms": 3615.1793003082275,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

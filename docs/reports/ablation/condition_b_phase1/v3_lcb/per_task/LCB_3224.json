@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3224",
+  "passed": true,
+  "code": "class Solution:\n    def numberOfSequence(self, n: int, sick: List[int]) -> int:\n        MOD = 10**9 + 7\n\n        # Precompute factorials and inverse factorials modulo MOD\n        max_fact = n\n        fact = [1] * (max_fact + 1)\n        inv_fact = [1] * (max_fact + 1)\n\n        for i in range(1, max_fact + 1):\n            fact[i] = fact[i - 1] * i % MOD\n\n        inv_fact[max_fact] = pow(fact[max_fact], MOD - 2, MOD)\n        for i in range(max_fact - 1, -1, -1):\n            inv_fact[i] = inv_fact[i + 1] * (i + 1) % MOD\n\n        def comb(a, b):\n            if a < 0 or b < 0 or a < b:\n                return 0\n            return fact[a] * inv_fact[b] % MOD * inv_fact[a - b] % MOD\n\n        res = 1\n        prev = -1\n        for pos in sick:\n            if prev == -1:\n                # First sick person, left side is 0 to pos - 1\n                # No infection sequence possible here\n                prev = pos\n                continue\n            gap = pos - prev - 1\n            # Number of ways to interleave the infection in this gap\n            res = res * comb(gap + 1, 1) % MOD\n            prev = pos\n\n        # Handle the rightmost gap\n        gap = n - 1 - sick[-1]\n        res = res * comb(gap + 1, 1) % MOD\n\n        return res",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2751,
+  "total_time_ms": 48812.1132850647,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 2368
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3219",
+  "passed": true,
+  "code": "class Solution:\n    def lexicographicallySmallestArray(self, nums: List[int], limit: int) -> List[int]:\n        # Create a list of (value, index) pairs and sort by value\n        sorted_pairs = sorted([(val, idx) for idx, val in enumerate(nums)], key=lambda x: x[0])\n        \n        # Group elements that can be connected via swaps (difference <= limit)\n        groups = []\n        current_group = [sorted_pairs[0]]\n        for i in range(1, len(sorted_pairs)):\n            if sorted_pairs[i][0] - sorted_pairs[i - 1][0] <= limit:\n                current_group.append(sorted_pairs[i])\n            else:\n                groups.append(current_group)\n                current_group = [sorted_pairs[i]]\n        groups.append(current_group)\n        \n        # For each group, sort the values and assign them to the original indices in sorted order\n        result = [0] * len(nums)\n        for group in groups:\n            # Extract the indices from the group\n            indices = [pair[1] for pair in group]\n            # Extract the values and sort them\n            values = sorted([pair[0] for pair in group])\n            # Assign the smallest value to the smallest index, etc.\n            for i, idx in enumerate(sorted(indices)):\n                result[idx] = values[i]\n        \n        return result",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1391,
+  "total_time_ms": 24828.834533691406,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1241
+  }
+}

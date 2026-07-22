@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc311_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    D = int(data[1])\n    schedules = data[2:2+N]\n    \n    max_streak = 0\n    current_streak = 0\n    \n    for day in range(D):\n        all_free = True\n        for person in range(N):\n            if schedules[person][day] == 'x':\n                all_free = False\n                break\n        if all_free:\n            current_streak += 1\n            max_streak = max(max_streak, current_streak)\n        else:\n            current_streak = 0\n    \n    print(max_streak)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1114,
+  "total_time_ms": 18122.57981300354,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 932
+  }
+}

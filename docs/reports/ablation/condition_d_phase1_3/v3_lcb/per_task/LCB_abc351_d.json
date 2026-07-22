@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc351_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport threading\nfrom collections import deque\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [list(sys.stdin.readline().strip()) for _ in range(H)]\n\n    # Preprocess: mark cells where Takahashi can move\n    can_move = [[False] * W for _ in range(H)]\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#':\n                continue\n            has_adjacent_magnet = False\n            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:\n                ni, nj = i + dx, j + dy\n                if 0 <= ni < H and 0 <= nj < W:\n                    if grid[ni][nj] == '#':\n                        has_adjacent_magnet = True\n                        break\n            can_move[i][j] = not has_adjacent_magnet\n\n    # BFS to find connected components\n    visited = [[False] * W for _ in range(H)]\n    component = [[0] * W for _ in range(H)]\n    current_component = 0\n\n    def bfs(i, j):\n        nonlocal current_component\n        q = deque()\n        q.append((i, j))\n        visited[i][j] = True\n        component[i][j] = current_component\n        count = 1\n        while q:\n            x, y = q.popleft()\n            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:\n                nx, ny = x + dx, y + dy\n                if 0 <= nx < H and 0 <= ny < W:\n                    if not visited[nx][ny] and can_move[nx][ny]:\n                        visited[nx][ny] = True\n                        component[nx][ny] = current_component\n                        count += 1\n                        q.append((nx, ny))\n        return count\n\n    max_freedom = 0\n    current_component = 0\n    for i in range(H):\n        for j in range(W):\n            if not visited[i][j] and can_move[i][j]:\n                size = bfs(i, j)\n                max_freedom = max(max_freedom, size)\n\n    print(max_freedom)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 53794,
+  "total_time_ms": 872142.3709392548,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1529,
+    "self_tests_generated": 5
+  }
+}

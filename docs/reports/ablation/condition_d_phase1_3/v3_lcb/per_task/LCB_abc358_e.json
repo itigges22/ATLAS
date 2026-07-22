@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc358_e",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport itertools\nMOD = 998244353\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    K = int(data[0])\n    C = list(map(int, data[1:]))\n    \n    # dp[i][j] = number of strings of length i with j letters used\n    dp = [[0] * (27) for _ in range(K + 1)]\n    dp[0][0] = 1\n    \n    for length in range(1, K + 1):\n        for j in range(27):\n            for c in range(26):\n                if j + 1 <= 26 and C[c] >= 1:\n                    dp[length][j + 1] = (dp[length][j + 1] + dp[length - 1][j]) % MOD\n    \n    result = 0\n    for i in range(1, K + 1):\n        for j in range(1, 27):\n            result = (result + dp[i][j]) % MOD\n    \n    print(result)\n\nmain()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 55734,
+  "total_time_ms": 893487.6828193665,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 945,
+    "self_tests_generated": 5
+  }
+}

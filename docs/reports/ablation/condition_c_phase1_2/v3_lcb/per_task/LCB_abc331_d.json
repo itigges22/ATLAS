@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc331_d",
+  "passed": false,
+  "code": "import sys\nimport numpy as np\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    \n    # Read the pattern grid\n    P = []\n    for _ in range(N):\n        row = data[idx]\n        P.append(row)\n        idx += 1\n    \n    # Precompute prefix sums for the pattern\n    prefix = np.zeros((N, N), dtype=np.int64)\n    for i in range(N):\n        row_sum = 0\n        for j in range(N):\n            row_sum += (1 if P[i][j] == 'B' else 0)\n            prefix[i][j] = row_sum\n        for j in range(1, N):\n            prefix[i][j] += prefix[i][j - 1]\n    \n    # Precompute 2D prefix sums for the pattern\n    for i in range(N):\n        for j in range(1, N):\n            prefix[i][j] += prefix[i - 1][j] if i > 0 else 0\n    \n    # Function to count black squares in a rectangle\n    def count_black(a, b, c, d):\n        def mod(x):\n            return x % N\n        \n        def get_sum(x, y):\n            if x < 0 or y < 0:\n                return 0\n            return prefix[x][y]\n        \n        def query(x1, y1, x2, y2):\n            return get_sum(x2, y2) - get_sum(x1 - 1, y2) - get_sum(x2, y1 - 1) + get_sum(x1 - 1, y1 - 1)\n        \n        a_mod = mod(a)\n        b_mod = mod(b)\n        c_mod = mod(c)\n        d_mod = mod(d)\n        \n        full_rows = (c - a + 1) // N\n        full_cols = (d - b + 1) // N\n        full = full_rows * full_cols\n        total = full * query(0, 0, N - 1, N - 1)\n        \n        # Remaining rows\n        rem_rows = (c - a + 1) % N\n        rem_cols = (d - b + 1) % N\n        if rem_rows > 0:\n            for i in range(rem_rows):\n                row = a + i\n                row_mod = mod(row)\n                for j in range(rem_cols):\n                    col = b + j\n                    col_mod = mod(col)\n                    total += (1 if P[row_mod][col_mod] == 'B' else 0)\n        \n        # Remaining columns\n        if rem_cols > 0:\n            for i in range(rem_rows):\n                row = a + i\n                row_mod = mod(row)\n                for j in range(rem_cols):\n                    col = b + j\n                    col_mod = mod(col)\n                    total += (1 if P[row_mod][col_mod] == 'B' else 0)\n        \n        return total\n    \n    # Process queries\n    results = []\n    for _ in range(Q):\n        A = int(data[idx])\n        B = int(data[idx + 1])\n        C = int(data[idx + 2])\n        D = int(data[idx + 3])\n        idx += 4\n        results.append(str(count_black(A, B, C, D)))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 774,
+  "total_time_ms": 11641.315221786499,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

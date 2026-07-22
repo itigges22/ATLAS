@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc323_d",
+  "passed": true,
+  "code": "import sys\nimport heapq\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    slimes = []\n    count = 1\n    index = 1\n    \n    while index < len(data):\n        S = int(data[index])\n        C = int(data[index + 1])\n        slimes.append((S, C))\n        index += 2\n    \n    # Use a min-heap to process slimes in increasing order of size\n    heap = []\n    # Map from slime size to its count\n    size_count = defaultdict(int)\n    \n    for S, C in slimes:\n        size_count[S] += C\n    \n    # Initialize the heap with all unique slime sizes\n    for size in size_count:\n        heapq.heappush(heap, size)\n    \n    # Process the heap\n    while heap:\n        current_size = heapq.heappop(heap)\n        current_count = size_count[current_size]\n        \n        # If there's only one slime, we can't synthesize\n        if current_count == 1:\n            continue\n        \n        # Synthesize as many as possible\n        pairs = current_count // 2\n        remainder = current_count % 2\n        \n        # The new size is 2 * current_size\n        new_size = current_size * 2\n        \n        # Add the remainder to the new size's count\n        size_count[new_size] += pairs\n        \n        # If there's an odd number of slimes, keep one\n        if remainder:\n            size_count[current_size] = 1\n        else:\n            # No slimes left of current_size\n            del size_count[current_size]\n        \n        # Push the new size into the heap if it's not already there\n        if new_size in size_count:\n            heapq.heappush(heap, new_size)\n    \n    # The total number of slimes is the sum of all counts\n    print(sum(size_count.values()))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 5097,
+  "total_time_ms": 152332.7558040619,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 4708
+  }
+}

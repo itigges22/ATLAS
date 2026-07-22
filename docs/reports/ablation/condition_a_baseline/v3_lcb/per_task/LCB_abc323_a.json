@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc323_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nS = input().strip()\n\n# Check every even index from 2 to 16 (1-based index)\n# In 0-based index, it's positions 1, 3, 5, ..., 15\nfor i in range(1, 16, 2):\n    if S[i] != '0':\n        print(\"No\")\n        break\nelse:\n    print(\"Yes\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 7053.161859512329,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

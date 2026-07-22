@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2952",
+  "passed": false,
+  "code": "class Solution:\n    def minimumTime(self, nums1: List[int], nums2: List[int], x: int) -> int:\n        n = len(nums1)\n        total = sum(nums1)\n        if total <= x:\n            return 0\n        \n        # We will use a greedy approach: at each step, reset the index with the highest current value\n        # We simulate the process for up to n steps (since after n steps, we can reset all indices once)\n        # We track the current values of nums1 and the time taken\n        current = nums1[:]\n        for t in range(1, n + 1):\n            # Find the index with the maximum current value\n            max_idx = current.index(max(current))\n            # Reset that index\n            current[max_idx] = 0\n            # Increment all elements by nums2[i]\n            for i in range(n):\n                current[i] += nums2[i]\n            # Check if the total is now <= x\n            if sum(current) <= x:\n                return t\n        \n        return -1",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 6340,
+  "total_time_ms": 107681.85114860535,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 6018
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc326_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN = int(input())\n\nfor num in range(N, 920):\n    hundreds = num // 100\n    tens = (num // 10) % 10\n    ones = num % 10\n    if hundreds * tens == ones:\n        print(num)\n        break",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1257.4326992034912,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

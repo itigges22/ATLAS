@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3507",
+  "passed": false,
+  "code": "class Solution:\n    def nonSpecialCount(self, l: int, r: int) -> int:\n        # A number has exactly 2 proper divisors if and only if it is:\n        # 1. The square of a prime number (e.g., 4 = 2^2, 9 = 3^2)\n        # 2. The product of two distinct primes (e.g., 6 = 2 * 3)\n        \n        # So, we need to count numbers in [l, r] that are NOT:\n        # - The square of a prime\n        # - The product of two distinct primes\n        \n        # Total numbers in range\n        total = r - l + 1\n        \n        # Count of special numbers in range\n        special_count = 0\n        \n        # Sieve of Eratosthenes to find primes up to sqrt(r)\n        max_prime = int(r**0.5) + 1\n        is_prime = [True] * (max_prime + 1)\n        is_prime[0] = is_prime[1] = False\n        for i in range(2, int(max_prime**0.5) + 1):\n            if is_prime[i]:\n                for j in range(i*i, max_prime + 1, i):\n                    is_prime[j] = False\n        \n        # Count squares of primes in range\n        for p in range(2, max_prime + 1):\n            if is_prime[p]:\n                square = p * p\n                if l <= square <= r:\n                    special_count += 1\n        \n        # Count products of two distinct primes in range\n        for i in range(2, int(r**0.5) + 1):\n            if is_prime[i]:\n                for j in range(i + 1, max_prime + 1):\n                    if is_prime[j]:\n                        product = i * j\n                        if l <= product <= r:\n                            special_count += 1\n        \n        # Return count of non-special numbers\n        return total - special_count",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 50975,
+  "total_time_ms": 1175775.7370471954,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1819,
+    "self_tests_generated": 5
+  }
+}

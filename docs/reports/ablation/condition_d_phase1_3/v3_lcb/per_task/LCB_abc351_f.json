@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc351_f",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n    \n    # Sort the array\n    A.sort()\n    \n    # Compute prefix sums\n    prefix_sum = [0] * (N + 1)\n    for i in range(N):\n        prefix_sum[i + 1] = prefix_sum[i] + A[i]\n    \n    # Calculate the result\n    result = 0\n    for i in range(N):\n        # For each A[i], find the number of elements after it that are greater than A[i]\n        # Since the array is sorted, all elements after i are >= A[i]\n        # So, for each A[i], the contribution is sum_{j=i+1}^{N-1} (A[j] - A[i])\n        # Which is (prefix_sum[N] - prefix_sum[i+1]) - A[i] * (N - i - 1)\n        count = N - i - 1\n        sum_after = prefix_sum[N] - prefix_sum[i + 1]\n        result += sum_after - A[i] * count\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 47159,
+  "total_time_ms": 772042.0210361481,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 755,
+    "self_tests_generated": 5
+  }
+}

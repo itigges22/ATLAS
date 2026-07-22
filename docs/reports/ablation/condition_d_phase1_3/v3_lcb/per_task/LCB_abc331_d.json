@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc331_d",
+  "passed": false,
+  "code": "# YOUR CODE HERE\nimport sys\nimport numpy as np\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n    \n    # Read N x N grid\n    grid = []\n    for _ in range(N):\n        row = data[idx]\n        idx += 1\n        grid.append([1 if c == 'B' else 0 for c in row])\n    \n    # Preprocess 2D prefix sum array (O(N^2) time and space)\n    prefix = np.zeros((N+1, N+1), dtype=int)\n    for i in range(N):\n        row_sum = 0\n        for j in range(N):\n            row_sum += grid[i][j]\n            prefix[i+1][j+1] = prefix[i][j+1] + row_sum\n    \n    def count_black(x1, y1, x2, y2):\n        # Count number of black squares in rectangle (x1, y1) to (x2, y2)\n        # Convert to 0-based indices\n        x1_mod = x1 % N\n        y1_mod = y1 % N\n        x2_mod = x2 % N\n        y2_mod = y2 % N\n        \n        # Number of full tiles in x and y directions\n        full_x = (x2 - x1 + 1) // N\n        full_y = (y2 - y1 + 1) // N\n        full_count = full_x * full_y * np.sum(grid)\n        \n        # Count partial tiles\n        partial_count = 0\n        \n        # Top-left partial tile\n        partial_count += prefix[x1_mod+1][y1_mod+1] - prefix[0][y1_mod+1] - prefix[x1_mod+1][0] + prefix[0][0]\n        \n        # Top-right partial tile\n        partial_count += prefix[x1_mod+1][N] - prefix[0][N] - prefix[x1_mod+1][y2_mod+1] + prefix[0][y2_mod+1]\n        \n        # Bottom-left partial tile\n        partial_count += prefix[N][y1_mod+1] - prefix[x1_mod+1][y1_mod+1] - prefix[N][0] + prefix[x1_mod+1][0]\n        \n        # Bottom-right partial tile\n        partial_count += prefix[N][N] - prefix[x1_mod+1][N] - prefix[N][y2_mod+1] + prefix[x1_mod+1][y2_mod+1]\n        \n        return full_count + partial_count\n    \n    # Process queries\n    results = []\n    for _ in range(Q):\n        A = int(data[idx])\n        idx += 1\n        B = int(data[idx])\n        idx += 1\n        C = int(data[idx])\n        idx += 1\n        D = int(data[idx])\n        idx += 1\n        res = count_black(A, B, C, D)\n        results.append(str(res))\n    \n    print('\\n'.join(results))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 56847,
+  "total_time_ms": 967229.523897171,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1574,
+    "self_tests_generated": 5
+  }
+}

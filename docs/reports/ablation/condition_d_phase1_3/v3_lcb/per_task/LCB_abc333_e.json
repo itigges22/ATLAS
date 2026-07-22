@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc333_e",
+  "passed": false,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    events = []\n    idx = 1\n    for _ in range(N):\n        t = int(data[idx])\n        x = int(data[idx + 1])\n        events.append((t, x))\n        idx += 2\n\n    potion_counts = defaultdict(int)\n    potion_list = []\n    result = []\n    max_potions = 0\n    output = []\n\n    for i in range(N):\n        t, x = events[i]\n        if t == 1:\n            potion_list.append(x)\n            potion_counts[x] += 1\n            result.append(1)\n            max_potions = max(max_potions, potion_counts[x])\n        else:\n            if potion_counts[x] == 0:\n                print(-1)\n                return\n            potion_counts[x] -= 1\n            result.append(0)\n\n    # Now, we need to find the minimal K_min\n    # We can try to minimize the number of potions we pick up\n    # So we will greedily not pick up potions unless necessary\n\n    potion_counts = defaultdict(int)\n    potion_list = []\n    result = []\n    max_potions = 0\n    output = []\n\n    for i in range(N):\n        t, x = events[i]\n        if t == 1:\n            # Decide whether to pick up the potion\n            # Only pick it up if we need it for future monsters\n            # We can track the number of monsters for each type\n            monster_count = defaultdict(int)\n            for j in range(i + 1, N):\n                t_j, x_j = events[j]\n                if t_j == 2 and x_j == x:\n                    monster_count[x_j] += 1\n            if monster_count[x] > potion_counts[x]:\n                potion_counts[x] += 1\n                result.append(1)\n                max_potions = max(max_potions, potion_counts[x])\n            else:\n                result.append(0)\n        else:\n            if potion_counts[x] == 0:\n                print(-1)\n                return\n            potion_counts[x] -= 1\n            result.append(0)\n\n    # Now, collect the result only for events where t_i == 1\n    final_output = []\n    for i in range(N):\n        t, x = events[i]\n        if t == 1:\n            final_output.append(str(result[i]))\n\n    print(max_potions)\n    print(' '.join(final_output))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 40654,
+  "total_time_ms": 2030150.3608226776,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 9879,
+    "self_tests_generated": 5
+  }
+}

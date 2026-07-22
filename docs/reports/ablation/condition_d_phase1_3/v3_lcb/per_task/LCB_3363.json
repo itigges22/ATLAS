@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3363",
+  "passed": true,
+  "code": "from collections import defaultdict\nimport heapq\n\nclass Solution:\n    def mostFrequentIDs(self, nums: List[int], freq: List[int]) -> List[int]:\n        count = defaultdict(int)\n        max_heap = []\n        ans = []\n        \n        for i in range(len(nums)):\n            num = nums[i]\n            f = freq[i]\n            \n            # Update the count for the current ID\n            count[num] += f\n            \n            # If the count becomes zero, remove it from the heap\n            if count[num] == 0:\n                del count[num]\n            \n            # Maintain a max heap of (count, id)\n            # Since Python's heapq is a min-heap, we use negative counts\n            heapq.heappush(max_heap, (-count[num], num))\n            \n            # Get the current maximum frequency\n            current_max = 0\n            while max_heap:\n                current_count = -max_heap[0][0]\n                current_id = max_heap[0][1]\n                if count[current_id] == current_count:\n                    current_max = current_count\n                    break\n                else:\n                    heapq.heappop(max_heap)\n            \n            ans.append(current_max)\n        \n        return ans",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 2019,
+  "total_time_ms": 36905.75170516968,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1760
+  }
+}

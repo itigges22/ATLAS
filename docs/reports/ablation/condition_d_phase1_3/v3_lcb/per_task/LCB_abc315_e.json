@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc315_e",
+  "passed": false,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    N = int(sys.stdin.readline())\n    pre = [[] for _ in range(N + 1)]\n    for i in range(1, N + 1):\n        parts = list(map(int, sys.stdin.readline().split()))\n        C_i = parts[0]\n        P_i = parts[1:]\n        pre[i] = P_i\n\n    visited = [False] * (N + 1)\n    order = []\n\n    def dfs(u):\n        visited[u] = True\n        for v in pre[u]:\n            if not visited[v]:\n                dfs(v)\n        order.append(u)\n\n    dfs(1)\n    order.reverse()\n\n    result = []\n    for book in order:\n        if book != 1:\n            result.append(str(book))\n    print(' '.join(result))\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 49186,
+  "total_time_ms": 943912.4109745026,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 5210,
+    "self_tests_generated": 5
+  }
+}

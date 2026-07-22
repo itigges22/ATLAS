@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc308_e",
+  "passed": true,
+  "code": "import sys\nfrom collections import defaultdict\n\ndef mex(a, b, c):\n    s = {a, b, c}\n    for i in range(3):\n        if i not in s:\n            return i\n    return 3\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    A = list(map(int, data[1:N+1]))\n    S = data[N+1]\n    \n    # Precompute positions of 'M', 'E', 'X'\n    m_pos = []\n    e_pos = []\n    x_pos = []\n    \n    for i in range(N):\n        if S[i] == 'M':\n            m_pos.append(i)\n        elif S[i] == 'E':\n            e_pos.append(i)\n        elif S[i] == 'X':\n            x_pos.append(i)\n    \n    result = 0\n    \n    # Iterate over all combinations of M, E, X with i < j < k\n    for m in m_pos:\n        for e in e_pos:\n            if e <= m:\n                continue\n            for x in x_pos:\n                if x <= e:\n                    continue\n                # Check if m < e < x\n                if m < e < x:\n                    a = A[m]\n                    b = A[e]\n                    c = A[x]\n                    result += mex(a, b, c)\n    \n    print(result)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 5259,
+  "total_time_ms": 62650.00796318054,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 4934
+  }
+}

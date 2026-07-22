@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc351_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    # Read input\n    A = list(map(int, sys.stdin.readline().split()))\n    B = list(map(int, sys.stdin.readline().split()))\n    \n    # Compute cumulative sums\n    total_A = sum(A)\n    total_B = sum(B)\n    \n    # Calculate the minimum runs needed for Team Aoki to win\n    required_runs = total_A - total_B + 1\n    \n    # Ensure the result is non-negative (if required_runs is negative, Aoki can win with 0 runs)\n    print(max(required_runs, 0))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 512,
+  "total_time_ms": 12272.230863571167,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 420
+  }
+}

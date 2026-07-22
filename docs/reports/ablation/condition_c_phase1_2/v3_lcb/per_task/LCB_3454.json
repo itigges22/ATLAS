@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3454",
+  "passed": false,
+  "code": "class Solution:\n    def minimumOperations(self, nums: List[int], target: List[int]) -> int:\n        operations = 0\n        running_diff = 0\n        \n        for i in range(len(nums)):\n            running_diff += nums[i] - target[i]\n            if running_diff < 0:\n                operations -= running_diff\n                running_diff = 0\n            elif running_diff > 0:\n                operations += running_diff\n                running_diff = 0\n        \n        return operations",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 3060,
+  "total_time_ms": 50159.08408164978,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 2967
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3361",
+  "passed": false,
+  "code": "class Solution:\n    def findLatestTime(self, s: str) -> str:\n        # Convert string to a list for easy manipulation\n        time = list(s)\n        \n        # Replace '?' in hours (first two characters)\n        if time[0] == '?':\n            if time[1] == '?':\n                # Both are unknown, set to maximum hour \"11\"\n                time[0] = '1'\n                time[1] = '1'\n            elif int(time[1]) <= 1:\n                # First hour digit is unknown, but second is <= 1, set to \"1\"\n                time[0] = '1'\n            else:\n                # First hour digit is unknown, but second is > 1, set to \"0\"\n                time[0] = '0'\n        if time[1] == '?':\n            if time[0] == '1':\n                # Second hour digit is unknown, set to maximum \"1\"\n                time[1] = '1'\n            else:\n                # Second hour digit is unknown, set to maximum \"9\"\n                time[1] = '9'\n        \n        # Replace '?' in minutes (last two characters)\n        if time[3] == '?':\n            time[3] = '5'\n        if time[4] == '?':\n            time[4] = '9'\n        \n        # Join the list back to string and return\n        return ''.join(time)",
+  "phase_solved": "none",
+  "candidates_generated": 8,
+  "total_tokens": 6101,
+  "total_time_ms": 95782.39917755127,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 5907
+  }
+}

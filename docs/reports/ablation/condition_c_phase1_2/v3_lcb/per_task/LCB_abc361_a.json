@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc361_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN, K, X = map(int, input().split())\nA = list(map(int, input().split()))\nA.insert(K, X)\nprint(' '.join(map(str, A)))",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 53,
+  "total_time_ms": 935.549259185791,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

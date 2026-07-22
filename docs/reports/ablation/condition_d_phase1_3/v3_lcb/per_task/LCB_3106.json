@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3106",
+  "passed": true,
+  "code": "class Solution:\n    def lengthOfLongestSubsequence(self, nums: List[int], target: int) -> int:\n        dp = [-1] * (target + 1)\n        dp[0] = 0  # Base case: sum 0 can be achieved with 0 elements\n\n        for num in nums:\n            for t in range(target, num - 1, -1):\n                if dp[t - num] != -1:\n                    dp[t] = max(dp[t], dp[t - num] + 1)\n\n        return dp[target] if dp[target] != -1 else -1",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 918,
+  "total_time_ms": 14535.680532455444,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 791
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc302_e",
+  "passed": false,
+  "code": "import sys\nimport threading\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    Q = int(data[idx])\n    idx += 1\n\n    from collections import defaultdict\n\n    edges = defaultdict(set)\n    degree = [0] * (N + 1)\n    isolated = N  # Initially all vertices are isolated\n\n    def add_edge(u, v):\n        nonlocal isolated\n        if degree[u] == 0:\n            isolated -= 1\n        if degree[v] == 0:\n            isolated -= 1\n        degree[u] += 1\n        degree[v] += 1\n        edges[u].add(v)\n        edges[v].add(u)\n\n    def remove_edges(v):\n        nonlocal isolated\n        for u in edges[v]:\n            if degree[u] == 1:\n                isolated += 1\n            degree[u] -= 1\n        degree[v] = 0\n        edges[v].clear()\n        for u in edges[v]:\n            edges[u].remove(v)\n        edges[v].clear()\n\n    for _ in range(Q):\n        t = data[idx]\n        idx += 1\n        if t == '1':\n            u = int(data[idx])\n            idx += 1\n            v = int(data[idx])\n            idx += 1\n            add_edge(u, v)\n        else:\n            v = int(data[idx])\n            idx += 1\n            remove_edges(v)\n        print(isolated)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 350,
+  "total_time_ms": 5956.690788269043,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

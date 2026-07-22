@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/3493",
+  "passed": true,
+  "code": "class Solution:\n    def maxOperations(self, s: str) -> int:\n        # We cannot modify the original string, so we simulate the operations\n        # using a list to simulate the string changes.\n        # This satisfies the constraint of not modifying the original string.\n\n        # Convert the string to a list for simulation\n        s_list = list(s)\n        operations = 0\n        n = len(s_list)\n\n        # Traverse the string from left to right\n        i = 0\n        while i < n - 1:\n            if s_list[i] == '1' and s_list[i + 1] == '0':\n                # Perform the operation: move '1' to the right\n                # until it reaches the end or another '1'\n                j = i\n                while j + 1 < n and s_list[j + 1] == '0':\n                    s_list[j], s_list[j + 1] = s_list[j + 1], s_list[j]\n                    j += 1\n                operations += 1\n                i = 0  # Reset index to check from the beginning again\n            else:\n                i += 1\n\n        return operations",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1176,
+  "total_time_ms": 31894.01888847351,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1108
+  }
+}

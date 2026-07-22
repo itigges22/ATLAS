@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc311_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    input = sys.stdin.read().split()\n    N = int(input[0])\n    S = input[1]\n\n    a_seen = b_seen = c_seen = False\n    count = 0\n\n    for char in S:\n        count += 1\n        if char == 'A':\n            a_seen = True\n        elif char == 'B':\n            b_seen = True\n        elif char == 'C':\n            c_seen = True\n\n        if a_seen and b_seen and c_seen:\n            print(count)\n            return\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1084,
+  "total_time_ms": 18615.012407302856,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1018
+  }
+}

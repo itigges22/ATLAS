@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc362_e",
+  "passed": true,
+  "code": "import sys\nimport itertools\nMOD = 998244353\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    N = int(data[0])\n    A = list(map(int, data[1:]))\n\n    result = [0] * (N + 1)\n    result[1] = N  # All single elements are arithmetic sequences\n\n    for k in range(2, N + 1):\n        for indices in itertools.combinations(range(N), k):\n            values = [A[i] for i in indices]\n            is_arithmetic = True\n            d = values[1] - values[0]\n            for i in range(2, k):\n                if values[i] - values[i - 1] != d:\n                    is_arithmetic = False\n                    break\n            if is_arithmetic:\n                result[k] += 1\n                result[k] %= MOD\n\n    print(' '.join(map(str, result[1:N + 1])))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1610,
+  "total_time_ms": 25040.454864501953,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1373
+  }
+}

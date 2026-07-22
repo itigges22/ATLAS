@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc336_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN = int(input())\ndragon_string = \"L\" + \"o\" * N + \"n\" + \"g\"\nprint(dragon_string)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 318,
+  "total_time_ms": 5594.489574432373,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 271
+  }
+}

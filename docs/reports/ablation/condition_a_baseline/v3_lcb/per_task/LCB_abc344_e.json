@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc344_e",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\nfrom collections import defaultdict\n\ndef main():\n    input = sys.stdin.read\n    data = input().split()\n    \n    idx = 0\n    N = int(data[idx])\n    idx += 1\n    A = list(map(int, data[idx:idx+N]))\n    idx += N\n    \n    Q = int(data[idx])\n    idx += 1\n    \n    # Use a dictionary to map each value to its index in the list\n    pos = {}\n    for i, val in enumerate(A):\n        pos[val] = i\n    \n    # Use a doubly linked list approach with prev and next pointers\n    prev = {}\n    next = {}\n    for i in range(N):\n        if i > 0:\n            prev[A[i]] = A[i-1]\n        else:\n            prev[A[i]] = None\n        if i < N - 1:\n            next[A[i]] = A[i+1]\n        else:\n            next[A[i]] = None\n    \n    for _ in range(Q):\n        query_type = data[idx]\n        idx += 1\n        if query_type == '1':\n            x = int(data[idx])\n            idx += 1\n            y = int(data[idx])\n            idx += 1\n            # Insert y after x\n            # Remove y from pos if it exists (though problem says it's guaranteed to be unique)\n            if y in pos:\n                del pos[y]\n            # Get the next of x\n            nx = next[x]\n            # Update next of x to y\n            next[x] = y\n            # Update prev of y to x\n            prev[y] = x\n            # Update next of y to nx\n            next[y] = nx\n            # Update prev of nx to y if nx exists\n            if nx is not None:\n                prev[nx] = y\n            # Add y to pos\n            pos[y] = pos[x] + 1\n        elif query_type == '2':\n            x = int(data[idx])\n            idx += 1\n            # Remove x\n            del pos[x]\n            # Get prev and next of x\n            p = prev[x]\n            nxt = next[x]\n            # Update next of p to nxt\n            if p is not None:\n                next[p] = nxt\n            # Update prev of nxt to p\n            if nxt is not None:\n                prev[nxt] = p\n            # Remove x from prev and next\n            del prev[x]\n            del next[x]\n    \n    # Reconstruct the list from the head\n    head = None\n    for val in pos:\n        if prev[val] is None:\n            head = val\n            break\n    result = []\n    current = head\n    while current is not None:\n        result.append(str(current))\n        current = next[current]\n    print(' '.join(result))\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 10039.189338684082,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

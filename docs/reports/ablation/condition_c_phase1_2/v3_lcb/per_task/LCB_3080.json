@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3080",
+  "passed": false,
+  "code": "class Solution:\n    def maxSubarrays(self, nums: List[int]) -> int:\n        total_and = nums[0]\n        count = 1\n        for num in nums[1:]:\n            total_and &= num\n            if total_and == 0:\n                count += 1\n                total_and = num\n        return count",
+  "phase_solved": "none",
+  "candidates_generated": 1,
+  "total_tokens": 83,
+  "total_time_ms": 1487.2496128082275,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

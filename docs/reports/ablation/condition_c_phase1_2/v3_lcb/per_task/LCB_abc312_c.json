@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc312_c",
+  "passed": true,
+  "code": "import sys\nimport bisect\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:2+N]))\n    B = list(map(int, data[2+N:2+N+M]))\n    \n    A.sort()\n    B.sort()\n    \n    # Binary search boundaries\n    low = 1\n    high = 10**18  # A safe upper bound\n\n    def is_possible(x):\n        # Number of sellers who can sell at x or less\n        sellers = bisect.bisect_right(A, x)\n        # Number of buyers who can buy at x or more\n        buyers = M - bisect.bisect_left(B, x)\n        return sellers >= buyers\n\n    # Binary search\n    answer = 0\n    while low <= high:\n        mid = (low + high) // 2\n        if is_possible(mid):\n            answer = mid\n            high = mid - 1\n        else:\n            low = mid + 1\n    print(answer)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 7311,
+  "total_time_ms": 114252.76780128479,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 4980,
+    "s_star_triggered": true
+  }
+}

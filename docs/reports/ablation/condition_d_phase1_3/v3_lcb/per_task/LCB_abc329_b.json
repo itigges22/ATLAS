@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc329_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\na = list(map(int, input().split()))\nmax_val = max(a)\nsecond_max = max([x for x in a if x != max_val])\nprint(second_max)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 770,
+  "total_time_ms": 14265.098094940186,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 715
+  }
+}

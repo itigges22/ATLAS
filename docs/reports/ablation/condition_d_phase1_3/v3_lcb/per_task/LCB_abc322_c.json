@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc322_c",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    \n    N = int(data[0])\n    M = int(data[1])\n    A = list(map(int, data[2:]))\n    \n    result = [0] * N\n    ptr = 0  # Pointer to track the next firework day\n    \n    for i in range(N):\n        if ptr < M and A[ptr] == i + 1:\n            result[i] = 0\n            ptr += 1\n        else:\n            result[i] = A[ptr] - (i + 1)\n    \n    for res in result:\n        print(res)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1281,
+  "total_time_ms": 22350.51202774048,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1125
+  }
+}

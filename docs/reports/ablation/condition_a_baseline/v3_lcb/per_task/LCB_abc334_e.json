@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc334_e",
+  "passed": true,
+  "code": "import sys\nimport threading\nfrom collections import deque\n\nMOD = 998244353\n\ndef main():\n    import sys\n    sys.setrecursionlimit(1 << 25)\n    H, W = map(int, sys.stdin.readline().split())\n    grid = [list(sys.stdin.readline().strip()) for _ in range(H)]\n\n    red_cells = []\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '.':\n                red_cells.append((i, j))\n\n    # First, find all green connected components\n    visited = [[False] * W for _ in range(H)]\n    component_id = 0\n    component = [[0] * W for _ in range(H)]\n    dir = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n\n    for i in range(H):\n        for j in range(W):\n            if grid[i][j] == '#' and not visited[i][j]:\n                component_id += 1\n                q = deque()\n                q.append((i, j))\n                visited[i][j] = True\n                component[i][j] = component_id\n                while q:\n                    x, y = q.popleft()\n                    for dx, dy in dir:\n                        nx, ny = x + dx, y + dy\n                        if 0 <= nx < H and 0 <= ny < W and grid[nx][ny] == '#' and not visited[nx][ny]:\n                            visited[nx][ny] = True\n                            component[nx][ny] = component_id\n                            q.append((nx, ny))\n\n    # Now, for each red cell, compute the change in component count\n    total = 0\n    num_red = len(red_cells)\n\n    for x, y in red_cells:\n        # Check neighboring components\n        neighbors = set()\n        for dx, dy in dir:\n            nx, ny = x + dx, y + dy\n            if 0 <= nx < H and 0 <= ny < W and grid[nx][ny] == '#':\n                neighbors.add(component[nx][ny])\n        unique_components = len(neighbors)\n        # When we paint this cell green, it connects all neighboring components\n        # So the new component count is (original_component_count - (unique_components - 1))\n        # original_component_count is the number of green components before painting\n        # which is component_id\n        total += (component_id - (unique_components - 1))\n\n    # Expected value is total / num_red\n    # Compute modular inverse of num_red\n    inv_num_red = pow(num_red, MOD - 2, MOD)\n    result = (total % MOD) * inv_num_red % MOD\n    print(result)\n\nthreading.Thread(target=main).start()",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 9196.718692779541,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

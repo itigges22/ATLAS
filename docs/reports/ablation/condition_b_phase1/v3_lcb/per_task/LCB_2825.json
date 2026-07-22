@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/2825",
+  "passed": true,
+  "code": "class Solution:\n    def minimizedStringLength(self, s: str) -> int:\n        return len(set(s))",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 1176,
+  "total_time_ms": 21602.094888687134,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1141
+  }
+}

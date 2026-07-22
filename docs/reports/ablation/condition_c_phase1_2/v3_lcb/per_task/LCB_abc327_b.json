@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc327_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nimport sys\n\ndef main():\n    B = int(sys.stdin.readline())\n    \n    # Since A^A grows very quickly, we only need to check small values of A\n    # A can't be larger than B, and A^A will exceed B quickly\n    # We'll check A from 1 to 60 (as 60^60 is way larger than 1e18)\n    for A in range(1, 61):\n        if pow(A, A) == B:\n            print(A)\n            return\n    print(-1)\n\nif __name__ == \"__main__\":\n    main()",
+  "phase_solved": "phase1",
+  "candidates_generated": 5,
+  "total_tokens": 3747,
+  "total_time_ms": 60097.7201461792,
+  "telemetry": {
+    "adaptive_k": 5,
+    "budget_tier": "hard",
+    "plansearch_tokens": 1560,
+    "s_star_triggered": true
+  }
+}

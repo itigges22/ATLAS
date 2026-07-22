@@ -1,0 +1,13 @@
+{
+  "task_id": "LCB/abc324_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nn = int(input())\na = list(map(int, input().split()))\nif all(x == a[0] for x in a):\n    print(\"Yes\")\nelse:\n    print(\"No\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 0,
+  "total_time_ms": 1026.270866394043,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard"
+  }
+}

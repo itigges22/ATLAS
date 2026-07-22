@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3508",
+  "passed": true,
+  "code": "class Solution:\n    def minChanges(self, n: int, k: int) -> int:\n        xor = n ^ k\n        # Count the number of 1s in the XOR result\n        count_ones = bin(xor).count('1')\n        \n        # If there are any bits set in k that are not set in n, it's impossible\n        if (k & ~n) != 0:\n            return -1\n        \n        return count_ones",
+  "phase_solved": "phase1",
+  "candidates_generated": 8,
+  "total_tokens": 5499,
+  "total_time_ms": 85244.07577514648,
+  "telemetry": {
+    "adaptive_k": 8,
+    "budget_tier": "extreme",
+    "plansearch_tokens": 3312,
+    "s_star_triggered": true
+  }
+}

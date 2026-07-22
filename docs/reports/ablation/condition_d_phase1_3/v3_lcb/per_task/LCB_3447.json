@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/3447",
+  "passed": false,
+  "code": "class Solution:\n    def clearDigits(self, s: str) -> str:\n        stack = []\n        for char in s:\n            if char.isdigit():\n                if stack:\n                    stack.pop()\n            else:\n                stack.append(char)\n        return ''.join(stack)",
+  "phase_solved": "none",
+  "candidates_generated": 3,
+  "total_tokens": 39126,
+  "total_time_ms": 922411.3261699677,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 1024,
+    "self_tests_generated": 5
+  }
+}

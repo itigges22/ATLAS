@@ -1,0 +1,15 @@
+{
+  "task_id": "LCB/abc335_b",
+  "passed": true,
+  "code": "# YOUR CODE HERE\nN = int(input())\n\nfor x in range(N + 1):\n    for y in range(N - x + 1):\n        for z in range(N - x - y + 1):\n            print(f\"{x} {y} {z}\")",
+  "phase_solved": "phase1",
+  "candidates_generated": 1,
+  "total_tokens": 69,
+  "total_time_ms": 1253.978967666626,
+  "telemetry": {
+    "reasc_stopped": true,
+    "reasc_reason": "easy_and_confident",
+    "adaptive_k": 1,
+    "budget_tier": "nothink"
+  }
+}

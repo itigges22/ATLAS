@@ -1,0 +1,14 @@
+{
+  "task_id": "LCB/abc314_a",
+  "passed": true,
+  "code": "# YOUR CODE HERE\npi_str = \"3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679\"\n\nN = int(input())\ndecimal_part = pi_str.split('.')[1][:N]\nresult = f\"{pi_str.split('.')[0]}.{decimal_part}\"\n\nprint(result)",
+  "phase_solved": "phase1",
+  "candidates_generated": 3,
+  "total_tokens": 921,
+  "total_time_ms": 15372.275352478027,
+  "telemetry": {
+    "adaptive_k": 3,
+    "budget_tier": "standard",
+    "plansearch_tokens": 747
+  }
+}
