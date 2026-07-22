@@ -18,7 +18,7 @@ func TestExtractFailurePath(t *testing.T) {
 		{"read_file", `{"path":"app.py","offset":0,"limit":100}`, "app.py"},
 		{"write_file", `{"path":"new.py","content":"hello"}`, "new.py"},
 		{"edit_file", `{"path":"a.py","old_str":"x","new_str":"y"}`, "a.py"},
-		{"ast_edit", `{"path":"t.html","selector":"<body>","content":"..."}`, "t.html"},
+		{"structural_edit", `{"path":"t.html","selector":"<body>","content":"..."}`, "t.html"},
 		{"delete_file", `{"path":"old.py"}`, "old.py"},
 		{"find_file", `{"pattern":".*test.*\\.py$"}`, ""},      // no path field
 		{"find_file", `{"pattern":"x","path":"src/"}`, "src/"}, // optional path
@@ -49,7 +49,7 @@ func TestBuildPlanReminderRendersProgress(t *testing.T) {
 		Plan: &Plan{
 			Steps: []PlanStep{
 				{ID: "s1", Action: "read_file", Target: "app.py"},
-				{ID: "s2", Action: "ast_edit", Target: "templates/dashboard.html"},
+				{ID: "s2", Action: "structural_edit", Target: "templates/dashboard.html"},
 				{ID: "s3", Action: "run_command", Target: "curl localhost:5000/dashboard"},
 			},
 			VerifyStep: "s3",
@@ -60,7 +60,7 @@ func TestBuildPlanReminderRendersProgress(t *testing.T) {
 	if got == "" {
 		t.Fatal("expected reminder, got empty")
 	}
-	for _, s := range []string{"[system note]: plan progress", "1/3", "s2", "ast_edit templates/dashboard.html", "Done: s1", "Remaining: s2, s3"} {
+	for _, s := range []string{"[system note]: plan progress", "1/3", "s2", "structural_edit templates/dashboard.html", "Done: s1", "Remaining: s2, s3"} {
 		if !strings.Contains(got, s) {
 			t.Errorf("reminder missing %q: %s", s, got)
 		}

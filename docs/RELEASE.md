@@ -42,7 +42,7 @@ marks *audience* rather than maturity and composes with a level:
 |---|---|---|
 | Sandbox health, languages, execute, syntax-check, shell, and background jobs | Internal | Called by proxy and V3; direct host use is a developer workflow |
 | V3 generate, run, plan, and health | Internal | `/v3/generate` is the proxy integration path |
-| V3 AST edit, symbol index, and complexity endpoints | Experimental (Internal) | Tree-sitter availability determines capability |
+| V3 structural edit, symbol index, and complexity endpoints | Experimental (Internal) | Tree-sitter availability determines capability |
 | Geometric Lens `/v1/*` endpoints | Supported (requires configured local API keys) | Local authenticated API |
 | Geometric Lens `/internal/*` endpoints | Internal | Intended only for the ATLAS service network |
 | llama-server inference, completion, embedding, and health | Internal (upstream llama.cpp contract, qualified against the pinned revision) | — |

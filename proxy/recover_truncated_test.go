@@ -7,22 +7,22 @@ import (
 )
 
 // May 9 2026: under BiasBusters mitigations the model now reaches for
-// ast_edit + edit_file too. Real flask test logs show 10K-12K char
-// ast_edit responses parse-erroring with no recovery path. Lock the
+// structural_edit + edit_file too. Real flask test logs show 10K-12K char
+// structural_edit responses parse-erroring with no recovery path. Lock the
 // generalized recovery so future regressions can't slip back in.
 
-func TestRecoverTruncatedAstEditFullPayload(t *testing.T) {
+func TestRecoverTruncatedStructuralEditFullPayload(t *testing.T) {
 	// Well-formed but unparseable-as-JSON payload (e.g. trailing brace
 	// dropped by the model). Recovery still extracts the fields.
-	partial := `{"type":"tool_call","name":"ast_edit","args":{"path":"templates/index.html","selector":"<html>","content":"<!DOCTYPE html>\n<html lang=\"en\"><head></head><body>hi</body></html>"`
+	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"templates/index.html","selector":"<html>","content":"<!DOCTYPE html>\n<html lang=\"en\"><head></head><body>hi</body></html>"`
 	resp, ok := recoverTruncatedToolCall(partial)
 	if !ok {
 		t.Fatal("recovery returned false")
 	}
-	if resp.Type != "tool_call" || resp.Name != "ast_edit" {
-		t.Fatalf("got Type=%q Name=%q, want tool_call/ast_edit", resp.Type, resp.Name)
+	if resp.Type != "tool_call" || resp.Name != "structural_edit" {
+		t.Fatalf("got Type=%q Name=%q, want tool_call/structural_edit", resp.Type, resp.Name)
 	}
-	var args AstEditInput
+	var args StructuralEditInput
 	if err := json.Unmarshal(resp.Args, &args); err != nil {
 		t.Fatalf("unmarshal recovered args: %v", err)
 	}
@@ -44,16 +44,16 @@ func TestRecoverTruncatedAstEditFullPayload(t *testing.T) {
 	}
 }
 
-func TestRecoverTruncatedAstEditMidContent(t *testing.T) {
+func TestRecoverTruncatedStructuralEditMidContent(t *testing.T) {
 	// Realistic case from May 9 logs: response cut off mid-content with
 	// no closing quote/braces. Recovery returns whatever content made
 	// it through so the agent can write SOMETHING useful and continue.
-	partial := `{"type":"tool_call","name":"ast_edit","args":{"path":"app.py","selector":"function:dashboard","content":"@app.route('/dashboard')\ndef dashboard():\n    users = get_users()\n    return render_template(`
+	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"app.py","selector":"function:dashboard","content":"@app.route('/dashboard')\ndef dashboard():\n    users = get_users()\n    return render_template(`
 	resp, ok := recoverTruncatedToolCall(partial)
 	if !ok {
 		t.Fatal("recovery returned false on mid-content truncation")
 	}
-	var args AstEditInput
+	var args StructuralEditInput
 	if err := json.Unmarshal(resp.Args, &args); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -109,11 +109,11 @@ func TestRecoverTruncatedToolCallUnknownToolReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestRecoverTruncatedAstEditMissingSelectorFails(t *testing.T) {
+func TestRecoverTruncatedStructuralEditMissingSelectorFails(t *testing.T) {
 	// Malformed — selector missing entirely. Recovery should fail
-	// rather than emit a tool call with empty selector that ast_edit
+	// rather than emit a tool call with empty selector that structural_edit
 	// would reject downstream anyway.
-	partial := `{"type":"tool_call","name":"ast_edit","args":{"path":"app.py","content":"def foo(): pass"}`
+	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"app.py","content":"def foo(): pass"}`
 	if _, ok := recoverTruncatedToolCall(partial); ok {
 		t.Error("expected no recovery when selector is missing")
 	}

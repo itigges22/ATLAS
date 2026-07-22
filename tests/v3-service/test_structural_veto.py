@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 import main  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
-    not getattr(main, "_AST_EDIT_AVAILABLE", False),
+    not getattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False),
     reason="tree-sitter not installed",
 )
 
@@ -234,7 +234,7 @@ def test_endpoint_fails_open_without_tree_sitter(structural_check_url,
     # ok:false = "check couldn't run"; the Go caller treats it as pass.
     # (Malformed Python is NOT this case: tree-sitter parses it tolerantly,
     # so the checkable trigger is tree-sitter being unavailable.)
-    monkeypatch.setattr(main, "_AST_EDIT_AVAILABLE", False)
+    monkeypatch.setattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False)
     out = _post_json(structural_check_url, {
         "path": "app.py",
         "source": "def index():\n    return render_template('x')\n",

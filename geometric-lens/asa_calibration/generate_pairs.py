@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate ~1000 ast_edit-vs-edit_file contrast pairs for ASA steering
+"""Generate ~1000 structural_edit-vs-edit_file contrast pairs for ASA steering
 vector extraction.
 
 Pairs are emitted in positional-symmetric order so cvector-generator
-contrasts line N (ast_edit positive) against line N+1 (edit_file
+contrasts line N (structural_edit positive) against line N+1 (edit_file
 negative) on the SAME user task — which is what isolates the tool-
 choice direction in residual space (task-comprehension noise cancels).
 
@@ -198,22 +198,22 @@ HTML_GOALS = [
     "add print-only styles in the head",
 ]
 
-PROSE_AST_EDIT = [
-    "I'll rewrite {name} with ast_edit using selector {selector} — that's a whole-{kind} swap and ast_edit is the right tool.",
-    "Switching to ast_edit selector {selector} since this is a whole-{kind} rewrite.",
-    "I'll use ast_edit on {file} with selector {selector} — single structural-{kind} swap.",
-    "ast_edit selector {selector} is the cleanest call here — no need to copy the existing {kind} body as old_str.",
-    "Going to use ast_edit with selector {selector} — whole-{kind} replacement.",
-    "Let me use ast_edit selector {selector} — exactly the case ast_edit was designed for (named-node rewrite).",
-    "I should use ast_edit with selector {selector} since this is a complete {kind} rewrite, not a surgical line edit.",
-    "I'll use ast_edit on {file} (selector {selector}) — whole-{kind} swap, no truncation risk on long content.",
-    "ast_edit with selector {selector} fits — the user is asking for a {kind}-level rewrite.",
-    "I'll rewrite the {kind} with ast_edit selector {selector}; decorators and signatures are pulled in automatically.",
-    "Using ast_edit on {file} with selector {selector} — whole-block swap is the right shape for this change.",
-    "I'll go with ast_edit selector {selector} — replacing the entire {kind} cleanly without copying it as old_str.",
-    "Picking ast_edit selector {selector} since the change touches the whole {kind}, not just a line or two.",
-    "ast_edit on {file} with selector {selector} — that's the structural-edit path for whole-{kind} swaps.",
-    "I'll use ast_edit (selector {selector}) — old_str-based edit_file would force me to copy the entire existing {kind}.",
+PROSE_STRUCTURAL_EDIT = [
+    "I'll rewrite {name} with structural_edit using selector {selector} — that's a whole-{kind} swap and structural_edit is the right tool.",
+    "Switching to structural_edit selector {selector} since this is a whole-{kind} rewrite.",
+    "I'll use structural_edit on {file} with selector {selector} — single structural-{kind} swap.",
+    "structural_edit selector {selector} is the cleanest call here — no need to copy the existing {kind} body as old_str.",
+    "Going to use structural_edit with selector {selector} — whole-{kind} replacement.",
+    "Let me use structural_edit selector {selector} — exactly the case structural_edit was designed for (named-node rewrite).",
+    "I should use structural_edit with selector {selector} since this is a complete {kind} rewrite, not a surgical line edit.",
+    "I'll use structural_edit on {file} (selector {selector}) — whole-{kind} swap, no truncation risk on long content.",
+    "structural_edit with selector {selector} fits — the user is asking for a {kind}-level rewrite.",
+    "I'll rewrite the {kind} with structural_edit selector {selector}; decorators and signatures are pulled in automatically.",
+    "Using structural_edit on {file} with selector {selector} — whole-block swap is the right shape for this change.",
+    "I'll go with structural_edit selector {selector} — replacing the entire {kind} cleanly without copying it as old_str.",
+    "Picking structural_edit selector {selector} since the change touches the whole {kind}, not just a line or two.",
+    "structural_edit on {file} with selector {selector} — that's the structural-edit path for whole-{kind} swaps.",
+    "I'll use structural_edit (selector {selector}) — old_str-based edit_file would force me to copy the entire existing {kind}.",
 ]
 
 PROSE_EDIT_FILE = [
@@ -262,7 +262,7 @@ def template_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {name} function in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=name, selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
                      kind="function", file=file)
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="function", file=file)
@@ -277,7 +277,7 @@ def template_decorated_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {decorator} {name} handler in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=name, selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
                      kind="function", file=file) + " The decorator comes along automatically."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="function", file=file)
@@ -292,8 +292,8 @@ def template_stacked_decorator_function(rng: random.Random) -> tuple[str, str, s
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {name} handler in {file} (stacked decorators: {stack}) to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=name, selector=selector,
-                     kind="function", file=file) + " The full decorator stack is preserved by ast_edit."
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
+                     kind="function", file=file) + " The full decorator stack is preserved by structural_edit."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="function", file=file)
     return user, pos, neg
@@ -306,7 +306,7 @@ def template_async_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the async {name} function in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=name, selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
                      kind="function", file=file) + " async signatures are handled the same as sync."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="function", file=file)
@@ -320,7 +320,7 @@ def template_generator_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {name} generator in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=name, selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
                      kind="function", file=file) + " A yield-based generator is just a function for the AST."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="function", file=file)
@@ -334,7 +334,7 @@ def template_class(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"class:{name}"
     user = f"{verb} the {name} class in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=name, selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
                      kind="class", file=file)
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="class", file=file)
@@ -350,7 +350,7 @@ def template_decorated_class(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"class:{name}"
     user = f"{verb} the {decorator} {name} class in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=name, selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
                      kind="class", file=file) + " The class decorator is captured automatically."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="class", file=file)
@@ -365,7 +365,7 @@ def template_html_element(rng: random.Random) -> tuple[str, str, str]:
     selector = element
     elem_name = element.strip("<>")
     user = f"{verb} the {element} element in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name=elem_name, selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=elem_name, selector=selector,
                      kind="element", file=file)
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=elem_name, selector=selector,
                      kind="element", file=file)
@@ -378,7 +378,7 @@ def template_html_body_redesign(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(HTML_GOALS)
     selector = "<body>"
     user = f"{verb} the body of {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_AST_EDIT), name="body", selector=selector,
+    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name="body", selector=selector,
                      kind="element", file=file)
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name="body", selector=selector,
                      kind="element", file=file)
@@ -392,7 +392,7 @@ def template_post_rejection_function(rng: random.Random) -> tuple[str, str, str]
     selector = f"function:{name}"
     preamble = rng.choice(REJECTION_PREAMBLES).format(file=file)
     user = preamble + f"The {name} function needs to {goal} — replace it."
-    pos = "Switching to ast_edit selector " + selector + \
+    pos = "Switching to structural_edit selector " + selector + \
           " — whole-function swap is the right tool for an existing-file rewrite, edit_file would force me to copy the whole function body."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="function", file=file)
@@ -406,7 +406,7 @@ def template_post_rejection_class(rng: random.Random) -> tuple[str, str, str]:
     selector = f"class:{name}"
     preamble = rng.choice(REJECTION_PREAMBLES).format(file=file)
     user = preamble + f"The {name} class needs to {goal} — refactor it."
-    pos = "Switching to ast_edit selector " + selector + \
+    pos = "Switching to structural_edit selector " + selector + \
           " — whole-class swap is the right tool for an existing-file rewrite."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="class", file=file)
@@ -421,7 +421,7 @@ def template_post_rejection_html(rng: random.Random) -> tuple[str, str, str]:
     elem_name = element.strip("<>")
     preamble = rng.choice(REJECTION_PREAMBLES).format(file=file)
     user = preamble + f"Need to swap the {element} so it can {goal} — the whole element changes."
-    pos = "Switching to ast_edit with selector " + selector + " on " + file + \
+    pos = "Switching to structural_edit with selector " + selector + " on " + file + \
           " — whole-element swap, doesn't truncate on long content the way edit_file can."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=elem_name, selector=selector,
                      kind="element", file=file)
@@ -429,15 +429,15 @@ def template_post_rejection_html(rng: random.Random) -> tuple[str, str, str]:
 
 
 def template_entire_keyword(rng: random.Random) -> tuple[str, str, str]:
-    """User explicitly says 'entire' — strong ast_edit signal."""
+    """User explicitly says 'entire' — strong structural_edit signal."""
     file = rng.choice(PY_FILES)
     name = rng.choice(FUNCTION_NAMES)
     verb = rng.choice(["Refactor", "Rewrite", "Replace"])
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the entire {name} function in {file} to {goal}."
-    pos = "I'll use ast_edit selector " + selector + \
-          " — the user said 'entire function', that's a whole-node rewrite which is ast_edit's specialty."
+    pos = "I'll use structural_edit selector " + selector + \
+          " — the user said 'entire function', that's a whole-node rewrite which is structural_edit's specialty."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
                      kind="function", file=file)
     return user, pos, neg
@@ -461,8 +461,8 @@ def template_swap_keyword(rng: random.Random) -> tuple[str, str, str]:
         user = f"Swap the {name} function in {file} for a version that can {goal}."
         kind = "function"
         name_for_prose = name
-    pos = "ast_edit with selector " + selector + \
-          " — 'swap' is the structural keyword, exactly what ast_edit handles."
+    pos = "structural_edit with selector " + selector + \
+          " — 'swap' is the structural keyword, exactly what structural_edit handles."
     neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name_for_prose, selector=selector,
                      kind=kind, file=file)
     return user, pos, neg
@@ -518,8 +518,8 @@ def generate(n: int, seed: int) -> list[dict]:
         if user in seen_users:
             continue
         seen_users.add(user)
-        pairs.append({"label": "ast_edit", "user": user,
-                      "assistant_prefix": pos_prefix, "tool": "ast_edit"})
+        pairs.append({"label": "structural_edit", "user": user,
+                      "assistant_prefix": pos_prefix, "tool": "structural_edit"})
         pairs.append({"label": "edit_file", "user": user,
                       "assistant_prefix": neg_prefix, "tool": "edit_file"})
     if len(pairs) // 2 < n:

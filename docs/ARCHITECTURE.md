@@ -153,7 +153,7 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 | `outline_file` | List a file's top-level functions/classes with line ranges, no bodies (tree-sitter for `.py`, best-effort scan otherwise). The surgical-read entry point: outline first, then `read_file` with offset/limit | Yes |
 | `write_file` | Create a NEW file (rejected for existing files >5 lines — see safety limits) | No |
 | `edit_file` | Surgical inline string replacement (old_str/new_str) for ≤10-line changes | No |
-| `ast_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
+| `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
 | `delete_file` | Delete file or empty directory (forces loop exit after) | No |
 | `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. The supported path for "reorganize the files" since shell `mv`/`cp` are refused | No |
 | `find_file` | Regex search by file **name** / path (cheap existence + locate). Distinct from `search_files` which greps inside file contents. | Yes |
@@ -167,12 +167,12 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 ### Tool-selection bias mitigations
 
 A measured reference deployment showed a bias toward `edit_file` over
-`ast_edit` even when `ast_edit` was correct (BiasBusters arxiv 2510.00307 —
+`structural_edit` even when `structural_edit` was correct (BiasBusters arxiv 2510.00307 —
 embeddings of nearby tool names compete; descriptions matter more than names).
 Four model-independent defenses compose in the proxy:
 
 1. **Description rewrite** (`proxy/tools.go`). edit_file's description
-   warns against whole-file/whole-function use; ast_edit's description
+   warns against whole-file/whole-function use; structural_edit's description
    says REQUIRED for >10-line / whole-node swaps; write_file's says
    NEW files only.
 2. **Conditional GBNF grammar** (`proxy/grammar.go`,
@@ -183,10 +183,10 @@ Four model-independent defenses compose in the proxy:
    them. Restriction expires after one decision.
 3. **Per-step tool-list filter** (same trigger). An ephemeral
    `[system note]` user message is injected reminding the model that
-   ast_edit is the only structural-edit tool for this step.
+   structural_edit is the only structural-edit tool for this step.
 4. **ASA steering vectors** (`geometric-lens/asa_calibration/`).
    Activation steering shifts the residual-stream distribution upstream
-   so ast_edit is preferred even on first-attempt decisions before any
+   so structural_edit is preferred even on first-attempt decisions before any
    rejection has fired. Auto-loaded by `inference/entrypoint-v3.1.sh`
    from `/models/ast_edit_steering.gguf` only when its `.model` sidecar
    matches the selected model—always-on after a compatible build via the workflow
@@ -241,7 +241,7 @@ See [PLAN_MODE.md](PLAN_MODE.md) for the full flow, components, tunables, skip c
 
 ### Safety Limits
 
-Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails.go` and `proxy/agent.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `ast_edit`, and every `write_file` branch; under BypassV3 only the non-iterating T0/T1 direct `write_file` skips it, so the demo baseline pane shows the raw model, while the edit paths and the iteration fast-path stay gated in all modes) lives in `proxy/structural_gate.go`. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
+Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails.go` and `proxy/agent.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `structural_edit`, and every `write_file` branch; under BypassV3 only the non-iterating T0/T1 direct `write_file` skips it, so the demo baseline pane shows the raw model, while the edit paths and the iteration fast-path stay gated in all modes) lives in `proxy/structural_gate.go`. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
 
 **Fast-path writes during active iteration.** V3 fires on the *first* write of a T2+ file (baseline generation). But once the model has written a file and just saw it fail a run, the next write is a targeted fix in an edit-test-fix loop — it skips V3 (still syntax- and structural-gated) and writes directly. V3's full pipeline is multi-minute per call and, on a file mid-debug, frequently completes without a usable result and falls back anyway; paying that latency per iteration throttles the loop to a handful of cycles. The fast-path keys off `SessionWrites[path]` plus a failed most-recent run referencing the file.
 
@@ -253,9 +253,9 @@ Operator-facing limits and the knobs that tune them. Internal steering guards (t
 | Redundant-read short-circuit | Whole-file re-read of an unchanged file returns an "already in context" pointer only while the content is still live; otherwise the full file is re-served (`ATLAS_DEDUP_READS=0` disables) | Avoid re-encoding an unchanged file every turn without the model editing blind |
 | V3 interactive wall-clock cap | Single V3 pipeline call capped at `ATLAS_V3_TIMEOUT` (default 180s); on timeout the proxy falls back to the model's syntax- and structural-gated content (`0` disables) | Keep an interactive session responsive under a long repair stall |
 | Per-turn reasoning budget | Cut the stream after ~6144 reasoning tokens (`ATLAS_REASONING_BUDGET`, 0 disables); recovery extracts an embedded tool_call or re-prompts | Bound reasoning spirals |
-| write_file for existing files | Reject if file > 5 lines; on .py/.html/.htm the per-step grammar gate steers to `ast_edit` | Force surgical (`edit_file`) or whole-node (`ast_edit`) edits |
-| Suspicious-shrinkage guard | Reject `ast_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
-| ast_edit runaway-content guard | Reject when `content` > 8 KB AND > 4× the file size | Catch reasoning-leak blobs emitted as the replacement node |
+| write_file for existing files | Reject if file > 5 lines; on .py/.html/.htm the per-step grammar gate steers to `structural_edit` | Force surgical (`edit_file`) or whole-node (`structural_edit`) edits |
+| Suspicious-shrinkage guard | Reject `structural_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
+| structural_edit runaway-content guard | Reject when `content` > 8 KB AND > 4× the file size | Catch reasoning-leak blobs emitted as the replacement node |
 | Error loop breaker | 3 consecutive failures | Stop runaway failure cycles |
 | Exploration budget | Nudge at 4 consecutive read-only calls; escalated nudge at 5+. Reads always execute — the nudge steers the *next* turn toward a write | Push the model to write instead of exploring indefinitely |
 | Command output truncation | stdout 8,000 chars, stderr 4,000 chars | Prevent context flooding |
@@ -709,4 +709,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-Existing files over 5 lines are rejected for `write_file` — the model must use `edit_file` (surgical, ≤10 lines) or `ast_edit` (whole-node rewrite, .py/.html/.htm only). On `.py`/`.html`/`.htm` files, the per-step grammar gate (BiasBusters #2) actively bans `edit_file`/`write_file` from the tool-name production for the next decision so the model can't relapse to the wrong shortcut.
+Existing files over 5 lines are rejected for `write_file` — the model must use `edit_file` (surgical, ≤10 lines) or `structural_edit` (whole-node rewrite, .py/.html/.htm only). On `.py`/`.html`/`.htm` files, the per-step grammar gate (BiasBusters #2) actively bans `edit_file`/`write_file` from the tool-name production for the next decision so the model can't relapse to the wrong shortcut.

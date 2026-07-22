@@ -3,7 +3,7 @@
 JSONL contrast-pair file.
 
 May 2026 BiasBusters #4 — ASA-style activation steering. The contrast
-pairs encode the ast_edit-vs-edit_file decision as positive/negative
+pairs encode the structural_edit-vs-edit_file decision as positive/negative
 examples; cvector-generator extracts the residual-stream difference
 between them; llama-server applies the difference at inference time
 via --control-vector-scaled.
@@ -11,15 +11,15 @@ via --control-vector-scaled.
 Usage:
     python build_cvector_prompts.py \\
         --pairs contrast_pairs.jsonl \\
-        --positive ast_edit_positive.txt \\
-        --negative ast_edit_negative.txt
+        --positive structural_edit_positive.txt \\
+        --negative structural_edit_negative.txt
 
 Then run upstream cvector-generator (built from llama.cpp tools/) with the
 same selected model used to render these prompts:
     llama-cvector-generator \\
         -m /models/your-model.gguf \\
-        --positive-file ast_edit_positive.txt \\
-        --negative-file ast_edit_negative.txt \\
+        --positive-file structural_edit_positive.txt \\
+        --negative-file structural_edit_negative.txt \\
         --method mean \\
         -o ast_edit_steering.gguf \\
         -ngl 99
@@ -75,7 +75,7 @@ def main() -> int:
                     help="JSONL file with one pair per line "
                          "({label, user, assistant_prefix, tool})")
     ap.add_argument("--positive", required=True, type=Path,
-                    help="output file for label==ast_edit prompts")
+                    help="output file for label==structural_edit prompts")
     ap.add_argument("--negative", required=True, type=Path,
                     help="output file for label==edit_file prompts")
     ap.add_argument(
@@ -106,17 +106,17 @@ def main() -> int:
             except RuntimeError as exc:
                 print(f"line {lineno}: {exc}", file=sys.stderr)
                 return 2
-            if pair["label"] == "ast_edit":
+            if pair["label"] == "structural_edit":
                 pos.append(rendered)
             elif pair["label"] == "edit_file":
                 neg.append(rendered)
             else:
                 print(f"line {lineno}: unknown label {pair['label']!r} "
-                      f"(expected 'ast_edit' or 'edit_file')", file=sys.stderr)
+                      f"(expected 'structural_edit' or 'edit_file')", file=sys.stderr)
                 return 1
 
     if not pos or not neg:
-        print(f"need both ast_edit and edit_file pairs; "
+        print(f"need both structural_edit and edit_file pairs; "
               f"got {len(pos)} positive, {len(neg)} negative", file=sys.stderr)
         return 1
     if len(pos) != len(neg):

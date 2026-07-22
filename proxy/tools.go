@@ -31,7 +31,7 @@ func init() {
 	registerTool(outlineFileTool())
 	registerTool(writeFileTool())
 	registerTool(editFileTool())
-	registerTool(astEditTool())
+	registerTool(structuralEditTool())
 	registerTool(deleteFileTool())
 	registerTool(moveFileTool())
 	registerTool(runCommandTool())
@@ -305,7 +305,7 @@ func outlineFileTool() *ToolDef {
 			"line ranges — NO bodies, so it costs almost no context. Use this " +
 			"FIRST to navigate an existing file instead of reading the whole " +
 			"thing: outline_file to find the function you care about, then " +
-			"read_file with offset/limit to read just its lines, then ast_edit " +
+			"read_file with offset/limit to read just its lines, then structural_edit " +
 			"(selector function:NAME / class:NAME) or edit_file to change it. " +
 			"Python is parsed precisely (tree-sitter, decorator-aware); other " +
 			"languages get a best-effort definition scan.",
@@ -330,7 +330,7 @@ func outlineFileTool() *ToolDef {
 			totalLines := strings.Count(src, "\n") + 1
 
 			// Prefer the v3 tree-sitter outline for .py (accurate, matches
-			// ast_edit selectors). Fall back to a language-agnostic regex
+			// structural_edit selectors). Fall back to a language-agnostic regex
 			// scan for everything else and whenever v3 is unavailable.
 			var syms []OutlineSymbol
 			if strings.HasSuffix(input.Path, ".py") {
@@ -657,8 +657,8 @@ func writeFileTool() *ToolDef {
 	return &ToolDef{
 		Name: "write_file",
 		Description: "Create a NEW file from scratch. Creates parent directories if needed. " +
-			"DO NOT use to overwrite existing files — for existing files use ast_edit (whole function/class/element rewrite) or edit_file (≤10-line surgical change). " +
-			"If a write_file call is rejected because the path already exists, switch to ast_edit (whole-block rewrite) or edit_file (surgical change). DO NOT retry with edit_file simply because the file is large.",
+			"DO NOT use to overwrite existing files — for existing files use structural_edit (whole function/class/element rewrite) or edit_file (≤10-line surgical change). " +
+			"If a write_file call is rejected because the path already exists, switch to structural_edit (whole-block rewrite) or edit_file (surgical change). DO NOT retry with edit_file simply because the file is large.",
 		InputSchema: WriteFileInput{},
 		ReadOnly:    false,
 		Destructive: true,
@@ -772,7 +772,7 @@ func writeFileTool() *ToolDef {
 				}
 				// #147 review finding #1: the fast-path skips V3 (and its
 				// structural veto), so it needs the same structural gate
-				// edit_file/ast_edit have — otherwise a fast-path rewrite that
+				// edit_file/structural_edit have — otherwise a fast-path rewrite that
 				// introduces render_template lands as verified and 500s. A new
 				// unresolved call vs the on-disk state blocks; an unreadable
 				// original skips the gate (fail open).
@@ -1373,9 +1373,9 @@ func editFileTool() *ToolDef {
 	return &ToolDef{
 		Name: "edit_file",
 		Description: "SURGICAL inline string replacement, ONLY. Use ONLY when changing a few lines inside a function (a None check, a regex, a constant). " +
-			"DO NOT use for whole-function rewrites, whole-class rewrites, whole-file replacements, or any change >10 lines — for those, use ast_edit (named node) or write_file (new file). " +
+			"DO NOT use for whole-function rewrites, whole-class rewrites, whole-file replacements, or any change >10 lines — for those, use structural_edit (named node) or write_file (new file). " +
 			"old_str must match exactly once (or replace_all=true). Always read_file before editing. " +
-			"Heuristic: if you're tempted to copy a whole function/class/HTML element into old_str, you have the wrong tool — switch to ast_edit.",
+			"Heuristic: if you're tempted to copy a whole function/class/HTML element into old_str, you have the wrong tool — switch to structural_edit.",
 		InputSchema: EditFileInput{},
 		ReadOnly:    false,
 		Destructive: false,
@@ -1477,7 +1477,7 @@ func editFileTool() *ToolDef {
 					ext := strings.ToLower(filepath.Ext(input.Path))
 					alt := ""
 					if ext == ".html" || ext == ".htm" || ext == ".py" {
-						alt = " For whole-element rewrites, ast_edit is the cleaner option — it takes a selector (e.g. `<body>`, `function:NAME`) and the new content body, no old_str needed."
+						alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector (e.g. `<body>`, `function:NAME`) and the new content body, no old_str needed."
 					}
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
 						alt, truncateStr(input.OldStr, 200))
@@ -1485,13 +1485,13 @@ func editFileTool() *ToolDef {
 				// Generic mismatch — the model's old_str doesn't byte-match
 				// the file (whitespace, quotes, or paraphrase drift, which
 				// smaller models do constantly). For structured files,
-				// ast_edit sidesteps the whole problem: it selects the node
+				// structural_edit sidesteps the whole problem: it selects the node
 				// by name, no old_str to reproduce exactly. Steer there.
 				ext := strings.ToLower(filepath.Ext(input.Path))
 				astAlt := ""
 				if ext == ".py" || ext == ".html" || ext == ".htm" {
 					astAlt = " To replace a whole function/class/element without " +
-						"matching exact text, use ast_edit with a selector " +
+						"matching exact text, use structural_edit with a selector " +
 						"(e.g. `function:NAME`, `class:NAME`, `<body>`) and the " +
 						"new content — no old_str needed, so a near-miss can't fail it."
 				}
@@ -1535,7 +1535,7 @@ func editFileTool() *ToolDef {
 				newContent = strings.Replace(content, actualOldStr, input.NewStr, 1)
 			}
 
-			// Shrinkage guard — same shape as ast_edit's. Catches the
+			// Shrinkage guard — same shape as structural_edit's. Catches the
 			// "model emitted a stub for old_str" failure where new_str
 			// is implausibly tiny for a substantial old_str. We compare
 			// the local replacement footprint (old_str → new_str), not
@@ -1547,7 +1547,7 @@ func editFileTool() *ToolDef {
 				return &ToolResult{Success: false, Error: rejection}, nil
 			}
 
-			// No-op guard — same rationale as ast_edit's. new_str identical
+			// No-op guard — same rationale as structural_edit's. new_str identical
 			// to old_str (or a replacement that leaves the file unchanged)
 			// must not report success: the model believes the fix landed
 			// and moves on while the bug is still on disk.
@@ -1557,7 +1557,7 @@ func editFileTool() *ToolDef {
 					"Look at the current code again and emit a new_str that actually differs from the existing code."}, nil
 			}
 
-			// Syntax gate — the edit_file counterpart of ast_edit's
+			// Syntax gate — the edit_file counterpart of structural_edit's
 			// post-splice compile check. A garbage-quoted new_str (doubled
 			// quotes, stray escapes) otherwise lands on disk and turns a
 			// runnable .py file into a SyntaxError. Best-effort: when the
@@ -1704,37 +1704,37 @@ func editFileTool() *ToolDef {
 }
 
 // ---------------------------------------------------------------------------
-// ast_edit — GH #39 v1: friendly-selector AST node replacement
+// structural_edit — GH #39 v1: friendly-selector named-node replacement
 // ---------------------------------------------------------------------------
 
-func astEditTool() *ToolDef {
+func structuralEditTool() *ToolDef {
 	return &ToolDef{
-		Name: "ast_edit",
+		Name: "structural_edit",
 		Description: "REQUIRED tool for whole-function, whole-class, or whole-HTML-element rewrites in existing files. " +
 			"ALWAYS prefer over edit_file when replacing a named node or changing more than ~10 lines — edit_file is the WRONG tool for those cases (it forces you to copy the entire existing block as old_str, wasting tokens and frequently truncating). " +
 			"Selectors v1: python `function:NAME` or `class:NAME` (decorators included automatically); html `<tag>` (top-level element). " +
 			"Selector must match exactly one node; failures return actionable errors. " +
-			"Decision rule: existing file + named-node change (any size) ⇒ ast_edit. New file ⇒ write_file. ≤10 lines inside a function ⇒ edit_file.",
-		InputSchema: AstEditInput{},
+			"Decision rule: existing file + named-node change (any size) ⇒ structural_edit. New file ⇒ write_file. ≤10 lines inside a function ⇒ edit_file.",
+		InputSchema: StructuralEditInput{},
 		ReadOnly:    false,
 		Destructive: false,
 		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input AstEditInput
+			var input StructuralEditInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 			if strings.TrimSpace(input.Path) == "" {
 				return &ToolResult{Success: false,
-					Error: "ast_edit: path cannot be empty. Read the file first then ast_edit with the same path."}, nil
+					Error: "structural_edit: path cannot be empty. Read the file first then structural_edit with the same path."}, nil
 			}
 			if strings.TrimSpace(input.Selector) == "" {
 				return &ToolResult{Success: false,
-					Error: "ast_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>"}, nil
+					Error: "structural_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>"}, nil
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
 			if !ctx.WasFileRead(path) {
-				return nil, fmt.Errorf("file not read yet — use read_file first before ast_edit: %s", input.Path)
+				return nil, fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path)
 			}
 
 			data, err := os.ReadFile(path)
@@ -1744,7 +1744,7 @@ func astEditTool() *ToolDef {
 			source := string(data)
 
 			// Empty-content guard. Replacing a node with nothing is a
-			// deletion, not an edit — observed live: a model called ast_edit
+			// deletion, not an edit — observed live: a model called structural_edit
 			// with the `content` field omitted entirely, which spliced an
 			// empty string over `function:add` and silently deleted it
 			// (calc.py lost both functions while __main__ still called
@@ -1753,15 +1753,15 @@ func astEditTool() *ToolDef {
 			// catches it. Refuse it and steer: an edit needs a replacement
 			// body; an intentional removal is delete_file's job.
 			if strings.TrimSpace(input.Content) == "" {
-				log.Printf("[ast_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
+				log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
 				return &ToolResult{Success: false, Error: fmt.Sprintf(
-					"ast_edit: content is empty — that would DELETE `%s`, not fix it. "+
+					"structural_edit: content is empty — that would DELETE `%s`, not fix it. "+
 						"Provide the full replacement body of the node (e.g. the corrected function definition). "+
 						"If you truly mean to remove code, use delete_file on the whole file instead.",
 					input.Selector)}, nil
 			}
 
-			// Runaway-content guard. ast_edit replaces ONE node, so the
+			// Runaway-content guard. structural_edit replaces ONE node, so the
 			// replacement should be roughly node-sized. A reasoning-heavy
 			// model sometimes leaks its entire chain-of-thought into the
 			// content field instead of emitting just the new body — observed
@@ -1774,12 +1774,12 @@ func astEditTool() *ToolDef {
 			// file stay clear, and large-function edits in large files aren't
 			// touched). Steer the model to emit only the replacement node.
 			if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
-				log.Printf("[ast_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
+				log.Printf("[structural_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
 					input.Path, input.Selector, len(input.Content), len(source))
 				return &ToolResult{Success: false, Error: fmt.Sprintf(
-					"ast_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
+					"structural_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
 						"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
-						"not the whole file and not your reasoning. Re-emit ast_edit with content set to ONLY the replacement node.",
+						"not the whole file and not your reasoning. Re-emit structural_edit with content set to ONLY the replacement node.",
 					len(input.Content), len(source), input.Selector)}, nil
 			}
 
@@ -1787,35 +1787,35 @@ func astEditTool() *ToolDef {
 			lastRead := ctx.FileReadTimes[path]
 			ctx.mu.Unlock()
 			if info, err := os.Stat(path); err == nil && info.ModTime().After(lastRead) {
-				return nil, fmt.Errorf("file modified since last read — read it again before ast_edit: %s", input.Path)
+				return nil, fmt.Errorf("file modified since last read — read it again before structural_edit: %s", input.Path)
 			}
 
 			// Sanitise replacement content the same way edit_file does — the
 			// model occasionally fences fragments with ```python or ```html.
 			if cleaned, sanitized := sanitizeFileContent(input.Path, input.Content); sanitized {
-				log.Printf("[ast_edit] sanitised markdown wrapper from content of %s", input.Path)
+				log.Printf("[structural_edit] sanitised markdown wrapper from content of %s", input.Path)
 				input.Content = cleaned
 			}
 
-			// HTML <html>-selector quirk. ast_edit replaces only the
+			// HTML <html>-selector quirk. structural_edit replaces only the
 			// <html>...</html> element, NOT the preceding <!DOCTYPE>
 			// declaration that conventionally precedes it. The model
 			// frequently emits a leading <!DOCTYPE html> at the top of
 			// `content` when selector is <html>, which produces a duplicated
 			// doctype on disk (May 8 2026 flask test: dashboard.html
 			// ended up with two consecutive <!DOCTYPE html> lines after
-			// a successful ast_edit). Detect that shape and strip the
+			// a successful structural_edit). Detect that shape and strip the
 			// leading doctype line so on-disk output matches intent.
 			ext := strings.ToLower(filepath.Ext(input.Path))
 			isHTML := ext == ".html" || ext == ".htm"
 			if isHTML && strings.EqualFold(strings.TrimSpace(input.Selector), "<html>") {
 				if stripped, ok := stripLeadingDoctype(input.Content); ok {
-					log.Printf("[ast_edit] stripped leading <!DOCTYPE> from content of %s — selector <html> only replaces the html element, not the preceding doctype", input.Path)
+					log.Printf("[structural_edit] stripped leading <!DOCTYPE> from content of %s — selector <html> only replaces the html element, not the preceding doctype", input.Path)
 					input.Content = stripped
 				}
 			}
 
-			// Call v3-service /internal/ast_edit. Stateless transform:
+			// Call v3-service /internal/structural_edit. Stateless transform:
 			// proxy reads + writes (preserving lens-score-before-write),
 			// v3-service is the tree-sitter authority.
 			reqBody, _ := json.Marshal(map[string]interface{}{
@@ -1826,21 +1826,21 @@ func astEditTool() *ToolDef {
 			})
 			v3URL := ctx.V3URL
 			if v3URL == "" {
-				return nil, fmt.Errorf("ast_edit unavailable: V3 service URL not configured")
+				return nil, fmt.Errorf("structural_edit unavailable: V3 service URL not configured")
 			}
-			req, err := http.NewRequestWithContext(ctx.Ctx, "POST", v3URL+"/internal/ast_edit", bytes.NewReader(reqBody))
+			req, err := http.NewRequestWithContext(ctx.Ctx, "POST", v3URL+"/internal/structural_edit", bytes.NewReader(reqBody))
 			if err != nil {
-				return nil, fmt.Errorf("ast_edit: build request: %w", err)
+				return nil, fmt.Errorf("structural_edit: build request: %w", err)
 			}
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return nil, fmt.Errorf("ast_edit: v3-service unreachable: %w", err)
+				return nil, fmt.Errorf("structural_edit: v3-service unreachable: %w", err)
 			}
 			defer resp.Body.Close()
 			respBytes, err := io.ReadAll(resp.Body)
 			if err != nil {
-				return nil, fmt.Errorf("ast_edit: read v3 response: %w", err)
+				return nil, fmt.Errorf("structural_edit: read v3 response: %w", err)
 			}
 			var astResp struct {
 				Success    bool   `json:"success"`
@@ -1852,7 +1852,7 @@ func astEditTool() *ToolDef {
 				NewSize    int    `json:"new_size,omitempty"`
 			}
 			if err := json.Unmarshal(respBytes, &astResp); err != nil {
-				return nil, fmt.Errorf("ast_edit: parse v3 response: %w (body=%s)", err, truncateStr(string(respBytes), 200))
+				return nil, fmt.Errorf("structural_edit: parse v3 response: %w (body=%s)", err, truncateStr(string(respBytes), 200))
 			}
 			if !astResp.Success {
 				return &ToolResult{Success: false, Error: astResp.Error}, nil
@@ -1865,24 +1865,24 @@ func astEditTool() *ToolDef {
 			// the replacement is suspiciously small for the original,
 			// reject the write and tell the model to re-emit with the
 			// full body.
-			if rejection := validateNotSuspiciouslyShrunk("ast_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
-				log.Printf("[ast_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
+			if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
+				log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
 					input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
 				return &ToolResult{Success: false, Error: rejection}, nil
 			}
 
 			// V3 quality-gate routing. History:
 			//   (a) May 10: tier classified on post-edit content only, so a
-			//       destructive ast_edit that shrank a T2+ file into a stub
+			//       destructive structural_edit that shrank a T2+ file into a stub
 			//       classified T1 and skipped V3 — the edits that most need
 			//       checking. Fixed by classifying on max(oldTier, newTier).
 			//   (b) May 10: floor dropped entirely so V3 fired on every
-			//       ast_edit.
+			//       structural_edit.
 			//   (c) Jun 8: floor restored to Tier2Medium. With (b), every
-			//       one-line ast_edit ran the full PlanSearch pipeline —
+			//       one-line structural_edit ran the full PlanSearch pipeline —
 			//       minutes per edit on a reasoning-heavy model, blocking the
 			//       single-threaded v3-service and looking like a hang. But
-			//       ast_edit is ALREADY surgical: the model named the exact
+			//       structural_edit is ALREADY surgical: the model named the exact
 			//       node and the replacement is its own tree-sitter
 			//       transform. PlanSearch-improving a precise node swap is
 			//       mostly cost. Gate it to T2+ files (same as edit_file /
@@ -1891,23 +1891,23 @@ func astEditTool() *ToolDef {
 			//       from (a) is preserved, so a destructive edit to a T2+
 			//       original still triggers V3.
 			//
-			// Baseline candidate is the AST-edited full file. V3's
+			// Baseline candidate is the structurally edited full file. V3's
 			// alternatives compete against it; if one build-verifies
-			// better, V3 wins; otherwise the AST-edited content passes
+			// better, V3 wins; otherwise the structurally edited content passes
 			// through unchanged. Either way the answer is build-verified.
 			finalContent := astResp.NewContent
 
 			// No-op guard. A weak model frequently "fixes" a bug by
 			// re-emitting the node's existing (broken) code verbatim —
-			// observed live: ast_edit function:add with content identical
+			// observed live: structural_edit function:add with content identical
 			// to the buggy body, twice in one batch. Reporting success on
 			// a no-op tells the model the fix landed when nothing changed;
 			// it then moves on to verification, fails, and can't work out
 			// why. Fail loudly instead so the model re-derives the edit.
 			if finalContent == source {
-				log.Printf("[ast_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
+				log.Printf("[structural_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
 				return &ToolResult{Success: false, Error: fmt.Sprintf(
-					"ast_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
+					"structural_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
 						"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
 					input.Selector)}, nil
 			}
@@ -1921,27 +1921,27 @@ func astEditTool() *ToolDef {
 			cc, ccOK := cyclomaticComplexity(ctx, input.Path, finalContent)
 			if ccOK {
 				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
-					log.Printf("[ast_edit] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
+					log.Printf("[structural_edit] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
 					fileTier = refined
 				}
 			}
 			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 {
-				log.Printf("[ast_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-AST-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
+				log.Printf("[structural_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-structural-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
 				improved, meta, err := improveContentWithV3(path, finalContent, ctx)
 				if err != nil {
 					// User cancellation is not a fallback case — the turn
 					// was aborted, so nothing should land on disk.
 					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
-						log.Printf("[ast_edit] V3 aborted by cancellation — not writing %s", input.Path)
+						log.Printf("[structural_edit] V3 aborted by cancellation — not writing %s", input.Path)
 						return &ToolResult{
 							Success: false,
-							Error:   "ast_edit cancelled — no content was written",
+							Error:   "structural_edit cancelled — no content was written",
 						}, nil
 					}
-					log.Printf("[ast_edit] V3 failed: %v — falling back to AST-edited content", err)
+					log.Printf("[structural_edit] V3 failed: %v — falling back to structurally edited content", err)
 				} else if improved != "" {
 					if cleanedImproved, sanitized := sanitizeFileContent(input.Path, improved); sanitized {
-						log.Printf("[ast_edit] sanitised V3 output for %s", input.Path)
+						log.Printf("[structural_edit] sanitised V3 output for %s", input.Path)
 						improved = cleanedImproved
 					}
 					finalContent = improved
@@ -1949,15 +1949,15 @@ func astEditTool() *ToolDef {
 				}
 			}
 
-			// Structural gate (#147): the AST splice guarantees the result
+			// Structural gate (#147): the structural splice guarantees the result
 			// parses, but not that its calls resolve — the observed failure
-			// was an ast_edit that introduced a render_template call with only
+			// was a structural_edit that introduced a render_template call with only
 			// render_template_string imported, which landed as verified and
 			// 500'd every request. Block a write that NEWLY makes a direct
 			// call unresolved (healthy->broken); a pre-existing one is left
 			// alone for repair-in-progress. Fail-open when the check can't run.
 			if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
-				log.Printf("[ast_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+				log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
 				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
 			}
 
@@ -1972,10 +1972,10 @@ func astEditTool() *ToolDef {
 			}
 			ctx.RecordFileRead(path, finalContent)
 
-			log.Printf("[ast_edit] %s %s selector=%q lang=%s old=%dB new=%dB v3=%v",
+			log.Printf("[structural_edit] %s %s selector=%q lang=%s old=%dB new=%dB v3=%v",
 				input.Path, input.Selector, input.Selector, astResp.Language, astResp.OldSize, len(finalContent), v3Out.Used)
 
-			out := AstEditOutput{
+			out := StructuralEditOutput{
 				OK:       true,
 				Selector: input.Selector,
 				Language: astResp.Language,
@@ -2989,7 +2989,7 @@ func refineTierWithCC(base Tier, cc int) Tier {
 }
 
 // editWarrantsV3 decides whether a successful, surgical edit should be run
-// back through the V3 whole-file pipeline. edit_file and ast_edit both
+// back through the V3 whole-file pipeline. edit_file and structural_edit both
 // produce content the model specified precisely — an exact old→new string
 // swap, or a named tree-sitter node replacement — so the result is already
 // what was asked for. V3's PlanSearch generates and build-verifies whole-
@@ -3195,7 +3195,7 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 		return nil
 	}
 	out := ReadFileOutput{
-		Content:    fmt.Sprintf("(You already read %s earlier in this session and it has not changed — its full content is above in the conversation. Do not read it again. Make your edit now with ast_edit or edit_file.)", input.Path),
+		Content:    fmt.Sprintf("(You already read %s earlier in this session and it has not changed — its full content is above in the conversation. Do not read it again. Make your edit now with structural_edit or edit_file.)", input.Path),
 		TotalLines: strings.Count(prev, "\n") + 1,
 		StartLine:  1,
 		EndLine:    strings.Count(prev, "\n") + 1,

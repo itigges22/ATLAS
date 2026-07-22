@@ -66,7 +66,7 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 				"⚠ You have fully rewritten `%s` %d times in the last %d tool calls. Each write_file replaces the "+
 					"whole file, and the on-disk version is the verified result of your previous write — rewriting it "+
 					"from memory just loops. Read the file to see what is actually there, then either make one targeted "+
-					"change with edit_file or ast_edit, or respond with done if the request is satisfied.",
+					"change with edit_file or structural_edit, or respond with done if the request is satisfied.",
 				p, count, toolRepeatWindow), true
 		}
 	}
@@ -136,7 +136,7 @@ func writeFileContentFingerprint(args json.RawMessage) string {
 // the path-only key as if it were a loop). The content fingerprint
 // separates the two: reassertion collides, iteration diverges. Falls back
 // to path-only when there's no content to fingerprint.
-// edit_file/ast_edit keep full-args signatures: distinct surgical
+// edit_file/structural_edit keep full-args signatures: distinct surgical
 // edits to one file in close succession are legitimate iteration.
 func toolCallSignature(toolName string, args json.RawMessage) string {
 	if toolName == "write_file" {

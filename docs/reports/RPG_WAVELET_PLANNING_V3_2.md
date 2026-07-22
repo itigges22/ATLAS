@@ -204,7 +204,7 @@ behavior change until a phase is explicitly enabled and benchmarked.
 - Tests: `test_rpg.py` (node_constraints + step enrichment), `proxy/rpg_test.go`
   (graph + step parsing, path-suffix constraint lookup, copy-safety, nil-plan).
   Full proxy `go test` + 119 python tests green.
-- **Deferred:** explicit `ast_edit`-primitive biasing / ASA steering from the
+- **Deferred:** explicit `structural_edit`-primitive biasing / ASA steering from the
   fixed node target → Phase 3 (rides with the structural-verification work).
 - **Exit (met):** end-to-end, an RPG plan generates files in topological order
   with each node's `/v3/generate` call constrained by its planned interface.
@@ -299,7 +299,7 @@ behavior change until a phase is explicitly enabled and benchmarked.
   Mitigated by the conformance suite + golden fixtures (§3). No drop-in library
   preserves wavescope's calibrated behavior, so we port rather than wrap (see §6).
 - **Language coverage.** wavescope covers 14 languages for bands; tree-sitter
-  `ast_edit` is Python/HTML today. RPG file/signature fidelity is best where both
+  `structural_edit` is Python/HTML today. RPG file/signature fidelity is best where both
   overlap (Python first), generic-fallback elsewhere.
 
 ## 6. Library survey — why we port instead of `pip install`

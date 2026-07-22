@@ -198,9 +198,9 @@ type EditFileOutput struct {
 	LinesRemoved int    `json:"lines_removed,omitempty"`
 }
 
-// -- ast_edit (GH #39 v1) --
+// -- structural_edit (GH #39 v1) --
 //
-// Friendly-selector AST edits via tree-sitter. Replaces a single named node
+// Friendly-selector structural edits via tree-sitter. Replaces a single named node
 // (function, class, HTML element) with new content. The selector grammar is
 // per-language and intentionally narrow in v1 to avoid the model
 // hallucinating raw tree-sitter s-expressions (42% intended-match measured
@@ -211,13 +211,13 @@ type EditFileOutput struct {
 //             decorated_definition wrapper when present)
 //     html:   <tag>             (top-level tag-name match)
 
-type AstEditInput struct {
+type StructuralEditInput struct {
 	Path     string `json:"path"`
 	Selector string `json:"selector"`
 	Content  string `json:"content"`
 }
 
-type AstEditOutput struct {
+type StructuralEditOutput struct {
 	OK       bool   `json:"ok"`
 	Selector string `json:"selector"`
 	Language string `json:"language,omitempty"`
@@ -463,7 +463,7 @@ type AgentContext struct {
 	AssetLintSeen map[string]bool
 
 	// PassWrites records the model-authored content of each write this pass
-	// (write_file / edit_file / ast_edit), for lens training-data collection.
+	// (write_file / edit_file / structural_edit), for lens training-data collection.
 	// On pass completion the writes are stashed by session id; a later
 	// /feedback call (per-file accept/deny + pass thumbs) turns them into
 	// labeled, weighted lens samples. Captured at the same point the lens

@@ -18,7 +18,7 @@ import (
 
 // fileProducingActions are the plan-step actions that create or rewrite a file
 // and therefore route through V3 generation.
-var fileProducingActions = []string{"write_file", "ast_edit", "edit_file"}
+var fileProducingActions = []string{"write_file", "structural_edit", "edit_file"}
 
 // planConstraintsForTarget returns the RPG node constraints attached to the
 // plan step that targets `path`, or nil when there is no plan, no matching

@@ -357,7 +357,7 @@ func validateRunCommand(cmd, workingDir string) string {
 }
 
 // validateNotSuspiciouslyShrunk rejects writes that replace a
-// substantial original with a tiny new payload. May 9 2026 ast_edit
+// substantial original with a tiny new payload. May 9 2026 structural_edit
 // failure: model emitted only `<!DOCTYPE html>\n` (16B) for an entire
 // <html>-element rewrite of a 120B file; the on-disk result was a
 // destroyed file passed off as a successful "done". The model usually
@@ -377,7 +377,7 @@ func validateRunCommand(cmd, workingDir string) string {
 //	v3 (current): 64 — catches today's 32B destructive stubs and any
 //	  "doctype-only" outputs while leaving room for real one-liner
 //	  refactors. Subtler cases (legitimate-shape but bad code) are
-//	  V3's job now that ast_edit always routes through it.
+//	  V3's job now that structural_edit always routes through it.
 func validateNotSuspiciouslyShrunk(toolName, path string, oldSize, newSize int) string {
 	if oldSize < 100 {
 		return ""
@@ -397,7 +397,7 @@ var leadingDoctypeRe = regexp.MustCompile(`(?i)^\s*<!DOCTYPE[^>]*>\s*\n?`)
 
 // stripLeadingDoctype removes a leading <!DOCTYPE> declaration from
 // content. Returns the stripped content and true if a doctype was
-// present, the original content and false otherwise. Used by ast_edit
+// present, the original content and false otherwise. Used by structural_edit
 // when the selector is <html> to prevent duplicated doctypes (the
 // element selector replaces only <html>...</html>, not the preceding
 // doctype).
@@ -439,7 +439,7 @@ func isFixIntentMessage(msg string) bool {
 // CREATED, MODIFIED, or REPLACED on disk." Distinct from
 // fixIntentWords (which is about repair/verification) — these match
 // feature-build prompts where the model must emit a write_file /
-// edit_file / ast_edit / delete_file before `done` is honest.
+// edit_file / structural_edit / delete_file before `done` is honest.
 //
 // May 10 2026 false-success case that motivated this: prompt was
 // "Rewrite templates/dashboard.html to display a clean SaaS-style
@@ -595,7 +595,7 @@ func expectedOutputMissingMessage(missing []string) string {
 }
 
 func actionWithoutProductiveChangeMessage(userMsg string) string {
-	return "Cannot declare `done` yet — the user asked you to make a change on disk (rewrite/create/add/implement/refactor/etc.) and you haven't emitted any successful write_file / edit_file / ast_edit / delete_file in this loop. Verification (running the server, curling the page) is NOT the task — it's how you confirm AFTER the change. Re-read the user's request, identify what file needs to change, and emit the appropriate edit tool. Then verify, then done."
+	return "Cannot declare `done` yet — the user asked you to make a change on disk (rewrite/create/add/implement/refactor/etc.) and you haven't emitted any successful write_file / edit_file / structural_edit / delete_file in this loop. Verification (running the server, curling the page) is NOT the task — it's how you confirm AFTER the change. Re-read the user's request, identify what file needs to change, and emit the appropriate edit tool. Then verify, then done."
 }
 
 // verificationCommandRe matches the leading token of commands that

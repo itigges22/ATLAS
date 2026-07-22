@@ -154,7 +154,7 @@ flowchart LR
 | `outline_file` | ファイルのトップレベルの関数/クラスを行範囲付きで一覧表示し、本体は含めない（`.py` は tree-sitter、それ以外はベストエフォートのスキャン）。外科的読み取りのエントリーポイント: まずアウトラインし、次に offset/limit 付きで `read_file` する | はい |
 | `write_file` | 新規ファイルを作成（既存の5行超ファイルでは拒否 — 安全制限を参照） | いいえ |
 | `edit_file` | ≤10 行の変更向けの外科的なインライン文字列置換（old_str/new_str） | いいえ |
-| `ast_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。GH #39、v1 では .py/.html/.htm のみ | いいえ |
+| `structural_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。GH #39、v1 では .py/.html/.htm のみ | いいえ |
 | `delete_file` | ファイルまたは空ディレクトリを削除（実行後にループ終了を強制） | いいえ |
 | `move_file` | ワークスペース内でファイルを移動またはリネーム（例: `index.html` → `templates/`）。純粋な移動 — V3/外科的編集のゲートをバイパスし、既存の宛先の上書きは拒否。シェルの `mv`/`cp` が拒否されるため「ファイルを再編成する」ための正規のパス | いいえ |
 | `find_file` | ファイル**名** / パスによる正規表現検索（安価な存在確認 + 位置特定）。ファイル内容を grep する `search_files` とは区別される。 | はい |
@@ -167,12 +167,12 @@ flowchart LR
 
 ### ツール選択バイアスの緩和策
 
-計測を行ったリファレンスデプロイでは、`ast_edit` が正しい場合でも `ast_edit` より `edit_file` を優先するバイアスが観測されました（BiasBusters arxiv 2510.00307 — 近接するツール名の埋め込みが競合する; 名前よりも説明文の方が重要）。プロキシでは、モデルに依存しない4つの防御策を組み合わせます:
+計測を行ったリファレンスデプロイでは、`structural_edit` が正しい場合でも `structural_edit` より `edit_file` を優先するバイアスが観測されました（BiasBusters arxiv 2510.00307 — 近接するツール名の埋め込みが競合する; 名前よりも説明文の方が重要）。プロキシでは、モデルに依存しない4つの防御策を組み合わせます:
 
-1. **説明文の書き換え**（`proxy/tools.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、ast_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
+1. **説明文の書き換え**（`proxy/tools.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
 2. **条件付き GBNF 文法**（`proxy/grammar.go`、`proxy/agent.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
-3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは ast_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
-4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも ast_edit が優先される。`inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
+3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
+4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
    **モデル別の結合。** 各 ASA ベクトルは特定モデルの残差ストリーム幾何に対してトレーニングされます。モデルをまたぐフォールバックに安全なものはありません。`atlas asa check` は `.model` サイドカーを検証し、ロード済みの埋め込み次元をプローブし、GGUF のレイヤーメタデータをパースして、`compat` / `needs-build` / `incompatible` を報告します。`atlas asa build` はロード済みモデルから抽出レイヤーを導出し、ベクトルとマーカーを書き込み、lens コンテナ内で実行されます。`atlas asa publish` はアップロード前に、マーカーの欠落や不一致を拒否します。[CLI.md § atlas asa](../../CLI.md#atlas-asa) を参照。
 
@@ -223,9 +223,9 @@ flowchart LR
 | 冗長読み取りのショートサーキット | 未変更ファイルのファイル全体再読み取りは、内容がまだライブの場合に限り「すでにコンテキストにある」ポインタを返す; それ以外では完全なファイルが再提供される（`ATLAS_DEDUP_READS=0` で無効化） | モデルが盲目的に編集することなく、未変更ファイルを毎ターン再エンコードするのを避ける |
 | V3 インタラクティブの実時間上限 | 単一の V3 パイプライン呼び出しは `ATLAS_V3_TIMEOUT`（デフォルト 180s）で上限。タイムアウト時、プロキシはモデルの構文ゲートされた内容にフォールバックする（`0` で無効化） | 長い修復の停滞の下でもインタラクティブセッションの応答性を保つ |
 | ターンごとの推論予算 | 約 6144 推論トークンでストリームを打ち切る（`ATLAS_REASONING_BUDGET`、0 で無効）; 回復は埋め込まれた tool_call を抽出するか再プロンプトする | 推論のスパイラルを抑える |
-| 既存ファイルへの write_file | ファイルが5行超なら拒否; .py/.html/.htm ではステップごとの文法ゲートが `ast_edit` へステアする | 外科的編集（`edit_file`）またはノード全体の編集（`ast_edit`）を強制する |
-| 疑わしい縮小ガード | `oldSize >= 100B` かつ `newSize < 64B` のとき `ast_edit`/`edit_file` を拒否（`proxy/guardrails.go::validateNotSuspiciouslyShrunk`） | 破壊的なスタブ書き換えがディスクに到達する前に捕捉する |
-| ast_edit の暴走コンテンツガード | `content` > 8 KB かつファイルサイズの > 4倍のとき拒否 | 置換ノードとして発行された推論リーク blob を捕捉する |
+| 既存ファイルへの write_file | ファイルが5行超なら拒否; .py/.html/.htm ではステップごとの文法ゲートが `structural_edit` へステアする | 外科的編集（`edit_file`）またはノード全体の編集（`structural_edit`）を強制する |
+| 疑わしい縮小ガード | `oldSize >= 100B` かつ `newSize < 64B` のとき `structural_edit`/`edit_file` を拒否（`proxy/guardrails.go::validateNotSuspiciouslyShrunk`） | 破壊的なスタブ書き換えがディスクに到達する前に捕捉する |
+| structural_edit の暴走コンテンツガード | `content` > 8 KB かつファイルサイズの > 4倍のとき拒否 | 置換ノードとして発行された推論リーク blob を捕捉する |
 | エラーループブレーカー | 3連続失敗 | 暴走する失敗サイクルを停止 |
 | 探索予算 | 4連続の読み取り専用呼び出しでナッジ; 5回以上でより強いナッジ。読み取りは常に実行されます — ナッジは*次の*ターンを書き込みへ誘導します | 際限なく探索する代わりに書くようモデルを押す |
 | コマンド出力の切り詰め | stdout 8,000 文字、stderr 4,000 文字 | コンテキストの氾濫を防ぐ |
@@ -665,4 +665,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-5行を超える既存ファイルは `write_file` で拒否されます — モデルは `edit_file`（外科的、≤10 行）または `ast_edit`（ノード全体の書き換え、.py/.html/.htm のみ）を使う必要があります。`.py`/`.html`/`.htm` ファイルでは、ステップごとの文法ゲート（BiasBusters #2）が次の判断のためにツール名のプロダクションから `edit_file`/`write_file` を能動的に禁止し、モデルが間違ったショートカットに逆戻りできないようにします。
+5行を超える既存ファイルは `write_file` で拒否されます — モデルは `edit_file`（外科的、≤10 行）または `structural_edit`（ノード全体の書き換え、.py/.html/.htm のみ）を使う必要があります。`.py`/`.html`/`.htm` ファイルでは、ステップごとの文法ゲート（BiasBusters #2）が次の判断のためにツール名のプロダクションから `edit_file`/`write_file` を能動的に禁止し、モデルが間違ったショートカットに逆戻りできないようにします。

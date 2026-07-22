@@ -429,7 +429,7 @@ atlas doctor -v           # verbose: show detail for each check
 | Host | metal-native | 原生 llama-server 二进制存在且可执行 —— 仅当 `ATLAS_BACKEND=metal`（macOS 混合方案） |
 | Host | model_file | `.env` 中选定的 `ATLAS_MODEL_FILE` 存在且大于 100 MB |
 | Host | lens_weights | `cost_field.pt` + G(x) 工件存在 |
-| Host | asa_steering | `ast_edit_steering.gguf` 存在（BiasBusters #4 —— 警告而非失败；没有它 ATLAS 也能工作，只是 ast_edit-vs-edit_file 的偏差不受操控） |
+| Host | asa_steering | `ast_edit_steering.gguf` 存在（BiasBusters #4 —— 警告而非失败；没有它 ATLAS 也能工作，只是 structural_edit-vs-edit_file 的偏差不受操控） |
 | Host | tier_match | `.env` 的模型选择与主机硬件匹配（超配时警告 —— 有 OOM 风险 —— 匹配或低配时通过） |
 | Host | tier_constraints | 主机 CPU/RAM/磁盘满足推荐 tier 的最低要求（抓住"16 GB GPU 却只有 8 GB RAM"的错配） |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 全部 5 个都在运行且健康 |
@@ -856,7 +856,7 @@ atlas lens check
 
 ## ASA 操控向量（自动构建）
 
-2026 年 5 月 BiasBusters #4。一个残差流操控向量，在语法门控有机会拒绝任何东西**之前**，就把模型对整函数/类/元素重写的选择偏向 `ast_edit` 而非 `edit_file`。完全可选 —— 没有它 ATLAS 仍能工作，只是工具选择偏差不受操控。
+2026 年 5 月 BiasBusters #4。一个残差流操控向量，在语法门控有机会拒绝任何东西**之前**，就把模型对整函数/类/元素重写的选择偏向 `structural_edit` 而非 `edit_file`。完全可选 —— 没有它 ATLAS 仍能工作，只是工具选择偏差不受操控。
 
 `atlas-bootstrap.sh` 会在服务启动后自动构建它。流水线是：
 

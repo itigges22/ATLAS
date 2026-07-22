@@ -154,7 +154,7 @@ flowchart LR
 | `outline_file` | 파일의 최상위 함수/클래스를 본문 없이 줄 범위와 함께 나열(`.py`는 tree-sitter, 그 외는 최선 노력 스캔). 정밀 읽기의 진입점: 먼저 아웃라인하고, 그다음 offset/limit으로 `read_file` | 예 |
 | `write_file` | 새(NEW) 파일 생성(5줄 초과의 기존 파일에 대해서는 거부 — 안전 제한 참고) | 아니오 |
 | `edit_file` | ≤10줄 변경을 위한 정밀 인라인 문자열 치환(old_str/new_str) | 아니오 |
-| `ast_edit` | tree-sitter 셀렉터(`function:NAME`, `class:NAME`, `<tag>`)를 통한 함수/클래스/HTML 요소 전체 재작성; 노드 전체 교체에는 edit_file보다 필수(REQUIRED). GH #39, v1에서는 .py/.html/.htm만 | 아니오 |
+| `structural_edit` | tree-sitter 셀렉터(`function:NAME`, `class:NAME`, `<tag>`)를 통한 함수/클래스/HTML 요소 전체 재작성; 노드 전체 교체에는 edit_file보다 필수(REQUIRED). GH #39, v1에서는 .py/.html/.htm만 | 아니오 |
 | `delete_file` | 파일 또는 빈 디렉토리 삭제(이후 루프 종료를 강제) | 아니오 |
 | `move_file` | 워크스페이스 내에서 파일 이동 또는 이름 변경(예: `index.html` → `templates/`). 순수 재배치 — V3/정밀 편집 게이트를 우회하며, 기존 대상을 덮어쓰는 것은 거부. 셸 `mv`/`cp`가 거부되므로 "파일 재구성"을 위한 지원 경로 | 아니오 |
 | `find_file` | 파일 **이름**/경로에 대한 정규식 검색(저렴한 존재 확인 + 위치 파악). 파일 내용을 grep하는 `search_files`와 구별됨. | 예 |
@@ -167,13 +167,13 @@ flowchart LR
 
 ### 도구 선택 편향 완화
 
-측정된 레퍼런스 배포에서, `ast_edit`가 옳은 경우에도 `ast_edit`보다
+측정된 레퍼런스 배포에서, `structural_edit`가 옳은 경우에도 `structural_edit`보다
 `edit_file`을 선호하는 편향이 나타났습니다(BiasBusters arxiv 2510.00307 —
 인접한 도구 이름의 임베딩이 경쟁하며, 설명이 이름보다 더 중요함).
 프록시에서 모델 독립적인 네 가지 방어책이 결합됩니다:
 
 1. **설명 재작성**(`proxy/tools.go`). edit_file의 설명은 파일 전체/함수
-   전체 용도에 대해 경고하고, ast_edit의 설명은 >10줄 / 노드 전체 교체에
+   전체 용도에 대해 경고하고, structural_edit의 설명은 >10줄 / 노드 전체 교체에
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
 2. **조건부 GBNF 문법**(`proxy/grammar.go`,
@@ -183,11 +183,11 @@ flowchart LR
    모델은 물리적으로 그것들을 내보낼 수 없습니다. 제한은 한 번의
    결정 후 만료됩니다.
 3. **단계별 도구 목록 필터**(동일 트리거). 일시적인
-   `[system note]` 사용자 메시지가 주입되어, 이 단계에서는 ast_edit가
+   `[system note]` 사용자 메시지가 주입되어, 이 단계에서는 structural_edit가
    유일한 구조적 편집 도구임을 모델에 상기시킵니다.
 4. **ASA 스티어링 벡터**(`geometric-lens/asa_calibration/`).
    활성화 스티어링이 residual-stream 분포를 상류에서 이동시켜, 어떤
-   거부도 발생하기 전인 첫 시도 결정에서도 ast_edit가 선호되도록 합니다.
+   거부도 발생하기 전인 첫 시도 결정에서도 structural_edit가 선호되도록 합니다.
    `inference/entrypoint-v3.1.sh`가 `/models/ast_edit_steering.gguf`에서
    자동 로드하되, 그 `.model` 사이드카가 선택된 모델과 일치할 때만
    로드합니다 — `geometric-lens/asa_calibration/README.md`의 워크플로를
@@ -250,9 +250,9 @@ Plan 모드는 첫 도구 호출 전에 에이전트 턴마다 한 번 실행되
 | 중복 읽기 단락(short-circuit) | 변경되지 않은 파일의 파일 전체 재읽기는 내용이 아직 라이브일 때만 "이미 컨텍스트에 있음" 포인터를 반환; 그렇지 않으면 전체 파일을 다시 제공(`ATLAS_DEDUP_READS=0`으로 비활성화) | 모델이 깜깜이로 편집하는 일 없이, 변경되지 않은 파일을 매 턴 재인코딩하는 것을 회피 |
 | V3 대화형 벽시계 상한 | 단일 V3 파이프라인 호출은 `ATLAS_V3_TIMEOUT`(기본 180초)으로 상한; 타임아웃 시 프록시는 모델의 구문 게이트를 통과한 내용으로 폴백(`0`은 비활성화) | 긴 수리 정체 상황에서도 대화형 세션의 응답성 유지 |
 | 턴별 추론 예산 | ~6144 추론 토큰 후 스트림을 끊음(`ATLAS_REASONING_BUDGET`, 0은 비활성화); 복구는 내장된 tool_call을 추출하거나 다시 프롬프트함 | 추론 나선을 제한 |
-| 기존 파일에 대한 write_file | 파일이 5줄 초과면 거부; .py/.html/.htm에서는 단계별 문법 게이트가 `ast_edit`로 스티어 | 정밀 편집(`edit_file`) 또는 노드 전체 편집(`ast_edit`)을 강제 |
-| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `ast_edit`/`edit_file` 거부(`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
-| ast_edit 폭주 콘텐츠 가드 | `content` > 8 KB AND > 파일 크기의 4배일 때 거부 | 교체 노드로 방출된 추론 누출 덩어리를 포착 |
+| 기존 파일에 대한 write_file | 파일이 5줄 초과면 거부; .py/.html/.htm에서는 단계별 문법 게이트가 `structural_edit`로 스티어 | 정밀 편집(`edit_file`) 또는 노드 전체 편집(`structural_edit`)을 강제 |
+| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
+| structural_edit 폭주 콘텐츠 가드 | `content` > 8 KB AND > 파일 크기의 4배일 때 거부 | 교체 노드로 방출된 추론 누출 덩어리를 포착 |
 | 에러 루프 브레이커 | 연속 3회 실패 | 폭주하는 실패 사이클 중단 |
 | 탐색 예산 | 연속 4회 읽기 전용 호출에서 넛지; 5회 이상에서 강화된 넛지. 읽기는 항상 실행됩니다 — 넛지는 *다음* 턴을 쓰기 쪽으로 유도할 뿐입니다 | 무한정 탐색하는 대신 쓰도록 모델을 유도 |
 | 명령 출력 잘라내기 | stdout 8,000자, stderr 4,000자 | 컨텍스트 범람 방지 |
@@ -692,4 +692,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-5줄을 초과하는 기존 파일은 `write_file`에 대해 거부됩니다 — 모델은 `edit_file`(정밀, ≤10줄) 또는 `ast_edit`(노드 전체 재작성, .py/.html/.htm만)를 사용해야 합니다. `.py`/`.html`/`.htm` 파일에서는 단계별 문법 게이트(BiasBusters #2)가 다음 결정에 대해 도구 이름 생성 규칙에서 `edit_file`/`write_file`를 능동적으로 금지하여 모델이 잘못된 지름길로 되돌아가지 못하게 합니다.
+5줄을 초과하는 기존 파일은 `write_file`에 대해 거부됩니다 — 모델은 `edit_file`(정밀, ≤10줄) 또는 `structural_edit`(노드 전체 재작성, .py/.html/.htm만)를 사용해야 합니다. `.py`/`.html`/`.htm` 파일에서는 단계별 문법 게이트(BiasBusters #2)가 다음 결정에 대해 도구 이름 생성 규칙에서 `edit_file`/`write_file`를 능동적으로 금지하여 모델이 잘못된 지름길로 되돌아가지 못하게 합니다.

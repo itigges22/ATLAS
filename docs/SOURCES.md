@@ -58,7 +58,7 @@ The current release ships C(x) (MLP cost field) and G(x) (XGBoost quality predic
 
 ### Structural code reasoning (shipped)
 
-Tree-sitter-backed structural tooling: `ast_edit`, the symbol index, the structural veto on unresolved calls, and the flag-gated call-graph layer (`ATLAS_CALL_GRAPH`). Tracked as [issue #39](https://github.com/itigges22/ATLAS/issues/39).
+Tree-sitter-backed structural tooling: `structural_edit`, the symbol index, the structural veto on unresolved calls, and the flag-gated call-graph layer (`ATLAS_CALL_GRAPH`). Tracked as [issue #39](https://github.com/itigges22/ATLAS/issues/39).
 
 - **Sotnikov, D., 2026.** *chiasmus: tree-sitter + solver call graph for code analysis.* GitHub [yogthos/chiasmus](https://github.com/yogthos/chiasmus). Inspiration for the structural code-reasoning layer.
 

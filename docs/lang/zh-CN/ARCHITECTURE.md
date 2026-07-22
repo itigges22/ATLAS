@@ -154,7 +154,7 @@ flowchart LR
 | `outline_file` | 列出文件的顶层函数/类及其行号范围，不含函数体（`.py` 使用 tree-sitter，其余为尽力而为的扫描）。外科式读取的入口点：先 outline，再用带 offset/limit 的 `read_file` | 是 |
 | `write_file` | 创建一个新文件（对超过 5 行的已有文件会被拒绝 —— 见安全限制） | 否 |
 | `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
-| `ast_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。GH #39，v1 中仅支持 .py/.html/.htm | 否 |
+| `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。GH #39，v1 中仅支持 .py/.html/.htm | 否 |
 | `delete_file` | 删除文件或空目录（之后强制退出循环） | 否 |
 | `move_file` | 在工作区内移动或重命名文件（例如 `index.html` → `templates/`）。纯粹的重定位 —— 绕过 V3/外科式编辑门控，拒绝覆盖已存在的目标。由于 shell `mv`/`cp` 会被拒绝，这是"重新组织文件"的受支持路径 | 否 |
 | `find_file` | 按文件**名**/路径做正则搜索（廉价的存在性检查 + 定位）。区别于在文件内容中 grep 的 `search_files`。 | 是 |
@@ -167,10 +167,10 @@ flowchart LR
 
 ### 工具选择偏差缓解
 
-一次实测的参考部署显示出一种偏差：即便 `ast_edit` 才是正确选择，模型也倾向于用 `edit_file`（BiasBusters arxiv 2510.00307 —— 相邻工具名的嵌入会相互竞争；描述比名称更重要）。代理中组合了四道与模型无关的防线：
+一次实测的参考部署显示出一种偏差：即便 `structural_edit` 才是正确选择，模型也倾向于用 `edit_file`（BiasBusters arxiv 2510.00307 —— 相邻工具名的嵌入会相互竞争；描述比名称更重要）。代理中组合了四道与模型无关的防线：
 
 1. **描述重写**（`proxy/tools.go`）。edit_file 的描述
-   警告不要用于整文件/整函数；ast_edit 的描述
+   警告不要用于整文件/整函数；structural_edit 的描述
    声明对 >10 行 / 整节点替换是必需的；write_file 的描述
    声明仅用于新文件。
 2. **条件式 GBNF 语法**（`proxy/grammar.go`，
@@ -181,10 +181,10 @@ flowchart LR
    它们。该限制在一次决策后失效。
 3. **逐步工具列表过滤**（同一触发条件）。注入一条临时的
    `[system note]` 用户消息，提醒模型在这一步
-   ast_edit 是唯一的结构性编辑工具。
+   structural_edit 是唯一的结构性编辑工具。
 4. **ASA 操控向量**（`geometric-lens/asa_calibration/`）。
    激活操控在上游移动残差流分布，因此即使在任何拒绝
-   触发之前的首次尝试决策中，也会偏好 ast_edit。仅当
+   触发之前的首次尝试决策中，也会偏好 structural_edit。仅当
    `/models/ast_edit_steering.gguf` 的 `.model` 侧车标记与所选模型
    匹配时，才由 `inference/entrypoint-v3.1.sh` 自动加载 —— 一旦通过
    `geometric-lens/asa_calibration/README.md` 中的工作流构建出兼容的
@@ -246,9 +246,9 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 | 冗余读取短路 | 对一个未改动文件的整文件重读仅在其内容仍然在场时返回"已在上下文中"指针；否则重新提供完整文件（`ATLAS_DEDUP_READS=0` 禁用） | 避免每轮重新编码一个未改动的文件，同时不让模型盲编辑 |
 | V3 交互式墙钟上限 | 单次 V3 pipeline 调用被限制在 `ATLAS_V3_TIMEOUT`（默认 180s）；超时时代理回退到模型自身的语法门控内容（`0` 禁用） | 在长时间修复停滞下保持交互式会话的响应 |
 | 逐轮推理预算 | 在约 6144 个推理 token 后切断流（`ATLAS_REASONING_BUDGET`，0 禁用）；恢复时从推理中提取一个内嵌的 tool_call 或重新提示 | 限定推理螺旋 |
-| 对已有文件的 write_file | 文件 > 5 行时拒绝；在 .py/.html/.htm 上，逐步语法门控操控转向 `ast_edit` | 强制外科式编辑（`edit_file`）或整节点编辑（`ast_edit`） |
-| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `ast_edit`/`edit_file`（`proxy/guardrails.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
-| ast_edit 失控内容守卫 | 当 `content` > 8 KB 且 > 4× 文件大小时拒绝 | 抓住作为替换节点发出的推理泄漏块 |
+| 对已有文件的 write_file | 文件 > 5 行时拒绝；在 .py/.html/.htm 上，逐步语法门控操控转向 `structural_edit` | 强制外科式编辑（`edit_file`）或整节点编辑（`structural_edit`） |
+| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`proxy/guardrails.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
+| structural_edit 失控内容守卫 | 当 `content` > 8 KB 且 > 4× 文件大小时拒绝 | 抓住作为替换节点发出的推理泄漏块 |
 | 错误循环熔断器 | 连续 3 次失败 | 停止失控的失败循环 |
 | 探索预算 | 连续 4 次只读调用时提示（nudge）；5 次以上时升级提示。读取始终会执行 —— 提示是把*下一*轮引向写入 | 推动模型去写，而不是无限探索 |
 | 命令输出截断 | stdout 8,000 字符，stderr 4,000 字符 | 防止上下文泛滥 |
@@ -688,4 +688,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-超过 5 行的已有文件对 `write_file` 会被拒绝 —— 模型必须使用 `edit_file`（外科式，≤10 行）或 `ast_edit`（整节点重写，仅 .py/.html/.htm）。在 `.py`/`.html`/`.htm` 文件上，逐步语法门控（BiasBusters #2）会在下一次决策中主动从工具名产生式里禁掉 `edit_file`/`write_file`，使模型无法退回到错误的捷径。
+超过 5 行的已有文件对 `write_file` 会被拒绝 —— 模型必须使用 `edit_file`（外科式，≤10 行）或 `structural_edit`（整节点重写，仅 .py/.html/.htm）。在 `.py`/`.html`/`.htm` 文件上，逐步语法门控（BiasBusters #2）会在下一次决策中主动从工具名产生式里禁掉 `edit_file`/`write_file`，使模型无法退回到错误的捷径。

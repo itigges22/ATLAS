@@ -731,7 +731,7 @@ uploaded to HuggingFace at https://huggingface.co/{hf_repo}.
 - [ ] Spot-check: drop the .gguf at `/models/{DEFAULT_VECTOR_NAME}` and
       confirm llama-server boots without `control_vector_load failed`
 - [ ] Behavior smoke-test: pre-vs-post task that benefits from the bias
-      (whole-function rewrite via `ast_edit` over `edit_file`)
+      (whole-function rewrite via `structural_edit` over `edit_file`)
 
 ### Suggested registry diff
 

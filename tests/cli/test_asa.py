@@ -453,7 +453,7 @@ def _make_fixture_pairs(tmp_path):
     p = tmp_path / "pairs.jsonl"
     p.write_text(
         '{"prompt": "edit the file", "label": "edit_file"}\n'
-        '{"prompt": "rewrite the function", "label": "ast_edit"}\n'
+        '{"prompt": "rewrite the function", "label": "structural_edit"}\n'
     )
     return p
 

@@ -1985,17 +1985,17 @@ Produce a plan as a SINGLE JSON object:
 }}
 
 Rules:
-- Each step is a single tool call: read_file, write_file, edit_file, ast_edit, delete_file, run_command, list_directory.
+- Each step is a single tool call: read_file, write_file, edit_file, structural_edit, delete_file, run_command, list_directory.
 - Tool selection guidance:
     * read_file        — inspect a file before editing it
     * write_file       — create a NEW file (rejected for files >5 lines that already exist)
     * edit_file        — small, targeted string change (one function, one block) inside an existing file
-    * ast_edit         — replace a WHOLE function, class, or HTML element by selector. Use for any
+    * structural_edit         — replace a WHOLE function, class, or HTML element by selector. Use for any
                          "replace the dashboard function" / "rewrite <body>" / "swap the validate method"
                          step. Selectors: `function:NAME`, `class:NAME`, `<tag>` (.py and .html only).
                          Strongly preferred over edit_file when the change is a whole-unit swap —
                          edit_file truncates on long old_str/new_str pairs (>1.5 KB hits max_tokens
-                         mid-string and the JSON parse fails). ast_edit takes no old_str so it
+                         mid-string and the JSON parse fails). structural_edit takes no old_str so it
                          doesn't truncate.
     * run_command      — build, test, run, curl. Verifies behavior.
     * delete_file      — remove a file
@@ -2353,12 +2353,12 @@ def generate_plan(
     return plan
 
 
-# --- AST-edit (GH #39 v1) ----------------------------------------------------
+# --- structural_edit (GH #39 v1) ----------------------------------------------------
 #
 # Friendly-selector-driven structural edits. Replaces the model's edit_file
 # old_str/new_str pair (which truncates on long blocks: 2716-char Flask
 # template hit max_tokens mid-JSON in the May 7 session) with a tree-sitter
-# AST node selector.
+# syntax-tree node selector.
 #
 # v1 supports:
 #   - Python: function:NAME, class:NAME
@@ -2373,10 +2373,10 @@ try:
     import tree_sitter_html as _tsh
     _PY_LANG = _ts.Language(_tsp.language())
     _HTML_LANG = _ts.Language(_tsh.language())
-    _AST_EDIT_AVAILABLE = True
+    _STRUCTURAL_EDIT_AVAILABLE = True
 except ImportError as _e:
-    print(f"[ast_edit] tree-sitter not available: {_e} — endpoint will return 501", flush=True)
-    _AST_EDIT_AVAILABLE = False
+    print(f"[structural_edit] tree-sitter not available: {_e} — endpoint will return 501", flush=True)
+    _STRUCTURAL_EDIT_AVAILABLE = False
     _PY_LANG = None
     _HTML_LANG = None
 
@@ -2503,7 +2503,7 @@ def symbol_index(file_map: dict, candidate_symbols: list, max_snippets: int = 3,
         matched: [{name, kind, file, snippet, n_lines}] for symbols defined in the project
         skipped: [{name, reason}] for symbols mentioned but not found
     """
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return {"matched": [], "skipped": [{"name": s, "reason": "tree-sitter not installed"} for s in candidate_symbols]}
 
     # Build {symbol_name: [(file, kind, start_byte, end_byte)]} index
@@ -2601,7 +2601,7 @@ def _extract_python_imports(source: bytes) -> set:
     a known v1 gap; conservative behavior is "treat the file's calls
     as more likely unresolved" rather than silently passing them.
     """
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return set()
     try:
         parser = _ts.Parser(_PY_LANG)
@@ -2665,7 +2665,7 @@ def _extract_python_call_targets(source: bytes) -> list:
     chained calls — those need full import-graph resolution and are out
     of scope for v1. Returns a list (not set) because duplicate calls
     matter when reporting — caller may dedup later."""
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return []
     try:
         parser = _ts.Parser(_PY_LANG)
@@ -2696,7 +2696,7 @@ def _extract_python_top_level_defs(source: bytes) -> set:
     one input to call resolution. Skips nested functions and class
     methods — those don't introduce names into the file's top-level
     namespace."""
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return set()
     try:
         parser = _ts.Parser(_PY_LANG)
@@ -2734,7 +2734,7 @@ def _extract_python_bound_names(source: bytes) -> set:
     trade for a gate that BLOCKS writes — wrongly rejecting valid code is
     far worse than letting an uncommon bug through.
     """
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return set()
     try:
         parser = _ts.Parser(_PY_LANG)
@@ -2833,7 +2833,7 @@ def structural_score(project_symbols, candidate_code: str,
                           (unresolved reporting is suppressed in that
                           case, so the list is always empty then)
     """
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return {"ok": False, "error": "tree-sitter not installed"}
     try:
         candidate_bytes = candidate_code.encode("utf-8")
@@ -2938,7 +2938,7 @@ def _python_call_targets_per_function(source: bytes):
     """Return {function_name: list[called_identifier_names]} for the
     file. Top-level functions only; class methods aggregate under their
     class name (we don't track method-level callers in v1)."""
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return {}
     try:
         parser = _ts.Parser(_PY_LANG)
@@ -2991,7 +2991,7 @@ def call_chain_context(file_map: dict, function_name: str, max_callers: int = 6,
     the function isn't found anywhere — caller should skip injection
     in that case rather than dilute the error context with a useless
     'no matches' block."""
-    if not function_name or not file_map or not _AST_EDIT_AVAILABLE:
+    if not function_name or not file_map or not _STRUCTURAL_EDIT_AVAILABLE:
         return ""
 
     # Pass 1: per-file map of {func: callees}. Also locate definition.
@@ -3067,7 +3067,7 @@ def call_chain_context(file_map: dict, function_name: str, max_callers: int = 6,
 
 
 def cyclomatic_complexity(path: str, source_text: str) -> dict:
-    """McCabe-style cyclomatic complexity from tree-sitter AST.
+    """McCabe-style cyclomatic complexity from the tree-sitter syntax tree.
 
     Counts decision points across the whole file (sum of per-function CC,
     not strictly McCabe's per-function definition — we want one number for
@@ -3081,7 +3081,7 @@ def cyclomatic_complexity(path: str, source_text: str) -> dict:
     text content). Other languages return {"ok": False} so the proxy's
     regex-based classifyFileTier stays the fallback floor.
     """
-    if not _AST_EDIT_AVAILABLE:
+    if not _STRUCTURAL_EDIT_AVAILABLE:
         return {"ok": False, "error": "tree-sitter not installed in this build"}
 
     p = (path or "").lower()
@@ -3118,27 +3118,27 @@ def cyclomatic_complexity(path: str, source_text: str) -> dict:
     return {"ok": True, "language": "python", "cyclomatic_complexity": cc}
 
 
-def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
-    """Apply a friendly-selector AST edit. Stateless transform — caller provides
+def structural_edit(path: str, source_text: str, selector: str, content: str) -> dict:
+    """Apply a friendly-selector structural edit. Stateless transform — caller provides
     the source bytes (read from their own filesystem) and gets back new content.
     v3-service does no file IO; the proxy reads + writes via its existing
     workspace mount, which keeps lens-score-before-write intact."""
-    if not _AST_EDIT_AVAILABLE:
-        return {"success": False, "error": "ast_edit unavailable: tree-sitter not installed in this v3-service build"}
+    if not _STRUCTURAL_EDIT_AVAILABLE:
+        return {"success": False, "error": "structural_edit unavailable: tree-sitter not installed in this v3-service build"}
 
     # Empty-content guard (defense-in-depth; the proxy also checks). Splicing
     # empty content over a node deletes it — a model that omits `content`
     # would silently remove the function instead of fixing it.
     if not content.strip():
         return {"success": False, "error": (
-            f"ast_edit: content is empty — that would DELETE '{selector}', not edit it. "
+            f"structural_edit: content is empty — that would DELETE '{selector}', not edit it. "
             f"Provide the full replacement body of the node."
         )}
 
     language, lang_obj = _ast_language_for_path(path)
     if not language:
         return {"success": False, "error": (
-            f"unsupported file type for ast_edit: {path}. v1 supports .py, .html, .htm — "
+            f"unsupported file type for structural_edit: {path}. v1 supports .py, .html, .htm — "
             f"use edit_file for other languages."
         )}
 
@@ -3191,7 +3191,7 @@ def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
     if len(targets) > 1:
         return {"success": False, "error": (
             f"selector '{selector}' matched {len(targets)} nodes in {path}. "
-            f"ast_edit requires exactly one match — use a more specific selector."
+            f"structural_edit requires exactly one match — use a more specific selector."
         )}
 
     target = targets[0]
@@ -3211,7 +3211,7 @@ def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
     # Post-splice syntax gate (Python). Tree-sitter is error-tolerant: it
     # happily locates the node and splices in replacement content that is
     # not valid Python — observed live: a model emitted `item["id""]` and
-    # `&quot;`-escaped quotes, ast_edit reported success, and a previously
+    # `&quot;`-escaped quotes, structural_edit reported success, and a previously
     # runnable Flask app shipped with a SyntaxError. Refuse to hand back a
     # broken file; return the parse error so the model can fix its quoting
     # on the retry. Keyed off file type, not the model.
@@ -3221,7 +3221,7 @@ def ast_edit(path: str, source_text: str, selector: str, content: str) -> dict:
         except SyntaxError as e:
             snippet = (e.text or "").strip()
             return {"success": False, "error": (
-                f"ast_edit: the replacement makes {path} invalid Python — "
+                f"structural_edit: the replacement makes {path} invalid Python — "
                 f"SyntaxError at line {e.lineno}: {e.msg}"
                 + (f" (offending line: {snippet})" if snippet else "")
                 + '. The file was NOT modified. Check your quoting (no doubled '
@@ -3274,8 +3274,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_generate()
         elif self.path == "/v3/plan":
             self._handle_plan()
-        elif self.path == "/internal/ast_edit":
-            self._handle_ast_edit()
+        elif self.path == "/internal/structural_edit":
+            self._handle_structural_edit()
         elif self.path == "/internal/cyclomatic_complexity":
             self._handle_cyclomatic_complexity()
         elif self.path == "/internal/symbol_index":
@@ -3597,8 +3597,8 @@ class V3Handler(BaseHTTPRequestHandler):
             # best-effort: swallow on failure (caller continues)
             pass
 
-    def _handle_ast_edit(self):
-        """POST /internal/ast_edit — friendly-selector-driven AST edit.
+    def _handle_structural_edit(self):
+        """POST /internal/structural_edit — friendly-selector structural replacement.
 
         Request:
             {"path": "...",  "source": "<full file content>",
@@ -3629,19 +3629,19 @@ class V3Handler(BaseHTTPRequestHandler):
             self._json_response(400, {"success": False, "error": "missing required field(s): path, source, selector"})
             return
 
-        result = ast_edit(path, source_text, selector, content)
+        result = structural_edit(path, source_text, selector, content)
         # Log per-call signal — matches the verbose-logging pattern we added
         # to score_candidate_per_step. Lets `docker logs atlas-v3-service-1`
-        # answer "what did the model ask ast_edit to do" without SSE capture.
+        # answer "what did the model ask structural_edit to do" without SSE capture.
         if result.get("success"):
             print(
-                f"  [ast_edit] {result['language']} {path} selector={selector!r} "
+                f"  [structural_edit] {result['language']} {path} selector={selector!r} "
                 f"matched bytes [{result['byte_range'][0]}-{result['byte_range'][1]}] "
                 f"old={result['old_size']}B new={result['new_size']}B",
                 flush=True,
             )
         else:
-            print(f"  [ast_edit] FAIL path={path} selector={selector!r}: {result['error']}", flush=True)
+            print(f"  [structural_edit] FAIL path={path} selector={selector!r}: {result['error']}", flush=True)
         self._json_response(200, result)
 
     def _handle_symbol_index(self):
@@ -3781,7 +3781,7 @@ class V3Handler(BaseHTTPRequestHandler):
         Response: {"ok": bool, "error": "...", "line": N}
 
         Used by the proxy's edit_file path to refuse writing a .py file the
-        edit would break — the same gate ast_edit applies post-splice. Pure
+        edit would break — the same gate structural_edit applies post-splice. Pure
         compile() check, no execution.
         """
         content_len = int(self.headers.get("Content-Length", 0))
@@ -3812,7 +3812,7 @@ class V3Handler(BaseHTTPRequestHandler):
         Response: {"ok": bool, "unresolved": ["render_template", ...],
                    "wildcard_imports": bool}
 
-        Used by the proxy's structural gate on edit_file, ast_edit, and the
+        Used by the proxy's structural gate on edit_file, structural_edit, and the
         write_file branches to refuse landing a .py file whose change
         introduces a NameError — a direct call to a name the file neither
         imports, defines, nor gets from builtins (#147: render_template
@@ -3852,8 +3852,8 @@ class V3Handler(BaseHTTPRequestHandler):
         Request:  {"path": "app.py", "source": "<file text>"}
         Response: {"symbols": [{name, kind, start_line, end_line}], "supported": bool}
 
-        Reuses the same decorator-aware tree-sitter walk ast_edit uses, so a
-        symbol the outline names is selectable by ast_edit with the same name.
+        Reuses the same decorator-aware tree-sitter walk structural_edit uses, so a
+        symbol the outline names is selectable by structural_edit with the same name.
         Bodies are NOT returned — this is the cheap "what's in here" probe so
         the model can then read just the one function's line range instead of
         the whole file. .py only here; the proxy regex-falls-back for the rest.
@@ -3879,7 +3879,7 @@ class V3Handler(BaseHTTPRequestHandler):
         source = body.get("source", "") or ""
         symbols = []
         supported = False
-        if path.endswith(".py") and _AST_EDIT_AVAILABLE:
+        if path.endswith(".py") and _STRUCTURAL_EDIT_AVAILABLE:
             supported = True
             src = source.encode("utf-8")
             for name, kind, sb_, eb in _symbol_index_for_python_source(src):
@@ -3930,7 +3930,7 @@ class V3Handler(BaseHTTPRequestHandler):
             return
 
         result = cyclomatic_complexity(path, source_text)
-        # Per-call signal — same pattern as ast_edit. Lets us correlate
+        # Per-call signal — same pattern as structural_edit. Lets us correlate
         # tier upgrades to the file that triggered them in docker logs.
         if result.get("ok"):
             print(

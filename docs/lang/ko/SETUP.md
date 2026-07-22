@@ -430,7 +430,7 @@ atlas doctor -v           # verbose: show detail for each check
 | Host | metal-native | 네이티브 llama-server 바이너리가 존재하고 실행 가능한지 — `ATLAS_BACKEND=metal`(macOS 하이브리드)일 때만 |
 | Host | model_file | `.env`에서 선택된 `ATLAS_MODEL_FILE`이 존재하고 100MB 초과 |
 | Host | lens_weights | `cost_field.pt` + G(x) 아티팩트 존재 |
-| Host | asa_steering | `ast_edit_steering.gguf` 존재 (BiasBusters #4 — 실패가 아닌 경고; ATLAS는 이것 없이도 동작하며, ast_edit-vs-edit_file 편향이 스티어링되지 않을 뿐) |
+| Host | asa_steering | `ast_edit_steering.gguf` 존재 (BiasBusters #4 — 실패가 아닌 경고; ATLAS는 이것 없이도 동작하며, structural_edit-vs-edit_file 편향이 스티어링되지 않을 뿐) |
 | Host | tier_match | `.env` 모델 선택이 호스트 하드웨어와 일치(초과 선택은 경고 — OOM 위험 — 일치나 여유 선택은 통과) |
 | Host | tier_constraints | 호스트 CPU/RAM/디스크가 권장 등급 최소치를 충족("16GB GPU인데 RAM 8GB" 같은 불일치를 포착) |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5개 모두 실행 중이고 healthy |
@@ -857,7 +857,7 @@ atlas lens check
 
 ## ASA 스티어링 벡터 (자동 빌드)
 
-2026년 5월 BiasBusters #4. 함수/클래스/요소 전체 재작성에서 모델이 `edit_file` 대신 `ast_edit`를 선호하도록 편향시키는 residual-stream 스티어링 벡터로, 문법 게이트가 무언가를 거부할 기회를 갖기 **전에** 적용됩니다. 엄밀히 선택 사항입니다 — ATLAS는 이것 없이도 계속 동작하며, 도구 선택 편향이 스티어링되지 않을 뿐입니다.
+2026년 5월 BiasBusters #4. 함수/클래스/요소 전체 재작성에서 모델이 `edit_file` 대신 `structural_edit`를 선호하도록 편향시키는 residual-stream 스티어링 벡터로, 문법 게이트가 무언가를 거부할 기회를 갖기 **전에** 적용됩니다. 엄밀히 선택 사항입니다 — ATLAS는 이것 없이도 계속 동작하며, 도구 선택 편향이 스티어링되지 않을 뿐입니다.
 
 `atlas-bootstrap.sh`가 서비스 기동 후 자동으로 빌드합니다. 파이프라인은 다음과 같습니다:
 

@@ -374,7 +374,7 @@ func TestRunCommandStepNotFileProducing(t *testing.T) {
 	if isFileProducingAction("run_command") {
 		t.Error("run_command must not be a file-producing action")
 	}
-	for _, a := range []string{"write_file", "ast_edit", "edit_file"} {
+	for _, a := range []string{"write_file", "structural_edit", "edit_file"} {
 		if !isFileProducingAction(a) {
 			t.Errorf("%s should be file-producing", a)
 		}

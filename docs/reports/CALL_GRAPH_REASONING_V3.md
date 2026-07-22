@@ -74,14 +74,14 @@ without ever depending on a Prolog/Z3 runtime.
 | 3. repair call-chain context | `call_chain_context` 1-hop callers/callees (`v3-service/main.py`) | multi-hop reachability slice + path witnesses (Phase 2) |
 | 4. context auto-injection | `symbol_index` name-match snippets (`proxy/symbol_index.go` + v3-service) | inject the symbol's graph neighborhood / impact set (Phase 3) |
 | 2. tier classification | cyclomatic complexity, shipped (`/internal/cyclomatic_complexity`) | optional graph fan-in/out enrichment (Phase 4, low priority) |
-| ast_edit | friendly selectors, Python + HTML (shipped) | unchanged; raw-query routing is a separate small follow-up |
+| structural_edit | friendly selectors, Python + HTML (shipped) | unchanged; raw-query routing is a separate small follow-up |
 
 Tree-sitter is already a v3-service dependency (`tree_sitter`,
 `tree_sitter_python`, `tree_sitter_html`), and v3-service already extracts
 Python defs/calls in `symbol_index`, `structural_score`, and
 `call_chain_context`. So the graph substrate extends code that already exists
 rather than greenfield. Internal endpoints already live in v3-service
-(`/internal/symbol_index`, `/internal/ast_edit`, `/internal/cyclomatic_complexity`),
+(`/internal/symbol_index`, `/internal/structural_edit`, `/internal/cyclomatic_complexity`),
 so a `/internal/call_graph` endpoint is the natural home.
 
 ## 5. Decisions

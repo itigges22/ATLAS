@@ -423,7 +423,7 @@ atlas doctor -v           # verbose: show detail for each check
 | ホスト | metal-native | ネイティブ llama-server バイナリが存在し実行可能 — `ATLAS_BACKEND=metal`（macOS ハイブリッド）のときのみ |
 | ホスト | model_file | `.env` で選択された `ATLAS_MODEL_FILE` が存在し 100 MB 超 |
 | ホスト | lens_weights | `cost_field.pt` + G(x) アーティファクトが存在 |
-| ホスト | asa_steering | `ast_edit_steering.gguf` が存在（BiasBusters #4 — fail ではなく warn。ATLAS はこれなしでも動作しますが、ast_edit と edit_file のバイアスがステアされないままになります） |
+| ホスト | asa_steering | `ast_edit_steering.gguf` が存在（BiasBusters #4 — fail ではなく warn。ATLAS はこれなしでも動作しますが、structural_edit と edit_file のバイアスがステアされないままになります） |
 | ホスト | tier_match | `.env` のモデル選択がホストのハードウェアに合致（オーバーシュートは警告 — OOM リスク。一致またはアンダーシュートは pass） |
 | ホスト | tier_constraints | ホストの CPU/RAM/ディスクが推奨ティアの最小値を満たす（「GPU は 16 GB だが RAM は 8 GB」の不一致を捕捉） |
 | スタック | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5 つすべてが実行中かつ healthy |
@@ -850,7 +850,7 @@ atlas lens check
 
 ## ASA ステアリングベクトル (自動ビルド)
 
-2026年5月の BiasBusters #4。関数 / クラス / 要素全体の書き換えにおいて、モデルを `edit_file` より `ast_edit` へバイアスする残差ストリームのステアリングベクトルで、文法ゲートが何かを拒否する機会を持つ**前に**適用されます。厳密にオプションです — ATLAS はこれなしでも動作し続けますが、ツール選択バイアスがステアされないままになります。
+2026年5月の BiasBusters #4。関数 / クラス / 要素全体の書き換えにおいて、モデルを `edit_file` より `structural_edit` へバイアスする残差ストリームのステアリングベクトルで、文法ゲートが何かを拒否する機会を持つ**前に**適用されます。厳密にオプションです — ATLAS はこれなしでも動作し続けますが、ツール選択バイアスがステアされないままになります。
 
 `atlas-bootstrap.sh` はサービス起動後に自動的にビルドします。パイプラインは:
 

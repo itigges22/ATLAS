@@ -57,8 +57,8 @@ func TestStepExclusions(t *testing.T) {
 			name: "stale rejection — assistant has already corrected — does not fire",
 			messages: []AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (42 lines)..."}`},
-				{Role: "assistant", Content: `{"type":"tool_call","name":"ast_edit","args":{...}}`},
-				{Role: "tool", ToolName: "ast_edit", Content: `{"success":true}`},
+				{Role: "assistant", Content: `{"type":"tool_call","name":"structural_edit","args":{...}}`},
+				{Role: "tool", ToolName: "structural_edit", Content: `{"success":true}`},
 			},
 			wantTools: nil,
 			wantExt:   "",
@@ -113,7 +113,7 @@ func TestStepExclusions(t *testing.T) {
 func TestBuildGBNFGrammarForToolsExcludes(t *testing.T) {
 	const editFileTok = `"\"edit_file\""`
 	const writeFileTok = `"\"write_file\""`
-	const astEditTok = `"\"ast_edit\""`
+	const structuralEditTok = `"\"structural_edit\""`
 	const readFileTok = `"\"read_file\""`
 
 	all := buildGBNFGrammarForTools(nil)
@@ -127,8 +127,8 @@ func TestBuildGBNFGrammarForToolsExcludes(t *testing.T) {
 	if strings.Contains(restricted, writeFileTok) {
 		t.Errorf("restricted grammar still contains %s", writeFileTok)
 	}
-	if !strings.Contains(restricted, astEditTok) {
-		t.Errorf("restricted grammar must keep %s available", astEditTok)
+	if !strings.Contains(restricted, structuralEditTok) {
+		t.Errorf("restricted grammar must keep %s available", structuralEditTok)
 	}
 	if !strings.Contains(restricted, readFileTok) {
 		t.Errorf("restricted grammar must keep %s available", readFileTok)

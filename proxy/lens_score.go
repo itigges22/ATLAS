@@ -149,7 +149,7 @@ func extractScorableContent(toolName string, args json.RawMessage) (string, bool
 }
 
 // extractFailurePath returns the path argument of a tool call when
-// the tool operates on a file (read/write/edit/ast_edit/delete/
+// the tool operates on a file (read/write/edit/structural_edit/delete/
 // search/list/find/run_background's cwd). Used by the path-aware
 // error-loop breaker to distinguish "stuck on one file" from
 // "grinding through different files." Returns "" when no path is
@@ -158,7 +158,7 @@ func extractScorableContent(toolName string, args json.RawMessage) (string, bool
 // from firing on tool-mix sequences.
 func extractFailurePath(toolName string, args json.RawMessage) string {
 	switch toolName {
-	case "read_file", "write_file", "edit_file", "ast_edit", "delete_file", "find_file":
+	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file":
 		var p struct {
 			Path string `json:"path"`
 		}

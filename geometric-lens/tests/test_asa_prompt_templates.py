@@ -35,9 +35,9 @@ def test_hidden_state_builder_uses_loaded_models_template(monkeypatch):
     monkeypatch.setattr(module, "urlopen", lambda *_a, **_k: _Response("MODEL_TEMPLATE:"))
     rendered = module.render_prompt({
         "user": "edit a function",
-        "assistant_prefix": '{"name":"ast_edit"',
+        "assistant_prefix": '{"name":"structural_edit"',
     })
-    assert rendered == 'MODEL_TEMPLATE:{"name":"ast_edit"'
+    assert rendered == 'MODEL_TEMPLATE:{"name":"structural_edit"'
     assert "<|im_start|>" not in rendered
 
 
@@ -46,7 +46,7 @@ def test_legacy_cvector_builder_uses_loaded_models_template(monkeypatch):
     monkeypatch.setattr(module, "urlopen", lambda *_a, **_k: _Response("MODEL\nTEMPLATE\n"))
     rendered = module.render({
         "user": "edit a function",
-        "assistant_prefix": '{"name":"ast_edit"',
+        "assistant_prefix": '{"name":"structural_edit"',
     }, "http://llama-server:8080")
-    assert rendered == 'MODEL\\nTEMPLATE\\n{"name":"ast_edit"'
+    assert rendered == 'MODEL\\nTEMPLATE\\n{"name":"structural_edit"'
     assert "<|im_start|>" not in rendered

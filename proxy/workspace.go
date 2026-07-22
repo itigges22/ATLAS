@@ -123,7 +123,7 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 		"outline_file":   {"path"},
 		"write_file":     {"path"},
 		"edit_file":      {"path"},
-		"ast_edit":       {"path"},
+		"structural_edit":       {"path"},
 		"delete_file":    {"path"},
 		"move_file":      {"source", "destination"},
 		"search_files":   {"path"},

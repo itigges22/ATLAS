@@ -76,7 +76,7 @@
 2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - システム全体を統括する Go 製エージェントループ。
    - [ツールコールルーティング](../../ARCHITECTURE.md#tools) - ファイル操作を複雑度ティアで分類
    - [文法強制](../../ARCHITECTURE.md#grammar-enforcement) - GBNF スキーマで期待される JSON 形式へ強く誘導し、不正または切り詰められた出力はプロキシ側で回復
-   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 構造的なコード編集でモデルを `ast_edit` へ誘導する4つの複合的な緩和策（説明文、文法禁則、システムノート、ASA ステアリング）
+   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 構造的なコード編集でモデルを `structural_edit` へ誘導する4つの複合的な緩和策（説明文、文法禁則、システムノート、ASA ステアリング）
    - [安全制限](../../ARCHITECTURE.md#safety-limits) - ターン上限、トークン予算、タイムアウト
 
 3. **[V3 パイプライン](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 単一のプロンプトを検証済み候補に変換するマルチフェーズコード生成。

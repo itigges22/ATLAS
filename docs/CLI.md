@@ -313,13 +313,13 @@ Cycle with `Ctrl+T`:
 
 | Mode | Behavior |
 |---|---|
-| `default` | Read tools and surgical edits (`edit_file`, `ast_edit`) auto-allow; `write_file`, `delete_file`, `run_command`, and `stop_background` require user approval |
+| `default` | Read tools and surgical edits (`edit_file`, `structural_edit`) auto-allow; `write_file`, `delete_file`, `run_command`, and `stop_background` require user approval |
 | `accept-edits` | As above + `write_file` auto-allow; `delete_file`, `run_command`, and `stop_background` still confirm |
 | `yolo` | Auto-allow everything |
 
 The exact gate is `Destructive: true` on the tool definition in
 `proxy/tools.go`; `accept-edits` additionally auto-approves
-`write_file`, `edit_file`, `ast_edit`, and `move_file`.
+`write_file`, `edit_file`, `structural_edit`, and `move_file`.
 
 The current mode shows in the header.
 

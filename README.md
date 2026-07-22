@@ -79,7 +79,7 @@
 2. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
    - [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
    - [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas strongly steer output toward the expected JSON shapes, with proxy-side recovery for malformed or truncated output
-   - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `ast_edit` for structural code edits
+   - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `structural_edit` for structural code edits
    - [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
 
 3. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.

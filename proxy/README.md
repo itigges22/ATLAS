@@ -31,7 +31,7 @@ Each user message drives an agent loop that runs until the model emits
    malformed or truncated output and treats parsing as fallible.
 3. **Tool dispatch + validation** — 14 tools (`read_file`,
    `outline_file`, `search_files`, `list_directory`, `find_file`,
-   `write_file`, `edit_file`, `ast_edit`, `delete_file`, `move_file`,
+   `write_file`, `edit_file`, `structural_edit`, `delete_file`, `move_file`,
    `run_command`, `run_background`, `tail_background`,
    `stop_background`). Per-tool
    guardrails: read-tracking, mtime checks, default-deny patterns,

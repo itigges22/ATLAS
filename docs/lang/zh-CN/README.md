@@ -76,7 +76,7 @@
 2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 基于 Go 的 agent 循环，负责编排整个系统。
    - [工具调用路由](../../ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
    - [语法强制执行](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 模式强力引导输出符合预期 JSON 结构，并由代理恢复格式错误或截断的输出
-   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 四道组合的缓解措施（描述、语法禁用、系统提示、ASA 操控），把模型推向用 `ast_edit` 做结构性代码编辑
+   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 四道组合的缓解措施（描述、语法禁用、系统提示、ASA 操控），把模型推向用 `structural_edit` 做结构性代码编辑
    - [安全限制](../../ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
 
 3. **[V3 Pipeline](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 多阶段代码生成；把单个提示词转化为经过验证的候选。

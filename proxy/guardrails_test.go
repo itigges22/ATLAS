@@ -454,18 +454,18 @@ func TestValidateRunCommandChainsBothGates(t *testing.T) {
 	}
 }
 
-// May 9 2026 ast_edit destructive-stub case: model emitted only
+// May 9 2026 structural_edit destructive-stub case: model emitted only
 // "<!DOCTYPE html>\n" (16B) for an entire <html>-element rewrite of a
-// 120B file, ast_edit "succeeded", file destroyed, model declared
+// 120B file, structural_edit "succeeded", file destroyed, model declared
 // "done". Guard catches this exact shape without false-rejecting
 // realistic small replacements.
 func TestValidateNotSuspiciouslyShrunkRejectsDestructiveStub(t *testing.T) {
 	// Today's exact case.
-	if got := validateNotSuspiciouslyShrunk("ast_edit", "templates/index.html", 120, 16); got == "" {
+	if got := validateNotSuspiciouslyShrunk("structural_edit", "templates/index.html", 120, 16); got == "" {
 		t.Error("expected rejection for 120B → 16B replacement")
 	}
 	// Larger original, larger stub — still flagged.
-	if got := validateNotSuspiciouslyShrunk("ast_edit", "app.py", 5000, 20); got == "" {
+	if got := validateNotSuspiciouslyShrunk("structural_edit", "app.py", 5000, 20); got == "" {
 		t.Error("expected rejection for 5000B → 20B replacement")
 	}
 	// edit_file path covered by the same guard.
@@ -475,11 +475,11 @@ func TestValidateNotSuspiciouslyShrunkRejectsDestructiveStub(t *testing.T) {
 	// May 10 2026: the 32B-just-passes failure that motivated bumping
 	// the floor from 32 to 128. Model emitted exactly 32B for an HTML
 	// body rewrite — clearly a stub but slipped past the v1 guard.
-	if got := validateNotSuspiciouslyShrunk("ast_edit", "templates/dashboard.html", 2199, 32); got == "" {
+	if got := validateNotSuspiciouslyShrunk("structural_edit", "templates/dashboard.html", 2199, 32); got == "" {
 		t.Error("expected rejection for 2199B → 32B (the May 10 boundary case)")
 	}
 	// 60B replacement of 2KB original — under the 64B floor.
-	if got := validateNotSuspiciouslyShrunk("ast_edit", "templates/index.html", 2000, 60); got == "" {
+	if got := validateNotSuspiciouslyShrunk("structural_edit", "templates/index.html", 2000, 60); got == "" {
 		t.Error("expected rejection for 2000B → 60B (below 64B floor)")
 	}
 }
@@ -496,11 +496,11 @@ func TestValidateNotSuspiciouslyShrunkAllowsLegitEdits(t *testing.T) {
 		{"new content well above threshold", 200, 200},
 		{"refactor to one-liner with reasonable body (5KB → 80B)", 5000, 80},
 		{"both small (below 100B trigger)", 80, 20},
-		{"empty original (new file via ast_edit-ish path)", 0, 16},
+		{"empty original (new file via structural_edit-ish path)", 0, 16},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := validateNotSuspiciouslyShrunk("ast_edit", "x.py", tc.old, tc.new); got != "" {
+			if got := validateNotSuspiciouslyShrunk("structural_edit", "x.py", tc.old, tc.new); got != "" {
 				t.Errorf("validateNotSuspiciouslyShrunk(%d, %d) rejected: %s", tc.old, tc.new, got)
 			}
 		})
@@ -511,11 +511,11 @@ func TestValidateNotSuspiciouslyShrunkRejectionMessage(t *testing.T) {
 	// The rejection text must (a) name the tool so the model knows what
 	// to retry, (b) report old/new sizes so the model can see it WAS
 	// truncated, and (c) tell it to re-emit the FULL body.
-	got := validateNotSuspiciouslyShrunk("ast_edit", "templates/index.html", 120, 16)
+	got := validateNotSuspiciouslyShrunk("structural_edit", "templates/index.html", 120, 16)
 	if got == "" {
 		t.Fatal("expected rejection")
 	}
-	for _, s := range []string{"ast_edit refused", "16B", "120B", "FULL", "templates/index.html"} {
+	for _, s := range []string{"structural_edit refused", "16B", "120B", "FULL", "templates/index.html"} {
 		if !strings.Contains(got, s) {
 			t.Errorf("rejection missing %q: %s", s, got)
 		}
@@ -523,9 +523,9 @@ func TestValidateNotSuspiciouslyShrunkRejectionMessage(t *testing.T) {
 }
 
 // May 8 2026 flask test: dashboard.html ended up with two consecutive
-// <!DOCTYPE html> lines after a successful ast_edit. Root cause: model
+// <!DOCTYPE html> lines after a successful structural_edit. Root cause: model
 // included <!DOCTYPE html> in `content` when selector was <html>, but
-// ast_edit's <html> selector replaces only the html element — the
+// structural_edit's <html> selector replaces only the html element — the
 // existing doctype declaration above it was untouched, producing a
 // duplicated doctype. This test locks the strip behaviour.
 func TestStripLeadingDoctype(t *testing.T) {
@@ -642,7 +642,7 @@ func TestActionWithoutProductiveChangeMessage(t *testing.T) {
 	// Sanity: rejection text must (a) tell the model NOT to declare done,
 	// (b) name the missing tools, (c) mention verification ≠ task.
 	got := actionWithoutProductiveChangeMessage("rewrite templates/dashboard.html...")
-	for _, s := range []string{"Cannot declare `done`", "write_file", "edit_file", "ast_edit", "Verification", "NOT the task"} {
+	for _, s := range []string{"Cannot declare `done`", "write_file", "edit_file", "structural_edit", "Verification", "NOT the task"} {
 		if !strings.Contains(got, s) {
 			t.Errorf("rejection missing %q: %s", s, got)
 		}

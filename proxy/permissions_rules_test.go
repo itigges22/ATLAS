@@ -57,7 +57,7 @@ func TestNeedsPermission(t *testing.T) {
 
 	t.Run("accept-edits auto-approves edits but not commands", func(t *testing.T) {
 		ctx := &AgentContext{PermissionMode: PermissionAcceptEdits}
-		for _, tool := range []string{"write_file", "edit_file", "ast_edit", "move_file"} {
+		for _, tool := range []string{"write_file", "edit_file", "structural_edit", "move_file"} {
 			if needsPermission(ctx, tool, args) {
 				t.Errorf("%s prompted in accept-edits mode", tool)
 			}

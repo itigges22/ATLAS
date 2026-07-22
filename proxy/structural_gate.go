@@ -6,10 +6,10 @@ package main
 // (improveContentWithV3) frequently sent no project_context, so the
 // in-pipeline veto was gated off, and even when it fired the pipeline's
 // baseline fallback resurrected the model's own edit. Result observed in
-// 2026-07-18 dogfooding: an ast_edit replaced a route with a body calling
+// 2026-07-18 dogfooding: a structural_edit replaced a route with a body calling
 // render_template while the file imported only render_template_string; it
 // passed V3 verification, landed as verified, and every request 500'd
-// (NameError). ast_edit had no syntax gate at all; edit_file's syntax gate
+// (NameError). structural_edit had no syntax gate at all; edit_file's syntax gate
 // catches parse failures but a NameError parses fine.
 //
 // This proxy-side gate closes the hole where it can't be bypassed: it
@@ -17,7 +17,7 @@ package main
 // checker and refuses landing content that INTRODUCES an unresolved direct
 // call — the same healthy->broken rule as the syntax gate (a change that
 // leaves a pre-existing unresolved name in place, i.e. a repair-in-
-// progress, is allowed). Wired into edit_file, ast_edit, and every
+// progress, is allowed). Wired into edit_file, structural_edit, and every
 // write_file branch (V3 winner, V3-error fallback, iteration fast-path,
 // T0/T1 direct); under BypassV3 only the non-iterating T0/T1 direct
 // write_file skips the gate (so the demo baseline pane shows the raw

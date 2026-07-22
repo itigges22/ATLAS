@@ -258,7 +258,7 @@ func generateInputExample(toolName string) string {
 		// shape, so a "rename foo to bar" placeholder steered them
 		// toward purely cosmetic edits instead of real bug-fix shapes.
 		return `{"path": "src/main.py", "old_str": "if x == 0:\n        return None", "new_str": "if x is None or x == 0:\n        return None", "replace_all": false}`
-	case "ast_edit":
+	case "structural_edit":
 		// Whole-function rewrite — the case where edit_file would force
 		// the model to copy the entire existing function as old_str and
 		// blow through max_tokens. Selector grammar is intentionally

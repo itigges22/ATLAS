@@ -1,4 +1,4 @@
-"""ast_edit HTML selector tests — regression for <script>/<style> matching.
+"""structural_edit HTML selector tests — regression for <script>/<style> matching.
 
 tree-sitter-html parses <script> and <style> as dedicated script_element /
 style_element nodes (raw JS/CSS bodies), NOT generic `element` nodes, so the
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 import main  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
-    not getattr(main, "_AST_EDIT_AVAILABLE", False),
+    not getattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False),
     reason="tree-sitter not installed in this environment",
 )
 
@@ -26,7 +26,7 @@ HTML = (
 
 
 def test_script_selector_matches_script_element():
-    res = main.ast_edit("templates/index.html", HTML, "<script>",
+    res = main.structural_edit("templates/index.html", HTML, "<script>",
                          "<script>\n  const c = 1; // inline\n</script>")
     assert res.get("success"), res
     # the src-based script was replaced
@@ -35,14 +35,14 @@ def test_script_selector_matches_script_element():
 
 
 def test_style_selector_matches_style_element():
-    res = main.ast_edit("templates/index.html", HTML, "<style>",
+    res = main.structural_edit("templates/index.html", HTML, "<style>",
                          "<style>body { margin: 8px; }</style>")
     assert res.get("success"), res
     assert "margin: 8px" in res["new_content"]
 
 
 def test_bare_element_selector_still_works():
-    res = main.ast_edit("templates/index.html", HTML, "<canvas>",
+    res = main.structural_edit("templates/index.html", HTML, "<canvas>",
                          "<canvas id=\"gameCanvas\" width=\"400\"></canvas>")
     assert res.get("success"), res
     assert "width=\"400\"" in res["new_content"]

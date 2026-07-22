@@ -245,7 +245,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// between attempts resets consecutiveErrors/RecentFailurePaths, which
 	// masks the classic read→edit-miss→read loop (smaller models can't
 	// reproduce old_str byte-for-byte). This counter survives interleaved
-	// reads so we can force the ast_edit steer after the second miss.
+	// reads so we can force the structural_edit steer after the second miss.
 	editMissByPath := map[string]int{}
 	repeatDetections := 0 // hard-stop after the 2nd repeated-identical-call detection
 	// Runaway backstop for content-varying write loops (#147 review finding
@@ -527,7 +527,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// done. Existing fix-intent gate didn't catch it because
 			// "rewrite" is action-intent, not fix-intent. This gate
 			// bounces `done` when the user prompt clearly asks for a
-			// state change AND no productive write/edit/ast_edit/delete
+			// state change AND no productive write/edit/structural_edit/delete
 			// landed in the loop. Distinct from verification gate:
 			// - verification gate: fix prompt + no run_command verify → bounce
 			// - this gate: action prompt + no successful edit tool → bounce
@@ -535,7 +535,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
-				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop, bounce %d/%d)",
+				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q has action-intent, no successful write/edit/structural_edit this loop, bounce %d/%d)",
 					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "assistant",
@@ -665,7 +665,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
-				log.Printf("[agent] text-exit action gate: bouncing text at turn %d (user prompt %q has action-intent, no successful write/edit/ast_edit this loop, bounce %d/%d)",
+				log.Printf("[agent] text-exit action gate: bouncing text at turn %d (user prompt %q has action-intent, no successful write/edit/structural_edit this loop, bounce %d/%d)",
 					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "assistant",
@@ -845,7 +845,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						if existingLines > 5 && !corrupted && !sessionOwned {
 							// GH #39: when the existing file is .py or .html
 							// and the model is replacing the whole thing,
-							// ast_edit is the right tool — selector-based
+							// structural_edit is the right tool — selector-based
 							// node replacement, no old_str literal, no
 							// truncation risk on long content. Surface
 							// the option in the rejection text. edit_file
@@ -853,13 +853,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							// string-level changes (other file types,
 							// inline tweaks).
 							ext := strings.ToLower(filepath.Ext(wfInput.Path))
-							astHint := ""
+							structuralHint := ""
 							if ext == ".py" || ext == ".html" || ext == ".htm" {
-								astHint = " For whole-function or whole-element rewrites, prefer `ast_edit` — it takes a structural selector (e.g. `function:dashboard`, `<body>`) and the new content body, no `old_str` needed. ast_edit doesn't truncate the way edit_file can on long replacement strings."
+								structuralHint = " For whole-function or whole-element rewrites, prefer `structural_edit` — it takes a structural selector (e.g. `function:dashboard`, `<body>`) and the new content body, no `old_str` needed. structural_edit doesn't truncate the way edit_file can on long replacement strings."
 							}
 							rejection := fmt.Sprintf(
 								"File %s already exists (%d lines). write_file is for creating new files, not modifying existing ones. Use edit_file with old_str/new_str to make targeted changes (read the file first if you need to confirm the exact text to replace).%s",
-								wfInput.Path, existingLines, astHint)
+								wfInput.Path, existingLines, structuralHint)
 							// %q quotes + escapes the path (go/log-injection).
 							log.Printf("[agent] rejecting write_file for existing %q (%d lines)", wfInput.Path, existingLines)
 							ctx.Messages = append(ctx.Messages, AgentMessage{
@@ -974,7 +974,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			}
 			if msg, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
 				if runawayWrite && msg == "" {
-					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/ast_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
+					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/structural_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
 				}
 				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
 				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
@@ -1164,11 +1164,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// Used below to soften the error-loop exit when work was completed
 			// AND by the done-without-action gate so a feature prompt
 			// ("rewrite X", "add Y") can't declare done without any actual
-			// edit on disk. ast_edit was missing from this list pre-May-10,
-			// which let an ast_edit-only success path slip past the
+			// edit on disk. structural_edit was missing from this list pre-May-10,
+			// which let a structural_edit-only success path slip past the
 			// productive-change tracking too.
 			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" ||
-				parsed.Name == "ast_edit" || parsed.Name == "delete_file") {
+				parsed.Name == "structural_edit" || parsed.Name == "delete_file") {
 				madeProductiveChange = true
 			}
 
@@ -1205,7 +1205,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// be too large to modify" when their file is, in fact, on disk.
 			// edit_file old_str miss: count per path independently of the
 			// consecutiveErrors reset an interleaved read causes. On the
-			// second miss for the same structured file, force the ast_edit
+			// second miss for the same structured file, force the structural_edit
 			// steer as a [system note] (the inline tool-error hint alone
 			// doesn't reliably move a small model off edit_file).
 			if !result.Success && parsed.Name == "edit_file" &&
@@ -1213,7 +1213,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				mp := extractFailurePath(parsed.Name, parsed.Args)
 				editMissByPath[mp]++
 				ext := strings.ToLower(filepath.Ext(mp))
-				// Force the ast_edit steer on the FIRST miss for structured
+				// Force the structural_edit steer on the FIRST miss for structured
 				// files — small models bail to run_command after a single
 				// edit_file miss rather than retrying, so waiting for a
 				// second miss never fires (observed: 1 edit_file all session,
@@ -1221,12 +1221,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if editMissByPath[mp] >= 1 && (ext == ".py" || ext == ".html" || ext == ".htm") {
 					pendingRepeatCorrective = "edit_file's old_str did not match " +
 						mp + " (small drift in whitespace/quotes is enough to miss). " +
-						"Do NOT re-read or run the file — switch to ast_edit, which " +
-						"needs no old_str: {\"type\":\"tool_call\",\"name\":\"ast_edit\"," +
+						"Do NOT re-read or run the file — switch to structural_edit, which " +
+						"needs no old_str: {\"type\":\"tool_call\",\"name\":\"structural_edit\"," +
 						"\"args\":{\"path\":\"" + mp + "\",\"selector\":\"function:NAME\" " +
 						"(or class:NAME, or <tag> for HTML),\"content\":\"<the full " +
 						"replacement function/class/element>\"}}."
-					log.Printf("[agent] edit_file miss on %q — forcing ast_edit steer", mp)
+					log.Printf("[agent] edit_file miss on %q — forcing structural_edit steer", mp)
 				}
 			}
 
@@ -1413,7 +1413,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// advisory [system note]s — never blockers.
 			if result.Success &&
 				(parsed.Name == "write_file" || parsed.Name == "edit_file" ||
-					parsed.Name == "ast_edit" || parsed.Name == "move_file" ||
+					parsed.Name == "structural_edit" || parsed.Name == "move_file" ||
 					parsed.Name == "delete_file") {
 				if note := sessionManifestNote(ctx); note != "" {
 					ctx.Messages = append(ctx.Messages, AgentMessage{
@@ -1521,10 +1521,10 @@ func isContextOverflow(err error) bool {
 // May 2026 BiasBusters #2/#3 — per-step tool restriction. If the previous
 // turn ended in a write_file rejection on a .py/.html file >5 lines, the
 // model is biased toward retrying with edit_file (lexically closer to
-// write_file than ast_edit, despite ast_edit being correct for the case).
+// write_file than structural_edit, despite structural_edit being correct for the case).
 // We respond by (a) dropping edit_file and write_file from the GBNF
 // tool-name production for this single decision and (b) injecting an
-// ephemeral [system note] reminding the model that ast_edit is the only
+// ephemeral [system note] reminding the model that structural_edit is the only
 // available structural-edit tool for this step. ctx.Messages is not
 // mutated; the nudge and grammar restriction are scoped to this call.
 func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, error) {
@@ -1610,7 +1610,7 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 	}
 
 	note := fmt.Sprintf(
-		"[system note]: For this single decision, %s is unavailable. The previous write_file was rejected because the target is an existing %s file >5 lines. Use ast_edit with a structural selector (function:NAME, class:NAME, or <tag>) to rewrite the named node. ast_edit doesn't need old_str so it doesn't truncate on long content. Emit exactly one JSON object: {\"type\":\"tool_call\",\"name\":\"ast_edit\",\"args\":{\"path\":\"...\",\"selector\":\"...\",\"content\":\"...\"}}.",
+		"[system note]: For this single decision, %s is unavailable. The previous write_file was rejected because the target is an existing %s file >5 lines. Use structural_edit with a structural selector (function:NAME, class:NAME, or <tag>) to rewrite the named node. structural_edit doesn't need old_str so it doesn't truncate on long content. Emit exactly one JSON object: {\"type\":\"tool_call\",\"name\":\"structural_edit\",\"args\":{\"path\":\"...\",\"selector\":\"...\",\"content\":\"...\"}}.",
 		strings.Join(excluded, " and "),
 		strings.TrimPrefix(ext, "."),
 	)
@@ -1685,7 +1685,7 @@ func stepExclusions(ctx *AgentContext) ([]string, string) {
 			return nil, ""
 		}
 		// Ban write_file (just got rejected) and edit_file (the wrong
-		// shortcut the model is biased toward). Leave ast_edit and the
+		// shortcut the model is biased toward). Leave structural_edit and the
 		// read/run/etc tools available.
 		return []string{"edit_file", "write_file"}, ext
 	}
@@ -2266,7 +2266,7 @@ func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) b
 	// In accept-edits mode, file writes and edits are auto-approved;
 	// run_command and delete_file still prompt.
 	if ctx.PermissionMode == PermissionAcceptEdits {
-		if toolName == "write_file" || toolName == "edit_file" || toolName == "ast_edit" || toolName == "move_file" {
+		if toolName == "write_file" || toolName == "edit_file" || toolName == "structural_edit" || toolName == "move_file" {
 			return false
 		}
 	}
@@ -2301,18 +2301,18 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// Rules
 	sb.WriteString("## Rules\n\n")
 	sb.WriteString("- To work on an EXISTING file, navigate it cheaply first: call `outline_file` to list its functions/classes with line ranges, then `read_file` with `offset`/`limit` to read just the part you need (e.g. the buggy function). Don't dump a whole large file into context — and never re-read the same file in a loop; if a read's content is already in the conversation, act on it.\n")
-	sb.WriteString("- Always read the relevant code before editing it (outline_file → read_file, then edit_file/ast_edit).\n")
+	sb.WriteString("- Always read the relevant code before editing it (outline_file → read_file, then edit_file/structural_edit).\n")
 	sb.WriteString("- MANDATORY: Use `edit_file` (targeted old_str/new_str) for any change to a file that already exists, no matter how small. `write_file` is ONLY for creating brand-new files. The agent layer rejects every `write_file` call against an existing file >5 lines — your call won't execute and you'll get a tool error directing you to edit_file. Don't re-emit a whole file to change a few lines.\n")
 	sb.WriteString("  Example — to add a None check to one branch, use:\n")
 	sb.WriteString("    edit_file {\"path\":\"src/foo.py\",\"old_str\":\"if x == 0:\\n        return None\",\"new_str\":\"if x is None or x == 0:\\n        return None\"}\n")
 	sb.WriteString("  NOT write_file with the entire file's new contents.\n")
-	sb.WriteString("- For WHOLE-FUNCTION or WHOLE-ELEMENT rewrites, prefer `ast_edit` over `edit_file`. ast_edit takes a structural selector (`function:NAME`, `class:NAME`, `<tag>` for HTML) and replaces that single AST node — no need to copy the existing function as old_str. Selector must match exactly one node; ambiguous selectors return an error so you can be more specific. Decorators are included automatically when selecting a Python function. Available v1 only on `.py` and `.html`/`.htm` files.\n")
-	sb.WriteString("    ast_edit {\"path\":\"app.py\",\"selector\":\"function:dashboard\",\"content\":\"@app.route('/dashboard')\\ndef dashboard():\\n    return render_template('dashboard.html')\"}\n")
-	sb.WriteString("    ast_edit {\"path\":\"templates/index.html\",\"selector\":\"<body>\",\"content\":\"<body>\\n  <h1>Welcome</h1>\\n  ...\\n</body>\"}\n")
-	sb.WriteString("- WHEN write_file IS REJECTED for an existing file: if the file is `.py`, `.html`, or `.htm` and you're replacing the whole thing (e.g. swapping the entire body, replacing the dashboard function), use `ast_edit` next, not edit_file. ast_edit doesn't need `old_str` so it doesn't hit the max_tokens truncation that kills long edit_file calls. Use edit_file ONLY for surgical inline string changes (one line, one expression). This rule applies even when conversation trimming has dropped the original rejection message — re-derive the intent from the file extension and the size of your replacement.\n")
+	sb.WriteString("- For WHOLE-FUNCTION or WHOLE-ELEMENT rewrites, prefer `structural_edit` over `edit_file`. structural_edit takes a structural selector (`function:NAME`, `class:NAME`, `<tag>` for HTML) and replaces that one whole named block — no need to copy the existing function as old_str. Selector must match exactly one node; ambiguous selectors return an error so you can be more specific. Decorators are included automatically when selecting a Python function. Available v1 only on `.py` and `.html`/`.htm` files.\n")
+	sb.WriteString("    structural_edit {\"path\":\"app.py\",\"selector\":\"function:dashboard\",\"content\":\"@app.route('/dashboard')\\ndef dashboard():\\n    return render_template('dashboard.html')\"}\n")
+	sb.WriteString("    structural_edit {\"path\":\"templates/index.html\",\"selector\":\"<body>\",\"content\":\"<body>\\n  <h1>Welcome</h1>\\n  ...\\n</body>\"}\n")
+	sb.WriteString("- WHEN write_file IS REJECTED for an existing file: if the file is `.py`, `.html`, or `.htm` and you're replacing the whole thing (e.g. swapping the entire body, replacing the dashboard function), use `structural_edit` next, not edit_file. structural_edit doesn't need `old_str` so it doesn't hit the max_tokens truncation that kills long edit_file calls. Use edit_file ONLY for surgical inline string changes (one line, one expression). This rule applies even when conversation trimming has dropped the original rejection message — re-derive the intent from the file extension and the size of your replacement.\n")
 	sb.WriteString("- JSON strings in tool args contain LITERAL characters: write `<` not `&lt;`, `>` not `&gt;`, `&` not `&amp;`. The file content goes verbatim onto disk — `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` instead of `<!DOCTYPE>`. NEVER HTML-encode angle brackets inside `content`, `old_str`, or `new_str`.\n")
 	sb.WriteString("- The `content` you put in write_file / edit_file goes verbatim onto disk. **No markdown fences. No prose preamble (\"Looking at the task...\", \"Here's the file:\"). No trailing explanation.** Just the raw file contents. The agent layer strips fenced wrappers before writing, but the right move is to never emit them in the first place.\n")
-	sb.WriteString("- For CONTENT changes, prefer the dedicated tools — `edit_file` (targeted), `write_file` (new files), `ast_edit` (whole node) — they go through the validation pipeline. For moving / renaming / reorganizing files you may use either `move_file` or shell `mv`/`cp` via run_command; both work. `run_command` runs a real shell (in an isolated sandbox confined to this project), so ordinary file operations (mv, cp, mkdir, rm of a specific file, chmod) are fine. Only catastrophic commands are blocked: wiping the whole project (`rm -rf /`, `rm -rf .`, `rm -rf *`), fork bombs, and device/filesystem destruction.\n")
+	sb.WriteString("- For CONTENT changes, prefer the dedicated tools — `edit_file` (targeted), `write_file` (new files), `structural_edit` (whole node) — they go through the validation pipeline. For moving / renaming / reorganizing files you may use either `move_file` or shell `mv`/`cp` via run_command; both work. `run_command` runs a real shell (in an isolated sandbox confined to this project), so ordinary file operations (mv, cp, mkdir, rm of a specific file, chmod) are fine. Only catastrophic commands are blocked: wiping the whole project (`rm -rf /`, `rm -rf .`, `rm -rf *`), fork bombs, and device/filesystem destruction.\n")
 	sb.WriteString("- Use run_command to verify your changes (build, test, lint, curl). For \"fix\"/\"isn't working\" prompts, verify before `done`.\n")
 	sb.WriteString("- For LONG-RUNNING commands (servers): `run_background(cmd)` → `run_command(\"curl ...\")` → `stop_background(job_id)`. Don't use `timeout 5 ... || true` — server dies before probe hits.\n")
 	sb.WriteString("- When creating a project from scratch: create config/build files FIRST, verify they work (e.g., npm install, cargo check), THEN create feature code\n")
@@ -2593,7 +2593,7 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 	// model is working on never gets trimmed out from under it. Without
 	// the file pin, a long agent loop drops the file content, the model
 	// edits BLIND, and a weak model then hallucinates symbols and old_str
-	// that aren't in the file (observed live: ast_edit
+	// that aren't in the file (observed live: structural_edit
 	// function:count_items and edit_file old_str="return len(items)"
 	// against a file containing neither, with the model literally
 	// reasoning "I don't see the file content"). The exploration-budget
@@ -2932,7 +2932,7 @@ func classifyParseFailure(raw string) string {
 	embeddedToolCall := strings.Contains(stripped, `"type":"tool_call"`) ||
 		strings.Contains(stripped, `"type": "tool_call"`)
 	if htmlEntities && embeddedToolCall {
-		return "Your tool call has HTML-entity-encoded angle brackets (`&lt;` / `&gt;` / `&amp;`) inside the JSON string args. JSON strings should contain literal `<` and `>` — don't HTML-escape them. The file content goes verbatim onto disk; entities like `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` into the file, not `<!DOCTYPE>`. Re-emit with literal angle brackets. For HTML rewrites, ast_edit is also a good alternative — it takes `selector: \"<body>\"` and the content body, no old_str needed. Also: respond with ONLY the JSON object — no prose preamble."
+		return "Your tool call has HTML-entity-encoded angle brackets (`&lt;` / `&gt;` / `&amp;`) inside the JSON string args. JSON strings should contain literal `<` and `>` — don't HTML-escape them. The file content goes verbatim onto disk; entities like `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` into the file, not `<!DOCTYPE>`. Re-emit with literal angle brackets. For HTML rewrites, structural_edit is also a good alternative — it takes `selector: \"<body>\"` and the content body, no old_str needed. Also: respond with ONLY the JSON object — no prose preamble."
 	}
 	// Truncated tool_call detection: response starts with the tool-call
 	// preamble but doesn't have a properly closed args object. We look
@@ -2952,20 +2952,20 @@ func classifyParseFailure(raw string) string {
 			!strings.HasSuffix(stripped, "]")
 		if hasEditOrWrite && truncated {
 			// GH #39: when truncation hits on a whole-file replacement,
-			// ast_edit is the right tool — it takes a structural
+			// structural_edit is the right tool — it takes a structural
 			// selector (function:NAME, <tag>) instead of literal
 			// old_str, so the JSON envelope stays small. Steer the
 			// model toward it explicitly.
-			astHint := ""
+			structuralHint := ""
 			if strings.Contains(stripped, `&lt;`) || strings.Contains(stripped, `&gt;`) ||
 				strings.Contains(stripped, `<body>`) || strings.Contains(stripped, `<head>`) ||
 				strings.Contains(stripped, `def `) || strings.Contains(stripped, `class `) {
-				astHint = " For whole-function or whole-element replacements, use `ast_edit` instead — it takes a selector (e.g. `function:dashboard`, `<body>`) and drops `old_str` entirely, so it doesn't truncate."
+				structuralHint = " For whole-function or whole-element replacements, use `structural_edit` instead — it takes a selector (e.g. `function:dashboard`, `<body>`) and drops `old_str` entirely, so it doesn't truncate."
 			}
-			return "Your last tool call was TRUNCATED — the response hit the token cap mid-args. The fix is to shrink old_str/new_str: edit ONE function or block per call, not the whole file. If you need to change multiple routes/functions, do them in separate edit_file calls (one per turn). Common offenders: pasting all of app.py into old_str, embedding 5+ @app.route handlers in a single replacement." + astHint + " Respond now with a smaller edit_file or an ast_edit call."
+			return "Your last tool call was TRUNCATED — the response hit the token cap mid-args. The fix is to shrink old_str/new_str: edit ONE function or block per call, not the whole file. If you need to change multiple routes/functions, do them in separate edit_file calls (one per turn). Common offenders: pasting all of app.py into old_str, embedding 5+ @app.route handlers in a single replacement." + structuralHint + " Respond now with a smaller edit_file or a structural_edit call."
 		}
 		if htmlEntities {
-			return "Your tool call has HTML-entity-encoded angle brackets (`&lt;` / `&gt;`) inside the JSON string args. JSON strings should contain literal `<` and `>` — don't HTML-escape them. The file content goes verbatim onto disk; entities like `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` into the file, not `<!DOCTYPE>`. Re-emit with literal angle brackets. For HTML rewrites, ast_edit is also a good alternative — it takes `selector: \"<body>\"` and the content body, no old_str needed."
+			return "Your tool call has HTML-entity-encoded angle brackets (`&lt;` / `&gt;`) inside the JSON string args. JSON strings should contain literal `<` and `>` — don't HTML-escape them. The file content goes verbatim onto disk; entities like `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` into the file, not `<!DOCTYPE>`. Re-emit with literal angle brackets. For HTML rewrites, structural_edit is also a good alternative — it takes `selector: \"<body>\"` and the content body, no old_str needed."
 		}
 		if truncated {
 			return "Your tool call was truncated mid-args. Make a smaller call — keep `content`, `old_str`, and `new_str` short (under ~30 lines). Respond now with the corrected, smaller call."
@@ -3096,7 +3096,7 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 
 	// JSON was truncated (max_tokens hit mid-content) or otherwise
 	// malformed — try a generalized tool_call recovery for write_file,
-	// edit_file, and ast_edit. Identical shape (path + payload field),
+	// edit_file, and structural_edit. Identical shape (path + payload field),
 	// just different field names. If recovery succeeds, return it; if
 	// not, fall through to the diagnostic error below.
 	if recovered, ok := recoverTruncatedToolCall(raw[start:]); ok {
@@ -3184,7 +3184,7 @@ func liftMissingArgs(resp *ModelResponse, raw string) {
 
 // recoverTruncatedToolCall is the generalized counterpart to
 // recoverTruncatedWriteFile. May 9 2026: under BiasBusters mitigations
-// the model now reaches for ast_edit and edit_file too, and either can
+// the model now reaches for structural_edit and edit_file too, and either can
 // land malformed JSON (truncated content, stray escape) the same way
 // write_file used to. Old code only recovered write_file; everything
 // else just died with "could not parse JSON". Now we sniff the tool
@@ -3198,8 +3198,8 @@ func recoverTruncatedToolCall(partial string) (ModelResponse, bool) {
 		if r, err := recoverTruncatedWriteFile(partial); err == nil {
 			return r, true
 		}
-	case strings.Contains(partial, `"name":"ast_edit"`) || strings.Contains(partial, `"name": "ast_edit"`):
-		if r, err := recoverTruncatedAstEdit(partial); err == nil {
+	case strings.Contains(partial, `"name":"structural_edit"`) || strings.Contains(partial, `"name": "structural_edit"`):
+		if r, err := recoverTruncatedStructuralEdit(partial); err == nil {
 			return r, true
 		}
 	case strings.Contains(partial, `"name":"edit_file"`) || strings.Contains(partial, `"name": "edit_file"`):
@@ -3263,29 +3263,29 @@ func extractStringField(partial, field string) (string, bool) {
 	return "", false
 }
 
-// recoverTruncatedAstEdit recovers an ast_edit tool call whose JSON
-// envelope didn't survive the parser. ast_edit's args are
+// recoverTruncatedStructuralEdit recovers a structural_edit tool call whose JSON
+// envelope didn't survive the parser. structural_edit's args are
 // {path, selector, content} — same shape as write_file but with an
 // additional selector field that's always short (function:NAME,
 // class:NAME, <tag>) so it lands intact even on truncation. The
 // content is the long field that gets cut.
-func recoverTruncatedAstEdit(partial string) (ModelResponse, error) {
+func recoverTruncatedStructuralEdit(partial string) (ModelResponse, error) {
 	path, ok := extractStringField(partial, "path")
 	if !ok || path == "" {
-		return ModelResponse{}, fmt.Errorf("ast_edit recovery: missing path")
+		return ModelResponse{}, fmt.Errorf("structural_edit recovery: missing path")
 	}
 	selector, ok := extractStringField(partial, "selector")
 	if !ok || selector == "" {
-		return ModelResponse{}, fmt.Errorf("ast_edit recovery: missing selector")
+		return ModelResponse{}, fmt.Errorf("structural_edit recovery: missing selector")
 	}
 	content, ok := extractStringField(partial, "content")
 	if !ok {
-		return ModelResponse{}, fmt.Errorf("ast_edit recovery: missing content")
+		return ModelResponse{}, fmt.Errorf("structural_edit recovery: missing content")
 	}
-	args, _ := json.Marshal(AstEditInput{Path: path, Selector: selector, Content: content})
-	log.Printf("[agent] recovered truncated ast_edit: path=%s selector=%q content=%d chars",
+	args, _ := json.Marshal(StructuralEditInput{Path: path, Selector: selector, Content: content})
+	log.Printf("[agent] recovered truncated structural_edit: path=%s selector=%q content=%d chars",
 		path, selector, len(content))
-	return ModelResponse{Type: "tool_call", Name: "ast_edit", Args: args}, nil
+	return ModelResponse{Type: "tool_call", Name: "structural_edit", Args: args}, nil
 }
 
 // recoverTruncatedEditFile recovers an edit_file tool call. Args are

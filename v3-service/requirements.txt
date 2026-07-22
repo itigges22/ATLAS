@@ -5,7 +5,7 @@
 # the pin here documents the runtime contract and lets pip verify the
 # preinstalled wheel satisfies it.
 #
-# tree-sitter grammars back /internal/ast_edit and the call-graph
+# tree-sitter grammars back /internal/structural_edit and the call-graph
 # reasoning (#39); the language set matches the selector translator —
 # extend here when adding a language.
 torch==2.13.0

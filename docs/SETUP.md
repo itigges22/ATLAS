@@ -445,7 +445,7 @@ The checks:
 | Host | metal-native | native llama-server binary present and executable — only when `ATLAS_BACKEND=metal` (macOS hybrid) |
 | Host | model_file | The `ATLAS_MODEL_FILE` selected in `.env` exists and is > 100 MB |
 | Host | lens_weights | `cost_field.pt` + G(x) artifacts present |
-| Host | asa_steering | `ast_edit_steering.gguf` present (BiasBusters #4 — warn-not-fail; ATLAS works without it, just unsteered ast_edit-vs-edit_file bias) |
+| Host | asa_steering | `ast_edit_steering.gguf` present (BiasBusters #4 — warn-not-fail; ATLAS works without it, just unsteered structural_edit-vs-edit_file bias) |
 | Host | tier_match | `.env` model selection matches host hardware (warn on overshoot — OOM risk — pass on match or undershoot) |
 | Host | tier_constraints | host CPU/RAM/disk meets the recommended tier minimums (catches "16 GB GPU but 8 GB RAM" mismatches) |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 5 running and healthy |
@@ -891,7 +891,7 @@ Full reference: [CLI.md § atlas lens](CLI.md#atlas-lens).
 ## ASA Steering Vector (Auto-Built)
 
 May 2026 BiasBusters #4. A residual-stream steering vector that biases
-the model toward `ast_edit` over `edit_file` for whole-function /
+the model toward `structural_edit` over `edit_file` for whole-function /
 class / element rewrites, applied **before** the grammar gate has a
 chance to reject anything. Strictly optional — ATLAS continues to work
 without it, just with an unsteered tool-selection bias.

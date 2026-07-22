@@ -31,8 +31,8 @@ func extractMatchValue(toolName string, args json.RawMessage) string {
 		if err := json.Unmarshal(args, &input); err == nil {
 			return input.Path
 		}
-	case "ast_edit":
-		var input AstEditInput
+	case "structural_edit":
+		var input StructuralEditInput
 		if err := json.Unmarshal(args, &input); err == nil {
 			return input.Path
 		}
@@ -189,7 +189,7 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 		if reason := denyCommandReason(input.Command); reason != "" {
 			return true, reason
 		}
-	case "write_file", "edit_file", "ast_edit":
+	case "write_file", "edit_file", "structural_edit":
 		if reason := denyWritePathReason(extractMatchValue(toolName, args)); reason != "" {
 			return true, reason
 		}

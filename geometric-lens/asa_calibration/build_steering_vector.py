@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the ast_edit-vs-edit_file ASA steering vector from contrast pairs.
+"""Build the structural_edit-vs-edit_file ASA steering vector from contrast pairs.
 
 Algorithm (matches the Feb 2026 ASA paper, arxiv 2602.04935):
   1. For each (positive, negative) pair, extract per-token residual stream
@@ -8,7 +8,7 @@ Algorithm (matches the Feb 2026 ASA paper, arxiv 2602.04935):
   2. Mean across tokens to get one vector per prompt.
   3. Mean across all positive prompts → v_pos. Same for negatives → v_neg.
   4. v_global = v_pos − v_neg. This is the direction in residual space
-     that distinguishes "about to emit ast_edit" from "about to emit
+     that distinguishes "about to emit structural_edit" from "about to emit
      edit_file" on the same task.
   5. Write as a GGUF control vector that llama-server's
      --control-vector-scaled flag consumes.
@@ -122,7 +122,7 @@ def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray,
                       layer_count if layer_count > 0 else layer + 1)
     writer.add_string(
         "general.description",
-        f"ATLAS BiasBusters #4 ASA — ast_edit vs edit_file (n={n_pairs} pairs, layer {layer})",
+        f"ATLAS BiasBusters #4 ASA — structural_edit vs edit_file (n={n_pairs} pairs, layer {layer})",
     )
     # llama.cpp expects shape [hidden_dim] f32 named direction.N
     writer.add_tensor(f"direction.{layer}", vector.astype(np.float32))
@@ -135,7 +135,7 @@ def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", required=True, type=Path,
-                    help="contrast_pairs.jsonl — paired ast_edit/edit_file prompts")
+                    help="contrast_pairs.jsonl — paired structural_edit/edit_file prompts")
     ap.add_argument("--out", required=True, type=Path,
                     help="output GGUF control vector path")
     ap.add_argument("--layer", type=int, required=True,
@@ -172,7 +172,7 @@ def main() -> int:
         except Exception as exc:
             print(f"[{i}] extraction failed: {exc}", file=sys.stderr)
             return 2
-        if pair["label"] == "ast_edit":
+        if pair["label"] == "structural_edit":
             pos_means.append(mean_vec)
         elif pair["label"] == "edit_file":
             neg_means.append(mean_vec)
@@ -193,7 +193,7 @@ def main() -> int:
 
     if not pos_means or not neg_means:
         print(
-            f"need both ast_edit and edit_file pairs; got pos={len(pos_means)} neg={len(neg_means)}",
+            f"need both structural_edit and edit_file pairs; got pos={len(pos_means)} neg={len(neg_means)}",
             file=sys.stderr,
         )
         return 2

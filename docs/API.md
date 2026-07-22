@@ -71,7 +71,7 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 |-------|------|---------|-------------|
 | `message` | string | (required) | The user's request |
 | `working_dir` | string | `"."` | Host-side working directory. Inside the proxy container this is overridden to `ATLAS_WORKSPACE_DIR` (the bind-mount target — `/workspace` by default). The startup wrapper aligns the bind mount to the user's cwd, so writes land in the right place. |
-| `mode` | string | `"default"` | Permission mode: `"default"` (prompt for destructive ops), `"accept-edits"` (auto-approve `write_file`/`edit_file`/`ast_edit`/`move_file`, prompt for delete/run), `"yolo"` (auto-approve everything) |
+| `mode` | string | `"default"` | Permission mode: `"default"` (prompt for destructive ops), `"accept-edits"` (auto-approve `write_file`/`edit_file`/`structural_edit`/`move_file`, prompt for delete/run), `"yolo"` (auto-approve everything) |
 | `session_id` | string | `""` | Required for `/cancel` and for the interactive permission prompt (`/v1/permission`). The proxy keys the cancel handle and pending permission requests by this id while the turn is running. **Without a session_id, destructive tool calls in `default`/`accept-edits` mode are denied** (there is no channel to answer the prompt) — unattended clients use `mode:"yolo"` or pre-approve tools via `session_allowed_tools`. |
 | `history` | array | `[]` | Optional. Prior-turn `{role, content}` messages (`"user"` / `"assistant"`) the client wants replayed into the conversation before the new message. Capped at the most recent 40 entries. Omit for a single-turn request. |
 | `session_allowed_tools` | array | `[]` | Optional. Tool names the user has approved for the whole session (e.g. from an "allow for session" choice). The proxy skips the interactive permission prompt for these. The client re-sends the current list on each turn. |
@@ -393,9 +393,9 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
 | `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Cheaper than `read_file` for orienting in a large file. |
-| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `ast_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
-| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `ast_edit`. |
-| `ast_edit` | Surgical replacement of a named AST node. Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. Same structural gate as `edit_file` on the composed post-edit `.py` file. |
+| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
+| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
+| `structural_edit` | Surgical replacement of one whole named block (function, class, or HTML element). Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. Same structural gate as `edit_file` on the composed post-edit `.py` file. |
 | `delete_file` | Remove a file (or an empty directory) from the workspace |
 | `move_file` | Rename/move a file within the workspace (`source` → `destination`) |
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
@@ -590,9 +590,9 @@ The final `event: result` payload has the shape:
 
 If all candidates fail to parse, the endpoint returns a single-step fallback (`{steps:[{action:"investigate the request and act"}], verify_step:null, winning_index:-1}`) rather than 5xx — callers can detect the fallback by `winning_index<0` or `reasons` containing "all candidates failed".
 
-### POST /internal/ast_edit
+### POST /internal/structural_edit
 
-Friendly-selector AST node replacement. Stateless transform: caller provides the file's source bytes, server parses with tree-sitter, finds the named node, returns the new full file content. The proxy reads + writes; this endpoint never touches the filesystem.
+Friendly-selector named-node replacement. Stateless transform: caller provides the file's source bytes, server parses with tree-sitter, finds the named node, returns the new full file content. The proxy reads + writes; this endpoint never touches the filesystem.
 
 **Request:**
 ```json
@@ -655,13 +655,13 @@ Resolve user-message symbol references against project source. The proxy extract
 }
 ```
 
-Decorator-aware (matches `ast_edit`'s behavior): a function with `@app.route(...)` returns the byte range of the wrapping `decorated_definition`, so the snippet includes the decorator line. Skips nested functions and methods inside classes — top-level definitions only in v1.
+Decorator-aware (matches `structural_edit`'s behavior): a function with `@app.route(...)` returns the byte range of the wrapping `decorated_definition`, so the snippet includes the decorator line. Skips nested functions and methods inside classes — top-level definitions only in v1.
 
 Stateless: each call rebuilds the index from the file_map. No caching.
 
 ### POST /internal/cyclomatic_complexity
 
-McCabe cyclomatic complexity from tree-sitter AST traversal. Used by the proxy's `classifyFileTier` to *escalate* (never downgrade) the regex-based tier verdict when real branching complexity warrants the V3 pipeline.
+McCabe cyclomatic complexity from tree-sitter syntax-tree traversal. Used by the proxy's `classifyFileTier` to *escalate* (never downgrade) the regex-based tier verdict when real branching complexity warrants the V3 pipeline.
 
 **Request:**
 ```json
@@ -682,7 +682,7 @@ v1 supports Python only. Decision points counted: `if`/`elif`, `for`, `while`, `
 
 ### POST /internal/outline
 
-Top-level function/class listing for a file — the backend of the proxy's `outline_file` tool. Uses the same decorator-aware tree-sitter walk as `ast_edit`, so any symbol the outline names is selectable by `ast_edit` with the same name. Bodies are not returned. `.py` only (`supported: false` otherwise — the proxy falls back to a regex outline).
+Top-level function/class listing for a file — the backend of the proxy's `outline_file` tool. Uses the same decorator-aware tree-sitter walk as `structural_edit`, so any symbol the outline names is selectable by `structural_edit` with the same name. Bodies are not returned. `.py` only (`supported: false` otherwise — the proxy falls back to a regex outline).
 
 **Request:**
 ```json
@@ -703,7 +703,7 @@ When `ATLAS_CALL_GRAPH` is enabled, each symbol additionally carries its intra-f
 
 ### POST /internal/pycheck
 
-Parse-check Python source without executing it (pure `compile()`). Used by the proxy's `edit_file` path to refuse writing a `.py` file the edit would break — the same gate `ast_edit` applies post-splice.
+Parse-check Python source without executing it (pure `compile()`). Used by the proxy's `edit_file` path to refuse writing a `.py` file the edit would break — the same gate `structural_edit` applies post-splice.
 
 **Request:**
 ```json
@@ -717,7 +717,7 @@ Parse-check Python source without executing it (pure `compile()`). Used by the p
 
 ### POST /internal/structural_check
 
-Resolve every direct-identifier call in a Python source against its local defs, imports, bound names, builtins, and (optionally) supplied project symbols — without executing it. Used by the proxy's structural gate (#147) on the `.py` write paths (`edit_file`, `ast_edit`, and the `write_file` branches; under BypassV3 only the non-iterating T0/T1 direct `write_file` is excepted) to refuse content that introduces a `NameError`: a call to a name the file never binds parses fine but 500s at request time.
+Resolve every direct-identifier call in a Python source against its local defs, imports, bound names, builtins, and (optionally) supplied project symbols — without executing it. Used by the proxy's structural gate (#147) on the `.py` write paths (`edit_file`, `structural_edit`, and the `write_file` branches; under BypassV3 only the non-iterating T0/T1 direct `write_file` is excepted) to refuse content that introduces a `NameError`: a call to a name the file never binds parses fine but 500s at request time.
 
 **Request:**
 ```json
