@@ -1,7 +1,7 @@
 """Typed configuration schema + validator for the ATLAS `.env`.
 
-A single typed spec for the ATLAS_* knobs: type (int/port/bool/enum/
-str), range, allowed values, and deprecation. `validate()` returns
+A single typed spec for the ATLAS_* knobs: type (int/float/port/bool/
+enum/str), range, allowed values, and deprecation. `validate()` returns
 structured problems (type errors, out-of-range, bad enum, unknown keys,
 deprecated keys) so misconfiguration is caught before startup rather
 than surfacing as an opaque container failure.
@@ -21,10 +21,11 @@ _BOOLS = {"0", "1", "true", "false", "yes", "no"}
 
 @dataclass
 class Field:
-    kind: str  # int | port | bool | enum | str
+    kind: str  # int | float | port | bool | enum | str
     enum: Optional[Tuple[str, ...]] = None
-    min: Optional[int] = None
-    max: Optional[int] = None
+    # int for int/port fields, int or float for float fields.
+    min: Optional[float] = None
+    max: Optional[float] = None
     deprecated: Optional[str] = None  # reason/replacement if deprecated
 
 
@@ -52,6 +53,16 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_DEDUP_READS": Field("bool"),
     "ATLAS_SANDBOX_NET_INTERNAL": Field("bool"),
     "ATLAS_MAX_TOKENS": Field("int", min=0, max=1_000_000),
+    # Repetition-control sampling forwarded to llama-server. DRY scores
+    # repeated sequences; repeat_penalty scores individual tokens and is off
+    # by default because it degrades code, where indentation and keywords
+    # repeat legitimately. 1.0 means "no penalty" for repeat_penalty.
+    "ATLAS_DRY_MULTIPLIER": Field("float", min=0, max=10),
+    "ATLAS_DRY_BASE": Field("float", min=1, max=10),
+    "ATLAS_DRY_ALLOWED_LENGTH": Field("int", min=1, max=1000),
+    "ATLAS_DRY_PENALTY_LAST_N": Field("int", min=-1, max=2_000_000),
+    "ATLAS_REPEAT_PENALTY": Field("float", min=0.5, max=2),
+    "ATLAS_REPEAT_LAST_N": Field("int", min=0, max=100_000),
     "ATLAS_MAX_TURNS": Field("int", min=0, max=1000),
     "ATLAS_LENS_RETRAIN_MIN": Field("int", min=0, max=10_000_000),
     "ATLAS_SANDBOX_PIDS": Field("int", min=1, max=1_000_000),
@@ -127,6 +138,16 @@ def _check_value(key: str, val: str, spec: Field) -> Optional[str]:
             return f"{key}={n}: below minimum {lo}"
         if hi is not None and n > hi:
             return f"{key}={n}: above maximum {hi}"
+        return None
+    if spec.kind == "float":
+        try:
+            f = float(val)
+        except ValueError:
+            return f"{key}={val!r}: expected a number"
+        if spec.min is not None and f < spec.min:
+            return f"{key}={f}: below minimum {spec.min}"
+        if spec.max is not None and f > spec.max:
+            return f"{key}={f}: above maximum {spec.max}"
         return None
     return None  # str: presence only
 

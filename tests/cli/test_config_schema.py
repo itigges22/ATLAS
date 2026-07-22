@@ -108,3 +108,30 @@ def test_migrate_preserves_comments_and_blanks(tmp_path):
     assert "ATLAS_CTX_SIZE=131072" in out
     assert "ATLAS_CONFIG_SCHEMA_VERSION=1" in out
     assert (tmp_path / ".env.bak").exists()   # backup written
+
+
+def test_float_fields_validate_range_and_type():
+    """Repetition-sampling knobs are floats; the schema gained a float kind
+    for them rather than demoting them to unvalidated strings."""
+    ok = cs.validate({"ATLAS_DRY_MULTIPLIER": "0.8", "ATLAS_REPEAT_PENALTY": "1.15"})
+    assert ok["errors"] == [], ok["errors"]
+
+    bad_type = cs.validate({"ATLAS_DRY_MULTIPLIER": "aggressive"})
+    assert any("expected a number" in e for e in bad_type["errors"])
+
+    # repeat_penalty below 0.5 would boost repetition instead of damping it.
+    out_of_range = cs.validate({"ATLAS_REPEAT_PENALTY": "0.1"})
+    assert any("below minimum" in e for e in out_of_range["errors"])
+
+    # Integers are valid floats — 1 must be accepted for a float field.
+    assert cs.validate({"ATLAS_DRY_BASE": "2"})["errors"] == []
+
+
+def test_repetition_sampling_keys_are_known():
+    """These reach llama-server through docker-compose; an unknown-key
+    warning here would mean the .env passthrough is unvalidated."""
+    for key in (
+        "ATLAS_DRY_MULTIPLIER", "ATLAS_DRY_BASE", "ATLAS_DRY_ALLOWED_LENGTH",
+        "ATLAS_DRY_PENALTY_LAST_N", "ATLAS_REPEAT_PENALTY", "ATLAS_REPEAT_LAST_N",
+    ):
+        assert key in cs.SCHEMA, f"{key} missing from SCHEMA"
