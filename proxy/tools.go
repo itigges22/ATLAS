@@ -2632,7 +2632,7 @@ func findFileTool() *ToolDef {
 func runCommandTool() *ToolDef {
 	return &ToolDef{
 		Name:        "run_command",
-		Description: "Execute a shell command. Returns stdout, stderr, and exit code. Use for building, testing, and verifying code.",
+		Description: "Execute a shell command and WAIT for it to exit. Returns stdout, stderr, and exit code. Use for building, testing, and verifying code: `pytest`, `npm test`, `go build`, `curl`, `ls`. NOT for anything that doesn't exit on its own — a server, watcher, or `--watch` build blocks here until the timeout kills it, and the port it bound may still be held when you retry, so the identical command fails again with \"address already in use\". Use `run_background` for those.",
 		InputSchema: RunCommandInput{},
 		ReadOnly:    false,
 		Destructive: true,

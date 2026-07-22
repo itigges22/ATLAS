@@ -1054,3 +1054,33 @@ func TestGateTriggerPrefersTheConcreteSignal(t *testing.T) {
 		t.Fatalf("gateTrigger(false,false) = %q, want none", got)
 	}
 }
+
+// --- tool-choice boundaries in descriptions --------------------------------
+
+// The 2026-07-21 port-conflict loop: the model started a blocking dev server
+// with run_command, it was killed at the timeout, and the identical command
+// was reissued twice more. run_background's description already named
+// `python app.py`; run_command's said only "Execute a shell command", so
+// nothing marked the boundary and the generic tool won. Descriptions are
+// surfaced to the model by buildToolDescriptionsExcluding, so this is the
+// text it actually reads when choosing.
+func TestRunCommandDescriptionRedirectsLongRunningWork(t *testing.T) {
+	docs := buildToolDescriptionsExcluding(nil)
+
+	for _, want := range []string{"run_background", "doesn't exit"} {
+		if !strings.Contains(docs, want) {
+			t.Fatalf("tool docs missing %q — run_command must mark the boundary it does not cover", want)
+		}
+	}
+	if !strings.Contains(docs, "WAIT for it to exit") {
+		t.Fatal("run_command description must state that it blocks, which is what makes it wrong for servers")
+	}
+}
+
+// Both tools must not claim the same job.
+func TestRunBackgroundDescriptionOwnsServers(t *testing.T) {
+	docs := buildToolDescriptionsExcluding(nil)
+	if !strings.Contains(docs, "python app.py") {
+		t.Fatal("run_background should keep naming a concrete server command — that specificity is what makes it selectable")
+	}
+}
