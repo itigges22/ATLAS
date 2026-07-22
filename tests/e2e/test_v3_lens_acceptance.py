@@ -44,7 +44,7 @@ import pytest
 
 from tests.e2e import conftest
 from tests.e2e.conftest import (
-    PROXY_BINARY, REPO, drive_agent_turn, free_port, ordered_subsequence,
+    REPO, drive_agent_turn, free_port, ordered_subsequence,
     sandbox_deps_available, start_proxy, proxy_binary_available,
     SKIP_NO_PROXY_BINARY, wait_for_port,
 )

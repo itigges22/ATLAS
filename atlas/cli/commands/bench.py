@@ -51,7 +51,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
 
     # Connectivity (llama/RAG URLs, model name) is resolved by benchmark.config
     # from the deployment's .env / atlas.conf — nothing model- or
-    # deployment-specific is pinned here. An explicit LLAMA_URL/RAG_API_URL in
+    # deployment-specific is pinned here. An explicit LLAMA_URL/LENS_URL in
     # the environment still wins. Generation stays serialized (the safe
     # default for any architecture).
     env = os.environ.copy()

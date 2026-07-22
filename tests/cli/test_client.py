@@ -102,3 +102,37 @@ def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
     tokens = [text for text, _done in client.chat_stream(
         [{"role": "user", "content": "q"}])]
     assert tokens == ["<think>", "pondering", "</think>", "print(42)"]
+
+
+# --- lens URL resolution ---------------------------------------------------
+
+def _reload_client(monkeypatch, env):
+    """Re-import client with a controlled environment (URLs bind at import)."""
+    import importlib
+    for k in ("ATLAS_LENS_URL", "ATLAS_RAG_URL"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    return importlib.reload(client)
+
+
+def test_lens_url_prefers_current_name_over_deprecated(monkeypatch):
+    """ATLAS_LENS_URL must win. It previously lost to ATLAS_RAG_URL, so the
+    documented current name was overridden by the name it replaced."""
+    mod = _reload_client(monkeypatch, {
+        "ATLAS_LENS_URL": "http://current:1111",
+        "ATLAS_RAG_URL": "http://deprecated:2222",
+    })
+    try:
+        assert mod.LENS_URL == "http://current:1111"
+    finally:
+        _reload_client(monkeypatch, {})
+
+
+def test_lens_url_still_honours_deprecated_name(monkeypatch):
+    """An existing .env carrying only ATLAS_RAG_URL keeps working."""
+    mod = _reload_client(monkeypatch, {"ATLAS_RAG_URL": "http://deprecated:2222"})
+    try:
+        assert mod.LENS_URL == "http://deprecated:2222"
+    finally:
+        _reload_client(monkeypatch, {})

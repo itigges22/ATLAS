@@ -11,8 +11,17 @@ from atlas.cli import compose as compose_config
 
 # Shell env wins; otherwise the Docker .env's port keys drive the URLs.
 INFERENCE_URL = compose_config.service_url("llama")
-RAG_API_URL = (os.environ.get("ATLAS_RAG_URL")
-               or compose_config.service_url("lens"))
+# geometric-lens. Called RAG_API_URL until the retrieval stack was removed —
+# every call through it is lens scoring or sandbox analysis, never retrieval.
+#
+# ATLAS_LENS_URL is the current name and now wins. ATLAS_RAG_URL is the
+# pre-rename spelling, kept as a fallback so an existing .env keeps working;
+# it used to be read first, which gave the deprecated name precedence over
+# its own replacement. service_url("lens") supplies the port-derived default
+# (and reads ATLAS_LENS_URL itself, so the first term is belt-and-braces).
+LENS_URL = (os.environ.get("ATLAS_LENS_URL")
+            or os.environ.get("ATLAS_RAG_URL")
+            or compose_config.service_url("lens"))
 SANDBOX_URL = compose_config.service_url("sandbox")
 MODEL_NAME = os.environ.get("ATLAS_MODEL_NAME", "local-model")
 
@@ -55,9 +64,9 @@ def check_llama() -> Tuple[bool, str]:
     return True, "unknown"
 
 
-def check_rag_api() -> Tuple[bool, str]:
+def check_lens() -> Tuple[bool, str]:
     try:
-        d = _get(f"{RAG_API_URL}/health")
+        d = _get(f"{LENS_URL}/health")
         return True, d.get("status", "ok")
     except Exception as e:
         return False, str(e)
@@ -246,7 +255,7 @@ def score_code(code: str) -> Tuple[float, float]:
     """Score code through Geometric Lens. Returns (energy, normalized)."""
     try:
         d = _post(
-            f"{RAG_API_URL}/internal/lens/score-text",
+            f"{LENS_URL}/internal/lens/score-text",
             {"text": f"SOLUTION: {code}"},
             timeout=30,
         )
@@ -262,7 +271,7 @@ def score_code_combined(code: str) -> dict:
     """
     try:
         d = _post(
-            f"{RAG_API_URL}/internal/lens/gx-score",
+            f"{LENS_URL}/internal/lens/gx-score",
             {"text": f"SOLUTION: {code}"},
             timeout=30,
         )
@@ -286,7 +295,7 @@ def analyze_sandbox(code: str, passed: bool, stdout: str, stderr: str,
     """Analyze sandbox result with structured error classification and G(x) scoring."""
     try:
         return _post(
-            f"{RAG_API_URL}/internal/sandbox/analyze",
+            f"{LENS_URL}/internal/sandbox/analyze",
             {
                 "code": code,
                 "passed": passed,

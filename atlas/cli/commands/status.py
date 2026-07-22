@@ -15,7 +15,7 @@ def status():
         display.error(f"llama-server: {detail}")
 
     # geometric-lens
-    ok, detail = client.check_rag_api()
+    ok, detail = client.check_lens()
     if ok:
         display.success(f"Lens: {detail}")
     else:

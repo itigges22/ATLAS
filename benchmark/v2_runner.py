@@ -47,7 +47,7 @@ from benchmark.best_of_k import score_candidate, get_temperature, BestOfKTracker
 
 # --- Constants ----------------------------------------------------------------
 
-RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
+LENS_URL = os.environ.get("LENS_URL", "http://localhost:31144")
 MAX_TOKENS = 16384
 TEMPERATURE = 0.0
 
@@ -85,7 +85,7 @@ def query_v2_signals(prompt):
     try:
         body = json.dumps({"query": prompt[:500]}).encode('utf-8')
         req = urllib.request.Request(
-            f"{RAG_API_URL}/internal/lens/evaluate",
+            f"{LENS_URL}/internal/lens/evaluate",
             data=body, headers={'Content-Type': 'application/json'}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -95,7 +95,7 @@ def query_v2_signals(prompt):
         # best-effort: swallow on failure (caller continues)
         pass
     try:
-        req = urllib.request.Request(f"{RAG_API_URL}/internal/cache/stats")
+        req = urllib.request.Request(f"{LENS_URL}/internal/cache/stats")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             signals["cache_score"] = data.get("hit_rate", 0.0)
@@ -177,7 +177,7 @@ def _trigger_retrain(tracker, max_epoch):
 
     body = json.dumps({"training_data": payload, "epochs": 50}).encode('utf-8')
     req = urllib.request.Request(
-        f"{RAG_API_URL}/internal/lens/retrain",
+        f"{LENS_URL}/internal/lens/retrain",
         data=body,
         headers={'Content-Type': 'application/json'},
     )
@@ -274,7 +274,7 @@ class V2BenchmarkRunner:
             if task_result.attempts:
                 best_code = task_result.attempts[-1].generated_code
                 if best_code:
-                    energy, normalized = score_candidate(best_code, RAG_API_URL)
+                    energy, normalized = score_candidate(best_code, LENS_URL)
                     signals["geometric_energy"] = normalized
 
             telemetry = collect_v2_telemetry(task.task_id, benchmark_name, {
@@ -464,7 +464,7 @@ class V2BenchmarkRunner:
                     generated_code = response
                 else:
                     generated_code = extract_code(response)
-                energy, normalized = score_candidate(generated_code, RAG_API_URL)
+                energy, normalized = score_candidate(generated_code, LENS_URL)
                 code_hash = hashlib.md5(generated_code.encode()).hexdigest()[:8]
                 return {
                     "index": index, "response": response,

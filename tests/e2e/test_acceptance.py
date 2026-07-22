@@ -24,7 +24,6 @@ locally): the proxy binary at $ATLAS_PROXY_BINARY (default
 
 import http.server
 import json
-import os
 import shutil
 import threading
 import uuid
@@ -32,7 +31,7 @@ import uuid
 import pytest
 
 from tests.e2e.conftest import (
-    PROXY_BINARY, drive_agent_turn, free_port, ordered_subsequence,
+    drive_agent_turn, free_port, ordered_subsequence,
     sandbox_deps_available, start_proxy, proxy_binary_available,
     SKIP_NO_PROXY_BINARY,
 )

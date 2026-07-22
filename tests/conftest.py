@@ -33,7 +33,7 @@ IN_CLUSTER = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token
 
 if IN_CLUSTER:
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://api-portal:3000")
-    RAG_API_URL = os.environ.get("RAG_API_URL", "http://geometric-lens:8099")
+    LENS_URL = os.environ.get("LENS_URL", "http://geometric-lens:8099")
     LLAMA_URL = os.environ.get("LLAMA_URL", "http://llama-service:8000")
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://llm-proxy:8000")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://sandbox:8020")
@@ -45,12 +45,12 @@ else:
     try:
         from benchmark.config import config as _atlas_config
         _llama_default = _atlas_config.llama_url
-        _rag_default = _atlas_config.rag_url
+        _lens_default = _atlas_config.rag_url
     except Exception:
         _llama_default = "http://localhost:32735"
-        _rag_default = "http://localhost:31144"
+        _lens_default = "http://localhost:31144"
     API_PORTAL_URL = os.environ.get("API_PORTAL_URL", "http://localhost:30000")
-    RAG_API_URL = os.environ.get("RAG_API_URL", _rag_default)
+    LENS_URL = os.environ.get("LENS_URL", _lens_default)
     LLAMA_URL = os.environ.get("LLAMA_URL", _llama_default)
     LLM_PROXY_URL = os.environ.get("LLM_PROXY_URL", "http://localhost:30080")
     SANDBOX_URL = os.environ.get("SANDBOX_URL", "http://localhost:30820")
@@ -89,7 +89,7 @@ if _HAS_HTTPX:
     @pytest.fixture(scope="session")
     def rag_api_client() -> Generator:
         """HTTP client for Geometric Lens service."""
-        with httpx.Client(base_url=RAG_API_URL, timeout=DEFAULT_TIMEOUT) as client:
+        with httpx.Client(base_url=LENS_URL, timeout=DEFAULT_TIMEOUT) as client:
             yield client
 
     @pytest.fixture(scope="session")

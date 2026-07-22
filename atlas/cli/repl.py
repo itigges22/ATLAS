@@ -623,13 +623,13 @@ def _ensure_proxy(required_capability: Optional[str] = None) -> bool:
 def startup_checks() -> bool:
     """Run startup health checks."""
     llm_ok, llm_model = client.check_llama()
-    rag_ok, _ = client.check_rag_api()
+    lens_ok, _ = client.check_lens()
     sandbox_ok, _ = client.check_sandbox()
 
     if llm_ok:
         display.status_block(
             model=llm_model,
-            lens="connected" if rag_ok else "unavailable",
+            lens="connected" if lens_ok else "unavailable",
             sandbox="ready" if sandbox_ok else "unavailable",
         )
     else:
@@ -637,7 +637,7 @@ def startup_checks() -> bool:
         display.info("Start llama-server first (see inference/ entrypoints)")
         return False
 
-    if not rag_ok:
+    if not lens_ok:
         display.warn("Lens unavailable — verification disabled")
     if not sandbox_ok:
         display.warn("Sandbox unavailable — code testing disabled")

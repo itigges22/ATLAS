@@ -557,7 +557,7 @@ generates a candidate per task, executes it, and writes per-task results with
 `code` + `passed` labels. This is the candidate-build step of model onboarding —
 its output feeds `atlas lens build --from-results`. Connectivity (llama/lens
 URLs) resolves from the deployment's config (`.env` on Docker, `atlas.conf` on
-K3s); explicit `LLAMA_URL`/`RAG_API_URL` env vars override.
+K3s); explicit `LLAMA_URL`/`ATLAS_LENS_URL` env vars override.
 
 ```bash
 atlas bench --tasks 15                       # quick sanity subset

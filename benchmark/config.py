@@ -150,9 +150,9 @@ class BenchmarkConfig:
     @property
     def rag_url(self) -> str:
         """URL for the geometric-lens / RAG service. Same resolution order as
-        llama_url: RAG_API_URL env → in-cluster DNS → Docker .env
+        llama_url: LENS_URL env → in-cluster DNS → Docker .env
         (ATLAS_LENS_PORT) → K3s NodePort."""
-        url = os.environ.get("RAG_API_URL")
+        url = os.environ.get("LENS_URL")
         if url:
             return url
         if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):

@@ -32,7 +32,7 @@ def make_collector(telemetry_dir, enabled=True, interval=5, min_pass=2,
             retrain_interval=interval,
             min_pass=min_pass,
             min_fail=min_fail,
-            rag_api_url="http://localhost:31144",
+            lens_url="http://localhost:31144",
         ),
         telemetry_dir=telemetry_dir,
     )

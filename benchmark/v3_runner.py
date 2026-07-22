@@ -94,7 +94,7 @@ from benchmark.v3.embedding_store import EmbeddingWriter
 
 # Resolved from .env (Docker) / atlas.conf (K3s) / explicit env var — see
 # BenchmarkConfig.llama_url / .rag_url. No deployment-specific port hardcoding.
-RAG_API_URL = config.rag_url
+LENS_URL = config.rag_url
 LLAMA_URL = config.llama_url
 # Published Qwen3.5 benchmarks use: temp=0.6, top_k=20, top_p=0.95,
 # max_tokens=32768+, thinking mode enabled. Match their settings.
@@ -596,7 +596,7 @@ class V3Pipeline:
             LensFeedbackConfig(
                 enabled=enable_feedback,
                 retrain_interval=self._v3_conf.get("feedback_interval", 50),
-                rag_api_url=RAG_API_URL,
+                lens_url=LENS_URL,
             ),
             telemetry_dir=telemetry_dir,
         ) if enable_feedback else None
@@ -654,7 +654,7 @@ class V3Pipeline:
                 if probe_code:
                     try:
                         energy_raw, energy_norm = score_candidate(
-                            probe_code, RAG_API_URL,
+                            probe_code, LENS_URL,
                         )
                         # Sentinel check: (0.0, 0.5) means Lens models
                         # not loaded. Leave probe_energy_raw as None so
@@ -804,7 +804,7 @@ class V3Pipeline:
                         continue
                     try:
                         energy_raw, energy_norm = score_candidate(
-                            code, RAG_API_URL,
+                            code, LENS_URL,
                         )
                     except Exception:
                         energy_raw, energy_norm = 0.0, 0.5
@@ -846,7 +846,7 @@ class V3Pipeline:
                         return None
                     try:
                         energy_raw, energy_norm = score_candidate(
-                            code, RAG_API_URL,
+                            code, LENS_URL,
                         )
                     except Exception:
                         energy_raw, energy_norm = 0.0, 0.5
@@ -888,7 +888,7 @@ class V3Pipeline:
                 code = extract_code(response)
                 try:
                     energy_raw, energy_norm = score_candidate(
-                        code, RAG_API_URL,
+                        code, LENS_URL,
                     )
                 except Exception:
                     energy_raw, energy_norm = 0.0, 0.5
@@ -1621,7 +1621,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         sys.exit(1)
 
     try:
-        req = urllib.request.Request(f"{RAG_API_URL}/health")
+        req = urllib.request.Request(f"{LENS_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
         print(f"  Geometric Lens: OK ({data.get('status', '?')})")
@@ -1634,7 +1634,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         try:
             test_body = json.dumps({"text": "test"}).encode("utf-8")
             req = urllib.request.Request(
-                f"{RAG_API_URL}/internal/lens/score-text",
+                f"{LENS_URL}/internal/lens/score-text",
                 data=test_body,
                 headers={"Content-Type": "application/json"},
             )

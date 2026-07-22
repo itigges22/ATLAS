@@ -30,7 +30,7 @@ class LensFeedbackConfig:
     retrain_interval: int = 50
     min_pass: int = 5
     min_fail: int = 5
-    rag_api_url: str = "http://geometric-lens.atlas.svc.cluster.local:8099"
+    lens_url: str = "http://geometric-lens.atlas.svc.cluster.local:8099"
     domain: str = "LCB"
     use_replay: bool = True
     use_ewc: bool = True
@@ -102,7 +102,7 @@ class LensFeedbackCollector:
             "use_ewc": self.config.use_ewc,
         }).encode("utf-8")
 
-        url = f"{self.config.rag_api_url}/internal/lens/retrain"
+        url = f"{self.config.lens_url}/internal/lens/retrain"
         req = urllib.request.Request(
             url, data=payload,
             headers={"Content-Type": "application/json"},

@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-def score_candidate(text: str, rag_api_url: str) -> Tuple[float, float]:
+def score_candidate(text: str, lens_url: str) -> Tuple[float, float]:
     """Score candidate text through the Geometric Lens.
 
     Args:
         text: Full text to score (typically "TASK: {prompt}\\n\\nSOLUTION: {response}").
-        rag_api_url: Base URL for geometric-lens (e.g. "http://localhost:31144").
+        lens_url: Base URL for geometric-lens (e.g. "http://localhost:31144").
 
     Returns:
         Tuple of (raw_energy, normalized_energy). Returns the neutral
@@ -25,7 +25,7 @@ def score_candidate(text: str, rag_api_url: str) -> Tuple[float, float]:
     """
     body = json.dumps({"text": text}).encode("utf-8")
     req = urllib.request.Request(
-        f"{rag_api_url}/internal/lens/score-text",
+        f"{lens_url}/internal/lens/score-text",
         data=body,
         headers={"Content-Type": "application/json"},
     )

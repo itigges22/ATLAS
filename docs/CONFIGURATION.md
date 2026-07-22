@@ -561,7 +561,7 @@ table; bootstrap-only knobs (`ATLAS_BOOTSTRAP_*` and friends) in
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_PROXY_URL` | `http://localhost:${ATLAS_PROXY_PORT:-8090}` | atlas-proxy endpoint (used by `atlas doctor`, the REPL, and honored by the TUI as its `--proxy` default) |
-| `ATLAS_RAG_URL` | (falls back to the lens URL) | Alias for the lens URL still read by `atlas/cli/client.py`; `ATLAS_LENS_URL` is the current name. |
+| `ATLAS_RAG_URL` | (unset) | Deprecated spelling of `ATLAS_LENS_URL`, still honoured by `atlas/cli/client.py` so an existing `.env` keeps working. `ATLAS_LENS_URL` now takes precedence; it previously did not. Prefer `ATLAS_LENS_URL`. |
 | `ATLAS_AUTO_WORKSPACE` | `1` | On TUI launch, the CLI checks whether the Docker proxy/sandbox `/workspace` binds cover your cwd and recreates those containers pointed at your project when they don't. Set `0` to keep whatever bind the containers already have. |
 | `ATLAS_MODELS_DIR` | `./models` | Host directory holding GGUF model files (used by `atlas doctor` and `atlas model`). |
 | `ATLAS_MODEL_FILE` | **required** | Selected model filename inside `ATLAS_MODELS_DIR`. |
