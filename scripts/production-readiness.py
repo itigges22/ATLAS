@@ -130,6 +130,15 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             "python-compile",
             (python, "-m", "compileall", "-q", *PYTHON_TARGETS),
         ),
+        # compileall proves the tree parses on the interpreter running CI.
+        # It cannot see syntax that parses everywhere but is only *evaluated*
+        # correctly on newer versions — a PEP 604 annotation is valid syntax
+        # on 3.9 and raises TypeError at import. This compares the tree
+        # against pyproject's declared requires-python instead.
+        "min-python": Gate(
+            "min-python",
+            (python, "scripts/check_min_python.py"),
+        ),
         "python-tests": Gate(
             "python-tests",
             (python, "-m", "pytest", *pytest_paths, "--no-header", "-q"),

@@ -64,7 +64,14 @@ python scripts/production-readiness.py
 ```
 
 The required checks cover test integrity, Python compilation and unit tests, and
-Go race tests and vet for the proxy and TUI. They do not require a GPU, model
+Go race tests and vet for the proxy and TUI. `min-python` sits alongside
+`python-compile`: compilation proves the tree parses on whichever interpreter
+is running, while `min-python` compares it against the `requires-python` floor
+in `pyproject.toml`. The distinction matters for syntax that parses on every
+version but is only *evaluated* correctly on newer ones — a PEP 604 annotation
+(`str | None`) is valid syntax on 3.9 and raises `TypeError` at import, which
+`compileall` cannot see and the CI test matrix misses because it runs 3.11 and
+3.12 only. Adding `from __future__ import annotations` to the file clears it. They do not require a GPU, model
 download, or running ATLAS services. The developer gate also includes contract
 tests for V3 language-aware syntax verification and sandbox overlay behavior.
 Full project build-command qualification still belongs to the container and
