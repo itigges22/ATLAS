@@ -301,4 +301,5 @@ through the sandbox).
 | Pipeline speed optimization | Reduce per-task latency (current V3 is compute-heavy: best-of-3 + Lens + repair) | Faster end-to-end benchmark runs |
 | Target | 80-90% LCB pass@1 with improved throughput | |
 
-Full ablation data: `ablation/` (sibling to this file)
+Full ablation data: [`ablation/README.md`](ablation/README.md) (sibling to this file), which
+indexes the per-task results on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS/tree/main/benchmarks/v3_ablation).
