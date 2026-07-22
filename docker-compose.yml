@@ -101,7 +101,7 @@ services:
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
       # SQLite state store (pattern cache, co-occurrence graph, Thompson
-      # router posteriors). Learned TTL-less state —
+      # router posteriors, task queue, metrics). Learned TTL-less state —
       # lives on the lens-state volume; losing the volume resets learning
       # (documented in docs/OPERATIONS.md).
       - SQLITE_DB_PATH=/data/state/geometric_state.db
@@ -146,6 +146,10 @@ services:
       # Structural call-graph reasoning (#39, experimental, default off). Read by
       # call_graph_enabled() inside this process, so it must be forwarded here.
       - ATLAS_CALL_GRAPH=${ATLAS_CALL_GRAPH:-0}
+      # V3.2 RPG-style planning (#120, experimental, default off). Read by
+      # rpg_planning_enabled() inside this process, so it must be forwarded
+      # here, not only to the proxy.
+      - ATLAS_RPG_PLANNING=${ATLAS_RPG_PLANNING:-0}
       # Plan-generation thinking mode (read inside this process — must be
       # forwarded here or setting it in .env has no effect).
       - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-}

@@ -163,7 +163,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 - 構造的な呼び出しグラフ推論 ([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125)、[@yogthos](https://github.com/yogthos) に感謝)。ARCHITECTURE.md の zh-CN / ja / ko 翻訳 ([#25](https://github.com/itigges22/ATLAS/issues/25))。
 
 **V3.2** - 次のマイルストーン: より深いコード推論とプランニング。
-- ~~アーキテクチャ優先のプランニングフェーズ — RPG スタイルのプラン先行・後埋め~~ ([#120](https://github.com/itigges22/ATLAS/issues/120)、PR [#124](https://github.com/itigges22/ATLAS/pull/124))。**実装し、計測し、削除しました。** リファレンスのローカルモデルでの A/B は改善 0 件・退行 2 件・プランニング遅延およそ 10 倍でした。ボトルネックはプランではなく、モデルが正しいコードを書けるかどうかです。RPG プランナーとそれを支えていた wavelet 分解は、既定オフのフラグの裏に残さず削除しました。
+- アーキテクチャ優先のプランニングフェーズ — RPG スタイルのプラン先行・後埋め: モジュールスコープでプランを立ててから関数スコープで実装 ([#120](https://github.com/itigges22/ATLAS/issues/120)、PR [#124](https://github.com/itigges22/ATLAS/pull/124))。
 - 構造的コード推論（残り） — ソルバー支援の到達可能性に加え、「どのファイルが重要か」を多解像度で検索する構文非依存のウェーブレット分解 ([#39](https://github.com/itigges22/ATLAS/issues/39))。
 - サンプリングを用いた推論 — 効率と品質の向上 ([#9](https://github.com/itigges22/ATLAS/issues/9))。
 - 先送りしたインフラ: 自動化された HuggingFace 投稿パイプライン ([#102](https://github.com/itigges22/ATLAS/issues/102))。K3s / Kubernetes 上の ROCm。レジストリモデルの正式ベンチマーク — LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28))。

@@ -163,8 +163,8 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 - 구조적 콜 그래프 추론([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125), [@yogthos](https://github.com/yogthos) 감사합니다); ARCHITECTURE.md의 zh-CN / ja / ko 번역([#25](https://github.com/itigges22/ATLAS/issues/25)).
 
 **V3.2** - 다음 마일스톤: 더 깊은 코드 추론과 계획.
-- ~~아키텍처 우선 계획 페이즈 — RPG 스타일의 계획 후 채우기~~ ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)). **구현 후 측정하여 제거했습니다.** 레퍼런스 로컬 모델 A/B에서 개선 0건, 회귀 2건, 계획 지연 약 10배가 나왔습니다. 병목은 계획이 아니라 모델이 올바른 코드를 작성하는 능력이었습니다. RPG 플래너와 이를 뒷받침하던 wavelet 분해는 기본 비활성 플래그로 남기지 않고 삭제했습니다.
-- 구조적 코드 추론 (후속) — 솔버 기반 도달성 분석 ([#39](https://github.com/itigges22/ATLAS/issues/39)).
+- 아키텍처 우선 계획 페이즈 — RPG 스타일의 계획 후 채우기: 모듈 범위에서 계획하고 함수 범위에서 구현 ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)).
+- 구조적 코드 추론 (후속) — 솔버 기반 도달성 분석 + 다중 해상도 "어떤 파일이 중요한가" 검색을 위한 구문 비의존적 wavelet 분해 ([#39](https://github.com/itigges22/ATLAS/issues/39)).
 - 샘플링 기반 추론 — 효율성과 품질 향상 ([#9](https://github.com/itigges22/ATLAS/issues/9)).
 - 이월된 인프라: 자동화된 HuggingFace 제출 파이프라인 ([#102](https://github.com/itigges22/ATLAS/issues/102)); K3s / Kubernetes 상의 ROCm; 공식 레지스트리 모델 벤치마크 — LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28)).
 

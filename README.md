@@ -166,8 +166,8 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 - Structural call-graph reasoning ([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125), thanks [@yogthos](https://github.com/yogthos)); ARCHITECTURE.md translated to zh-CN / ja / ko ([#25](https://github.com/itigges22/ATLAS/issues/25)).
 
 **V3.2** - Next milestone: deeper code reasoning and planning.
-- ~~Architecture-first planning phase - RPG-style plan-then-fill~~ ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)). **Built, measured, removed.** An A/B on the reference local model produced 0 improvements, 2 regressions, and roughly 10x planning latency: the bottleneck is the model writing correct code, not the plan it writes against. The RPG planner and the wavelet decomposition that fed it were deleted rather than left behind a default-off flag.
-- Structural code reasoning (tail) - solver-backed reachability ([#39](https://github.com/itigges22/ATLAS/issues/39)).
+- Architecture-first planning phase - RPG-style plan-then-fill: plan at module scope, then implement at function scope ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)).
+- Structural code reasoning (tail) - solver-backed reachability + syntax-agnostic wavelet decomposition for multi-resolution "which files matter" retrieval ([#39](https://github.com/itigges22/ATLAS/issues/39)).
 - Reasoning with sampling - efficiency and quality gains ([#9](https://github.com/itigges22/ATLAS/issues/9)).
 - Deferred infra: automated HuggingFace submission pipeline ([#102](https://github.com/itigges22/ATLAS/issues/102)); ROCm on K3s / Kubernetes; formal registry-model benchmarks - LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28)).
 
