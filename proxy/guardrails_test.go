@@ -976,3 +976,81 @@ func TestExpectedOutputMustExistPhrasing(t *testing.T) {
 		t.Errorf("expected repo/algo.py from must-exist phrasing, got %v", got)
 	}
 }
+
+// --- verification gate: observed state vs message shape ---------------------
+
+// The 2026-07-21 dogfooding failure. "build an API with a couple tests" holds
+// no repair-shaped word, so message-shape analysis alone cannot gate it — yet
+// the model ran pytest, watched it fail, diagnosed the fix in prose, and
+// exited without applying it.
+func TestVerificationGateFiresOnFailedVerificationWithoutFixIntent(t *testing.T) {
+	msg := "build me a small API with a couple tests"
+
+	if isFixIntentMessage(msg) {
+		t.Fatalf("precondition failed: %q should not read as fix-intent — "+
+			"if it did, this test would not be exercising the observed-state path", msg)
+	}
+
+	userWantsVerification := isFixIntentMessage(msg)
+	sawFailedVerification := true // pytest ran and exited non-zero
+	verifiedThisLoop := false
+
+	if !((userWantsVerification || sawFailedVerification) && !verifiedThisLoop) {
+		t.Fatal("gate did not fire after a verification command failed — a red test must block done regardless of how the request was worded")
+	}
+}
+
+// A green run after a red one must clear the latch, or the loop can never
+// legitimately finish.
+func TestVerificationGateClearsAfterPassingRun(t *testing.T) {
+	userWantsVerification := false
+	sawFailedVerification := false // reset when the command later succeeded
+	verifiedThisLoop := true
+
+	if (userWantsVerification || sawFailedVerification) && !verifiedThisLoop {
+		t.Fatal("gate still firing after verification passed")
+	}
+}
+
+// No verification attempted and no repair-shaped request: nothing to gate.
+// This is what keeps the gate off pure feature work.
+func TestVerificationGateStaysOffWhenNothingWasVerified(t *testing.T) {
+	userWantsVerification := isFixIntentMessage("add a logout button to the navbar")
+	sawFailedVerification := false
+	verifiedThisLoop := false
+
+	if (userWantsVerification || sawFailedVerification) && !verifiedThisLoop {
+		t.Fatal("gate fired on a plain feature request with no verification attempted")
+	}
+}
+
+func TestVerificationRejectionMessageNamesTheRedCommand(t *testing.T) {
+	failed := verificationRejectionMessage(true)
+	if !strings.Contains(failed, "FAILED") {
+		t.Fatalf("failed-verification message should say a command failed, got: %s", failed)
+	}
+	// The model has already seen the output; it needs to act, not be taught.
+	if !strings.Contains(failed, "Describing the fix is not applying it") {
+		t.Fatalf("failed-verification message should push for the edit, got: %s", failed)
+	}
+
+	plain := verificationRejectionMessage(false)
+	if !strings.Contains(plain, "fix/repair request") {
+		t.Fatalf("fix-intent message should describe the request, got: %s", plain)
+	}
+	if failed == plain {
+		t.Fatal("both triggers produced the same message — the gate must say which one fired")
+	}
+}
+
+func TestGateTriggerPrefersTheConcreteSignal(t *testing.T) {
+	if got := gateTrigger(true, true); got != "failed-verification" {
+		t.Fatalf("gateTrigger(true,true) = %q, want failed-verification (a red command outranks message shape)", got)
+	}
+	if got := gateTrigger(true, false); got != "fix-intent" {
+		t.Fatalf("gateTrigger(true,false) = %q, want fix-intent", got)
+	}
+	if got := gateTrigger(false, false); got != "none" {
+		t.Fatalf("gateTrigger(false,false) = %q, want none", got)
+	}
+}

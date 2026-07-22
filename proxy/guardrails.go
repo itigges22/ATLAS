@@ -632,7 +632,29 @@ func isVerificationCommand(cmd string) bool {
 // missing and what to run. We prefer concrete suggestions over
 // abstract "verify your work" prompts — the model is more likely to
 // pick a sensible command when given a category.
-func verificationRejectionMessage(userMsg string) string {
+// gateTrigger names why the verification gate fired, for the log line. A
+// red command outranks message shape: it is the concrete signal, and when
+// both hold it is the one that describes what actually happened.
+func gateTrigger(userWantsVerification, sawFailedVerification bool) string {
+	switch {
+	case sawFailedVerification:
+		return "failed-verification"
+	case userWantsVerification:
+		return "fix-intent"
+	default:
+		return "none"
+	}
+}
+
+// sawFailedVerification distinguishes the two ways this gate fires. When a
+// verification command has actually gone red in this loop, the run holds
+// concrete evidence of breakage, so the message says that rather than
+// describing the request — the model has already seen the failure and needs
+// to act on it, not be told what verification is.
+func verificationRejectionMessage(sawFailedVerification bool) string {
+	if sawFailedVerification {
+		return "Cannot declare `done` — a test or build command you ran in this session FAILED and nothing has passed since. You have already seen the failure output. Apply the fix with `edit_file`, `structural_edit`, or `write_file`, then re-run the same command and confirm it exits clean. Describing the fix is not applying it: if you know what the problem is, make the edit now. Declaring done over a red test reports a broken result as a working one."
+	}
 	return "Cannot declare `done` yet — this is a fix/repair request and you haven't verified the change works. Before emitting `done`, run a verification command and confirm it succeeded. Examples: `python app.py` to start a server, `curl http://localhost:5000/` to probe a route, `pytest tests/` to run tests, `npm test` for Node, `go test ./...` for Go. \"Done\" without a clean verification exit is a guess, not a fix."
 }
 

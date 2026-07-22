@@ -287,8 +287,26 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// One successful verification per loop is enough — the model can iterate
 	// inside the loop without re-verifying every turn.
 
+	// Set when a verification command RAN AND FAILED and none has succeeded
+	// since. This is observed session state, not a guess about the request:
+	// once a test or build has actually gone red in this loop, the run has
+	// objective evidence something is broken, and declaring done is
+	// dishonest regardless of how the user phrased the ask.
+	//
+	// It closes the case the message-shape check below structurally cannot
+	// see (2026-07-21 dogfooding): asked to "build an API with a couple
+	// tests", the model wrote a test file, ran pytest for real, watched it
+	// fail 5/5 three times, diagnosed the exact fix in prose, then exited
+	// through a bare text narration without applying it. The prompt held no
+	// repair-shaped word, so userWantsVerification was false and no gate
+	// ran. Widening the fix-intent word list to include "test" would only
+	// have covered prompts that happen to say "test"; the model can
+	// introduce a failing test the user never mentioned.
+	sawFailedVerification := false
+
 	// Whether the user prompt is a repair/fix request. Computed once because
-	// the user message doesn't change mid-loop. Drives the verification gate.
+	// the user message doesn't change mid-loop. Drives the verification gate
+	// together with sawFailedVerification above.
 	userWantsVerification := isFixIntentMessage(userMessage)
 
 	// Shared cap across the verification, done-without-action, and
@@ -503,11 +521,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// shipped an ignored-red pytest done and a zero-write completion
 			// claim that these gates exist to bounce. Bounces stay capped by
 			// maxGateBounces, so unattended runs cannot loop on a gate.
-			if userWantsVerification && !verifiedThisLoop && gateBounces < maxGateBounces {
+			if (userWantsVerification || sawFailedVerification) && !verifiedThisLoop && gateBounces < maxGateBounces {
 				gateBounces++
-				rejection := verificationRejectionMessage(userMessage)
-				log.Printf("[agent] verification gate: bouncing done at turn %d (user prompt %q has fix-intent, no successful verification command this loop, bounce %d/%d)",
-					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
+				rejection := verificationRejectionMessage(sawFailedVerification)
+				log.Printf("[agent] verification gate: bouncing done at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
+					turn, gateTrigger(userWantsVerification, sawFailedVerification), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "assistant",
 					Content: response,
@@ -648,11 +666,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// verification command having run — the same bounce the done
 			// branch applies. Without this, narrate-then-quit reported an
 			// unverified, possibly still-red fix as complete.
-			if userWantsVerification && !verifiedThisLoop && gateBounces < maxGateBounces {
+			if (userWantsVerification || sawFailedVerification) && !verifiedThisLoop && gateBounces < maxGateBounces {
 				gateBounces++
-				rejection := verificationRejectionMessage(userMessage)
-				log.Printf("[agent] text-exit verification gate: bouncing text at turn %d (fix-intent, no verification this loop, bounce %d/%d)",
-					turn, gateBounces, maxGateBounces)
+				rejection := verificationRejectionMessage(sawFailedVerification)
+				log.Printf("[agent] text-exit verification gate: bouncing text at turn %d (trigger=%s, no verification this loop, bounce %d/%d)",
+					turn, gateTrigger(userWantsVerification, sawFailedVerification), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:       "tool",
@@ -1176,12 +1194,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// test / probe / runner. Recon (ls, cat, grep) doesn't count.
 			// Once any verification succeeds in this loop, the fix-intent
 			// gate stops blocking `done`.
-			if result.Success && parsed.Name == "run_command" {
+			if parsed.Name == "run_command" {
 				var rc RunCommandInput
 				if json.Unmarshal(parsed.Args, &rc) == nil && isVerificationCommand(rc.Command) {
-					verifiedThisLoop = true
-					log.Printf("[agent] verification recorded: turn=%d cmd=%q",
-						turn, truncateStr(rc.Command, 60))
+					if result.Success {
+						verifiedThisLoop = true
+						sawFailedVerification = false
+						log.Printf("[agent] verification recorded: turn=%d cmd=%q",
+							turn, truncateStr(rc.Command, 60))
+					} else {
+						// Red test/build. Latches the verification gate on
+						// for this loop until something verifies green.
+						sawFailedVerification = true
+						log.Printf("[agent] verification FAILED: turn=%d cmd=%q — done is gated until it passes",
+							turn, truncateStr(rc.Command, 60))
+					}
 				}
 			}
 
