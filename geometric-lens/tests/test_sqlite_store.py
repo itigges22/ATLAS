@@ -1,6 +1,5 @@
-"""SQLite state store: schema init, Thompson state, task queue, metrics, patterns."""
+"""SQLite state store: schema init, Thompson state, patterns, co-occurrence."""
 
-import json
 import os
 import sys
 
@@ -8,9 +7,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# The task-queue and request-metrics tables were dropped with the lens's
+# /v1/tasks/* and /v1/chat/completions endpoints — nothing wrote or read them
+# afterwards.
 EXPECTED_TABLES = {
     "patterns", "co_occurrence", "thompson_state", "routing_stats",
-    "tasks", "metrics_daily", "metrics_recent_tasks", "store_metadata",
+    "store_metadata",
 }
 
 
@@ -46,28 +48,22 @@ def _table_names(pool):
 def test_schema_init_creates_all_tables(store):
     pool = store.get_db_pool()
     assert EXPECTED_TABLES <= _table_names(pool)
-    with pool.get_connection() as conn:
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'index' "
-            "AND tbl_name = 'tasks' AND name NOT LIKE 'sqlite_%'")
-        names = {row["name"] for row in cur.fetchall()}
-    assert "idx_tasks_status_priority_created" in names
 
 
 def test_schema_init_is_idempotent(store):
     pool = store.get_db_pool()
     with pool.get_connection() as conn:
         conn.execute(
-            "INSERT INTO tasks (id, priority, status, data) "
-            "VALUES ('t1', 'p1', 'pending', '{}')")
+            "INSERT INTO store_metadata (key, value) VALUES ('probe', 7)")
 
     # Re-run initialization against the existing database file.
     store.SQLitePool._instance = None
     pool2 = store.get_db_pool()
     assert EXPECTED_TABLES <= _table_names(pool2)
     with pool2.get_connection() as conn:
-        cur = conn.execute("SELECT COUNT(*) AS c FROM tasks")
-        assert cur.fetchone()["c"] == 1  # existing rows survive re-init
+        cur = conn.execute(
+            "SELECT value FROM store_metadata WHERE key = 'probe'")
+        assert cur.fetchone()["value"] == 7  # existing rows survive re-init
 
 
 # ── Thompson state ──────────────────────────────────────────────────
@@ -116,112 +112,17 @@ def test_thompson_reset(store):
 # ── Task queue ──────────────────────────────────────────────────────
 
 
-def _submit(pool, task_id, priority):
-    with pool.get_connection() as conn:
-        conn.execute(
-            "INSERT INTO tasks (id, priority, status, data) "
-            "VALUES (?, ?, 'pending', ?)",
-            (task_id, priority, json.dumps({"id": task_id})))
 
 
-def _next_pending(pool, priority):
-    with pool.get_connection() as conn:
-        cur = conn.execute(
-            "SELECT id FROM tasks WHERE status = 'pending' AND priority = ? "
-            "ORDER BY created_at, rowid LIMIT 1", (priority,))
-        row = cur.fetchone()
-    return row["id"] if row else None
 
 
-def test_task_queue_fifo_within_priority(store):
-    pool = store.get_db_pool()
-    for tid in ("a", "b", "c"):
-        _submit(pool, tid, "p1")
-    _submit(pool, "urgent", "p0")
-
-    order = []
-    while True:
-        tid = _next_pending(pool, "p1")
-        if tid is None:
-            break
-        order.append(tid)
-        with pool.get_connection() as conn:
-            conn.execute(
-                "UPDATE tasks SET status = 'running' WHERE id = ?", (tid,))
-    assert order == ["a", "b", "c"]  # FIFO within a priority
-    # Other priorities are untouched.
-    assert _next_pending(pool, "p0") == "urgent"
 
 
-def test_task_status_transitions_and_queue_stats(store):
-    pool = store.get_db_pool()
-    _submit(pool, "t1", "p0")
-    _submit(pool, "t2", "p1")
-    _submit(pool, "t3", "p1")
-
-    def pending_counts():
-        with pool.get_connection() as conn:
-            cur = conn.execute(
-                "SELECT priority, COUNT(*) AS count FROM tasks "
-                "WHERE status = 'pending' GROUP BY priority")
-            return {row["priority"]: row["count"] for row in cur.fetchall()}
-
-    assert pending_counts() == {"p0": 1, "p1": 2}
-
-    # pending -> running -> completed
-    for status in ("running", "completed"):
-        with pool.get_connection() as conn:
-            conn.execute(
-                "UPDATE tasks SET status = ? WHERE id = 't2'", (status,))
-        with pool.get_connection() as conn:
-            cur = conn.execute("SELECT status FROM tasks WHERE id = 't2'")
-            assert cur.fetchone()["status"] == status
-
-    # Completed tasks leave the pending pool but stay queryable.
-    assert pending_counts() == {"p0": 1, "p1": 1}
 
 
 # ── Metrics ─────────────────────────────────────────────────────────
 
 
-def test_recent_tasks_trims_to_100(store, tmp_path, monkeypatch):
-    # main's import-time side effects need a writable project dir.
-    monkeypatch.setenv("PROJECT_DATA_DIR", str(tmp_path / "projects"))
-    # `import main` by bare name collides with v3-service's main when
-    # another suite imported it first (both are flat top-level modules);
-    # load the lens main under a unique sys.modules key instead.
-    import importlib.util
-    main = sys.modules.get("lens_main")
-    if main is None:
-        spec = importlib.util.spec_from_file_location(
-            "lens_main",
-            os.path.join(os.path.dirname(__file__), "..", "main.py"))
-        main = importlib.util.module_from_spec(spec)
-        sys.modules["lens_main"] = main
-        spec.loader.exec_module(main)
-
-    for i in range(120):
-        main.log_request_metrics("chat_completion", success=(i % 2 == 0),
-                                 tokens=i, model=f"m{i}")
-
-    pool = store.get_db_pool()
-    with pool.get_connection() as conn:
-        cur = conn.execute(
-            "SELECT task_record FROM metrics_recent_tasks ORDER BY id")
-        records = [json.loads(row["task_record"]) for row in cur.fetchall()]
-
-    assert len(records) == 100
-    # Oldest 20 trimmed, newest kept, insertion order preserved.
-    assert records[0]["model"] == "m20"
-    assert records[-1]["model"] == "m119"
-
-    # Daily counters aggregated in metrics_daily.
-    with pool.get_connection() as conn:
-        cur = conn.execute("SELECT key, value FROM metrics_daily")
-        daily = {row["key"]: row["value"] for row in cur.fetchall()}
-    assert daily["tasks_total"] == 120
-    assert daily["tasks_success"] == 60
-    assert daily["tokens_total"] == sum(range(120))
 
 
 # ── Pattern store ───────────────────────────────────────────────────

@@ -77,7 +77,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | **atlas-proxy** | 8090 | Go | agent 循环、工具调用路由、tier 分类、`/v1/agent` SSE、`/events` 类型化 SSE、`/cancel`。`/v1/chat/completions` 原样透传给 llama-server。 |
 | **atlas-tui** | （客户端） | Go | Bubbletea TUI；消费 `/events` 和 `/v1/agent` SSE 流。 |
 | **v3-service** | 8070 | Python | V3 pipeline 的 HTTP 封装（PlanSearch、DivSampling、PR-CoT 等） |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) 能量打分、G(x) XGBoost 质量预测、RAG/项目索引；拥有 SQLite 状态存储（`lens-state` 卷上的 `SQLITE_DB_PATH`），支撑模式缓存、共现图、任务队列和路由器状态 |
+| **geometric-lens** | 8099 | Python (FastAPI) | C(x) 能量打分、G(x) XGBoost 质量预测；拥有 SQLite 状态存储（`lens-state` 卷上的 `SQLITE_DB_PATH`），支撑模式缓存、共现图和路由器状态 |
 | **sandbox** | 30820（主机）/ 8020（容器） | Python (FastAPI) | 隔离的代码执行、编译、检查、测试运行 |
 
 ---
@@ -397,7 +397,7 @@ graph LR
 
 ## 5. Geometric Lens
 
-一个神经打分系统，通过分析模型嵌入的几何结构，在不执行代码的情况下评估代码质量。完全运行在 CPU 上。同时也作为项目索引、检索、置信度路由和模式缓存的 RAG API。
+一个神经打分系统，通过分析模型嵌入的几何结构，在不执行代码的情况下评估代码质量。完全运行在 CPU 上。同时托管模式缓存以及置信度路由器的反馈/统计端点。
 
 #### 为什么叫 "Geometric Lens"？
 
@@ -452,53 +452,23 @@ C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型�
 
 > **注意：** 模型权重（.pt、.pkl 文件）未提交到仓库 —— 它们在训练期间构建，并烘焙进容器镜像或在运行时挂载。当模型文件缺失时，服务会优雅降级：C(x) 返回中性能量，G(x) 返回 `gx_score: 0.5` 和 `verdict: "unavailable"`。训练数据与权重可在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 获取。
 
-### RAG / PageIndex V2
-
-```mermaid
-graph LR
-    subgraph indexing["Indexing Pipeline"]
-        AST["AST Parser\ntree-sitter Python"] --> TB["Tree Builder\nhierarchical index"]
-        TB --> BM25I["BM25 Index\ninverted index, k1=1.5"]
-        TB --> SUM["Summarizer\nLLM-generated summaries"]
-        BM25I --> PERS["Persistence\nJSON to disk"]
-        SUM --> PERS
-    end
-
-    subgraph retrieval["Retrieval"]
-        BM25S["BM25 Searcher\nmin_score=0.1, top_k=20"]
-        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6, max_calls=40"]
-        HYB["Hybrid Retriever\nroutes: bm25_first / tree_only / both"]
-        BM25S --> HYB
-        TreeS --> HYB
-    end
-
-    style indexing fill:#1a3a5c,color:#fff
-    style retrieval fill:#2d5016,color:#fff
-```
-
 ### 置信度路由器与模式缓存
 
 ```mermaid
 graph LR
     subgraph router["Confidence Router"]
-        SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
-        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
-        TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
+        TS["Route Selector\nThompson Sampling\nBeta(α,β) posteriors"]
         FB["Feedback Recorder\nSQLite-backed"]
-        FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
-        SIG --> DIFF --> TS --> FC
         FB --> TS
     end
 
     subgraph cache["Pattern Cache"]
         PS["Pattern Store\nSQLite: STM (100) / LTM / PERSISTENT"]
-        PM["Pattern Matcher\nBM25 over summaries"]
         PE["Pattern Extractor\nLLM-driven"]
         PSC["Pattern Scorer\nEbbinghaus decay"]
         COO["Co-occurrence Graph\nlinked pattern retrieval"]
         PE --> PS
-        PS --> PM
-        PM --> PSC
+        PE --> PSC
         PS --> COO
     end
 

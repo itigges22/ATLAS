@@ -62,13 +62,15 @@ Tree-sitter-backed structural tooling: `structural_edit`, the symbol index, the 
 
 - **Sotnikov, D., 2026.** *chiasmus: tree-sitter + solver call graph for code analysis.* GitHub [yogthos/chiasmus](https://github.com/yogthos/chiasmus). Inspiration for the structural code-reasoning layer.
 
-### RAG / PageIndex V2 (shipped)
+### RAG / PageIndex V2 (removed)
 
-- **VectifyAI, 2025.** *MAFIN 2.5 / PageIndex.* Product / reasoning-based retrieval over tree structures. **Basis for the PageIndex V2 indexer** (tree-sitter AST + BM25 + LLM-guided traversal).
+The PageIndex V2 indexer (tree-sitter tree index + BM25 + LLM-guided traversal) and the hybrid retriever built on it were removed: they served only the lens's own `/v1/chat/completions`, which never had a caller in the stack. Kept here because the reference informed the design.
+
+- **VectifyAI, 2025.** *MAFIN 2.5 / PageIndex.* Product / reasoning-based retrieval over tree structures.
 
 ### Pattern Cache & Memory (shipped)
 
-The Confidence Router uses a pattern cache with tiered decay (CACHE_HIT / FAST_PATH / STANDARD / HARD_PATH), co-occurrence graph, and STM→LTM promotion.
+The pattern cache uses tiered decay, a co-occurrence graph, and STM→LTM promotion. It is written by v3-service after a successful candidate (`/internal/patterns/write`). The per-request route selection that consumed it was removed with the RAG chat path; the router retains its Thompson posteriors and feedback endpoints.
 
 - **Ebbinghaus, 1885.** *Über das Gedächtnis* (On Memory). The forgetting curve — memory strength decays roughly exponentially with time. Underlies the tiered decay schedule.
 - **ACT-R** (Anderson et al.). Adaptive Control of Thought-Rational. ~30-day half-life for activation — numeric baseline for cache decay.

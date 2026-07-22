@@ -77,7 +77,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | **atlas-proxy** | 8090 | Go | エージェントループ、ツールコールルーティング、ティア分類、`/v1/agent` SSE、`/events` 型付き SSE、`/cancel`。`/v1/chat/completions` は llama-server へそのままパススルー。 |
 | **atlas-tui** | (クライアント) | Go | Bubbletea TUI; `/events` と `/v1/agent` の SSE ストリームを消費。 |
 | **v3-service** | 8070 | Python | V3 パイプラインの HTTP ラッパー（PlanSearch、DivSampling、PR-CoT など） |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) エネルギースコアリング、G(x) XGBoost 品質予測、RAG/プロジェクトインデキシング。パターンキャッシュ、共起グラフ、タスクキュー、ルーター状態を支える SQLite ステートストア（`lens-state` ボリューム上の `SQLITE_DB_PATH`）を所有 |
+| **geometric-lens** | 8099 | Python (FastAPI) | C(x) エネルギースコアリング、G(x) XGBoost 品質予測。パターンキャッシュ、共起グラフ、ルーター状態を支える SQLite ステートストア（`lens-state` ボリューム上の `SQLITE_DB_PATH`）を所有 |
 | **sandbox** | 30820 (ホスト) / 8020 (コンテナ) | Python (FastAPI) | 分離されたコード実行、コンパイル、リント、テスト実行 |
 
 ---
@@ -374,7 +374,7 @@ graph LR
 
 ## 5. Geometric Lens
 
-モデルの埋め込みの幾何構造を分析することで、コードを実行せずにその品質を評価するニューラルスコアリングシステム。完全に CPU 上で動作します。プロジェクトインデキシング、検索、信頼度ルーティング、パターンキャッシングのための RAG API としても機能します。
+モデルの埋め込みの幾何構造を分析することで、コードを実行せずにその品質を評価するニューラルスコアリングシステム。完全に CPU 上で動作します。パターンキャッシュと信頼度ルーターのフィードバック/統計エンドポイントもホストします。
 
 #### なぜ「Geometric Lens」なのか?
 
@@ -429,53 +429,23 @@ C(x) の正規化は `sigmoid(steepness × (energy - midpoint))` です。両方
 
 > **注:** モデルの重み（.pt、.pkl ファイル）はリポジトリにコミットされていません — トレーニング中にビルドされ、コンテナイメージに焼き込まれるか、実行時にマウントされます。モデルファイルが存在しない場合、サービスは緩やかにデグレードします: C(x) は中立エネルギーを返し、G(x) は `gx_score: 0.5` と `verdict: "unavailable"` を返します。トレーニングデータと重みは [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) で公開しています。
 
-### RAG / PageIndex V2
-
-```mermaid
-graph LR
-    subgraph indexing["Indexing Pipeline"]
-        AST["AST Parser\ntree-sitter Python"] --> TB["Tree Builder\nhierarchical index"]
-        TB --> BM25I["BM25 Index\ninverted index, k1=1.5"]
-        TB --> SUM["Summarizer\nLLM-generated summaries"]
-        BM25I --> PERS["Persistence\nJSON to disk"]
-        SUM --> PERS
-    end
-
-    subgraph retrieval["Retrieval"]
-        BM25S["BM25 Searcher\nmin_score=0.1, top_k=20"]
-        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6, max_calls=40"]
-        HYB["Hybrid Retriever\nroutes: bm25_first / tree_only / both"]
-        BM25S --> HYB
-        TreeS --> HYB
-    end
-
-    style indexing fill:#1a3a5c,color:#fff
-    style retrieval fill:#2d5016,color:#fff
-```
-
 ### 信頼度ルーター & パターンキャッシュ
 
 ```mermaid
 graph LR
     subgraph router["Confidence Router"]
-        SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
-        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
-        TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
+        TS["Route Selector\nThompson Sampling\nBeta(α,β) posteriors"]
         FB["Feedback Recorder\nSQLite-backed"]
-        FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
-        SIG --> DIFF --> TS --> FC
         FB --> TS
     end
 
     subgraph cache["Pattern Cache"]
         PS["Pattern Store\nSQLite: STM (100) / LTM / PERSISTENT"]
-        PM["Pattern Matcher\nBM25 over summaries"]
         PE["Pattern Extractor\nLLM-driven"]
         PSC["Pattern Scorer\nEbbinghaus decay"]
         COO["Co-occurrence Graph\nlinked pattern retrieval"]
         PE --> PS
-        PS --> PM
-        PM --> PSC
+        PE --> PSC
         PS --> COO
     end
 

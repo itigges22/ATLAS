@@ -19,8 +19,6 @@ RUN pip install --no-cache-dir torch==2.13.0 \
 
 # Copy application code
 COPY *.py .
-COPY indexer/ indexer/
-COPY retriever/ retriever/
 COPY models/ models/
 COPY cache/ cache/
 COPY router/ router/

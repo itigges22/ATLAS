@@ -15,7 +15,7 @@ the documentation lives. For component internals see
 | `tui/` | Bubbletea terminal client — the canonical chat front-end, consumes proxy SSE streams | — |
 | `atlas/` | Python CLI package: `atlas` subcommand dispatch (init, doctor, tier, model, onboard, lens, asa, publish, bench, compose, tui, upgrade, rollback, diagnostics, artifact, config) and pipe-mode REPL | — |
 | `v3-service/` | Python HTTP wrapper for the V3 generation pipeline and the structural call-graph engine | — |
-| `geometric-lens/` | Scoring (C(x)/G(x)), RAG indexing and retrieval, confidence routing, pattern cache, ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
+| `geometric-lens/` | Scoring (C(x)/G(x)), pattern cache, confidence-router feedback, ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
 | `sandbox/` | Isolated multi-language code execution and shell, with workspace containment | — |
 | `inference/` | llama-server Docker builds (CUDA / ROCm / Vulkan) and model-neutral entrypoints | — |
 | `benchmark/` | Benchmark runners, dataset loaders, and the V3 pipeline modules | [benchmark/README.md](../benchmark/README.md) |

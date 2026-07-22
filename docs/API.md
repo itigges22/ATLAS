@@ -770,7 +770,7 @@ curl http://localhost:8070/health
 
 ## Geometric Lens (Port 8099)
 
-Energy-based code scoring using C(x) cost field and G(x) quality prediction. Also serves as the RAG API for project indexing and retrieval.
+Energy-based code scoring using C(x) cost field and G(x) quality prediction. Also hosts the pattern cache and the confidence router's feedback/stats endpoints.
 
 > **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
 
@@ -838,20 +838,13 @@ Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degrade
 
 These are not part of the public API. **Internal** rows are consumed by other ATLAS services in-stack; **Experimental** rows have no in-stack consumer today and may change or be removed without notice.
 
+The project-indexing, RAG chat, and task-queue endpoints that used to sit here were removed: nothing in the stack called them, and the retrieval code behind them (PageIndex tree index, BM25, hybrid retriever) went with them.
+
 The `/v1/*` endpoints below require `Authorization: Bearer <key>`, validated against the locally-loaded `api-keys.json` (plus the installation's service token, which is auto-accepted); requests without a valid key get 401. The `/internal/*` endpoints require the service token when one is configured (`secrets/service-token`, see CONFIGURATION.md `ATLAS_SERVICE_TOKEN_FILE`) and are open otherwise.
 
 | Endpoint | Method | Status | Description |
 |----------|--------|--------|-------------|
 | `/` | GET | Internal | Service banner — name, version, a few endpoint pointers |
-| `/v1/projects/sync` | POST | Experimental | Sync/index a project codebase |
-| `/v1/projects/{id}/status` | GET | Experimental | Get project index status |
-| `/v1/projects` | GET | Experimental | List indexed projects |
-| `/v1/projects/{id}` | DELETE | Experimental | Delete a project index |
-| `/v1/chat/completions` | POST | Experimental | RAG-augmented chat completions |
-| `/v1/models` | GET | Experimental | List available models |
-| `/v1/tasks/submit` | POST | Experimental | Submit async task |
-| `/v1/tasks/{id}/status` | GET | Experimental | Get task status |
-| `/v1/queue/stats` | GET | Experimental | Task queue statistics |
 | `/v1/patterns/write` | POST | Experimental | Write pattern data (bearer-token variant of `/internal/patterns/write`) |
 | `/internal/patterns/write` | POST | Internal | Write pattern data — unauthenticated in-stack path used by v3-service; mirrors `/v1/patterns/write` |
 | `/internal/cache/stats` | GET | Internal | Cache statistics |
