@@ -9,12 +9,16 @@ import json
 
 import pytest
 
-from .conftest import (SERVICE_TOKEN, request_status,
-                       sandbox_deps_available, start_proxy)
+from .conftest import (SKIP_NO_PROXY_BINARY, SERVICE_TOKEN, proxy_binary_available,
+                       request_status, sandbox_deps_available, start_proxy)
 
-pytestmark = pytest.mark.skipif(
-    not sandbox_deps_available(),
-    reason="sandbox executor deps (fastapi/uvicorn) not installed")
+pytestmark = [
+    pytest.mark.skipif(
+        not sandbox_deps_available(),
+        reason="sandbox executor deps (fastapi/uvicorn) not installed"),
+    pytest.mark.skipif(
+        not proxy_binary_available(), reason=SKIP_NO_PROXY_BINARY),
+]
 
 
 @pytest.fixture()

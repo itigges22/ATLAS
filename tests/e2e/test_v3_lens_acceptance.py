@@ -45,14 +45,13 @@ import pytest
 from tests.e2e import conftest
 from tests.e2e.conftest import (
     PROXY_BINARY, REPO, drive_agent_turn, free_port, ordered_subsequence,
-    sandbox_deps_available, start_proxy, wait_for_port,
+    sandbox_deps_available, start_proxy, proxy_binary_available,
+    SKIP_NO_PROXY_BINARY, wait_for_port,
 )
 
 pytestmark = [
     pytest.mark.skipif(
-        not (os.path.isfile(PROXY_BINARY) and os.access(PROXY_BINARY, os.X_OK)),
-        reason=f"atlas-proxy binary not available at {PROXY_BINARY} "
-               f"— run `cd proxy && go build -o {PROXY_BINARY} .` first"),
+        not proxy_binary_available(), reason=SKIP_NO_PROXY_BINARY),
     pytest.mark.skipif(
         not sandbox_deps_available(),
         reason="sandbox runtime deps missing — "

@@ -1,15 +1,36 @@
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 
+SANDBOX_DIR = Path(__file__).parents[2] / "sandbox"
+
 
 def _load_sandbox_module():
-    module_path = Path(__file__).parents[2] / "sandbox" / "executor_server.py"
+    # executor_server imports its sibling `structured_log`, which only
+    # resolves when sandbox/ is importable. In the container that holds
+    # because the module runs from its own directory; loading it by path
+    # from the test suite does not, so put the directory on sys.path
+    # first. Without this every test here fails at import with
+    # ModuleNotFoundError before reaching an assertion.
+    if str(SANDBOX_DIR) not in sys.path:
+        sys.path.insert(0, str(SANDBOX_DIR))
+    module_path = SANDBOX_DIR / "executor_server.py"
     spec = importlib.util.spec_from_file_location("atlas_sandbox_executor", module_path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Register before exec: executor_server defers annotation evaluation, so
+    # pydantic resolves model field types by looking the module up in
+    # sys.modules. Loading by path without registering leaves it absent and
+    # every model raises "is not fully defined". In the container the module
+    # runs as __main__ and is registered, so this only bites by-path loads.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 

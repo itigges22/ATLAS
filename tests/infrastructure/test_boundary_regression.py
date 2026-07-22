@@ -27,7 +27,17 @@ def executor(tmp_path_factory):
     spec = importlib.util.spec_from_file_location(
         "executor_server_bt", SANDBOX_DIR / "executor_server.py")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # executor_server defers annotation evaluation, so pydantic resolves
+    # model field types through sys.modules. The checks in this file only
+    # touch plain functions today and pass either way, but a test that
+    # reaches a request model would fail with "is not fully defined"
+    # rather than anything describing the real problem.
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     mod._WS_ROOT_FIXTURE = root
     return mod
 

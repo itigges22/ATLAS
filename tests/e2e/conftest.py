@@ -40,6 +40,25 @@ def sandbox_deps_available() -> bool:
         return False
 
 
+def proxy_binary_available() -> bool:
+    """Whether the compiled proxy these tests boot is present and runnable.
+
+    CI builds it (`go build -o /tmp/test-atlas-proxy .`) before invoking
+    pytest; a plain checkout has not. Without the guard the missing file
+    surfaces as a FileNotFoundError raised from subprocess deep inside a
+    fixture, which reads like a broken test rather than an absent
+    prerequisite. Checks the executable bit too, so a half-written or
+    non-executable file skips instead of failing at Popen.
+    """
+    return os.path.isfile(PROXY_BINARY) and os.access(PROXY_BINARY, os.X_OK)
+
+
+SKIP_NO_PROXY_BINARY = (
+    f"atlas-proxy binary not available at {PROXY_BINARY} "
+    f"— run `cd proxy && go build -o {PROXY_BINARY} .` first"
+)
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
