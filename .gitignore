@@ -209,3 +209,7 @@ lens_training/
 geometric-lens/geometric_lens/models/provenance.json
 geometric-lens/geometric_lens/models/provenance.json.sig
 geometric-lens/geometric_lens/models/.previous-bundle/
+
+# Understand-Anything knowledge graph (local analysis artifact, per-machine)
+.ua/
+.understand-anything/
