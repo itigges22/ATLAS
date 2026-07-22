@@ -320,6 +320,16 @@ services:
       - ATLAS_ALLOW_CREDENTIAL_READS=${ATLAS_ALLOW_CREDENTIAL_READS:-}
       - ATLAS_PERMISSION_TIMEOUT_SEC=${ATLAS_PERMISSION_TIMEOUT_SEC:-}
       - ATLAS_REASONING_BUDGET=${ATLAS_REASONING_BUDGET:-}
+      # Repetition-control sampling. llama-server defaults every one of
+      # these off, so the proxy sets DRY on outgoing requests; these let
+      # a .env override reach the container. Empty means the in-code
+      # default applies.
+      - ATLAS_DRY_MULTIPLIER=${ATLAS_DRY_MULTIPLIER:-}
+      - ATLAS_DRY_BASE=${ATLAS_DRY_BASE:-}
+      - ATLAS_DRY_ALLOWED_LENGTH=${ATLAS_DRY_ALLOWED_LENGTH:-}
+      - ATLAS_DRY_PENALTY_LAST_N=${ATLAS_DRY_PENALTY_LAST_N:-}
+      - ATLAS_REPEAT_PENALTY=${ATLAS_REPEAT_PENALTY:-}
+      - ATLAS_REPEAT_LAST_N=${ATLAS_REPEAT_LAST_N:-}
       # Context budget for conversation trimming (PC-216). Same
       # values the llama-server gets; the proxy trims history to a
       # token budget derived from per-slot context instead of a

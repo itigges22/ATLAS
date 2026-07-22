@@ -142,3 +142,86 @@ func TestExtractModelResponseSurfacesUnmarshalError(t *testing.T) {
 		t.Errorf("error missing inner json detail: %v", err)
 	}
 }
+
+// --- degenerate-output rejection -------------------------------------------
+//
+// Truncation recovery is structural: it reconstructs args from whatever the
+// field extractor can read. Degenerate generations parse just as cleanly as
+// real content, so without a sense-check they are "recovered" into a real
+// write against the user's file.
+
+func TestRecoveryRejectsRepeatedNewlineContent(t *testing.T) {
+	junk := strings.Repeat("\n", 400)
+	partial := `{"type":"tool_call","name":"write_file","args":{"path":"app.py","content":"` +
+		strings.ReplaceAll(junk, "\n", `\n`)
+
+	if _, ok := recoverTruncatedToolCall(partial); ok {
+		t.Fatal("recovered a write_file from 400 repeated newlines — degenerate output must not become a real write")
+	}
+}
+
+func TestRecoveryRejectsRepeatingTailEditFile(t *testing.T) {
+	tail := strings.Repeat("return None; return None; return None; return None;", 8)
+	partial := `{"type":"tool_call","name":"edit_file","args":{"path":"app.py","old_str":"x = 1","new_str":"` + tail
+
+	if _, ok := recoverTruncatedToolCall(partial); ok {
+		t.Fatal("recovered an edit_file whose new_str is a repeating tail")
+	}
+}
+
+func TestRecoveryRejectsDegenerateStructuralEditContent(t *testing.T) {
+	junk := strings.Repeat(" ", 500)
+	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"app.py","selector":"function:main","content":"` + junk
+
+	if _, ok := recoverTruncatedToolCall(partial); ok {
+		t.Fatal("recovered a structural_edit from 500 spaces")
+	}
+}
+
+// The guard must not reject legitimate truncated code, which is the entire
+// reason recovery exists.
+func TestRecoveryStillAcceptsRealTruncatedCode(t *testing.T) {
+	body := "def handler(request):\n" +
+		"    user = get_user(request)\n" +
+		"    if user is None:\n" +
+		"        return abort(404)\n" +
+		"    rows = query_orders(user.id)\n" +
+		"    total = sum(r.amount for r in rows)\n" +
+		"    return render_template('orders.html', rows=rows, total=total"
+	partial := `{"type":"tool_call","name":"write_file","args":{"path":"app.py","content":"` +
+		strings.ReplaceAll(strings.ReplaceAll(body, `"`, `\"`), "\n", `\n`)
+
+	got, ok := recoverTruncatedToolCall(partial)
+	if !ok {
+		t.Fatal("rejected a legitimately truncated write_file — recovery must still work for real code")
+	}
+	if got.Name != "write_file" {
+		t.Fatalf("recovered %q, want write_file", got.Name)
+	}
+}
+
+// Indented code is whitespace-heavy but nowhere near the degenerate ratio.
+func TestLooksDegenerateAllowsIndentedCode(t *testing.T) {
+	code := "            result.append(transform(item, config, index))\n" +
+		"            totals[key] = totals.get(key, 0) + item.amount\n" +
+		"            if item.status == 'pending' and not item.archived:\n" +
+		"                queue.push(item.id, priority=item.rank)\n" +
+		"            seen.add(item.id)\n"
+	if looksDegenerate(code) {
+		t.Fatal("flagged ordinary deeply-indented code as degenerate")
+	}
+
+	// A long file that legitimately repeats a boilerplate line must survive:
+	// repetition only counts as degeneracy when it dominates the value.
+	boiler := strings.Repeat("x = compute(a, b, c, d, e, f, g, h, i, j, k)\n", 3)
+	body := boiler + strings.Repeat("def f(q):\n    return q.value * 2 + offset(q)\n", 40)
+	if looksDegenerate(body) {
+		t.Fatal("flagged a long file with some repeated boilerplate as degenerate")
+	}
+}
+
+func TestLooksDegenerateIgnoresShortValues(t *testing.T) {
+	if looksDegenerate("\n\n\n\n") {
+		t.Fatal("short values must be exempt — a small new_str cannot look degenerate")
+	}
+}

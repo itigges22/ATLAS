@@ -1932,6 +1932,68 @@ func toWireMessages(messages []AgentMessage) []map[string]string {
 	return wire
 }
 
+// applyRepetitionSampling sets the repetition-control sampler fields on an
+// outgoing llama-server request.
+//
+// llama-server ships every repetition control off: querying /props on a
+// running instance reports repeat_penalty=1.0, dry_multiplier=0.0,
+// frequency_penalty=0.0, presence_penalty=0.0. Nothing bounded how long a
+// generation could repeat itself, which is what the stream-level
+// isLoopingTail cut in callLLMOnceWithGrammar exists to catch. That cut is
+// a backstop; it does not stop the model entering the loop.
+//
+// DRY rather than repeat_penalty. repeat_penalty scores individual token
+// reoccurrence, which is wrong for code: indentation, `return`, `self.`,
+// and closing braces legitimately repeat many times in one file. DRY scores
+// repeated *sequences*, and llama.cpp treats "\n" as a sequence breaker by
+// default, so per-line repetition across lines is not penalized at all.
+// dry_allowed_length is raised above llama.cpp's default of 2 for the same
+// reason — 3-token runs are ordinary in source.
+//
+// The defaults here reduce how often the tail loop is entered; they have not
+// been A/B'd against a benchmark run. ATLAS_DRY_MULTIPLIER=0 disables DRY
+// outright. ATLAS_REPEAT_PENALTY is available for the pure-repeated-newline
+// degeneration that DRY's newline sequence-breaker cannot see, and defaults
+// off precisely because of the code-repetition cost above.
+func applyRepetitionSampling(reqBody map[string]interface{}) {
+	dryMultiplier := envFloatOr("ATLAS_DRY_MULTIPLIER", 0.8)
+	if dryMultiplier > 0 {
+		reqBody["dry_multiplier"] = dryMultiplier
+		reqBody["dry_base"] = envFloatOr("ATLAS_DRY_BASE", 1.75)
+		reqBody["dry_allowed_length"] = envIntOr("ATLAS_DRY_ALLOWED_LENGTH", 6)
+		// Bound the lookback so DRY scans the current generation rather
+		// than the whole 32k window; -1 (llama.cpp's default) would make
+		// every prior turn's text a repetition source.
+		reqBody["dry_penalty_last_n"] = envIntOr("ATLAS_DRY_PENALTY_LAST_N", 2048)
+	}
+	if rp := envFloatOr("ATLAS_REPEAT_PENALTY", 1.0); rp != 1.0 {
+		reqBody["repeat_penalty"] = rp
+		reqBody["repeat_last_n"] = envIntOr("ATLAS_REPEAT_LAST_N", 64)
+	}
+}
+
+// envFloatOr reads a float tunable from the environment, falling back to def
+// when unset or unparseable.
+func envFloatOr(key string, def float64) float64 {
+	if v := envOr(key, ""); v != "" {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
+// envIntOr reads an int tunable from the environment, falling back to def
+// when unset or unparseable.
+func envIntOr(key string, def int) int {
+	if v := envOr(key, ""); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
 func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperature float64, grammar string) (string, int, error) {
 	wireMessages := toWireMessages(messages)
 
@@ -1961,6 +2023,7 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		// incompatible with enable_thinking"). Disable explicitly.
 		"chat_template_kwargs": map[string]bool{"enable_thinking": false},
 	}
+	applyRepetitionSampling(reqBody)
 	if grammar != "" {
 		// Token-level restriction wins over response_format. llama-server
 		// rejects requests that pass both response_format=json_object and
@@ -3210,6 +3273,56 @@ func recoverTruncatedToolCall(partial string) (ModelResponse, bool) {
 	return ModelResponse{}, false
 }
 
+// looksDegenerate reports whether a recovered field value is the model's
+// own degenerate output rather than real content.
+//
+// Truncation recovery exists for one case: a well-formed tool call whose
+// JSON was cut off by max_tokens. It reconstructs args from whatever
+// extractStringField can read, which is a purely structural operation — a
+// run of repeated newlines parses exactly as well as a real function body.
+// Without this check, a generation that degenerated into a repeating tail
+// (the same condition isLoopingTail cuts the stream on) is "successfully
+// recovered" into an edit_file or write_file call and executed against the
+// user's file. The stream cut prevents the tokens from being generated; it
+// does nothing about the bytes already buffered when recovery runs.
+//
+// Two shapes, both observed: a value that is almost entirely whitespace,
+// and one whose tail repeats. Short values are exempt — a legitimately
+// small new_str has no room to look degenerate, and the length floor keeps
+// ordinary edits out of the check entirely.
+func looksDegenerate(s string) bool {
+	const minJudgeable = 64
+	if len(s) < minJudgeable {
+		return false
+	}
+	var ws int
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t', '\n', '\r':
+			ws++
+		}
+	}
+	if float64(ws)/float64(len(s)) > 0.9 {
+		return true
+	}
+	// Repetition alone is not degeneracy — real files repeat boilerplate,
+	// and isLoopingTail's "tail occurs 3+ times" fires on a long file with
+	// a handful of similar lines. Rejecting those would break recovery for
+	// exactly the truncated writes it exists to salvage. Require instead
+	// that the repeated tail account for most of the value, which
+	// separates a repeating generation from a file that happens to repeat.
+	const probe = 48
+	if len(s) < probe*3 {
+		return false
+	}
+	tail := s[len(s)-probe:]
+	if strings.TrimSpace(tail) == "" {
+		return false
+	}
+	occurrences := strings.Count(s, tail)
+	return float64(occurrences*probe)/float64(len(s)) > 0.5
+}
+
 // extractStringField pulls a JSON-string field value out of a partial
 // (possibly truncated) tool-call payload. Returns the unescaped value
 // and true on success. The end is determined by the next unescaped `"`
@@ -3282,6 +3395,9 @@ func recoverTruncatedStructuralEdit(partial string) (ModelResponse, error) {
 	if !ok {
 		return ModelResponse{}, fmt.Errorf("structural_edit recovery: missing content")
 	}
+	if looksDegenerate(content) {
+		return ModelResponse{}, fmt.Errorf("structural_edit recovery: content is degenerate output, not a real edit")
+	}
 	args, _ := json.Marshal(StructuralEditInput{Path: path, Selector: selector, Content: content})
 	log.Printf("[agent] recovered truncated structural_edit: path=%s selector=%q content=%d chars",
 		path, selector, len(content))
@@ -3302,6 +3418,9 @@ func recoverTruncatedEditFile(partial string) (ModelResponse, error) {
 	newStr, newOK := extractStringField(partial, "new_str")
 	if !oldOK && !newOK {
 		return ModelResponse{}, fmt.Errorf("edit_file recovery: missing both old_str and new_str")
+	}
+	if looksDegenerate(oldStr) || looksDegenerate(newStr) {
+		return ModelResponse{}, fmt.Errorf("edit_file recovery: old_str/new_str is degenerate output, not a real edit")
 	}
 	replaceAll := strings.Contains(partial, `"replace_all":true`) ||
 		strings.Contains(partial, `"replace_all": true`)
@@ -3370,6 +3489,9 @@ func recoverTruncatedWriteFile(partial string) (ModelResponse, error) {
 
 	if path == "" {
 		return ModelResponse{}, fmt.Errorf("could not extract path from truncated write_file")
+	}
+	if looksDegenerate(unescaped) {
+		return ModelResponse{}, fmt.Errorf("write_file recovery: content is degenerate output, not a real file")
 	}
 
 	// Build the args JSON

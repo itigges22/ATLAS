@@ -279,3 +279,64 @@ func TestIsContextOverflow(t *testing.T) {
 		t.Error("false positive on nil")
 	}
 }
+
+// --- repetition sampling ---------------------------------------------------
+
+func TestApplyRepetitionSamplingDefaultsEnableDry(t *testing.T) {
+	body := map[string]interface{}{}
+	applyRepetitionSampling(body)
+
+	if body["dry_multiplier"] != 0.8 {
+		t.Fatalf("dry_multiplier = %v, want 0.8 (DRY must be on by default — "+
+			"llama-server ships every repetition control disabled)", body["dry_multiplier"])
+	}
+	// Above llama.cpp's default of 2: 3-token runs are ordinary in source.
+	if body["dry_allowed_length"] != 6 {
+		t.Fatalf("dry_allowed_length = %v, want 6", body["dry_allowed_length"])
+	}
+	if body["dry_penalty_last_n"] != 2048 {
+		t.Fatalf("dry_penalty_last_n = %v, want 2048 (bounded lookback, not -1)",
+			body["dry_penalty_last_n"])
+	}
+	// repeat_penalty scores individual tokens and mangles code indentation;
+	// it must stay off unless explicitly opted into.
+	if _, ok := body["repeat_penalty"]; ok {
+		t.Fatalf("repeat_penalty must not be set by default, got %v", body["repeat_penalty"])
+	}
+}
+
+func TestApplyRepetitionSamplingDryDisabledByEnv(t *testing.T) {
+	t.Setenv("ATLAS_DRY_MULTIPLIER", "0")
+	body := map[string]interface{}{}
+	applyRepetitionSampling(body)
+
+	for _, k := range []string{"dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n"} {
+		if _, ok := body[k]; ok {
+			t.Fatalf("%s set despite ATLAS_DRY_MULTIPLIER=0", k)
+		}
+	}
+}
+
+func TestApplyRepetitionSamplingRepeatPenaltyOptIn(t *testing.T) {
+	t.Setenv("ATLAS_REPEAT_PENALTY", "1.1")
+	body := map[string]interface{}{}
+	applyRepetitionSampling(body)
+
+	if body["repeat_penalty"] != 1.1 {
+		t.Fatalf("repeat_penalty = %v, want 1.1", body["repeat_penalty"])
+	}
+	if body["repeat_last_n"] != 64 {
+		t.Fatalf("repeat_last_n = %v, want 64", body["repeat_last_n"])
+	}
+}
+
+func TestEnvFloatOrAndEnvIntOrFallBackOnGarbage(t *testing.T) {
+	t.Setenv("ATLAS_TEST_FLOAT", "not-a-float")
+	t.Setenv("ATLAS_TEST_INT", "not-an-int")
+	if got := envFloatOr("ATLAS_TEST_FLOAT", 1.75); got != 1.75 {
+		t.Fatalf("envFloatOr on garbage = %v, want fallback 1.75", got)
+	}
+	if got := envIntOr("ATLAS_TEST_INT", 6); got != 6 {
+		t.Fatalf("envIntOr on garbage = %v, want fallback 6", got)
+	}
+}
