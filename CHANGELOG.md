@@ -4,6 +4,92 @@
 
 ## [Unreleased]
 
+### Removed: RPG planning, wavelet decomposition, and the retrieval stack (2026-07-22)
+- **RPG planning removed.** `ATLAS_RPG_PLANNING` shipped default-off; the A/B
+  against the flat planner on the reference local model returned 0
+  improvements, 2 regressions, and roughly 10x planning latency. The outcome
+  bottleneck is the model writing correct code, not the plan it writes
+  against. Deleted `v3-service/{rpg.py,rpg_eval.py}`, `v3-service/wavelet/`,
+  `proxy/rpg.go`, the two-stage planner, the signature veto, the drift
+  regeneration loop, and the RPG types. The flag stays in the config schema
+  marked deprecated so an existing `.env` gets a specific warning rather than
+  "unknown key". `docs/reports/RPG_WAVELET_PLANNING_V3_2.md` is kept and
+  marked removed — the design record and the reason it did not pay off are
+  both worth having.
+- **Retrieval stack removed.** `/v1/projects/*`, `/v1/tasks/*`,
+  `/v1/queue/stats`, and the lens's own `/v1/chat/completions` had no caller
+  anywhere in the repo — they appeared only as rows in the API.md table. The
+  PageIndex tree index, BM25, hybrid retriever, project store, and the router
+  stages that fed them are gone. The pattern cache stays: v3-service writes to
+  it through `/internal/patterns/write` after every successful candidate.
+- **Endpoints kept and verified against their callers**: `score-per-step`
+  (proxy, v3-service), `gx-score` (CLI, v3-service), `score-text` and
+  `sandbox/analyze` (CLI), `retrain` (benchmark), `reload` (retrain scripts),
+  `patterns/write` (v3-service). 23 lens routes before, 19 after.
+
+### Renamed: ast_edit is now structural_edit (2026-07-22)
+- The tool resolves a friendly selector (`function:NAME`, `class:NAME`,
+  `<tag>`) to exactly one tree-sitter node and replaces that node's source
+  text. tree-sitter produces a concrete syntax tree, and the tool never
+  traverses one, so the old name described neither the operation nor the
+  substrate — and it required the model to reason about compiler internals
+  when the trigger is "replace this whole function". Renamed across the proxy,
+  v3-service, CLI, ASA scripts, tests, docs, and all three translations,
+  including the `/internal/ast_edit` endpoint.
+- `ast_edit_steering.gguf` keeps its name: `model_registry.py` pins it by
+  filename and SHA256 against the HuggingFace dataset, so renaming would 404
+  every download. The ASA contrast prompts embedded the literal old tool name,
+  so published vectors predate the rename; `asa_calibration/README.md`
+  documents the rebuild path.
+- `atlas/cli/client.py`'s `RAG_API_URL` became `LENS_URL` (it always pointed
+  at the lens), and `ATLAS_LENS_URL` now takes precedence over the deprecated
+  `ATLAS_RAG_URL`, which previously overrode its own replacement.
+
+### Sampling and honesty gates keyed on evidence (2026-07-22)
+- **Repetition sampling enabled.** llama-server ships every repetition control
+  off (`repeat_penalty=1.0`, `dry_multiplier=0.0`, both penalties 0.0), and
+  the proxy set none, so nothing bounded a repeating generation. DRY is now
+  set on outgoing requests — chosen over `repeat_penalty`, which scores
+  individual tokens and punishes the indentation and keywords source code
+  repeats legitimately. Six env knobs, forwarded by compose and registered in
+  the config schema (which gained a `float` kind rather than demoting them to
+  unvalidated strings). Values are not yet A/B'd.
+- **Truncation recovery rejects degenerate output.** The three recovery paths
+  rebuilt tool args from whatever the field extractor read, with no check —
+  a run of repeated newlines parses as cleanly as a function body, so a
+  degenerate generation became a real `edit_file` against the user's file.
+- **Verification gate** now also fires when a test or build command actually
+  exited non-zero and nothing has passed since, catching a failing test the
+  model introduced itself — which no reading of the user's message predicts.
+- **Done-without-action gate** now also fires when the model opened the
+  project on a non-conversational message and nothing reached disk, covering
+  verbs absent from the intent list (`remove the debug logging` matched none).
+- **Message tier reduced to its one real decision.** `TierMaxTurns` treats
+  T1/T2/T3 identically, `shouldGeneratePlan` tests only T0, and v3-service
+  reads the tier into a log line without branching, so the T3 branch was
+  removed. T0 now requires positive evidence (short greeting or question
+  shape) instead of being the fallthrough: "slow it down significantly" was
+  classified conversational, capped at 5 turns, and returned a zero-tool-call
+  non-answer.
+- `run_command`'s description now marks the boundary it does not cover —
+  servers and watchers belong in `run_background`.
+
+### CI gates for failure modes the matrix could not see (2026-07-22)
+- **`min-python`** compares the tree against `pyproject.toml`'s
+  `requires-python`. A PEP 604 annotation in `sandbox/executor_server.py`
+  broke imports on the declared 3.9 floor while CI ran only 3.11/3.12, so it
+  failed for contributors and never in CI.
+- **`dockerfile-sources`** checks every `COPY` source exists, resolved against
+  each service's own build context from `docker-compose.yml`. Stale COPYs
+  after the retrieval and RPG removals broke image builds while imports,
+  tests, and lint stayed green.
+- Python suite repaired from 15 failures and 29 errors to zero (module loaders
+  missing `sys.path` and `sys.modules` registration; a missing skip guard on
+  the proxy binary).
+- Benchmark ablation conditions A–D now index the HuggingFace copies instead
+  of being vendored; verified byte-identical first. Tracked files: 3,045 to
+  605.
+
 ### CPU-torch images actually CPU-only again (2026-07-20)
 - The lens and v3-service Dockerfiles pre-install torch from the CPU-only
   index, but their pin (2.12.1) had drifted behind requirements.txt
