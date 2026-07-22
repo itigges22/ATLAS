@@ -76,7 +76,7 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` passes through to llama-server unchanged. |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction; owns the SQLite state store (`SQLITE_DB_PATH` on the `lens-state` volume) backing the pattern cache, co-occurrence graph, and router state |
+| **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing; owns the SQLite state store (`SQLITE_DB_PATH` on the `lens-state` volume) backing the pattern cache, co-occurrence graph, task queue, and router state |
 | **sandbox** | 30820 (host) / 8020 (container) | Python (FastAPI) | Isolated code execution, compilation, linting, test running |
 
 ---
@@ -413,7 +413,7 @@ Legend: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 
 
 ## 5. Geometric Lens
 
-Neural scoring system that evaluates code quality without executing it by analyzing the geometric structure of model embeddings. Runs entirely on CPU. Also hosts the pattern cache and the confidence router's feedback/stats endpoints.
+Neural scoring system that evaluates code quality without executing it by analyzing the geometric structure of model embeddings. Runs entirely on CPU. Also serves as the RAG API for project indexing, retrieval, confidence routing, and pattern caching.
 
 #### Why "Geometric Lens"?
 
@@ -478,22 +478,53 @@ between two different models.
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, the service degrades gracefully: C(x) returns neutral energy, G(x) returns `gx_score: 0.5` and `verdict: "unavailable"`. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
+### RAG / PageIndex V2
+
+```mermaid
+graph LR
+    subgraph indexing["Indexing Pipeline"]
+        AST["AST Parser\ntree-sitter Python"] --> TB["Tree Builder\nhierarchical index"]
+        TB --> BM25I["BM25 Index\ninverted index, k1=1.5"]
+        TB --> SUM["Summarizer\nLLM-generated summaries"]
+        BM25I --> PERS["Persistence\nJSON to disk"]
+        SUM --> PERS
+    end
+
+    subgraph retrieval["Retrieval"]
+        BM25S["BM25 Searcher\nmin_score=0.1, top_k=20"]
+        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6, max_calls=40"]
+        HYB["Hybrid Retriever\nroutes: bm25_first / tree_only / both"]
+        BM25S --> HYB
+        TreeS --> HYB
+    end
+
+    style indexing fill:#1a3a5c,color:#fff
+    style retrieval fill:#2d5016,color:#fff
+```
+
 ### Confidence Router & Pattern Cache
 
 ```mermaid
 graph LR
     subgraph router["Confidence Router"]
-        TS["Route Selector\nThompson Sampling\nBeta(α,β) posteriors"]
+        SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
+        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
+        TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
         FB["Feedback Recorder\nSQLite-backed"]
+        FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
+        SIG --> DIFF --> TS --> FC
         FB --> TS
     end
 
     subgraph cache["Pattern Cache"]
         PS["Pattern Store\nSQLite: STM (100) / LTM / PERSISTENT"]
+        PM["Pattern Matcher\nBM25 over summaries"]
         PE["Pattern Extractor\nLLM-driven"]
         PSC["Pattern Scorer\nEbbinghaus decay"]
-        COO["Co-occurrence Graph\nlinked patterns"]
-        PE --> PSC --> PS
+        COO["Co-occurrence Graph\nlinked pattern retrieval"]
+        PE --> PS
+        PS --> PM
+        PM --> PSC
         PS --> COO
     end
 
@@ -501,7 +532,7 @@ graph LR
     style cache fill:#5c3a1a,color:#fff
 ```
 
-The router keeps per-route Thompson posteriors updated from recorded outcomes (`/internal/router/feedback`). The signal-collection and fallback-chain stages that selected a route per request were removed with the RAG chat path they served — nothing calls them now, and route selection state is retained for the feedback/stats endpoints.
+4 routes with cost-weighted Thompson Sampling: CACHE_HIT (cost=1, k=0) → FAST_PATH (cost=50, k=1) → STANDARD (cost=300, k=5) → HARD_PATH (cost=1500, k=20).
 
 ---
 

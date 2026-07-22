@@ -55,6 +55,39 @@ class SQLitePool:
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("PRAGMA busy_timeout=5000;")
 
+            # Metrics daily
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS metrics_daily (
+                    date TEXT,
+                    key TEXT,
+                    value INTEGER,
+                    PRIMARY KEY (date, key)
+                )
+            """)
+            
+            # Metrics recent tasks
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS metrics_recent_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_record TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Tasks queue
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY,
+                    priority TEXT,
+                    status TEXT,
+                    data TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tasks_status_priority_created
+                ON tasks (status, priority, created_at)
+            """)
 
             # Thompson sampling state
             conn.execute("""

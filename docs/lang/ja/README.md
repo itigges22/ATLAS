@@ -90,6 +90,7 @@
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - モデル自身の埋め込み上で動くエネルギーベースのスコアリング。外部オラクル不要。(「[Geometric Lens とは?](../../ARCHITECTURE.md#why-geometric-lens)」)
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する、モデルの隠れ次元→512→128→1 の MLP
    - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 選択に用いる XGBoost アンサンブル
+   - [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - AST 対応のコード検索とプロジェクトインデキシング
    - [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling で必要な候補に計算を寄せる
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - ビルド検証のための分離実行環境。

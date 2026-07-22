@@ -396,7 +396,7 @@ the V3 service.
 
 ## 4. Geometric Lens
 
-Python FastAPI service for C(x)/G(x) scoring, pattern caching, and confidence-router feedback.
+Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence routing, and pattern caching.
 
 ### Environment Variables
 
@@ -432,7 +432,28 @@ threshold-based intervention remains disabled while raw telemetry stays visible.
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
+| CACHE_HIT route cost | 1 | Cheapest route (k=0 retrieval) |
+| FAST_PATH route cost | 50 | Quick route (k=1) |
+| STANDARD route cost | 300 | Default route (k=5) |
+| HARD_PATH route cost | 1,500 | Expensive route (k=20) |
+| BM25 k1 | 1.5 | BM25 term frequency saturation |
+| BM25 b | 0.75 | BM25 document length normalization |
+| Tree search max depth | 6 | LLM-guided traversal depth |
+| Tree search max calls | 40 | Maximum LLM scoring calls |
 | Pattern cache STM capacity | 100 | Short-term memory max entries |
+
+### Project Indexing Limits (YAML-overridable via `CONFIG_PATH`)
+
+These come from `geometric-lens/config.py:LimitsConfig` and `RetrievalConfig`. They are NOT env-var-configurable on their own — override by mounting a YAML file at `CONFIG_PATH` with matching nested keys.
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `limits.max_files` | 10,000 | Per-project file cap during indexing |
+| `limits.max_loc` | 500,000 | Per-project lines-of-code cap |
+| `limits.max_size_mb` | 100 | Per-file size cap (MB) — larger files are skipped |
+| `limits.project_ttl_hours` | 24 | Project index TTL before re-index |
+| `retrieval.top_k` | 20 | Default top-K returned per retrieval call |
+| `retrieval.context_budget_tokens` | 8,000 | Max tokens of retrieved context returned to the caller |
 
 ---
 
