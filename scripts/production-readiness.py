@@ -139,6 +139,12 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             "min-python",
             (python, "scripts/check_min_python.py"),
         ),
+        # A COPY whose source was deleted breaks only the image build —
+        # imports, tests, and lint all stay green, so nothing else sees it.
+        "dockerfile-sources": Gate(
+            "dockerfile-sources",
+            (python, "scripts/check_dockerfile_sources.py"),
+        ),
         "python-tests": Gate(
             "python-tests",
             (python, "-m", "pytest", *pytest_paths, "--no-header", "-q"),

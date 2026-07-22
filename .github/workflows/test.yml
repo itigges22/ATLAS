@@ -149,17 +149,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: test integrity + compile + min-python check
+      - name: test integrity + compile + min-python + dockerfile check
         # test-integrity runs tests/validate_tests.py (the weakened-test
         # linter); python-compile is a whole-tree syntax check; min-python
         # compares the tree against pyproject's requires-python floor, which
-        # the matrix above cannot do because it only runs 3.11/3.12. All
-        # three are static — no dependencies beyond the stdlib.
+        # the matrix above cannot do because it only runs 3.11/3.12;
+        # dockerfile-sources checks every COPY source still exists, which
+        # otherwise fails only in the image-build job. All are static — no
+        # dependencies beyond the stdlib.
         run: |
           python scripts/production-readiness.py \
             --only test-integrity \
             --only python-compile \
-            --only min-python
+            --only min-python \
+            --only dockerfile-sources
 
       - name: ruff check
         # --select F is Pyflakes — real-bug rules (undefined names, redefined
