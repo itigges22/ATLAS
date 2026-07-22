@@ -1786,22 +1786,6 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
-	// V3.2 RPG planning (issue #120): drift detection + the one-shot
-	// corrective regeneration. Both carry a prebuilt human message.
-	case "rpg_drift", "rpg_regen":
-		var d struct {
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(ev.Data, &d) == nil && d.Message != "" {
-			meta := "rpg drift"
-			if ev.Type == "rpg_regen" {
-				meta = "rpg regen"
-			}
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: meta, Body: d.Message,
-			})
-		}
-
 	// Reasoning repetition detector: the proxy saw the model open its
 	// reasoning stream with the same prefix on consecutive turns and
 	// queued a corrective for the next LLM call. Third member of the

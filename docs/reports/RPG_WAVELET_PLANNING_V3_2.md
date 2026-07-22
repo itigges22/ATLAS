@@ -1,5 +1,17 @@
 # V3.2 — Architecture-First Planning (RPG-style plan-then-fill over wavelet bands)
 
+> **Removed.** This design shipped behind `ATLAS_RPG_PLANNING` and was deleted
+> after measurement. An A/B against the flat planner on the reference local
+> model gave **0 improvements, 2 regressions, and roughly 10x planning
+> latency** — the outcome bottleneck is the model writing correct code, not the
+> plan it writes against. The RPG planner, the wavelet decomposition that fed
+> it, and the signature veto and drift-regeneration loops built on top were all
+> removed rather than kept alive behind a default-off flag.
+>
+> The document is kept as the design record and the reason it did not pay off.
+> `ATLAS_RPG_PLANNING` remains in the config schema marked deprecated so an
+> existing `.env` that sets it gets a clear warning instead of "unknown key".
+
 Tracks **[#120](https://github.com/itigges22/ATLAS/issues/120)**. Builds on the wavelet
 decomposition angle from **[#39](https://github.com/itigges22/ATLAS/issues/39)**.
 

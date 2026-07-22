@@ -1072,8 +1072,7 @@ class V3PipelineService:
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
             file_path: str = "", build_command: str = "",
-            working_dir: str = "/workspace",
-            constraints: List[str] = None) -> Dict[str, Any]:
+            working_dir: str = "/workspace") -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -1087,15 +1086,10 @@ class V3PipelineService:
             build_command: Optional project build command to run against an
                 ephemeral candidate overlay after syntax/self-tests pass.
             working_dir: Container workspace root used by the sandbox overlay.
-            constraints: raw constraint strings from the request. When the V3.2
-                RPG planner is active (issue #120) these carry the node's planned
-                signatures, used by the RPG signature veto below. Backward
-                compatible — defaults to none, leaving existing callers unchanged.
         """
         start = time.time()
         events = []
         files = files or {}
-        constraints = constraints or []
 
         # PC-048: derive language from the target file's extension. Used
         # only by smoke_compile_check below to pick the right syntax
@@ -1603,59 +1597,6 @@ class V3PipelineService:
                     cg_kept.append(c)
                 if cg_kept:  # only prune when at least one candidate survives
                     passing = cg_kept
-
-        # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
-        # When the RPG planner is active, the request constraints carry the
-        # node's planned signatures. Extend the #39-pt-1 veto from "imports
-        # survive" to "the planned interface exists": reject sandbox-passing
-        # candidates that don't define the planned functions. Additive and
-        # conservative — only fires when the flag is on AND constraints carry
-        # planned signatures, and never empties the candidate set (so it can't
-        # do worse than the flat path; a fully-failing set falls through intact
-        # to phase-3 repair).
-        if passing and constraints:
-            try:
-                from wavelet import rpg_planning_enabled as _rpg_on
-                _rpg_active = _rpg_on()
-            except Exception:
-                _rpg_active = False
-            if _rpg_active:
-                try:
-                    import rpg as _rpgmod
-                    planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
-                except Exception:
-                    planned_sigs = []
-                if planned_sigs:
-                    sig_kept = []
-                    vetoed = []  # (candidate, missing) — emitted only if the prune applies
-                    for c in passing:
-                        # Guarded per-candidate like the call-graph veto: an
-                        # unexpected parser error must skip the veto for that
-                        # candidate, not fail the whole /v3/generate request.
-                        try:
-                            missing = _rpgmod.missing_planned_signatures(
-                                c.get("code", ""), planned_sigs, file_path)
-                        except Exception as ve:
-                            print(f"  [rpg] signature check failed on cand "
-                                  f"{c.get('index')}: {ve} — keeping candidate",
-                                  flush=True)
-                            missing = []
-                        if missing:
-                            vetoed.append((c, missing))
-                            continue
-                        sig_kept.append(c)
-                    # Only prune when at least one candidate realizes the plan
-                    # — and only announce vetoes that actually took effect
-                    # (when every candidate drifts, all of them survive).
-                    if sig_kept:
-                        passing = sig_kept
-                        for c, missing in vetoed:
-                            emit("rpg_signature_veto",
-                                 f"Candidate {c['index']} sandbox-passed but missing "
-                                 f"planned signature(s): {', '.join(missing[:3])}",
-                                 index=c["index"], missing=missing[:5])
-                            print(f"  [rpg] vetoed cand {c['index']} — missing: {missing[:5]}",
-                                  flush=True)
 
         # ===== CANDIDATE SELECTION =====
         if passing:
@@ -2203,70 +2144,6 @@ def generate_plan(
                 progress_callback(stage, detail)
 
     emit("plan_start", f"generating {n_candidates} candidate plans")
-
-    # V3.2 RPG-style architecture-first planning (issue #120), flag-gated by
-    # ATLAS_RPG_PLANNING. Strictly additive: on any failure (flag off, modules
-    # missing, model output unusable) we fall through to the flat planner below.
-    # Pre-bound so a partial import failure can never leave a name unbound
-    # on the guarded paths below (py/uninitialized-local-variable).
-    decompose_project = decompose_file_map = _rpg_mod = None
-    try:
-        from wavelet import rpg_planning_enabled, decompose_project, decompose_file_map
-        import rpg as _rpg_mod
-        _rpg_on = rpg_planning_enabled()
-    except Exception:
-        _rpg_on = False
-    if _rpg_on:
-        try:
-            # Build the coarse structural band that seeds the proposal stage.
-            # Prefer the in-memory project_context the proxy already sent — the
-            # v3-service container has no project volume mount, so reading
-            # working_dir off disk only works in non-container / dev setups.
-            # Fall back to a disk scan when no context was passed.
-            coarse_map = None
-            try:
-                if project_context:
-                    coarse_map = [
-                        {"label": p.label, "filename": p.filename}
-                        for p in decompose_file_map(project_context, limit=30)
-                    ]
-                elif working_dir and os.path.isdir(working_dir):
-                    coarse_map = [
-                        {"label": p.label, "filename": p.filename}
-                        for p in decompose_project(working_dir, limit=30)
-                    ]
-            except Exception as ce:
-                emit("rpg_coarse_error", f"coarse decomposition failed: {ce}")
-            rpg_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
-            rpg_llm = LLMAdapter(progress_callback=progress_callback, thinking=rpg_thinking)
-
-            def _complete(prompt, temperature, mt, seed):
-                raw, _, _ = rpg_llm(prompt, temperature, mt, seed)
-                return raw
-
-            result = _rpg_mod.construct_rpg(
-                user_message=user_message,
-                complete_fn=_complete,
-                project_context=project_context,
-                coarse_map=coarse_map,
-                max_tokens=(8192 if rpg_thinking else 2048),
-                emit=emit,
-            )
-            if result.ok and result.plan and result.plan.get("steps"):
-                plan = dict(result.plan)
-                plan["candidates_tested"] = 1
-                plan["winning_score"] = result.score
-                plan["winning_index"] = 0
-                plan["reasons"] = ["RPG two-stage plan"] + result.issues
-                plan["rpg"] = result.rpg.to_dict()
-                emit("plan_selected",
-                     f"RPG plan ({len(plan['steps'])} steps, score={result.score:.2f})",
-                     index=0, score=result.score, steps=len(plan["steps"]))
-                return plan
-            emit("rpg_fallback",
-                 f"RPG not usable (stage={result.stage_reached}); using flat planner")
-        except Exception as re_:
-            emit("rpg_error", f"RPG planning failed: {re_}; using flat planner")
 
     # PC-206: thinking-aware infrastructure shipped — planner CAN run with
     # Template-level reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
@@ -3450,7 +3327,6 @@ class V3Handler(BaseHTTPRequestHandler):
                 file_path=file_path,  # PC-048: language-aware smoke check
                 build_command=build_command,
                 working_dir=working_dir or "/workspace",
-                constraints=constraints,  # V3.2: RPG signature veto (issue #120)
             )
         except ClientDisconnected as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
@@ -3474,29 +3350,6 @@ class V3Handler(BaseHTTPRequestHandler):
             "total_time_ms": result.get("total_time_ms", 0.0),
             "verification_evidence": result.get("verification_evidence", []),
         }
-
-        # V3.2 RPG (issue #120): report which planned signatures the WINNING
-        # code failed to realize, so the proxy's re-plan loop can react (the
-        # signature veto rejects failing candidates mid-pipeline, but the
-        # winner can still drift when every candidate fell short and one was
-        # kept anyway). Flag-gated and conservative — empty unless RPG is on,
-        # constraints carry signatures, and a planned function is genuinely
-        # absent from parseable code.
-        try:
-            from wavelet import rpg_planning_enabled as _rpg_on
-            _rpg_active = _rpg_on()
-        except Exception:
-            _rpg_active = False
-        if _rpg_active and response["code"] and constraints:
-            try:
-                import rpg as _rpgmod
-                planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
-                missing = _rpgmod.missing_planned_signatures(
-                    response["code"], planned_sigs, file_path)
-                if missing:
-                    response["rpg_signature_missing"] = missing
-            except Exception as _e:
-                print(f"  [rpg] drift check skipped: {_e}", flush=True)
 
         final = json.dumps(response)
         try:

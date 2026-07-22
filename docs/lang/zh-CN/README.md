@@ -163,7 +163,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 - 结构化调用图推理（[#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125)，感谢 [@yogthos](https://github.com/yogthos)）；ARCHITECTURE.md 翻译为 zh-CN / ja / ko ([#25](https://github.com/itigges22/ATLAS/issues/25))。
 
 **V3.2** - 下一个里程碑：更深入的代码推理与规划。
-- 架构优先的规划阶段 - RPG 式的先规划后填充：在模块尺度规划，再在函数尺度实现（[#120](https://github.com/itigges22/ATLAS/issues/120)，PR [#124](https://github.com/itigges22/ATLAS/pull/124)）。
+- ~~架构优先的规划阶段 - RPG 式的先规划后填充~~（[#120](https://github.com/itigges22/ATLAS/issues/120)，PR [#124](https://github.com/itigges22/ATLAS/pull/124)）。**已实现、已测量、已移除。** 在参考本地模型上的 A/B 得到 0 项改进、2 项回归，规划延迟约为 10 倍：瓶颈在于模型能否写出正确的代码，而不在于规划本身。RPG 规划器及其依赖的 wavelet 分解已被删除，而不是留在默认关闭的开关后面。
 - 结构化代码推理（收尾）- 求解器支撑的可达性分析 + 语法无关的小波分解，实现多分辨率的"哪些文件重要"检索 ([#39](https://github.com/itigges22/ATLAS/issues/39))。
 - 带采样的推理 - 兼顾效率与质量提升 ([#9](https://github.com/itigges22/ATLAS/issues/9))。
 - 顺延的基础设施：自动化 HuggingFace 提交流水线 ([#102](https://github.com/itigges22/ATLAS/issues/102))；ROCm 跑在 K3s / Kubernetes 上；注册表模型的正式基准测试 - LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28))。
