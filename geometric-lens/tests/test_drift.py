@@ -88,6 +88,13 @@ def test_fingerprint_reproduces_energies(tmp_path):
     from geometric_lens.cost_field import CostField
 
     dim = 16
+    # Seed the init: CostField ends in Softplus, and for some random draws the
+    # pre-activation sits far enough negative that both the unit and the scaled
+    # embedding saturate to nearly the same energy. The scale-drift assertion
+    # below then compares two values within tolerance and fails. Sampling 300
+    # unseeded inits puts that at ~13%. Seed 3 separates the two energies by
+    # ~155%, an order of magnitude above the 15% tolerance used here.
+    torch.manual_seed(3)
     cf = CostField(input_dim=dim)
     cf.set_eval_mode()
 
