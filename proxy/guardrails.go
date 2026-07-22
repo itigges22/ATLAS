@@ -632,6 +632,32 @@ func isVerificationCommand(cmd string) bool {
 // missing and what to run. We prefer concrete suggestions over
 // abstract "verify your work" prompts — the model is more likely to
 // pick a sensible command when given a category.
+// wantsStateChange reports whether `done` should be blocked when no write,
+// edit, or delete succeeded in this run.
+//
+// actionIntentWords alone was the test, and it is an open vocabulary that
+// cannot be completed: it lists "create"/"add"/"make" but not
+// "remove"/"delete", so "remove the debug logging from app.py" armed no
+// gate and the model could close the turn having deleted nothing. Adding
+// those two words leaves the next verb missing.
+//
+// The second signal is observed instead of guessed: a read-only tool
+// succeeded, so the model opened the project rather than answering from the
+// message alone. That covers any phrasing, including verbs no list has.
+//
+// It needs the tier to stay honest, because reading files is also how a
+// question gets answered. "why does the game store direction as a string"
+// opens the file and correctly writes nothing; classifyAgentTier calls that
+// conversational, and conversational messages are never gated. What remains
+// is the case worth blocking: a non-conversational message, the model went
+// into the project, and nothing changed on disk.
+func wantsStateChange(userMessage string, tier Tier, inspectedWorkspace bool) bool {
+	if isActionIntentMessage(userMessage) {
+		return true
+	}
+	return inspectedWorkspace && tier != Tier0Conversational
+}
+
 // gateTrigger names why the verification gate fired, for the log line. A
 // red command outranks message shape: it is the concrete signal, and when
 // both hold it is the one that describes what actually happened.

@@ -1084,3 +1084,57 @@ func TestRunBackgroundDescriptionOwnsServers(t *testing.T) {
 		t.Fatal("run_background should keep naming a concrete server command — that specificity is what makes it selectable")
 	}
 }
+
+// --- done-without-action gate: observed engagement vs verb list ------------
+
+// The gap the verb list left. actionIntentWords carries "create"/"add"/"make"
+// but not "remove"/"delete", so this prompt armed no gate and the model could
+// close the turn having deleted nothing.
+func TestWantsStateChangeCatchesRemovalWithoutAVerbListEntry(t *testing.T) {
+	msg := "remove the debug logging from app.py"
+
+	if isActionIntentMessage(msg) {
+		t.Fatalf("precondition failed: %q now matches actionIntentWords, so this test "+
+			"no longer exercises the observed-engagement path", msg)
+	}
+	if !wantsStateChange(msg, Tier2Medium, true) {
+		t.Fatal("removal request with the workspace inspected must arm the gate")
+	}
+}
+
+// The user's stated worst case: model investigates, finds the bug, narrates it,
+// never applies the fix.
+func TestWantsStateChangeCatchesDiagnoseWithoutFix(t *testing.T) {
+	msg := "the sidebar overlaps the content on narrow screens"
+	if !wantsStateChange(msg, classifyAgentTier(msg), true) {
+		t.Fatal("bug report + files opened + nothing written must arm the gate")
+	}
+}
+
+// Reading files is also how a question is answered; those must stay ungated.
+func TestWantsStateChangeIgnoresQuestionsThatReadFiles(t *testing.T) {
+	msg := "why does the game store direction as a string"
+	if got := classifyAgentTier(msg); got != Tier0Conversational {
+		t.Fatalf("precondition: classifyAgentTier(%q) = %v, want T0", msg, got)
+	}
+	if wantsStateChange(msg, Tier0Conversational, true) {
+		t.Fatal("a question that opened files must not be gated — writing nothing is the correct outcome")
+	}
+}
+
+// Acknowledgements are longer than the T0 length floor but never touch the
+// project, so engagement is what keeps them out.
+func TestWantsStateChangeIgnoresAcknowledgements(t *testing.T) {
+	for _, msg := range []string{"thanks, that looks great", "ok that makes sense to me"} {
+		if wantsStateChange(msg, classifyAgentTier(msg), false) {
+			t.Errorf("acknowledgement %q armed the gate with no workspace inspection", msg)
+		}
+	}
+}
+
+// Explicit action wording still arms the gate on its own, before any tool runs.
+func TestWantsStateChangeHonoursExplicitActionIntent(t *testing.T) {
+	if !wantsStateChange("add a logout button to the navbar", Tier2Medium, false) {
+		t.Fatal("explicit action intent must arm the gate without needing inspection")
+	}
+}

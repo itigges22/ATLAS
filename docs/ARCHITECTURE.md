@@ -213,7 +213,16 @@ Each `write_file`/`edit_file` call is classified independently:
 | T2 (Feature) | 0 (uncapped) | V3 pipeline fires |
 | T3 (Hard) | 0 (uncapped) | V3 pipeline fires |
 
+The two columns above belong to two different classifiers, and the table reads as one only by coincidence. **Turns** comes from the message tier (`proxy/agent.go:classifyAgentTier`), which scores what the user typed. **Behavior** comes from the file tier (`proxy/tools.go:classifyFileTier`), which scores the file being edited and is what actually gates V3 — the message tier is forwarded to v3-service but only lands in a log line.
+
+Because the turn cap is the same for T1/T2/T3, the message tier has exactly one decision to make: conversational or not. T0 caps at 5 turns and skips Plan Mode; every other value behaves identically. It therefore requires positive evidence to call something conversational — a sub-12-character greeting or a question shape — and treats everything else as work. The asymmetry is deliberate: misreading conversation as work costs one wasted planner call, while misreading work as conversation caps a real request at 5 turns and fails it.
+
 Tier caps are 0 (uncapped); the detector stack inside the loop decides when to break: lens regression (`agent_lens_intervention`), reasoning repetition (`agent_reasoning_intervention`), tool-call repetition (`agent_repeat_intervention`), path-aware error breaker, done-without-action gate, claim-check gate, plan adherence threshold, and the empty-response fallback. Operators can override with `ATLAS_MAX_TURNS=<n>` for one-off "fix the entire app" prompts — see `proxy/types.go::envOverrideMaxTurns`.
+
+Two of those gates decide whether to fire from what the run observed rather than from how the request was worded, because request wording is an open vocabulary that no list completes:
+
+- **Verification gate** — blocks `done` when the user asked for a repair, *or* when a test or build command actually exited non-zero and nothing has passed since. The second condition catches a failing test the model introduced on its own, which no reading of the user's message could have predicted.
+- **Done-without-action gate** — blocks `done` when the request carries explicit action wording, *or* when the model opened the project on a non-conversational message and nothing landed on disk. That covers verbs absent from the intent list (`remove the debug logging` matches none of them), while questions stay exempt: they are conversational, and answering one by reading files and writing nothing is correct.
 
 Classifier in `proxy/tools.go` (`classifyFileTier`); logic-pattern matcher in the same file (`hasLogicIndicators`).
 

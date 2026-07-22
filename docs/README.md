@@ -119,8 +119,10 @@ whole first hour; keep [TROUBLESHOOTING.md](TROUBLESHOOTING.md) open in a tab.
 - **V3 pipeline / inner layer** — multi-candidate generation, scoring,
   sandbox verification, and repair for non-trivial files
   ([ARCHITECTURE.md](ARCHITECTURE.md), [reports/V3_ABLATION_STUDY.md](reports/V3_ABLATION_STUDY.md)).
-- **Tiers (T0–T3)** — per-message and per-file complexity classification;
-  T0 is conversational, T1 writes directly, and T2/T3 use the V3 pipeline
+- **Tiers (T0–T3)** — two separate classifications. The per-file tier gates
+  V3: T1 writes directly, T2/T3 use the pipeline. The per-message tier only
+  distinguishes T0 (conversational: 5-turn cap, no plan) from everything
+  else, since the turn cap and plan gate are all it feeds
   ([ARCHITECTURE.md](ARCHITECTURE.md)).
 - **Geometric Lens, C(x) / G(x)** — energy-based candidate scoring over the
   model's own embeddings; per-model trained bundle

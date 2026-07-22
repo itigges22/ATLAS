@@ -258,6 +258,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	writeCountByPath := map[string]int{}
 	const runawayWriteThreshold = 20
 	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
+
+	// Set when a read-only tool succeeds — the model opened the project to
+	// answer this message. Distinguishes a request the model treated as
+	// work from one it answered conversationally, without consulting a
+	// vocabulary list. See wantsStateChange.
+	inspectedWorkspace := false
 	// HARNESS-12: files the prompt explicitly asks the model to produce
 	// ("save your solution in X", "write the output to Y"). Checked
 	// against disk before `done` is allowed — a model can satisfy the
@@ -550,10 +556,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// - verification gate: fix prompt + no run_command verify → bounce
 			// - this gate: action prompt + no successful edit tool → bounce
 			// Both can fire on the same prompt (e.g. "rewrite X and verify").
-			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
+			if wantsStateChange(userMessage, ctx.Tier, inspectedWorkspace) && !madeProductiveChange && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
-				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q has action-intent, no successful write/edit/structural_edit this loop, bounce %d/%d)",
+				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
 					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "assistant",
@@ -657,8 +663,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// all. Apply the done-without-action gate here too: same
 			// condition, same bounce shape (assistant + tool-rejection
 			// pair, so no bare trailing assistant message for prefill
-			// to trip on). Conversational input never matches
-			// isActionIntentMessage, so chat replies still exit here.
+			// to trip on). Chat replies still exit here: wantsStateChange
+			// requires either action-intent wording or that the model
+			// opened the project on a non-conversational message, and a
+			// chat reply does neither.
 			//
 			// Verification gate on the text exit too (#147 review finding
 			// #3): a fix/verify-intent prompt must not be abandoned via a
@@ -680,10 +688,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				})
 				continue
 			}
-			if isActionIntentMessage(userMessage) && !madeProductiveChange && gateBounces < maxGateBounces {
+			if wantsStateChange(userMessage, ctx.Tier, inspectedWorkspace) && !madeProductiveChange && gateBounces < maxGateBounces {
 				gateBounces++
 				rejection := actionWithoutProductiveChangeMessage(userMessage)
-				log.Printf("[agent] text-exit action gate: bouncing text at turn %d (user prompt %q has action-intent, no successful write/edit/structural_edit this loop, bounce %d/%d)",
+				log.Printf("[agent] text-exit action gate: bouncing text at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
 					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "assistant",
@@ -1320,6 +1328,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				parsed.Name == "find_file"
 			if isReadOnly {
 				consecutiveReads++
+				if result.Success {
+					// The model went looking at the project, so it read the
+					// message as work rather than conversation. Used by the
+					// done-without-action gate below to tell "remove the
+					// debug logging" (opens the file, writes nothing) apart
+					// from "thanks, that looks great" (no tool calls at all).
+					inspectedWorkspace = true
+				}
 			} else {
 				consecutiveReads = 0
 			}
@@ -3533,75 +3549,79 @@ func recoverTruncatedWriteFile(partial string) (ModelResponse, error) {
 	}, nil
 }
 
-// classifyAgentTier classifies the task tier using fast heuristics.
+// classifyAgentTier decides whether a request is conversational.
 //
-// Inversion (PC-159 follow-up): the prior cascade defaulted to T1, which
-// kept V3 dormant on most real prompts (it only fires at T2+). After
-// observing real flask-app debugging sessions where V3 never engaged,
-// the rule is now: T2 is the floor for any non-trivial message, T0/T1
-// are the narrow cases. Trivial chat ("hi", "thanks", "yes") stays T0.
-// Single greetings or sub-15-char acknowledgements stay below the V3
-// threshold; everything else gets the pipeline.
+// The message tier has exactly two behaviours, despite the four-value Tier
+// type. TierMaxTurns caps T0 at 5 turns and leaves T1/T2/T3 uncapped
+// alike; shouldGeneratePlan tests only Tier0Conversational; and the tier
+// travels to v3-service where it is read into a log line and never branched
+// on. V3 activation is driven by classifyFileTier, which scores the file
+// being edited — a different function that does use T1/T2/T3 meaningfully.
+// So the only question here is conversational or not, and the returned
+// non-T0 value is Tier2Medium because that is what every consumer treats
+// every non-T0 value as.
+//
+// The costs are asymmetric, which sets the direction of the default.
+// Misreading chat as a task wastes one planner call on a message the model
+// answers and closes in a single turn. Misreading a task as chat caps it at
+// 5 turns and skips planning, and a capped task fails: "the snake is still
+// moving way too fast, please slow it down significantly" was classified
+// conversational during 2026-07-21 dogfooding and returned a zero-tool-call
+// non-answer instead of an edit.
+//
+// So T0 requires positive evidence, and the absence of a recognized task
+// word is not evidence. Describing desired software behaviour is open
+// vocabulary with no closed list to match against, while greetings are
+// short and questions are a closed grammatical class. Both of those are
+// things a message can be shown to BE, rather than shown not to be.
 func classifyAgentTier(message string) Tier {
 	trimmed := strings.TrimSpace(message)
-	lower := strings.ToLower(trimmed)
 
-	// T0: empty / sub-5-char garbage.
-	if len(trimmed) < 5 {
+	// Task language wins outright, at any length and in any shape. "can
+	// you fix the login bug?" is a question and a task; the task reading
+	// is the one whose failure mode is expensive.
+	if isActionIntentMessage(trimmed) || isFixIntentMessage(trimmed) {
+		return Tier2Medium
+	}
+
+	// Greeting or acknowledgement. The floor matches shouldGeneratePlan's
+	// own, so the two agree on what is too short to plan for.
+	if len(trimmed) < 12 {
 		return Tier0Conversational
 	}
 
-	// T0: trivial chat — exact-match against a small list of greetings
-	// and acknowledgements. Anything more substantial than these is
-	// assumed to be a task, even if it looks short.
-	trivialChat := map[string]bool{
-		"hi": true, "hello": true, "hey": true, "yo": true, "sup": true,
-		"thanks": true, "thank you": true, "ty": true, "thx": true,
-		"ok": true, "okay": true, "k": true,
-		"yes": true, "yep": true, "yeah": true, "no": true, "nope": true,
-		"sure": true, "got it": true, "cool": true, "nice": true,
-		"good": true, "great": true, "perfect": true,
-		"bye": true, "goodbye": true, "later": true, "cya": true,
-	}
-	if trivialChat[lower] {
+	if isQuestionMessage(trimmed) {
 		return Tier0Conversational
 	}
 
-	// Count multi-component indicators for T3 detection.
-	multiIndicators := 0
-	multiPatterns := []string{
-		"multiple files", "several files", "full application",
-		"api routes", "middleware", "database", "authentication",
-		"frontend and backend", "client and server",
-		"multiple endpoints", "with tests",
-	}
-	for _, p := range multiPatterns {
-		if strings.Contains(lower, p) {
-			multiIndicators++
-		}
-	}
-	fileIndicators := 0
-	filePatterns := []string{
-		".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".c", ".h",
-		".sh", ".json", ".toml", ".yaml", ".yml", ".css", ".html",
-		"package.json", "cargo.toml", "go.mod", "makefile",
-	}
-	for _, p := range filePatterns {
-		if strings.Contains(lower, p) {
-			fileIndicators++
-		}
-	}
-
-	// T3: explicit multi-component or architectural complexity. Costs
-	// the most (more turn budget, deeper V3 candidate generation), so
-	// the bar stays high.
-	if multiIndicators >= 2 || (fileIndicators >= 4 && multiIndicators >= 1) {
-		return Tier3Hard
-	}
-
-	// T2: default. Anything that survived the T0 gate above is a real
-	// task and gets the pipeline.
 	return Tier2Medium
+}
+
+// questionStarters is the set of words an English interrogative can open
+// with. Unlike task vocabulary, which is unbounded, this is a closed
+// grammatical class, which is what makes matching against it sound where
+// matching against a list of task verbs would not be.
+var questionStarters = []string{
+	"why", "what", "when", "where", "who", "which", "how",
+	"is ", "are ", "does ", "do ", "did ", "can ", "could ",
+	"would ", "should ", "will ", "won't", "isn't", "aren't",
+}
+
+// isQuestionMessage reports whether a message is shaped as a question:
+// a trailing "?", which catches any phrasing, or one of the interrogative
+// openers above for questions written without one.
+func isQuestionMessage(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	if strings.HasSuffix(trimmed, "?") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	for _, w := range questionStarters {
+		if strings.HasPrefix(lower, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // Toolchain describes one language ecosystem detected in the project.

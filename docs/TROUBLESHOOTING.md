@@ -780,7 +780,9 @@ If `/v3/generate` receives an approved project build command, V3 emits a `build_
 
 **Symptom:** First request creates a file and V3 runs. A terse follow-up like "ok" or "yes" gets a conversational reply — no tool calls, no V3 events.
 
-**What's happening:** The agent-loop tier classifier treats T2 as the floor for any non-trivial message — "still doesn't work, try again" classifies T2 and gets the pipeline. Only messages under 5 characters or exact matches against a small trivial-chat list (`hi`, `thanks`, `ok`, `yes`, …) stay at T0: conversational, no pipeline.
+**What's happening:** The agent-loop tier classifier (`proxy/agent.go:classifyAgentTier`) answers one question: is this conversation, or work? Work is the default, and T0 requires positive evidence, because the two mistakes cost very differently. Reading conversation as work wastes one planner call on a message the model closes in a single turn; reading work as conversation caps the turn at 5 and skips planning, which makes the request fail outright.
+
+A message is conversational only when it is under 12 characters (`hi`, `thanks`, `ok`) or shaped as a question — ending in `?`, or opening with an interrogative (`why`, `what`, `how`, `is`, `can`, …). Task wording outranks both, so `can you fix the login bug?` is work despite the question mark. Everything else is work: `still doesn't work, try again` and `the snake is moving way too fast, slow it down` both get the pipeline, even though neither names a file or matches a task-verb list.
 
 **What to do:** Say what you want, even briefly — "yes, fix it" clears the T0 gate. If a follow-up runs the agent loop but V3 stays silent, the request tier isn't the gate — the file's own tier is. See [V3 Pipeline Not Firing on Feature Files](#v3-pipeline-not-firing-on-feature-files) and check `docker compose logs atlas-proxy | grep -E "write_file|edit_file"` for the file-tier line (e.g. `[write_file] app.py → T1:simple (8 lines)`).
 

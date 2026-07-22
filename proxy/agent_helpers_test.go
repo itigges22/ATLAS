@@ -172,15 +172,68 @@ func TestClassifyAgentTierRealTaskDefaultsToT2(t *testing.T) {
 	}
 }
 
-func TestClassifyAgentTierMultiComponentStaysT3(t *testing.T) {
-	// T3 budget should still trip on explicit multi-component prompts.
-	t3Prompts := []string{
+func TestClassifyAgentTierMultiComponentIsTreatedAsWork(t *testing.T) {
+	// This asserted Tier3Hard when classifyAgentTier had a multi-component
+	// branch. That branch was removed because T3 was indistinguishable from
+	// T2 at every consumer: TierMaxTurns leaves T1/T2/T3 uncapped alike,
+	// shouldGeneratePlan tests only Tier0Conversational, and v3-service
+	// reads the tier into a log line without branching on it. The contract
+	// that actually holds is that these are work, not chat.
+	workPrompts := []string{
 		"build a full application with frontend and backend authentication",
 		"set up middleware, database, and authentication for the api",
 	}
-	for _, msg := range t3Prompts {
-		if got := classifyAgentTier(msg); got != Tier3Hard {
-			t.Errorf("classifyAgentTier(%q) = %v, want T3", msg, got)
+	for _, msg := range workPrompts {
+		if got := classifyAgentTier(msg); got == Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = T0 — a multi-component build must not be capped at 5 turns", msg)
+		}
+	}
+}
+
+// The 2026-07-21 dogfooding regression. This message names no file, matches
+// no task-verb list, and is not a question — it describes desired behaviour.
+// Classified T0 it was capped at 5 turns and produced a zero-tool-call
+// non-answer instead of an edit.
+func TestClassifyAgentTierBehaviourDescriptionIsWork(t *testing.T) {
+	msgs := []string{
+		"the snake is still moving way too fast, please slow it down significantly",
+		"the sidebar overlaps the content on narrow screens",
+		"it crashes when the list is empty",
+	}
+	for _, msg := range msgs {
+		if got := classifyAgentTier(msg); got == Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = T0 — describing broken behaviour is a task; "+
+				"absence of a recognized task word is not evidence of chat", msg)
+		}
+	}
+}
+
+func TestClassifyAgentTierGreetingsAndQuestionsAreConversational(t *testing.T) {
+	for _, msg := range []string{"hi", "thanks", "ok", "yep", "  hello  "} {
+		if got := classifyAgentTier(msg); got != Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = %v, want T0", msg, got)
+		}
+	}
+	for _, msg := range []string{
+		"why does the game store direction as a string",
+		"what does the lens actually score here",
+		"is the sandbox mounted read-only?",
+	} {
+		if got := classifyAgentTier(msg); got != Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = %v, want T0 (question shape)", msg, got)
+		}
+	}
+}
+
+// A question that is also a request must be treated as the request.
+func TestClassifyAgentTierTaskWinsOverQuestionShape(t *testing.T) {
+	for _, msg := range []string{
+		"can you fix the login bug?",
+		"could you add a logout button to the navbar?",
+		"why is it broken - can you repair the parser?",
+	} {
+		if got := classifyAgentTier(msg); got != Tier2Medium {
+			t.Errorf("classifyAgentTier(%q) = %v, want T2 — task intent outranks question shape", msg, got)
 		}
 	}
 }
