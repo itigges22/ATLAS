@@ -11,7 +11,7 @@ from atlas.cli import compose as compose_config
 
 # Shell env wins; otherwise the Docker .env's port keys drive the URLs.
 INFERENCE_URL = compose_config.service_url("llama")
-# geometric-lens. Called RAG_API_URL until the retrieval stack was removed —
+# geometric-lens. Called RAG_API_URL until the name was corrected —
 # every call through it is lens scoring or sandbox analysis, never retrieval.
 #
 # ATLAS_LENS_URL is the current name and now wins. ATLAS_RAG_URL is the

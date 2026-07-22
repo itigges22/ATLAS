@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Reverted: the removals below were undone on 2026-07-22
+
+The RPG, wavelet, retrieval, and ablation-data removals described in this section
+were reverted the same day. The code is back in the tree. Each subsystem is being
+reviewed one component at a time rather than in a single pass, so the entries below
+describe what was removed and why, not the current state of the tree.
+
+Reverted in `db4b055`, `b407eed`, `69f2dea`, `8d0abf2`. The `structural_edit` rename
+and the sampling and honesty-gate work were kept and remain accurate as written.
+
 ### Removed: RPG planning, wavelet decomposition, and the retrieval stack (2026-07-22)
 - **RPG planning removed.** `ATLAS_RPG_PLANNING` shipped default-off; the A/B
   against the flat planner on the reference local model returned 0
