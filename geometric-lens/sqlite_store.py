@@ -74,25 +74,6 @@ class SQLitePool:
                 )
             """)
             
-            # Thompson sampling state
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS thompson_state (
-                    difficulty_bin TEXT,
-                    route TEXT,
-                    alpha REAL DEFAULT 0.0,
-                    beta REAL DEFAULT 0.0,
-                    PRIMARY KEY (difficulty_bin, route)
-                )
-            """)
-            
-            # Routing stats
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS routing_stats (
-                    key TEXT PRIMARY KEY,
-                    value INTEGER DEFAULT 0
-                )
-            """)
-            
             # Pattern cache
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS patterns (

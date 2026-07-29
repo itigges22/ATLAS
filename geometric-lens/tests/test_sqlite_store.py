@@ -1,4 +1,4 @@
-"""SQLite state store: schema init, Thompson state, metrics, patterns."""
+"""SQLite state store: schema init, metrics, patterns."""
 
 import json
 import os
@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 EXPECTED_TABLES = {
-    "patterns", "co_occurrence", "thompson_state", "routing_stats",
+    "patterns", "co_occurrence",
     "metrics_daily", "metrics_recent_tasks", "store_metadata",
 }
 
@@ -62,49 +62,6 @@ def test_schema_init_is_idempotent(store):
     with pool2.get_connection() as conn:
         cur = conn.execute("SELECT COUNT(*) AS c FROM patterns")
         assert cur.fetchone()["c"] == 1  # existing rows survive re-init
-
-
-# ── Thompson state ──────────────────────────────────────────────────
-
-
-def test_thompson_upsert_and_read(store):
-    from models.route import Route, DifficultyBin
-    from router.feedback_recorder import record_outcome
-    from router.route_selector import _load_thompson_state
-
-    record_outcome(DifficultyBin.LOW, Route.FAST_PATH, success=True)
-    record_outcome(DifficultyBin.LOW, Route.FAST_PATH, success=True)
-    record_outcome(DifficultyBin.LOW, Route.FAST_PATH, success=False)
-
-    pool = store.get_db_pool()
-    with pool.get_connection() as conn:
-        cur = conn.execute(
-            "SELECT alpha, beta FROM thompson_state "
-            "WHERE difficulty_bin = ? AND route = ?",
-            (DifficultyBin.LOW.value, Route.FAST_PATH.value))
-        row = cur.fetchone()
-    assert row["alpha"] == 2.0
-    assert row["beta"] == 1.0
-
-    # Loader adds the Beta(1,1) prior on top of the raw counts.
-    states = _load_thompson_state(DifficultyBin.LOW)
-    assert states[Route.FAST_PATH] == (3.0, 2.0)
-    # Routes with no outcomes read as the uniform prior.
-    assert states[Route.HARD_PATH] == (1.0, 1.0)
-
-
-def test_thompson_reset(store):
-    from models.route import Route, DifficultyBin
-    from router.feedback_recorder import record_outcome
-    from router.route_selector import reset_thompson_state
-
-    record_outcome(DifficultyBin.HIGH, Route.STANDARD, success=True)
-    reset_thompson_state()
-
-    pool = store.get_db_pool()
-    with pool.get_connection() as conn:
-        cur = conn.execute("SELECT COUNT(*) AS c FROM thompson_state")
-        assert cur.fetchone()["c"] == 0
 
 
 # ── Metrics ─────────────────────────────────────────────────────────

@@ -23,7 +23,6 @@ COPY indexer/ indexer/
 COPY retriever/ retriever/
 COPY models/ models/
 COPY cache/ cache/
-COPY router/ router/
 COPY geometric_lens/ geometric_lens/
 
 # Create directories for config and data. The serving path writes to

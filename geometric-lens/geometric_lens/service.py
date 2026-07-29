@@ -4,7 +4,6 @@ Provides:
 - evaluate(embedding) -> energy scalar (C(x))
 - evaluate_gx(query) -> XGBoost G(x) verdict dict
 - is_enabled() -> bool
-- get_geometric_energy(query) -> float in [0,1] for router signal
 """
 
 import logging
@@ -43,11 +42,6 @@ _active_models_dir = None
 # was exported at container start. Reset by reload_weights().
 _served_model_id = None
 _served_model_probed = False
-
-# Once-per-load-cycle warning flag for the router's energy signal — a
-# disabled lens must not silently read as "low energy". Reset by
-# reload_weights().
-_energy_disabled_logged = False
 
 # C(x) energy scales are learned, not universal. The selected model's Lens
 # artifact must provide its own sigmoid calibration. Without one, raw energy is
@@ -450,8 +444,6 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
     # Re-probe llama-server on reload — the served model may have changed.
     _served_model_id = None
     _served_model_probed = False
-    global _energy_disabled_logged
-    _energy_disabled_logged = False
 
     if model_dir:
         try:
@@ -488,60 +480,6 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
             "status": "reloaded" if success else "error",
             "gx_loaded": _gx_xgboost is not None,
         }
-
-
-def get_geometric_energy(query: str) -> float:
-    """Compute normalized geometric energy for a query.
-
-    Extracts embedding from llama-server, evaluates through C(x),
-    and returns a normalized energy in [0, 1].
-
-    Used as the 4th signal in the Confidence Router.
-
-    Returns 0.0 if lens is disabled or models aren't loaded — logged once
-    per load cycle so a disabled lens can't silently masquerade as
-    "genuinely low energy" in the router's signal mix.
-    """
-    global _energy_disabled_logged
-    if not is_enabled() or not _ensure_models_loaded():
-        if not _energy_disabled_logged:
-            _energy_disabled_logged = True
-            logger.warning(
-                "get_geometric_energy: lens disabled or weights not "
-                "loaded — returning 0.0 to the confidence router for "
-                "every query until weights load")
-        return 0.0
-
-    try:
-        import torch
-        from geometric_lens.embedding_extractor import extract_embedding
-
-        cost_field, _, _, _, _, cx_cfg, _ = _snapshot_weights()
-
-        start = time.monotonic()
-
-        # Extract embedding
-        emb = extract_embedding(query)
-        x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
-
-        # Evaluate C(x)
-        with torch.no_grad():
-            energy = cost_field(x).item()
-
-        elapsed_ms = (time.monotonic() - start) * 1000
-
-        normalized = _normalize_cx_energy(energy, cx_cfg)
-
-        logger.debug(
-            f"Geometric energy: raw={energy:.2f} normalized={normalized:.3f} "
-            f"latency={elapsed_ms:.1f}ms"
-        )
-
-        return min(1.0, max(0.0, normalized))
-
-    except Exception as e:
-        logger.error(f"Geometric energy computation failed: {e}")
-        return 0.0
 
 
 def evaluate_energy(query: str) -> Tuple[float, float]:

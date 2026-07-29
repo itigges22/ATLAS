@@ -1,7 +1,6 @@
-"""Geometric Lens pipeline — retrieval orchestration with PageIndex, Pattern Cache, and Confidence Router."""
+"""Geometric Lens pipeline — retrieval orchestration with PageIndex and the Pattern Cache."""
 
 import asyncio
-import os
 import httpx
 import logging
 import json
@@ -25,11 +24,6 @@ _pattern_matcher_cache: Dict[str, Any] = {"version": -1, "matcher": None}
 PAGEINDEX_BUDGET = 6000
 CACHE_BUDGET = 2000
 FULL_BUDGET = 8000
-
-
-def is_routing_enabled() -> bool:
-    """Check if confidence routing is enabled (ROUTING_ENABLED env var)."""
-    return os.environ.get("ROUTING_ENABLED", "true").lower() in ("true", "1", "yes")
 
 
 def build_context_prompt(chunks: List[Dict[str, Any]], max_tokens: int = 8000) -> str:
@@ -420,15 +414,14 @@ async def rag_enhanced_completion(
     **kwargs,
 ):
     """
-    Perform RAG-enhanced chat completion with Pattern Cache and Confidence Router.
+    Perform RAG-enhanced chat completion with the Pattern Cache.
 
     1. Extract query from messages
     2. Search for relevant chunks (via configured retrieval mode)
     3. Query Pattern Cache for matching patterns (READ PATH)
-    4. ROUTER: Collect signals, estimate difficulty, select route, set retry budget
-    5. Build enhanced system prompt with context + cached patterns
-    6. Forward to llama-server
-    7. Return response (with route metadata in _route_decision for feedback recording)
+    4. Build enhanced system prompt with context + cached patterns
+    5. Forward to llama-server
+    6. Return response
     """
     # Extract query from last user message
     query = ""
@@ -467,47 +460,6 @@ async def rag_enhanced_completion(
     except Exception as e:
         logger.error(f"Pattern cache read failed: {e}")
         scored_patterns = []
-
-    # ── Confidence Router ──────────────────────────────────────
-    route_decision = None
-    if is_routing_enabled():
-        try:
-            from router.signal_collector import collect_signals
-            from router.difficulty_estimator import estimate_difficulty
-            from router.route_selector import select_route as thompson_select
-
-            # Collect signals
-            signals = collect_signals(
-                query=query,
-                scored_patterns=scored_patterns,
-                chunks=chunks,
-            )
-
-            # Estimate difficulty
-            difficulty = estimate_difficulty(signals)
-
-            # Determine if cache hit is viable
-            cache_hit_available = (
-                bool(scored_patterns)
-                and scored_patterns[0].composite_score > 0.7
-            )
-
-            # Select route via Thompson Sampling. Degrades internally to
-            # STANDARD when the state store is unreachable.
-            route_decision = thompson_select(
-                signals=signals,
-                difficulty=difficulty,
-                cache_hit_available=cache_hit_available,
-            )
-            logger.info(
-                f"Router decision: route={route_decision.route.value} "
-                f"D(x)={route_decision.difficulty_score:.3f} "
-                f"bin={route_decision.difficulty_bin.value} "
-                f"k={route_decision.retry_budget}"
-            )
-        except Exception as e:
-            logger.error(f"Confidence Router failed, defaulting to STANDARD: {e}")
-            route_decision = None
 
     # Context budget splitting:
     # If cache has hits: PageIndex gets 6K, cache gets 2K
@@ -548,10 +500,7 @@ async def rag_enhanced_completion(
                 response_text = choices[0].get("message", {}).get("content", "")
 
             if response_text:
-                # Determine retry budget from router
-                budget = 3  # default
-                if route_decision:
-                    budget = route_decision.retry_budget
+                budget = 3
 
                 verify_result = await verify_and_repair(
                     response_text=response_text,
@@ -617,42 +566,7 @@ async def rag_enhanced_completion(
                     )
                 )
 
-    # Attach route decision to result for feedback recording
-    if route_decision and isinstance(result, dict):
-        result["_route_decision"] = {
-            "route": route_decision.route.value,
-            "difficulty_score": route_decision.difficulty_score,
-            "difficulty_bin": route_decision.difficulty_bin.value,
-            "retry_budget": route_decision.retry_budget,
-            "signals": route_decision.signals.model_dump(),
-            "thompson_samples": route_decision.thompson_samples,
-        }
-
     return result
-
-
-# ──────────────────────────────────────────────────────────────
-# Confidence Router: Feedback Recording
-# ──────────────────────────────────────────────────────────────
-
-def record_route_feedback(
-    route_value: str,
-    difficulty_bin_value: str,
-    success: bool,
-):
-    """Record a routing outcome to update Thompson Sampling state."""
-    if not is_routing_enabled():
-        return
-
-    try:
-        from router.feedback_recorder import record_outcome
-        from models.route import Route, DifficultyBin
-
-        route = Route(route_value)
-        d_bin = DifficultyBin(difficulty_bin_value)
-        record_outcome(d_bin, route, success)
-    except Exception as e:
-        logger.error(f"Failed to record route feedback: {e}")
 
 
 async def forward_to_llama(

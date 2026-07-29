@@ -20,7 +20,6 @@ from pipeline import (
     rag_enhanced_completion, simple_completion, forward_to_llama_stream,
     invalidate_cache,
     write_pattern_async, record_pattern_outcome,
-    record_route_feedback, is_routing_enabled,
 )
 from indexer.tree_builder import build_tree_from_files
 from indexer.bm25_index import BM25Index
@@ -952,80 +951,6 @@ async def trigger_consolidation():
 
     await run_consolidation()
     return {"status": "consolidation_complete"}
-
-
-# ──────────────────────────────────────────────────────────────
-# Confidence Router: Internal Monitoring Endpoints
-# ──────────────────────────────────────────────────────────────
-
-@app.get("/internal/router/stats")
-async def router_stats():
-    """Get Confidence Router statistics — Thompson state, route distribution, difficulty histogram."""
-    if not is_routing_enabled():
-        return {"enabled": False, "message": "Routing is disabled (ROUTING_ENABLED=false)"}
-
-    try:
-        from router.route_selector import get_all_thompson_states
-        from router.feedback_recorder import get_routing_stats
-
-        thompson = get_all_thompson_states()
-        raw_stats = get_routing_stats()
-
-        # get_routing_stats() returns {"error": str(e)} on failure (it logs
-        # the full detail itself). Rebuild the payload from known keys so
-        # raw exception text never reaches the HTTP response.
-        if "error" in raw_stats:
-            stats: Dict[str, Any] = {
-                "error": "routing stats unavailable (see service log)",
-            }
-        else:
-            stats = {
-                "total_decisions": raw_stats.get("total_decisions"),
-                "total_successes": raw_stats.get("total_successes"),
-                "success_rate": raw_stats.get("success_rate"),
-                "route_distribution": raw_stats.get("route_distribution"),
-                "difficulty_distribution": raw_stats.get("difficulty_distribution"),
-            }
-
-        return {
-            "enabled": True,
-            "thompson_state": thompson,
-            "aggregate_stats": stats,
-        }
-    except Exception as e:
-        return {"enabled": True, "error": _safe_detail(e, "router stats")}
-
-
-@app.post("/internal/router/reset")
-async def router_reset():
-    """Reset Thompson Sampling state for recalibration."""
-    if not is_routing_enabled():
-        return {"status": "skipped", "message": "Routing is disabled"}
-
-    try:
-        from router.route_selector import reset_thompson_state
-        from router.feedback_recorder import reset_stats
-
-        reset_thompson_state()
-        reset_stats()
-
-        return {"status": "reset", "message": "Thompson state and stats reset to uniform priors"}
-    except Exception as e:
-        return {"status": "error", "error": _safe_detail(e, "router reset")}
-
-
-@app.post("/internal/router/feedback")
-async def router_feedback(
-    route: str,
-    difficulty_bin: str,
-    success: bool,
-):
-    """Manually record a routing outcome for Thompson Sampling."""
-    try:
-        record_route_feedback(route, difficulty_bin, success)
-        return {"status": "recorded"}
-    except Exception as e:
-        return {"status": "error", "error": _safe_detail(e, "router feedback")}
 
 
 # ──────────────────────────────────────────────────────────────
