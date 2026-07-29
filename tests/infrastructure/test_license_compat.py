@@ -39,7 +39,6 @@ DEP_LICENSES = {
     "numpy": "BSD-3-Clause",
     "pydantic": "MIT",
     "pytest": "MIT",
-    "python-multipart": "Apache-2.0",
     "pyyaml": "MIT",
     "requests": "Apache-2.0",
     "ruff": "MIT",
