@@ -47,7 +47,7 @@ Ordered by value ÷ risk. Each row is one commit, tests green after.
 | A1 | Dedupe ANSI colors + `safe_print` into `display.py` | atlas/cli: display.py + doctor, tier, asa, lens, onboard, init, **model** (7th copy found) | inverse-merge | low | ✅ done |
 | A2 | Extract publish/registry/model-resolve helpers out of `lens.py` into a shared module | lens.py → new `atlas/cli/publishing.py` + probe → `client.py` + `atlas_root` → `env.py` | inverse-merge | med | ✅ done |
 | A3 | Split `v3-service/main.py` (4018) God-file | → adapters.py, scoring.py, symbols.py, planning.py, pipeline.py, server(main).py | split | med | ☐ todo |
-| A4 | Split `tui/model.go` (2866): extract `events.go` | model.go → events.go (appendChatEvent + format*) | split | med | ☐ todo |
+| A4 | Split `tui/model.go` (2866): extract `events.go` | model.go 2866→1745; events.go 1135 | split | med | ✅ done |
 | A5 | Split proxy `agent.go` (4254) + `tools.go` (3562) | decompose `runAgentLoop` (1421-line fn) + per-tool files | split | high | ☐ todo |
 
 Notes:
@@ -154,3 +154,10 @@ Do not touch until the decision is made. Listed so the decision is concrete.
   test_lens: moved names → `publishing.*`); `bench._atlas_root`/`asa._atlas_root`
   stay patchable module attrs. lens.py 2178 → ~1600 lines.
   Suite: 1731 passed, 6 skipped — matches baseline exactly.
+- 2026-07-29 — **A4 done** (out of order while A3's split ran in background).
+  `tui/events.go` extracted from model.go: `appendChatEvent` + all ten `format*`
+  event renderers + `summarizeTool*` + the cancelled-event classifiers
+  (`envelopeLooksCancelled`/`looksCancelled`) — the full SSE-event → chat-row
+  formatting concern, verbatim. model.go 2866 → 1745 (update loop + view),
+  events.go 1135. Same Go package, so zero call-site changes. go build/vet/test
+  green, gofmt clean.
