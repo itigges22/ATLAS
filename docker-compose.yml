@@ -82,6 +82,7 @@ services:
       # ASA control-vector knobs (read by entrypoint-v3.1.sh; without the
       # passthrough the documented .env knobs only work on the macOS
       # native launcher). Empty values keep the entrypoint defaults.
+      - ATLAS_CONTROL_VECTOR=${ATLAS_CONTROL_VECTOR:-}
       - ATLAS_CONTROL_VECTOR_SCALE=${ATLAS_CONTROL_VECTOR_SCALE:-}
       - ATLAS_CONTROL_VECTOR_LAYER_RANGE=${ATLAS_CONTROL_VECTOR_LAYER_RANGE:-}
       - ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED=${ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED:-}

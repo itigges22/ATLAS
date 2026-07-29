@@ -511,7 +511,8 @@ deploy_manifests() {
 wait_for_services() {
     log_info "Waiting for all services to be ready..."
 
-    # Service names as defined in deployments
+    # Service names as defined in the deployment templates' app= labels.
+    SERVICES="llama-server geometric-lens atlas-proxy v3-service sandbox"
 
     for svc in $SERVICES; do
         log_info "Waiting for $svc..."

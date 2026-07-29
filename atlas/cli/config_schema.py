@@ -94,7 +94,11 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_SECRETS_DIR": Field("str"),
     "ATLAS_MACOS_PREFIX": Field("str"),
     "ATLAS_LLAMA_HOST": Field("str"),
-    "ATLAS_GPU_INDEX_LIST": Field("str"),
+    # Written by `atlas init` (wizard-detected GPU vendor + host UID/GID
+    # for the proxy container); validate() must not flag its own output.
+    "ATLAS_GPU_VENDOR": Field("str"),
+    "ATLAS_PROXY_UID": Field("int", min=0),
+    "ATLAS_PROXY_GID": Field("int", min=0),
     "ATLAS_AGENT_HISTORY_BUDGET": Field("int", min=0, max=10_000_000),
     "ATLAS_SANDBOX_MEM": Field("str"),   # "4g"/"0"/bytes — freeform
     "ATLAS_SANDBOX_CPUS": Field("str"),  # "2"/"0.5"/"0" — freeform
