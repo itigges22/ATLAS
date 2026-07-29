@@ -102,3 +102,77 @@ def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
     tokens = [text for text, _done in client.chat_stream(
         [{"role": "user", "content": "q"}])]
     assert tokens == ["<think>", "pondering", "</think>", "print(42)"]
+
+
+def _capture_post(monkeypatch):
+    """Replace client._post with a capturing stub; returns the capture dict."""
+    captured = {}
+
+    def fake_post(url, body, timeout=120, headers=None):
+        captured["url"] = url
+        captured["body"] = body
+        captured["headers"] = headers or {}
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr(client, "_post", fake_post)
+    return captured
+
+
+def test_chat_defaults_to_local_llama_without_auth(monkeypatch):
+    """With no provider configured the chat path stays on the local
+    llama-server: the historical /v1 URL, ATLAS_MODEL_NAME, and no auth."""
+    monkeypatch.delenv("ATLAS_LLM_PROVIDER", raising=False)
+    captured = _capture_post(monkeypatch)
+    client.chat([{"role": "user", "content": "q"}])
+    assert captured["url"] == f"{client.INFERENCE_URL}/v1/chat/completions"
+    assert captured["body"]["model"] == client.MODEL_NAME
+    assert "Authorization" not in captured["headers"]
+
+
+def test_chat_minimax_global_endpoint_model_and_bearer(monkeypatch):
+    """provider=minimax routes chat to the global MiniMax endpoint with the
+    default MiniMax model id and a Bearer credential."""
+    monkeypatch.setenv("ATLAS_LLM_PROVIDER", "minimax")
+    monkeypatch.delenv("ATLAS_MINIMAX_REGION", raising=False)
+    monkeypatch.delenv("ATLAS_MINIMAX_MODEL", raising=False)
+    monkeypatch.setenv("ATLAS_MINIMAX_API_KEY", "sample-credential")
+    captured = _capture_post(monkeypatch)
+    client.chat([{"role": "user", "content": "q"}])
+    assert captured["url"] == "https://api.minimax.io/v1/chat/completions"
+    assert captured["body"]["model"] == "MiniMax-M3"
+    assert captured["headers"]["Authorization"] == "Bearer sample-credential"
+
+
+def test_chat_minimax_cn_region_and_model_selection(monkeypatch):
+    """The CN region and an explicit model id are honored."""
+    monkeypatch.setenv("ATLAS_LLM_PROVIDER", "minimax")
+    monkeypatch.setenv("ATLAS_MINIMAX_REGION", "cn_zh")
+    monkeypatch.setenv("ATLAS_MINIMAX_MODEL", "MiniMax-M2.7")
+    monkeypatch.setenv("ATLAS_MINIMAX_API_KEY", "sample-credential")
+    captured = _capture_post(monkeypatch)
+    client.chat([{"role": "user", "content": "q"}])
+    assert captured["url"] == "https://api.minimaxi.com/v1/chat/completions"
+    assert captured["body"]["model"] == "MiniMax-M2.7"
+
+
+def test_minimax_unknown_region_and_model_fall_back_to_defaults(monkeypatch):
+    """Unrecognized region/model values fall back to the global endpoint and
+    the default MiniMax model rather than emitting an invalid request."""
+    monkeypatch.setenv("ATLAS_LLM_PROVIDER", "minimax")
+    monkeypatch.setenv("ATLAS_MINIMAX_REGION", "mars")
+    monkeypatch.setenv("ATLAS_MINIMAX_MODEL", "not-a-model")
+    monkeypatch.setenv("ATLAS_MINIMAX_API_KEY", "sample-credential")
+    captured = _capture_post(monkeypatch)
+    client.generate("hello")
+    assert captured["url"] == "https://api.minimax.io/v1/completions"
+    assert captured["body"]["model"] == "MiniMax-M3"
+
+
+def test_minimax_without_credential_sends_no_auth_header(monkeypatch):
+    """A missing credential must not fabricate an empty Bearer header."""
+    monkeypatch.setenv("ATLAS_LLM_PROVIDER", "minimax")
+    monkeypatch.delenv("ATLAS_MINIMAX_API_KEY", raising=False)
+    captured = _capture_post(monkeypatch)
+    client.chat([{"role": "user", "content": "q"}])
+    assert captured["headers"] == {}
+

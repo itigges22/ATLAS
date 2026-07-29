@@ -17,12 +17,80 @@ SANDBOX_URL = compose_config.service_url("sandbox")
 MODEL_NAME = os.environ.get("ATLAS_MODEL_NAME", "local-model")
 
 
-def _post(url: str, body: dict, timeout: int = 120) -> dict:
+# --- Provider selection ---
+# The default backend is the local llama-server (OpenAI-compatible, no auth).
+# Setting ATLAS_LLM_PROVIDER=minimax routes the generation calls to the
+# MiniMax remote API instead: a region-scoped OpenAI-compatible base URL, a
+# MiniMax model id, and a Bearer credential. Health, embedding, lens, and
+# sandbox calls are local services and stay on their own URLs regardless of
+# the selected provider.
+_LLAMA_PROVIDER = "llama"
+_MINIMAX_PROVIDER = "minimax"
+
+# Region -> OpenAI-compatible base URL. Each value already carries the /v1
+# suffix, so request paths append "/chat/completions" and "/completions".
+_MINIMAX_OPENAI_BASE_URLS = {
+    "global_en": "https://api.minimax.io/v1",
+    "cn_zh": "https://api.minimaxi.com/v1",
+}
+_MINIMAX_DEFAULT_REGION = "global_en"
+_MINIMAX_MODELS = ("MiniMax-M3", "MiniMax-M2.7")
+_MINIMAX_DEFAULT_MODEL = "MiniMax-M3"
+
+
+def _provider() -> str:
+    """Active generation provider (defaults to the local llama-server)."""
+    name = (os.environ.get("ATLAS_LLM_PROVIDER") or _LLAMA_PROVIDER).strip().lower()
+    return _MINIMAX_PROVIDER if name == _MINIMAX_PROVIDER else _LLAMA_PROVIDER
+
+
+def _minimax_region() -> str:
+    region = (os.environ.get("ATLAS_MINIMAX_REGION")
+              or _MINIMAX_DEFAULT_REGION).strip().lower()
+    return region if region in _MINIMAX_OPENAI_BASE_URLS else _MINIMAX_DEFAULT_REGION
+
+
+def _openai_base() -> str:
+    """OpenAI-compatible base URL for the active provider (no trailing slash).
+
+    For llama-server this is the local `.../v1`, keeping the historical
+    request paths byte-for-byte; for MiniMax it is the region endpoint.
+    """
+    if _provider() == _MINIMAX_PROVIDER:
+        return _MINIMAX_OPENAI_BASE_URLS[_minimax_region()]
+    return f"{INFERENCE_URL}/v1"
+
+
+def _model_name() -> str:
+    """Model id sent in generation requests for the active provider."""
+    if _provider() == _MINIMAX_PROVIDER:
+        model = (os.environ.get("ATLAS_MINIMAX_MODEL")
+                 or _MINIMAX_DEFAULT_MODEL).strip()
+        return model if model in _MINIMAX_MODELS else _MINIMAX_DEFAULT_MODEL
+    return MODEL_NAME
+
+
+def _auth_headers() -> Dict[str, str]:
+    """Authorization headers for the active generation provider.
+
+    The local llama-server needs none; MiniMax authorizes with a Bearer
+    credential read from ATLAS_MINIMAX_API_KEY.
+    """
+    if _provider() == _MINIMAX_PROVIDER:
+        key = (os.environ.get("ATLAS_MINIMAX_API_KEY") or "").strip()
+        if key:
+            return {"Authorization": f"Bearer {key}"}
+    return {}
+
+
+def _post(url: str, body: dict, timeout: int = 120,
+          headers: Optional[Dict[str, str]] = None) -> dict:
     """POST JSON, return parsed response."""
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}
-    )
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, data=data, headers=req_headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -76,9 +144,10 @@ def check_sandbox() -> Tuple[bool, str]:
 def generate(prompt: str, max_tokens: int = 8192,
              temperature: float = 0.6, stop: Optional[List[str]] = None,
              timeout: int = 900) -> dict:
-    """Generate via llama-server /v1/completions (raw prompt, includes thinking)."""
+    """Generate via the provider's OpenAI-compatible /completions endpoint
+    (raw prompt, includes thinking)."""
     body = {
-        "model": MODEL_NAME,
+        "model": _model_name(),
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -87,18 +156,20 @@ def generate(prompt: str, max_tokens: int = 8192,
     }
     if stop:
         body["stop"] = stop
-    return _post(f"{INFERENCE_URL}/v1/completions", body, timeout=timeout)
+    return _post(f"{_openai_base()}/completions", body, timeout=timeout,
+                 headers=_auth_headers())
 
 
 def generate_stream(prompt: str, max_tokens: int = 8192,
                     temperature: float = 0.6, stop: Optional[List[str]] = None,
                     timeout: int = 900):
-    """Stream generation via llama-server /v1/completions with stream=true.
+    """Stream generation via the provider's /completions endpoint with
+    stream=true.
 
     Yields (token_text, is_done) tuples.
     """
     body = {
-        "model": MODEL_NAME,
+        "model": _model_name(),
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -111,9 +182,10 @@ def generate_stream(prompt: str, max_tokens: int = 8192,
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"{INFERENCE_URL}/v1/completions",
+        f"{_openai_base()}/completions",
         data=data,
-        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream",
+                 **_auth_headers()},
     )
 
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -147,18 +219,20 @@ def generate_stream(prompt: str, max_tokens: int = 8192,
 
 def chat(messages: List[Dict], max_tokens: int = 8192,
          temperature: float = 0.6, timeout: int = 900) -> dict:
-    """Generate via llama-server /v1/chat/completions.
+    """Generate via the provider's OpenAI-compatible /chat/completions.
 
-    llama-server applies the GGUF's own chat template (--jinja), so this
-    stays model-agnostic — no hand-built ChatML markers or stop tokens.
+    llama-server applies the GGUF's own chat template (--jinja) and remote
+    providers apply their own, so this stays model-agnostic — no hand-built
+    ChatML markers or stop tokens.
     """
     body = {
-        "model": MODEL_NAME,
+        "model": _model_name(),
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    return _post(f"{INFERENCE_URL}/v1/chat/completions", body, timeout=timeout)
+    return _post(f"{_openai_base()}/chat/completions", body, timeout=timeout,
+                 headers=_auth_headers())
 
 
 def chat_stream(messages: List[Dict], max_tokens: int = 8192,
@@ -170,7 +244,7 @@ def chat_stream(messages: List[Dict], max_tokens: int = 8192,
     tags so callers keep a single thinking-detection path.
     """
     body = {
-        "model": MODEL_NAME,
+        "model": _model_name(),
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -179,9 +253,10 @@ def chat_stream(messages: List[Dict], max_tokens: int = 8192,
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"{INFERENCE_URL}/v1/chat/completions",
+        f"{_openai_base()}/chat/completions",
         data=data,
-        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream",
+                 **_auth_headers()},
     )
 
     in_reasoning = False

@@ -32,6 +32,12 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_MODEL_FILE": Field("str"),
     "ATLAS_MODEL_NAME": Field("str"),
     "ATLAS_MODELS_DIR": Field("str"),
+    # Generation provider: the local llama-server (default) or the MiniMax
+    # remote API. The MiniMax knobs below only apply when provider=minimax.
+    "ATLAS_LLM_PROVIDER": Field("enum", enum=("llama", "minimax")),
+    "ATLAS_MINIMAX_REGION": Field("enum", enum=("global_en", "cn_zh")),
+    "ATLAS_MINIMAX_MODEL": Field("enum", enum=("MiniMax-M3", "MiniMax-M2.7")),
+    "ATLAS_MINIMAX_API_KEY": Field("str"),
     "ATLAS_CTX_SIZE": Field("int", min=512, max=2_000_000),
     "ATLAS_PARALLEL_SLOTS": Field("int", min=1, max=64),
     "ATLAS_UBATCH": Field("int", min=1, max=100_000),
