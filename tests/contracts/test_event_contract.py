@@ -22,6 +22,21 @@ ALLOWED_UNCONSUMED: dict = {}
 ALLOWED_EXTRA_CONSUMERS = {"__turn_done__"}
 
 
+def _find_go_source(directory: Path, marker: str) -> str:
+    """Source of the non-test .go file in `directory` containing `marker`.
+
+    Functions move between files of a package during reorganizations
+    (appendChatEvent lived in model.go before events.go), so the contract
+    scans by content, never by filename."""
+    for go in sorted(directory.glob("*.go")):
+        if go.name.endswith("_test.go"):
+            continue
+        src = go.read_text()
+        if marker in src:
+            return src
+    raise AssertionError(f"{marker!r} not found in any {directory.name}/*.go")
+
+
 def _proxy_chat_events() -> set:
     events = set()
     for go in (REPO / "proxy").glob("*.go"):
@@ -30,7 +45,7 @@ def _proxy_chat_events() -> set:
         src = go.read_text()
         events.update(re.findall(r'ctx\.Stream(?:Fn)?\(\s*"([a-z0-9_]+)"', src))
     # v3StageToEvent maps v3-service stage names onto event types.
-    tools = (REPO / "proxy" / "tools.go").read_text()
+    tools = _find_go_source(REPO / "proxy", "func v3StageToEvent")
     fn = tools[tools.index("func v3StageToEvent"):]
     fn = fn[:fn.index("\nfunc ", 1)]
     events.update(re.findall(r'return "([a-z0-9_]+)"', fn))
@@ -38,7 +53,7 @@ def _proxy_chat_events() -> set:
 
 
 def _tui_chat_handlers() -> set:
-    src = (REPO / "tui" / "model.go").read_text()
+    src = _find_go_source(REPO / "tui", "func (m *tuiModel) appendChatEvent")
     start = src.index("func (m *tuiModel) appendChatEvent")
     body = src[start:]
     body = body[:body.index("\nfunc ", 1)]
