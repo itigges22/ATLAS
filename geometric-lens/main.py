@@ -4,12 +4,12 @@ import tempfile
 import threading
 import uuid
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
 import httpx
-from config import config, api_keys
+from config import config
 from sqlite_store import get_db_pool
 from pipeline import (
     retrieve_cached_patterns, record_pattern_access,
@@ -280,11 +280,8 @@ app = FastAPI(
 )
 
 # --- Internal service auth (per-installation token) ---
-# /v1/* keeps its api-keys.json Bearer scheme; the service token is
-# injected into that dict below so one credential works everywhere.
-# /internal/* (previously unauthenticated by design) is enforced by
-# this middleware when a token is configured. /health, /ready and /
-# stay open (compose/K8s probes are headerless).
+# /internal/* is enforced by this middleware when a token is configured.
+# /health, /ready and / stay open (compose/K8s probes are headerless).
 from geometric_lens.auth_token import (SERVICE_TOKEN as _SERVICE_TOKEN,
                                        install_urllib_opener as
                                        _install_urllib_opener)
@@ -292,14 +289,10 @@ import hmac as _hmac
 
 _install_urllib_opener()  # outbound: embedding extractor, identity probe
 
-if _SERVICE_TOKEN:
-    api_keys[_SERVICE_TOKEN] = {"user": "atlas-internal"}
-
 @app.middleware("http")
 async def _require_service_token(request, call_next):
-    # Enforce only on /internal/* — /v1/* has its own Bearer check
-    # (verify_api_key Depends, which now also accepts the service
-    # token), and /health, /ready, / stay open for probes.
+    # Enforce only on /internal/* — /health, /ready, / stay open for
+    # probes.
     if _SERVICE_TOKEN and request.url.path.startswith("/internal/"):
         got = request.headers.get("authorization", "")
         if not _hmac.compare_digest(got, f"Bearer {_SERVICE_TOKEN}"):
@@ -325,25 +318,6 @@ async def _correlation_id(request, call_next):
     if rid:
         response.headers["X-ATLAS-Request-ID"] = rid
     return response
-
-
-# Auth dependency — local key file lookup, no remote portal.
-async def verify_api_key(authorization: str = Header(None)) -> str:
-    """Verify the bearer token against the locally-loaded api-keys.json."""
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Invalid Authorization format")
-
-    key = parts[1]
-    metadata = api_keys.get(key)
-    if metadata is not None:
-        logger.info(f"API key validated for user: {metadata.get('user', 'unknown')}")
-        return key
-
-    raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 # Endpoints
@@ -430,7 +404,6 @@ async def root():
         "endpoints": {
             "health": "GET /health",
             "ready": "GET /ready",
-            "pattern_write": "POST /v1/patterns/write",
             "pattern_context": "POST /internal/patterns/context",
             "pattern_write_internal": "POST /internal/patterns/write",
             "cache_stats": "GET /internal/cache/stats",
@@ -476,44 +449,6 @@ def _spawn_pattern_task(coro) -> None:
     task.add_done_callback(_pattern_write_tasks.discard)
 
 
-def _dispatch_pattern_write(request: PatternWriteRequest) -> dict:
-    """Schedule pattern-write + outcome recording. Shared by /v1 and /internal handlers."""
-    if not request.success:
-        if request.active_pattern_ids:
-            _spawn_pattern_task(
-                record_pattern_outcome(request.active_pattern_ids, success=False)
-            )
-        return {"status": "recorded_failure"}
-
-    _spawn_pattern_task(
-        write_pattern_async(
-            query=request.query,
-            solution=request.solution,
-            retry_count=request.retry_count,
-            max_retries=request.max_retries,
-            error_context=request.error_context,
-            source_files=request.source_files,
-            active_pattern_ids=request.active_pattern_ids,
-        )
-    )
-
-    if request.active_pattern_ids:
-        _spawn_pattern_task(
-            record_pattern_outcome(request.active_pattern_ids, success=True)
-        )
-
-    return {"status": "accepted", "message": "Pattern extraction started in background"}
-
-
-@app.post("/v1/patterns/write")
-async def write_pattern(
-    request: PatternWriteRequest,
-    api_key: str = Depends(verify_api_key),
-):
-    """Auth-gated write path for external clients. See `_dispatch_pattern_write`."""
-    return _dispatch_pattern_write(request)
-
-
 class PatternContextRequest(BaseModel):
     task: str
     top_k: int = 3
@@ -546,13 +481,37 @@ async def pattern_context(request: PatternContextRequest):
 
 @app.post("/internal/patterns/write")
 async def write_pattern_internal(request: PatternWriteRequest):
-    """Unauthenticated write path for in-stack service-to-service calls (v3-service).
+    """Write path for in-stack service-to-service calls (v3-service).
 
-    Mirrors `/v1/patterns/write` exactly but skips the bearer-token check, in
-    line with the rest of the `/internal/*` surface (lens, sandbox, cache stats).
-    Only reachable from inside the docker network in normal deployments.
+    Schedules pattern extraction + outcome recording in the background.
+    Gated by the service-token middleware like the rest of `/internal/*`;
+    only reachable from inside the docker network in normal deployments.
     """
-    return _dispatch_pattern_write(request)
+    if not request.success:
+        if request.active_pattern_ids:
+            _spawn_pattern_task(
+                record_pattern_outcome(request.active_pattern_ids, success=False)
+            )
+        return {"status": "recorded_failure"}
+
+    _spawn_pattern_task(
+        write_pattern_async(
+            query=request.query,
+            solution=request.solution,
+            retry_count=request.retry_count,
+            max_retries=request.max_retries,
+            error_context=request.error_context,
+            source_files=request.source_files,
+            active_pattern_ids=request.active_pattern_ids,
+        )
+    )
+
+    if request.active_pattern_ids:
+        _spawn_pattern_task(
+            record_pattern_outcome(request.active_pattern_ids, success=True)
+        )
+
+    return {"status": "accepted", "message": "Pattern extraction started in background"}
 
 
 @app.get("/internal/cache/stats")
