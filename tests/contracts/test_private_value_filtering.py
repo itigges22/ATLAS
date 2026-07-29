@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.contracts import go_source
+
 REPO = Path(__file__).resolve().parents[2]
 CORPUS = json.loads(
     (REPO / "tests" / "fixtures" / "private_value_fixtures.json").read_text())
@@ -94,6 +96,6 @@ def test_logging_filter_masks_records():
 
 
 def test_go_implementation_pins_same_placeholder():
-    go_src = (REPO / "proxy" / "private_values.go").read_text()
+    go_src = go_source("proxy", "privateValuePlaceholder = ")
     assert f'privateValuePlaceholder = "{CORPUS["placeholder"]}"' in go_src, (
         "Go placeholder drifted from the fixture corpus")

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.contracts import go_source
+
 yaml = pytest.importorskip("yaml")
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,7 +47,7 @@ def test_no_phantom_documented_paths():
 
 def test_spec_version_matches_go_constant():
     spec = yaml.safe_load(SPEC.read_text())
-    go = (REPO / "proxy" / "api_version.go").read_text()
+    go = go_source("proxy", "const APIVersion")
     m = re.search(r'const APIVersion = "([\d.]+)"', go)
     assert m and spec["info"]["version"] == m.group(1), (
         "OpenAPI info.version must match the Go APIVersion constant")

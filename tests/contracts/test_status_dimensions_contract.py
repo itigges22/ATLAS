@@ -12,6 +12,8 @@ Parsing only — no services are started.
 import re
 from pathlib import Path
 
+from tests.contracts import go_source
+
 REPO = Path(__file__).resolve().parents[2]
 
 CANONICAL = [
@@ -26,7 +28,7 @@ CANONICAL = [
 
 
 def test_go_producer_emits_the_seven_dimensions():
-    src = (REPO / "proxy" / "calibration_status.go").read_text()
+    src = go_source("proxy", "return []StatusDimension{")
     # Extract the ordered list literal returned by buildDimensions.
     block = src[src.index("return []StatusDimension{"):]
     names = re.findall(r'\{"([a-z_]+)",', block)

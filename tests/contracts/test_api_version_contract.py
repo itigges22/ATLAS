@@ -10,6 +10,8 @@ import json
 import re
 from pathlib import Path
 
+from tests.contracts import go_source
+
 REPO = Path(__file__).resolve().parents[2]
 
 CANONICAL_CODES = [
@@ -21,7 +23,7 @@ CANONICAL_CODES = [
 
 
 def test_go_error_codes_match_canonical_set():
-    src = (REPO / "proxy" / "api_version.go").read_text()
+    src = go_source("proxy", 'ErrorCode = "')
     codes = re.findall(r'ErrorCode = "([a-z_]+)"', src)
     assert codes == CANONICAL_CODES, (
         f"Go error codes {codes} != canonical {CANONICAL_CODES}")
@@ -36,7 +38,7 @@ def test_error_schema_enum_matches():
 
 
 def test_version_constants_present():
-    src = (REPO / "proxy" / "api_version.go").read_text()
+    src = go_source("proxy", "const APIVersion")
     assert re.search(r'const APIVersion = "\d+\.\d+\.\d+"', src)
     assert re.search(r'const ProtocolVersion = \d+', src)
 

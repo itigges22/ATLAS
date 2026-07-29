@@ -148,8 +148,8 @@ func TestWriteFileIndentationChangeIsIteration(t *testing.T) {
 	// A common fix: correcting a wrongly-indented body line. Different
 	// leading indentation -> different fingerprint -> not flagged.
 	versions := []string{
-		`{"path":"m.py","content":"def f():\nreturn 1"}`,        // broken indent
-		`{"path":"m.py","content":"def f():\n    return 1"}`,    // fixed (4)
+		`{"path":"m.py","content":"def f():\nreturn 1"}`,         // broken indent
+		`{"path":"m.py","content":"def f():\n    return 1"}`,     // fixed (4)
 		`{"path":"m.py","content":"def f():\n        return 1"}`, // 8-space
 	}
 	for i, v := range versions {

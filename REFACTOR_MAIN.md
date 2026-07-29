@@ -48,7 +48,8 @@ Ordered by value ÷ risk. Each row is one commit, tests green after.
 | A2 | Extract publish/registry/model-resolve helpers out of `lens.py` into a shared module | lens.py → new `atlas/cli/publishing.py` + probe → `client.py` + `atlas_root` → `env.py` | inverse-merge | med | ✅ done |
 | A3 | Split `v3-service/main.py` (4018) God-file | → adapters.py, scoring.py, symbols.py, planning.py, pipeline.py, server(main).py | split | med | ☐ todo |
 | A4 | Split `tui/model.go` (2866): extract `events.go` | model.go 2866→1745; events.go 1135 | split | med | ✅ done |
-| A5 | Split proxy `agent.go` (4254) + `tools.go` (3562) | decompose `runAgentLoop` (1421-line fn) + per-tool files | split | high | ☐ todo |
+| A5 | **Consolidate the proxy: 33 → 13 files** (direction reversed by owner: too many files; collapse, never split) | main+5 infra fragments; gates.go ×6; detectors.go ×3; context.go ×4; permissions.go ×3; lens.go ×3; grammar→tools.go | merge | med | ✅ done |
+| A5b | Decompose `runAgentLoop` (1421-line fn) IN PLACE — `runState` struct + turn extraction + gate dedup; no new files | agent.go internals only | in-file | high | ☐ todo |
 
 Notes:
 - **A1** is textbook accidental fragmentation: `display.py` already owns the colors, yet 6
@@ -161,3 +162,28 @@ Do not touch until the decision is made. Listed so the decision is concrete.
   formatting concern, verbatim. model.go 2866 → 1745 (update loop + view),
   events.go 1135. Same Go package, so zero call-site changes. go build/vet/test
   green, gofmt clean.
+- 2026-08-05 — Session cut out mid-run; the A3 and A5a split agents died before
+  writing anything (tree was clean). Full re-verification caught what the Go
+  suites could not: the event-contract tests pinned `appendChatEvent` to
+  `tui/model.go` by filename and went red after A4. Root-fixed by scanning the
+  package by content (same policy as the proxy side) and un-pinned
+  `v3StageToEvent` from tools.go in the same pass, pre-empting the identical
+  break the pending tools split would have caused. Suite back to 1731/6.
+  A3 + A5a relaunched. Standing constraint recorded: refactors collapse, they
+  don't grow — no added lines unless structurally required.
+- 2026-08-05 — **Direction reversed on the Go side by the owner**: too many files
+  is the disease, not the cure. Killed the tools.go split mid-run (nothing
+  written). **Proxy consolidated 33 → 13 files, −155 lines**: server infra
+  (correlation, auth, api_version, security, private_values) → main.go; all six
+  honesty/plan gates (claim_check, structural_gate, syntax_gate, plan_adherence,
+  plan_reminder, asset_lint) → gates.go; stuck detectors (tool_repeat,
+  reasoning_repeat, traceback) → detectors.go; context enrichment (symbol_index,
+  project, workspace, session_manifest) → context.go; permission_gate +
+  trust_mode → permissions.go; lens_score + lens_samples + calibration_status →
+  lens.go; grammar → tools.go. Unchanged: agent.go, tools.go, guardrails.go,
+  types.go, events.go, v3_bridge.go, rpg.go (quarantined). Fallout, root-fixed:
+  five more contract tests pinned Go filenames — added one shared content-based
+  `go_source()` in tests/contracts/__init__.py, collapsed the event-contract
+  test's local copy into it; dropped the now-stale (and unnecessary)
+  `proxy/private_values.go` secret-scan allowlist entry, which strengthens the
+  scan. go build/vet/test + gofmt green first try; suite 1731/6 exact.
