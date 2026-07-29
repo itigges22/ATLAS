@@ -50,7 +50,7 @@ def compute_score(pattern: Pattern, similarity: float) -> PatternScore:
 
 def compute_storage_score(pattern: Pattern) -> float:
     """
-    Compute storage score for STM/LTM sorted-set ordering.
+    Compute storage score for STM sorted-set ordering (capacity eviction).
 
     Used purely for relative ordering; not directly comparable to
     compute_score's composite (which is gated against an absolute threshold).

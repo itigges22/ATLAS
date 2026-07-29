@@ -16,7 +16,6 @@ class PatternType(str, Enum):
 
 class PatternTier(str, Enum):
     STM = "stm"
-    LTM = "ltm"
     PERSISTENT = "persistent"
 
 

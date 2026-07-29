@@ -622,6 +622,17 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	// Pattern-cache context: the lens served lessons from previous
+	// sessions on similar tasks and the proxy injected them as a
+	// system note before the first LLM call.
+	case "pattern_context_injected":
+		body := formatPatternContextInjected(ev.Data)
+		if body != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "patterns", Body: body,
+			})
+		}
+
 	// Plan pipeline progress (planner candidate generation, scoring,
 	// selection). Lots of these fire during a 3-candidate sweep but
 	// we already drop per-token noise in the proxy callback — what
@@ -865,6 +876,24 @@ func formatSymbolIndexInjected(data json.RawMessage) string {
 	}
 	if p.Skipped > 0 {
 		body += fmt.Sprintf(" (%d skipped)", p.Skipped)
+	}
+	return body
+}
+
+// formatPatternContextInjected renders the pattern_context_injected
+// event — the proxy fetched pattern-cache lessons from the lens and
+// prepended them as a system note before the first LLM call.
+func formatPatternContextInjected(data json.RawMessage) string {
+	var p struct {
+		Count int      `json:"count"`
+		Types []string `json:"types"`
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return ""
+	}
+	body := fmt.Sprintf("injected %d pattern(s) from previous sessions", p.Count)
+	if types := strings.Join(p.Types, ", "); types != "" {
+		body += " — " + types
 	}
 	return body
 }

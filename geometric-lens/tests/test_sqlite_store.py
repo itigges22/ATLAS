@@ -123,17 +123,14 @@ def _make_pattern(pid="pat-1", tier=None):
     )
 
 
-def test_pattern_store_crud_and_version_bump(store):
+def test_pattern_store_crud(store):
     from cache.pattern_store import get_pattern_store
 
     ps = get_pattern_store()
     assert ps.available
-    v0 = ps.get_version()
 
     pattern = _make_pattern()
     assert ps.store_pattern(pattern, score=0.4)
-    v1 = ps.get_version()
-    assert v1 > v0
 
     got = ps.get_pattern(pattern.id)
     assert got is not None
@@ -142,12 +139,9 @@ def test_pattern_store_crud_and_version_bump(store):
 
     got.summary = "updated summary"
     assert ps.update_pattern(got, score=0.9)
-    v2 = ps.get_version()
-    assert v2 > v1
     assert ps.get_pattern(pattern.id).summary == "updated summary"
 
     assert ps.delete_pattern(pattern.id)
-    assert ps.get_version() > v2
     assert ps.get_pattern(pattern.id) is None
 
 
@@ -158,10 +152,13 @@ def test_pattern_store_tier_listing_and_scores(store):
     ps = get_pattern_store()
     ps.store_pattern(_make_pattern("stm-low"), score=0.1)
     ps.store_pattern(_make_pattern("stm-high"), score=0.9)
-    ps.store_pattern(_make_pattern("ltm-1", tier=PatternTier.LTM), score=0.5)
+    ps.store_pattern(
+        _make_pattern("seed-1", tier=PatternTier.PERSISTENT), score=0.5)
 
     stm = ps.get_stm_patterns()
     assert [p.id for p in stm] == ["stm-high", "stm-low"]  # score-descending
-    assert [p.id for p in ps.get_ltm_patterns()] == ["ltm-1"]
+    assert [p.id for p in ps.get_persistent_patterns()] == ["seed-1"]
     assert ps.stm_size() == 2
-    assert ps.ltm_size() == 1
+    assert ps.persistent_size() == 1
+    assert {p.id for p in ps.get_all_patterns()} == {
+        "stm-high", "stm-low", "seed-1"}

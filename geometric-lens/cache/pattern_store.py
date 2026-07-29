@@ -1,4 +1,4 @@
-"""SQLite-backed pattern storage with STM/LTM scoring."""
+"""SQLite-backed pattern storage: a scored STM tier plus persistent seeds."""
 
 import logging
 from typing import List, Optional, Dict
@@ -24,32 +24,6 @@ class PatternStore:
     def available(self) -> bool:
         return self._available
 
-    def get_version(self) -> int:
-        """Monotonic counter bumped on every mutation. Used to invalidate caches."""
-        if not self._available:
-            return 0
-        try:
-            with self._pool.get_connection() as conn:
-                cur = conn.execute("SELECT value FROM store_metadata WHERE key = 'version'")
-                row = cur.fetchone()
-                return row["value"] if row else 0
-        except Exception:
-            return 0
-
-    def _bump_version(self):
-        if self._available:
-            try:
-                with self._pool.get_connection() as conn:
-                    conn.execute("""
-                        INSERT INTO store_metadata (key, value)
-                        VALUES ('version', 1)
-                        ON CONFLICT(key) DO UPDATE SET value = value + 1
-                    """)
-            except Exception as e:
-                # Version bump is advisory (cache invalidation hint) — a
-                # failed write shouldn't fail the pattern operation.
-                logger.debug(f"Version bump failed: {e}")
-
     def store_pattern(self, pattern: Pattern, score: float = 0.0) -> bool:
         if not self._available:
             return False
@@ -65,7 +39,6 @@ class PatternStore:
                 """, (pattern.id, pattern.model_dump_json(), pattern.tier.value, score))
             if pattern.tier == PatternTier.STM:
                 self._enforce_stm_capacity()
-            self._bump_version()
             return True
         except Exception as e:
             logger.error(f"Failed to store pattern {pattern.id}: {e}")
@@ -100,7 +73,6 @@ class PatternStore:
                         UPDATE patterns SET data = ?, tier = ?
                         WHERE id = ?
                     """, (pattern.model_dump_json(), pattern.tier.value, pattern.id))
-            self._bump_version()
             return True
         except Exception as e:
             logger.error(f"Failed to update pattern {pattern.id}: {e}")
@@ -112,7 +84,6 @@ class PatternStore:
         try:
             with self._pool.get_connection() as conn:
                 conn.execute("DELETE FROM patterns WHERE id = ?", (pattern_id,))
-            self._bump_version()
             return True
         except Exception as e:
             logger.error(f"Failed to delete pattern {pattern_id}: {e}")
@@ -120,9 +91,6 @@ class PatternStore:
 
     def get_stm_patterns(self, limit: int = 50) -> List[Pattern]:
         return self._get_sorted_set_patterns(PatternTier.STM.value, limit)
-
-    def get_ltm_patterns(self, limit: int = 50) -> List[Pattern]:
-        return self._get_sorted_set_patterns(PatternTier.LTM.value, limit)
 
     def get_persistent_patterns(self) -> List[Pattern]:
         if not self._available:
@@ -138,29 +106,8 @@ class PatternStore:
     def get_all_patterns(self) -> List[Pattern]:
         patterns = []
         patterns.extend(self.get_stm_patterns(limit=STM_CAPACITY))
-        patterns.extend(self.get_ltm_patterns(limit=500))
         patterns.extend(self.get_persistent_patterns())
         return patterns
-
-    def promote_to_ltm(self, pattern_id: str, score: float) -> bool:
-        if not self._available:
-            return False
-        try:
-            pattern = self.get_pattern(pattern_id)
-            if not pattern:
-                return False
-            pattern.tier = PatternTier.LTM
-            with self._pool.get_connection() as conn:
-                conn.execute("""
-                    UPDATE patterns SET data = ?, tier = ?, score = ?
-                    WHERE id = ?
-                """, (pattern.model_dump_json(), PatternTier.LTM.value, score, pattern_id))
-            self._bump_version()
-            logger.info(f"Promoted pattern {pattern_id} to LTM (score={score:.3f})")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to promote pattern {pattern_id}: {e}")
-            return False
 
     def _get_count(self, tier: str) -> int:
         if not self._available:
@@ -175,9 +122,6 @@ class PatternStore:
 
     def stm_size(self) -> int:
         return self._get_count(PatternTier.STM.value)
-
-    def ltm_size(self) -> int:
-        return self._get_count(PatternTier.LTM.value)
 
     def persistent_size(self) -> int:
         return self._get_count(PatternTier.PERSISTENT.value)
@@ -198,9 +142,8 @@ class PatternStore:
             return {
                 "available": True,
                 "stm_size": self.stm_size(),
-                "ltm_size": self.ltm_size(),
                 "persistent_size": self.persistent_size(),
-                "total_patterns": self.stm_size() + self.ltm_size() + self.persistent_size(),
+                "total_patterns": self.stm_size() + self.persistent_size(),
                 "hits": hits,
                 "misses": misses,
                 "writes": writes,
@@ -236,19 +179,6 @@ class PatternStore:
     def record_write(self):
         self._incr_stat("writes")
 
-    def flush(self):
-        if not self._available:
-            return
-        try:
-            with self._pool.get_connection() as conn:
-                conn.execute("DELETE FROM patterns")
-                conn.execute("DELETE FROM store_metadata")
-                conn.execute("DELETE FROM co_occurrence")
-            self._bump_version()
-            logger.info("Pattern cache flushed")
-        except Exception as e:
-            logger.error(f"Failed to flush cache: {e}")
-
     def _get_sorted_set_patterns(self, tier: str, limit: int) -> List[Pattern]:
         if not self._available:
             return []
@@ -275,7 +205,6 @@ class PatternStore:
                             LIMIT ?
                         )
                     """, (PatternTier.STM.value, excess))
-                self._bump_version()
                 logger.info(f"Evicted {excess} patterns from STM (capacity={STM_CAPACITY})")
         except Exception as e:
             logger.error(f"Failed to enforce STM capacity: {e}")

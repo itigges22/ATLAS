@@ -107,13 +107,3 @@ class CoOccurrenceGraph:
                 self._dfs(linked_id, depth + 1, max_depth, visited, results, weight)
         except Exception as e:
             logger.error(f"Co-occurrence DFS failed at {current_id}: {e}")
-
-    def cleanup_pattern(self, pattern_id: str):
-        if not self._available:
-            return
-
-        try:
-            with self._pool.get_connection() as conn:
-                conn.execute("DELETE FROM co_occurrence WHERE source_id = ? OR target_id = ?", (pattern_id, pattern_id))
-        except Exception as e:
-            logger.error(f"Failed to cleanup co-occurrence for {pattern_id}: {e}")

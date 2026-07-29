@@ -15,11 +15,6 @@ logger = logging.getLogger(__name__)
 # In-memory cache of loaded PageIndex data per project
 _pageindex_cache: Dict[str, Any] = {}
 
-# Versioned cache of the Pattern Cache BM25 matcher.
-# Invalidated by checking PatternStore.get_version() — if the version has
-# changed since we last built, we rebuild from get_all_patterns().
-_pattern_matcher_cache: Dict[str, Any] = {"version": -1, "matcher": None}
-
 # Context budget constants (tokens, estimated at 4 chars/token)
 PAGEINDEX_BUDGET = 6000
 CACHE_BUDGET = 2000
@@ -201,83 +196,86 @@ def invalidate_cache(project_id: str):
 # Pattern Cache: Read Path
 # ──────────────────────────────────────────────────────────────
 
-def _get_pattern_matcher(store):
-    """Get a PatternMatcher built over all patterns, rebuilding only when the store mutates."""
-    from cache.pattern_matcher import PatternMatcher
+# Similarity assigned by the type match: full weight when the task
+# classifies to the pattern's type, a floor otherwise so a very recent /
+# frequently-used pattern of another type can still surface.
+TYPE_MATCH_SIMILARITY = 1.0
+TYPE_MISMATCH_SIMILARITY = 0.3
 
-    current_version = store.get_version()
-    cached_matcher = _pattern_matcher_cache.get("matcher")
-    cached_version = _pattern_matcher_cache.get("version")
-
-    if cached_matcher is not None and cached_version == current_version:
-        return cached_matcher
-
-    all_patterns = store.get_all_patterns()
-    if not all_patterns:
-        _pattern_matcher_cache["matcher"] = None
-        _pattern_matcher_cache["version"] = current_version
-        return None
-
-    matcher = PatternMatcher()
-    matcher.build(all_patterns)
-    _pattern_matcher_cache["matcher"] = matcher
-    _pattern_matcher_cache["version"] = current_version
-    return matcher
+# Minimum composite score (compute_score: similarity × decay × freq) for a
+# pattern to be served. A fresh type-matched pattern scores 0.5; a
+# type-mismatched one 0.15; two half-lives of decay put a type match at
+# 0.125 — so the floor drops only long-unused mismatches.
+PATTERN_RELEVANCE_THRESHOLD = 0.1
 
 
-async def retrieve_cached_patterns(query: str, top_k: int = 3):
+async def retrieve_cached_patterns(task: str, top_k: int = 3):
     """
-    Read path: query Pattern Cache for matching patterns.
+    Read path: type + recency matching over the pattern cache.
 
     Flow:
-    1. BM25 match across all patterns (STM + LTM + persistent)
-    2. Co-occurrence expansion of the top BM25 hits
-    3. Score all candidates with Ebbinghaus decay
-    4. Return top-k by composite score
+    1. Classify the task text to a PatternType (same heuristic the write
+       path uses — no LLM call)
+    2. Score every STM + persistent pattern through compute_score with
+       similarity 1.0 on a type match, 0.3 otherwise
+    3. Expand 1 hop through the co-occurrence graph: a pattern linked to a
+       type-matched one inherits similarity proportional to the edge weight
+    4. Return the top-k above the relevance threshold
     """
     from cache.pattern_store import get_pattern_store
     from cache.pattern_scorer import compute_score
+    from cache.pattern_extractor import classify_pattern_type
     from cache.co_occurrence import CoOccurrenceGraph
 
     store = get_pattern_store()
     if not store.available:
         return []
 
-    matcher = _get_pattern_matcher(store)
-    if matcher is None:
+    candidates = store.get_all_patterns()
+    if not candidates:
         store.record_miss()
         return []
 
-    bm25_matches = matcher.search(query, top_k=10)
-    if not bm25_matches:
-        store.record_miss()
-        return []
+    task_type = classify_pattern_type(task, None)
+    by_id = {p.id: p for p in candidates}
+
+    scored = {
+        p.id: compute_score(
+            p,
+            TYPE_MATCH_SIMILARITY if p.type == task_type
+            else TYPE_MISMATCH_SIMILARITY,
+        )
+        for p in by_id.values()
+    }
 
     cooccur = CoOccurrenceGraph()
-    candidate_patterns = {}  # pattern_id -> (Pattern, similarity)
+    for pattern in by_id.values():
+        if pattern.type != task_type:
+            continue
+        for linked_id, edge_weight in cooccur.get_linked_patterns(
+            pattern.id, top_k=3, max_depth=1
+        ):
+            linked = by_id.get(linked_id)
+            if linked is None:
+                continue
+            inherited = TYPE_MATCH_SIMILARITY * edge_weight
+            if inherited > scored[linked_id].similarity:
+                scored[linked_id] = compute_score(linked, inherited)
 
-    for pattern, similarity in bm25_matches:
-        candidate_patterns[pattern.id] = (pattern, similarity)
-
-        linked = cooccur.get_linked_patterns(pattern.id, top_k=3, max_depth=2)
-        for linked_id, edge_weight in linked:
-            if linked_id not in candidate_patterns:
-                linked_pattern = store.get_pattern(linked_id)
-                if linked_pattern:
-                    candidate_patterns[linked_id] = (linked_pattern, similarity * edge_weight)
-
-    scored = [
-        compute_score(pattern, similarity)
-        for pattern, similarity in candidate_patterns.values()
+    ranked = sorted(
+        scored.values(), key=lambda ps: ps.composite_score, reverse=True
+    )
+    result = [
+        ps for ps in ranked[:top_k]
+        if ps.composite_score >= PATTERN_RELEVANCE_THRESHOLD
     ]
-    scored.sort(key=lambda ps: ps.composite_score, reverse=True)
 
-    result = scored[:top_k]
     if result:
         store.record_hit()
         logger.info(
-            f"Pattern cache HIT: {len(result)} patterns for query '{query[:50]}...' "
-            f"(top score={result[0].composite_score:.3f})"
+            f"Pattern cache HIT: {len(result)} patterns "
+            f"(task type={task_type.value}, "
+            f"top score={result[0].composite_score:.3f})"
         )
     else:
         store.record_miss()
@@ -324,7 +322,6 @@ async def write_pattern_async(
     from cache.pattern_extractor import extract_pattern
     from cache.pattern_scorer import compute_storage_score
     from cache.co_occurrence import CoOccurrenceGraph
-    from cache.consolidator import update_category_surprise
 
     store = get_pattern_store()
     if not store.available:
@@ -364,9 +361,6 @@ async def write_pattern_async(
         if len(pattern_ids) >= 2:
             cooccur = CoOccurrenceGraph()
             cooccur.record_co_occurrence(pattern_ids)
-
-        # Update category surprise
-        update_category_surprise(pattern.type, pattern.surprise_score)
 
     except Exception as e:
         logger.error(f"Pattern write failed: {e}")

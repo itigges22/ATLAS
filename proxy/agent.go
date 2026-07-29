@@ -221,6 +221,68 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	return "", ""
 }
 
+// fetchPatternContext asks the lens pattern-cache reader
+// (/internal/patterns/context) for lessons from previous sessions whose
+// pattern type matches the user message, and formats them as one
+// "[system note]:" block (≤3 patterns, one "- [type] summary" line each,
+// hard-capped at 600 chars). Strictly fail-soft: any error, timeout, or
+// empty result returns ("", nil) and the agent loop proceeds without the
+// block — the lens being down must never cost a turn or spam the log.
+func fetchPatternContext(ctx *AgentContext, userMessage string) (string, []string) {
+	if ctx.LensURL == "" || strings.TrimSpace(userMessage) == "" {
+		return "", nil
+	}
+	body, err := json.Marshal(map[string]interface{}{
+		"task": userMessage, "top_k": 3,
+	})
+	if err != nil {
+		return "", nil
+	}
+	reqCtx, cancel := context.WithTimeout(ctx.Ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "POST",
+		ctx.LensURL+"/internal/patterns/context", bytes.NewReader(body))
+	if err != nil {
+		return "", nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", nil
+	}
+	var r struct {
+		Patterns []struct {
+			Summary string `json:"summary"`
+			Type    string `json:"type"`
+		} `json:"patterns"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil || len(r.Patterns) == 0 {
+		return "", nil
+	}
+	const blockCap = 600
+	b := "[system note]: lessons from previous ATLAS sessions on similar tasks:"
+	types := make([]string, 0, 3)
+	for i, p := range r.Patterns {
+		if i >= 3 {
+			break
+		}
+		line := "\n- [" + p.Type + "] " + truncateStr(p.Summary, 160)
+		if len(b)+len(line) > blockCap {
+			break
+		}
+		b += line
+		types = append(types, p.Type)
+	}
+	if len(types) == 0 {
+		return "", nil
+	}
+	return b, types
+}
+
 func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// Emit a stage_start envelope so the TUI's pipeline pane shows
 	// the agent is working. Mirrors the typed-event broker (PC-061).
@@ -327,6 +389,23 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 		}
+	}
+
+	// Pattern-cache context: lessons from previous sessions whose pattern
+	// type matches this task, served by the lens reader. Same user-role
+	// "[system note]:" convention as the symbol injection above. Fail-soft:
+	// an empty block means no message and no event.
+	if block, types := fetchPatternContext(ctx, userMessage); block != "" {
+		ctx.Messages = append(ctx.Messages, AgentMessage{
+			Role:    "user",
+			Content: block,
+		})
+		log.Printf("[pattern_context] injected %d pattern(s) [%s]",
+			len(types), strings.Join(types, ", "))
+		ctx.Stream("pattern_context_injected", map[string]interface{}{
+			"count": len(types),
+			"types": types,
+		})
 	}
 
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: userMessage})

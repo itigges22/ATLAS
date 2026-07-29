@@ -19,6 +19,7 @@ from storage import project_store
 from pipeline import (
     rag_enhanced_completion, simple_completion, forward_to_llama_stream,
     invalidate_cache,
+    retrieve_cached_patterns, record_pattern_access,
     write_pattern_async, record_pattern_outcome,
 )
 from indexer.tree_builder import build_tree_from_files
@@ -888,6 +889,36 @@ async def write_pattern(
     return _dispatch_pattern_write(request)
 
 
+class PatternContextRequest(BaseModel):
+    task: str
+    top_k: int = 3
+
+
+@app.post("/internal/patterns/context")
+async def pattern_context(request: PatternContextRequest):
+    """Read path: patterns from previous sessions matching the task.
+
+    Type + recency matching (see pipeline.retrieve_cached_patterns) — the
+    proxy calls this in the agent-loop setup and injects the result as a
+    system note. Served patterns get their access stats updated in the
+    background.
+    """
+    scored = await retrieve_cached_patterns(request.task, top_k=request.top_k)
+    if scored:
+        _spawn_pattern_task(record_pattern_access(scored))
+    return {
+        "patterns": [
+            {
+                "summary": ps.pattern.summary,
+                "content": ps.pattern.content,
+                "type": ps.pattern.type.value,
+                "age_days": round(ps.pattern.age_days(), 1),
+            }
+            for ps in scored
+        ]
+    }
+
+
 @app.post("/internal/patterns/write")
 async def write_pattern_internal(request: PatternWriteRequest):
     """Unauthenticated write path for in-stack service-to-service calls (v3-service).
@@ -910,47 +941,14 @@ async def cache_stats():
     # Add top patterns by score
     if stats.get("available"):
         top_stm = store.get_stm_patterns(limit=5)
-        top_ltm = store.get_ltm_patterns(limit=5)
 
         stats["top_stm"] = [
             {"id": p.id, "type": p.type.value, "summary": p.summary[:80],
              "access_count": p.access_count, "surprise": p.surprise_score}
             for p in top_stm
         ]
-        stats["top_ltm"] = [
-            {"id": p.id, "type": p.type.value, "summary": p.summary[:80],
-             "access_count": p.access_count, "surprise": p.surprise_score}
-            for p in top_ltm
-        ]
 
     return stats
-
-
-@app.post("/internal/cache/flush")
-async def flush_cache():
-    """Clear the entire pattern cache (for testing/reset)."""
-    from cache.pattern_store import get_pattern_store
-
-    store = get_pattern_store()
-    store.flush()
-
-    # Reload seed patterns
-    try:
-        from cache.seed_patterns import load_seed_patterns
-        await load_seed_patterns()
-    except Exception as e:
-        logger.warning(f"Failed to reload seed patterns after flush: {e}")
-
-    return {"status": "flushed"}
-
-
-@app.post("/internal/cache/consolidate")
-async def trigger_consolidation():
-    """Manually trigger STM → LTM consolidation."""
-    from cache.consolidator import run_consolidation
-
-    await run_consolidation()
-    return {"status": "consolidation_complete"}
 
 
 # ──────────────────────────────────────────────────────────────
