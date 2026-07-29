@@ -29,38 +29,11 @@ from typing import Optional, List, Dict, Tuple
 from atlas.cli import compose as compose_config
 from atlas.cli.commands import tier
 
-# ANSI color codes
-RESET = "\033[0m"
-BOLD  = "\033[1m"
-DIM   = "\033[2m"
-RED   = "\033[31m"
-GREEN = "\033[32m"
-YELL  = "\033[33m"
-CYAN  = "\033[36m"
-
-
-def _supports_unicode() -> bool:
-    """Detect whether stdout can safely encode the unicode chars we emit.
-
-    Catches the LANG=C / ASCII-only stdout case (common via SSH from
-    terminals with degraded locale, or when stdout is piped through a
-    logger that defaulted to ASCII). Without this guard, doctor crashes
-    with UnicodeEncodeError on the first em-dash.
-    """
-    enc = (getattr(sys.stdout, "encoding", None) or "").lower()
-    if not enc:
-        return False
-    try:
-        # Round-trip the chars we actually emit: em-dash + checkmark
-        "—✓".encode(enc, errors="strict")
-        return True
-    except (UnicodeEncodeError, LookupError):
-        return False
-
-
-# Resolved at import; doctor.main() can re-evaluate if needed.
-UNICODE_OK = _supports_unicode()
-DASH       = "—" if UNICODE_OK else "--"
+# Shared ANSI colors + unicode-safe output primitives.
+from atlas.cli.display import (
+    RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL,
+    UNICODE_OK, DASH, safe_print as _safe_print,
+)
 
 # Env-derived defaults live in atlas.cli.env (shared with fit, lens,
 # publish); re-imported here so doctor.MODEL_FILE-style access keeps
@@ -1114,31 +1087,6 @@ def check_e2e_smoke() -> CheckResult:
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
-
-def _safe_print(s: str = "") -> None:
-    """print() that survives an ASCII-only stdout.
-
-    Without this, any em-dash, arrow, or unicode in a check message
-    (most of them have one) crashes the entire run with
-    UnicodeEncodeError — even though we only emit a small fixed set
-    of unicode characters and could safely degrade them.
-    """
-    if UNICODE_OK:
-        print(s)
-        return
-    # Replace the specific unicode chars we know we use, then encode/decode
-    # as ASCII with replacement to catch anything else.
-    s = (s.replace("—", "--")
-          .replace("✓", "OK")
-          .replace("✗", "X")
-          .replace("⚠", "!")
-          .replace("→", "->")
-          .replace("│", "|")
-          .replace("╭", "+").replace("╮", "+")
-          .replace("╰", "+").replace("╯", "+")
-          .replace("─", "-"))
-    print(s.encode("ascii", errors="replace").decode("ascii"))
-
 
 def _icon(status: str, color: bool) -> str:
     # Without color OR without unicode support, fall back to ASCII brackets.

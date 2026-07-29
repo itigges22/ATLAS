@@ -63,6 +63,64 @@ CROSS = "✗"
 DIAMOND = "◆"
 
 
+# ---------------------------------------------------------------------------
+# Unicode-safe output
+#
+# CLI commands emit a small fixed set of unicode glyphs (em-dash, checkmark,
+# box drawing). On an ASCII-only stdout (LANG=C over SSH, stdout piped
+# through a logger that defaulted to ASCII) a bare print() crashes with
+# UnicodeEncodeError on the first em-dash, so command modules print through
+# safe_print(), which degrades that glyph set instead.
+# ---------------------------------------------------------------------------
+
+def supports_unicode() -> bool:
+    """True when stdout can strictly encode the unicode glyphs we emit."""
+    enc = (getattr(sys.stdout, "encoding", None) or "").lower()
+    if not enc:
+        return False
+    try:
+        # Round-trip the chars we actually emit: em-dash + checkmark.
+        "—✓".encode(enc, errors="strict")
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+# Resolved at import time, like the color constants above.
+UNICODE_OK = supports_unicode()
+
+# Glyphs that degrade to ASCII when stdout can't encode them.
+DASH = "—" if UNICODE_OK else "--"
+OK_MARK = "✓" if UNICODE_OK else "[ok]"
+NO_MARK = "✗" if UNICODE_OK else "[x]"
+WARN_MARK = "⚠" if UNICODE_OK else "[!]"
+
+
+def safe_print(s: str = "") -> None:
+    """print() that survives an ASCII-only stdout.
+
+    On a unicode-capable terminal this is a plain print(). Otherwise the
+    known glyphs are rewritten to ASCII equivalents, then anything left is
+    encoded with replacement so the command never dies mid-report.
+    """
+    if UNICODE_OK:
+        try:
+            print(s)
+            return
+        except UnicodeEncodeError:
+            pass  # encoding probe was wrong for this string — degrade below
+    s = (s.replace("—", "--")
+          .replace("✓", "OK")
+          .replace("✗", "X")
+          .replace("⚠", "!")
+          .replace("→", "->")
+          .replace("│", "|")
+          .replace("╭", "+").replace("╮", "+")
+          .replace("╰", "+").replace("╯", "+")
+          .replace("─", "-"))
+    print(s.encode("ascii", errors="replace").decode("ascii"))
+
+
 def w() -> int:
     """Terminal width."""
     return shutil.get_terminal_size().columns

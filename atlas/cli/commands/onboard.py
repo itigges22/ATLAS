@@ -35,32 +35,12 @@ from typing import Dict, List, Optional, Tuple
 from atlas.cli import compose as compose_config
 
 
-# --- presentation (mirrors model.py / doctor.py) ---------------------------
-RESET = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELL = "\033[33m"
-
-
-def _supports_unicode() -> bool:
-    enc = (sys.stdout.encoding or "").lower()
-    return "utf" in enc
-
-
-UNICODE_OK = _supports_unicode()
-DASH = "—" if UNICODE_OK else "--"
-OK = "✓" if UNICODE_OK else "[ok]"
-NO = "✗" if UNICODE_OK else "[x]"
-WARN = "⚠" if UNICODE_OK else "[!]"
-
-
-def _safe_print(s: str = "") -> None:
-    if UNICODE_OK:
-        print(s)
-    else:
-        print(s.encode("ascii", "replace").decode("ascii"))
+# Shared ANSI colors + unicode-safe output primitives.
+from atlas.cli.display import (
+    RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL,
+    DASH, OK_MARK as OK, NO_MARK as NO, WARN_MARK as WARN,
+    safe_print as _safe_print,
+)
 
 
 def _c(s: str, color: str, on: bool) -> str:

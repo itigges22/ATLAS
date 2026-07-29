@@ -47,29 +47,11 @@ from atlas.cli import compose as compose_config
 from atlas.cli.commands import model_registry
 
 
-# Reuse the color + safe-print primitives from tier/doctor for consistency.
-RESET = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELL = "\033[33m"
-CYAN = "\033[36m"
-
-
-def _supports_unicode() -> bool:
-    enc = (getattr(sys.stdout, "encoding", None) or "").lower()
-    return "utf" in enc
-
-
-UNICODE_OK = _supports_unicode()
-
-
-def _safe_print(s: str = "") -> None:
-    try:
-        print(s)
-    except UnicodeEncodeError:
-        print(s.encode("ascii", errors="replace").decode("ascii"))
+# Shared ANSI colors + unicode-safe output primitives.
+from atlas.cli.display import (
+    RESET, BOLD, RED, GREEN, YELLOW as YELL,
+    safe_print as _safe_print,
+)
 
 
 # ---------------------------------------------------------------------------

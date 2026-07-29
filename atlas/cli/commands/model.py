@@ -54,41 +54,11 @@ from atlas.cli.commands import model_registry, tier
 from atlas.cli.commands.model_registry import Model
 
 
-# Reuse tier's color + unicode-safety primitives. Keep this self-contained
-# rather than importing private symbols — tier may evolve, model is its peer.
-RESET = "\033[0m"
-BOLD  = "\033[1m"
-DIM   = "\033[2m"
-RED   = "\033[31m"
-GREEN = "\033[32m"
-YELL  = "\033[33m"
-CYAN  = "\033[36m"
-
-
-def _supports_unicode() -> bool:
-    enc = (getattr(sys.stdout, "encoding", None) or "").lower()
-    if not enc:
-        return False
-    try:
-        "—✓".encode(enc, errors="strict")
-        return True
-    except (UnicodeEncodeError, LookupError):
-        return False
-
-
-UNICODE_OK = _supports_unicode()
-DASH = "—" if UNICODE_OK else "--"
-
-
-def _safe_print(s: str = "") -> None:
-    if UNICODE_OK:
-        print(s)
-        return
-    s = (s.replace("—", "--").replace("→", "->")
-          .replace("│", "|").replace("─", "-")
-          .replace("✓", "[OK]").replace("⚠", "[WARN]")
-          .replace("✗", "[FAIL]"))
-    print(s.encode("ascii", errors="replace").decode("ascii"))
+# Shared ANSI colors + unicode-safe output primitives.
+from atlas.cli.display import (
+    RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL,
+    UNICODE_OK, DASH, safe_print as _safe_print,
+)
 
 
 # ---------------------------------------------------------------------------
