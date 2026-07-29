@@ -38,12 +38,13 @@ import os
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
 from atlas.cli import compose as compose_config
+from atlas.cli import env as cli_env
+from atlas.cli import publishing
+from atlas.cli.client import LlamaProbe, post_json_or_none, probe_llama
 from atlas.cli.commands import model_registry
 
 
@@ -55,143 +56,12 @@ from atlas.cli.display import (
 
 
 # ---------------------------------------------------------------------------
-# llama-server probe helpers
-# ---------------------------------------------------------------------------
-
-def _llama_url() -> str:
-    """Resolve where llama-server is listening.
-
-    Mirrors geometric-lens/embedding_extractor.py's resolution order so
-    `atlas lens check` agrees with what the lens service itself sees,
-    then falls back to the Docker .env's port keys via compose config.
-    """
-    for key in ("ATLAS_LLAMA_URL", "LLAMA_EMBED_URL", "LLAMA_URL"):
-        value = os.environ.get(key)
-        if value:
-            return value
-    return compose_config.service_url("llama")
-
-
-@dataclass
-class LlamaProbe:
-    """Snapshot of what the running llama-server can tell us about the model."""
-    reachable: bool
-    url: str
-    embedding_dim: int = 0          # 0 when /embedding failed or didn't return
-    n_layers: int = 0               # 0 when /props didn't carry n_layer
-    model_name: str = ""            # whatever /props reports (often a path)
-    has_hidden_states_patch: bool = False  # PC-202: layers extension present
-    error: str = ""                 # short human description when reachable=False
-
-
-def _http_get(url: str, timeout: float = 5.0) -> Optional[dict]:
-    """GET a JSON endpoint. Returns parsed dict or None on any failure."""
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return jsonlib.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError,
-            jsonlib.JSONDecodeError, OSError, ValueError):
-        return None
-
-
-def _http_post_json(url: str, body: dict, timeout: float = 30.0) -> Optional[dict]:
-    """POST JSON, parse response. Returns parsed obj or None on failure."""
-    payload = jsonlib.dumps(body).encode()
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return jsonlib.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError,
-            jsonlib.JSONDecodeError, OSError, ValueError):
-        return None
-
-
-def probe_llama(url: Optional[str] = None,
-                sample_text: str = "def hello():\n    return 42") -> LlamaProbe:
-    """Discover what the running llama-server knows about its loaded model.
-
-    Three probes:
-      1. /health  -> is the server reachable at all?
-      2. /props   -> model metadata (n_layer, model_name)
-      3. /embedding (POST) -> the authoritative embedding dim, plus a
-         PC-202 hidden-states ping (layers=[0]) to detect the patch.
-
-    Failures degrade gracefully: a probe step that times out or returns
-    a non-JSON body sets that field to its zero value rather than
-    raising. Caller inspects reachable + embedding_dim to decide verdict.
-    """
-    url = url or _llama_url()
-    probe = LlamaProbe(reachable=False, url=url)
-
-    # 1. /health — fast existence check
-    health = _http_get(f"{url}/health", timeout=3.0)
-    if health is None:
-        probe.error = (f"llama-server not reachable at {url}. "
-                       f"Bring the stack up with `docker compose up -d` "
-                       f"(or `docker compose -f docker-compose.yml "
-                       f"-f docker-compose.rocm.yml up -d` on AMD), "
-                       f"then re-run.")
-        return probe
-    probe.reachable = True
-
-    # 2. /props — n_layer + model name. Field names changed across
-    # llama-server versions; tolerate both `n_layer` and `default_generation_settings`.
-    props = _http_get(f"{url}/props", timeout=5.0) or {}
-    probe.n_layers = (
-        int(props.get("n_layer", 0))
-        or int((props.get("default_generation_settings") or {}).get("n_layer", 0))
-    )
-    probe.model_name = (props.get("model_path")
-                        or props.get("model_name")
-                        or props.get("model")
-                        or "")
-
-    # 3. /embedding — authoritative dim. Send a small sample; pooled or
-    # per-token both yield the dim. The PC-202 patch is signalled by the
-    # presence of `hidden_states_dim` in the response when `layers` is
-    # requested; on an unpatched server the field is silently absent.
-    emb = _http_post_json(f"{url}/embedding",
-                          {"content": sample_text, "layers": [0]},
-                          timeout=30.0)
-    if isinstance(emb, list) and emb:
-        first = emb[0]
-        if isinstance(first, dict):
-            raw = first.get("embedding")
-            if isinstance(raw, list) and raw:
-                if isinstance(raw[0], list):
-                    probe.embedding_dim = len(raw[0])  # per-token
-                else:
-                    probe.embedding_dim = len(raw)     # pooled
-            if "hidden_states_dim" in first:
-                probe.has_hidden_states_patch = True
-    if probe.embedding_dim == 0:
-        probe.error = (f"llama-server at {url} is up but /embedding "
-                       f"didn't return an embedding. Likely cause: model "
-                       f"was started without `--embeddings`. Check "
-                       f"inference/entrypoint-v3.1.sh.")
-    return probe
-
-
-# ---------------------------------------------------------------------------
 # Artifact resolution + dim inspection
 # ---------------------------------------------------------------------------
-
-def _resolve_model_arg(arg: Optional[str]) -> Optional[model_registry.Model]:
-    """Best-effort lookup: registry name → Model, or path/None → None.
-
-    `atlas lens check` accepts:
-      - a registry name        (e.g. "your-model-Q4_K_M")
-      - a .gguf path           (any model on disk)
-      - nothing                (probe whatever llama-server has loaded)
-    """
-    if not arg:
-        return None
-    for m in model_registry.REGISTRY:
-        if m.name == arg or m.model_file == os.path.basename(arg):
-            return m
-    return None
-
+# The llama-server probe (LlamaProbe, probe_llama) lives in atlas.cli.client
+# with the other service HTTP machinery; the publish/registry helpers live
+# in atlas.cli.publishing, shared with `atlas asa publish` and
+# `atlas publish`.
 
 def _canonical_model_identity(value: Optional[str]) -> str:
     """Normalize registry names, GGUF filenames, and model paths."""
@@ -284,7 +154,7 @@ def _invalid_runtime_artifacts(artifact_dir: str,
     inverted threshold order would let publishing claim calibrated support
     while the runtime quietly disables interventions.
     """
-    gl_dir = os.path.join(_atlas_root(), "geometric-lens")
+    gl_dir = os.path.join(cli_env.atlas_root(), "geometric-lens")
     if gl_dir not in sys.path:
         sys.path.insert(0, gl_dir)
     try:
@@ -346,24 +216,6 @@ class CheckVerdict:
         return {"compat": 0, "needs-build": 1, "incompatible": 2}.get(self.verdict, 2)
 
 
-def _atlas_root() -> str:
-    """The repo root (the directory holding docker-compose.yml). Resolved from
-    this file first so commands work from any cwd, then by walking up from the
-    cwd; falls back to the cwd."""
-    starts = (os.path.dirname(os.path.abspath(__file__)),
-              os.path.abspath(os.getcwd()))
-    for start in starts:
-        cur = start
-        while True:
-            if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
-                return cur
-            parent = os.path.dirname(cur)
-            if parent == cur:
-                break
-            cur = parent
-    return os.path.abspath(os.getcwd())
-
-
 def _configured_lens_models_dir(atlas_root: str) -> Optional[str]:
     """Resolve the host Lens artifact override with shell-env precedence."""
     return (os.environ.get("ATLAS_LENS_MODELS")
@@ -392,7 +244,7 @@ def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
         return CheckVerdict(verdict="incompatible", reason=probe.error,
                             probe=probe)
 
-    matched = _resolve_model_arg(arg)
+    matched = publishing.resolve_model_arg(arg)
     matched_name = matched.name if matched else None
     requested_model = (matched.name if matched else arg) or ""
     if (requested_model and probe.model_name
@@ -536,7 +388,7 @@ def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
 
 
 def _emit_check(args: argparse.Namespace, color: bool) -> int:
-    atlas_root = _atlas_root()
+    atlas_root = cli_env.atlas_root()
     v = _check_model(args.model, atlas_root)
 
     if args.json:
@@ -592,8 +444,8 @@ def _embed_text(llama_url: str, text: str,
     mean-pools per-token states anyway, so chunk-averaging is the same
     operation at coarser granularity). Depth-capped at 4 (16 chunks).
     """
-    resp = _http_post_json(f"{llama_url}/embedding",
-                           {"content": text}, timeout=60.0)
+    resp = post_json_or_none(f"{llama_url}/embedding",
+                             {"content": text}, timeout=60.0)
     vec = None
     if isinstance(resp, list) and resp and isinstance(resp[0], dict):
         raw = resp[0].get("embedding")
@@ -732,7 +584,7 @@ def _load_telemetry_embeddings(emb_path: str,
     labeled samples per task, not one. Returns ({"embedding", "label"}
     dicts, n_skipped) with UNKNOWN labels and dim mismatches dropped.
     """
-    root = _atlas_root()
+    root = cli_env.atlas_root()
     if root not in sys.path:
         sys.path.insert(0, root)
     from benchmark.v3.embedding_store import EmbeddingReader
@@ -876,7 +728,7 @@ def _collected_corpus_dir() -> str:
     env = os.environ.get("ATLAS_LENS_HOST_DIR")
     if env:
         return env
-    return os.path.join(_atlas_root(), "lens_training")
+    return os.path.join(cli_env.atlas_root(), "lens_training")
 
 
 def _sanitize_model_dir(name: str) -> str:
@@ -936,7 +788,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     sanity datasets are intentionally NOT bundled: a 20-sample C(x) is
     worse than no C(x) (it'll badly mis-rank and the user won't know).
     """
-    atlas_root = _atlas_root()
+    atlas_root = cli_env.atlas_root()
 
     # 1. Pre-flight: confirm we can probe the model. Reuses the check path
     # so build's UX agrees with check's "this is/isn't compat" verdict.
@@ -1217,464 +1069,6 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
 # atlas lens publish  (PC-059)
 # ---------------------------------------------------------------------------
 
-def _sha256_file(path: str) -> str:
-    """Stream-hash a file (large .pt artifacts shouldn't blow memory)."""
-    import hashlib
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(64 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _hf_token() -> Optional[str]:
-    """Resolve the HF token from the standard places huggingface_hub looks."""
-    return (os.environ.get("HF_TOKEN")
-            or os.environ.get("HUGGINGFACE_HUB_TOKEN")
-            or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
-
-
-_UPSTREAM_REPO = "itigges22/ATLAS"
-_REGISTRY_PATH = "atlas/cli/commands/model_registry.py"
-
-
-def _gh_api(api_args: List[str], payload: Optional[dict] = None):
-    """Run `gh api …`, return (ok, parsed-json-or-text, stderr)."""
-    import subprocess
-    cmd = ["gh", "api"] + api_args
-    stdin = None
-    if payload is not None:
-        cmd += ["--input", "-"]
-        stdin = jsonlib.dumps(payload)
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           input=stdin, timeout=60)
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        return False, None, str(e)
-    if r.returncode != 0:
-        return False, None, r.stderr.strip()[:300]
-    try:
-        return True, jsonlib.loads(r.stdout), ""
-    except jsonlib.JSONDecodeError:
-        return True, r.stdout.strip(), ""
-
-
-def _render_registry_entry(model_label: str, model_file: str,
-                           size_gb: float, tier: str, dim: int,
-                           hf_repo: str, license_id: str,
-                           artifact_files: List[str]) -> str:
-    """A complete, committable Model(...) entry for an unregistered model."""
-    files = ", ".join(f'"{f}"' for f in artifact_files)
-    dim_label = str(dim) if dim else "unknown"
-    return f'''    Model(
-        name="{model_label}",
-        tier="{tier}",
-        model_file="{model_file}",
-        model_display="{model_label}",
-        model_size_gb={size_gb},
-        lens_status="supported",
-        lens_calibrated=True,
-        download_url=None,
-        sha256=None,
-        license="{license_id}",
-        lens_artifact_files=[{files}],
-        lens_hf_repo="{hf_repo}",
-        notes="Added via `atlas lens publish` — lens artifacts "
-              "({dim_label}-dim) at https://huggingface.co/{hf_repo}. "
-              "download_url not captured at publish time; maintainers "
-              "can fill it in for `atlas model install` support.",
-    ),
-'''
-
-
-def _registry_insert_entry(content: str, model_label: str,
-                           entry: str) -> Optional[str]:
-    """Insert a Model entry before the REGISTRY list's closing bracket.
-    Returns the new content, or None when insertion isn't safe (model
-    already present, or the anchor isn't found).
-
-    The upstream registry can be older than the publisher's install —
-    kwargs the upstream Model dataclass doesn't declare yet are stripped
-    from the entry so the committed file stays importable.
-    """
-    if f'name="{model_label}"' in content:
-        return None
-    anchor = "REGISTRY: List[Model] = ["
-    start = content.find(anchor)
-    if start < 0:
-        return None
-    close = content.find("\n]", start)
-    if close < 0:
-        return None
-    schema = content[:start]   # the Model dataclass definition lives above
-    for field_name in ("lens_calibrated", "lens_hf_repo", "asa_hf_repo"):
-        if f"{field_name}:" not in schema:
-            entry = "\n".join(l for l in entry.splitlines()
-                              if not l.strip().startswith(f"{field_name}="))
-            if not entry.endswith("\n"):
-                entry += "\n"
-    return content[:close + 1] + entry + content[close + 1:]
-
-
-def _registry_set_lens(content: str, model_label: str, hf_repo: str,
-                       artifact_files: List[str]) -> Optional[str]:
-    """Mark an existing registry entry's Lens bundle as current.
-
-    Publishing is also the upgrade path for legacy or unverified entries, so
-    it must update those entries rather than only knowing how to insert a new
-    model. The upstream schema may lag behind the publisher; in that case the
-    download location is retained as a comment until the field lands.
-    """
-    import re
-    match = re.search(
-        rf'(    Model\(\s*\n\s*name="{re.escape(model_label)}".*?\n    \),)',
-        content,
-        re.DOTALL,
-    )
-    if not match:
-        return None
-
-    block = match.group(1)
-    files = ", ".join(f'"{name}"' for name in artifact_files)
-    lens_lines = (
-        '        lens_status="supported",\n'
-        f'        lens_artifact_files=[{files}],\n'
-    )
-    schema = content[:match.start()]
-    if "lens_calibrated:" in schema:
-        lens_lines += '        lens_calibrated=True,\n'
-    else:
-        lens_lines += '        # Bundle includes current C(x)/G(x) calibration.\n'
-    if "lens_hf_repo:" in schema:
-        lens_lines += f'        lens_hf_repo="{hf_repo}",\n'
-    else:
-        lens_lines = (
-            f'        # Lens artifacts: https://huggingface.co/{hf_repo}\n'
-            '        # (promote to lens_hf_repo= once the registry schema carries it)\n'
-        ) + lens_lines
-
-    new_block = re.sub(r'\n\s*lens_status="[^"]*",', "", block)
-    new_block = re.sub(r'\n\s*lens_calibrated=(?:True|False),', "", new_block)
-    new_block = re.sub(r'\n\s*lens_artifact_files=\[[^\]]*\],', "", new_block)
-    new_block = re.sub(r'\n\s*lens_hf_repo="[^"]*",', "", new_block)
-    new_block = new_block.replace("\n    ),", "\n" + lens_lines + "    ),")
-    return content.replace(block, new_block)
-
-
-def _registry_set_asa(content: str, model_label: str, hf_repo: str,
-                      artifact_files: List[str]) -> Optional[str]:
-    """Within the named entry's block, set asa_status to supported and
-    record the vector's HF repo + files. Returns new content or None when
-    the entry (or a safe edit point) can't be found."""
-    import re
-    m = re.search(rf'(    Model\(\s*\n\s*name="{re.escape(model_label)}".*?'
-                  rf'\n    \),)', content, re.DOTALL)
-    if not m:
-        return None
-    block = m.group(1)
-    files = ", ".join(f'"{f}"' for f in artifact_files)
-    asa_lines = (f'        asa_status="supported",\n'
-                 f'        asa_artifact_files=[{files}],\n')
-    # Only set fields the upstream dataclass declares (it can be older
-    # than the publisher's install) — but never drop the download
-    # location: without `asa_hf_repo` in the schema, record the vector's
-    # HF repo as a comment so the entry still points at it (promotable
-    # to the field once the newer schema lands).
-    if "asa_hf_repo:" in content[:m.start()]:
-        asa_lines += f'        asa_hf_repo="{hf_repo}",\n'
-    else:
-        asa_lines = (f'        # ASA vector: https://huggingface.co/'
-                     f'{hf_repo}\n'
-                     f'        # (promote to asa_hf_repo= once the '
-                     f'registry schema carries it)\n') + asa_lines
-    new_block = re.sub(r'\n\s*asa_status="[^"]*",', "", block)
-    new_block = re.sub(r'\n\s*asa_artifact_files=\[[^\]]*\],', "", new_block)
-    new_block = re.sub(r'\n\s*asa_hf_repo="[^"]*",', "", new_block)
-    new_block = new_block.replace("\n    ),", "\n" + asa_lines + "    ),")
-    return content.replace(block, new_block)
-
-
-def open_registry_pr_via_api(model_label: str, title: str, body: str,
-                             edit_fn, color: bool) -> Optional[str]:
-    """Open a registry PR through the GitHub API — no local git checkout.
-
-    edit_fn(content) -> new content or None. Flow: resolve user + base
-    branch (prefers `dev`), fork if the user can't push upstream, branch,
-    commit the edited registry file, open the PR against the upstream.
-    Returns the PR URL, or None on any failure (caller falls back to
-    printing the body).
-    """
-    import base64
-
-    upstream = os.environ.get("ATLAS_UPSTREAM_REPO", _UPSTREAM_REPO)
-    owner = upstream.split("/")[0]
-
-    ok, login, err = _gh_api(["user", "-q", ".login"])
-    if not ok:
-        _safe_print(f"  gh api user failed: {err}")
-        return None
-    login = str(login).strip()
-
-    ok, _, _ = _gh_api([f"repos/{upstream}/branches/dev"])
-    base = "dev" if ok else None
-    if base is None:
-        ok, repo_info, err = _gh_api([f"repos/{upstream}"])
-        if not ok:
-            _safe_print(f"  gh api repos/{upstream} failed: {err}")
-            return None
-        base = repo_info.get("default_branch", "main")
-
-    if login == owner:
-        target = upstream
-    else:
-        ok, fork, err = _gh_api([f"repos/{upstream}/forks", "-X", "POST"])
-        if not ok:
-            _safe_print(f"  fork failed: {err}")
-            return None
-        target = fork.get("full_name", f"{login}/{upstream.split('/')[1]}")
-        # Best-effort: bring the fork's base branch up to date.
-        _gh_api([f"repos/{target}/merge-upstream", "-X", "POST"],
-                payload={"branch": base})
-
-    ok, br, err = _gh_api([f"repos/{target}/branches/{base}"])
-    if not ok:
-        _safe_print(f"  branch {base} not found on {target}: {err}")
-        return None
-    head_sha = br["commit"]["sha"]
-
-    ok, blob, err = _gh_api(
-        [f"repos/{target}/contents/{_REGISTRY_PATH}?ref={base}"])
-    if not ok:
-        _safe_print(f"  fetch registry file failed: {err}")
-        return None
-    content = base64.b64decode(blob["content"]).decode("utf-8")
-
-    new_content = edit_fn(content)
-    if new_content is None:
-        # The edit doesn't apply to the base branch. Common cause: a prior
-        # `atlas * publish` PR holding this model's entry is still open —
-        # stack this edit onto that PR's branch instead of failing.
-        slug = "".join(c if c.isalnum() else "-" for c in model_label.lower())
-        ok, prs, _ = _gh_api(
-            [f"repos/{upstream}/pulls?state=open&base={base}"])
-        for pr in (prs if ok and isinstance(prs, list) else []):
-            head_ref = pr.get("head", {}).get("ref", "")
-            if not (head_ref.startswith("atlas-publish/")
-                    and slug in head_ref):
-                continue
-            head_repo = pr.get("head", {}).get("repo", {}).get("full_name")
-            if not head_repo:
-                continue
-            ok, pr_blob, err = _gh_api(
-                [f"repos/{head_repo}/contents/{_REGISTRY_PATH}"
-                 f"?ref={head_ref}"])
-            if not ok:
-                continue
-            pr_content = base64.b64decode(pr_blob["content"]).decode("utf-8")
-            stacked = edit_fn(pr_content)
-            if stacked is None:
-                continue
-            pr_num = pr.get("number")
-            if head_repo == upstream:
-                # The pending branch lives upstream — open a SEPARATE PR
-                # based on it. Its diff shows only this edit; when the
-                # earlier PR merges (delete its branch), GitHub retargets
-                # this one to the base branch automatically.
-                ok, head_br, err = _gh_api(
-                    [f"repos/{upstream}/branches/{head_ref}"])
-                if not ok:
-                    continue
-                new_branch = f"{head_ref}-next-{int(time.time())}"
-                ok, _, err = _gh_api(
-                    [f"repos/{upstream}/git/refs", "-X", "POST"],
-                    payload={"ref": f"refs/heads/{new_branch}",
-                             "sha": head_br["commit"]["sha"]})
-                if not ok:
-                    _safe_print(f"  branch off PR #{pr_num} failed: {err}")
-                    continue
-                ok, _, err = _gh_api(
-                    [f"repos/{upstream}/contents/{_REGISTRY_PATH}",
-                     "-X", "PUT"],
-                    payload={"message": title,
-                             "content": base64.b64encode(
-                                 stacked.encode("utf-8")).decode("ascii"),
-                             "sha": pr_blob["sha"],
-                             "branch": new_branch})
-                if not ok:
-                    _safe_print(f"  commit failed: {err}")
-                    continue
-                note = (f"\n\n---\n*Stacked on #{pr_num} (this model's "
-                        f"entry lands there). Merge #{pr_num} with branch "
-                        f"deletion and GitHub retargets this PR to `{base}` "
-                        f"automatically — its diff shows only this change.*")
-                ok, pr2, err = _gh_api(
-                    [f"repos/{upstream}/pulls", "-X", "POST"],
-                    payload={"title": title, "body": body + note,
-                             "head": new_branch, "base": head_ref})
-                if not ok:
-                    _safe_print(f"  open stacked PR failed: {err}")
-                    continue
-                _safe_print(f"  Entry is pending in open PR #{pr_num} — "
-                            f"opened a separate PR stacked on it (diff "
-                            f"shows only this change).")
-                return pr2.get("html_url")
-            # Fork case: a PR's base must be an upstream branch, so a
-            # separate stacked PR isn't expressible — commit onto the
-            # pending PR's branch instead (one PR, both changes).
-            ok, _, err = _gh_api(
-                [f"repos/{head_repo}/contents/{_REGISTRY_PATH}", "-X", "PUT"],
-                payload={"message": title,
-                         "content": base64.b64encode(
-                             stacked.encode("utf-8")).decode("ascii"),
-                         "sha": pr_blob["sha"],
-                         "branch": head_ref})
-            if not ok:
-                _safe_print(f"  stacking onto PR #{pr_num} failed: {err}")
-                continue
-            _safe_print(f"  Entry is pending in open PR #{pr_num} — this "
-                        f"edit was committed onto its branch (forks can't "
-                        f"host a separate stacked PR; one PR, both "
-                        f"changes).")
-            return pr.get("html_url")
-        _safe_print("  registry edit not applicable (entry state differs "
-                    "upstream, and no open publish PR holds it) — falling "
-                    "back to the printed body.")
-        return None
-
-    slug = "".join(c if c.isalnum() else "-" for c in model_label.lower())
-    branch = f"atlas-publish/{slug}-{int(time.time())}"
-    ok, _, err = _gh_api([f"repos/{target}/git/refs", "-X", "POST"],
-                         payload={"ref": f"refs/heads/{branch}",
-                                  "sha": head_sha})
-    if not ok:
-        _safe_print(f"  create branch failed: {err}")
-        return None
-
-    ok, _, err = _gh_api(
-        [f"repos/{target}/contents/{_REGISTRY_PATH}", "-X", "PUT"],
-        payload={"message": title,
-                 "content": base64.b64encode(
-                     new_content.encode("utf-8")).decode("ascii"),
-                 "sha": blob["sha"],
-                 "branch": branch})
-    if not ok:
-        _safe_print(f"  commit failed: {err}")
-        return None
-
-    head = branch if target == upstream else f"{login}:{branch}"
-    ok, pr, err = _gh_api([f"repos/{upstream}/pulls", "-X", "POST"],
-                          payload={"title": title, "body": body,
-                                   "head": head, "base": base})
-    if not ok:
-        _safe_print(f"  open PR failed: {err}")
-        return None
-    return pr.get("html_url")
-
-
-def _gh_available() -> bool:
-    """Best-effort probe for the gh CLI on PATH. Used by the publish
-    pre-flight so we can tell the user up front whether the registry PR
-    will auto-open or whether they'll need to paste the body manually."""
-    import shutil
-    return shutil.which("gh") is not None
-
-
-def _huggingface_hub_available() -> bool:
-    """Probe-only check that huggingface_hub imports. Lazy and quiet —
-    we don't want to fail the whole CLI just because the user hasn't
-    installed it yet; publish itself catches the ImportError too."""
-    try:
-        import huggingface_hub  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
-    """Print the requirements block at the start of a publish run.
-
-    Shared by both `atlas lens publish` and `atlas asa publish` so the
-    contributor sees the same explicit "here's what publishing involves
-    and what you need" panel regardless of which artifact they're shipping.
-
-    Returns False if a hard requirement is missing AND we're not in
-    --dry-run mode; the caller should bail with exit 1 in that case.
-    Dry-run skips the auth gates entirely since nothing leaves the host.
-
-    `kind` is "lens" or "asa" — only affects the printed wording.
-    """
-    GREEN_ = GREEN if color else ""
-    RED_ = RED if color else ""
-    YELL_ = YELL if color else ""
-    RESET_ = RESET if color else ""
-
-    _safe_print("")
-    _safe_print(f"  atlas {kind} publish — submission pre-flight")
-    _safe_print("  ──────────────────────────────────────────")
-    _safe_print("  Publish does TWO things in one command:")
-    _safe_print("    1. Uploads the artifact to a HuggingFace repo you own")
-    _safe_print("    2. Opens a registry PR against github.com/itigges22/ATLAS")
-    _safe_print("  Full walkthrough: docs/PUBLISHING.md")
-    _safe_print("")
-
-    token_ok = bool(_hf_token())
-    hf_pkg_ok = _huggingface_hub_available()
-    gh_ok = _gh_available()
-
-    # In dry-run mode the auth gates aren't enforced, so rendering a red
-    # ✗ next to "HF_TOKEN required" is alarming and confusing — users
-    # think they did something wrong when --dry-run is exactly the path
-    # for previewing without setting any of this up. Render missing
-    # items as dim ○ in dry-run, ✗/⚠ in real-run.
-    def _row(label: str, ok: bool, required: bool, hint: str) -> None:
-        if ok:
-            mark = f"{GREEN_}✓{RESET_}"
-        elif dry_run:
-            mark = "○"  # neutral — not enforced
-        elif required:
-            mark = f"{RED_}✗{RESET_}"
-        else:
-            mark = f"{YELL_}⚠{RESET_}"
-        if ok or dry_run:
-            # Don't print the "required" hint when we're not enforcing it —
-            # it adds visual noise that contradicts the dry-run header.
-            suffix = "" if ok else "  (would be needed for a real upload)"
-        else:
-            suffix = f"  {hint}"
-        _safe_print(f"  {mark} {label}{suffix}")
-
-    _row("HF_TOKEN env var",
-         token_ok, required=True,
-         hint=(f"{RED_}required{RESET_} — get a write token at "
-               "https://huggingface.co/settings/tokens, then "
-               "`export HF_TOKEN=hf_...`"))
-    _row("huggingface_hub Python pkg",
-         hf_pkg_ok, required=True,
-         hint=(f"{RED_}required{RESET_} — `pip install huggingface_hub`"))
-    _row("gh CLI",
-         gh_ok, required=False,
-         hint=(f"{YELL_}optional{RESET_} — without it we'll print the PR "
-               "body for you to paste at "
-               "https://github.com/itigges22/ATLAS/compare"))
-    _safe_print("")
-
-    if dry_run:
-        _safe_print(f"  {YELL_}--dry-run{RESET_}: nothing will leave the host "
-                    f"(no upload, no PR opened, no auth enforced)")
-        _safe_print("")
-        return True
-
-    missing_required = (not token_ok) or (not hf_pkg_ok)
-    if missing_required:
-        _safe_print(f"  {RED_}Cannot continue: missing required credentials.{RESET_}")
-        _safe_print("  Fix the items marked ✗ above, then re-run. "
-                    "Or use --dry-run to preview the PR body without uploading.")
-        _safe_print("")
-        return False
-
-    return True
-
-
 def _render_model_card_md(model_name: str, base_model: str, dim: int,
                            sha256: str, size_bytes: int,
                            license_id: str, files_uploaded: List[str]) -> str:
@@ -1812,13 +1206,14 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
       4. Render the registry-PR markdown
       5. (Unless --skip-pr) open the registry PR via `gh api`; otherwise print body
     """
-    if not publish_preflight("lens", dry_run=args.dry_run, color=color):
+    if not publishing.publish_preflight("lens", dry_run=args.dry_run,
+                                        color=color):
         return 1
 
-    atlas_root = _atlas_root()
+    atlas_root = cli_env.atlas_root()
 
     # 1. Resolve artifacts
-    matched = _resolve_model_arg(args.model)
+    matched = publishing.resolve_model_arg(args.model)
     model_label = matched.name if matched else (args.model or "<unknown-model>")
 
     if args.artifact_dir:
@@ -1877,7 +1272,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
 
     # 2. Compute SHA + inspect
     _safe_print(f"[1/5] Hashing {cost_path}…")
-    sha = _sha256_file(cost_path)
+    sha = publishing.sha256_file(cost_path)
     size = os.path.getsize(cost_path)
     inspection = _inspect_cost_field(artifact_dir)
     dim = inspection.dim or 0
@@ -1907,7 +1302,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                         f"is required (or pass --dry-run to skip upload)."
                         f"{RESET if color else ''}")
             return 1
-        token = _hf_token()
+        token = publishing.hf_token()
         if not token:
             _safe_print(f"  {RED if color else ''}HF_TOKEN env var not set. "
                         f"Get a write token from https://huggingface.co/settings/tokens "
@@ -1974,9 +1369,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                     "https://github.com/itigges22/ATLAS/compare")
         return 0
 
-    import shutil as _shutil
-    gh_path = _shutil.which("gh")
-    if not gh_path:
+    if not publishing.gh_available():
         _safe_print("[4/5] `gh` not found — printing PR body for manual paste")
         _safe_print("")
         _safe_print(pr_body)
@@ -2006,7 +1399,6 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     model_file = ""
     size_gb = 0.0
     try:
-        from atlas.cli import env as cli_env
         model_file = cli_env.MODEL_FILE
         base = (cli_env.MODEL_DIR if os.path.isabs(cli_env.MODEL_DIR)
                 else os.path.join(atlas_root, cli_env.MODEL_DIR))
@@ -2017,17 +1409,17 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         # publish a verified artifact bundle.
         pass
 
-    entry = _render_registry_entry(model_label, model_file or model_label,
-                                   size_gb, entry_tier, dim, hf_repo,
-                                   license_id, files_to_upload)
+    entry = publishing.render_registry_entry(
+        model_label, model_file or model_label, size_gb, entry_tier, dim,
+        hf_repo, license_id, files_to_upload)
     def _edit_registry(content: str) -> Optional[str]:
-        updated = _registry_set_lens(content, model_label, hf_repo,
-                                     files_to_upload)
+        updated = publishing.registry_set_lens(content, model_label, hf_repo,
+                                               files_to_upload)
         if updated is not None:
             return updated
-        return _registry_insert_entry(content, model_label, entry)
+        return publishing.registry_insert_entry(content, model_label, entry)
 
-    pr_url = open_registry_pr_via_api(
+    pr_url = publishing.open_registry_pr_via_api(
         model_label, title, pr_body,
         _edit_registry,
         color)
@@ -2037,7 +1429,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     else:
         _safe_print(f"  {YELL if color else ''}Could not open the PR "
                     f"automatically — body below for manual paste at "
-                    f"https://github.com/{_UPSTREAM_REPO}/compare"
+                    f"https://github.com/{publishing.UPSTREAM_REPO}/compare"
                     f"{RESET if color else ''}")
         _safe_print("")
         _safe_print(pr_body)

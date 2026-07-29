@@ -13,6 +13,28 @@ from typing import Dict
 from atlas.cli import compose as compose_config
 
 
+def atlas_root() -> str:
+    """The repo root (the directory holding docker-compose.yml). Resolved from
+    this file first so commands work from any cwd, then by walking up from the
+    cwd; falls back to the cwd.
+
+    The canonical resolver — command modules that need a patchable module
+    attribute import it as `_atlas_root`.
+    """
+    starts = (os.path.dirname(os.path.abspath(__file__)),
+              os.path.abspath(os.getcwd()))
+    for start in starts:
+        cur = start
+        while True:
+            if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    return os.path.abspath(os.getcwd())
+
+
 def _read_dotenv() -> Dict[str, str]:
     """Parse the compose .env (the Docker deployment's source of truth) by
     walking up from this file. Lets the model/dir checks reflect what's actually

@@ -8,19 +8,13 @@ import time
 from pathlib import Path
 
 from atlas.cli import display
+from atlas.cli import env as cli_env
 
 
 def _atlas_root() -> Path:
-    """The repo root (the directory holding docker-compose.yml), resolved from
-    this file so the command works from any working directory."""
-    cur = Path(__file__).resolve().parent
-    for _ in range(8):
-        if (cur / "docker-compose.yml").exists():
-            return cur
-        if cur.parent == cur:
-            break
-        cur = cur.parent
-    return Path.cwd()
+    """The repo root, as a Path. Canonical resolution lives in
+    atlas.cli.env; kept as a module hook so tests can pin the root."""
+    return Path(cli_env.atlas_root())
 
 
 def bench(dataset: str = "livecodebench", max_tasks: int = 0,

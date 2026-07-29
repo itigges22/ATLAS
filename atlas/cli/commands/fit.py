@@ -36,6 +36,9 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
 from atlas.cli.gguf import read_gguf_kv
+# Canonical resolver; imported under the module-local name so tests can
+# pin the root with monkeypatch.setattr(fit, "_atlas_root", ...).
+from atlas.cli.env import atlas_root as _atlas_root
 
 GIB = 1024 ** 3
 
@@ -315,18 +318,6 @@ def fit_runtime_knobs(meta: GGUFMeta, vram_gib: float,
 # ---------------------------------------------------------------------------
 # CLI surface (invoked by `atlas tier fit`)
 # ---------------------------------------------------------------------------
-
-def _atlas_root() -> str:
-    cur = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(8):
-        if os.path.exists(os.path.join(cur, "docker-compose.yml")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    return os.getcwd()
-
 
 def _default_model_path() -> Optional[str]:
     from atlas.cli import env as cli_env

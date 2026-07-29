@@ -45,7 +45,7 @@ Ordered by value ÷ risk. Each row is one commit, tests green after.
 | # | Item | Files | Type | Risk | Status |
 |---|---|---|---|---|---|
 | A1 | Dedupe ANSI colors + `safe_print` into `display.py` | atlas/cli: display.py + doctor, tier, asa, lens, onboard, init, **model** (7th copy found) | inverse-merge | low | ✅ done |
-| A2 | Extract publish/registry/model-resolve helpers out of `lens.py` into a shared module | atlas/cli/commands: lens.py → new publish_helpers; asa.py, publish.py consume it | inverse-merge | med | ☐ todo |
+| A2 | Extract publish/registry/model-resolve helpers out of `lens.py` into a shared module | lens.py → new `atlas/cli/publishing.py` + probe → `client.py` + `atlas_root` → `env.py` | inverse-merge | med | ✅ done |
 | A3 | Split `v3-service/main.py` (4018) God-file | → adapters.py, scoring.py, symbols.py, planning.py, pipeline.py, server(main).py | split | med | ☐ todo |
 | A4 | Split `tui/model.go` (2866): extract `events.go` | model.go → events.go (appendChatEvent + format*) | split | med | ☐ todo |
 | A5 | Split proxy `agent.go` (4254) + `tools.go` (3562) | decompose `runAgentLoop` (1421-line fn) + per-tool files | split | high | ☐ todo |
@@ -139,4 +139,18 @@ Do not touch until the decision is made. Listed so the decision is concrete.
   the glyph rewrites instead of bare `?` replacement). Deleted 7 divergent `_safe_print`
   defs, 7 const blocks, and 5 declared-but-never-used constants (CYAN×4, DIM×2).
   `fit.py`'s `from tier import _safe_print` kept working via the alias. −209/+95 lines.
+  Suite: 1731 passed, 6 skipped — matches baseline exactly.
+- 2026-07-29 — **A2 done.** Three moves, all Hebbian-grounded:
+  (1) publish/registry machinery → new `atlas/cli/publishing.py` (sha256, HF token,
+  `gh api`, registry-file editing, PR flow, preflight, model-arg resolution) — was
+  buried in lens.py and reached into by asa/publish via 9+ private `_names`; now
+  public API with true names. (2) llama probe (`LlamaProbe`, `probe_llama`,
+  `llama_url`, the None-contract JSON helpers) → `client.py`, which already owned
+  service reachability. (3) `atlas_root()` → `env.py`; killed FOUR duplicate
+  resolvers (lens's canonical walk, asa's delegating wrapper, fit's 8-hop variant,
+  bench's Path variant now delegates) and model.py's duplicate `_hf_token` (lens's
+  superset variant is canonical — also reads HUGGINGFACE_HUB_TOKEN).
+  Test patch points retargeted (test_asa: `lens_module.probe_llama` → `asa.probe_llama`;
+  test_lens: moved names → `publishing.*`); `bench._atlas_root`/`asa._atlas_root`
+  stay patchable module attrs. lens.py 2178 → ~1600 lines.
   Suite: 1731 passed, 6 skipped — matches baseline exactly.

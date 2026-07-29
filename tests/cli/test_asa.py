@@ -12,8 +12,8 @@ import json
 
 import pytest
 
+from atlas.cli import publishing
 from atlas.cli.commands import asa
-from atlas.cli.commands import lens as lens_module
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ from atlas.cli.commands import lens as lens_module
 
 def _probe(reachable=True, embedding_dim=4096, n_layers=32,
            model_name="test-model.gguf", patch=True, error=""):
-    return lens_module.LlamaProbe(
+    return asa.LlamaProbe(
         reachable=reachable,
         url="http://test-llama:8080",
         embedding_dim=embedding_dim,
@@ -142,7 +142,7 @@ def test_read_cvector_meta_real_gguf(tmp_path):
 
 def test_check_unreachable_is_incompatible(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        lens_module, "probe_llama",
+        asa, "probe_llama",
         lambda *a, **kw: _probe(reachable=False, error="not reachable"))
     v = asa._check_asa(str(tmp_path))
     assert v.verdict == "incompatible"
@@ -151,7 +151,7 @@ def test_check_unreachable_is_incompatible(monkeypatch, tmp_path):
 
 def test_check_missing_vector_is_needs_build(monkeypatch, tmp_path):
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(tmp_path / "nope.gguf"))
-    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "probe_llama", lambda *a, **kw: _probe())
     v = asa._check_asa(str(tmp_path))
     assert v.verdict == "needs-build"
     assert v.exit_code == 1
@@ -173,7 +173,7 @@ def test_check_vector_present_dim_match_is_compat(monkeypatch, tmp_path):
     writer.close()
     _write_model_marker(vp)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
-    monkeypatch.setattr(lens_module, "probe_llama",
+    monkeypatch.setattr(asa, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
     v = asa._check_asa(str(tmp_path))
     assert v.verdict == "compat"
@@ -196,7 +196,7 @@ def test_check_dim_mismatch_is_needs_build(monkeypatch, tmp_path):
     writer.close()
     _write_model_marker(vp)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
-    monkeypatch.setattr(lens_module, "probe_llama",
+    monkeypatch.setattr(asa, "probe_llama",
                         lambda *a, **kw: _probe(embedding_dim=4096))
     v = asa._check_asa(str(tmp_path))
     assert v.verdict == "needs-build"
@@ -212,7 +212,7 @@ def test_check_unverified_when_gguf_pkg_missing(monkeypatch, tmp_path):
     vp.write_bytes(b"GGUF" + b"\x00" * 100)
     _write_model_marker(vp)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
-    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "probe_llama", lambda *a, **kw: _probe())
     # Stub _read_cvector_meta to simulate gguf-missing case
     monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
         "present": True, "size_bytes": 104, "dim": None,
@@ -230,7 +230,7 @@ def test_check_present_vector_without_marker_is_not_compatible(monkeypatch,
     vp = tmp_path / "v.gguf"
     vp.write_bytes(b"GGUF" + b"\x00" * 100)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
-    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "probe_llama", lambda *a, **kw: _probe())
     monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
         "present": True, "size_bytes": 104, "dim": 4096,
         "layer_count": None, "model_hint": None, "error": "",
@@ -245,7 +245,7 @@ def test_check_rejects_marker_for_another_model(monkeypatch, tmp_path):
     vp.write_bytes(b"GGUF" + b"\x00" * 100)
     _write_model_marker(vp, "other-model")
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
-    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "probe_llama", lambda *a, **kw: _probe())
     monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
         "present": True, "size_bytes": 104, "dim": 4096,
         "layer_count": None, "model_hint": None, "error": "",
@@ -267,7 +267,7 @@ def test_check_needs_build_points_at_published_artifacts(monkeypatch, tmp_path):
     vp.write_bytes(b"GGUF" + b"\x00" * 100)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
     monkeypatch.setattr(
-        lens_module, "probe_llama",
+        asa, "probe_llama",
         lambda *a, **kw: _probe(
             model_name="/models/gemma-4-12b-it-Q4_K_M.gguf"))
     monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
@@ -285,7 +285,7 @@ def test_check_needs_build_no_hint_for_unregistered_model(monkeypatch,
     vp = tmp_path / "v.gguf"
     vp.write_bytes(b"GGUF" + b"\x00" * 100)
     monkeypatch.setenv("ATLAS_CONTROL_VECTOR", str(vp))
-    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "probe_llama", lambda *a, **kw: _probe())
     monkeypatch.setattr(asa, "_read_cvector_meta", lambda p: {
         "present": True, "size_bytes": 104, "dim": 4096,
         "layer_count": None, "model_hint": None, "error": "",
@@ -297,7 +297,7 @@ def test_check_needs_build_no_hint_for_unregistered_model(monkeypatch,
 
 def test_check_json_output_shape(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
-        lens_module, "probe_llama",
+        asa, "probe_llama",
         lambda *a, **kw: _probe(reachable=False, error="oops"))
     rc = asa.main(["check", "--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -314,7 +314,7 @@ def test_check_json_output_shape(monkeypatch, tmp_path, capsys):
 
 def test_build_refuses_on_unreachable_server(monkeypatch, capsys):
     monkeypatch.setattr(
-        lens_module, "probe_llama",
+        asa, "probe_llama",
         lambda *a, **kw: _probe(reachable=False, error="server down"))
     monkeypatch.setattr(asa, "_docker_available", lambda: True)
     rc = asa.main(["build", "--no-color"])
@@ -324,7 +324,7 @@ def test_build_refuses_on_unreachable_server(monkeypatch, capsys):
 def test_build_refuses_when_pc202_patch_missing(monkeypatch, capsys):
     """No PC-202 patch -> can't extract per-layer residuals -> refuse."""
     monkeypatch.setattr(
-        lens_module, "probe_llama",
+        asa, "probe_llama",
         lambda *a, **kw: _probe(patch=False))
     monkeypatch.setattr(asa, "_docker_available", lambda: True)
     rc = asa.main(["build", "--no-color"])
@@ -382,7 +382,7 @@ def test_build_derives_layer_from_gguf_when_props_lacks_depth(
                               block_count=48)
 
     monkeypatch.setattr(
-        lens_module, "probe_llama",
+        asa, "probe_llama",
         lambda *a, **kw: _probe(n_layers=0, model_name="/models/m.gguf"))
     monkeypatch.setattr(asa, "_docker_available", lambda: True)
     # ATLAS_MODELS_DIR steers /models/* host resolution to tmp_path;
@@ -409,7 +409,7 @@ def test_build_still_asks_for_layer_when_gguf_unreadable(
     """No /props depth AND no readable model GGUF on the host: refuse
     with the explicit --layer instruction rather than guessing."""
     monkeypatch.setattr(
-        lens_module, "probe_llama",
+        asa, "probe_llama",
         lambda *a, **kw: _probe(n_layers=0,
                                 model_name="/models/not-here.gguf"))
     monkeypatch.setattr(asa, "_docker_available", lambda: True)
@@ -463,7 +463,7 @@ def test_build_dry_run_cleans_up_staged_files(monkeypatch, tmp_path, capsys):
     container's /tmp. Verify _docker_exec gets called with `rm -f` for
     both staged paths before we return."""
     monkeypatch.setattr(asa, "_docker_available", lambda: True)
-    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "probe_llama", lambda *a, **kw: _probe())
     import subprocess as _sp
     monkeypatch.setattr(_sp, "run", _fake_subprocess_run_for_build())
     pairs = _make_fixture_pairs(tmp_path)
@@ -499,7 +499,7 @@ def test_build_pre_run_nukes_stale_output(monkeypatch, tmp_path, capsys):
     nothing would let `docker cp` return the stale vector as if it were
     a new build."""
     monkeypatch.setattr(asa, "_docker_available", lambda: True)
-    monkeypatch.setattr(lens_module, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(asa, "probe_llama", lambda *a, **kw: _probe())
     import subprocess as _sp
     monkeypatch.setattr(_sp, "run", _fake_subprocess_run_for_build())
     pairs = _make_fixture_pairs(tmp_path)
@@ -531,8 +531,7 @@ def test_publish_requires_repo_unless_dry_run(monkeypatch, tmp_path, capsys):
     """--repo required when actually uploading. Set HF_TOKEN so the
     publish_preflight passes — we want to isolate this test to the --repo
     enforcement, not the auth gate."""
-    from atlas.cli.commands import lens as lens_module
-    if not lens_module._huggingface_hub_available():
+    if not publishing.huggingface_hub_available():
         import pytest
         pytest.skip("huggingface_hub not installed on this host")
     vp = tmp_path / "v.gguf"

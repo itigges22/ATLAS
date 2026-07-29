@@ -46,8 +46,12 @@ from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
 from atlas.cli import compose as compose_config
-from atlas.cli.commands import lens as lens_module  # for shared helpers
+from atlas.cli import publishing
+from atlas.cli.client import LlamaProbe, probe_llama
 from atlas.cli.commands import model_registry
+# Canonical resolver; imported under the module-local name so tests can
+# pin the root with monkeypatch.setattr(asa, "_atlas_root", ...).
+from atlas.cli.env import atlas_root as _atlas_root
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -103,12 +107,6 @@ def _host_resolve_vector_path(configured: str, atlas_root: str) -> str:
             if os.path.isfile(cand):
                 return cand
     return configured
-
-
-def _atlas_root() -> str:
-    """Reuse lens.py's resolution so both subcommand families walk up the
-    same way."""
-    return lens_module._atlas_root()
 
 
 def _gguf_block_count(path: str) -> int:
@@ -242,7 +240,7 @@ def _read_cvector_meta(path: str) -> dict:
 class ASACheckVerdict:
     verdict: str          # 'compat' | 'needs-build' | 'incompatible'
     reason: str
-    probe: lens_module.LlamaProbe = field(default_factory=lambda: lens_module.LlamaProbe(reachable=False, url=""))
+    probe: LlamaProbe = field(default_factory=lambda: LlamaProbe(reachable=False, url=""))
     vector_path: str = ""
     vector_present: bool = False
     vector_size_bytes: int = 0
@@ -258,7 +256,7 @@ class ASACheckVerdict:
 
 
 def _check_asa(atlas_root: str) -> ASACheckVerdict:
-    probe = lens_module.probe_llama()
+    probe = probe_llama()
     if not probe.reachable:
         return ASACheckVerdict(
             verdict="incompatible", reason=probe.error, probe=probe,
@@ -438,7 +436,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     # 1. Pre-flight: check the container is up + lens reachable
     _safe_print(f"[1/5] Pre-flight: container {container}, "
                 f"llama-server reachable…")
-    probe = lens_module.probe_llama()
+    probe = probe_llama()
     if not probe.reachable:
         _safe_print(f"  {RED if color else ''}llama-server unreachable: "
                     f"{probe.error}{RESET if color else ''}")
@@ -751,7 +749,8 @@ Feb 2026 ASA paper (arxiv 2602.04935).
 
 
 def _emit_publish(args: argparse.Namespace, color: bool) -> int:
-    if not lens_module.publish_preflight("asa", dry_run=args.dry_run, color=color):
+    if not publishing.publish_preflight("asa", dry_run=args.dry_run,
+                                        color=color):
         return 1
 
     if not args.dry_run and not args.repo:
@@ -769,7 +768,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         return 1
 
     _safe_print(f"[1/4] Hashing {vpath}…")
-    sha = lens_module._sha256_file(vpath)
+    sha = publishing.sha256_file(vpath)
     size = os.path.getsize(vpath)
     meta = _read_cvector_meta(vpath)
     dim = meta["dim"]
@@ -779,7 +778,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     if meta["model_hint"]:
         _safe_print(f"  Hint:   {meta['model_hint']}")
 
-    matched = lens_module._resolve_model_arg(args.model)
+    matched = publishing.resolve_model_arg(args.model)
     model_label = matched.name if matched else (args.model or "")
     if not model_label:
         # No model argument — fall back to the configured model, the same
@@ -825,7 +824,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"[2/4] (dry-run) would upload to "
                     f"https://huggingface.co/{hf_repo}")
     else:
-        token = lens_module._hf_token()
+        token = publishing.hf_token()
         if not token:
             _safe_print(f"  {RED if color else ''}HF_TOKEN env var not set. "
                         f"Get a write token from https://huggingface.co/settings/tokens "
@@ -868,9 +867,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                     "Paste the body above into a PR.")
         return 0
 
-    import shutil as _shutil
-    gh_path = _shutil.which("gh")
-    if not gh_path:
+    if not publishing.gh_available():
         _safe_print("[4/4] `gh` not found — printing PR body for manual paste")
         _safe_print("")
         _safe_print(pr_body)
@@ -885,9 +882,9 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
              f"(via atlas asa publish)")
     vector_name = os.path.basename(
         _configured_vector_path(atlas_root)) or "ast_edit_steering.gguf"
-    pr_url = lens_module.open_registry_pr_via_api(
+    pr_url = publishing.open_registry_pr_via_api(
         model_label, title, pr_body,
-        lambda content: lens_module._registry_set_asa(
+        lambda content: publishing.registry_set_asa(
             content, model_label, hf_repo, [vector_name]),
         color)
     if pr_url:

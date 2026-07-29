@@ -52,6 +52,9 @@ from typing import List, Optional, Tuple
 from atlas.cli import compose as compose_config
 from atlas.cli.commands import model_registry, tier
 from atlas.cli.commands.model_registry import Model
+# HF token resolution is shared publish machinery; the canonical resolver
+# (which also reads HUGGINGFACE_HUB_TOKEN) lives in atlas.cli.publishing.
+from atlas.cli.publishing import hf_token as _hf_token
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -693,13 +696,6 @@ def _build_request(url: str, range_start: int = 0,
         # response will be 206 Partial Content with Content-Range.
         headers["Range"] = f"bytes={range_start}-"
     return urllib.request.Request(url, headers=headers)
-
-
-def _hf_token() -> Optional[str]:
-    """Read HF_TOKEN (preferred) or HUGGING_FACE_HUB_TOKEN (HF SDK alt
-    spelling) from env. Returns None if neither is set."""
-    return (os.environ.get("HF_TOKEN")
-            or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
 
 
 # ---------------------------------------------------------------------------

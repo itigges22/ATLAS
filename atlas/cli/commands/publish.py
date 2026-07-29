@@ -24,14 +24,15 @@ import os
 import sys
 from typing import List, Optional
 
+from atlas.cli import publishing
+from atlas.cli import env as cli_env
+from atlas.cli.display import (
+    RESET, RED, GREEN, YELLOW as YELL,
+    safe_print as _safe_print,
+)
 from atlas.cli.commands import lens as lens_module
 from atlas.cli.commands import asa as asa_module
-from atlas.cli.commands.lens import (
-    _safe_print, GREEN, RED, YELL, RESET,
-    _render_registry_entry, _render_registry_pr_body,
-    _registry_insert_entry, _registry_set_asa,
-    open_registry_pr_via_api, _UPSTREAM_REPO,
-)
+from atlas.cli.commands.lens import _render_registry_pr_body
 from atlas.cli.commands.asa import (
     _read_cvector_meta, _render_asa_pr_body,
     _configured_vector_path, _host_resolve_vector_path,
@@ -39,10 +40,10 @@ from atlas.cli.commands.asa import (
 
 
 def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
-    atlas_root = lens_module._atlas_root()
+    atlas_root = cli_env.atlas_root()
 
     # Resolve the model once, the same way the component flows do.
-    matched = lens_module._resolve_model_arg(args.model)
+    matched = publishing.resolve_model_arg(args.model)
     model_label = matched.name if matched else (args.model or "")
     if not model_label:
         try:
@@ -126,7 +127,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
         return 0
     if args.skip_pr:
         _safe_print("  (--skip-pr: bodies printed above; paste into "
-                    f"https://github.com/{_UPSTREAM_REPO}/compare)")
+                    f"https://github.com/{publishing.UPSTREAM_REPO}/compare)")
         return 0
 
     # One registry PR carrying the complete entry: lens + ASA fields.
@@ -135,7 +136,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     inspection = lens_module._inspect_cost_field(artifact_dir)
     dim = inspection.dim or 0
     cost_path = os.path.join(artifact_dir, "cost_field.pt")
-    lens_sha = lens_module._sha256_file(cost_path)
+    lens_sha = publishing.sha256_file(cost_path)
     license_id = args.license or "apache-2.0"
 
     lens_files = ["cost_field.pt"]
@@ -148,7 +149,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
             lens_files.append(opt)
 
     vec_meta = _read_cvector_meta(vpath)
-    vec_sha = lens_module._sha256_file(vpath)
+    vec_sha = publishing.sha256_file(vpath)
     vector_name = os.path.basename(vpath)
     layer = vec_meta.get("steered_layer") or 0
 
@@ -162,7 +163,6 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     model_file = model_label + ".gguf"
     size_gb = 0.0
     try:
-        from atlas.cli import env as cli_env
         model_file = cli_env.MODEL_FILE
         base = (cli_env.MODEL_DIR if os.path.isabs(cli_env.MODEL_DIR)
                 else os.path.join(atlas_root, cli_env.MODEL_DIR))
@@ -173,20 +173,20 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
         # remain mandatory regardless of this lookup.
         pass
 
-    entry = _render_registry_entry(model_label, model_file, size_gb,
-                                   entry_tier, dim, args.lens_repo,
-                                   license_id, lens_files)
+    entry = publishing.render_registry_entry(model_label, model_file, size_gb,
+                                             entry_tier, dim, args.lens_repo,
+                                             license_id, lens_files)
 
     def edit(content):
         # Insert the lens entry, then flip its ASA fields — composing the
         # two single-component edits gives the complete entry. For models
         # already registered upstream, fall through to the component
         # flows' own PR logic instead of guessing at an update.
-        inserted = _registry_insert_entry(content, model_label, entry)
+        inserted = publishing.registry_insert_entry(content, model_label, entry)
         if inserted is None:
             return None
-        return _registry_set_asa(inserted, model_label, args.asa_repo,
-                                 [vector_name])
+        return publishing.registry_set_asa(inserted, model_label,
+                                           args.asa_repo, [vector_name])
 
     body = (_render_registry_pr_body(model_label, args.lens_repo,
                                      model_label, dim, lens_sha, license_id,
@@ -196,7 +196,8 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
                                   dim, layer, vec_sha, license_id))
     title = (f"Registry: add Lens + ASA artifacts for {model_label} "
              f"(via atlas publish)")
-    pr_url = open_registry_pr_via_api(model_label, title, body, edit, color)
+    pr_url = publishing.open_registry_pr_via_api(model_label, title, body,
+                                                 edit, color)
     if pr_url:
         _safe_print(f"  {GREEN if color else ''}PR opened: "
                     f"{pr_url}{RESET if color else ''}")

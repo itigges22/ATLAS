@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+from atlas.cli import publishing
 from atlas.cli.commands import lens
 
 
@@ -514,7 +515,7 @@ def test_publish_requires_repo_unless_dry_run(monkeypatch, tmp_path, capsys):
     We set HF_TOKEN here so the publish_preflight passes — we want to
     isolate the test to the --repo check, not the auth gate (covered by
     test_preflight_blocks_non_dryrun_when_token_missing)."""
-    if not lens._huggingface_hub_available():
+    if not publishing.huggingface_hub_available():
         pytest.skip("huggingface_hub not installed on this host")
     (tmp_path / "cost_field.pt").write_bytes(b"fake")
     _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
@@ -601,7 +602,7 @@ REGISTRY: List[Model] = [
     ),
 ]
 '''
-    updated = lens._registry_set_lens(
+    updated = publishing.registry_set_lens(
         content,
         "ExampleModel",
         "owner/current-bundle",
@@ -616,7 +617,7 @@ REGISTRY: List[Model] = [
 
 
 def test_registry_set_lens_returns_none_for_unknown_entry():
-    assert lens._registry_set_lens(
+    assert publishing.registry_set_lens(
         "REGISTRY: List[Model] = [\n]\n",
         "MissingModel",
         "owner/bundle",
@@ -630,7 +631,7 @@ def test_sha256_file_is_deterministic_and_correct(tmp_path):
     content = b"deterministic content for sha test" * 100
     (tmp_path / "f.bin").write_bytes(content)
     expected = hashlib.sha256(content).hexdigest()
-    assert lens._sha256_file(str(tmp_path / "f.bin")) == expected
+    assert publishing.sha256_file(str(tmp_path / "f.bin")) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +643,7 @@ def test_preflight_dry_run_skips_auth_gates(monkeypatch, capsys):
     the whole point is letting users preview without setting anything up."""
     for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
-    ok = lens.publish_preflight("lens", dry_run=True, color=False)
+    ok = publishing.publish_preflight("lens", dry_run=True, color=False)
     out = capsys.readouterr().out
     assert ok is True, "dry-run preflight should always pass"
     assert "submission pre-flight" in out
@@ -653,7 +654,7 @@ def test_preflight_dry_run_skips_auth_gates(monkeypatch, capsys):
 def test_preflight_blocks_non_dryrun_when_token_missing(monkeypatch, capsys):
     for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
-    ok = lens.publish_preflight("lens", dry_run=False, color=False)
+    ok = publishing.publish_preflight("lens", dry_run=False, color=False)
     out = capsys.readouterr().out
     assert ok is False, "missing HF_TOKEN in real run should block"
     assert "HF_TOKEN" in out
@@ -665,9 +666,9 @@ def test_preflight_passes_when_token_and_pkg_present(monkeypatch, capsys):
     # huggingface_hub may or may not be installed in CI; only assert pass
     # when the pkg is genuinely available (otherwise the test would be
     # flaky depending on host env).
-    if not lens._huggingface_hub_available():
+    if not publishing.huggingface_hub_available():
         pytest.skip("huggingface_hub not installed on this host")
-    ok = lens.publish_preflight("lens", dry_run=False, color=False)
+    ok = publishing.publish_preflight("lens", dry_run=False, color=False)
     out = capsys.readouterr().out
     assert ok is True
     assert "HF_TOKEN env var" in out
@@ -677,10 +678,10 @@ def test_preflight_mentions_both_lens_and_asa_kinds(monkeypatch, capsys):
     """The panel header should reflect whichever publish flow invoked it
     so the user isn't confused about what they're shipping."""
     monkeypatch.setenv("HF_TOKEN", "hf_dummy")
-    lens.publish_preflight("asa", dry_run=True, color=False)
+    publishing.publish_preflight("asa", dry_run=True, color=False)
     out = capsys.readouterr().out
     assert "atlas asa publish" in out
-    lens.publish_preflight("lens", dry_run=True, color=False)
+    publishing.publish_preflight("lens", dry_run=True, color=False)
     out = capsys.readouterr().out
     assert "atlas lens publish" in out
 
@@ -689,10 +690,10 @@ def test_preflight_gh_missing_is_optional_warning(monkeypatch, capsys):
     """Without gh installed the preflight should still pass — it just
     notes the user will paste the PR body manually."""
     monkeypatch.setenv("HF_TOKEN", "hf_dummy")
-    monkeypatch.setattr(lens, "_gh_available", lambda: False)
-    if not lens._huggingface_hub_available():
+    monkeypatch.setattr(publishing, "gh_available", lambda: False)
+    if not publishing.huggingface_hub_available():
         pytest.skip("huggingface_hub not installed on this host")
-    ok = lens.publish_preflight("lens", dry_run=False, color=False)
+    ok = publishing.publish_preflight("lens", dry_run=False, color=False)
     out = capsys.readouterr().out
     assert ok is True, "missing gh should not block — paste fallback is valid"
     assert "gh CLI" in out
@@ -708,7 +709,7 @@ def test_preflight_dry_run_doesnt_flag_missing_token_as_failure(
     look like they did something wrong is the opposite of what we want."""
     for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
-    ok = lens.publish_preflight("lens", dry_run=True, color=False)
+    ok = publishing.publish_preflight("lens", dry_run=True, color=False)
     out = capsys.readouterr().out
     assert ok is True
     # The red ✗ marker must not appear next to HF_TOKEN in dry-run mode.
@@ -729,7 +730,7 @@ def test_publish_opens_pr_via_github_api(monkeypatch, tmp_path, capsys):
     never `gh pr create`, which needs a local git checkout most installs
     don't have (PC-214). A failing API call falls back to printing the
     PR body rather than failing the publish."""
-    if not lens._huggingface_hub_available():
+    if not publishing.huggingface_hub_available():
         pytest.skip("huggingface_hub not installed on this host")
     (tmp_path / "cost_field.pt").write_bytes(b"fake")
     _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
