@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # scripts/ and benchmark/ are included because they run under the developer's
-# own interpreter — `atlas bench` and retrain_lens_from_results.py are driven
+# own interpreter — `atlas bench` and `atlas lens build` are driven
 # from the host, not a container, so the floor applies to them the same way.
 DEFAULT_TARGETS = ("atlas", "geometric-lens", "v3-service", "sandbox",
                    "scripts", "benchmark", "tests")

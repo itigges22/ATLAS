@@ -641,6 +641,7 @@ _MANAGED_LENS_ARTIFACTS = (
     "gx_xgboost.json",
     "gx_weights.json",
     "gx_thresholds.json",
+    "provenance.json",
     "model_identity.json",
     # Superseded formats must not shadow a freshly trained XGBoost bundle.
     "metric_tensor.pt",
@@ -1038,6 +1039,34 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             return 1
         save_model_identity(
             staging_dir, model_identity, verdict.probe.embedding_dim)
+        # Per-bundle provenance manifest (SUPPORT_MATRIX §9.5): every
+        # activated bundle is reproducible and auditable — `atlas artifact
+        # verify/snapshot/rollback` consume this file. Best-effort: a
+        # failed manifest never blocks activation.
+        try:
+            from datetime import datetime, timezone
+            from geometric_lens.provenance import build_manifest, save_provenance
+            n_p = sum(data["labels"])
+            save_provenance(staging_dir, build_manifest(
+                model=model_identity,
+                embedding_dim=verdict.probe.embedding_dim,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                dataset=(getattr(args, "from_results", None)
+                         or ("collected" if getattr(args, "from_collected", False)
+                             else args.samples or "")),
+                n_samples=len(data["labels"]), n_pass=n_p,
+                n_fail=len(data["labels"]) - n_p,
+                metrics={"best_test_auc": result.get("best_test_auc"),
+                         "final_train_auc": result.get("final_train_auc"),
+                         "gx_cv_auc_mean": gx_result.get("cv_auc_mean"),
+                         "pass_energy_mean": result.get("pass_energy_mean"),
+                         "fail_energy_mean": result.get("fail_energy_mean")},
+                normalization=normalization,
+                hyperparameters={"epochs": args.epochs, "lr": args.lr,
+                                 "margin": args.margin},
+                save_dir=staging_dir))
+        except Exception as e:
+            _safe_print(f"  WARN: provenance manifest not written: {e}")
         try:
             _activate_lens_bundle(staging_dir, artifact_dir)
         except (OSError, ValueError) as e:
