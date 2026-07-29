@@ -88,12 +88,23 @@ Sub-plan authored before starting.
 
 ## Category B — UNBLOCKED (owner decisions, 2026-08-05)
 
-1. **Retrieval/routing stack: CUT, permanently.** Component-by-component commits,
-   owner sign-off before each push.
+1. **Retrieval/routing stack: CUT, permanently.** Commits 1-3 pushed (c02844b,
+   778a444, 5b83142); 4-6 in flight.
 2. **Pattern cache: WIRE A READER.** Type+recency matching feeding the agent as
    context; the BM25/indexer stack is not needed for it and dies with the cut.
 3. **Behavior-affecting collapse (detector unification, word-list vs evidence
    gates): IN SCOPE**, validated by a real dogfood session before merge.
+4. **RPG: CUT EVERYWHERE** (owner, 2026-08-05) — unshipped in the v3 image;
+   remove rpg.py/rpg_eval.py/wavelet/ + proxy rpg.go + the tools.go call
+   sites + types RPG fields + the 16MB SSE sizing + TUI handlers + knob
+   surface (schema keeps a deprecated= entry). Issue #148 stays as record.
+5. **V2/TB2 bench subgraph: DELETE** (~1,870).
+6. **Trainer scripts: DELETE after verifying `atlas lens build --from-results`
+   covers the retrain_lens_from_results.py flow** — then update the
+   per-model-candidate-build memory.
+7. **LTM tier: DELETE** — no scheduler exists, promotion unreachable in prod;
+   consolidator goes with it (its whole job); reader keeps co-occurrence
+   expansion only if something still writes the graph at pattern-write time.
 
 **Phase 3b reader design (commit 4 of the cut sequence):**
 - Lens: one endpoint, `POST /internal/patterns/context` {task, top_k} →
@@ -289,6 +300,22 @@ Status legend: ✅ done · 🔜 queued · ⏸ owner decision · ❌ rejected (do
 | C34 | model.py docstring omits install-artifacts subcommand | FIX | 🔜 |
 | C35 | local junk: patches/*.bak, _agenttest/ (gitignored) | DELETE locally | 🔜 |
 | C36 | Docs-with-dead-subjects list (SETUP retrain menu, CONFIGURATION rows, benchmark/README V2 sections, models/README) | captured for docs pass | 🔜 LAST |
+
+## Phase 4 — existence interrogation (owner directive, 2026-08-05: "do they
+## both need to exist?" — question components, not just files)
+
+Queued behind the current cut waves. Each row needs an evidence-based
+recommendation before any action.
+
+| # | Question | First evidence | Status |
+|---|---|---|---|
+| E1 | **repl.py vs tui/** — two interactive chat frontends. repl.py:1 calls itself "the main ATLAS interface"; tui.py:3 says it replaced the Aider chat UI; tui.py imports repl for proxy-launch + `_stop_local_proxy`. | Split repl.py into (a) proxy-runtime lifecycle (live, TUI depends on it → own module) and (b) the 800-line fallback REPL chat loop — cut candidate if the TUI is the product surface. Decide what bare `atlas` should launch. | 🔎 analyze |
+| E2 | **geometric-lens as a separate service** — post-cut it serves only `/health`,`/ready`,`/internal/*` (score-per-step, patterns, sandbox/analyze). Could fold into v3-service: one Python service, one image, one compose entry, one auth story. Cost: v3 image gains torch (~752MB); lens restart currently doesn't kill v3. | Wait for cut c4-c6 to land, then size the real remaining surface. | 🔎 after cut |
+| E3 | **graph/ vs symbols.py** — after the B9-B11 collapses, graph/'s unique value is import-resolution + reachability for `unresolved_calls`/`repair_context`. May fold into symbols.py entirely, deleting the package. | B1/B4-B6 first (dead route + engines), then re-measure. | 🔎 after B-wave |
+| E4 | **sandbox as separate container** | Isolation IS the feature (untrusted code execution). KEEP — recorded so it isn't re-asked. | ❌ keep |
+| E5 | **benchmark/ remainder** (runner, best_of_k, geo_learning, models, v3/) | Load-bearing for `atlas bench` → lens training loop. KEEP. | ❌ keep |
+| E6 | **scripts/ remainder** after C-wave — each survivor must justify itself vs an `atlas` command or CI use. | Inventory post-cut. | 🔎 |
+| E7 | **atlas/cli/events.py in the shipped package** (C27) | spec-as-test-fixture; EVENT_TYPES is the contract anchor. | ⏸ owner |
 
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
