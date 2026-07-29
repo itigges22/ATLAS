@@ -100,23 +100,15 @@ services:
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       - GEOMETRIC_LENS_ENABLED=true
-      - PROJECT_DATA_DIR=/data/projects
-      # SQLite state store (pattern cache, co-occurrence graph, Thompson
-      # router posteriors, task queue, metrics). Learned TTL-less state —
-      # lives on the lens-state volume; losing the volume resets learning
-      # (documented in docs/OPERATIONS.md).
+      # SQLite state store (pattern cache, co-occurrence graph). Learned
+      # TTL-less state — lives on the lens-state volume; losing the
+      # volume resets learning (documented in docs/OPERATIONS.md).
       - SQLITE_DB_PATH=/data/state/geometric_state.db
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
-      # Auth: bearer tokens are looked up locally from /app/secrets/api-keys.json.
-      # Format: {"sk-...": {"user": "alice"}, ...}. Override path with API_KEYS_PATH.
-      # Until a key file is mounted, /v1/* endpoints will return 401.
     volumes:
-      - lens-data:/data/projects
       - lens-state:/data/state
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
-      # Uncomment and point ATLAS_SECRETS_DIR at a host directory containing api-keys.json:
-      # - ${ATLAS_SECRETS_DIR:-./secrets}:/app/secrets:ro
     ports:
       - "127.0.0.1:${ATLAS_LENS_PORT:-8099}:8099"
     depends_on:
@@ -409,7 +401,6 @@ services:
       - sandbox-net
 
 volumes:
-  lens-data:
   lens-state:
 
 networks:

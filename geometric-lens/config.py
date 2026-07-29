@@ -1,5 +1,4 @@
 import os
-import yaml
 import json
 from pydantic import BaseModel
 from typing import Dict
@@ -14,32 +13,9 @@ class LlamaConfig(BaseModel):
     base_url: str = os.environ.get("LLAMA_URL", "http://llama-server:8080")
 
 
-class LimitsConfig(BaseModel):
-    max_files: int = 10000
-    max_loc: int = 500000
-    max_size_mb: int = 100
-    project_ttl_hours: int = 24
-
-
-class RetrievalConfig(BaseModel):
-    top_k: int = 20
-    context_budget_tokens: int = 8000
-
-
 class Config(BaseModel):
     server: ServerConfig = ServerConfig()
     llama: LlamaConfig = LlamaConfig()
-    limits: LimitsConfig = LimitsConfig()
-    retrieval: RetrievalConfig = RetrievalConfig()
-
-
-def load_config() -> Config:
-    config_path = os.environ.get("CONFIG_PATH", "/app/config/config.yaml")
-    if os.path.exists(config_path):
-        with open(config_path) as f:
-            data = yaml.safe_load(f)
-            return Config(**data)
-    return Config()
 
 
 def load_api_keys() -> Dict[str, dict]:
@@ -64,5 +40,5 @@ def load_api_keys() -> Dict[str, dict]:
     return {}
 
 
-config = load_config()
+config = Config()
 api_keys = load_api_keys()

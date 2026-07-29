@@ -1,31 +1,20 @@
 import logging
-import json
 import os
 import tempfile
 import threading
 import uuid
-from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
 import httpx
 from config import config, api_keys
 from sqlite_store import get_db_pool
-from storage import project_store
 from pipeline import (
-    rag_enhanced_completion, simple_completion, forward_to_llama_stream,
-    invalidate_cache,
     retrieve_cached_patterns, record_pattern_access,
     write_pattern_async, record_pattern_outcome,
 )
-from indexer.tree_builder import build_tree_from_files
-from indexer.bm25_index import BM25Index
-from indexer.summarizer import summarize_tree, collect_summaries
-from indexer.persistence import save_index, load_index, delete_index
 from geometric_lens.auth_token import auth_headers as _svc_auth_headers
 
 
@@ -66,7 +55,7 @@ def _safe_detail(e: Exception, op: str = "operation") -> str:
 
 
 # Configure logging. The private-value filter sits on the root handler
-# so every logger in the process (pipeline, cache, router) is covered
+# so every logger in the process (pipeline, cache) is covered
 # before serialization.
 logging.basicConfig(
     level=logging.INFO,
@@ -77,10 +66,10 @@ from geometric_lens.structured_log import (install as _install_logging,
 _install_logging("geometric-lens")
 logger = logging.getLogger(__name__)
 
-# Initialize the SQLite state store (patterns, router state, task queue,
-# metrics) so the schema exists before the first request. A failure here
-# leaves the store degraded: pattern cache/router fall back to neutral
-# behavior and the task-queue endpoints return 503 (see ADR 0002).
+# Initialize the SQLite state store (pattern cache + co-occurrence graph)
+# so the schema exists before the first request. A failure here leaves the
+# store degraded: the pattern cache falls back to neutral behavior
+# (see ADR 0002).
 try:
     get_db_pool()
 except Exception as e:
@@ -263,9 +252,6 @@ async def lifespan(app: FastAPI):
     logger.info("Geometric Lens API starting up")
     logger.info(f"Llama server: {config.llama.base_url}")
 
-    # Cleanup expired projects on startup
-    project_store.cleanup_expired()
-
     # Load seed persistent patterns into Pattern Cache
     try:
         from cache.seed_patterns import load_seed_patterns
@@ -288,21 +274,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Geometric Lens API",
-    description="Geometric Lens API for code-aware LLM interactions with RAG, Pattern Cache, and Confidence Router",
+    description="C(x)/G(x) scoring, the Pattern Cache, and sandbox analysis for the ATLAS stack",
     version="3.0.1",
     lifespan=lifespan
-)
-
-# CORS — configurable via CORS_ORIGINS env var (comma-separated)
-_cors_origins_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080")
-_cors_origins = [origin.strip() for origin in _cors_origins_raw.split(",") if origin.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 # --- Internal service auth (per-installation token) ---
@@ -370,53 +344,6 @@ async def verify_api_key(authorization: str = Header(None)) -> str:
         return key
 
     raise HTTPException(status_code=401, detail="Invalid API key")
-
-
-# Request/Response models
-class FileInfo(BaseModel):
-    path: str
-    content: str
-    hash: Optional[str] = None
-
-
-class SyncRequest(BaseModel):
-    project_name: str
-    project_hash: str
-    files: List[FileInfo]
-    metadata: Optional[Dict[str, Any]] = None
-
-
-class SyncResponse(BaseModel):
-    project_id: str
-    status: str
-    stats: Optional[Dict[str, int]] = None
-    sync_time_ms: Optional[int] = None
-    message: Optional[str] = None
-
-
-class ProjectStatus(BaseModel):
-    project_id: str
-    project_name: str
-    status: str
-    stats: Dict[str, Any]
-    last_sync: str
-    expires_at: str
-
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-
-class ChatRequest(BaseModel):
-    model: str
-    messages: List[ChatMessage]
-    project_id: Optional[str] = None
-    tools: Optional[List[Dict]] = None
-    max_tokens: int = 16384
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    stream: bool = False
 
 
 # Endpoints
@@ -501,324 +428,22 @@ async def root():
         "service": "Geometric Lens API",
         "version": "3.0.1",
         "endpoints": {
-            "sync": "POST /v1/projects/sync",
-            "chat": "POST /v1/chat/completions",
-            "projects": "GET /v1/projects",
-            "models": "GET /v1/models"
+            "health": "GET /health",
+            "ready": "GET /ready",
+            "pattern_write": "POST /v1/patterns/write",
+            "pattern_context": "POST /internal/patterns/context",
+            "pattern_write_internal": "POST /internal/patterns/write",
+            "cache_stats": "GET /internal/cache/stats",
+            "lens_stats": "GET /internal/lens/stats",
+            "lens_evaluate": "GET/POST /internal/lens/evaluate",
+            "lens_score_text": "POST /internal/lens/score-text",
+            "lens_gx_score": "POST /internal/lens/gx-score",
+            "lens_score_per_step": "POST /internal/lens/score-per-step",
+            "lens_retrain": "POST /internal/lens/retrain",
+            "lens_reload": "POST /internal/lens/reload",
+            "sandbox_analyze": "POST /internal/sandbox/analyze",
         }
     }
-
-
-@app.post("/v1/projects/sync", response_model=SyncResponse)
-async def sync_project(
-    request: SyncRequest,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    Sync a project's codebase for RAG indexing.
-    """
-    import time
-    start_time = time.time()
-
-    # Validate limits
-    files = [{"path": f.path, "content": f.content} for f in request.files]
-    total_files = len(files)
-    total_loc = sum(f["content"].count("\n") + 1 for f in files)
-    total_size = sum(len(f["content"].encode()) for f in files)
-
-    if total_files > config.limits.max_files:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Too many files: {total_files} > {config.limits.max_files}"
-        )
-
-    if total_loc > config.limits.max_loc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Too many lines: {total_loc} > {config.limits.max_loc}"
-        )
-
-    if total_size > config.limits.max_size_mb * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Total size too large: {total_size / 1024 / 1024:.1f}MB > {config.limits.max_size_mb}MB"
-        )
-
-    # Generate project ID
-    project_id = project_store.generate_project_id(request.project_name, api_key)
-
-    # Check if project already exists with same hash
-    existing = project_store.get_metadata(project_id)
-    if existing and existing.project_hash == request.project_hash:
-        return SyncResponse(
-            project_id=project_id,
-            status="already_synced",
-            message="Project hash matches, no sync needed"
-        )
-
-    indexed = 0
-
-    # PageIndex tree building
-    try:
-        # Load existing index for incremental re-summarization
-        old_file_hashes = {}
-        existing_summaries = {}
-        existing = load_index(project_id)
-        if existing:
-            old_tree, _ = existing
-            old_file_hashes = old_tree.file_hashes
-            existing_summaries = collect_summaries(old_tree.root)
-
-        # Build tree from files
-        tree_index = build_tree_from_files(
-            project_id=project_id,
-            files=files,
-            project_name=request.project_name,
-        )
-
-        # Generate LLM summaries (bottom-up)
-        await summarize_tree(
-            root=tree_index.root,
-            llama_url=config.llama.base_url,
-            existing_summaries=existing_summaries,
-            file_hashes=tree_index.file_hashes,
-            old_file_hashes=old_file_hashes,
-        )
-
-        # Build BM25 index
-        bm25_index = BM25Index()
-        bm25_index.build_from_tree(tree_index)
-
-        # Persist to disk
-        save_index(project_id, tree_index, bm25_index)
-
-        # Invalidate in-memory cache
-        invalidate_cache(project_id)
-
-        indexed = tree_index.root.node_count()
-        logger.info(
-            f"PageIndex built for {project_id}: {indexed} nodes, "
-            f"{bm25_index.num_docs} BM25 docs"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=_safe_detail(e, "PageIndex build"))
-
-    # Save project metadata
-    project_store.create_project(
-        project_id=project_id,
-        project_name=request.project_name,
-        project_hash=request.project_hash,
-        files=files,
-        chunks_created=indexed,
-        ttl_hours=config.limits.project_ttl_hours
-    )
-
-    elapsed_ms = int((time.time() - start_time) * 1000)
-
-    return SyncResponse(
-        project_id=project_id,
-        status="synced",
-        stats={
-            "files_indexed": total_files,
-            "chunks_created": indexed,
-            "loc_indexed": total_loc
-        },
-        sync_time_ms=elapsed_ms
-    )
-
-
-@app.get("/v1/projects/{project_id}/status", response_model=ProjectStatus)
-async def get_project_status(
-    project_id: str,
-    api_key: str = Depends(verify_api_key)
-):
-    """Get project status and statistics."""
-    meta = project_store.get_metadata(project_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    return ProjectStatus(
-        project_id=meta.project_id,
-        project_name=meta.project_name,
-        status=meta.status,
-        stats={
-            "files_indexed": meta.files_indexed,
-            "chunks_created": meta.chunks_created,
-            "loc_indexed": meta.loc_indexed,
-            "size_bytes": meta.size_bytes
-        },
-        last_sync=meta.created_at,
-        expires_at=meta.expires_at
-    )
-
-
-@app.get("/v1/projects")
-async def list_projects(api_key: str = Depends(verify_api_key)):
-    """List all projects."""
-    projects = project_store.list_projects()
-    return {
-        "projects": [
-            {
-                "project_id": p.project_id,
-                "project_name": p.project_name,
-                "status": p.status,
-                "last_sync": p.created_at
-            }
-            for p in projects
-        ]
-    }
-
-
-@app.delete("/v1/projects/{project_id}")
-async def delete_project(
-    project_id: str,
-    api_key: str = Depends(verify_api_key)
-):
-    """Delete a project."""
-    # Delete PageIndex data
-    delete_index(project_id)
-    invalidate_cache(project_id)
-
-    # Delete from file store
-    deleted = project_store.delete_project(project_id)
-
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    return {"deleted": True, "project_id": project_id}
-
-
-def log_request_metrics(request_type: str, success: bool, tokens: int = 0, model: str = ""):
-    """Log request metrics to SQLite for dashboard."""
-    try:
-        from datetime import date
-        today = date.today().isoformat()
-
-        pool = get_db_pool()
-        with pool.get_connection() as conn:
-            # Increment daily counters
-            counters = [("tasks_total", 1), ("tokens_total", tokens)]
-            if success:
-                counters.append(("tasks_success", 1))
-            for key, delta in counters:
-                conn.execute("""
-                    INSERT INTO metrics_daily (date, key, value) VALUES (?, ?, ?)
-                    ON CONFLICT(date, key) DO UPDATE SET value = value + excluded.value
-                """, (today, key, delta))
-
-            # Add to recent tasks list
-            task_record = json.dumps({
-                "type": request_type,
-                "model": model,
-                "tokens": tokens,
-                "success": success,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-            conn.execute(
-                "INSERT INTO metrics_recent_tasks (task_record) VALUES (?)",
-                (task_record,)
-            )
-            # Keep the newest 100 records
-            conn.execute("""
-                DELETE FROM metrics_recent_tasks
-                WHERE id NOT IN (
-                    SELECT id FROM metrics_recent_tasks ORDER BY id DESC LIMIT 100
-                )
-            """)
-    except Exception as e:
-        logger.warning(f"Failed to log metrics: {e}")
-
-
-@app.post("/v1/chat/completions")
-async def chat_completions(
-    request: ChatRequest,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    OpenAI-compatible chat completions endpoint with optional RAG enhancement.
-    Supports both streaming and non-streaming responses.
-    """
-    messages = [{"role": m.role, "content": m.content} for m in request.messages]
-
-    # Build kwargs for optional params
-    kwargs = {}
-    if request.temperature is not None:
-        kwargs["temperature"] = request.temperature
-    if request.top_p is not None:
-        kwargs["top_p"] = request.top_p
-
-    request_type = "rag_completion" if request.project_id else "chat_completion"
-
-    if request.project_id:
-        # Verify project exists
-        if not project_store.project_exists(request.project_id):
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        # RAG-enhanced completion
-        if request.stream:
-            log_request_metrics(request_type, True, 0, request.model)  # Log at start for streaming
-            generator = await rag_enhanced_completion(
-                project_id=request.project_id,
-                messages=messages,
-                model=request.model,
-                tools=request.tools,
-                max_tokens=request.max_tokens,
-                stream=True,
-                **kwargs
-            )
-            return StreamingResponse(
-                generator,
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
-            )
-        result = await rag_enhanced_completion(
-            project_id=request.project_id,
-            messages=messages,
-            model=request.model,
-            tools=request.tools,
-            max_tokens=request.max_tokens,
-            stream=False,
-            **kwargs
-        )
-        tokens = result.get("usage", {}).get("total_tokens", 0) if isinstance(result, dict) else 0
-        log_request_metrics(request_type, True, tokens, request.model)
-        return result
-    else:
-        # Simple pass-through
-        if request.stream:
-            log_request_metrics(request_type, True, 0, request.model)  # Log at start for streaming
-            generator = forward_to_llama_stream(
-                messages=messages,
-                model=request.model,
-                tools=request.tools,
-                max_tokens=request.max_tokens,
-                **kwargs
-            )
-            return StreamingResponse(
-                generator,
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
-            )
-        result = await simple_completion(
-            messages=messages,
-            model=request.model,
-            tools=request.tools,
-            max_tokens=request.max_tokens,
-            stream=False,
-            **kwargs
-        )
-        tokens = result.get("usage", {}).get("total_tokens", 0) if isinstance(result, dict) else 0
-        log_request_metrics(request_type, True, tokens, request.model)
-        return result
-
-
-@app.get("/v1/models")
-async def list_models(api_key: str = Depends(verify_api_key)):
-    """List available models (proxy to llama-server)."""
-    import httpx
-    async with httpx.AsyncClient(headers=_svc_auth_headers()) as client:
-        response = await client.get(f"{config.llama.base_url}/v1/models")
-        return response.json()
 
 
 # ──────────────────────────────────────────────────────────────

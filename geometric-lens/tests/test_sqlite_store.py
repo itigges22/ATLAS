@@ -1,6 +1,5 @@
-"""SQLite state store: schema init, metrics, patterns."""
+"""SQLite state store: schema init, patterns."""
 
-import json
 import os
 import sys
 
@@ -8,10 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-EXPECTED_TABLES = {
-    "patterns", "co_occurrence",
-    "metrics_daily", "metrics_recent_tasks", "store_metadata",
-}
+EXPECTED_TABLES = {"patterns", "co_occurrence", "store_metadata"}
 
 
 def _reset_singletons():
@@ -62,49 +58,6 @@ def test_schema_init_is_idempotent(store):
     with pool2.get_connection() as conn:
         cur = conn.execute("SELECT COUNT(*) AS c FROM patterns")
         assert cur.fetchone()["c"] == 1  # existing rows survive re-init
-
-
-# ── Metrics ─────────────────────────────────────────────────────────
-
-
-def test_recent_tasks_trims_to_100(store, tmp_path, monkeypatch):
-    # main's import-time side effects need a writable project dir.
-    monkeypatch.setenv("PROJECT_DATA_DIR", str(tmp_path / "projects"))
-    # `import main` by bare name collides with v3-service's main when
-    # another suite imported it first (both are flat top-level modules);
-    # load the lens main under a unique sys.modules key instead.
-    import importlib.util
-    main = sys.modules.get("lens_main")
-    if main is None:
-        spec = importlib.util.spec_from_file_location(
-            "lens_main",
-            os.path.join(os.path.dirname(__file__), "..", "main.py"))
-        main = importlib.util.module_from_spec(spec)
-        sys.modules["lens_main"] = main
-        spec.loader.exec_module(main)
-
-    for i in range(120):
-        main.log_request_metrics("chat_completion", success=(i % 2 == 0),
-                                 tokens=i, model=f"m{i}")
-
-    pool = store.get_db_pool()
-    with pool.get_connection() as conn:
-        cur = conn.execute(
-            "SELECT task_record FROM metrics_recent_tasks ORDER BY id")
-        records = [json.loads(row["task_record"]) for row in cur.fetchall()]
-
-    assert len(records) == 100
-    # Oldest 20 trimmed, newest kept, insertion order preserved.
-    assert records[0]["model"] == "m20"
-    assert records[-1]["model"] == "m119"
-
-    # Daily counters aggregated in metrics_daily.
-    with pool.get_connection() as conn:
-        cur = conn.execute("SELECT key, value FROM metrics_daily")
-        daily = {row["key"]: row["value"] for row in cur.fetchall()}
-    assert daily["tasks_total"] == 120
-    assert daily["tasks_success"] == 60
-    assert daily["tokens_total"] == sum(range(120))
 
 
 # ── Pattern store ───────────────────────────────────────────────────

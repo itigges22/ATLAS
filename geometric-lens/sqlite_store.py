@@ -1,4 +1,5 @@
-"""SQLite connection pool and initialization for Geometric Lens state."""
+"""SQLite connection pool and schema for Geometric Lens state (pattern
+cache, co-occurrence graph, stats counters)."""
 
 import os
 import sqlite3
@@ -55,25 +56,6 @@ class SQLitePool:
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("PRAGMA busy_timeout=5000;")
 
-            # Metrics daily
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS metrics_daily (
-                    date TEXT,
-                    key TEXT,
-                    value INTEGER,
-                    PRIMARY KEY (date, key)
-                )
-            """)
-            
-            # Metrics recent tasks
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS metrics_recent_tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_record TEXT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
             # Pattern cache
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS patterns (
