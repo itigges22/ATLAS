@@ -340,7 +340,7 @@ Wait 注入会追加 "Wait, let me reconsider.\n" 以请求更长的一轮推理
 
 ### 模块图
 
-`benchmark/v3/` 中的 18 个 Python 模块。`v3-service/main.py` 编排其中的 13 个；`reasc`、`ace_pipeline`、`lens_feedback` 和 `embedding_store` 只在离线 bench 运行器（`benchmark/v3_runner.py`）下运行，而 `ablation_analysis` 是一个独立的分析脚本（未在图中显示）：
+`benchmark/v3/` 中的 18 个 Python 模块。`v3-service/pipeline.py` 编排其中的 13 个；`reasc`、`ace_pipeline`、`lens_feedback` 和 `embedding_store` 只在离线 bench 运行器（`benchmark/v3_runner.py`）下运行，而 `ablation_analysis` 是一个独立的分析脚本（未在图中显示）：
 
 ```mermaid
 graph LR

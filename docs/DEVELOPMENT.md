@@ -51,7 +51,7 @@ docker compose logs geometric-lens | grep -i reload
 
 ### v3-service
 
-The override bind-mounts `./v3-service/main.py` and `./benchmark/`
+The override bind-mounts the `./v3-service/*.py` modules and `./benchmark/`
 into the container. The service runs on Python's stdlib
 `http.server`, which has no built-in reloader, so after editing you
 need to restart the container — but no rebuild:

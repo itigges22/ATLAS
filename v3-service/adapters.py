@@ -1,0 +1,477 @@
+"""Outbound service adapters for the V3 service: llama-server chat/embedding
+clients, the sandbox client, internal-auth plumbing, and the pattern-cache
+write hook."""
+
+import json
+import os
+import re
+import sys
+import threading
+import time
+import urllib.request
+import urllib.error
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from benchmark.llm_client import chatml_to_messages
+
+# --- Configuration -----------------------------------------------------------
+
+INFERENCE_URL = os.environ.get("ATLAS_INFERENCE_URL", "http://localhost:8080")
+LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
+SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
+
+
+def _load_service_token() -> str:
+    """Internal-auth token (Authorization: Bearer). Empty = auth
+    disabled — an install without `atlas init` keeps the open-localhost
+    behavior and `atlas doctor` warns. The value is never logged."""
+    path = os.environ.get("ATLAS_SERVICE_TOKEN_FILE",
+                          "/run/atlas-secrets/service-token")
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+SERVICE_TOKEN = _load_service_token()
+
+if SERVICE_TOKEN:
+    # Outbound injection: one opener covers every urllib call site
+    # (llama, lens, sandbox). urllib merges addheaders under explicit
+    # per-request headers, so requests that already set Authorization
+    # keep their own value.
+    _opener = urllib.request.build_opener()
+    _opener.addheaders = [("Authorization", f"Bearer {SERVICE_TOKEN}")]
+    urllib.request.install_opener(_opener)
+
+
+def _service_headers(rid: str = "") -> dict:
+    """Headers for outbound service-to-service calls: forwards the
+    current request's correlation ID so lens/sandbox/llama log records
+    join the same trace. Pass rid explicitly from background threads —
+    a new thread doesn't inherit the request's ContextVar."""
+    headers = {"Content-Type": "application/json"}
+    if not rid:
+        try:
+            from structured_log import get_request_id
+            rid = get_request_id()
+        except ImportError:
+            rid = ""
+    if rid:
+        headers["X-ATLAS-Request-ID"] = rid
+    return headers
+
+
+# --- Pattern Cache write hook -------------------------------------------------
+# Maps the V3 phase that produced the winning solution to a retry_count value.
+# The pattern cache uses retry_count / max_retries as a "surprise" proxy — higher
+# retries mean the pattern was harder to find and worth caching with more weight.
+_PHASE_RETRY_COUNT = {
+    "probe": 1,             # solved on first probe (phase_solved="probe")
+    "phase1": 2,            # plan-search candidates passed
+    "phase1_sstar": 2,      # S* tiebreak among passing candidates
+    "pr_cot": 3,            # required PR-CoT repair
+    "refinement": 4,        # required refinement loop
+    "derivation": 5,        # required derivation chains
+    "fallback": 5,          # nothing passed; best-by-energy returned
+    "none": 5,
+}
+
+
+def _post_pattern_outcome(problem: str, result: dict):
+    """Fire-and-forget: post the pipeline outcome to geometric-lens for caching.
+
+    Runs in a background thread so it never delays the response. Errors are
+    logged but never raised — the pattern cache is best-effort, not load-bearing.
+    """
+    import threading
+
+    # Capture the correlation ID on the request thread — the ContextVar
+    # doesn't propagate into a newly created thread.
+    try:
+        from structured_log import get_request_id
+        rid = get_request_id()
+    except ImportError:
+        rid = ""
+
+    def _do_post():
+        payload = {
+            "query": problem,
+            "solution": result.get("code", ""),
+            "retry_count": _PHASE_RETRY_COUNT.get(result.get("phase_solved", "none"), 5),
+            "max_retries": 5,
+            "error_context": None,
+            "source_files": [],
+            "active_pattern_ids": [],
+            "success": bool(result.get("passed")),
+        }
+        try:
+            req = urllib.request.Request(
+                f"{LENS_URL}/internal/patterns/write",
+                data=json.dumps(payload).encode(),
+                headers=_service_headers(rid),
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read()
+        except Exception as e:
+            print(f"  [pattern-write] POST failed (non-fatal): {e}", flush=True)
+
+    threading.Thread(target=_do_post, daemon=True).start()
+
+
+# --- PC-061 step B: typed event emission ------------------------------------
+# --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
+
+class LLMAdapter:
+    """Calls llama-server's /v1/chat/completions, parsing ChatML prompts into messages.
+
+    PC-206: `thinking` controls template-level reasoning when supported.
+    - False (default) — `enable_thinking=False`.
+      Required for grammar-constrained JSON output (the agent's tool-call
+      shape) and for the tight V3 sampling loop where reasoning would 5-20×
+      output token cost. This matches the previously hardcoded behavior.
+    - True — `enable_thinking=True`. Use for
+      high-reasoning-value calls (planner, verification, claim-check) where
+      the output can absorb a preamble and the strip pattern in __call__
+      cleans up `<think>...</think>` blocks before downstream JSON parse.
+
+    The default is set per-instance; individual __call__ invocations can
+    override via the `thinking` keyword for ad-hoc switches.
+    """
+
+    _lock = threading.Lock()
+
+    def __init__(self, progress_callback=None, thinking: bool = False):
+        self.call_count = 0
+        self.total_tokens = 0
+        self.last_logprobs: List[float] = []
+        self._progress = progress_callback
+        self.thinking = thinking
+
+    def _emit(self, stage: str, detail: str = "", **data):
+        if self._progress:
+            try:
+                self._progress(stage, detail, **data)
+            except TypeError:
+                # Older two-arg callbacks don't accept **data — call back
+                # to the legacy signature so we stay compatible.
+                self._progress(stage, detail)
+
+    def __call__(self, prompt: str, temperature: float,
+                 max_tokens: int, seed: Optional[int],
+                 thinking: Optional[bool] = None) -> Tuple[str, int, float]:
+        self.call_count += 1
+
+        # Resolve per-call override against the instance default (PC-206).
+        thinking_resolved = self.thinking if thinking is None else thinking
+
+        body = {
+            "model": "default",
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,  # streaming: per-token visibility + no
+                              # 300s urllib read-timeout on long gens.
+            "stop": ["\n\n\n\n"],
+            "top_k": 20,
+            "top_p": 0.95,
+            "_thinking": thinking_resolved,  # consumed by _send, popped before send
+        }
+        if seed is not None:
+            body["seed"] = seed
+
+        start = time.time()
+        # Marker so the TUI can frame this LLM call. Mirrors what
+        # atlas-proxy emits around its own llama.cpp calls.
+        self._emit("llm_start", f"call #{self.call_count}",
+                   call=self.call_count, max_tokens=max_tokens,
+                   temperature=temperature)
+        data = self._send(body)
+        # The streaming send already emitted token events; emit a
+        # closing marker with totals so the TUI can replace the live
+        # row with a compact summary.
+        elapsed_ms = (time.time() - start) * 1000
+        completion_tokens = data.get("usage", {}).get("completion_tokens", 0) \
+            or data.get("usage", {}).get("total_tokens", 0)
+        self._emit("llm_end", f"{completion_tokens} tok · {elapsed_ms:.0f}ms",
+                   call=self.call_count, tokens=completion_tokens,
+                   elapsed_ms=int(elapsed_ms))
+
+        # Parse response
+        content = ""
+        tokens = completion_tokens
+        if "choices" in data:
+            content = data["choices"][0].get("text", "")
+
+        # Strip thinking blocks
+        content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
+        if '</think>' in content and '<think>' not in content:
+            content = content[content.index('</think>') + len('</think>'):].strip()
+
+        self.total_tokens += tokens
+        return content, tokens, elapsed_ms
+
+    def _send(self, body: dict) -> dict:
+        """Send to llama-server via /v1/chat/completions.
+
+        V3 modules generate ChatML prompts. We parse them into messages format
+        for the chat endpoint. ChatML format:
+            <|im_start|>system\n...\n<|im_end|>\n<|im_start|>user\n...\n<|im_end|>\n<|im_start|>assistant\n
+        """
+        prompt = body.pop("prompt", "")
+        model_name = os.environ.get("ATLAS_MODEL_NAME", "local-model")
+
+        # PC-206: thinking flag drops down from __call__. Default False so
+        # callers get bounded generation unless they opt into reasoning.
+        thinking = bool(body.pop("_thinking", False))
+
+        # Convert the internal prompt carrier into structured messages before
+        # llama-server applies the selected model's own template.
+        messages = chatml_to_messages(prompt)
+        if "<|im_start|>" not in prompt:
+            print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
+        else:
+            print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
+                  f" (thinking={'on' if thinking else 'off'})", flush=True)
+            if thinking:
+                # Strip the legacy directive from old prompt templates when a
+                # caller explicitly enables reasoning.
+                for msg in messages:
+                    if msg["role"] == "user" and msg["content"].startswith("/nothink"):
+                        msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
+
+        chat_body = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
+            "temperature": body.get("temperature", 0.6),
+            "stream": bool(body.get("stream", False)),
+            # The chat template may honor enable_thinking; templates that do
+            # not support it ignore the kwarg. Reasoning blocks are stripped
+            # in __call__ before downstream JSON parsing.
+            "chat_template_kwargs": {"enable_thinking": thinking},
+        }
+        if chat_body["stream"]:
+            # Need usage in the final chunk so we can report token counts.
+            chat_body["stream_options"] = {"include_usage": True}
+        if "seed" in body:
+            chat_body["seed"] = body["seed"]
+
+        req = urllib.request.Request(
+            f"{INFERENCE_URL}/v1/chat/completions",
+            data=json.dumps(chat_body).encode(),
+            headers=_service_headers(),
+        )
+        for attempt in range(5):
+            try:
+                with LLMAdapter._lock:
+                    with urllib.request.urlopen(req, timeout=600) as resp:
+                        if not chat_body["stream"]:
+                            data = json.loads(resp.read())
+                            # Convert chat response to completions format
+                            if "choices" in data and len(data["choices"]) > 0:
+                                choice = data["choices"][0]
+                                if "message" in choice:
+                                    choice["text"] = choice["message"].get("content", "")
+                            return data
+                        # Streaming path: parse SSE chunks, accumulate
+                        # delta content, and forward each delta to the
+                        # progress callback as ("token", text). The 600s
+                        # urllib timeout is per-read; with continuous
+                        # token flow each read is sub-second, so long
+                        # generations no longer hit the old 300s ceiling.
+                        full = []
+                        reasoning = []
+                        usage = {}
+                        first_chunk_logged = False
+                        for raw in resp:
+                            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                            if not line.startswith("data:"):
+                                continue
+                            payload = line[5:].lstrip()
+                            if payload == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(payload)
+                            except json.JSONDecodeError:
+                                continue
+                            choices = chunk.get("choices") or []
+                            if choices:
+                                delta_obj = choices[0].get("delta", {}) or {}
+                                if not first_chunk_logged and delta_obj:
+                                    print(f"  [LLM] first delta keys={list(delta_obj.keys())} sample={json.dumps(delta_obj)[:200]}",
+                                          flush=True)
+                                    first_chunk_logged = True
+                                delta = delta_obj.get("content", "") or ""
+                                # Some llama.cpp builds split <think>…</think>
+                                # into delta.reasoning_content. Capture it as
+                                # a fallback so we don't end up with 2048 tok
+                                # of reasoning and zero parseable text.
+                                rdelta = delta_obj.get("reasoning_content", "") or ""
+                                if delta:
+                                    full.append(delta)
+                                    self._emit("token", delta)
+                                if rdelta:
+                                    reasoning.append(rdelta)
+                            u = chunk.get("usage")
+                            if u:
+                                usage = u
+                        text = "".join(full)
+                        if not text and reasoning:
+                            # Reasoning-only response: surface it so the
+                            # parser at least sees the JSON the model
+                            # buried inside its think block.
+                            print(f"  [LLM] reasoning-only response ({len(reasoning)} chunks, "
+                                  f"{sum(len(r) for r in reasoning)} chars) — using as content",
+                                  flush=True)
+                            text = "".join(reasoning)
+                        return {
+                            "choices": [{"text": text}],
+                            "usage": usage,
+                        }
+            except (urllib.error.HTTPError, OSError) as e:
+                print(f"  [LLM] Attempt {attempt+1} failed: {e}", flush=True)
+                if attempt < 4:
+                    time.sleep(2 * (attempt + 1))
+                else:
+                    raise
+        # Unreachable: the for loop above always either returns inside
+        # the success branch or raises on the 5th failure. Explicit
+        # for py/mixed-returns (the implicit fall-through returns None,
+        # which violates the -> dict signature).
+        raise RuntimeError("unreachable: _send loop must return or raise")
+
+
+class ClientDisconnected(Exception):
+    """SSE client went away mid-pipeline. Raised at phase boundaries in
+    V3PipelineService.run so a dead client doesn't keep burning GPU minutes;
+    the HTTP handlers catch it and stop without writing a response."""
+
+
+# --- Sandbox Adapter (calls sandbox /execute) ---------------------------------
+
+class SandboxAdapter:
+    """Calls the sandbox service for code execution.
+
+    PC-046: optional `project_files` dict ships supporting files (other
+    modules from the user's project) into the sandbox workspace so
+    multi-file imports resolve. Without this, a candidate that does
+    `from utils import helper` fails ImportError in the sandbox even
+    though it would work on the user's machine.
+    """
+
+    def __init__(self, project_files: Optional[Dict[str, str]] = None):
+        self.project_files = project_files or {}
+
+    def __call__(self, code: str, test_input: str = "") -> Tuple[bool, str, str]:
+        body = {
+            "code": code,
+            "language": "python",
+            "timeout": 15,
+        }
+        if self.project_files:
+            body["files"] = self.project_files
+        try:
+            req = urllib.request.Request(
+                f"{SANDBOX_URL}/execute",
+                data=json.dumps(body).encode(),
+                headers=_service_headers(),
+            )
+            # 45s client timeout: the sandbox's server-side budgets (syntax
+            # check + optional pip install + lint + the 15s run cap) can sum
+            # past 30s, and the old 20s read timeout gave up on executions
+            # the sandbox would still have completed.
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read())
+                return data.get("success", False), data.get("stdout", ""), data.get("stderr", "")
+        except Exception as e:
+            return False, "", str(e)
+
+    def syntax_check(self, code: str, language: str, filename: str = "") -> Tuple[bool, str, str]:
+        """Ask the sandbox to parse or compile source without executing it."""
+        body = {
+            "code": code,
+            "language": language,
+            "filename": filename or None,
+        }
+        try:
+            req = urllib.request.Request(
+                f"{SANDBOX_URL}/syntax-check",
+                data=json.dumps(body).encode(),
+                headers=_service_headers(),
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read())
+            errors = data.get("errors", [])
+            error_text = "\n".join(str(error) for error in errors)
+            return bool(data.get("valid", False)), "", error_text
+        except Exception as e:
+            return False, "", f"syntax verification unavailable: {e}"
+
+    def run_command(
+        self,
+        command: str,
+        files: Optional[Dict[str, str]] = None,
+        cwd: str = "/workspace",
+        timeout: int = 60,
+    ) -> Tuple[bool, str, str, Dict[str, Any]]:
+        """Run a project command through the sandbox /shell endpoint.
+
+        `files` is an ephemeral overlay: the sandbox snapshots /workspace,
+        applies these relative paths in the temp copy, runs the command there,
+        then deletes the temp copy. It lets V3 verify a candidate without
+        writing it to the user's real workspace.
+        """
+        body = {
+            "command": command,
+            "cwd": cwd or "/workspace",
+            "timeout": timeout,
+        }
+        if files:
+            body["files"] = files
+        try:
+            req = urllib.request.Request(
+                f"{SANDBOX_URL}/shell",
+                data=json.dumps(body).encode(),
+                headers=_service_headers(),
+            )
+            with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
+                data = json.loads(resp.read())
+            return (
+                bool(data.get("success", False)),
+                data.get("stdout", ""),
+                data.get("stderr", ""),
+                data,
+            )
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")
+            return False, "", detail, {"exit_code": None, "elapsed_ms": 0}
+        except Exception as e:
+            return False, "", f"build verification unavailable: {e}", {"exit_code": None, "elapsed_ms": 0}
+
+
+# --- Embedding Adapter --------------------------------------------------------
+
+class EmbedAdapter:
+    """Calls llama-server /v1/embeddings for code embeddings."""
+
+    def __call__(self, text: str) -> List[float]:
+        body = {"model": "default", "input": text}
+        try:
+            req = urllib.request.Request(
+                f"{INFERENCE_URL}/v1/embeddings",
+                data=json.dumps(body).encode(),
+                headers=_service_headers(),
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+                return data.get("data", [{}])[0].get("embedding", [])
+        except Exception:
+            return []

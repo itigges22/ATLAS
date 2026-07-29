@@ -10,7 +10,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
+import adapters  # noqa: E402
 import main  # noqa: E402
+import symbols  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not getattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False),
@@ -161,7 +163,7 @@ def structural_check_url(monkeypatch):
     import threading
     from http.server import ThreadingHTTPServer
 
-    monkeypatch.setattr(main, "SERVICE_TOKEN", "")
+    monkeypatch.setattr(adapters, "SERVICE_TOKEN", "")
     srv = ThreadingHTTPServer(("127.0.0.1", 0), main.V3Handler)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
@@ -234,7 +236,7 @@ def test_endpoint_fails_open_without_tree_sitter(structural_check_url,
     # ok:false = "check couldn't run"; the Go caller treats it as pass.
     # (Malformed Python is NOT this case: tree-sitter parses it tolerantly,
     # so the checkable trigger is tree-sitter being unavailable.)
-    monkeypatch.setattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False)
+    monkeypatch.setattr(symbols, "_STRUCTURAL_EDIT_AVAILABLE", False)
     out = _post_json(structural_check_url, {
         "path": "app.py",
         "source": "def index():\n    return render_template('x')\n",

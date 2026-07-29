@@ -3,9 +3,9 @@
 # Dockerfiles in proxy/, geometric-lens/, sandbox/, inference/ use
 # their own subdirectory as context and are unaffected by this file.
 #
-# Goal: keep the v3 build context to just `benchmark/` + `v3-service/main.py`
-# (what its Dockerfile actually COPYs), so CI doesn't ship docs/ + tests/ +
-# proxy sources / etc. across the wire on every build.
+# Goal: keep the v3 build context to just `benchmark/` + the `v3-service/`
+# Python modules (what its Dockerfile actually COPYs), so CI doesn't ship
+# docs/ + tests/ + proxy sources / etc. across the wire on every build.
 
 # VCS + CI
 .git/

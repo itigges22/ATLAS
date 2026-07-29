@@ -356,7 +356,7 @@ Wait injection appends "Wait, let me reconsider.\n" to request a longer reasonin
 
 ### Module Map
 
-18 Python modules in `benchmark/v3/`. `v3-service/main.py` orchestrates 13 of them; `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`benchmark/v3_runner.py`), and `ablation_analysis` is a standalone analysis script (not shown):
+18 Python modules in `benchmark/v3/`. `v3-service/pipeline.py` orchestrates 13 of them; `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`benchmark/v3_runner.py`), and `ablation_analysis` is a standalone analysis script (not shown):
 
 ```mermaid
 graph LR

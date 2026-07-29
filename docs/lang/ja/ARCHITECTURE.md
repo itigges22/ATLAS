@@ -317,7 +317,7 @@ Wait 注入は、より長い推論パスを要求するために「Wait, let me
 
 ### モジュールマップ
 
-`benchmark/v3/` 内の18個の Python モジュール。そのうち13個を `v3-service/main.py` がオーケストレーションします; `reasc`、`ace_pipeline`、`lens_feedback`、`embedding_store` はオフラインのベンチランナー（`benchmark/v3_runner.py`）の下でのみ動作し、`ablation_analysis` はスタンドアロンの分析スクリプトです（図には含まれません）:
+`benchmark/v3/` 内の18個の Python モジュール。そのうち13個を `v3-service/pipeline.py` がオーケストレーションします; `reasc`、`ace_pipeline`、`lens_feedback`、`embedding_store` はオフラインのベンチランナー（`benchmark/v3_runner.py`）の下でのみ動作し、`ablation_analysis` はスタンドアロンの分析スクリプトです（図には含まれません）:
 
 ```mermaid
 graph LR

@@ -344,7 +344,7 @@ Wait 주입은 더 긴 추론 패스를 요청하기 위해 "Wait, let me recons
 
 ### 모듈 맵
 
-`benchmark/v3/`의 18개 Python 모듈. `v3-service/main.py`가 그중 13개를 오케스트레이션하며, `reasc`, `ace_pipeline`, `lens_feedback`, `embedding_store`는 오프라인 벤치 러너(`benchmark/v3_runner.py`)에서만 실행되고, `ablation_analysis`는 독립 실행형 분석 스크립트입니다(다이어그램에는 없음):
+`benchmark/v3/`의 18개 Python 모듈. `v3-service/pipeline.py`가 그중 13개를 오케스트레이션하며, `reasc`, `ace_pipeline`, `lens_feedback`, `embedding_store`는 오프라인 벤치 러너(`benchmark/v3_runner.py`)에서만 실행되고, `ablation_analysis`는 독립 실행형 분석 스크립트입니다(다이어그램에는 없음):
 
 ```mermaid
 graph LR

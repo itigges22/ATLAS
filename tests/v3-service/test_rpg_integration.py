@@ -1,8 +1,8 @@
 """Integration test for the RPG wiring inside main.generate_plan.
 
-Monkeypatches main.LLMAdapter so no llama-server is needed, and verifies the
-ATLAS_RPG_PLANNING flag routes planning through the two-stage RPG path (and
-that it stays off by default).
+Monkeypatches adapters.LLMAdapter so no llama-server is needed, and verifies
+the ATLAS_RPG_PLANNING flag routes planning through the two-stage RPG path
+(and that it stays off by default).
 """
 
 import json
@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
+import adapters  # noqa: E402
 import main as v3main  # noqa: E402
 
 PROPOSAL_JSON = json.dumps(
@@ -35,7 +36,7 @@ IMPL_JSON = json.dumps(
 
 
 class _FakeLLM:
-    """Stand-in for main.LLMAdapter: returns proposal then implementation."""
+    """Stand-in for adapters.LLMAdapter: returns proposal then implementation."""
 
     _shared = {"n": 0}
 
@@ -50,7 +51,7 @@ class _FakeLLM:
 
 def test_flag_off_uses_flat_planner(monkeypatch):
     monkeypatch.delenv("ATLAS_RPG_PLANNING", raising=False)
-    monkeypatch.setattr(v3main, "LLMAdapter", _FakeLLM)
+    monkeypatch.setattr(adapters, "LLMAdapter", _FakeLLM)
     plan = v3main.generate_plan("build a loader", "/nonexistent-dir", {}, n_candidates=1)
     # Flat planner path: no RPG artifact attached.
     assert "rpg" not in plan
@@ -59,7 +60,7 @@ def test_flag_off_uses_flat_planner(monkeypatch):
 def test_flag_on_routes_through_rpg(monkeypatch):
     _FakeLLM._shared["n"] = 0
     monkeypatch.setenv("ATLAS_RPG_PLANNING", "1")
-    monkeypatch.setattr(v3main, "LLMAdapter", _FakeLLM)
+    monkeypatch.setattr(adapters, "LLMAdapter", _FakeLLM)
     plan = v3main.generate_plan("build a loader", "/nonexistent-dir", {}, n_candidates=1)
     assert "rpg" in plan
     assert plan["winning_index"] == 0

@@ -1,0 +1,409 @@
+"""Plan generation for /v3/plan: the planning prompt, plan-JSON parsing, the
+heuristic plan scorer, and diverse-sample plan selection (with the flag-gated
+RPG path)."""
+
+import json
+import os
+import re
+from typing import Dict, List, Optional, Tuple
+
+import adapters
+
+
+# --- Plan generation (/v3/plan) ----------------------------------------------
+#
+# Generates a structured plan for an agent task. Reuses the same LLMAdapter
+# the code-generation pipeline uses, but with a planning prompt template and
+# a heuristic scorer (V3's lens-based scorer is for code embeddings, not prose
+# plans, so it doesn't apply here).
+#
+# Why bother: when a compact coding model gets a multi-step task without a plan, it
+# wanders through 12+ turns of recon before any real work. Forcing the
+# model to commit to an ordered set of steps up front cuts the wander to
+# zero — even a wrong plan beats no plan, because at least the wrongness
+# is visible in one screen instead of buried in a trace.
+
+PLAN_PROMPT_TEMPLATE = """You are an architect. Output ONLY a JSON plan, no other text. No markdown fences. No prose preamble.
+
+User goal: {user_message}
+Working directory: {working_dir}
+
+{project_context}
+
+Produce a plan as a SINGLE JSON object:
+{{
+  "steps": [
+    {{"id": "s1", "action": "<concrete action>", "target": "<file path or url>", "why": "<one short sentence>"}},
+    ...
+  ],
+  "verify_step": "<id of the step that verifies the fix works>",
+  "rationale": "<one sentence on why this plan shape is right>"
+}}
+
+Rules:
+- Each step is a single tool call: read_file, write_file, edit_file, structural_edit, delete_file, run_command, list_directory.
+- Tool selection guidance:
+    * read_file        — inspect a file before editing it
+    * write_file       — create a NEW file (rejected for files >5 lines that already exist)
+    * edit_file        — small, targeted string change (one function, one block) inside an existing file
+    * structural_edit         — replace a WHOLE function, class, or HTML element by selector. Use for any
+                         "replace the dashboard function" / "rewrite <body>" / "swap the validate method"
+                         step. Selectors: `function:NAME`, `class:NAME`, `<tag>` (.py and .html only).
+                         Strongly preferred over edit_file when the change is a whole-unit swap —
+                         edit_file truncates on long old_str/new_str pairs (>1.5 KB hits max_tokens
+                         mid-string and the JSON parse fails). structural_edit takes no old_str so it
+                         doesn't truncate.
+    * run_command      — build, test, run, curl. Verifies behavior.
+    * delete_file      — remove a file
+    * list_directory   — list a directory's contents
+- The verify_step MUST run a verification command — curl, pytest, python <script>, go test, npm test, cargo test, make test. ls / cat / grep do NOT verify; they only inspect.
+- Minimum 2 steps, maximum 6. Tighter is better.
+- Address the user's STATED problem only. Don't add unrelated work, don't re-architect.
+- For "fix" intents, the plan shape should be: investigate (1 step) → change (1-3 steps) → verify (1 step).
+
+JSON plan:"""
+
+
+def _build_plan_prompt(user_message: str, working_dir: str,
+                       project_context: Dict[str, str]) -> str:
+    """Render the planning prompt with project files inlined (truncated)."""
+    if project_context:
+        ctx_lines = ["Files in project:"]
+        for path, content in project_context.items():
+            preview = content[:200]
+            if len(content) > 200:
+                preview += "\n..."
+            ctx_lines.append(f"### {path}\n```\n{preview}\n```")
+        ctx_str = "\n".join(ctx_lines)
+    else:
+        ctx_str = "(no project files inspected yet)"
+    return PLAN_PROMPT_TEMPLATE.format(
+        user_message=user_message,
+        working_dir=working_dir,
+        project_context=ctx_str,
+    )
+
+
+def _parse_plan_json(raw: str) -> Optional[dict]:
+    """Extract a plan dict from raw LLM output. Tolerates leading/trailing
+    prose and markdown fences — the agent's output sanitizer normally
+    strips these for tool args, but plans cross the wire as raw text so
+    we strip here too."""
+    if not raw:
+        return None
+    # Strip ```json ... ``` fences if present.
+    fence_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", raw, re.DOTALL)
+    if fence_match:
+        raw = fence_match.group(1)
+    # Find the first {...} block — model sometimes prefixes "Here's the plan:".
+    brace_start = raw.find("{")
+    if brace_start < 0:
+        return None
+    # Scan to matching closing brace (depth-aware, ignores braces in strings
+    # to be safe — though plan JSON shouldn't have embedded strings with `{`).
+    depth = 0
+    in_str = False
+    escape = False
+    end = -1
+    for i in range(brace_start, len(raw)):
+        c = raw[i]
+        if escape:
+            escape = False
+            continue
+        if c == "\\":
+            escape = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end < 0:
+        return None
+    try:
+        return json.loads(raw[brace_start:end])
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+# Verification-command pattern. Mirrors proxy/guardrails.go:verificationCommandRe
+# so the plan scorer agrees with the agent loop on what counts as "verifies".
+_VERIFY_CMD_RE = re.compile(
+    r"\b(pytest|python\b|python3\b|node\b|deno\b|bun\b|"
+    r"cargo\s+(run|test|check|build)|go\s+(run|test|build|vet)|"
+    r"npm\s+(test|run|start)|yarn\s+(test|run|start)|pnpm\s+(test|run|start)|"
+    r"make\b|just\b|curl\b|wget\b|http\b|httpie\b|"
+    r"mypy\b|ruff\b|pylint\b|tsc\b|eslint\b|"
+    r"markdownlint\b|stylelint\b|shellcheck\b|hadolint\b|flake8\b|"
+    r"rubocop\b|golangci-lint\b)"
+)
+
+
+def _score_plan(plan: dict, user_message: str) -> Tuple[float, List[str]]:
+    """Heuristic plan scorer. Returns (score in [0,1], reasons[]).
+
+    Plans aren't sandbox-buildable so the lens doesn't help us pick a
+    winner. Instead we check structural properties that correlate with
+    "this plan will actually solve the user's problem":
+      - has a verify_step
+      - step count is in [2, 6]
+      - verify_step's action runs an actual verification command
+      - target paths reference files the user named
+      - rationale is present
+
+    Reasons are returned alongside the score so the picker can stream
+    "plan #2 won because: has verify, target matches" to the TUI.
+    """
+    reasons: List[str] = []
+    score = 0.0
+
+    steps = plan.get("steps") or []
+    if not isinstance(steps, list):
+        return 0.0, ["steps is not a list"]
+
+    n = len(steps)
+    if 2 <= n <= 6:
+        score += 0.2
+        reasons.append(f"step count {n} in range")
+    elif n > 0:
+        # A 1-step or 7+ step plan is a yellow flag, not a fail.
+        score += 0.05
+        reasons.append(f"step count {n} outside [2,6]")
+    else:
+        return 0.0, ["empty plan"]
+
+    verify_step_id = plan.get("verify_step")
+    verify_step = None
+    for s in steps:
+        if isinstance(s, dict) and s.get("id") == verify_step_id:
+            verify_step = s
+            break
+    if verify_step is not None:
+        score += 0.3
+        reasons.append(f"verify_step={verify_step_id}")
+        action = (verify_step.get("action") or "") + " " + (verify_step.get("target") or "")
+        if _VERIFY_CMD_RE.search(action.lower()):
+            score += 0.2
+            reasons.append("verify_step references a real verification command")
+        else:
+            reasons.append("verify_step doesn't reference a verification command")
+    else:
+        reasons.append("missing or invalid verify_step")
+
+    # Target-vs-user-message overlap. If the user said "fix index.html",
+    # plans that touch index.html beat plans that don't.
+    # Length bounds (max 128 for the stem, max 16 for the extension) cap
+    # regex backtracking on pathological input like "a." repeated many
+    # times — both groups need `.` so without bounds this is polynomial.
+    mentioned_files = set(re.findall(
+        r"[\w./-]{1,128}\.[a-zA-Z0-9]{1,16}", user_message.lower()))
+    target_hits = 0
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        target = (s.get("target") or "").lower()
+        for f in mentioned_files:
+            if f in target:
+                target_hits += 1
+                break
+    if mentioned_files:
+        target_score = min(0.2, target_hits * 0.1)
+        score += target_score
+        if target_hits:
+            reasons.append(f"{target_hits} step(s) target user-mentioned files")
+
+    if plan.get("rationale"):
+        score += 0.1
+        reasons.append("rationale present")
+
+    return min(score, 1.0), reasons
+
+
+def generate_plan(
+    user_message: str,
+    working_dir: str,
+    project_context: Dict[str, str],
+    n_candidates: int = 3,
+    progress_callback=None,
+) -> dict:
+    """Generate a plan via diverse LLM sampling + heuristic scoring.
+
+    Returns a dict matching the proxy's expected schema:
+      {
+        "steps": [...],
+        "verify_step": "sN",
+        "candidates_tested": int,
+        "winning_score": float,
+        "winning_index": int,
+        "rationale": str,
+        "reasons": [str],  # why the winner won
+      }
+
+    On total failure (no candidate parses), returns a single-step
+    fallback plan that asks the model to plan inline. Better than
+    blocking the agent loop on planner-pipeline errors.
+    """
+
+    def emit(stage: str, detail: str = "", **data):
+        if progress_callback:
+            try:
+                progress_callback(stage, detail, **data)
+            except TypeError:
+                progress_callback(stage, detail)
+
+    emit("plan_start", f"generating {n_candidates} candidate plans")
+
+    # V3.2 RPG-style architecture-first planning (issue #120), flag-gated by
+    # ATLAS_RPG_PLANNING. Strictly additive: on any failure (flag off, modules
+    # missing, model output unusable) we fall through to the flat planner below.
+    # Pre-bound so a partial import failure can never leave a name unbound
+    # on the guarded paths below (py/uninitialized-local-variable).
+    decompose_project = decompose_file_map = _rpg_mod = None
+    try:
+        from wavelet import rpg_planning_enabled, decompose_project, decompose_file_map
+        import rpg as _rpg_mod
+        _rpg_on = rpg_planning_enabled()
+    except Exception:
+        _rpg_on = False
+    if _rpg_on:
+        try:
+            # Build the coarse structural band that seeds the proposal stage.
+            # Prefer the in-memory project_context the proxy already sent — the
+            # v3-service container has no project volume mount, so reading
+            # working_dir off disk only works in non-container / dev setups.
+            # Fall back to a disk scan when no context was passed.
+            coarse_map = None
+            try:
+                if project_context:
+                    coarse_map = [
+                        {"label": p.label, "filename": p.filename}
+                        for p in decompose_file_map(project_context, limit=30)
+                    ]
+                elif working_dir and os.path.isdir(working_dir):
+                    coarse_map = [
+                        {"label": p.label, "filename": p.filename}
+                        for p in decompose_project(working_dir, limit=30)
+                    ]
+            except Exception as ce:
+                emit("rpg_coarse_error", f"coarse decomposition failed: {ce}")
+            rpg_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
+            rpg_llm = adapters.LLMAdapter(progress_callback=progress_callback, thinking=rpg_thinking)
+
+            def _complete(prompt, temperature, mt, seed):
+                raw, _, _ = rpg_llm(prompt, temperature, mt, seed)
+                return raw
+
+            result = _rpg_mod.construct_rpg(
+                user_message=user_message,
+                complete_fn=_complete,
+                project_context=project_context,
+                coarse_map=coarse_map,
+                max_tokens=(8192 if rpg_thinking else 2048),
+                emit=emit,
+            )
+            if result.ok and result.plan and result.plan.get("steps"):
+                plan = dict(result.plan)
+                plan["candidates_tested"] = 1
+                plan["winning_score"] = result.score
+                plan["winning_index"] = 0
+                plan["reasons"] = ["RPG two-stage plan"] + result.issues
+                plan["rpg"] = result.rpg.to_dict()
+                emit("plan_selected",
+                     f"RPG plan ({len(plan['steps'])} steps, score={result.score:.2f})",
+                     index=0, score=result.score, steps=len(plan["steps"]))
+                return plan
+            emit("rpg_fallback",
+                 f"RPG not usable (stage={result.stage_reached}); using flat planner")
+        except Exception as re_:
+            emit("rpg_error", f"RPG planning failed: {re_}; using flat planner")
+
+    # PC-206: thinking-aware infrastructure shipped — planner CAN run with
+    # Template-level reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
+    # because empirically on the reference local model + this codebase's
+    # hardware tier, thinking pushes planner latency from ~5-30s to >4min
+    # per candidate (model spends the full token budget reasoning before
+    # emitting JSON). On faster GPU tiers the design's aspirational
+    # "reasoning > latency cost" trade may be worth it — flip the env var
+    # there. When ON, max_tokens jumps to 8192 to fit reasoning + answer.
+    plan_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
+    plan_max_tokens = 8192 if plan_thinking else 2048
+    llm = adapters.LLMAdapter(progress_callback=progress_callback, thinking=plan_thinking)
+    prompt = _build_plan_prompt(user_message, working_dir, project_context)
+
+    candidates: List[Tuple[Optional[dict], float, List[str]]] = []
+    # Diverse sampling via temperature spread. Cheap version of V3's
+    # PlanSearch — three samples at 0.3 / 0.5 / 0.7 give us breadth
+    # without the full plansearch infrastructure.
+    temperatures = [0.3, 0.5, 0.7][:n_candidates]
+    for i, temp in enumerate(temperatures):
+        emit("plan_candidate", f"candidate {i+1}/{n_candidates} (temp={temp})",
+             index=i, temperature=temp)
+        try:
+            # plan_max_tokens varies with thinking mode (PC-206): 2048 covers
+            # a 6-step plan + rationale when thinking is off, 8192 leaves
+            # room for ~6KB of reasoning preamble plus the JSON answer.
+            raw, tokens, t_ms = llm(prompt, temp, plan_max_tokens, 42 + i)
+        except Exception as e:
+            emit("plan_candidate_error", f"candidate {i+1} failed: {e}", index=i)
+            candidates.append((None, 0.0, [f"llm error: {e}"]))
+            continue
+        plan = _parse_plan_json(raw)
+        if plan is None:
+            preview = raw[:500] if raw else "(empty)"
+            print(f"  [plan] candidate {i+1} unparseable. raw preview:\n{preview}\n",
+                  flush=True)
+            emit("plan_candidate_unparseable", f"candidate {i+1} didn't parse",
+                 index=i)
+            candidates.append((None, 0.0, ["unparseable"]))
+            continue
+        score, reasons = _score_plan(plan, user_message)
+        emit("plan_candidate_scored", f"candidate {i+1} score={score:.2f}",
+             index=i, score=score, reasons=reasons)
+        candidates.append((plan, score, reasons))
+
+    # Pick winner. Tie-break: shorter plan wins (less waffle).
+    best_idx = -1
+    best_score = -1.0
+    best_steps = 999
+    for i, (plan, score, _) in enumerate(candidates):
+        if plan is None:
+            continue
+        n_steps = len(plan.get("steps") or [])
+        if score > best_score or (score == best_score and n_steps < best_steps):
+            best_score = score
+            best_steps = n_steps
+            best_idx = i
+
+    if best_idx < 0:
+        # All candidates failed. Return a minimal fallback so the agent
+        # loop doesn't block — the plan-adherence gate will be lenient
+        # if it sees this shape.
+        emit("plan_failed", "no candidate parsed — returning fallback")
+        return {
+            "steps": [
+                {"id": "s1", "action": "investigate the request and act",
+                 "target": working_dir, "why": "planner failed; deferring to agent"},
+            ],
+            "verify_step": None,
+            "candidates_tested": len(candidates),
+            "winning_score": 0.0,
+            "winning_index": -1,
+            "rationale": "planner-pipeline fallback (no parseable candidate)",
+            "reasons": ["all candidates failed to parse"],
+        }
+
+    plan, score, reasons = candidates[best_idx]
+    plan["candidates_tested"] = len([c for c in candidates if c[0] is not None])
+    plan["winning_score"] = score
+    plan["winning_index"] = best_idx
+    plan["reasons"] = reasons
+    emit("plan_selected", f"plan {best_idx+1} won (score={score:.2f})",
+         index=best_idx, score=score, steps=len(plan.get("steps") or []))
+    return plan

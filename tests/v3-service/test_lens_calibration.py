@@ -7,6 +7,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
 import main as v3main  # noqa: E402
+import scoring  # noqa: E402
 
 
 class _Response:
@@ -43,7 +44,7 @@ def _payload(thresholds):
 def test_per_step_score_carries_selected_models_thresholds(monkeypatch):
     expected = {"off_rails": 0.3, "low": 0.4, "severe": 0.2}
     monkeypatch.setattr(
-        v3main.urllib.request,
+        scoring.urllib.request,
         "urlopen",
         lambda *_args, **_kwargs: _Response(_payload(expected)),
     )
@@ -52,7 +53,7 @@ def test_per_step_score_carries_selected_models_thresholds(monkeypatch):
 
 def test_per_step_score_does_not_invent_missing_thresholds(monkeypatch):
     monkeypatch.setattr(
-        v3main.urllib.request,
+        scoring.urllib.request,
         "urlopen",
         lambda *_args, **_kwargs: _Response(_payload(None)),
     )

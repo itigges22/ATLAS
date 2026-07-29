@@ -46,7 +46,7 @@ Ordered by value ÷ risk. Each row is one commit, tests green after.
 |---|---|---|---|---|---|
 | A1 | Dedupe ANSI colors + `safe_print` into `display.py` | atlas/cli: display.py + doctor, tier, asa, lens, onboard, init, **model** (7th copy found) | inverse-merge | low | ✅ done |
 | A2 | Extract publish/registry/model-resolve helpers out of `lens.py` into a shared module | lens.py → new `atlas/cli/publishing.py` + probe → `client.py` + `atlas_root` → `env.py` | inverse-merge | med | ✅ done |
-| A3 | Split `v3-service/main.py` (4018) God-file | → adapters.py, scoring.py, symbols.py, planning.py, pipeline.py, server(main).py | split | med | ☐ todo |
+| A3 | Split `v3-service/main.py` (4018) God-file | → adapters.py, scoring.py, symbols.py, planning.py, pipeline.py, server(main).py | split | med | ✅ done |
 | A4 | Split `tui/model.go` (2866): extract `events.go` | model.go 2866→1745; events.go 1135 | split | med | ✅ done |
 | A5 | **Consolidate the proxy: 33 → 13 files** (direction reversed by owner: too many files; collapse, never split) | main+5 infra fragments; gates.go ×6; detectors.go ×3; context.go ×4; permissions.go ×3; lens.go ×3; grammar→tools.go | merge | med | ✅ done |
 | A5b | Decompose `runAgentLoop` (1421-line fn) IN PLACE — `runState` struct + turn extraction + gate dedup; no new files | agent.go internals only | in-file | high | ☐ todo |
@@ -187,3 +187,19 @@ Do not touch until the decision is made. Listed so the decision is concrete.
   test's local copy into it; dropped the now-stale (and unnecessary)
   `proxy/private_values.go` secret-scan allowlist entry, which strengthens the
   scan. go build/vet/test + gofmt green first try; suite 1731/6 exact.
+- 2026-08-05 — **A3 done.** `v3-service/main.py` (4018) split into flat sibling
+  modules, code moved verbatim by line range: `adapters.py` 477 (LLM/sandbox/
+  embed clients, service token + outbound auth, pattern-cache write hook),
+  `scoring.py` 505 (lens scoring, task-type classifier, smoke checks, build
+  verification, interactive lint), `symbols.py` 892 (tree-sitter toolkit:
+  structural_edit, symbol index, structural_score, call-chain context,
+  cyclomatic complexity), `planning.py` 409 (/v3/plan), `pipeline.py` 984
+  (V3PipelineService + problem builder), `main.py` 820 (V3Handler, bootstrap).
+  +69 lines total, all import blocks/headers. Cross-module refs are
+  module-qualified (`adapters.X` / `scoring.X` / `symbols.X`) so module-attr
+  monkeypatching keeps working; import DAG is main → pipeline → planning →
+  scoring → adapters, symbols (scoring needs adapters' `_service_headers` +
+  `LENS_URL`; no cycles). Dockerfile COPYs + compose-override mounts added for
+  the five modules. Test patch points retargeted (`LLMAdapter`/`SERVICE_TOKEN`
+  → adapters, `_STRUCTURAL_EDIT_AVAILABLE` → symbols, `urllib` → scoring).
+  Suite: 1731 passed, 6 skipped — matches baseline exactly.

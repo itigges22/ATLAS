@@ -21,6 +21,11 @@ RUN pip install --no-cache-dir torch==2.13.0 \
 # Copy benchmark modules (V3 pipeline depends on them)
 COPY benchmark/ /app/benchmark/
 COPY v3-service/main.py /app/main.py
+COPY v3-service/adapters.py /app/adapters.py
+COPY v3-service/scoring.py /app/scoring.py
+COPY v3-service/symbols.py /app/symbols.py
+COPY v3-service/planning.py /app/planning.py
+COPY v3-service/pipeline.py /app/pipeline.py
 COPY v3-service/private_values.py /app/private_values.py
 COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.

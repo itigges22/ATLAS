@@ -37,7 +37,7 @@ flowchart TD
 
 ### v3-service: `/v3/plan` (Python)
 
-Defined in `v3-service/main.py`. The handler:
+Defined in `v3-service/planning.py`; `v3-service/main.py` serves the route. The handler:
 
 1. Renders `PLAN_PROMPT_TEMPLATE` with the user message + working dir + truncated project files.
 2. Calls the LLM 3 times with seed offsets and temperatures `[0.3, 0.5, 0.7]`. By default it sends the optional `chat_template_kwargs: {enable_thinking: false}` control and reserves 2,048 output tokens for plan JSON. Supporting templates disable their reasoning channel; other templates ignore the flag. `ATLAS_PLAN_THINKING=1` requests reasoning and raises the budget to 8,192. No model-family prompt directive is injected.
@@ -85,7 +85,7 @@ Defined in `proxy/plan_adherence.go`:
 | `planAutoReviseThreshold` | 5 | Non-recon off-plan tool calls before auto-revise fires (recon tools never extend the streak, so natural exploration doesn't count). Tight enough to catch a wrong plan early; loose enough that a few stray off-plan calls don't trigger thrashing. |
 | `planMaxRevisions` | 2 | Cap on auto-revisions per loop. Past this, the loop runs plan-free for the remainder. Prevents pathological off-plan inputs from looping `/v3/plan` forever. |
 
-`v3-service/main.py` constants:
+`v3-service/planning.py` constants:
 
 | Constant | Default | Rationale |
 |---|---|---|

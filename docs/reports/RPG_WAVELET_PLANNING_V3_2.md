@@ -71,7 +71,7 @@ tasks (editing existing repos), the coarse band grounds the proposal stage in th
 
 | RPG concept | ATLAS today | What changes |
 |---|---|---|
-| Proposal-level plan (what) | `Plan{Steps[]}` flat list, `PLAN_PROMPT_TEMPLATE` (`v3-service/main.py:1707`) | New `capability tree` stage feeding a graph |
+| Proposal-level plan (what) | `Plan{Steps[]}` flat list, `PLAN_PROMPT_TEMPLATE` (`v3-service/planning.py`) | New `capability tree` stage feeding a graph |
 | Implementation-level plan (how) | — (none; steps are tool calls) | New `RPG` artifact: files + signatures + edges |
 | Graph-guided generation | `/v3/generate` whole-file pipeline | Topological per-node traversal |
 | Guided localization | `symbol_index` (tree-sitter, ad-hoc) + symbol-name match | Coarse-band "which files matter" + RPG node→file map |

@@ -70,8 +70,8 @@ without ever depending on a Prolog/Z3 runtime.
 | #39 point | ATLAS today | What changes |
 |---|---|---|
 | precomputed call graph | none; ad-hoc tree-sitter walks | new cached `CodeGraph` substrate (Phase 0) |
-| 1. candidate scoring veto | `structural_score` direct-identifier name check (`v3-service/main.py`) | resolve calls against graph; reject calls with no reachable definition (Phase 1) |
-| 3. repair call-chain context | `call_chain_context` 1-hop callers/callees (`v3-service/main.py`) | multi-hop reachability slice + path witnesses (Phase 2) |
+| 1. candidate scoring veto | `structural_score` direct-identifier name check (`v3-service/symbols.py`) | resolve calls against graph; reject calls with no reachable definition (Phase 1) |
+| 3. repair call-chain context | `call_chain_context` 1-hop callers/callees (`v3-service/symbols.py`) | multi-hop reachability slice + path witnesses (Phase 2) |
 | 4. context auto-injection | `symbol_index` name-match snippets (`proxy/symbol_index.go` + v3-service) | inject the symbol's graph neighborhood / impact set (Phase 3) |
 | 2. tier classification | cyclomatic complexity, shipped (`/internal/cyclomatic_complexity`) | optional graph fan-in/out enrichment (Phase 4, low priority) |
 | structural_edit | friendly selectors, Python + HTML (shipped) | unchanged; raw-query routing is a separate small follow-up |

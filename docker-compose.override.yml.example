@@ -39,4 +39,9 @@ services:
   v3-service:
     volumes:
       - ./v3-service/main.py:/app/main.py
+      - ./v3-service/adapters.py:/app/adapters.py
+      - ./v3-service/scoring.py:/app/scoring.py
+      - ./v3-service/symbols.py:/app/symbols.py
+      - ./v3-service/planning.py:/app/planning.py
+      - ./v3-service/pipeline.py:/app/pipeline.py
       - ./benchmark:/app/benchmark
