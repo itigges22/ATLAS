@@ -137,8 +137,6 @@ func missingArgsHint(name string) string {
 		return `find_file: no arguments provided. Call with {"pattern":"<name regex>"} (e.g. {"pattern":"snake_game\\.py"}).`
 	case "run_command":
 		return `run_command: no arguments provided. Call with {"command":"<shell command>"}.`
-	case "lint_python":
-		return `lint_python: no arguments provided. Call with {"path":"<file.py>"} or {"code":"<source>"}.`
 	default:
 		return fmt.Sprintf("%s: no arguments provided. Inspect the tool schema and resend with the required fields.", name)
 	}
@@ -1057,11 +1055,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 
 	// Tell the user V3 is taking over so they don't think the file
 	// vanished. write_file with V3 holds the disk write until V3 picks
-	// a winner \u2014 without this message the chat goes silent for the 1\u20133
+	// a winner — without this message the chat goes silent for the 1–3
 	// minute V3 cycle and looks broken.
 	if ctx.StreamFn != nil {
 		ctx.StreamFn("v3_progress", map[string]string{
-			"message": fmt.Sprintf("V3 pipeline starting for %s \u2014 generating diverse candidates and build-verifying each.", filepath.Base(path)),
+			"message": fmt.Sprintf("V3 pipeline starting for %s — generating diverse candidates and build-verifying each.", filepath.Base(path)),
 		})
 	}
 	Emit(NewEnvelope(EvtStageStart, "v3", map[string]interface{}{
@@ -1072,10 +1070,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// Call V3 service with streaming progress. Each stage callback also
 	// fires a typed envelope so the pipeline pane shows V3 progress.
 	// Three categories of progress events:
-	//   token       \u2014 per-LLM-token delta from V3's streaming generator
-	//   llm_start   \u2014 V3 is starting an LLM call (candidate gen, scoring\u2026)
-	//   llm_end     \u2014 V3's LLM call finished (with token/timing summary)
-	//   <other>     \u2014 pipeline stage marker (probe, plansearch, sandbox\u2026)
+	//   token       — per-LLM-token delta from V3's streaming generator
+	//   llm_start   — V3 is starting an LLM call (candidate gen, scoring…)
+	//   llm_end     — V3's LLM call finished (with token/timing summary)
+	//   <other>     — pipeline stage marker (probe, plansearch, sandbox…)
 	currentV3Stage := ""
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		// Token deltas: forward to the TUI on a separate SSE event so
@@ -1132,7 +1130,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if ctx.StreamFn != nil {
 			eventName := v3StageToEvent(stage)
 			if eventName == "v3_progress" {
-				// Unknown / unmapped stage \u2014 emit the legacy text line
+				// Unknown / unmapped stage — emit the legacy text line
 				// only. Keeps third-party clients that haven't migrated
 				// to typed events working.
 				ctx.StreamFn("v3_progress", map[string]string{
@@ -1150,7 +1148,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			}
 		}
 		// Stage transitions emit start/end envelopes for the pipeline
-		// pane \u2014 close the previous stage when we see a new name.
+		// pane — close the previous stage when we see a new name.
 		if stage != currentV3Stage {
 			if currentV3Stage != "" {
 				Emit(Envelope{
@@ -1215,12 +1213,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 				Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
 		}
 		// #147: structural gate on the fallback too. It matters on the
-		// DeadlineExceeded case \u2014 /generate timed out but the service is
+		// DeadlineExceeded case — /generate timed out but the service is
 		// up, so /internal/structural_check (own 5s timeout) still
 		// answers; when the service is genuinely down the gate fails open.
 		if original, ok := readOriginalForGate(path); ok {
 			if introduced := editIntroducesUnresolved(ctx, path, original, baselineContent); len(introduced) > 0 {
-				log.Printf("[write_file] fallback content introduces unresolved call(s) %v in %s \u2014 rejecting", logPaths(introduced), logPath(path))
+				log.Printf("[write_file] fallback content introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
 				return &ToolResult{Success: false, Error: structuralWriteRejection(path, introduced)}, nil
 			}
 		}
@@ -2352,70 +2350,25 @@ func deleteFileTool() *ToolDef {
 				}, nil
 			}
 
-			deleted := false
-
-			// Delete from the REAL project directory (where the user's files live)
-			if ctx.RealProjectDir != "" {
-				realPath := resolvePath(input.Path, ctx.RealProjectDir)
-				if info, err := os.Stat(realPath); err == nil {
-					if info.IsDir() {
-						entries, _ := os.ReadDir(realPath)
-						if len(entries) > 0 {
-							return nil, fmt.Errorf("directory not empty: %s (%d entries)", input.Path, len(entries))
-						}
-					}
-					if rmErr := os.Remove(realPath); rmErr != nil {
-						return &ToolResult{
-							Success: false,
-							Error:   fmt.Sprintf("delete_file: %v", rmErr),
-						}, nil
-					}
-					deleted = true
-					log.Printf("[delete_file] %s deleted from project dir %s", input.Path, ctx.RealProjectDir)
-				}
-			}
-
-			// Also delete from temp/working dir if it exists there. If the
-			// project-dir removal already succeeded, a failure on this mirror
-			// copy is not reported as an overall failure — the user-visible
-			// file is already gone, and reporting failure would make the model
-			// retry against a path it can never clear.
 			path := resolveAgentPath(ctx, input.Path)
-			if info, err := os.Stat(path); err == nil {
-				if info.IsDir() {
-					entries, _ := os.ReadDir(path)
-					if len(entries) > 0 {
-						if deleted {
-							log.Printf("[delete_file] %s removed from project dir; working-dir copy is a non-empty directory, left in place", input.Path)
-						} else {
-							return &ToolResult{
-								Success: false,
-								Error:   fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries)),
-							}, nil
-						}
-					} else if rmErr := os.Remove(path); rmErr != nil && !deleted {
-						return &ToolResult{
-							Success: false,
-							Error:   fmt.Sprintf("delete_file: %v", rmErr),
-						}, nil
-					} else if rmErr == nil {
-						deleted = true
-					}
-				} else if rmErr := os.Remove(path); rmErr != nil {
-					if !deleted {
-						return &ToolResult{
-							Success: false,
-							Error:   fmt.Sprintf("delete_file: %v", rmErr),
-						}, nil
-					}
-					log.Printf("[delete_file] %s removed from project dir; working-dir copy removal failed: %v", input.Path, rmErr)
-				} else {
-					deleted = true
+			info, err := os.Stat(path)
+			if err != nil {
+				return nil, fmt.Errorf("file not found: %s", input.Path)
+			}
+			if info.IsDir() {
+				entries, _ := os.ReadDir(path)
+				if len(entries) > 0 {
+					return &ToolResult{
+						Success: false,
+						Error:   fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries)),
+					}, nil
 				}
 			}
-
-			if !deleted {
-				return nil, fmt.Errorf("file not found: %s", input.Path)
+			if rmErr := os.Remove(path); rmErr != nil {
+				return &ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("delete_file: %v", rmErr),
+				}, nil
 			}
 
 			out := DeleteFileOutput{Deleted: true}
@@ -3682,13 +3635,6 @@ func buildToolCallSchemaForTools(excluded []string) map[string]interface{} {
 			},
 		},
 	}
-}
-
-// buildToolCallSchemaJSON returns the JSON-encoded schema string.
-func buildToolCallSchemaJSON() string {
-	schema := buildToolCallSchema()
-	b, _ := json.Marshal(schema)
-	return string(b)
 }
 
 // buildResponseFormat picks the response_format payload to send to

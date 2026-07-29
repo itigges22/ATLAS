@@ -189,11 +189,9 @@ func walkPythonFiles(root string) map[string]string {
 // field (issue #39 Phase 3): a matched symbol's call-graph neighborhood.
 // Present only when ATLAS_CALL_GRAPH is on; omitted otherwise.
 type symbolGraphNode struct {
-	Symbol    string   `json:"symbol"`
-	DefinedIn []string `json:"defined_in"`
-	Callers   []string `json:"callers"`
-	Callees   []string `json:"callees"`
-	Impact    []string `json:"impact"`
+	Symbol  string   `json:"symbol"`
+	Callers []string `json:"callers"`
+	Callees []string `json:"callees"`
 }
 
 // symbolIndexResult mirrors the v3-service /internal/symbol_index response.

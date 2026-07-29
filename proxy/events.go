@@ -9,8 +9,7 @@
 // connected to /events) get a buffered channel; slow consumers are
 // dropped from individual events rather than blocking producers.
 //
-// SSE-only transport. Cancellation is out of scope for this ticket
-// (separate POST /cancel will follow when the TUI lands).
+// SSE-only transport. Cancellation rides POST /cancel (PC-062).
 
 package main
 
@@ -32,7 +31,6 @@ type Envelope struct {
 	Type       string                 `json:"type"`
 	Stage      string                 `json:"stage"`
 	Payload    map[string]interface{} `json:"payload"`
-	ParentID   string                 `json:"parent_id,omitempty"`
 	DurationMS int64                  `json:"duration_ms,omitempty"`
 }
 
@@ -53,7 +51,7 @@ func NewEventID() string {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		// fall back to time-based to never block — collisions are not a
-		// correctness concern (event_ids are for parent_id pairing only)
+		// correctness concern (event_ids are display/log identifiers)
 		return fmt.Sprintf("evt_%08x", time.Now().UnixNano()&0xffffffff)
 	}
 	return "evt_" + hex.EncodeToString(b[:])

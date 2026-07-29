@@ -792,7 +792,7 @@ func formatAgentLensIntervention(data json.RawMessage) string {
 // formatAgentRepeatIntervention renders the agent_repeat_intervention
 // event, which fires when the proxy detected the model issuing the same
 // (tool, args) signature N times in close succession (toolRepeatThreshold
-// in proxy/tool_repeat.go). Sibling event to agent_lens_intervention but
+// in proxy/detectors.go). Sibling event to agent_lens_intervention but
 // catches structural loops the lens (which only sees write content) misses.
 // Reason is the verbose corrective queued for the next LLM call; we trim
 // it for display.

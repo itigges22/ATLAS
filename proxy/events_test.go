@@ -60,7 +60,6 @@ func TestEnvelopeJSONShapeMatchesPythonSchema(t *testing.T) {
 	ev := NewEnvelope(EvtStageEnd, "phase2", map[string]interface{}{
 		"success": true,
 	})
-	ev.ParentID = "evt_aabbccdd"
 	ev.DurationMS = 4523
 
 	raw, err := json.Marshal(ev)
@@ -72,7 +71,7 @@ func TestEnvelopeJSONShapeMatchesPythonSchema(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	for _, key := range []string{"event_id", "timestamp", "type", "stage",
-		"payload", "parent_id", "duration_ms"} {
+		"payload", "duration_ms"} {
 		if _, ok := roundtrip[key]; !ok {
 			t.Errorf("missing required field %q in JSON: %s", key, raw)
 		}
@@ -83,15 +82,12 @@ func TestEnvelopeJSONShapeMatchesPythonSchema(t *testing.T) {
 }
 
 func TestEnvelopeOmitsEmptyOptionalFields(t *testing.T) {
-	// When parent_id and duration_ms aren't set, they should be omitted
-	// from the JSON (mirrors Python `to_dict()` behavior).
+	// When duration_ms isn't set, it should be omitted from the JSON
+	// (mirrors Python `to_dict()` behavior).
 	ev := NewEnvelope(EvtStageStart, "phase2", nil)
 	raw, _ := json.Marshal(ev)
 	var rt map[string]interface{}
 	_ = json.Unmarshal(raw, &rt)
-	if _, has := rt["parent_id"]; has {
-		t.Errorf("parent_id should be omitted when empty, got %v", rt["parent_id"])
-	}
 	if _, has := rt["duration_ms"]; has {
 		t.Errorf("duration_ms should be omitted when zero, got %v", rt["duration_ms"])
 	}

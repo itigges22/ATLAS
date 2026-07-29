@@ -41,7 +41,6 @@ Every event is a JSON object with this shape:
   "timestamp":   1714600000.123,
   "type":        "stage_start" | "stage_end" | "tool_call" | "tool_result" | "metric" | "error" | "done",
   "stage":       "<pipeline stage name>",
-  "parent_id":   "evt_<8 hex chars>",   // reserved — never set by current producers
   "duration_ms": 4523,                  // optional — set on stage_end / tool_result
   "payload":     { ... type-specific ... }
 }
@@ -54,7 +53,6 @@ Every event is a JSON object with this shape:
 | `type` | string | yes | One of the seven legal values listed below. |
 | `stage` | string | yes | Logical pipeline stage (`agent`, `llm`, `tool`, `v3:<stage>`, etc.). The proxy's v3 bridge prefixes the v3-service stage name with `v3:` and passes it through verbatim — suffixes like `_pass`/`_done`/`_failed` are kept (e.g. `v3:sandbox_pass`). |
 | `payload` | object | yes | Type-specific. Always an object, never null. |
-| `parent_id` | string | optional | Reserved for pairing a `stage_end` to its `stage_start`; never set by current producers. |
 | `duration_ms` | int | optional | Set on `stage_end` and `tool_result` — wall-clock duration of the stage / tool execution. |
 
 ## Event types

@@ -21,7 +21,7 @@ import (
 
 // ------------------------------------------------------------------------
 // Trust model (load-bearing — read before "fixing" go/path-injection CodeQL
-// alerts on this file or its helpers in tools.go, project.go, claim_check.go).
+// alerts on this file or its helpers in tools.go, context.go, gates.go).
 //
 // ATLAS is a single-tenant local-install agent. The proxy runs inside a
 // container whose /workspace mount IS the user's project directory: the
@@ -211,7 +211,7 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		return "output_gate", expectedOutputMissingMessage(missing)
 	}
 	if claimsUniversal(claimText) || promptIsMultiIssue(userMessage) {
-		if gap := verifyCompletionClaims(ctx.WorkingDir, claimText); gap != "" {
+		if gap := verifyCompletionClaims(ctx.WorkingDir); gap != "" {
 			s.gateBounces++
 			log.Printf("[agent] claim-check gate: bouncing exit at turn %d (bounce %d/%d) — %q",
 				s.turn, s.gateBounces, maxGateBounces, truncateStr(gap, 200))
@@ -344,11 +344,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		eraseLlamaSlot(ctx)
 	}
 
-	// Get the constrained output schema. The legacy string parameter is
-	// retained for call-site compatibility; token-level restrictions are
-	// assembled by buildStepRequest for each turn.
-	schemaJSON := buildToolCallSchemaJSON()
-
 	consecutiveReads := 0  // Track consecutive read-only calls
 	consecutiveErrors := 0 // Track consecutive tool failures to break error loops
 	// edit_file old_str-mismatch failures per path. A successful read_file
@@ -466,7 +461,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		llmStart := time.Now()
 
 		// Call LLM with grammar constraint
-		response, tokens, err := callLLMConstrained(ctx, schemaJSON)
+		response, tokens, err := callLLMConstrained(ctx)
 		llmElapsed := time.Since(llmStart)
 		if err != nil {
 			ctx.Stream("llm_call_end", map[string]interface{}{
@@ -1356,9 +1351,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 // LLM call with grammar constraint
 // ---------------------------------------------------------------------------
 
-// callLLMConstrained calls the LLM with json_schema or grammar constraint.
-// Returns the raw response text and token count.
-//
 // isContextOverflow reports whether an LLM-call error is llama-server's
 // exceed_context_size_error 400 (prompt tokens > per-slot n_ctx). Matched
 // on the error body text — model-agnostic, keyed to llama.cpp's stable
@@ -1372,6 +1364,9 @@ func isContextOverflow(err error) bool {
 		strings.Contains(s, "exceeds the available context size")
 }
 
+// callLLMConstrained calls the LLM with json_schema or grammar constraint.
+// Returns the raw response text and token count.
+//
 // PC-043: When the model emits zero tokens (raw_len=0) — usually after a
 // tool result message under a constrained JSON grammar — we retry
 // inline once with a bumped temperature and a transient "continue"
@@ -1388,7 +1383,7 @@ func isContextOverflow(err error) bool {
 // ephemeral [system note] reminding the model that structural_edit is the only
 // available structural-edit tool for this step. ctx.Messages is not
 // mutated; the nudge and grammar restriction are scoped to this call.
-func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, error) {
+func callLLMConstrained(ctx *AgentContext) (string, int, error) {
 	messages, grammar := buildStepRequest(ctx)
 
 	content, tokens, err := callLLMOnceWithGrammar(ctx, messages, 0.3, grammar)
@@ -2590,7 +2585,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// the bind mount to the user's cwd, so /workspace IS the user's cwd
 	// from the proxy's perspective. Use ATLAS_WORKSPACE_DIR (set in
 	// docker-compose.yml) as the canonical write target. The original
-	// host path is kept on RealProjectDir for display / V3 metadata.
+	// host path is kept on HostWorkingDir for path translation (below).
 	hostDir := req.WorkingDir
 	if hostDir == "" {
 		hostDir = "."
@@ -2700,7 +2695,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Detect project (implemented in project.go)
+	// Detect project (implemented in context.go)
 	ctx.Project = detectProjectInfo(workingDir)
 
 	// Set up SSE streaming

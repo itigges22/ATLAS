@@ -387,7 +387,6 @@ type AgentContext struct {
 	Tier           Tier
 	MaxTurns       int
 	WorkingDir     string // Project directory for agent operations (container path, e.g. /workspace)
-	RealProjectDir string // Same as WorkingDir; kept for delete_file compatibility
 	HostWorkingDir string // The host-side path that's bind-mounted as WorkingDir
 	// (e.g. /home/isaac/snake when /workspace is mounted from there).
 	// Used to translate absolute host paths the model receives back from
@@ -454,11 +453,11 @@ type AgentContext struct {
 	SessionWrites map[string]bool
 
 	// ManifestAnnounced tracks which SessionWrites paths have been named
-	// in a session-file-manifest note (session_manifest.go) so each file
+	// in a session-file-manifest note (context.go) so each file
 	// is announced to the model once.
 	ManifestAnnounced map[string]bool
 
-	// AssetLintSeen dedupes asset-graph lint findings (asset_lint.go) so
+	// AssetLintSeen dedupes asset-graph lint findings (gates.go) so
 	// a persistent orphan is mentioned once, not after every write.
 	AssetLintSeen map[string]bool
 
@@ -478,14 +477,14 @@ type AgentContext struct {
 	// from lens scoring of write_file/edit_file tool calls. When the
 	// recent N values all fall below the selected model's calibrated threshold the loop
 	// injects a corrective system message before the next LLM call.
-	// See proxy/lens_score.go for the pattern detection.
+	// See proxy/lens.go for the pattern detection.
 	LensScoreHistory []float64
 
 	// Tool-call repetition detector: rolling window of recent (tool,
 	// args) signatures. When the same signature appears
 	// toolRepeatThreshold times within the last toolRepeatWindow
 	// entries, the loop injects a corrective system message. See
-	// proxy/tool_repeat.go for the detection logic.
+	// proxy/detectors.go for the detection logic.
 	RecentToolCalls []string
 
 	// Reasoning-repetition detector state (May 10 2026, BiasBusters
@@ -493,7 +492,7 @@ type AgentContext struct {
 	// stream. When the same opening prose ("Now I need to look at the
 	// file" / similar) appears across consecutive turns, the loop
 	// injects a corrective so the model breaks out of the thought loop.
-	// See proxy/reasoning_repeat.go for the detection logic.
+	// See proxy/detectors.go for the detection logic.
 	LastTurnReasoning           string
 	LastReasoningSnippet        string
 	ConsecutiveReasoningRepeats int
@@ -734,8 +733,6 @@ type V3VerificationEvidence struct {
 	Stderr     string `json:"stderr,omitempty"`
 }
 
-// LensScore is already defined in main.go — reused here.
-
 // V3PlanRequest is sent to the Python V3 service for plan generation.
 // project_context inlines small file contents (truncated server-side) so
 // the planner sees what's actually in the working directory.
@@ -773,8 +770,6 @@ type Plan struct {
 	Rationale        string     `json:"rationale"`
 	CandidatesTested int        `json:"candidates_tested"`
 	WinningScore     float64    `json:"winning_score"`
-	WinningIndex     int        `json:"winning_index"`
-	Reasons          []string   `json:"reasons"`
 	// RPG is the full Repository Planning Graph the flat Steps were projected
 	// from (V3.2, issue #120). Present only when the RPG planner ran; nil for
 	// the flat planner. Captured proxy-side for graph-guided traversal /

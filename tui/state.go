@@ -50,7 +50,6 @@ type pipelineState struct {
 	done        bool
 	doneSuccess bool
 	totalMS     int64
-	doneSummary string
 }
 
 func newPipelineState() pipelineState {
@@ -120,7 +119,6 @@ func (p *pipelineState) apply(ev Envelope) {
 		if v, ok := ev.Payload["total_duration_ms"].(float64); ok {
 			p.totalMS = int64(v)
 		}
-		p.doneSummary = payloadString(ev.Payload, "summary")
 	}
 }
 

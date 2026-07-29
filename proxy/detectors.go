@@ -166,8 +166,8 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 // Reasoning-repetition detector. May 10 2026 BiasBusters follow-up #30.
 //
 // Sibling to:
-//   - tool_repeat.go (structural call-shape repetition)
-//   - lens_score.go's agentLensRegression (semantic content quality)
+//   - the tool-call repetition detector above (structural call-shape repetition)
+//   - lens.go's agentLensRegression (semantic content quality)
 //
 // The pattern this catches: the model emits reasoning_content that
 // rehashes the same opening prose across consecutive turns ("Now I

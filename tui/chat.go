@@ -347,18 +347,6 @@ func cancelTurn(proxyURL, sessionID string) error {
 	return nil
 }
 
-// sendChat opens an SSE POST to /v1/agent and forwards each parsed
-// event to out. Returns nil on clean [DONE], err otherwise. Caller is
-// responsible for closing the channel after this returns.
-//
-// history is the prior-turn user/assistant transcript so the agent can
-// answer follow-ups. Pass nil for the first turn of a session.
-func sendChat(ctx context.Context, proxyURL, message, workingDir, mode,
-	sessionID string, history []historyMessage, out chan<- chatEvent) error {
-	return sendChatOpts(ctx, proxyURL, message, workingDir, mode,
-		sessionID, history, demoOpts{}, out)
-}
-
 // demoOpts bundles the per-request flags the /demo split-pane needs.
 // Held in a struct rather than added as positional args to keep
 // sendChatOpts readable as the demo grows.
@@ -370,11 +358,17 @@ type demoOpts struct {
 	allowedTools []string
 }
 
-// sendChatOpts is sendChat with the demo flags exposed; used by the
-// /demo split-pane's V3 side to keep PC-045 from wiping the
-// pre-warmed prefix cache (disableFreshSlot), and write files into
-// per-side sandbox subdirs so the two panes never clobber each other
-// (sandboxSubdir).
+// sendChatOpts opens an SSE POST to /v1/agent and forwards each parsed
+// event to out. Returns nil on clean [DONE], err otherwise. Caller is
+// responsible for closing the channel after this returns.
+//
+// history is the prior-turn user/assistant transcript so the agent can
+// answer follow-ups. Pass nil for the first turn of a session.
+//
+// opts carries the /demo split-pane flags (pass demoOpts{} otherwise):
+// the V3 side keeps PC-045 from wiping the pre-warmed prefix cache
+// (disableFreshSlot), and writes files into per-side sandbox subdirs so
+// the two panes never clobber each other (sandboxSubdir).
 func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	sessionID string, history []historyMessage,
 	opts demoOpts, out chan<- chatEvent) error {

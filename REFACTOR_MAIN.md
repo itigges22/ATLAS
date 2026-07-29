@@ -95,6 +95,48 @@ Sub-plan authored before starting.
 3. **Behavior-affecting collapse (detector unification, word-list vs evidence
    gates): IN SCOPE**, validated by a real dogfood session before merge.
 
+**Phase 3b reader design (commit 4 of the cut sequence):**
+- Lens: one endpoint, `POST /internal/patterns/context` {task, top_k} →
+  {patterns:[{summary, content, type, age_days}]}. Matching = pattern-type
+  match (heuristic classify of the task text) scored through the existing
+  `compute_score` with similarity := 1.0 on type match / 0.3 otherwise —
+  type+recency+success, zero BM25. 1-hop expansion via
+  `co_occurrence.get_linked_patterns`; `record_pattern_access` on serve
+  (hit/miss stats become real again).
+- Proxy: in the run setup next to the symbol-index injection — call the
+  endpoint with the user message, inject top ≤3 patterns as one
+  `[system note]: lessons from previous sessions` block, hard char cap,
+  fail-soft on any error, no flag (always-on; flags are the disease).
+- Keeps alive (per cut-order hazard): `pattern_scorer.compute_score`,
+  `co_occurrence.get_linked_patterns`. `pattern_matcher.py` (BM25) dies.
+
+**v3+lens debris ledger (2026-08-05): ~5,736 net lines.** Tier 0 highlights:
+dead `/internal/call_graph` + `/v3/run` routes; **v3 Dockerfile ships neither
+rpg.py nor wavelet/ — the quarantine is already enforced in the image and
+`ATLAS_RPG_PLANNING` is wired to nothing deployed**. Tier 2: graph/ facade
+40→8 exports; Datalog+Prolog engines reachable only via the dead route (three
+reachability implementations); unshipped JS extraction; three pairs of
+graph/-vs-symbols duplicate implementations on the write-blocking path.
+Tier 3: ~640 lines of zero-caller machinery (provenance.py module,
+evaluate_gx, write-only EMA, legacy cvector builder, per-file inventory in
+the audit transcript). Full 6-commit cut sequence + blast radius (≈4,294
+lines, lens tree −36%) recorded in the audit report; commits 1-3 dispatched,
+held locally for owner sign-off.
+
+**CLI/scripts/infra debris ledger (2026-08-05): 49 findings, ~4,525 lines.**
+P0 bugs fixed same-day (4f27031, local): install.sh unbound $SERVICES aborting
+the K3s installer's last step; compose not forwarding ATLAS_CONTROL_VECTOR
+(documented override silently inert in Docker); config validate flagging keys
+init itself writes; ATLAS_GPU_INDEX_LIST deleted (zero readers). Big buckets
+queued: five superseded C(x) trainer scripts (~1,560 incl. one that emits
+bundles the runtime refuses); the V2/TB2 benchmark subgraph (~1,870); the
+unbuilt inference/Dockerfile+entrypoint pair CI still maintains; eleven
+atlas-root resolvers and nine .env parsers that A2's pass missed; dead
+draft-model/JWT/LoRA knob families; 4× duplicated sandbox smoke CI jobs;
+atlas/cli/events.py as shipped test fixture (307). Full ledger in the audit
+transcript. Grand total across all three audits: **≈10,600 removable lines**
+(+1,974 quarantined RPG/wavelet, unshipped by the v3 image, if cut).
+
 Original decision table kept for reference:
 
 | Item | Files | If KEEP | If CUT |
@@ -112,6 +154,30 @@ Original decision table kept for reference:
   `models.route.difficulty_to_bin` directly.
 
 ---
+
+## Debris backlog (deep audit, 2026-08-05)
+
+**proxy/tui ledger** (35 findings, ~357 removable lines):
+- Tier 1 (zero-risk deletions + comment repairs) — dispatched for execution:
+  dead `LensScore` type, four never-incremented health counters, the
+  `callLLMConstrained` legacy param + `buildToolCallSchemaJSON`, unregistered
+  `lint_python` hint, write-only struct fields (`Plan.WinningIndex/Reasons`,
+  `symbolGraphNode.DefinedIn/Impact`, `Envelope.ParentID` both sides,
+  `pipelineState.doneSummary`), `RealProjectDir` dup field, `sendChat` shim,
+  9 comments pointing at deleted files, 3 detached doc comments, `ragOK`
+  rename, dead-knob documentation in .env.example.
+- Tier 2 (mechanism collapses, queued): `classifyParseFailure`+
+  `categorizeParseFailure` identical trees (~55); the two template-existence
+  walkers in gates.go (~130); `patternReadTracker` global duplicating
+  `ctx.FilesRead` (~40); three truncation helpers → one.
+- Deferred decisions: 6 never-emitted ErrorCode constants (API surface);
+  `EvtMetric` emitted but unconsumed.
+- **Correction from memory**: `ATLAS_GRAMMAR_MODE=loose` flagged dead by the
+  audit is load-bearing for Gemma (strict GBNF → done-spam). Documented, kept.
+- **rpg.go quarantine is LEAKY**: `planConstraintsForTarget`,
+  `regenerateOnDrift`, `reportRPGDrift` are called from tools.go's write
+  paths; `types.go` carries RPG fields; v3_bridge.go's 16MB SSE buffer is
+  sized for RPG graphs. The RPG keep/cut decision spans four files.
 
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 

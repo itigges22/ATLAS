@@ -42,9 +42,9 @@ Each user message drives an agent loop that runs until the model emits
    re-emits each pipeline stage onto `/events` as a `v3:<stage>`
    envelope.
 5. **Adherence + stuck-pattern gates** — every turn is scored against
-   the active plan step (`plan_adherence.go`) and three stuck-pattern
-   detectors (`tool_repeat.go`, `reasoning_repeat.go`,
-   `claim_check.go`). Auto-revise the plan after a configurable
+   the active plan step (`gates.go`) and three stuck-pattern
+   detectors (tool/reasoning repetition in `detectors.go`, claim
+   checking in `gates.go`). Auto-revise the plan after a configurable
    threshold; bail if the loop is genuinely stuck.
 
 ## Tier Classification

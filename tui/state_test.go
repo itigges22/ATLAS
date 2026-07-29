@@ -178,9 +178,6 @@ func TestDoneEventCapturesFinalState(t *testing.T) {
 	if p.totalMS != 12453 {
 		t.Errorf("totalMS = %d, want 12453", p.totalMS)
 	}
-	if p.doneSummary != "done" {
-		t.Errorf("summary = %q", p.doneSummary)
-	}
 }
 
 func TestStagesPreserveInsertionOrder(t *testing.T) {

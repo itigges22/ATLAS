@@ -31,7 +31,7 @@ import (
 //   1. claimsUniversal(summary) — does the wording make a global
 //      assertion? Quiet pass for narrow done summaries ("added /admin
 //      route" — model said nothing about the rest of the app).
-//   2. verifyCompletionClaims(workingDir, summary) — cheap structural
+//   2. verifyCompletionClaims(workingDir) — cheap structural
 //      checks for the failure modes we know about. Returns a directive
 //      to the model when a gap is found, "" otherwise.
 //
@@ -113,7 +113,7 @@ func claimsUniversal(summary string) bool {
 // node_modules walk for a Python-only project, etc.). Bounded walk
 // depth and per-file size limits so we don't spend the user's
 // session-end latency on a 50-MB monorepo scan.
-func verifyCompletionClaims(workingDir, summary string) string {
+func verifyCompletionClaims(workingDir string) string {
 	if workingDir == "" {
 		return ""
 	}

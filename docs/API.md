@@ -221,7 +221,7 @@ The correlation key is `session_id` + `tool_call_id`, so multiple destructive ca
 
 Subscribe to the **global typed-envelope broker**. Unlike `/v1/agent` (per-request stream of one turn), `/events` is a long-lived pub/sub feed of structured envelopes from across the proxy: agent loop boundaries, tool calls, V3 stage transitions, metrics. Multiple clients can subscribe simultaneously; slow consumers drop events rather than blocking producers.
 
-**Envelope wire format** (matches `atlas/cli/events.py` exactly). A `stage_start` example (`parent_id` is reserved but never set by current producers; `duration_ms` is only set on `stage_end` / `tool_result` and the final `done`):
+**Envelope wire format** (matches `atlas/cli/events.py` exactly). A `stage_start` example (`duration_ms` is only set on `stage_end` / `tool_result` and the final `done`):
 ```json
 {
   "event_id": "evt_a1b2c3d4",

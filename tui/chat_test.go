@@ -79,9 +79,9 @@ func TestSendChatPostsRequestBodyAndStreamsEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := sendChat(ctx, srv.URL, "fix bug", "/work", "default",
-		"sess-1", nil, out); err != nil {
-		t.Fatalf("sendChat: %v", err)
+	if err := sendChatOpts(ctx, srv.URL, "fix bug", "/work", "default",
+		"sess-1", nil, demoOpts{}, out); err != nil {
+		t.Fatalf("sendChatOpts: %v", err)
 	}
 	close(out)
 
@@ -158,9 +158,9 @@ func TestSendChatHandlesNon200Status(t *testing.T) {
 	}))
 	defer srv.Close()
 	out := make(chan chatEvent, 1)
-	err := sendChat(context.Background(), srv.URL, "hi", "/", "default", "s", nil, out)
+	err := sendChatOpts(context.Background(), srv.URL, "hi", "/", "default", "s", nil, demoOpts{}, out)
 	if err == nil {
-		t.Fatal("sendChat should return error on 503")
+		t.Fatal("sendChatOpts should return error on 503")
 	}
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("error = %v, want one mentioning 503", err)
@@ -168,7 +168,7 @@ func TestSendChatHandlesNon200Status(t *testing.T) {
 }
 
 func TestSendChatContextCancelStopsStream(t *testing.T) {
-	// Server drips events forever — sendChat should return when ctx cancels.
+	// Server drips events forever — sendChatOpts should return when ctx cancels.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher, _ := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -193,12 +193,12 @@ func TestSendChatContextCancelStopsStream(t *testing.T) {
 		time.Sleep(80 * time.Millisecond)
 		cancel()
 	}()
-	err := sendChat(ctx, srv.URL, "hi", "/", "default", "s", nil, out)
+	err := sendChatOpts(ctx, srv.URL, "hi", "/", "default", "s", nil, demoOpts{}, out)
 	if err == nil {
 		// context cancellation on read returns ctx.Err() or io.EOF;
 		// either is acceptable. nil means the stream completed before
 		// cancel fired — which is also fine but unexpected.
-		t.Log("sendChat returned nil — server may have closed first")
+		t.Log("sendChatOpts returned nil — server may have closed first")
 	}
 }
 

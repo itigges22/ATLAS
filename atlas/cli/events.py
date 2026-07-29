@@ -18,7 +18,6 @@ Envelope shape
       "type":        "stage_start" | "stage_end" | "tool_call" |
                      "tool_result" | "metric" | "error" | "done",
       "stage":       <str — pipeline stage name; e.g., "phase2", "pr_cot">,
-      "parent_id":   "evt_<8 hex>" | null,   # pairs end-events to start-events
       "duration_ms": <int> | null,           # set on stage_end / tool_result
       "payload":     { ... type-specific ... }
     }
@@ -88,7 +87,6 @@ class Event:
     type: str
     stage: str
     payload: Dict[str, Any] = field(default_factory=dict)
-    parent_id: Optional[str] = None
     duration_ms: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -99,8 +97,6 @@ class Event:
             "stage": self.stage,
             "payload": self.payload,
         }
-        if self.parent_id is not None:
-            d["parent_id"] = self.parent_id
         if self.duration_ms is not None:
             d["duration_ms"] = self.duration_ms
         return d
@@ -139,7 +135,6 @@ def new_event_id() -> str:
 
 
 def make_event(type: str, stage: str, payload: Optional[Dict[str, Any]] = None,
-                parent_id: Optional[str] = None,
                 duration_ms: Optional[int] = None,
                 timestamp: Optional[float] = None) -> Event:
     """Build a well-formed Event with sensible defaults.
@@ -156,7 +151,6 @@ def make_event(type: str, stage: str, payload: Optional[Dict[str, Any]] = None,
         type=type,
         stage=stage,
         payload=payload or {},
-        parent_id=parent_id,
         duration_ms=duration_ms,
     )
 
@@ -216,7 +210,6 @@ def parse_envelope(blob: Any) -> Event:
         type=blob["type"],
         stage=blob["stage"],
         payload=blob["payload"],
-        parent_id=blob.get("parent_id"),
         duration_ms=blob.get("duration_ms"),
     )
 

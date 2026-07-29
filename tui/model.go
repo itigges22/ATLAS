@@ -569,7 +569,7 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 	return out
 }
 
-// sendChatCmd kicks off a /v1/agent turn. Runs sendChat in a goroutine
+// sendChatCmd kicks off a /v1/agent turn. Runs sendChatOpts in a goroutine
 // because Bubbletea Cmds should be quick — the goroutine pumps events
 // onto m.chatEvents which the model drains via waitForChatEvent.
 func (m *tuiModel) sendChatCmd(message string) tea.Cmd {

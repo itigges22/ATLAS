@@ -99,6 +99,16 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_GPU_VENDOR": Field("str"),
     "ATLAS_PROXY_UID": Field("int", min=0),
     "ATLAS_PROXY_GID": Field("int", min=0),
+    # ASA control-vector path (entrypoint-v3.1.sh + `atlas asa`); the
+    # _SCALE/_LAYER_RANGE/_ALLOW_UNVERIFIED tuning knobs are above.
+    "ATLAS_CONTROL_VECTOR": Field("str"),
+    # Proxy-side lens-training corpus dir + read_file byte cap.
+    "ATLAS_LENS_DATA_DIR": Field("str"),
+    "ATLAS_MAX_READ_BYTES": Field("int", min=0),
+    # TUI: proxy base URL, debug log path, mouse capture (on/off).
+    "ATLAS_PROXY_URL": Field("str"),
+    "ATLAS_TUI_LOG": Field("str"),
+    "ATLAS_TUI_MOUSE": Field("str"),
     "ATLAS_AGENT_HISTORY_BUDGET": Field("int", min=0, max=10_000_000),
     "ATLAS_SANDBOX_MEM": Field("str"),   # "4g"/"0"/bytes — freeform
     "ATLAS_SANDBOX_CPUS": Field("str"),  # "2"/"0.5"/"0" — freeform

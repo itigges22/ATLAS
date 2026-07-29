@@ -58,7 +58,7 @@ def admin(): return render_template('admin.html')
 		t.Fatal(err)
 	}
 
-	got := verifyCompletionClaims(dir, "All routes are functioning properly.")
+	got := verifyCompletionClaims(dir)
 	if got == "" {
 		t.Fatal("expected gap report, got empty")
 	}
@@ -83,7 +83,7 @@ def index(): return render_template('index.html')
 	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
 	os.WriteFile(filepath.Join(dir, "templates", "index.html"), []byte("ok"), 0o644)
 
-	if got := verifyCompletionClaims(dir, "All routes work."); got != "" {
+	if got := verifyCompletionClaims(dir); got != "" {
 		t.Errorf("expected empty (no gaps), got: %s", got)
 	}
 }
@@ -100,7 +100,7 @@ app.get('/about', (req, res) => res.render('about'));
 	os.WriteFile(filepath.Join(dir, "views", "home.ejs"), []byte("<%= 1 %>"), 0o644)
 	// about.* missing
 
-	got := verifyCompletionClaims(dir, "All endpoints are working.")
+	got := verifyCompletionClaims(dir)
 	if !strings.Contains(got, "about") {
 		t.Errorf("expected `about` in gap, got: %s", got)
 	}
@@ -112,7 +112,7 @@ func TestVerifyCompletionClaimsSkipsNoiseDirs(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "venv", "lib"), 0o755)
 	os.WriteFile(filepath.Join(dir, "venv", "lib", "junk.py"),
 		[]byte(`render_template('ghost.html')`), 0o644)
-	if got := verifyCompletionClaims(dir, "All routes work."); got != "" {
+	if got := verifyCompletionClaims(dir); got != "" {
 		t.Errorf("noise dir tripped check: %s", got)
 	}
 }
@@ -125,7 +125,7 @@ func TestVerifyCompletionClaimsHandlesDynamicRenderArgs(t *testing.T) {
 def view(name): return render_template(name)
 `
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte(app), 0o644)
-	if got := verifyCompletionClaims(dir, "All routes work."); got != "" {
+	if got := verifyCompletionClaims(dir); got != "" {
 		t.Errorf("dynamic render tripped check: %s", got)
 	}
 }
@@ -180,7 +180,7 @@ def y(): return render_template('b.html')`), 0o644)
 	if !promptIsMultiIssue("LOTS of issues with the flask app, fix the bugs") {
 		t.Fatal("test premise broken: multi-issue prompt not detected")
 	}
-	if got := verifyCompletionClaims(dir, narrow); got == "" || !strings.Contains(got, "b.html") {
+	if got := verifyCompletionClaims(dir); got == "" || !strings.Contains(got, "b.html") {
 		t.Errorf("gap report missing b.html, got: %q", got)
 	}
 }

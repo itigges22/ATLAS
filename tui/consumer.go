@@ -30,7 +30,6 @@ type Envelope struct {
 	Type       string                 `json:"type"`
 	Stage      string                 `json:"stage"`
 	Payload    map[string]interface{} `json:"payload"`
-	ParentID   string                 `json:"parent_id,omitempty"`
 	DurationMS int64                  `json:"duration_ms,omitempty"`
 }
 
@@ -75,9 +74,8 @@ func streamEvents(ctx context.Context, eventsURL string, out chan<- Envelope) er
 }
 
 // parseSSE reads SSE frames from r and pushes parsed envelopes onto out.
-// Skips comment lines (`: connected`, `: heartbeat`) and named events
-// (`event: result`) since those are control frames, not envelopes —
-// see docs/PROTOCOL.md "SSE control frames".
+// Skips comment lines (`: connected`, `: heartbeat`) and anything that
+// is not a `data:` line — see docs/PROTOCOL.md "SSE control frames".
 func parseSSE(ctx context.Context, r io.Reader, out chan<- Envelope) error {
 	scanner := bufio.NewScanner(r)
 	// SSE frames can contain large JSON blobs. The default 64KB buffer
@@ -95,11 +93,8 @@ func parseSSE(ctx context.Context, r io.Reader, out chan<- Envelope) error {
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue // blank line = frame boundary; `:` = SSE comment
 		}
-		if strings.HasPrefix(line, "event:") {
-			continue // named events (`event: result`) are legacy v3-service framing
-		}
 		if !strings.HasPrefix(line, "data:") {
-			continue
+			continue // includes named `event:` lines — /events never emits them
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "" || data == "[DONE]" {

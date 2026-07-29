@@ -29,7 +29,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -53,7 +52,6 @@ var (
 
 const (
 	demoRawCapability   = "demo_raw_completion_v1"
-	maxRepairAttempts   = 3
 	maxRequestBodyBytes = 16 << 20
 )
 
@@ -115,30 +113,6 @@ func resolveVerifyTarget(workingDir string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Telemetry counters
-// ---------------------------------------------------------------------------
-
-var (
-	totalRequests atomic.Int64
-	totalRepairs  atomic.Int64
-	sandboxPasses atomic.Int64
-	sandboxFails  atomic.Int64
-)
-
-// ---------------------------------------------------------------------------
-// Lens scoring types
-// ---------------------------------------------------------------------------
-
-type LensScore struct {
-	CxEnergy  float64 `json:"cx_energy"`
-	CxNorm    float64 `json:"cx_normalized"`
-	GxScore   float64 `json:"gx_score"`
-	Verdict   string  `json:"verdict"`
-	Enabled   bool    `json:"enabled"`
-	LatencyMs float64 `json:"latency_ms"`
-}
-
-// ---------------------------------------------------------------------------
 // HTTP server setup
 // ---------------------------------------------------------------------------
 
@@ -180,7 +154,7 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
-	llmOK, ragOK, sandboxOK, lensReady := false, false, false, false
+	llmOK, lensOK, sandboxOK, lensReady := false, false, false, false
 
 	if resp, err := healthClient.Get(inferenceURL + "/health"); err == nil {
 		resp.Body.Close()
@@ -188,7 +162,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	if resp, err := healthClient.Get(lensURL + "/health"); err == nil {
 		resp.Body.Close()
-		ragOK = resp.StatusCode == 200
+		lensOK = resp.StatusCode == 200
 	}
 	// Geometric-lens /ready is the gate that flips to 503 when scoring is
 	// degraded (lens weights missing, embedding-dim mismatch, etc — see
@@ -202,7 +176,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		sandboxOK = resp.StatusCode == 200
 	}
 
-	overall := llmOK && ragOK && sandboxOK && lensReady
+	overall := llmOK && lensOK && sandboxOK && lensReady
 	overallStatus := "ok"
 	if !overall {
 		overallStatus = "degraded"
@@ -211,17 +185,11 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := map[string]any{
 		"status":       overallStatus,
 		"inference":    llmOK,
-		"lens":         ragOK,
+		"lens":         lensOK,
 		"lens_ready":   lensReady,
 		"sandbox":      sandboxOK,
 		"port":         proxyPort,
 		"capabilities": []string{demoRawCapability},
-		"stats": map[string]int64{
-			"requests":       totalRequests.Load(),
-			"repairs":        totalRepairs.Load(),
-			"sandbox_passes": sandboxPasses.Load(),
-			"sandbox_fails":  sandboxFails.Load(),
-		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
@@ -269,13 +237,6 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 
 func newProxyMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	// /v1/chat/completions used to be wrapped here with the Aider whole-
-	// file output format and embedded agent loop. After PC-062 the TUI
-	// uses /v1/agent for everything, and Aider was removed in the cleanup
-	// pass — so the OpenAI-compat endpoint now passes through to
-	// llama-server unchanged via the catch-all registered below. Anyone
-	// hitting /v1/chat/completions on the proxy gets the raw upstream
-	// behavior; structured agent turns belong on /v1/agent.
 	mux.HandleFunc("/v1/models", handleModels)
 	mux.HandleFunc("/models", handleModels)
 	mux.HandleFunc("/health", handleHealth)
@@ -330,7 +291,7 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	// Private-value filtering: every log line passes through the
-	// filter before it reaches stderr (see private_values.go).
+	// filter before it reaches stderr (filteringWriter, below).
 	// In json mode the filtered line is then wrapped into a JSON
 	// record; the record stamps its own ts, so the log package's
 	// time prefix is dropped to keep it out of msg.
@@ -346,7 +307,7 @@ func main() {
 	log.Printf("  Inference: %s", inferenceURL)
 	log.Printf("  Geometric Lens: %s", lensURL)
 	log.Printf("  Sandbox: %s", sandboxURL)
-	log.Printf("  Pipeline: generate → score → sandbox → repair (max %d) → deliver", maxRepairAttempts)
+	log.Printf("  Pipeline: agent loop (/v1/agent) + V3 candidate pipeline in v3-service for T2/T3 writes")
 
 	// PC-059: probe geometric-lens + ASA calibration so operators see the
 	// same verdict the TUI's header badge will render. The old "ASA

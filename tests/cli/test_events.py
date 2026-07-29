@@ -61,10 +61,8 @@ def test_make_event_uses_provided_timestamp():
     assert ev.timestamp == 1.5
 
 
-def test_make_event_carries_parent_and_duration():
-    ev = make_event("stage_end", "phase2",
-                     parent_id="evt_aabbccdd", duration_ms=4523)
-    assert ev.parent_id == "evt_aabbccdd"
+def test_make_event_carries_duration():
+    ev = make_event("stage_end", "phase2", duration_ms=4523)
     assert ev.duration_ms == 4523
 
 
@@ -75,15 +73,12 @@ def test_make_event_carries_parent_and_duration():
 def test_to_dict_omits_none_optional_fields():
     ev = make_event("stage_start", "phase2", payload={"detail": "x"})
     d = ev.to_dict()
-    assert "parent_id" not in d
     assert "duration_ms" not in d
 
 
 def test_to_dict_includes_set_optional_fields():
-    ev = make_event("stage_end", "phase2",
-                     parent_id="evt_x", duration_ms=10)
+    ev = make_event("stage_end", "phase2", duration_ms=10)
     d = ev.to_dict()
-    assert d["parent_id"] == "evt_x"
     assert d["duration_ms"] == 10
 
 

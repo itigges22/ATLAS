@@ -465,11 +465,6 @@ var actionIntentWords = []string{
 	"redesign", "redesigning", "redesigned",
 }
 
-// isActionIntentMessage returns true when the prompt clearly asks
-// for a state change on disk (create/rewrite/refactor/etc.). The
-// done-without-action gate uses this to bounce a `done` that wasn't
-// preceded by any productive write — which would otherwise pass
-// through silently because the fix-intent gate ignores feature work.
 // reOutputFilenameTok matches a filename-looking token: an optional
 // leading path, then name.ext (1-6 char extension). Captures group 1.
 var reOutputFilenameTok = regexp.MustCompile("[`\"']?((?:[~./]|\\.\\./)?[\\w./-]*\\.[A-Za-z][A-Za-z0-9]{0,5})[`\"']?")
@@ -566,6 +561,11 @@ func logPaths(paths []string) []string {
 	return out
 }
 
+// isActionIntentMessage returns true when the prompt clearly asks
+// for a state change on disk (create/rewrite/refactor/etc.). The
+// done-without-action gate uses this to bounce a `done` that wasn't
+// preceded by any productive write — which would otherwise pass
+// through silently because the fix-intent gate ignores feature work.
 func isActionIntentMessage(msg string) bool {
 	lower := strings.ToLower(msg)
 	for _, w := range actionIntentWords {
@@ -576,11 +576,6 @@ func isActionIntentMessage(msg string) bool {
 	return false
 }
 
-// actionWithoutProductiveChangeMessage tells the model to actually do
-// the work the user asked for before declaring done. Concrete and
-// directive — points at the missing tool call, not abstract "you
-// haven't done enough." Mirror of verificationRejectionMessage's
-// shape.
 // expectedOutputMissingMessage tells the model the task's named output
 // file doesn't exist yet — the deliverable, not just "some change." Names
 // the file(s) so the steer is concrete and grounded in the task text.
@@ -594,6 +589,11 @@ func expectedOutputMissingMessage(missing []string) string {
 		" as a deliverable, but it does not exist on disk yet. If your code PRODUCES it when run, run your code now to generate it (do NOT hand-write a fabricated stand-in). If it is a file you author directly, write your solution to it. If you have genuinely already produced it elsewhere or it is not actually required, you may proceed."
 }
 
+// actionWithoutProductiveChangeMessage tells the model to actually do
+// the work the user asked for before declaring done. Concrete and
+// directive — points at the missing tool call, not abstract "you
+// haven't done enough." Mirror of verificationRejectionMessage's
+// shape.
 func actionWithoutProductiveChangeMessage(userMsg string) string {
 	return "Cannot declare `done` yet — the user asked you to make a change on disk (rewrite/create/add/implement/refactor/etc.) and you haven't emitted any successful write_file / edit_file / structural_edit / delete_file in this loop. Verification (running the server, curling the page) is NOT the task — it's how you confirm AFTER the change. Re-read the user's request, identify what file needs to change, and emit the appropriate edit tool. Then verify, then done."
 }
@@ -628,10 +628,6 @@ func isVerificationCommand(cmd string) bool {
 	return verificationCommandRe.MatchString(strings.TrimSpace(cmd))
 }
 
-// verificationRejectionMessage tells the model exactly what's
-// missing and what to run. We prefer concrete suggestions over
-// abstract "verify your work" prompts — the model is more likely to
-// pick a sensible command when given a category.
 // wantsStateChange reports whether `done` should be blocked when no write,
 // edit, or delete succeeded in this run.
 //
@@ -672,6 +668,11 @@ func gateTrigger(userWantsVerification, sawFailedVerification bool) string {
 	}
 }
 
+// verificationRejectionMessage tells the model exactly what's
+// missing and what to run. We prefer concrete suggestions over
+// abstract "verify your work" prompts — the model is more likely to
+// pick a sensible command when given a category.
+//
 // sawFailedVerification distinguishes the two ways this gate fires. When a
 // verification command has actually gone red in this loop, the run holds
 // concrete evidence of breakage, so the message says that rather than
