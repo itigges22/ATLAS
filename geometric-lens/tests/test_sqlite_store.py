@@ -1,4 +1,4 @@
-"""SQLite state store: schema init, Thompson state, task queue, metrics, patterns."""
+"""SQLite state store: schema init, Thompson state, metrics, patterns."""
 
 import json
 import os
@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 EXPECTED_TABLES = {
     "patterns", "co_occurrence", "thompson_state", "routing_stats",
-    "tasks", "metrics_daily", "metrics_recent_tasks", "store_metadata",
+    "metrics_daily", "metrics_recent_tasks", "store_metadata",
 }
 
 
@@ -46,27 +46,21 @@ def _table_names(pool):
 def test_schema_init_creates_all_tables(store):
     pool = store.get_db_pool()
     assert EXPECTED_TABLES <= _table_names(pool)
-    with pool.get_connection() as conn:
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'index' "
-            "AND tbl_name = 'tasks' AND name NOT LIKE 'sqlite_%'")
-        names = {row["name"] for row in cur.fetchall()}
-    assert "idx_tasks_status_priority_created" in names
 
 
 def test_schema_init_is_idempotent(store):
     pool = store.get_db_pool()
     with pool.get_connection() as conn:
         conn.execute(
-            "INSERT INTO tasks (id, priority, status, data) "
-            "VALUES ('t1', 'p1', 'pending', '{}')")
+            "INSERT INTO patterns (id, data, tier, score) "
+            "VALUES ('p1', '{}', 'stm', 0.5)")
 
     # Re-run initialization against the existing database file.
     store.SQLitePool._instance = None
     pool2 = store.get_db_pool()
     assert EXPECTED_TABLES <= _table_names(pool2)
     with pool2.get_connection() as conn:
-        cur = conn.execute("SELECT COUNT(*) AS c FROM tasks")
+        cur = conn.execute("SELECT COUNT(*) AS c FROM patterns")
         assert cur.fetchone()["c"] == 1  # existing rows survive re-init
 
 
@@ -111,74 +105,6 @@ def test_thompson_reset(store):
     with pool.get_connection() as conn:
         cur = conn.execute("SELECT COUNT(*) AS c FROM thompson_state")
         assert cur.fetchone()["c"] == 0
-
-
-# ── Task queue ──────────────────────────────────────────────────────
-
-
-def _submit(pool, task_id, priority):
-    with pool.get_connection() as conn:
-        conn.execute(
-            "INSERT INTO tasks (id, priority, status, data) "
-            "VALUES (?, ?, 'pending', ?)",
-            (task_id, priority, json.dumps({"id": task_id})))
-
-
-def _next_pending(pool, priority):
-    with pool.get_connection() as conn:
-        cur = conn.execute(
-            "SELECT id FROM tasks WHERE status = 'pending' AND priority = ? "
-            "ORDER BY created_at, rowid LIMIT 1", (priority,))
-        row = cur.fetchone()
-    return row["id"] if row else None
-
-
-def test_task_queue_fifo_within_priority(store):
-    pool = store.get_db_pool()
-    for tid in ("a", "b", "c"):
-        _submit(pool, tid, "p1")
-    _submit(pool, "urgent", "p0")
-
-    order = []
-    while True:
-        tid = _next_pending(pool, "p1")
-        if tid is None:
-            break
-        order.append(tid)
-        with pool.get_connection() as conn:
-            conn.execute(
-                "UPDATE tasks SET status = 'running' WHERE id = ?", (tid,))
-    assert order == ["a", "b", "c"]  # FIFO within a priority
-    # Other priorities are untouched.
-    assert _next_pending(pool, "p0") == "urgent"
-
-
-def test_task_status_transitions_and_queue_stats(store):
-    pool = store.get_db_pool()
-    _submit(pool, "t1", "p0")
-    _submit(pool, "t2", "p1")
-    _submit(pool, "t3", "p1")
-
-    def pending_counts():
-        with pool.get_connection() as conn:
-            cur = conn.execute(
-                "SELECT priority, COUNT(*) AS count FROM tasks "
-                "WHERE status = 'pending' GROUP BY priority")
-            return {row["priority"]: row["count"] for row in cur.fetchall()}
-
-    assert pending_counts() == {"p0": 1, "p1": 2}
-
-    # pending -> running -> completed
-    for status in ("running", "completed"):
-        with pool.get_connection() as conn:
-            conn.execute(
-                "UPDATE tasks SET status = ? WHERE id = 't2'", (status,))
-        with pool.get_connection() as conn:
-            cur = conn.execute("SELECT status FROM tasks WHERE id = 't2'")
-            assert cur.fetchone()["status"] == status
-
-    # Completed tasks leave the pending pool but stay queryable.
-    assert pending_counts() == {"p0": 1, "p1": 1}
 
 
 # ── Metrics ─────────────────────────────────────────────────────────

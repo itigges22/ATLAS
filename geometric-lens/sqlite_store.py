@@ -74,21 +74,6 @@ class SQLitePool:
                 )
             """)
             
-            # Tasks queue
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id TEXT PRIMARY KEY,
-                    priority TEXT,
-                    status TEXT,
-                    data TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_tasks_status_priority_created
-                ON tasks (status, priority, created_at)
-            """)
-
             # Thompson sampling state
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS thompson_state (

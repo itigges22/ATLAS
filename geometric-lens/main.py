@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
-from enum import Enum
 
 import httpx
 from config import config, api_keys
@@ -820,119 +819,6 @@ async def list_models(api_key: str = Depends(verify_api_key)):
     async with httpx.AsyncClient(headers=_svc_auth_headers()) as client:
         response = await client.get(f"{config.llama.base_url}/v1/models")
         return response.json()
-
-
-# Task Queue Models and Endpoints
-class Priority(str, Enum):
-    INTERACTIVE = "p0"
-    FIRE_FORGET = "p1"
-    BATCH = "p2"
-
-class TaskSubmitRequest(BaseModel):
-    prompt: str
-    type: str = "code_generation"
-    priority: str = "p1"
-    project_id: Optional[str] = None
-    max_attempts: int = 5
-    require_tests_pass: bool = True
-    test_code: Optional[str] = None
-
-class TaskSubmitResponse(BaseModel):
-    task_id: str
-    status: str
-
-@app.post("/v1/tasks/submit", response_model=TaskSubmitResponse)
-async def submit_task(
-    request: TaskSubmitRequest,
-    api_key: str = Depends(verify_api_key)
-):
-    """Submit a task for async processing."""
-    task_id = str(uuid.uuid4())
-    task_data = {
-        "id": task_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "priority": request.priority,
-        "status": "pending",
-        "type": request.type,
-        "prompt": request.prompt,
-        "project_id": request.project_id,
-        "max_attempts": request.max_attempts,
-        "timeout_seconds": 300,
-        "require_tests_pass": request.require_tests_pass,
-        "require_lint_pass": False,
-        "test_code": request.test_code,
-        "attempts": [],
-        "result": None,
-        "completed_at": None,
-        "metrics": {}
-    }
-
-    # Store + enqueue in one insert: a pending row in `tasks` is the queue
-    # entry (workers pull by status + priority, FIFO within a priority via
-    # created_at/rowid). A store failure returns a clean 503 instead of a
-    # raw database error.
-    try:
-        pool = get_db_pool()
-        with pool.get_connection() as conn:
-            conn.execute(
-                "INSERT INTO tasks (id, priority, status, data) VALUES (?, ?, ?, ?)",
-                (task_id, request.priority, "pending", json.dumps(task_data))
-            )
-    except Exception as e:
-        logger.warning("task queue unavailable: %s", _safe_log(e))
-        raise HTTPException(status_code=503,
-                            detail="Task queue not available")
-
-    return TaskSubmitResponse(task_id=task_id, status="pending")
-
-@app.get("/v1/tasks/{task_id}/status")
-async def get_task_status(
-    task_id: str,
-    api_key: str = Depends(verify_api_key)
-):
-    """Get current status of a submitted task."""
-    try:
-        pool = get_db_pool()
-        with pool.get_connection() as conn:
-            cur = conn.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
-            row = cur.fetchone()
-    except Exception as e:
-        logger.warning("task queue unavailable: %s", _safe_log(e))
-        raise HTTPException(status_code=503, detail="Task queue not available")
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    task = json.loads(row["data"])
-    return {
-        "id": task["id"],
-        "status": task["status"],
-        "attempts": len(task.get("attempts", [])),
-        "result": task.get("result"),
-        "completed_at": task.get("completed_at")
-    }
-
-@app.get("/v1/queue/stats")
-async def get_queue_stats(api_key: str = Depends(verify_api_key)):
-    """Get current queue statistics."""
-    try:
-        pool = get_db_pool()
-        with pool.get_connection() as conn:
-            cur = conn.execute(
-                "SELECT priority, COUNT(*) AS count FROM tasks "
-                "WHERE status = 'pending' GROUP BY priority"
-            )
-            counts = {row["priority"]: row["count"] for row in cur.fetchall()}
-    except Exception as e:
-        logger.warning("task queue unavailable: %s", _safe_log(e))
-        raise HTTPException(status_code=503, detail="Task queue not available")
-
-    return {
-        "p0_waiting": counts.get("p0", 0),
-        "p1_waiting": counts.get("p1", 0),
-        "p2_waiting": counts.get("p2", 0),
-        "total_waiting": sum(counts.values())
-    }
 
 
 # ──────────────────────────────────────────────────────────────
