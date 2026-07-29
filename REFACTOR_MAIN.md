@@ -155,29 +155,140 @@ Original decision table kept for reference:
 
 ---
 
-## Debris backlog (deep audit, 2026-08-05)
+## Audit coverage matrix (what has been READ, so it is not re-read)
 
-**proxy/tui ledger** (35 findings, ~357 removable lines):
-- Tier 1 (zero-risk deletions + comment repairs) — dispatched for execution:
-  dead `LensScore` type, four never-incremented health counters, the
-  `callLLMConstrained` legacy param + `buildToolCallSchemaJSON`, unregistered
-  `lint_python` hint, write-only struct fields (`Plan.WinningIndex/Reasons`,
-  `symbolGraphNode.DefinedIn/Impact`, `Envelope.ParentID` both sides,
-  `pipelineState.doneSummary`), `RealProjectDir` dup field, `sendChat` shim,
-  9 comments pointing at deleted files, 3 detached doc comments, `ragOK`
-  rename, dead-knob documentation in .env.example.
-- Tier 2 (mechanism collapses, queued): `classifyParseFailure`+
-  `categorizeParseFailure` identical trees (~55); the two template-existence
-  walkers in gates.go (~130); `patternReadTracker` global duplicating
-  `ctx.FilesRead` (~40); three truncation helpers → one.
-- Deferred decisions: 6 never-emitted ErrorCode constants (API surface);
-  `EvtMetric` emitted but unconsumed.
-- **Correction from memory**: `ATLAS_GRAMMAR_MODE=loose` flagged dead by the
-  audit is load-bearing for Gemma (strict GBNF → done-spam). Documented, kept.
-- **rpg.go quarantine is LEAKY**: `planConstraintsForTarget`,
-  `regenerateOnDrift`, `reportRPGDrift` are called from tools.go's write
-  paths; `types.go` carries RPG fields; v3_bridge.go's 16MB SSE buffer is
-  sized for RPG graphs. The RPG keep/cut decision spans four files.
+Every row = a full-file read by the 2026-08-05 deep audit. A future pass may
+trust these as covered; re-audit only after major rewrites of that area.
+
+| Area | Files read | Ledger | Executed |
+|---|---|---|---|
+| proxy/ (13 non-test .go) | all, line-by-line | L-A below | Tier 1 done (03bdfe5) |
+| tui/ (~15 .go) | all | L-A | Tier 1 done (03bdfe5) |
+| v3-service/ incl. graph/ | all (quarantine: isolation only) | L-B | queued |
+| geometric-lens/ (all .py) | all | L-B | cut commits 1-3 in flight |
+| atlas/ (24 modules) | all | L-C | P0s done (4f27031) |
+| scripts/ (22) + lib/ | all | L-C | P0 install.sh done |
+| sandbox/ (4), inference/ (8) | all | L-C | queued |
+| .github/workflows (7), compose (6), .env.example, atlas.conf.example, pyproject, .gitignore, .dockerignore | all | L-C | partial (schema/compose fixes) |
+| benchmark/ | structure + entry points (not per-task data) | L-C | queued |
+| docs/ | NOT audited for prose accuracy (deliberate — docs pass is LAST); stale-subject list captured in L-C | — | pending |
+
+## Debris ledgers — full disposition (dedup record)
+
+Status legend: ✅ done · 🔜 queued · ⏸ owner decision · ❌ rejected (do not re-flag).
+
+### L-A: proxy + tui (35 findings)
+
+| # | Item | Action | Status |
+|---|---|---|---|
+| A1 | `LensScore` type + false comment (main.go/types.go) | DELETE | ✅ 03bdfe5 |
+| A2 | 4 never-incremented health counters + stats block | DELETE | ✅ |
+| A3 | `maxRepairAttempts` + fictional banner | DELETE+FIX | ✅ |
+| A4 | `callLLMConstrained` ignored param + `buildToolCallSchemaJSON` | DELETE | ✅ |
+| A5 | `lint_python` hint case | DELETE | ✅ |
+| A6 | `verifyCompletionClaims` unread `summary` param | FIX | ✅ |
+| A7 | `sendChat` shim (tui) | DELETE | ✅ |
+| A8 | `RealProjectDir` — never assigned; dead delete-block removed WITH it (substituting WorkingDir would have resurrected dead behavior) | DELETE | ✅ (deviation documented) |
+| A9 | `Plan.WinningIndex`/`.Reasons` write-only | DELETE | ✅ |
+| A10 | `symbolGraphNode.DefinedIn`/`.Impact` | DELETE | ✅ |
+| A11 | `Envelope.ParentID` (Go×2 + events.py + docs) | DELETE | ✅ |
+| A12 | `pipelineState.doneSummary` | DELETE | ✅ |
+| A13 | 12 stale-filename comments (9 ledger + 3 found in-flight) | FIX | ✅ |
+| A14 | 3+1 detached doc comments (guardrails.go, agent.go) | FIX | ✅ |
+| A15 | `ragOK`→`lensOK` | FIX | ✅ |
+| A16 | Aider-archaeology comment (main.go) | DELETE | ✅ |
+| A17 | events.go cancellation-out-of-scope claim | FIX | ✅ |
+| A18 | tui `event:`-frame skip (redundant with data: filter) | DELETE | ✅ |
+| A19 | literal `—` escapes (13+, incl. 4 beyond ledger) | FIX | ✅ (Replacer smart-quote escapes kept — functional) |
+| A20 | dead-knob docs: GRAMMAR_MODE/LENS_DATA_DIR/MAX_READ_BYTES/CONTROL_VECTOR/TUI block | FIX | ✅ (+schema decl in follow-up) |
+| A21 | `classifyParseFailure`+`categorizeParseFailure` twin trees (~55) | COLLAPSE | 🔜 Tier 2 |
+| A22 | two template-existence walkers in gates.go (~130) | COLLAPSE | 🔜 Tier 2 |
+| A23 | `patternReadTracker` global dup of ctx.FilesRead (~40; its no-import-cycle rationale is false) | COLLAPSE | 🔜 Tier 2 |
+| A24 | `truncate` vs `truncateStr` (keep `truncateForCorrective`) | COLLAPSE | 🔜 Tier 2 |
+| A25 | `reInlineTemplate` pre-pass for one sentence fragment | judgment | 🔜 with A22 |
+| A26 | 15 TB2-era calibration comments; 34 PC-ticket citations | restate/strip | 🔜 docs-adjacent pass |
+| A27 | 6 never-emitted ErrorCode consts (API surface, contract-pinned) | ⏸ owner | ⏸ |
+| A28 | `EvtMetric` emitted, zero consumers | ⏸ wire or delete | ⏸ |
+| A29 | **rpg.go quarantine LEAKY**: `planConstraintsForTarget`/`regenerateOnDrift`/`reportRPGDrift` called from tools.go write paths; RPG fields in types.go; 16MB SSE buffer in v3_bridge.go sized for RPG | ⏸ owner (4-file decision) | ⏸ |
+| A30 | `ATLAS_GRAMMAR_MODE=loose` flagged dead by audit | **❌ REJECTED** — Gemma requires loose (done-spam on strict); documented instead | ❌ |
+| A31 | lens.go/gates.go/detectors.go/tools.go header comments understate contents | FIX headers | 🔜 |
+| A32 | dead knobs `ATLAS_MACOS_PREFIX`/`ATLAS_LLAMA_HOST`/`ATLAS_BACKEND` in .env.example, no reader found in Go/py | verify vs scripts, then DELETE | 🔜 (check macOS overlays first) |
+
+### L-B: v3-service + geometric-lens (key items; blast radius in audit report)
+
+| # | Item | Action | Status |
+|---|---|---|---|
+| B1 | `/internal/call_graph` route + handler (69) — zero callers | DELETE | 🔜 (before B4-B6) |
+| B2 | `/v3/run` route + `_handle_run` (58) + false events.py docstring | DELETE+FIX | 🔜 |
+| B3 | `ATLAS_V3_PORT` read never forwarded; container port hardcoded | FIX or constant | 🔜 |
+| B4 | Datalog engine (143) — reachable only via B1 | DELETE | 🔜 |
+| B5 | Prolog facts emitter (136) — same; 3rd reachability impl | DELETE | 🔜 |
+| B6 | `graph/analyses.complexity` (24) — undocumented analysis value | DELETE | 🔜 |
+| B7 | JS extraction (120) — grammar not in image; `_JS_AVAILABLE` always False | DELETE or ship grammar | ⏸ owner |
+| B8 | graph/ facade: 40 exports → 8 real (5 post-B1) | SHRINK | 🔜 |
+| B9 | `_DEFAULT_BUILTINS` hand-list vs `PY_BUILTINS` (documented bug class) | COLLAPSE | 🔜 |
+| B10 | `direct_call_names` vs `_extract_python_call_targets`; `bound_names` vs `_extract_python_bound_names` (write-blocking divergence risk) | COLLAPSE | 🔜 |
+| B11 | `repair_context` vs `call_chain_context` (~80) | COLLAPSE (parameterize hops) | 🔜 |
+| B12 | **RPG/wavelet not COPY'd into the v3 image** — ATLAS_RPG_PLANNING wired to nothing deployed; 3 lazy-import sites take the except path always | ⏸ owner (pairs with A29) | ⏸ |
+| B13 | pipeline: `failure_analyzer`/`constraint_refiner` constructed never used; `constraints=[]` clobbers the param; `last_logprobs`; unused `test_input`; dup threading import; unreachable "fallback" retry key | DELETE/FIX | 🔜 |
+| B14 | main.py test-only import shim (6 names) → tests import owning modules | FIX | 🔜 |
+| B15 | `_post_pattern_outcome` fires before baseline substitution (cache sees `solution=""`) | FIX (real bug) | 🔜 |
+| B16 | scoring.py inline smoke-check generators shadowed by sandbox.syntax_check (70) | DELETE | 🔜 |
+| B17 | `_ext_to_lang` advertises 5 languages the checker rejects | FIX | 🔜 |
+| B18 | lens: `evaluate_gx` (49), `extract_embeddings_batch`, `get_embedding_contract`, `save/load_models` aliases, Replay/EWC Config dataclasses + stats(), false telemetry/atlas.conf docstrings | DELETE/FIX | 🔜 |
+| B19 | `provenance.py` (151) — nothing writes or reads it; docstring claims CLI surfaces it (false) | DELETE or wire | ⏸ owner |
+| B20 | `get_category_surprise` + write-only EMA (~15) | DELETE | 🔜 |
+| B21 | `/v1/patterns/write` twin of `/internal/patterns/write` | DELETE /v1 twin | 🔜 (cut c6) |
+| B22 | `/internal/lens/stats` dup of /health payload | DELETE | 🔜 |
+| B23 | cache flush/consolidate routes zero-caller; **no scheduler → LTM tier unreachable in prod** | ⏸ owner: schedule or delete LTM | ⏸ |
+| B24 | legacy `build_cvector_prompts.py` (141) superseded by build_steering_vector | DELETE | 🔜 |
+| B25 | `render_pos`/`render_neg` identical wrappers | COLLAPSE | 🔜 |
+| B26 | `ast_edit_steering.gguf` filename kept post-rename | **❌ REJECTED as debris** — SHA-pinned by registry, documented in CHANGELOG | ❌ |
+| B27 | retrieval cut (whole-file list, main.py/pipeline.py regions, sqlite tables, Dockerfile/compose/docs collateral; ≈4,294 net) with 6-commit sequence; hazard: reader rewrite (c4) must land WITH pattern_matcher deletion | CUT | commits 1-3 🔜→in flight; c4 = Phase 3b design (§above); c5-c6 queued |
+| B28 | `sandbox_analysis.py` looks cuttable but has live caller (client.py /internal/sandbox/analyze) | **KEEP** | ❌ do not cut |
+| B29 | lens dead knobs: CORS_ORIGINS, ROUTING_ENABLED, CONFIG_PATH, API_KEYS_PATH, SANDBOX_URL prefix mismatch, `_energy_disabled_logged` | DIE-WITH-CUT | 🔜 (c5/c6) |
+| B30 | `ATLAS_ALLOW_PICKLE_GX` legit but undeclared in schema | FIX | 🔜 |
+
+### L-C: CLI + scripts + infra (49 findings)
+
+| # | Item | Action | Status |
+|---|---|---|---|
+| C1 | install.sh unbound `$SERVICES` (installer aborts last step) | FIX | ✅ 4f27031 |
+| C2 | schema missing GPU_VENDOR/PROXY_UID/GID (validate flags init's own output) | FIX | ✅ |
+| C3 | compose missing ATLAS_CONTROL_VECTOR passthrough | FIX | ✅ |
+| C4 | `retrain_cx.py` (458) — emits bundles runtime refuses; reads nonexistent TB2 path | DELETE | 🔜 |
+| C5 | `ATLAS_RPG_PLANNING` knob surface (compose/.env/schema) | pairs with A29/B12 | ⏸ |
+| C6 | 4 more trainer scripts (retrain_cx_phase0, retrain_lens_from_results, collect_/prepare_lens_training) superseded by `atlas lens build` (~1,100) | DELETE | ⏸ owner — **note: memory pins `retrain_lens_from_results.py` in the onboarding loop; verify `atlas lens build --from-results` fully covers it BEFORE deleting, then update memory** |
+| C7 | V2/TB2 bench subgraph: v2_runner, v2_report, run_v2_benchmark.sh, benchmark/cli.py (~1,870) | DELETE | ⏸ owner (user previously said TB2 testing is over) |
+| C8 | unbuilt inference/Dockerfile + entrypoint.sh pair; CI pins its LLAMA_CPP_REV | DELETE | 🔜 |
+| C9 | client.py 5 zero-caller fns (~115) | DELETE | 🔜 |
+| C10 | download-models.sh reimplements `atlas model install`; stale 3-model manifest | COLLAPSE to shim | 🔜 |
+| C11 | uninstall.sh deletes resources from 3 dead eras (redis, llm-proxy label, nightly cronjob, phantom manifests dir) | FIX | 🔜 |
+| C12 | ELEVEN atlas-root resolvers (model.py copy is verbatim env.py) — A2 missed these | COLLAPSE-INTO env.atlas_root | 🔜 |
+| C13 | NINE .env parsers (4 in atlas/) | COLLAPSE-INTO compose.read_env_file | 🔜 |
+| C14 | `_canonical_model_identity` ×2 + `_model_marker_value` | COLLAPSE into publishing.py | 🔜 |
+| C15 | onboard.py hand-rolled GGUF parser vs gguf.read_gguf_kv | COLLAPSE | 🔜 |
+| C16 | display.py 17 unused constants + h() + clear() | DELETE | 🔜 |
+| C17 | 4 duplicate container-smoke CI jobs → 1 matrix | COLLAPSE | 🔜 |
+| C18 | `check_nvidia` alias, `ATLAS_RAG_URL` fallback, `_read_saved_cost_field_dim` shim, `sign_manifest`, init `_ok/_warn/_err`, `solve.sandbox_test`, `status_block(speed)`, `open_registry_pr_via_api(color)`, `_verify_one(color)`, onboard `_c` no-op | DELETE (10 small) | 🔜 |
+| C19 | dead knob families: DRAFT_MODEL/SPECULATIVE (~30), JWT secret chain (~20), LORA/TRAINING dirs (~12) | DELETE | 🔜 |
+| C20 | .gitignore 12 phantom paths + stale V2.5 headers; .dockerignore phantoms + 3 Aider rules | DELETE | 🔜 |
+| C21 | CI uses deprecated SKIP_NVIDIA alias (its only caller) | FIX then DELETE alias | 🔜 |
+| C22 | redact.py docstrings say 3 copies; there are 4 (test enforces 4) | FIX | 🔜 |
+| C23 | lens.py docstring advertises nonexistent `atlas lens push` | FIX | 🔜 |
+| C24 | entrypoint metal message says "V3.1.2 planned" for shipped feature | FIX | 🔜 |
+| C25 | `atlas bench --strategy` 3 of 4 choices inert (always --baseline) | FIX help or drop flag | ⏸ owner (bench semantics) |
+| C26 | pyproject torch>=2.13 floor above CI-proven 2.12.1; no 2.13 wheel exists | FIX | 🔜 |
+| C27 | events.py = 307-line shipped test fixture; keep EVENT_TYPES as contract anchor | COLLAPSE-INTO tests/ | ⏸ owner (packaging surface) |
+| C28 | check_dockerfile_sources.py — KEEP through the cut (it exists to catch exactly this), re-evaluate after | KEEP | ❌ for now |
+| C29 | compose retrieval leftovers (PROJECT_DATA_DIR, lens-data volume, api-keys comment; init.py still generates api-keys.json) | DIE-WITH-CUT c5/c6 | 🔜 |
+| C30 | rocm compose pulls never-published image (upgrade.py already special-cases) | FIX docs or publish | ⏸ owner |
+| C31 | verify-install.sh NVIDIA-only check hard-fails AMD/Metal installs; omits v3-service | FIX | 🔜 |
+| C32 | run_v31_ablation.sh hardcodes K3s NodePort health URL | FIX from .env | 🔜 |
+| C33 | production-readiness.py PYTEST_PATHS omits 3 suites CI gates on | FIX | 🔜 |
+| C34 | model.py docstring omits install-artifacts subcommand | FIX | 🔜 |
+| C35 | local junk: patches/*.bak, _agenttest/ (gitignored) | DELETE locally | 🔜 |
+| C36 | Docs-with-dead-subjects list (SETUP retrain menu, CONFIGURATION rows, benchmark/README V2 sections, models/README) | captured for docs pass | 🔜 LAST |
 
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
