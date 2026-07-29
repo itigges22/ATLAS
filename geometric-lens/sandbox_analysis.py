@@ -3,8 +3,8 @@
 Parses raw sandbox output (passed, stdout, stderr) into structured
 error analysis with failure types, line numbers, and recoverability.
 
-Used by the verify-repair-retry loop to make intelligent repair decisions
-combining G(x) quality scores with concrete error diagnostics.
+Served through the /internal/sandbox/analyze endpoint, which combines
+G(x) quality scores with concrete error diagnostics.
 """
 
 import re
@@ -363,8 +363,6 @@ def _generate_suggestion(
 
 def build_repair_prompt(
     analysis: SandboxResult,
-    original_code: str,
-    original_prompt: str = "",
     gx_score: Optional[float] = None,
 ) -> str:
     """Build a structured repair prompt from sandbox analysis.

@@ -1380,7 +1380,6 @@ def sandbox_analyze(request: SandboxAnalyzeRequest):
         if not analysis.passed:
             repair_prompt = build_repair_prompt(
                 analysis=analysis,
-                original_code=request.code,
                 gx_score=gx_score,
             )
 

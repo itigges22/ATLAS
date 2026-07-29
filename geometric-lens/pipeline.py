@@ -486,49 +486,7 @@ async def rag_enhanced_completion(
         )
     result = await forward_to_llama(enhanced_messages, model, tools, max_tokens, **kwargs)
 
-    # ── Verify-Repair-Retry Loop ───────────────────────────────
-    # If verification requested and not streaming, run closed-loop pipeline
     verify_result = None
-    if verify and not stream and isinstance(result, dict):
-        try:
-            from verify_loop import verify_and_repair
-
-            # Extract response text
-            choices = result.get("choices", [])
-            response_text = ""
-            if choices:
-                response_text = choices[0].get("message", {}).get("content", "")
-
-            if response_text:
-                budget = 3
-
-                verify_result = await verify_and_repair(
-                    response_text=response_text,
-                    test_code=test_code,
-                    stdin=stdin,
-                    expected_output=expected_output,
-                    retry_budget=budget,
-                    messages=enhanced_messages,
-                    model=model,
-                    forward_fn=forward_to_llama,
-                    max_tokens=max_tokens,
-                    **kwargs,
-                )
-
-                # If repair succeeded, update the response with the repaired code
-                if verify_result.attempts > 1 and verify_result.final_code:
-                    result["_verify_result"] = verify_result.to_dict()
-                    logger.info(
-                        f"Verify loop: passed={verify_result.passed} "
-                        f"attempts={verify_result.attempts}/{verify_result.max_attempts} "
-                        f"G(x)={verify_result.gx_score:.3f} "
-                        f"latency={verify_result.total_latency_ms:.0f}ms"
-                    )
-                elif verify_result:
-                    result["_verify_result"] = verify_result.to_dict()
-
-        except Exception as e:
-            logger.error(f"Verify loop failed (non-fatal): {e}")
 
     # ── Pattern Cache: Write Path ──────────────────────────────
     # Drive writes off the verify result so we only persist patterns whose
