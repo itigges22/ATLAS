@@ -101,6 +101,9 @@ projects/
 !.env.example
 secrets/
 *secret*
+# The rule above exists to keep credential files out; it must not also
+# swallow the scanner that hunts for them.
+!tests/infrastructure/test_no_committed_secrets.py
 
 # ----- Temporary files -----
 tmp/
