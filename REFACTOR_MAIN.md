@@ -49,7 +49,7 @@ Ordered by value ÷ risk. Each row is one commit, tests green after.
 | A3 | Split `v3-service/main.py` (4018) God-file | → adapters.py, scoring.py, symbols.py, planning.py, pipeline.py, server(main).py | split | med | ✅ done |
 | A4 | Split `tui/model.go` (2866): extract `events.go` | model.go 2866→1745; events.go 1135 | split | med | ✅ done |
 | A5 | **Consolidate the proxy: 33 → 13 files** (direction reversed by owner: too many files; collapse, never split) | main+5 infra fragments; gates.go ×6; detectors.go ×3; context.go ×4; permissions.go ×3; lens.go ×3; grammar→tools.go | merge | med | ✅ done |
-| A5b | Decompose `runAgentLoop` (1421-line fn) IN PLACE — `runState` struct + turn extraction + gate dedup; no new files | agent.go internals only | in-file | high | ☐ todo |
+| A5b | Decompose `runAgentLoop` IN PLACE — `runState` + gate dedup + bounce collapse; no new files | agent.go internals only | in-file | high | ✅ stage 1 |
 
 Notes:
 - **A1** is textbook accidental fragmentation: `display.py` already owns the colors, yet 6
@@ -86,9 +86,16 @@ Sub-plan authored before starting.
 
 ---
 
-## Category B — blocked on the retrieval/routing/pattern-cache keep-or-cut decision
+## Category B — UNBLOCKED (owner decisions, 2026-08-05)
 
-Do not touch until the decision is made. Listed so the decision is concrete.
+1. **Retrieval/routing stack: CUT, permanently.** Component-by-component commits,
+   owner sign-off before each push.
+2. **Pattern cache: WIRE A READER.** Type+recency matching feeding the agent as
+   context; the BM25/indexer stack is not needed for it and dies with the cut.
+3. **Behavior-affecting collapse (detector unification, word-list vs evidence
+   gates): IN SCOPE**, validated by a real dogfood session before merge.
+
+Original decision table kept for reference:
 
 | Item | Files | If KEEP | If CUT |
 |---|---|---|---|

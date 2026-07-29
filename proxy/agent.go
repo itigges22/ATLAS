@@ -111,6 +111,116 @@ type sessionCancel struct {
 // runAgentLoop runs the agent loop for a single user request.
 // The model emits tool calls (constrained by grammar), the proxy executes them,
 // and returns results. Continues until the model emits "done" or max turns hit.
+// maxGateBounces caps the shared budget across the verification,
+// done-without-action, expected-output, and claim-check gates. Mirrors
+// the parse-error cap: three bounces of a `done` is a stuck loop, so
+// the fourth done is accepted rather than bounced forever.
+const maxGateBounces = 3
+
+// runState is the per-run evidence the completion-honesty gates decide
+// on, plus the shared bounce shape. One struct so the gates see the
+// same facts on the done and text exits instead of two hand-copied
+// gate blocks (which is exactly how the text exit shipped ungated once).
+type runState struct {
+	turn     int    // current loop turn, for tool-call IDs and logs
+	response string // raw model output this turn, echoed on a bounce
+
+	// Set when a write/edit/structural_edit/delete landed in this run.
+	madeProductiveChange bool
+	// Set when a read-only tool succeeds — the model opened the project
+	// to answer this message. Distinguishes a request the model treated
+	// as work from one it answered conversationally, without consulting
+	// a vocabulary list. See wantsStateChange.
+	inspectedWorkspace bool
+	// HARNESS-12: files the prompt explicitly asks the model to produce
+	// ("save your solution in X"). Checked against disk before `done` is
+	// allowed — a model can satisfy the generic action gate with a
+	// PARTIAL artifact or by exploring without ever committing the named
+	// output (TB2 2026-07-19). Computed once from the prompt.
+	expectedOutputs []string
+	// The expected-output gate fires at most ONCE per session: a named
+	// deliverable might be PRODUCED AT RUNTIME by the model's code (not
+	// authored), so repeatedly bouncing a correct done would steer the
+	// model to fabricate a stand-in (#147 review finding #8).
+	outputGateUsed bool
+	// Set when a verification command (pytest, curl, go test, ...)
+	// completed successfully in any turn of this run. One success per
+	// loop is enough — the model can iterate without re-verifying every
+	// turn. Also softens the consecutive-errors exit: post-write
+	// run_command failures are usually verification noise, not "stuck
+	// loop" (PC-025 Sub-finding B).
+	verifiedThisLoop bool
+	// Set when a verification command RAN AND FAILED and none has
+	// succeeded since. Observed session state, not a guess about the
+	// request: once a test has gone red in this loop, declaring done is
+	// dishonest regardless of how the user phrased the ask. Closes the
+	// case the message-shape check cannot see (2026-07-21 dogfooding:
+	// the model watched pytest fail 5/5 three times, diagnosed the fix
+	// in prose, and exited through a bare text narration).
+	sawFailedVerification bool
+	// Whether the user prompt is a repair/fix request. Computed once —
+	// the user message doesn't change mid-loop.
+	userWantsVerification bool
+	// Bounces spent across all four gates this run.
+	gateBounces int
+}
+
+// bounce echoes the model's output plus a synthetic tool rejection into
+// the conversation, so the next LLM call sees exactly why the attempt
+// was refused. The one shape every gate and guard refusal shares.
+func (s *runState) bounce(ctx *AgentContext, toolName, rejection string) {
+	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: s.response})
+	ctx.Messages = append(ctx.Messages, AgentMessage{
+		Role:       "tool",
+		Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
+		ToolCallID: fmt.Sprintf("call_%d", s.turn),
+		ToolName:   toolName,
+	})
+}
+
+// exitGates runs the completion-honesty gates a done or text exit must
+// clear, in order: verification, done-without-action, expected-output,
+// claim-check. claimText is the completion claim to check structurally
+// (the done summary, or the text narration — on a text exit the
+// narration IS the claim). Returns the failing gate's tool name and
+// rejection, or "" to let the exit pass. Gates run in EVERY permission
+// mode: yolo means "don't ask permission for destructive calls", not
+// "skip completion checks". Bounces stay capped by maxGateBounces, so
+// unattended runs cannot loop on a gate.
+func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (string, string) {
+	if s.gateBounces >= maxGateBounces {
+		return "", ""
+	}
+	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop {
+		s.gateBounces++
+		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
+			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces, maxGateBounces)
+		return "verification_gate", verificationRejectionMessage(s.sawFailedVerification)
+	}
+	if wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) && !s.madeProductiveChange {
+		s.gateBounces++
+		log.Printf("[agent] done-without-action gate: bouncing exit at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
+			s.turn, truncateStr(userMessage, 60), s.gateBounces, maxGateBounces)
+		return "action_gate", actionWithoutProductiveChangeMessage(userMessage)
+	}
+	if missing := missingExpectedOutputs(ctx, s.expectedOutputs); len(missing) > 0 && !s.outputGateUsed {
+		s.gateBounces++
+		s.outputGateUsed = true // fire once — see field doc (#147 review #8)
+		log.Printf("[agent] expected-output gate: bouncing exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
+			s.turn, logPaths(missing), s.gateBounces, maxGateBounces)
+		return "output_gate", expectedOutputMissingMessage(missing)
+	}
+	if claimsUniversal(claimText) || promptIsMultiIssue(userMessage) {
+		if gap := verifyCompletionClaims(ctx.WorkingDir, claimText); gap != "" {
+			s.gateBounces++
+			log.Printf("[agent] claim-check gate: bouncing exit at turn %d (bounce %d/%d) — %q",
+				s.turn, s.gateBounces, maxGateBounces, truncateStr(gap, 200))
+			return "claim_check", gap
+		}
+	}
+	return "", ""
+}
+
 func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// Emit a stage_start envelope so the TUI's pipeline pane shows
 	// the agent is working. Mirrors the typed-event broker (PC-061).
@@ -257,70 +367,18 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// true runaway without regressing legitimate iteration.
 	writeCountByPath := map[string]int{}
 	const runawayWriteThreshold = 20
-	madeProductiveChange := false // Set when a write/edit/delete succeeds in this run.
-
-	// Set when a read-only tool succeeds — the model opened the project to
-	// answer this message. Distinguishes a request the model treated as
-	// work from one it answered conversationally, without consulting a
-	// vocabulary list. See wantsStateChange.
-	inspectedWorkspace := false
-	// HARNESS-12: files the prompt explicitly asks the model to produce
-	// ("save your solution in X", "write the output to Y"). Checked
-	// against disk before `done` is allowed — a model can satisfy the
-	// generic action gate with a PARTIAL artifact (a .proto but not the
-	// server) or by exploring without ever committing the named output
-	// (TB2 2026-07-19: query-optimize ran 18 queries, never wrote sol.sql;
-	// kv-store wrote the proto, never the server; merge-diff looped
-	// without committing). Computed once from the prompt.
-	expectedOutputs := expectedOutputPaths(userMessage)
+	// Exit-gate evidence + the shared bounce shape live on runState (see
+	// its field docs); the remaining counters are loop-local.
+	st := &runState{
+		expectedOutputs:       expectedOutputPaths(userMessage),
+		userWantsVerification: isFixIntentMessage(userMessage),
+	}
 	// One-shot: when a loop-stop is about to fire but the task's named
 	// deliverable was never written, steer toward it once instead of
 	// stopping (many hard tasks loop on run_command exploration and
 	// hard-stop without ever reaching the done/text exit where the
 	// expected-output gate lives — TB2 sqlite/merge-diff).
 	outputRescueUsed := false
-	// The expected-output done/text gate fires at most ONCE per session:
-	// a named deliverable might be PRODUCED AT RUNTIME by the model's code
-	// (not authored), so repeatedly bouncing a correct done would steer the
-	// model to fabricate a stand-in (#147 review finding #8). One reminder
-	// keeps the "did you forget the deliverable?" value without the loop.
-	outputGateUsed := false
-	// Used to soften the consecutiveErrors exit: post-write run_command failures
-	// are usually verification noise, not "stuck loop" — see PC-025 Sub-finding B.
-	verifiedThisLoop := false // Set when a verification command (pytest, curl,
-	// python script, go test, ...) completes successfully in any turn of this
-	// run. Used by the fix-intent gate before `done` is allowed to pass.
-	// One successful verification per loop is enough — the model can iterate
-	// inside the loop without re-verifying every turn.
-
-	// Set when a verification command RAN AND FAILED and none has succeeded
-	// since. This is observed session state, not a guess about the request:
-	// once a test or build has actually gone red in this loop, the run has
-	// objective evidence something is broken, and declaring done is
-	// dishonest regardless of how the user phrased the ask.
-	//
-	// It closes the case the message-shape check below structurally cannot
-	// see (2026-07-21 dogfooding): asked to "build an API with a couple
-	// tests", the model wrote a test file, ran pytest for real, watched it
-	// fail 5/5 three times, diagnosed the exact fix in prose, then exited
-	// through a bare text narration without applying it. The prompt held no
-	// repair-shaped word, so userWantsVerification was false and no gate
-	// ran. Widening the fix-intent word list to include "test" would only
-	// have covered prompts that happen to say "test"; the model can
-	// introduce a failing test the user never mentioned.
-	sawFailedVerification := false
-
-	// Whether the user prompt is a repair/fix request. Computed once because
-	// the user message doesn't change mid-loop. Drives the verification gate
-	// together with sawFailedVerification above.
-	userWantsVerification := isFixIntentMessage(userMessage)
-
-	// Shared cap across the verification, done-without-action, and
-	// claim-check gates. Mirrors the parse-error cap: three bounces of a
-	// `done` is a stuck loop, so the fourth done is accepted rather than
-	// bounced forever.
-	gateBounces := 0
-	const maxGateBounces = 3
 
 	// PC-200 — flag whether we've already injected the
 	// approaching-budget hint, so we don't fire it every turn after
@@ -328,6 +386,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	budgetHintFired := false
 
 	for turn := 0; ctx.MaxTurns <= 0 || turn < ctx.MaxTurns; turn++ {
+		st.turn = turn
 		// PC-200 budget hint — only relevant when there IS a turn cap.
 		// May 10 2026: T1/T2/T3 default to uncapped (ctx.MaxTurns == 0),
 		// so the hint is mostly dormant unless an operator explicitly
@@ -433,6 +492,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			return fmt.Errorf("LLM call failed on turn %d: %w", turn, err)
 		}
 		ctx.TotalTokens += tokens
+		st.response = response
 		ctx.Stream("llm_call_end", map[string]interface{}{
 			"turn":         turn,
 			"tokens":       tokens,
@@ -513,235 +573,34 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 		switch parsed.Type {
 		case "done":
-			// Verification gate. When the user asked to "fix" / "verify" /
-			// "render" something and the model is declaring done without
-			// having ever run a verification command (pytest, curl, python
-			// app.py, go test, ...), bounce the done with a directive.
-			// Reactive form of Roo Code's AttemptCompletionTool — we don't
-			// require a structured verification field, just evidence in the
-			// loop that the agent ran something that exits non-zero on
-			// failure.
-			// Honesty gates run in EVERY permission mode. Yolo means "don't
-			// ask permission for destructive calls," not "skip completion
-			// checks" — the 2026-07-18 mini-bench ran unattended in yolo and
-			// shipped an ignored-red pytest done and a zero-write completion
-			// claim that these gates exist to bounce. Bounces stay capped by
-			// maxGateBounces, so unattended runs cannot loop on a gate.
-			if (userWantsVerification || sawFailedVerification) && !verifiedThisLoop && gateBounces < maxGateBounces {
-				gateBounces++
-				rejection := verificationRejectionMessage(sawFailedVerification)
-				log.Printf("[agent] verification gate: bouncing done at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
-					turn, gateTrigger(userWantsVerification, sawFailedVerification), gateBounces, maxGateBounces)
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "assistant",
-					Content: response,
-				})
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-					ToolCallID: fmt.Sprintf("call_%d", turn),
-					ToolName:   "verification_gate",
-				})
+			// The four honesty gates (see runState.exitGates): a done that
+			// the run's own evidence contradicts is bounced, capped.
+			if gate, rejection := st.exitGates(ctx, userMessage, parsed.Summary); gate != "" {
+				st.bounce(ctx, gate, rejection)
 				continue
-			}
-
-			// Done-without-action gate. May 10 2026 false-success: model
-			// spent 6 turns starting servers + curling and never actually
-			// edited the file the user asked to rewrite, then declared
-			// done. Existing fix-intent gate didn't catch it because
-			// "rewrite" is action-intent, not fix-intent. This gate
-			// bounces `done` when the user prompt clearly asks for a
-			// state change AND no productive write/edit/structural_edit/delete
-			// landed in the loop. Distinct from verification gate:
-			// - verification gate: fix prompt + no run_command verify → bounce
-			// - this gate: action prompt + no successful edit tool → bounce
-			// Both can fire on the same prompt (e.g. "rewrite X and verify").
-			if wantsStateChange(userMessage, ctx.Tier, inspectedWorkspace) && !madeProductiveChange && gateBounces < maxGateBounces {
-				gateBounces++
-				rejection := actionWithoutProductiveChangeMessage(userMessage)
-				log.Printf("[agent] done-without-action gate: bouncing done at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
-					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "assistant",
-					Content: response,
-				})
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-					ToolCallID: fmt.Sprintf("call_%d", turn),
-					ToolName:   "action_gate",
-				})
-				continue
-			}
-
-			// HARNESS-12: expected-output gate. Distinct from the action
-			// gate — a partial artifact or pure exploration can satisfy
-			// "made a productive change" while the task's NAMED deliverable
-			// is still missing. Check it against disk (any creation method
-			// counts); bounce naming the missing file so the model commits
-			// its answer instead of finishing empty-handed.
-			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputGateUsed && gateBounces < maxGateBounces {
-				gateBounces++
-				outputGateUsed = true // fire once — see decl (#147 review #8)
-				rejection := expectedOutputMissingMessage(missing)
-				log.Printf("[agent] expected-output gate: bouncing done at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
-					turn, logPaths(missing), gateBounces, maxGateBounces)
-				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-					ToolCallID: fmt.Sprintf("call_%d", turn),
-					ToolName:   "output_gate",
-				})
-				continue
-			}
-
-			// PC-197 — completion-claim verification. The model's done
-			// summary often contains universals ("all routes work",
-			// "fixed all bugs", "verified everything") that we can
-			// structurally check against the workspace. The May 2026
-			// flask run had the model claim "All routes are functioning
-			// properly" while only 3 of 7 templates existed. Scan the
-			// summary for claim language; if present, run cheap structural
-			// checks (template references, view references, import
-			// targets) and bounce if there's a concrete gap.
-			//
-			// Quiet pass when summary makes no universal claim (model
-			// said something like "added /admin route" — no claim about
-			// the rest of the app) or when there are no gaps. Bounce
-			// only when both fire.
-			// PC-199 — fire claim-check ALSO when the user prompt was
-			// multi-issue ("LOTS of issues", "fix all the bugs",
-			// plurals like "routes", "tests", "endpoints"). The model's
-			// failure mode there is a NARROW done summary ("fixed the
-			// product route") that bypasses the universal-claim wording
-			// gate. By treating the prompt as the trigger condition,
-			// we catch "fixed 1 of N" cases regardless of how the
-			// model worded the summary. Structural check is the same.
-			shouldCheck := claimsUniversal(parsed.Summary) || promptIsMultiIssue(userMessage)
-			if shouldCheck && gateBounces < maxGateBounces {
-				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Summary); gap != "" {
-					gateBounces++
-					log.Printf("[agent] claim-check gate: bouncing done at turn %d (bounce %d/%d) — %q",
-						turn, gateBounces, maxGateBounces, truncateStr(gap, 200))
-					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role:    "assistant",
-						Content: response,
-					})
-					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role:       "tool",
-						Content:    fmt.Sprintf(`{"success":false,"error":%q}`, gap),
-						ToolCallID: fmt.Sprintf("call_%d", turn),
-						ToolName:   "claim_check",
-					})
-					continue
-				}
 			}
 			ctx.Stream("done", map[string]string{"summary": parsed.Summary})
 			return nil
 
 		case "text":
 			// `text` is the agent's user-facing chat answer. End the turn
-			// here — the user gets one reply per message they send, and
-			// can follow up to continue. Looping after text caused two
-			// failures in earlier revisions:
-			//   1. trailing role=assistant tripped llama-server's
-			//      "prefill incompatible with enable_thinking" 400, and
-			//   2. with a "continue" nudge, the model would rabbit-hole
-			//      into nonsense tool_calls on conversational input
-			//      ("hi" → list_directory → run_command → 3 fails → bail).
-			// If the model wants to narrate before tool work, it should
-			// emit tool_call directly with the narration in the args or
-			// roll narration into the done.summary at the end.
+			// here — the user gets one reply per message they send, and can
+			// follow up to continue. Looping after text caused two failures
+			// in earlier revisions: a trailing role=assistant tripped
+			// llama-server's "prefill incompatible with enable_thinking"
+			// 400, and with a "continue" nudge the model would rabbit-hole
+			// into nonsense tool_calls on conversational input.
 			//
-			// EXCEPT: text is an UNGATED exit, and on action-intent
-			// prompts models abandon work through it — observed live
-			// (TB2 round 2): "I will now proceed to sanitize the
-			// credentials in ray_cluster.yaml" as a text response, then
-			// session over, zero edits. Every completion gate lives in
-			// the done branch, so narrating-then-quitting bypassed them
-			// all. Apply the done-without-action gate here too: same
-			// condition, same bounce shape (assistant + tool-rejection
-			// pair, so no bare trailing assistant message for prefill
-			// to trip on). Chat replies still exit here: wantsStateChange
-			// requires either action-intent wording or that the model
-			// opened the project on a non-conversational message, and a
-			// chat reply does neither.
-			//
-			// Verification gate on the text exit too (#147 review finding
-			// #3): a fix/verify-intent prompt must not be abandoned via a
-			// `text` narration ("I fixed and verified it") without a
-			// verification command having run — the same bounce the done
-			// branch applies. Without this, narrate-then-quit reported an
-			// unverified, possibly still-red fix as complete.
-			if (userWantsVerification || sawFailedVerification) && !verifiedThisLoop && gateBounces < maxGateBounces {
-				gateBounces++
-				rejection := verificationRejectionMessage(sawFailedVerification)
-				log.Printf("[agent] text-exit verification gate: bouncing text at turn %d (trigger=%s, no verification this loop, bounce %d/%d)",
-					turn, gateTrigger(userWantsVerification, sawFailedVerification), gateBounces, maxGateBounces)
-				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-					ToolCallID: fmt.Sprintf("call_%d", turn),
-					ToolName:   "verification_gate",
-				})
+			// text is otherwise an UNGATED exit, and on action-intent
+			// prompts models abandon work through it ("I will now proceed
+			// to sanitize the credentials" — then session over, zero
+			// edits; TB2 round 2). So the same gates as done run here,
+			// with the narration as the completion claim. Chat replies
+			// still exit cleanly: wantsStateChange requires action-intent
+			// wording or an opened project, and a chat reply has neither.
+			if gate, rejection := st.exitGates(ctx, userMessage, parsed.Content); gate != "" {
+				st.bounce(ctx, gate, rejection)
 				continue
-			}
-			if wantsStateChange(userMessage, ctx.Tier, inspectedWorkspace) && !madeProductiveChange && gateBounces < maxGateBounces {
-				gateBounces++
-				rejection := actionWithoutProductiveChangeMessage(userMessage)
-				log.Printf("[agent] text-exit action gate: bouncing text at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
-					turn, truncateStr(userMessage, 60), gateBounces, maxGateBounces)
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "assistant",
-					Content: response,
-				})
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-					ToolCallID: fmt.Sprintf("call_%d", turn),
-					ToolName:   "action_gate",
-				})
-				continue
-			}
-			// HARNESS-12 on the text-exit path too: a partial artifact
-			// satisfies the action gate above (madeProductiveChange), but
-			// the named deliverable may still be missing (TB2: kv-store
-			// wrote the proto, narrated, and quit without the server).
-			if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputGateUsed && gateBounces < maxGateBounces {
-				gateBounces++
-				outputGateUsed = true // fire once — see decl (#147 review #8)
-				rejection := expectedOutputMissingMessage(missing)
-				log.Printf("[agent] expected-output gate: bouncing text-exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
-					turn, logPaths(missing), gateBounces, maxGateBounces)
-				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-					ToolCallID: fmt.Sprintf("call_%d", turn),
-					ToolName:   "output_gate",
-				})
-				continue
-			}
-			// Completion-claim check on the text exit too (#147 review
-			// finding #3). The narration IS the completion claim here
-			// ("I fixed all the routes"), so scan parsed.Content — the
-			// same structural gap-check the done branch runs on the summary.
-			if (claimsUniversal(parsed.Content) || promptIsMultiIssue(userMessage)) && gateBounces < maxGateBounces {
-				if gap := verifyCompletionClaims(ctx.WorkingDir, parsed.Content); gap != "" {
-					gateBounces++
-					log.Printf("[agent] text-exit claim-check: bouncing text at turn %d (bounce %d/%d) — %q",
-						turn, gateBounces, maxGateBounces, truncateStr(gap, 200))
-					ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
-					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role:       "tool",
-						Content:    fmt.Sprintf(`{"success":false,"error":%q}`, gap),
-						ToolCallID: fmt.Sprintf("call_%d", turn),
-						ToolName:   "claim_check",
-					})
-					continue
-				}
 			}
 			ctx.Stream("text", map[string]string{"content": parsed.Content})
 			ctx.Stream("done", map[string]string{"summary": ""})
@@ -775,6 +634,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					ctx.Stream("permission_denied", map[string]string{
 						"tool": parsed.Name,
 					})
+					// Bespoke bounce: the permission flow keys its tool-call
+					// ID via permCallID so the TUI can match the decision.
 					ctx.Messages = append(ctx.Messages, AgentMessage{
 						Role:    "assistant",
 						Content: response,
@@ -796,16 +657,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				var testParse map[string]interface{}
 				if err := json.Unmarshal(parsed.Args, &testParse); err != nil {
 					log.Printf("[agent] truncated args detected for %s at turn %d", parsed.Name, turn)
-					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role:    "assistant",
-						Content: response,
-					})
-					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role:       "tool",
-						Content:    `{"success":false,"error":"Your output was truncated — the content is too long for a single tool call. For existing files, use edit_file with small targeted changes (replace specific functions or sections). For new files, keep them under 100 lines per write_file call."}`,
-						ToolCallID: fmt.Sprintf("call_%d", turn),
-						ToolName:   parsed.Name,
-					})
+					st.bounce(ctx, parsed.Name, "Your output was truncated — the content is too long for a single tool call. For existing files, use edit_file with small targeted changes (replace specific functions or sections). For new files, keep them under 100 lines per write_file call.")
 					consecutiveErrors++
 					if consecutiveErrors >= 3 {
 						ctx.Stream("done", map[string]string{"summary": "Stopped: content too large for tool calls. Try requesting smaller, targeted changes."})
@@ -818,13 +670,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// Enforce the workspace boundary before any pre-execution gate reads
 			// a path. executeToolCall repeats this check for parallel dispatch.
 			if rejection := validateToolWorkspacePaths(parsed.Name, parsed.Args, ctx); rejection != "" {
-				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: response})
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-					ToolCallID: fmt.Sprintf("call_%d", turn),
-					ToolName:   parsed.Name,
-				})
+				st.bounce(ctx, parsed.Name, rejection)
 				consecutiveErrors++
 				continue
 			}
@@ -888,16 +734,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								wfInput.Path, existingLines, structuralHint)
 							// %q quotes + escapes the path (go/log-injection).
 							log.Printf("[agent] rejecting write_file for existing %q (%d lines)", wfInput.Path, existingLines)
-							ctx.Messages = append(ctx.Messages, AgentMessage{
-								Role:    "assistant",
-								Content: response,
-							})
-							ctx.Messages = append(ctx.Messages, AgentMessage{
-								Role:       "tool",
-								Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-								ToolCallID: fmt.Sprintf("call_%d", turn),
-								ToolName:   "write_file",
-							})
+							st.bounce(ctx, "write_file", rejection)
 							continue
 						}
 						if existingLines > 5 {
@@ -931,16 +768,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// reason string (go/log-injection).
 						log.Printf("[agent] rejecting run_command %q: %q",
 							truncateStr(rc.Command, 80), rejection)
-						ctx.Messages = append(ctx.Messages, AgentMessage{
-							Role:    "assistant",
-							Content: response,
-						})
-						ctx.Messages = append(ctx.Messages, AgentMessage{
-							Role:       "tool",
-							Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-							ToolCallID: fmt.Sprintf("call_%d", turn),
-							ToolName:   "run_command",
-						})
+						st.bounce(ctx, "run_command", rejection)
 						continue
 					}
 				}
@@ -961,16 +789,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					if rejection := validateRunCommand(rb.Command, ctx.WorkingDir); rejection != "" {
 						log.Printf("[agent] rejecting run_background %q: %q",
 							truncateStr(rb.Command, 80), rejection)
-						ctx.Messages = append(ctx.Messages, AgentMessage{
-							Role:    "assistant",
-							Content: response,
-						})
-						ctx.Messages = append(ctx.Messages, AgentMessage{
-							Role:       "tool",
-							Content:    fmt.Sprintf(`{"success":false,"error":%q}`, rejection),
-							ToolCallID: fmt.Sprintf("call_%d", turn),
-							ToolName:   "run_background",
-						})
+						st.bounce(ctx, "run_background", rejection)
 						continue
 					}
 				}
@@ -1003,7 +822,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/structural_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
 				}
 				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
-				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
 				ctx.Stream("agent_repeat_intervention", map[string]interface{}{
 					"turn":   turn,
 					"tool":   parsed.Name,
@@ -1020,7 +838,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// repeated anyway (genuinely stuck).
 				//
 				// The old code hard-stopped on the FIRST detection whenever
-				// madeProductiveChange was set ("work landed, model spinning
+				// st.madeProductiveChange was set ("work landed, model spinning
 				// on verification"). That mistook legitimate iteration for a
 				// loop: TB2 2026-07-19 showed models one nudge from finishing
 				// — regex-chess repeating a verify command that itself had a
@@ -1033,13 +851,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					// isn't on disk, the model is looping WITHOUT having
 					// committed its answer — steer toward the file once and
 					// keep going rather than hard-stopping empty-handed.
-					if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputRescueUsed {
+					if missing := missingExpectedOutputs(ctx, st.expectedOutputs); len(missing) > 0 && !outputRescueUsed {
 						outputRescueUsed = true
 						repeatDetections = 0
 						pendingRepeatCorrective = expectedOutputMissingMessage(missing)
 						log.Printf("[agent] repeat loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 					} else {
-						if madeProductiveChange {
+						if st.madeProductiveChange {
 							log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
 							ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
 						} else {
@@ -1195,7 +1013,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// productive-change tracking too.
 			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" ||
 				parsed.Name == "structural_edit" || parsed.Name == "delete_file") {
-				madeProductiveChange = true
+				st.madeProductiveChange = true
 			}
 
 			// Track verification — a successful run_command of a build /
@@ -1206,14 +1024,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				var rc RunCommandInput
 				if json.Unmarshal(parsed.Args, &rc) == nil && isVerificationCommand(rc.Command) {
 					if result.Success {
-						verifiedThisLoop = true
-						sawFailedVerification = false
+						st.verifiedThisLoop = true
+						st.sawFailedVerification = false
 						log.Printf("[agent] verification recorded: turn=%d cmd=%q",
 							turn, truncateStr(rc.Command, 60))
 					} else {
 						// Red test/build. Latches the verification gate on
 						// for this loop until something verifies green.
-						sawFailedVerification = true
+						st.sawFailedVerification = true
 						log.Printf("[agent] verification FAILED: turn=%d cmd=%q — done is gated until it passes",
 							turn, truncateStr(rc.Command, 60))
 					}
@@ -1289,7 +1107,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// a rolling window so if subsequent fails DO
 						// collapse onto one path, we still catch it.
 						consecutiveErrors = 0
-					} else if missing := missingExpectedOutputs(ctx, expectedOutputs); len(missing) > 0 && !outputRescueUsed {
+					} else if missing := missingExpectedOutputs(ctx, st.expectedOutputs); len(missing) > 0 && !outputRescueUsed {
 						// Output-rescue (same as the repeat breaker): looping
 						// on failures without ever committing the named
 						// deliverable — steer toward it once before stopping.
@@ -1300,8 +1118,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						log.Printf("[agent] error loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 					} else {
 						log.Printf("[agent] breaking error loop: %d consecutive failures on the same path %q at turn %d (productive=%v)",
-							consecutiveErrors, ctx.RecentFailurePaths[0], turn, madeProductiveChange)
-						if madeProductiveChange {
+							consecutiveErrors, ctx.RecentFailurePaths[0], turn, st.madeProductiveChange)
+						if st.madeProductiveChange {
 							ctx.Stream("done", map[string]string{"summary": "Wrote your changes to disk; couldn't verify them automatically (the verification commands failed). Run them yourself to confirm — they're on disk."})
 						} else {
 							ctx.Stream("done", map[string]string{"summary": "Stopped after 3 tool failures on the same target with no successful changes. Common causes: the file you referenced isn't in the workspace, an empty path argument was passed, or a regex was malformed. Check the per-turn errors above, then try a more specific request (e.g. \"fix snake_game.py at line 95 — the curses bounds are wrong\")."})
@@ -1334,7 +1152,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					// done-without-action gate below to tell "remove the
 					// debug logging" (opens the file, writes nothing) apart
 					// from "thanks, that looks great" (no tool calls at all).
-					inspectedWorkspace = true
+					st.inspectedWorkspace = true
 				}
 			} else {
 				consecutiveReads = 0
