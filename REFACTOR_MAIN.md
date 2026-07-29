@@ -13,8 +13,9 @@ identical (the test suites are the invariant). Docs updated LAST, only to match 
 5. Names must be true; note dead code when found but act on it only within its component's step.
 
 **Baseline invariant (must stay green), captured 2026-07-29:**
-python `tests/` **1731 passed, 6 skipped**; lens **63 passed**; proxy `go test ./...` **ok**;
-tui `go build ./...` **ok**. Every step must reproduce this.
+python `tests/` **1565 passed, 6 skipped** (cuts removed their tests: was 1731);
+lens **64**; contracts **60**; proxy+tui go build/vet/test **ok**. Every step must
+reproduce this (baseline re-pinned 2026-08-05 after the cut waves).
 
 ---
 
@@ -94,14 +95,14 @@ Sub-plan authored before starting.
    context; the BM25/indexer stack is not needed for it and dies with the cut.
 3. **Behavior-affecting collapse (detector unification, word-list vs evidence
    gates): IN SCOPE**, validated by a real dogfood session before merge.
-4. **RPG: CUT EVERYWHERE** (owner, 2026-08-05) — unshipped in the v3 image;
+4. **RPG: CUT EVERYWHERE** ✅ abdf085 (−5,319) — unshipped in the v3 image;
    remove rpg.py/rpg_eval.py/wavelet/ + proxy rpg.go + the tools.go call
    sites + types RPG fields + the 16MB SSE sizing + TUI handlers + knob
    surface (schema keeps a deprecated= entry). Issue #148 stays as record.
-5. **V2/TB2 bench subgraph: DELETE** (~1,870).
-6. **Trainer scripts: DELETE after verifying `atlas lens build --from-results`
-   covers the retrain_lens_from_results.py flow** — then update the
-   per-model-candidate-build memory.
+5. **V2/TB2 bench subgraph: DELETE** ✅ 60059de (−1,872).
+6. **Trainer scripts: DELETED** ✅ 2b6c7bb (−1,559) — coverage gap (provenance
+   manifest) root-fixed first: `atlas lens build` now writes provenance.json
+   into every activated bundle; memory updated.
 7. **LTM tier: DELETE** — no scheduler exists, promotion unreachable in prod;
    consolidator goes with it (its whole job); reader keeps co-occurrence
    expansion only if something still writes the graph at pattern-write time.
@@ -249,13 +250,13 @@ Status legend: ✅ done · 🔜 queued · ⏸ owner decision · ❌ rejected (do
 | B18 | lens: `evaluate_gx` (49), `extract_embeddings_batch`, `get_embedding_contract`, `save/load_models` aliases, Replay/EWC Config dataclasses + stats(), false telemetry/atlas.conf docstrings | DELETE/FIX | 🔜 |
 | B19 | `provenance.py` (151) — nothing writes or reads it; docstring claims CLI surfaces it (false) | DELETE or wire | ⏸ owner |
 | B20 | `get_category_surprise` + write-only EMA (~15) | DELETE | 🔜 |
-| B21 | `/v1/patterns/write` twin of `/internal/patterns/write` | DELETE /v1 twin | 🔜 (cut c6) |
+| B21 | `/v1/patterns/write` twin of `/internal/patterns/write` | DELETE /v1 twin | ✅ d985885 |
 | B22 | `/internal/lens/stats` dup of /health payload | DELETE | 🔜 |
-| B23 | cache flush/consolidate routes zero-caller; **no scheduler → LTM tier unreachable in prod** | ⏸ owner: schedule or delete LTM | ⏸ |
+| B23 | cache flush/consolidate routes zero-caller; **no scheduler → LTM tier unreachable in prod** | DELETE (decided) | ✅ 733e6a8 (consolidator + LTM tier gone) |
 | B24 | legacy `build_cvector_prompts.py` (141) superseded by build_steering_vector | DELETE | 🔜 |
 | B25 | `render_pos`/`render_neg` identical wrappers | COLLAPSE | 🔜 |
 | B26 | `ast_edit_steering.gguf` filename kept post-rename | **❌ REJECTED as debris** — SHA-pinned by registry, documented in CHANGELOG | ❌ |
-| B27 | retrieval cut (whole-file list, main.py/pipeline.py regions, sqlite tables, Dockerfile/compose/docs collateral; ≈4,294 net) with 6-commit sequence; hazard: reader rewrite (c4) must land WITH pattern_matcher deletion | CUT | commits 1-3 🔜→in flight; c4 = Phase 3b design (§above); c5-c6 queued |
+| B27 | retrieval cut (whole-file list, main.py/pipeline.py regions, sqlite tables, Dockerfile/compose/docs collateral; ≈4,294 net) with 6-commit sequence; hazard: reader rewrite (c4) must land WITH pattern_matcher deletion | CUT | ✅ all six commits done (c4 733e6a8 reader, c5 b48eca7, c6 d985885 + cc4e717 reqs) |
 | B28 | `sandbox_analysis.py` looks cuttable but has live caller (client.py /internal/sandbox/analyze) | **KEEP** | ❌ do not cut |
 | B29 | lens dead knobs: CORS_ORIGINS, ROUTING_ENABLED, CONFIG_PATH, API_KEYS_PATH, SANDBOX_URL prefix mismatch, `_energy_disabled_logged` | DIE-WITH-CUT | 🔜 (c5/c6) |
 | B30 | `ATLAS_ALLOW_PICKLE_GX` legit but undeclared in schema | FIX | 🔜 |
@@ -309,7 +310,21 @@ recommendation before any action.
 
 | # | Question | First evidence | Status |
 |---|---|---|---|
-| E1 | **repl.py vs tui/** — two interactive chat frontends. repl.py:1 calls itself "the main ATLAS interface"; tui.py:3 says it replaced the Aider chat UI; tui.py imports repl for proxy-launch + `_stop_local_proxy`. | Split repl.py into (a) proxy-runtime lifecycle (live, TUI depends on it → own module) and (b) the 800-line fallback REPL chat loop — cut candidate if the TUI is the product surface. Decide what bare `atlas` should launch. | 🔎 analyze |
+| E1 | **repl.py vs tui/** — two interactive chat frontends. repl.py:1 calls itself "the main ATLAS interface"; tui.py:3 says it replaced the Aider chat UI; tui.py imports repl for proxy-launch + `_stop_local_proxy`. | **VERDICT (2026-08-05): one chat surface = TUI.** Extract proxy-launch lifecycle to a runtime module (TUI keeps it); delete the REPL chat loop (its features exist as plain commands); bare `atlas` launches the TUI. CLI stays as the non-interactive command surface. | 🔜 queued |
+| E8 | **tui/ still confetti**: 15 files / 7,862 lines. | **Merge map:** auth+consumer→chat (transport); plan→state; files→panes; calibration→commands; debug→main. 15 → 8 files. | 🔜 queued |
+| E9 | **atlas/cli/ nesting** — package contains ONLY cli/, so `atlas/cli/commands/x.py` carries a dead level. | **Flatten `atlas/cli/*` → `atlas/*`** (`atlas.commands.doctor`); pyproject entry point + ~37 files of import rewrites, mechanical. Package name stays `atlas` (pip). | 🔜 queued |
+| E10 | **tui/demo.go = 1,147 lines (15% of the TUI) of self-contained demo mode.** | **KEEP** (owner delegated 2026-08-05): documented `--demo`/`/demo` split-pane base-vs-V3 recording — the proof-of-value tool; cohesive single file. | ❌ keep |
+| E11 | **docs/lang/{ja,ko,zh-CN}** — ×4 maintenance on every doc edit. | **FREEZE** (delegated): docs pass adds a may-lag banner; translations no longer block or accompany code changes; revisit post-1.0. Public-facing translations are not deleted. | ✅ decided |
+| E2b | **Fold direction for the lens↔v3 service merge** (E2, owner: "if it makes sense, do it" — it does). | Preliminary: fold v3's routes INTO the lens's FastAPI app (kills the hand-rolled stdlib V3Handler server, keeps the framework); one Python service, one image, one URL for the proxy; compose loses a service. Final direction + plan measured AFTER cut c4-c6 lands; capstone of the campaign, after dogfood validation of the reader. | 🔜 capstone |
+
+**Delegated micro-decisions (2026-08-05, "do what you think is best"):**
+- A27 error codes: DELETE the six never-emitted constants; shrink AllErrorCodes,
+  the JSON schema enum, and the contract canonical set together (never emitted →
+  no client ever saw them; not a breaking change in practice).
+- A28 EvtMetric: DELETE emission + type across proxy/tui/events.py + schema
+  (emitted once, consumed nowhere).
+- E7/C27 events.py: slim the in-package module to the spec anchor (EVENT_TYPES +
+  envelope shape, ~60 lines); the test-harness functions move under tests/.
 | E2 | **geometric-lens as a separate service** — post-cut it serves only `/health`,`/ready`,`/internal/*` (score-per-step, patterns, sandbox/analyze). Could fold into v3-service: one Python service, one image, one compose entry, one auth story. Cost: v3 image gains torch (~752MB); lens restart currently doesn't kill v3. | Wait for cut c4-c6 to land, then size the real remaining surface. | 🔎 after cut |
 | E3 | **graph/ vs symbols.py** — after the B9-B11 collapses, graph/'s unique value is import-resolution + reachability for `unresolved_calls`/`repair_context`. May fold into symbols.py entirely, deleting the package. | B1/B4-B6 first (dead route + engines), then re-measure. | 🔎 after B-wave |
 | E4 | **sandbox as separate container** | Isolation IS the feature (untrusted code execution). KEEP — recorded so it isn't re-asked. | ❌ keep |
