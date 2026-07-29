@@ -1038,10 +1038,3 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	body := lipgloss.JoinHorizontal(lipgloss.Top, rightCol, filesBox)
 	return lipgloss.JoinVertical(lipgloss.Left, header, body), totalLines
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
