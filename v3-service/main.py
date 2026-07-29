@@ -252,7 +252,6 @@ class V3Handler(BaseHTTPRequestHandler):
                 file_path=file_path,  # PC-048: language-aware smoke check
                 build_command=build_command,
                 working_dir=working_dir or "/workspace",
-                constraints=constraints,  # V3.2: RPG signature veto (issue #120)
             )
         except ClientDisconnected as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
@@ -276,29 +275,6 @@ class V3Handler(BaseHTTPRequestHandler):
             "total_time_ms": result.get("total_time_ms", 0.0),
             "verification_evidence": result.get("verification_evidence", []),
         }
-
-        # V3.2 RPG (issue #120): report which planned signatures the WINNING
-        # code failed to realize, so the proxy's re-plan loop can react (the
-        # signature veto rejects failing candidates mid-pipeline, but the
-        # winner can still drift when every candidate fell short and one was
-        # kept anyway). Flag-gated and conservative — empty unless RPG is on,
-        # constraints carry signatures, and a planned function is genuinely
-        # absent from parseable code.
-        try:
-            from wavelet import rpg_planning_enabled as _rpg_on
-            _rpg_active = _rpg_on()
-        except Exception:
-            _rpg_active = False
-        if _rpg_active and response["code"] and constraints:
-            try:
-                import rpg as _rpgmod
-                planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
-                missing = _rpgmod.missing_planned_signatures(
-                    response["code"], planned_sigs, file_path)
-                if missing:
-                    response["rpg_signature_missing"] = missing
-            except Exception as _e:
-                print(f"  [rpg] drift check skipped: {_e}", flush=True)
 
         final = json.dumps(response)
         try:

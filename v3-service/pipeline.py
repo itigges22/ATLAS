@@ -1,5 +1,5 @@
 """The V3 pipeline orchestrator: probe, candidate generation, sandbox
-verification, the lens/structural/call-graph/RPG vetoes, candidate selection,
+verification, the lens/structural/call-graph vetoes, candidate selection,
 the repair phases, and the /v3/generate problem builder."""
 
 import re
@@ -102,8 +102,7 @@ class V3PipelineService:
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
             file_path: str = "", build_command: str = "",
-            working_dir: str = "/workspace",
-            constraints: List[str] = None) -> Dict[str, Any]:
+            working_dir: str = "/workspace") -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -117,15 +116,10 @@ class V3PipelineService:
             build_command: Optional project build command to run against an
                 ephemeral candidate overlay after syntax/self-tests pass.
             working_dir: Container workspace root used by the sandbox overlay.
-            constraints: raw constraint strings from the request. When the V3.2
-                RPG planner is active (issue #120) these carry the node's planned
-                signatures, used by the RPG signature veto below. Backward
-                compatible — defaults to none, leaving existing callers unchanged.
         """
         start = time.time()
         events = []
         files = files or {}
-        constraints = constraints or []
 
         # PC-048: derive language from the target file's extension. Used
         # only by smoke_compile_check below to pick the right syntax
@@ -633,59 +627,6 @@ class V3PipelineService:
                     cg_kept.append(c)
                 if cg_kept:  # only prune when at least one candidate survives
                     passing = cg_kept
-
-        # ===== RPG SIGNATURE VETO (V3.2, issue #120) =====
-        # When the RPG planner is active, the request constraints carry the
-        # node's planned signatures. Extend the #39-pt-1 veto from "imports
-        # survive" to "the planned interface exists": reject sandbox-passing
-        # candidates that don't define the planned functions. Additive and
-        # conservative — only fires when the flag is on AND constraints carry
-        # planned signatures, and never empties the candidate set (so it can't
-        # do worse than the flat path; a fully-failing set falls through intact
-        # to phase-3 repair).
-        if passing and constraints:
-            try:
-                from wavelet import rpg_planning_enabled as _rpg_on
-                _rpg_active = _rpg_on()
-            except Exception:
-                _rpg_active = False
-            if _rpg_active:
-                try:
-                    import rpg as _rpgmod
-                    planned_sigs = _rpgmod.planned_signatures_from_constraints(constraints)
-                except Exception:
-                    planned_sigs = []
-                if planned_sigs:
-                    sig_kept = []
-                    vetoed = []  # (candidate, missing) — emitted only if the prune applies
-                    for c in passing:
-                        # Guarded per-candidate like the call-graph veto: an
-                        # unexpected parser error must skip the veto for that
-                        # candidate, not fail the whole /v3/generate request.
-                        try:
-                            missing = _rpgmod.missing_planned_signatures(
-                                c.get("code", ""), planned_sigs, file_path)
-                        except Exception as ve:
-                            print(f"  [rpg] signature check failed on cand "
-                                  f"{c.get('index')}: {ve} — keeping candidate",
-                                  flush=True)
-                            missing = []
-                        if missing:
-                            vetoed.append((c, missing))
-                            continue
-                        sig_kept.append(c)
-                    # Only prune when at least one candidate realizes the plan
-                    # — and only announce vetoes that actually took effect
-                    # (when every candidate drifts, all of them survive).
-                    if sig_kept:
-                        passing = sig_kept
-                        for c, missing in vetoed:
-                            emit("rpg_signature_veto",
-                                 f"Candidate {c['index']} sandbox-passed but missing "
-                                 f"planned signature(s): {', '.join(missing[:3])}",
-                                 index=c["index"], missing=missing[:5])
-                            print(f"  [rpg] vetoed cand {c['index']} — missing: {missing[:5]}",
-                                  flush=True)
 
         # ===== CANDIDATE SELECTION =====
         if passing:

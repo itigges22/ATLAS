@@ -185,12 +185,11 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
-	// The plan result is one SSE `data:` line. With V3.2 RPG planning it now
-	// carries the whole graph (files + signatures + edges) plus per-step
-	// constraints, so the line is far larger than a flat plan. Allow up to 16MB
-	// so a big graph degrades gracefully instead of tripping ErrTooLong and
-	// silently dropping the plan (#120 review).
-	scanner.Buffer(make([]byte, 0, 1<<20), 16<<20)
+	// The plan result is one SSE `data:` line: a flat step list plus rationale
+	// and scoring metadata. 1MB comfortably bounds it while still clearing the
+	// 64KB scanner default, which a verbose plan could trip (ErrTooLong would
+	// silently drop the plan).
+	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
 
 	var plan *Plan
 

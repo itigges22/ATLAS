@@ -1,6 +1,5 @@
 """Plan generation for /v3/plan: the planning prompt, plan-JSON parsing, the
-heuristic plan scorer, and diverse-sample plan selection (with the flag-gated
-RPG path)."""
+heuristic plan scorer, and diverse-sample plan selection."""
 
 import json
 import os
@@ -259,70 +258,6 @@ def generate_plan(
                 progress_callback(stage, detail)
 
     emit("plan_start", f"generating {n_candidates} candidate plans")
-
-    # V3.2 RPG-style architecture-first planning (issue #120), flag-gated by
-    # ATLAS_RPG_PLANNING. Strictly additive: on any failure (flag off, modules
-    # missing, model output unusable) we fall through to the flat planner below.
-    # Pre-bound so a partial import failure can never leave a name unbound
-    # on the guarded paths below (py/uninitialized-local-variable).
-    decompose_project = decompose_file_map = _rpg_mod = None
-    try:
-        from wavelet import rpg_planning_enabled, decompose_project, decompose_file_map
-        import rpg as _rpg_mod
-        _rpg_on = rpg_planning_enabled()
-    except Exception:
-        _rpg_on = False
-    if _rpg_on:
-        try:
-            # Build the coarse structural band that seeds the proposal stage.
-            # Prefer the in-memory project_context the proxy already sent — the
-            # v3-service container has no project volume mount, so reading
-            # working_dir off disk only works in non-container / dev setups.
-            # Fall back to a disk scan when no context was passed.
-            coarse_map = None
-            try:
-                if project_context:
-                    coarse_map = [
-                        {"label": p.label, "filename": p.filename}
-                        for p in decompose_file_map(project_context, limit=30)
-                    ]
-                elif working_dir and os.path.isdir(working_dir):
-                    coarse_map = [
-                        {"label": p.label, "filename": p.filename}
-                        for p in decompose_project(working_dir, limit=30)
-                    ]
-            except Exception as ce:
-                emit("rpg_coarse_error", f"coarse decomposition failed: {ce}")
-            rpg_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
-            rpg_llm = adapters.LLMAdapter(progress_callback=progress_callback, thinking=rpg_thinking)
-
-            def _complete(prompt, temperature, mt, seed):
-                raw, _, _ = rpg_llm(prompt, temperature, mt, seed)
-                return raw
-
-            result = _rpg_mod.construct_rpg(
-                user_message=user_message,
-                complete_fn=_complete,
-                project_context=project_context,
-                coarse_map=coarse_map,
-                max_tokens=(8192 if rpg_thinking else 2048),
-                emit=emit,
-            )
-            if result.ok and result.plan and result.plan.get("steps"):
-                plan = dict(result.plan)
-                plan["candidates_tested"] = 1
-                plan["winning_score"] = result.score
-                plan["winning_index"] = 0
-                plan["reasons"] = ["RPG two-stage plan"] + result.issues
-                plan["rpg"] = result.rpg.to_dict()
-                emit("plan_selected",
-                     f"RPG plan ({len(plan['steps'])} steps, score={result.score:.2f})",
-                     index=0, score=result.score, steps=len(plan["steps"]))
-                return plan
-            emit("rpg_fallback",
-                 f"RPG not usable (stage={result.stage_reached}); using flat planner")
-        except Exception as re_:
-            emit("rpg_error", f"RPG planning failed: {re_}; using flat planner")
 
     # PC-206: thinking-aware infrastructure shipped — planner CAN run with
     # Template-level reasoning ON via ATLAS_PLAN_THINKING=1. Default is OFF
