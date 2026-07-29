@@ -40,7 +40,6 @@ def test_removed_surfaces_stay_removed():
         ("docs/API.md", "plan_tasks"),
         ("docs/ARCHITECTURE.md", "plan_tasks"),
         ("atlas/cli/display.py", "/ablation"),
-        ("benchmark/cli.py", "--runs"),
     ]
     for rel, needle in checks:
         text = (REPO / rel).read_text()

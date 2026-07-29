@@ -103,7 +103,7 @@ BASE_TEMPERATURE = 0.6  # Qwen3.5 recommended for coding with thinking
 DIVERSITY_TEMPERATURE = 0.8  # Slightly higher for candidate diversity
 
 
-# --- Atomic I/O (reused from v2_runner) ----------------------------------------
+# --- Atomic I/O ----------------------------------------------------------------
 
 def atomic_write_json(filepath, data):
     filepath = Path(filepath)
