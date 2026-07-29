@@ -87,7 +87,7 @@ def test_envelope_types_agree_across_implementations():
     assert m, "EVENT_TYPES not found in atlas/cli/events.py"
     py_types = set(re.findall(r'"([a-z_]+)"', m.group(1)))
 
-    tui_src = (REPO / "tui" / "consumer.go").read_text()
+    tui_src = go_source("tui", "Envelope")
     tui_types = set(re.findall(r'Evt\w+\s*=\s*"([a-z_]+)"', tui_src))
 
     assert go_types == py_types, (
