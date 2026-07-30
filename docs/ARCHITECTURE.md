@@ -339,10 +339,11 @@ Wait injection appends "Wait, let me reconsider.\n" to request a longer reasonin
 **Phase 2: Verification and Selection**
 
 - **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Java (`javac`), Kotlin (`kotlinc`), Rust (`rustc` on the sandbox `/execute` path; `Cargo.toml` projects are detected with `cargo build`, and `cargo check` is accepted only via the build-command allowlist), C/C++ (full `gcc`/`g++` compile with `-Wall` on `/execute`; `-fsyntax-only` applies only to the `/syntax-check` route), Ruby (`ruby -c`, no compile step — interpreted), PHP (`php -l`, no compile step — interpreted), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
+- **Vetoes**: three checks can reject a sandbox-passing candidate — the lens veto (per-step `gx_min` below the model's calibrated severe threshold: the code executes but the generation pattern collapsed toward a stub), the structural veto (tree-sitter finds a direct-identifier call resolving to no local def, import, builtin, or project symbol — a `NameError` in waiting), and the flag-gated call-graph veto (`ATLAS_CALL_GRAPH`: cross-file calls with no in-scope definition). A vetoed candidate is marked failed (`passed=false`, `vetoed_by`, veto reason as its error output) and joins the Phase-3 repair pool like any failing candidate; the final energy fallback never returns it. If every candidate is vetoed and repair fails, the pipeline returns no code and the caller substitutes its baseline
 - **S* Tiebreaking** (2+ passing): generates edge-case inputs, runs both candidates, majority wins
 - **Lens Selection** (1 passing or fallback): sort by C(x) energy, lowest wins
 
-**Phase 3: Repair** (if 0/K pass) — three strategies, sequential with early exit:
+**Phase 3: Repair** (if 0/K pass, or every passer was vetoed) — three strategies, sequential with early exit:
 
 - **Failure Analysis**: categorize failures (wrong_algorithm, implementation_bug, edge_case_miss, time_limit, format_error, partial_correct)
 - **PR-CoT**: 4 perspectives (logical_consistency, information_completeness, biases, alternative_solutions) x (analysis + repair) = ~8 LLM calls, up to 3 rounds

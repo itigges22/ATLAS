@@ -508,6 +508,18 @@ class V3PipelineService:
                 severe = (per_step.get("thresholds") or {}).get("severe")
                 if (gx_min is not None and isinstance(severe, (int, float))
                         and gx_min < severe):
+                    # A vetoed candidate is a failing candidate: mark it so
+                    # the phase-3 pool (`not c.get("passed")`) picks it up
+                    # and the energy fallback can never return it. The veto
+                    # reason replaces the (empty) passing-run stderr so
+                    # repair sees WHY it was rejected.
+                    c["passed"] = False
+                    c["vetoed_by"] = "lens"
+                    c["stderr"] = (
+                        f"lens veto: gx_min={gx_min:.3f} below the severe "
+                        f"threshold {severe:.3f} — generation pattern "
+                        f"collapsed toward a stub; the code executes but "
+                        f"likely does not implement the task")
                     vetoed.append(c)
                     emit("lens_veto",
                          f"Candidate {c['index']} sandbox-passed but lens-vetoed "
@@ -553,6 +565,13 @@ class V3PipelineService:
             for c in passing:
                 struct = symbols.structural_score(project_symbols, c.get("code", ""))
                 if struct.get("ok") and struct.get("n_unresolved", 0) >= 1:
+                    # Same contract as the lens veto: vetoed = failing.
+                    c["passed"] = False
+                    c["vetoed_by"] = "structural"
+                    c["stderr"] = (
+                        "structural veto: unresolved direct call(s) that "
+                        "would raise NameError at runtime: "
+                        + ", ".join(struct["unresolved_calls"][:5]))
                     emit("structural_veto",
                          f"Candidate {c['index']} sandbox-passed but "
                          f"{struct['n_unresolved']} unresolved call(s): "
@@ -593,7 +612,7 @@ class V3PipelineService:
             except Exception:
                 _cg_on = False
             if _cg_on:
-                cg_kept = []
+                cg_kept, cg_vetoed = [], []
                 for c in passing:
                     try:
                         res = unresolved_calls(
@@ -604,15 +623,26 @@ class V3PipelineService:
                         cg_kept.append(c)
                         continue
                     if res.get("ok") and res.get("unresolved"):
-                        emit("call_graph_veto",
-                             f"Candidate {c.get('index')} has unresolved call(s): "
-                             f"{', '.join(res['unresolved'][:3])}",
-                             index=c.get("index"), unresolved=res["unresolved"][:5])
-                        print(f"  [call_graph] vetoed cand {c.get('index')} — "
-                              f"unresolved: {res['unresolved'][:5]}", flush=True)
+                        cg_vetoed.append((c, res["unresolved"]))
                         continue
                     cg_kept.append(c)
                 if cg_kept:  # only prune when at least one candidate survives
+                    # Marking happens only when the prune actually applies —
+                    # the conservative all-vetoed case keeps the full set
+                    # (and its passed flags) intact.
+                    for c, unresolved in cg_vetoed:
+                        c["passed"] = False
+                        c["vetoed_by"] = "call_graph"
+                        c["stderr"] = (
+                            "call-graph veto: cross-file call(s) that resolve "
+                            "to no in-scope definition: "
+                            + ", ".join(unresolved[:5]))
+                        emit("call_graph_veto",
+                             f"Candidate {c.get('index')} has unresolved call(s): "
+                             f"{', '.join(unresolved[:3])}",
+                             index=c.get("index"), unresolved=unresolved[:5])
+                        print(f"  [call_graph] vetoed cand {c.get('index')} — "
+                              f"unresolved: {unresolved[:5]}", flush=True)
                     passing = cg_kept
 
         # ===== CANDIDATE SELECTION =====
@@ -850,10 +880,19 @@ class V3PipelineService:
                 emit("derivation_error", str(e)[:200])
 
         # ===== FALLBACK: Return best candidate even if none passed =====
+        # Vetoed candidates are excluded outright: a veto means "executes
+        # but is wrong" (stub, NameError-in-waiting), which is worse than
+        # an honest sandbox failure — and returning one is exactly the
+        # May 7 dashboard-stub failure mode. If every candidate was
+        # vetoed, return no code; the caller falls back to its baseline.
         emit("fallback", "No passing solution found — returning best candidate by energy")
-        if candidates:
-            candidates.sort(key=lambda c: c.get("energy", 999))
-            result["code"] = candidates[0]["code"]
+        fallback_pool = [c for c in candidates if not c.get("vetoed_by")]
+        if fallback_pool:
+            fallback_pool.sort(key=lambda c: c.get("energy", 999))
+            result["code"] = fallback_pool[0]["code"]
+        elif candidates:
+            emit("fallback_all_vetoed",
+                 "Every candidate was vetoed — returning no code")
         result["total_time_ms"] = (time.time() - start) * 1000
         result["events"] = events
         return result
