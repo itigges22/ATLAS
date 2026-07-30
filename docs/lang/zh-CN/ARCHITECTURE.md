@@ -1,4 +1,8 @@
 <!-- source: docs/ARCHITECTURE.md synced-through: fe64417 -->
+> ⚠️ **本翻译已冻结。** 自 2026-08 代码库精简以来，翻译不再更新，内容可能落后于英文 `docs/`（甚至可能描述已移除的功能）。请以英文文档为准。翻译计划在 1.0 版本发布时恢复更新。
+>
+> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
+
 > **[English](../../ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS 架构

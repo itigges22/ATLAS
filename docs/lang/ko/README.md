@@ -1,4 +1,8 @@
 <!-- source: README.md synced-through: 53daf3b -->
+> ⚠️ **이 번역은 동결되었습니다.** 2026-08 코드베이스 단순화 이후 번역 업데이트가 중단되어, 내용이 영어 `docs/` 보다 오래되었을 수 있습니다(이미 제거된 기능을 설명할 수도 있습니다). 최신 정보는 영어 문서를 참고하세요. 번역은 1.0 릴리스에 맞춰 갱신될 예정입니다.
+>
+> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
+
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[日本語](../ja/README.md)** | **한국어**
 
 <p align="center">

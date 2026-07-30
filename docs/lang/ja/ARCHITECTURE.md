@@ -1,4 +1,8 @@
 <!-- source: docs/ARCHITECTURE.md synced-through: fe64417 -->
+> ⚠️ **この翻訳は凍結されています。** 2026-08 のコードベース簡素化以降、翻訳の更新は停止しており、内容は英語版 `docs/` より古い場合があります（削除済みの機能に触れていることもあります）。最新の正確な情報は英語版を参照してください。翻訳は 1.0 リリース時に更新を再開する予定です。
+>
+> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
+
 > **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS アーキテクチャ
