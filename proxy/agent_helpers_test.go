@@ -244,7 +244,7 @@ func TestClassifyParseFailureTruncatedEditFile(t *testing.T) {
 	// truncation explicitly so the model shrinks the next attempt.
 	raw := `{"type":"tool_call","name":"edit_file","args":{"path":"snake/app.py","old_str":"@app.route('/')\ndef index():\n    return render_template('index.html')\n\n@app.route('/product')\ndef product():\n    return render_template('product.html')\n\n@app.route('/solutions')\ndef solutions():\n    return render_template('solutions.html')\n\n@app.route('/pricing"`
 
-	got := classifyParseFailure(raw)
+	_, got := classifyParseFailure(raw)
 	if !strings.Contains(got, "TRUNCATED") {
 		t.Errorf("expected TRUNCATED callout, got %q", got)
 	}
@@ -254,10 +254,10 @@ func TestClassifyParseFailureTruncatedEditFile(t *testing.T) {
 }
 
 func TestClassifyParseFailureEmptyResponse(t *testing.T) {
-	if got := classifyParseFailure(""); !strings.Contains(got, "empty") {
+	if _, got := classifyParseFailure(""); !strings.Contains(got, "empty") {
 		t.Errorf("empty input should mention empty, got %q", got)
 	}
-	if got := classifyParseFailure("   \n\t "); !strings.Contains(got, "empty") {
+	if _, got := classifyParseFailure("   \n\t "); !strings.Contains(got, "empty") {
 		t.Errorf("whitespace-only should be treated as empty, got %q", got)
 	}
 }
@@ -266,7 +266,7 @@ func TestClassifyParseFailureMalformedToolCall(t *testing.T) {
 	// Looks like a tool_call but ends cleanly — different feedback
 	// than truncation.
 	raw := `{"type":"tool_call","name":"read_file","args":{"path":"app.py",}}`
-	got := classifyParseFailure(raw)
+	_, got := classifyParseFailure(raw)
 	if strings.Contains(got, "TRUNCATED") {
 		t.Errorf("clean-ending malformed shouldn't say TRUNCATED, got %q", got)
 	}
@@ -274,7 +274,7 @@ func TestClassifyParseFailureMalformedToolCall(t *testing.T) {
 
 func TestClassifyParseFailureProse(t *testing.T) {
 	raw := "Here's what I'll do: I'll read the file first..."
-	got := classifyParseFailure(raw)
+	_, got := classifyParseFailure(raw)
 	if !strings.Contains(got, "JSON") {
 		t.Errorf("prose response should get JSON-only nudge, got %q", got)
 	}

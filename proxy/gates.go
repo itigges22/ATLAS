@@ -97,191 +97,33 @@ func claimsUniversal(summary string) bool {
 	return false
 }
 
-// verifyCompletionClaims runs cheap structural checks against
-// workingDir and returns a non-empty directive when the model's
+// verifyCompletionClaims returns a non-empty directive when the model's
 // universal claim doesn't match reality. The directive is shaped as
 // a tool-result error, so it lands back in the model's context as
 // "your done was bounced because X."
 //
-// Checks (additive — first gap wins, but caller sees one combined
-// message when multiple are flagged):
-//   - Flask/Jinja template references (render_template('X')) → templates/X exists?
-//   - Django render() / get_template() → matching template exists?
-//   - Express render() / res.render('X') → views/X exists?
-//
-// Each check is gated on the file types it's relevant to (no
-// node_modules walk for a Python-only project, etc.). Bounded walk
-// depth and per-file size limits so we don't spend the user's
-// session-end latency on a 50-MB monorepo scan.
+// The structural evidence comes from assetLintFindings — the same
+// bounded workspace walk the advisory lint uses — filtered down to the
+// hard gaps: template references (render_template('X') in .py,
+// {% extends/include %} in templates) whose target does not exist.
+// Those are blocking because a missing render_template target is a
+// guaranteed 500 at runtime; the rest of the lint stays advisory.
 func verifyCompletionClaims(workingDir string) string {
 	if workingDir == "" {
 		return ""
 	}
-	gaps := []string{}
-
-	if g := checkTemplateReferences(workingDir); g != "" {
-		gaps = append(gaps, g)
+	var gaps []string
+	for _, f := range assetLintFindings(workingDir) {
+		if strings.Contains(f, "references template ") {
+			gaps = append(gaps, f)
+		}
 	}
-
 	if len(gaps) == 0 {
 		return ""
 	}
 	return fmt.Sprintf(
 		"Your `done` summary claims the work is complete, but a structural check of the workspace found gaps:\n\n%s\n\nFix the missing files (or correct your summary to acknowledge what's not done) before declaring done.",
-		strings.Join(gaps, "\n\n"))
-}
-
-// renderTemplateRe matches `render_template('X.html')` in Python
-// (Flask/Jinja). The pattern handles single quotes, double quotes,
-// and an optional whitespace inside the parens. Captures the template
-// path. Doesn't try to handle dynamic args (`render_template(name)`)
-// — those can't be statically verified.
-var renderTemplateRe = regexp.MustCompile(
-	`render_template\(\s*['"]([^'"\n]+)['"]`)
-
-// expressRenderRe matches `res.render('view')` / `res.render("view")`
-// in Express/Node. The view name might or might not include an
-// extension; we check the full path AND extensionless variants.
-var expressRenderRe = regexp.MustCompile(
-	`\bres\.render\(\s*['"]([^'"\n]+)['"]`)
-
-// checkTemplateReferences walks workingDir for source files,
-// extracts template references, and reports any that don't resolve
-// to a file under templates/ (Flask) or views/ (Express). Bounded
-// to ~200 source files and ignores noise dirs.
-func checkTemplateReferences(workingDir string) string {
-	skipDirs := map[string]bool{
-		"venv": true, ".venv": true, "env": true, "node_modules": true,
-		".git": true, "__pycache__": true, "dist": true, "build": true,
-		"target": true, "vendor": true, ".dart_tool": true,
-	}
-	const maxFiles = 200
-	const maxBytes = 64 * 1024 // 64K per file is plenty for top-level grep
-
-	var missingFlask []missing
-	var missingExpress []missing
-
-	count := 0
-	err := filepath.Walk(workingDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			if skipDirs[info.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if count >= maxFiles {
-			return filepath.SkipDir
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		var re *regexp.Regexp
-		var resolveTo []string
-		switch ext {
-		case ".py":
-			re = renderTemplateRe
-			// Flask resolves render_template against templates/ AND
-			// any blueprint-registered template_folder. We only
-			// check the conventional templates/ here — false negatives
-			// in custom layouts are acceptable.
-			resolveTo = []string{filepath.Join(workingDir, "templates")}
-		case ".js", ".ts", ".mjs", ".cjs":
-			re = expressRenderRe
-			// Express defaults views/ for app.set('views', ...).
-			resolveTo = []string{filepath.Join(workingDir, "views")}
-		default:
-			return nil
-		}
-		count++
-		// Read up to maxBytes — render_template calls usually appear
-		// in the first KB of small route files anyway.
-		f, err := os.Open(path)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-		buf := make([]byte, maxBytes)
-		n, _ := f.Read(buf)
-		body := string(buf[:n])
-		matches := re.FindAllStringSubmatch(body, -1)
-		for _, m := range matches {
-			tmpl := m[1]
-			// Empty or path-traversal-y references — skip.
-			if tmpl == "" || strings.Contains(tmpl, "..") {
-				continue
-			}
-			if !templateResolves(tmpl, resolveTo, ext) {
-				rel, _ := filepath.Rel(workingDir, path)
-				rec := missing{ref: tmpl, from: rel}
-				if ext == ".py" {
-					missingFlask = append(missingFlask, rec)
-				} else {
-					missingExpress = append(missingExpress, rec)
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return ""
-	}
-
-	var lines []string
-	if len(missingFlask) > 0 {
-		lines = append(lines,
-			"**Flask templates referenced but missing:** "+formatMissing(missingFlask, "templates/"))
-	}
-	if len(missingExpress) > 0 {
-		lines = append(lines,
-			"**Express views referenced but missing:** "+formatMissing(missingExpress, "views/"))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// templateResolves returns true when tmpl exists under any of the
-// candidate dirs. For JS/TS we also try common view-engine extensions
-// (.ejs, .pug, .hbs) when tmpl has none.
-func templateResolves(tmpl string, candidates []string, srcExt string) bool {
-	probe := func(p string) bool {
-		_, err := os.Stat(p)
-		return err == nil
-	}
-	for _, dir := range candidates {
-		if probe(filepath.Join(dir, tmpl)) {
-			return true
-		}
-		// JS view engines often elide the extension.
-		if srcExt != ".py" && filepath.Ext(tmpl) == "" {
-			for _, ext := range []string{".ejs", ".pug", ".hbs", ".html"} {
-				if probe(filepath.Join(dir, tmpl+ext)) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-// formatMissing builds a compact list "<dir>X (in <src>), <dir>Y (in <src>)"
-// for the rejection message. Capped at 8 to keep the prompt back-pressure
-// digestible.
-func formatMissing(items []missing, dirPrefix string) string {
-	if len(items) > 8 {
-		items = items[:8]
-	}
-	parts := make([]string, len(items))
-	for i, m := range items {
-		parts[i] = fmt.Sprintf("`%s%s` (referenced in %s)", dirPrefix, m.ref, m.from)
-	}
-	return strings.Join(parts, ", ")
-}
-
-// missing is a single template/view reference that doesn't resolve.
-// Local to this file because no other check produces the same shape.
-type missing struct {
-	ref  string
-	from string
+		strings.Join(gaps, "\n"))
 }
 
 // Structural gate for the edit and write paths (issue #147). The V3
@@ -1089,9 +931,6 @@ var (
 	reSrcHref = regexp.MustCompile(`(?i)\b(?:src|href)\s*=\s*["']([^"']+)["']`)
 	// url_for('static', filename='x.js') — Flask's canonical static ref.
 	reURLFor = regexp.MustCompile(`url_for\(\s*['"]static['"]\s*,\s*filename\s*=\s*['"]([^'"]+)['"]`)
-	// render_template_string with a sizeable inline literal — the smell
-	// that pairs with an orphaned template.
-	reInlineTemplate = regexp.MustCompile(`render_template_string\s*\(`)
 	// render_template('name.html') — referenced template must exist.
 	reRenderTemplate = regexp.MustCompile(`render_template\(\s*['"]([^'"]+)['"]`)
 	// {% extends "base.html" %} / {% include "nav.html" %}.
@@ -1163,14 +1002,6 @@ func assetLintFindings(workingDir string) []string {
 		}
 		return b.String()
 	}
-	hasInlineTemplateUse := false
-	for _, f := range files {
-		if strings.HasSuffix(f.rel, ".py") && reInlineTemplate.MatchString(f.content) {
-			hasInlineTemplateUse = true
-			break
-		}
-	}
-
 	htmlCount := 0
 	routeSet := []*regexp.Regexp{}
 	routeRaw := []string{}
@@ -1227,11 +1058,15 @@ func assetLintFindings(workingDir string) []string {
 		switch {
 		case strings.HasPrefix(f.rel, "templates/"):
 			base := filepath.Base(f.rel)
-			if !strings.Contains(allOther(f.rel), base) {
+			if others := allOther(f.rel); !strings.Contains(others, base) {
 				msg := fmt.Sprintf(
 					"%s is referenced by nothing (no render_template call or include names %q).",
 					f.rel, base)
-				if hasInlineTemplateUse {
+				// render_template_string elsewhere is the smell that
+				// pairs with an orphaned template (2026-07-18 snake
+				// session: model inlined the page and orphaned both
+				// the template and its static script).
+				if strings.Contains(others, "render_template_string") {
 					msg += " A .py file builds its page inline with render_template_string instead — either render this template or delete it."
 				}
 				findings = append(findings, msg)

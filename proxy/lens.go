@@ -716,7 +716,7 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 	}
 	var h lensHealthShape
 	if err := json.Unmarshal(body, &h); err != nil {
-		out.Hint = "lens /health returned non-JSON: " + truncate(string(body), 80)
+		out.Hint = "lens /health returned non-JSON: " + truncateStr(string(body), 80)
 		return out
 	}
 
@@ -861,11 +861,4 @@ func logCalibrationStatusAtStartup() {
 	asa := probeASAStatus()
 	log.Printf("  Lens: %s — %s", lens.Verdict, lens.Hint)
 	log.Printf("  ASA:  %s — %s", asa.Verdict, asa.Hint)
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

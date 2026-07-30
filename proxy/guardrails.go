@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 )
 
 // sanitizeFileContent strips markdown wrappers and prose preamble from
@@ -819,9 +818,10 @@ func stubRejectionMessage(path, why string) string {
 //   - The parent directory contains ≥1 sibling with the same extension
 //   - ctx.FilesRead doesn't include any of those siblings
 //
-// Soft-coupled to AgentContext via the FilesRead snapshot we pass in;
-// keeps the helper testable without dragging the whole context type in.
-func patternMatchHint(resolvedPath, _ string) string {
+// Soft-coupled to AgentContext via the FilesRead snapshot we pass in
+// (ctx.SnapshotFilesRead() at the call site); keeps the helper testable
+// without dragging the whole context type in.
+func patternMatchHint(resolvedPath string, filesRead map[string]string) string {
 	if !isNewWrite(resolvedPath) {
 		return ""
 	}
@@ -851,13 +851,8 @@ func patternMatchHint(resolvedPath, _ string) string {
 	if len(siblings) < 2 {
 		return ""
 	}
-	// Don't gate when no session context is available — would block
-	// the first write of every new project. The agent loop wires this
-	// to ctx.FilesRead via the read-tracker; absence here means we
-	// can't reason about it.
-	read := patternReadTracker.snapshot()
 	for _, s := range siblings {
-		if _, ok := read[filepath.Join(dir, s)]; ok {
+		if _, ok := filesRead[filepath.Join(dir, s)]; ok {
 			return ""
 		}
 	}
@@ -868,47 +863,6 @@ func patternMatchHint(resolvedPath, _ string) string {
 	return fmt.Sprintf(
 		"write_file deferred: you're creating a new %s file in %s, which already contains %d sibling %s files (e.g. %s). Read at least one of those first so this new file follows the project's existing conventions (style, imports, structure). Then re-issue the write_file call.",
 		ext, dir, len(siblings), ext, strings.Join(preview, ", "))
-}
-
-// patternReadTracker is a tiny indirection so patternMatchHint can ask
-// "did the agent read any of these sibling files?" without taking an
-// AgentContext dep that would force the function into the agent
-// package's import cycle. The agent loop populates this on every
-// successful read_file via patternReadTracker.add(absPath); the gate
-// reads from snapshot(). Cleared per-session via reset().
-//
-// Tradeoff: the tracker is process-global, so concurrent sessions in
-// one proxy share it. That's fine — a sibling read by ANY recent
-// session is signal that the model's been there. We bound memory by
-// capping at 200 entries (LRU-ish via insertion order).
-var patternReadTracker = newReadTracker()
-
-type readTracker struct {
-	mu    sync.Mutex
-	items map[string]struct{}
-}
-
-func newReadTracker() *readTracker { return &readTracker{items: map[string]struct{}{}} }
-
-func (r *readTracker) add(absPath string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.items) > 200 {
-		// Cheap eviction: drop the whole map. Anything still
-		// relevant will be re-added on next read.
-		r.items = map[string]struct{}{}
-	}
-	r.items[absPath] = struct{}{}
-}
-
-func (r *readTracker) snapshot() map[string]struct{} {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make(map[string]struct{}, len(r.items))
-	for k := range r.items {
-		out[k] = struct{}{}
-	}
-	return out
 }
 
 // looksCorruptedOnDisk returns true when the file at displayPath has

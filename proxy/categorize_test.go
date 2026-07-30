@@ -47,9 +47,9 @@ func TestCategorizeParseFailureHtmlEntitiesShape(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := categorizeParseFailure(tc.raw)
+			got, _ := classifyParseFailure(tc.raw)
 			if got != tc.want {
-				t.Errorf("categorizeParseFailure() = %q, want %q\nraw: %q", got, tc.want, tc.raw)
+				t.Errorf("classifyParseFailure() category = %q, want %q\nraw: %q", got, tc.want, tc.raw)
 			}
 		})
 	}

@@ -34,6 +34,10 @@ func TestClaimsUniversalCatchesGlobalAssertions(t *testing.T) {
 	}
 }
 
+// A22 parity: verifyCompletionClaims now consumes assetLintFindings'
+// dangling-template findings, but a missing render_template target must
+// still bounce a universal-claim done — universal summary trips
+// claimsUniversal AND the structural check reports the gap.
 func TestVerifyCompletionClaimsCatchesMissingFlaskTemplates(t *testing.T) {
 	dir := t.TempDir()
 	// app.py references 4 templates; only index.html exists.
@@ -58,9 +62,15 @@ def admin(): return render_template('admin.html')
 		t.Fatal(err)
 	}
 
+	if !claimsUniversal("All routes are functioning properly.") {
+		t.Fatal("test premise broken: universal summary not detected")
+	}
 	got := verifyCompletionClaims(dir)
 	if got == "" {
 		t.Fatal("expected gap report, got empty")
+	}
+	if !strings.Contains(got, "before declaring done") {
+		t.Errorf("gap report should be shaped as a done-bounce directive:\n%s", got)
 	}
 	for _, want := range []string{"pricing.html", "contact.html", "admin.html"} {
 		if !strings.Contains(got, want) {
@@ -85,24 +95,6 @@ def index(): return render_template('index.html')
 
 	if got := verifyCompletionClaims(dir); got != "" {
 		t.Errorf("expected empty (no gaps), got: %s", got)
-	}
-}
-
-func TestVerifyCompletionClaimsExpressMissingViews(t *testing.T) {
-	dir := t.TempDir()
-	srv := `const express = require('express');
-const app = express();
-app.get('/', (req, res) => res.render('home'));
-app.get('/about', (req, res) => res.render('about'));
-`
-	os.WriteFile(filepath.Join(dir, "server.js"), []byte(srv), 0o644)
-	os.MkdirAll(filepath.Join(dir, "views"), 0o755)
-	os.WriteFile(filepath.Join(dir, "views", "home.ejs"), []byte("<%= 1 %>"), 0o644)
-	// about.* missing
-
-	got := verifyCompletionClaims(dir)
-	if !strings.Contains(got, "about") {
-		t.Errorf("expected `about` in gap, got: %s", got)
 	}
 }
 

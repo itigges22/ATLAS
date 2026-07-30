@@ -256,10 +256,6 @@ func readFileTool() *ToolDef {
 				recorded = strings.Join(lines[start:shownEnd], "\n")
 			}
 			ctx.RecordFileRead(path, recorded)
-			// PC-194 — register the read so the pattern-matching gate
-			// on write_file knows the model has actually inspected a
-			// sibling before generating a new file in the same dir.
-			patternReadTracker.add(path)
 
 			// Call-graph footer (issue #39, flag-gated). The model reads a
 			// file far more often than it outlines one, so attach the
@@ -343,7 +339,6 @@ func outlineFileTool() *ToolDef {
 			}
 
 			ctx.RecordFileRead(path, src)
-			patternReadTracker.add(path)
 
 			var sb strings.Builder
 			fmt.Fprintf(&sb, "%s — %d lines, %d symbols (%s)\n",
@@ -695,7 +690,7 @@ func writeFileTool() *ToolDef {
 			// to avoid breaking edits-via-write_file. Soft hint via
 			// tool result, not a hard reject — the model can ignore it
 			// if the content is clearly intentional.
-			if hint := patternMatchHint(path, input.Content); hint != "" {
+			if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
 				return &ToolResult{Success: false, Error: hint}, nil
 			}
 

@@ -825,12 +825,12 @@ func TestPatternMatchHintNewFileInDirOfSiblings(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, name), []byte("<html/>"), 0o644)
 	}
 	target := filepath.Join(dir, "pricing.html")
-	if got := patternMatchHint(target, "<html/>"); got == "" {
+	if got := patternMatchHint(target, nil); got == "" {
 		t.Error("expected hint when no siblings have been read")
 	}
-	// Now register a sibling read — hint should disappear.
-	patternReadTracker.add(filepath.Join(dir, "index.html"))
-	if got := patternMatchHint(target, "<html/>"); got != "" {
+	// A sibling in the session read-cache — hint should disappear.
+	read := map[string]string{filepath.Join(dir, "index.html"): "<html/>"}
+	if got := patternMatchHint(target, read); got != "" {
 		t.Errorf("hint should disappear after sibling read: %s", got)
 	}
 }
@@ -840,7 +840,7 @@ func TestPatternMatchHintSkipsExistingFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "a.html"), []byte("a"), 0o644)
 	os.WriteFile(filepath.Join(dir, "b.html"), []byte("b"), 0o644)
 	target := filepath.Join(dir, "a.html") // exists already → not a new write
-	if got := patternMatchHint(target, "x"); got != "" {
+	if got := patternMatchHint(target, nil); got != "" {
 		t.Errorf("editing existing file should not trip hint: %s", got)
 	}
 }
@@ -849,7 +849,7 @@ func TestPatternMatchHintSkipsLonelyDir(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "only.go"), []byte("package x"), 0o644)
 	target := filepath.Join(dir, "new.go")
-	if got := patternMatchHint(target, "package x"); got != "" {
+	if got := patternMatchHint(target, nil); got != "" {
 		t.Errorf("single-sibling dir shouldn't trip hint: %s", got)
 	}
 }
