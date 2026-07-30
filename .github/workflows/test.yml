@@ -94,10 +94,12 @@ jobs:
           # yaml — without the install the whole route-parity contract
           # silently skips instead of gating.
           pip install pytest pyyaml
-          # tree-sitter grammars for the #39 call-graph extraction tests under
-          # tests/v3-service/ (they skip cleanly if absent, but CI should run
-          # them). Pre-built wheels, no build toolchain needed.
-          pip install tree_sitter tree_sitter_python tree_sitter_javascript
+          # tree-sitter + grammars for the call-graph/structural_edit tests
+          # under tests/v3-service/. Installed from the service's own
+          # requirements so CI runs the PINNED versions the image ships —
+          # an unpinned install once pulled a newer tree-sitter whose API
+          # change made extraction silently return empty.
+          pip install -r v3-service/requirements.txt
 
       - name: install sandbox runtime dependencies
         # tests/infrastructure needs these too: the boundary-regression
