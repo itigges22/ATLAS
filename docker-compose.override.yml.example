@@ -44,4 +44,4 @@ services:
       - ./v3-service/symbols.py:/app/symbols.py
       - ./v3-service/planning.py:/app/planning.py
       - ./v3-service/pipeline.py:/app/pipeline.py
-      - ./benchmark:/app/benchmark
+      - ./v3-service/stages:/app/stages

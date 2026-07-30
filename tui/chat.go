@@ -463,9 +463,8 @@ func parseChatSSE(ctx context.Context, r io.Reader, out chan<- chatEvent) error 
 }
 
 // loadBearerToken returns the bearer token for /v1/agent if a keys
-// file is configured. The proxy doesn't currently enforce auth (see
-// docs/CONFIGURATION.md — API_KEYS_PATH is "optional"), but the file
-// is created by `atlas init` for forward compatibility.
+// file is configured. The proxy doesn't currently enforce auth, but
+// the file is created by `atlas init` for forward compatibility.
 //
 // Search order: $ATLAS_API_KEYS_PATH, then ./secrets/api-keys.json
 // relative to cwd. Returns "" if no token is found — caller must

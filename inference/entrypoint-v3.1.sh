@@ -110,7 +110,7 @@ case "$ATLAS_BACKEND" in
     ;;
   metal|sycl)
     echo "Warning: ATLAS_BACKEND=$ATLAS_BACKEND but this entrypoint runs in Docker."
-    echo "  Metal requires native install (V3.1.2 planned). SYCL is roadmap."
+    echo "  Metal runs via the macOS hybrid path (docs/SETUP_MACOS.md), not in Docker. SYCL is roadmap."
     echo "  Continuing with default CPU-only behavior; performance will be poor."
     ;;
   *)
