@@ -1,12 +1,17 @@
-"""Interactive REPL — the main ATLAS interface.
+"""Proxy runtime — locate, build, launch, align, and stop atlas-proxy.
 
-Proxy launch strategy:
-1. If atlas-proxy is already running (any method) → use it
-2. If Go is installed → build and launch proxy locally (full CWD file access)
-3. Fall back to built-in REPL (no file operations, /solve and /bench only)
+ensure_proxy() strategy:
+1. atlas-proxy already running on PROXY_PORT → use it (and align a Docker
+   proxy's /workspace bind to the caller's CWD — PC-038/PC-189)
+2. A docker-compose stack owns atlas-proxy (#118) → wait for it or tell
+   the user to bring the stack up; never launch a competing local proxy
+3. Go available + no docker stack → build (if needed) and launch locally
+4. Nothing available → False
+
+stop_local_proxy() reaps a proxy this process launched; it also runs at
+exit via atexit.
 """
 
-import sys
 import os
 import shutil
 import subprocess
@@ -16,10 +21,8 @@ import atexit
 import json
 from typing import Optional, List
 
-from atlas import client, compose as compose_config, display
-from atlas.commands import solve, status, bench
+from atlas import compose as compose_config
 from atlas.runtime_artifacts import go_binary_is_current
-
 
 # Shell env wins; otherwise the Docker .env's port keys drive the URLs.
 _ENV_VALUES = compose_config.read_env_file(compose_config.find_atlas_root())
@@ -283,7 +286,7 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
         # log_fd is intentionally held open for the lifetime of the proxy
         # child process — Popen below pipes its stdout/stderr into this
         # descriptor, and closing it here would yank the proxy's output.
-        # The OS reclaims the fd when _stop_local_proxy() reaps the child
+        # The OS reclaims the fd when stop_local_proxy() reaps the child
         # at atexit. CodeQL's file-not-closed alert is a false positive
         # for this pattern.
         log_fd = open(log_path, "ab", buffering=0)  # noqa: SIM115
@@ -301,7 +304,7 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
         )
 
         # Register cleanup
-        atexit.register(_stop_local_proxy)
+        atexit.register(stop_local_proxy)
 
         # Wait for health
         for _ in range(30):
@@ -327,9 +330,8 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
         return False
 
 
-def _stop_local_proxy():
+def stop_local_proxy():
     """Stop the locally-launched proxy on exit."""
-    global _proxy_process
     if _proxy_process and _proxy_process.poll() is None:
         _proxy_process.terminate()
         try:
@@ -512,7 +514,7 @@ def _align_workspace(atlas_dir: str) -> None:
 
 def _docker_compose_owns_proxy(atlas_dir: Optional[str]) -> bool:
     """True if a docker-compose stack rooted at atlas_dir defines an
-    atlas-proxy service. Used by _ensure_proxy() to avoid auto-launching
+    atlas-proxy service. Used by ensure_proxy() to avoid auto-launching
     a competing local proxy when the user's expected deployment is the
     docker stack (Linux + CUDA/ROCm, macOS hybrid #32). The check is
     cheap (~10ms) and silently false when docker isn't installed.
@@ -554,7 +556,7 @@ def _wait_for_proxy(timeout: float = 60.0) -> bool:
     return False
 
 
-def _ensure_proxy(required_capability: Optional[str] = None) -> bool:
+def ensure_proxy(required_capability: Optional[str] = None) -> bool:
     """Ensure atlas-proxy is running, launching it locally if needed.
 
     Strategy:
@@ -618,240 +620,3 @@ def _ensure_proxy(required_capability: Optional[str] = None) -> bool:
             return True
 
     return False
-
-
-def startup_checks() -> bool:
-    """Run startup health checks."""
-    llm_ok, llm_model = client.check_llama()
-    lens_ok, _ = client.check_lens()
-    sandbox_ok, _ = client.check_sandbox()
-
-    if llm_ok:
-        display.status_block(
-            model=llm_model,
-            lens="connected" if lens_ok else "unavailable",
-            sandbox="ready" if sandbox_ok else "unavailable",
-        )
-    else:
-        display.error(f"llama-server not running — {llm_model}")
-        display.info("Start llama-server first (see inference/ entrypoints)")
-        return False
-
-    if not lens_ok:
-        display.warn("Lens unavailable — verification disabled")
-    if not sandbox_ok:
-        display.warn("Sandbox unavailable — code testing disabled")
-
-    return True
-
-
-def handle_command(line: str):
-    """Dispatch slash commands."""
-    parts = line.split(None, 1)
-    cmd = parts[0].lower()
-    args = parts[1] if len(parts) > 1 else ""
-
-    if cmd in ("/quit", "/exit", "/q"):
-        display.goodbye()
-        sys.exit(0)
-
-    elif cmd == "/help":
-        display.help_text()
-
-    elif cmd == "/status":
-        status.status()
-
-    elif cmd == "/solve":
-        if not args:
-            display.error("Usage: /solve <filename>")
-            return
-        filepath = args.strip()
-        if not os.path.exists(filepath):
-            display.error(f"File not found: {filepath}")
-            return
-        solve.solve_file(filepath)
-
-    elif cmd == "/bench":
-        import shlex
-        try:
-            bench_args = shlex.split(args) if args else []
-        except ValueError as e:
-            display.error(f"/bench: {e}")
-            display.info("Usage: /bench [--tasks N] [--strategy NAME]")
-            return
-        tasks = 0
-        strategy = "random"
-        i = 0
-        while i < len(bench_args):
-            if bench_args[i] == "--tasks" and i + 1 < len(bench_args):
-                try:
-                    tasks = int(bench_args[i + 1])
-                except ValueError:
-                    display.error(f"--tasks expects an integer, got "
-                                  f"{bench_args[i + 1]!r}")
-                    display.info("Usage: /bench [--tasks N] [--strategy NAME]")
-                    return
-                i += 2
-            elif bench_args[i] == "--strategy" and i + 1 < len(bench_args):
-                strategy = bench_args[i + 1]
-                i += 2
-            else:
-                i += 1
-        if tasks < 0:
-            display.error("--tasks must be >= 0 (0 runs the full dataset)")
-            return
-        bench.bench(max_tasks=tasks, selection_strategy=strategy)
-
-    else:
-        display.error(f"Unknown command: {cmd}")
-        display.info("Type /help for commands")
-
-
-_SUBCOMMAND_HELP = [
-    ("init",    "first-run install wizard"),
-    ("doctor",  "install health diagnostic"),
-    ("tier",    "hardware tier probe + runtime fit"),
-    ("model",   "model registry: list/install/verify/remove"),
-    ("onboard", "guided drop-in for a new model"),
-    ("lens",    "Geometric Lens check/build/publish"),
-    ("asa",     "ASA control-vector check/build/publish"),
-    ("publish", "publish lens + ASA artifacts in one step"),
-    ("bench",   "run benchmarks with live progress"),
-    ("compose", "docker compose with ATLAS's compose files"),
-    ("upgrade", "staged upgrade with auto-restore on failure"),
-    ("rollback","return the deployment to a previous release"),
-    ("diagnostics", "collect a filtered diagnostic bundle"),
-    ("artifact", "verify / snapshot / roll back artifact bundles"),
-    ("config",  "validate / migrate the .env configuration"),
-    ("tui",     "launch the terminal UI"),
-]
-
-# Flags recognized by the interactive UI. They are passed through to the TUI
-# binary unchanged (a leading-dash argument is not treated as a subcommand);
-# listed here so `atlas --help` documents them.
-_SESSION_FLAG_HELP = [
-    ("--continue", "resume the most recent session in the current directory"),
-    ("--resume [id]", "resume a session by id, or pick from a list"),
-]
-
-
-def _print_usage(stream=None) -> None:
-    out = stream or sys.stdout
-    out.write("usage: atlas [subcommand] [args...]\n\n")
-    out.write("Run `atlas` with no arguments for the interactive UI.\n\n")
-    out.write("subcommands:\n")
-    for name, desc in _SUBCOMMAND_HELP:
-        out.write(f"  {name:<8} {desc}\n")
-    out.write("\nsession flags (interactive UI):\n")
-    for name, desc in _SESSION_FLAG_HELP:
-        out.write(f"  {name:<14} {desc}\n")
-    out.write("\n  --version     print the CLI version and exit\n")
-
-
-def _dispatch_subcommand(name: str, argv: List[str]) -> int:
-    if name == "compose":
-        return _run_compose(argv)
-    import importlib
-    module = importlib.import_module(f"atlas.commands.{name}")
-    return module.main(argv)
-
-
-def _run_compose(argv: List[str]) -> int:
-    """`atlas compose ...` — thin passthrough to `docker compose` with the
-    project's compose file set (backend overlays included)."""
-    atlas_dir = compose_config.find_atlas_root()
-    if not os.path.isfile(os.path.join(atlas_dir, "docker-compose.yml")):
-        print("atlas compose: no docker-compose.yml found — run from an "
-              "ATLAS checkout.", file=sys.stderr)
-        return 1
-    try:
-        cmd = compose_config.command(atlas_dir, argv)
-    except FileNotFoundError as e:
-        print(f"atlas compose: {e}", file=sys.stderr)
-        return 1
-    try:
-        return subprocess.call(cmd, cwd=atlas_dir)
-    except FileNotFoundError:
-        print("atlas compose: docker not found on PATH.", file=sys.stderr)
-        return 1
-
-
-def run():
-    """Main entry point.
-
-    Launch strategy:
-    1. `atlas <subcommand> [...]` → subcommand dispatch (see _SUBCOMMAND_HELP)
-    2. `atlas --help` / unknown subcommand → usage
-    3. Default (interactive tty) → launch the Bubbletea TUI
-    4. Pipe mode (no tty) → built-in REPL with /solve, /bench
-    """
-    # Internal service auth: one global opener covers every urllib
-    # call the CLI makes (proxy, llama, lens, v3, sandbox). No-op when
-    # secrets/service-token doesn't exist.
-    try:
-        from atlas.token import install_urllib_opener
-        install_urllib_opener()
-    except Exception:
-        pass  # auth is best-effort on the client side; servers enforce
-
-    if len(sys.argv) > 1:
-        first = sys.argv[1]
-        known = {name for name, _ in _SUBCOMMAND_HELP}
-        if first in ("--help", "-h"):
-            _print_usage()
-            sys.exit(0)
-        if first in ("--version", "-V"):
-            from atlas import __version__
-            print(f"atlas {__version__}")
-            sys.exit(0)
-        if first in known:
-            sys.exit(_dispatch_subcommand(first, sys.argv[2:]))
-        if not first.startswith("-"):
-            print(f"atlas: unknown subcommand {first!r}\n", file=sys.stderr)
-            _print_usage(sys.stderr)
-            sys.exit(2)
-
-    # Interactive default → TUI. Pipe mode (e.g. `echo "..." | atlas`) skips
-    # the TUI and runs the built-in /solve flow so scripts and CI usage
-    # don't get a fullscreen UI they can't drive.
-    if sys.stdin.isatty() and sys.stdout.isatty():
-        from atlas.commands import tui
-        sys.exit(tui.main(sys.argv[1:]))
-
-    display.banner()
-
-    if not startup_checks():
-        return
-
-    display.separator()
-
-    # Pipe mode
-    if not sys.stdin.isatty():
-        problem = sys.stdin.read().strip()
-        if problem:
-            if problem.startswith("/"):
-                handle_command(problem)
-            else:
-                display.user_message(problem[:80] + ("..." if len(problem) > 80 else ""))
-                solve.solve(problem, stream=sys.stderr.isatty())
-        return
-
-    # Interactive mode
-    while True:
-        try:
-            line = display.prompt()
-
-            if not line:
-                continue
-
-            if line.startswith("/"):
-                handle_command(line)
-            else:
-                display.user_message(line[:80] + ("..." if len(line) > 80 else ""))
-                solve.solve(line)
-
-        except KeyboardInterrupt:
-            print()
-            continue
-        except Exception as e:
-            display.error(str(e))

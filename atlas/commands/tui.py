@@ -110,12 +110,12 @@ def main(argv: List[str]) -> int:
     # force-recreate when cwd is outside the bind. The recreate is ~5s
     # — fast enough to do unconditionally, and necessary for tool calls
     # to work (the proxy can only read/write paths under its mount).
-    from atlas.repl import (
+    from atlas.runtime import (
         DEMO_RAW_CAPABILITY,
         PROXY_URL,
-        _ensure_proxy,
+        ensure_proxy,
     )
-    if not _ensure_proxy(required_capability=DEMO_RAW_CAPABILITY):
+    if not ensure_proxy(required_capability=DEMO_RAW_CAPABILITY):
         sys.stderr.write(
             "atlas tui: atlas-proxy is unavailable or too old for the "
             "current demo contract and could not be rebuilt.\n"
@@ -124,7 +124,7 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    # Default --proxy from env/repl.py if the user didn't override it.
+    # Default --proxy from env/runtime.py if the user didn't override it.
     args = list(argv)
     if "--proxy" not in args:
         args = ["--proxy", PROXY_URL] + args
@@ -156,20 +156,15 @@ def main(argv: List[str]) -> int:
     # exec, not run — the TUI takes over the terminal and we want
     # signals (Ctrl+C, window resize) routed to it directly. CAVEAT:
     # execv replaces the Python process image, so atexit handlers
-    # registered by the wrapper (notably _stop_local_proxy in repl.py)
-    # never fire. Any local proxy launched by _ensure_proxy() gets
+    # registered by the wrapper (notably stop_local_proxy in runtime.py)
+    # never fire. Any local proxy launched by ensure_proxy() gets
     # orphaned and keeps running until something else (reboot, manual
-    # kill, or this wrapper's own _kill_stale_proxy on the next run)
+    # kill, or the runtime's own stale-proxy reaper on the next run)
     # cleans it up. That orphan owns :8090 and collides with subsequent
     # `docker compose up` on the macOS hybrid path (#118). Stop it
     # explicitly here before exec so the cleanup actually runs.
-    try:
-        from atlas import repl as _repl
-        _repl._stop_local_proxy()
-    except ImportError:
-        # repl import failed for some reason — best-effort cleanup,
-        # not worth blocking the TUI launch.
-        pass
+    from atlas.runtime import stop_local_proxy
+    stop_local_proxy()
     try:
         os.execv(binary, [binary, *args])
     except OSError as e:

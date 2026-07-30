@@ -7,11 +7,11 @@ and appear in the CLI docs; removed commands must stay gone from docs.
 import importlib
 from pathlib import Path
 
-from atlas.repl import _SUBCOMMAND_HELP
+from atlas.__main__ import _SUBCOMMAND_HELP
 
 REPO = Path(__file__).resolve().parents[2]
 
-# Subcommands implemented inline in repl.py rather than as a module.
+# Subcommands implemented inline in atlas/__main__.py rather than as a module.
 INLINE = {"compose"}
 
 

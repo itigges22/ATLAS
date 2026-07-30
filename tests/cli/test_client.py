@@ -74,7 +74,7 @@ def test_check_llama_unknown_when_models_endpoint_missing(monkeypatch):
 
 def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
     """reasoning_content deltas surface as literal <think>…</think> so
-    the solve pipeline keeps one thinking-detection path."""
+    callers keep a single thinking-detection path."""
     events = [
         b'data: {"choices":[{"delta":{"reasoning_content":"pondering"},'
         + b'"finish_reason":null}]}\n',

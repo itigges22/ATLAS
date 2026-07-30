@@ -85,7 +85,7 @@ def check_file_permissions(atlas_root: Optional[str] = None
 
 def install_urllib_opener(atlas_root: Optional[str] = None) -> None:
     """Global opener so every CLI urllib call site (client, doctor,
-    lens, events, repl, onboard) sends the token. urllib merges
+    lens, events, runtime, onboard) sends the token. urllib merges
     addheaders under explicit per-request headers, so requests that
     set their own Authorization keep it. No-op without a token."""
     tok = read_token(atlas_root)

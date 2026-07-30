@@ -1,4 +1,4 @@
-"""HTTP client for llama-server, geometric-lens, and sandbox. Pure urllib, no dependencies."""
+"""HTTP client for llama-server and the sandbox executor. Pure urllib, no dependencies."""
 
 import contextlib
 import json
@@ -12,12 +12,10 @@ from atlas import compose as compose_config
 
 # Shell env wins; otherwise the Docker .env's port keys drive the URLs.
 INFERENCE_URL = compose_config.service_url("llama")
-# geometric-lens. Called RAG_API_URL until the name was corrected —
-# every call through it is lens scoring or sandbox analysis, never retrieval.
-#
-# ATLAS_LENS_URL is the current name and now wins. ATLAS_RAG_URL is the
-# pre-rename spelling, kept as a fallback so an existing .env keeps working;
-# it used to be read first, which gave the deprecated name precedence over
+# geometric-lens. ATLAS_LENS_URL is the current name and wins; ATLAS_RAG_URL
+# is the pre-rename spelling, kept so an existing .env keeps working
+# (CONFIGURATION.md documents the alias and pins this module as its reader).
+# It used to be read first, which gave the deprecated name precedence over
 # its own replacement. service_url("lens") supplies the port-derived default
 # (and reads ATLAS_LENS_URL itself, so the first term is belt-and-braces).
 LENS_URL = (os.environ.get("ATLAS_LENS_URL")
@@ -63,22 +61,6 @@ def check_llama() -> Tuple[bool, str]:
             if raw:
                 return True, os.path.basename(str(raw))
     return True, "unknown"
-
-
-def check_lens() -> Tuple[bool, str]:
-    try:
-        d = _get(f"{LENS_URL}/health")
-        return True, d.get("status", "ok")
-    except Exception as e:
-        return False, str(e)
-
-
-def check_sandbox() -> Tuple[bool, str]:
-    try:
-        d = _get(f"{SANDBOX_URL}/health")
-        return True, d.get("status", "ok")
-    except Exception as e:
-        return False, str(e)
 
 
 # --- llama-server model probe ---
@@ -204,94 +186,6 @@ def probe_llama(url: Optional[str] = None,
 
 # --- Generation ---
 
-def generate(prompt: str, max_tokens: int = 8192,
-             temperature: float = 0.6, stop: Optional[List[str]] = None,
-             timeout: int = 900) -> dict:
-    """Generate via llama-server /v1/completions (raw prompt, includes thinking)."""
-    body = {
-        "model": MODEL_NAME,
-        "prompt": prompt,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "top_k": 20,
-        "top_p": 0.95,
-    }
-    if stop:
-        body["stop"] = stop
-    return _post(f"{INFERENCE_URL}/v1/completions", body, timeout=timeout)
-
-
-def generate_stream(prompt: str, max_tokens: int = 8192,
-                    temperature: float = 0.6, stop: Optional[List[str]] = None,
-                    timeout: int = 900):
-    """Stream generation via llama-server /v1/completions with stream=true.
-
-    Yields (token_text, is_done) tuples.
-    """
-    body = {
-        "model": MODEL_NAME,
-        "prompt": prompt,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "top_k": 20,
-        "top_p": 0.95,
-        "stream": True,
-    }
-    if stop:
-        body["stop"] = stop
-
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        f"{INFERENCE_URL}/v1/completions",
-        data=data,
-        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
-    )
-
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        buffer = b""
-        while True:
-            chunk = resp.read(4096)
-            if not chunk:
-                break
-            buffer += chunk
-            # Process complete lines
-            while b"\n" in buffer:
-                line_bytes, buffer = buffer.split(b"\n", 1)
-                line = line_bytes.decode("utf-8", errors="replace").strip()
-                if not line or not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    return
-                try:
-                    event = json.loads(payload)
-                    choices = event.get("choices", [])
-                    if choices:
-                        text = choices[0].get("text", "")
-                        finish = choices[0].get("finish_reason")
-                        yield text, finish is not None
-                        if finish is not None:
-                            return
-                except json.JSONDecodeError:
-                    continue
-
-
-def chat(messages: List[Dict], max_tokens: int = 8192,
-         temperature: float = 0.6, timeout: int = 900) -> dict:
-    """Generate via llama-server /v1/chat/completions.
-
-    llama-server applies the GGUF's own chat template (--jinja), so this
-    stays model-agnostic — no hand-built ChatML markers or stop tokens.
-    """
-    body = {
-        "model": MODEL_NAME,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    return _post(f"{INFERENCE_URL}/v1/chat/completions", body, timeout=timeout)
-
-
 def chat_stream(messages: List[Dict], max_tokens: int = 8192,
                 temperature: float = 0.6, timeout: int = 900):
     """Stream /v1/chat/completions. Yields (token_text, is_done) tuples.
@@ -358,78 +252,6 @@ def chat_stream(messages: List[Dict], max_tokens: int = 8192,
                     if in_reasoning:
                         yield "</think>", True
                     return
-
-
-# --- Embeddings ---
-
-def get_embedding(text: str) -> Optional[List[float]]:
-    """Get embedding from llama-server /embedding endpoint."""
-    try:
-        d = _post(f"{INFERENCE_URL}/embedding", {"content": text}, timeout=30)
-        return d[0]["embedding"]
-    except Exception:
-        return None
-
-
-# --- Lens scoring ---
-
-def score_code(code: str) -> Tuple[float, float]:
-    """Score code through Geometric Lens. Returns (energy, normalized)."""
-    try:
-        d = _post(
-            f"{LENS_URL}/internal/lens/score-text",
-            {"text": f"SOLUTION: {code}"},
-            timeout=30,
-        )
-        return d.get("energy", 0.0), d.get("normalized", 0.5)
-    except Exception:
-        return 0.0, 0.5
-
-
-def score_code_combined(code: str) -> dict:
-    """Score code through combined C(x) + G(x) endpoint.
-
-    Returns dict with cx_energy, cx_normalized, gx_score, verdict, gx_available.
-    """
-    try:
-        d = _post(
-            f"{LENS_URL}/internal/lens/gx-score",
-            {"text": f"SOLUTION: {code}"},
-            timeout=30,
-        )
-        return {
-            "cx_energy": d.get("cx_energy", 0.0),
-            "cx_normalized": d.get("cx_normalized", 0.5),
-            "gx_score": d.get("gx_score", 0.5),
-            "verdict": d.get("verdict", "unavailable"),
-            "gx_available": d.get("gx_available", False),
-        }
-    except Exception:
-        return {
-            "cx_energy": 0.0, "cx_normalized": 0.5,
-            "gx_score": 0.5, "verdict": "unavailable",
-            "gx_available": False,
-        }
-
-
-def analyze_sandbox(code: str, passed: bool, stdout: str, stderr: str,
-                    expected_output: str = "") -> dict:
-    """Analyze sandbox result with structured error classification and G(x) scoring."""
-    try:
-        return _post(
-            f"{LENS_URL}/internal/sandbox/analyze",
-            {
-                "code": code,
-                "passed": passed,
-                "stdout": stdout,
-                "stderr": stderr,
-                "expected_output": expected_output,
-                "include_gx": True,
-            },
-            timeout=30,
-        )
-    except Exception:
-        return {"error": "analysis_unavailable", "passed": passed}
 
 
 # --- Sandbox ---
