@@ -608,7 +608,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | `ATLAS_LENS_TRAINING_DIR` | `/opt/atlas/data/lens_training` | Lens training-data corpus. Mounted at `/data/lens_training` in the atlas-proxy pod (`hostPath`, `DirectoryOrCreate`) so `atlas lens retrain` on the node reads the corpus the proxy writes. |
 | `ATLAS_DATA_DIR` | `/opt/atlas/data` | Housekeeping path. Printed at install time; `uninstall.sh` does `rm -rf "$ATLAS_DATA_DIR"` when `--remove-data` is set. Not mounted as a volume. |
 | `ATLAS_TRAINING_DIR` | `/opt/atlas/data/training` | Housekeeping path. Referenced by `uninstall.sh` cleanup; not mounted by any deployment template. |
-| `ATLAS_LORA_DIR` | `/opt/atlas/models/lora` | Housekeeping path. Created by `install.sh` and `download-models.sh`; populated by the training pipeline; not currently mounted into any pod. |
+| `ATLAS_LORA_DIR` | `/opt/atlas/models/lora` | Housekeeping path. Created by `install.sh` and `download-models.sh`; nothing populates it today and it is not mounted into any pod. |
 
 ### 8.3 Persistent Volume sizes
 
