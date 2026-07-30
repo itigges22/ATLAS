@@ -461,17 +461,6 @@ def load_cost_field(save_dir=None, dim=None):
     return cost_field
 
 
-# Backward-compatible aliases
-def save_models(cost_field, metric_tensor=None, save_dir=None):
-    """Save model weights. metric_tensor param kept for backward compat (ignored)."""
-    return save_cost_field(cost_field, save_dir), None
-
-
-def load_models(save_dir=None, dim=None):
-    """Load model weights. Returns (cost_field, None) for backward compat."""
-    return load_cost_field(save_dir, dim), None
-
-
 def retrain_cost_field_bce(
     embeddings: list,
     labels: list,

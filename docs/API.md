@@ -822,7 +822,6 @@ The `/v1/*` endpoints below require `Authorization: Bearer <key>`, validated aga
 | `/internal/router/stats` | GET | Internal | Confidence router statistics |
 | `/internal/router/reset` | POST | Internal | Reset router posteriors |
 | `/internal/router/feedback` | POST | Internal | Record routing feedback |
-| `/internal/lens/stats` | GET | Internal | Lens model statistics |
 | `/internal/lens/evaluate` | GET/POST | Internal | Evaluate text through Lens (C(x) energy; testing aid) |
 | `/internal/lens/score-text` | POST | Internal | Score text (C(x) only) |
 | `/internal/lens/retrain` | POST | Internal | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |

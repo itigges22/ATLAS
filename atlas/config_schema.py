@@ -81,6 +81,9 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES": Field("int", min=0),
     "ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED": Field("bool"),
     "ATLAS_CONTROL_VECTOR_LAYER_RANGE": Field("str"),
+    # Opt-in for loading the legacy pickled G(x) artifact (gx_xgboost.pkl);
+    # the lens refuses to unpickle by default — see CONFIGURATION.md.
+    "ATLAS_ALLOW_PICKLE_GX": Field("bool"),
     "ATLAS_SERVICE_TOKEN_FILE": Field("str"),
     "ATLAS_ALLOW_CREDENTIAL_READS": Field("bool"),
     "ATLAS_CONFIG_SCHEMA_VERSION": Field("int", min=1),

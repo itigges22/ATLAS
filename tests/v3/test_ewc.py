@@ -23,7 +23,7 @@ torch = pytest.importorskip("torch")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))
 
 from geometric_lens.cost_field import CostField
-from geometric_lens.ewc import ElasticWeightConsolidation, EWCConfig
+from geometric_lens.ewc import ElasticWeightConsolidation
 
 
 # --- Helpers ---
@@ -60,21 +60,6 @@ def train_model_briefly(model, embeddings, labels, epochs=5):
             optimizer.step()
 
     return model
-
-
-# --- Config ---
-
-class TestEWCConfig:
-    def test_defaults(self):
-        cfg = EWCConfig()
-        assert cfg.enabled is False
-        assert cfg.lambda_ewc == 1000.0
-        assert cfg.fisher_samples == 500
-
-    def test_custom(self):
-        cfg = EWCConfig(enabled=True, lambda_ewc=5000.0, fisher_samples=200)
-        assert cfg.enabled is True
-        assert cfg.lambda_ewc == 5000.0
 
 
 # --- Fisher Computation ---
@@ -342,31 +327,6 @@ class TestEWCPersistence:
             bytes_per_param = size_bytes / n_params
             estimated_full_size_mb = bytes_per_param * 2_200_000 / (1024 * 1024)
             assert estimated_full_size_mb < 30, f"Estimated full size: {estimated_full_size_mb:.1f} MB"
-
-
-# --- Stats ---
-
-class TestEWCStats:
-    def test_stats_uninitialized(self):
-        ewc = ElasticWeightConsolidation(lambda_ewc=500.0)
-        stats = ewc.stats()
-        assert stats["initialized"] is False
-        assert stats["lambda_ewc"] == 500.0
-
-    def test_stats_initialized(self):
-        model = make_model()
-        embeddings, labels = make_data()
-
-        ewc = ElasticWeightConsolidation(lambda_ewc=1000.0)
-        ewc.compute_fisher(model, embeddings, labels, n_samples=20)
-
-        stats = ewc.stats()
-        assert stats["initialized"] is True
-        assert stats["lambda_ewc"] == 1000.0
-        assert stats["n_parameters"] > 0
-        assert stats["mean_fisher"] >= 0
-        assert stats["max_fisher"] >= 0
-        assert stats["n_layers"] > 0
 
 
 # --- Performance ---

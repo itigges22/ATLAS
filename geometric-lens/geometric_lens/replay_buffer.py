@@ -1,8 +1,6 @@
 """V3 Replay Buffer — Domain-stratified experience replay for C(x) continual learning.
 
 Paper: Experience Replay (Lin, 1992); Continual Learning surveys (Parisi et al., 2019)
-Config: [lens_evolution] in atlas.conf
-Telemetry: telemetry/replay_buffer_events.jsonl
 
 Maintains a fixed-size buffer of representative pass/fail embedding pairs from
 every domain C(x) has trained on. Uses reservoir sampling to maintain uniform
@@ -13,15 +11,6 @@ each domain contributes proportionally during replay.
 import json
 import os
 import random
-from dataclasses import dataclass
-
-
-@dataclass
-class ReplayBufferConfig:
-    enabled: bool = False
-    max_size: int = 5000
-    replay_ratio: float = 0.30
-    data_dir: str = ""
 
 
 class ReplayBuffer:
@@ -180,20 +169,3 @@ class ReplayBuffer:
         self.domain_counts = state.get("domain_counts", {})
         self.buffer = state.get("buffer", [])
         return True
-
-    def stats(self) -> dict:
-        """Return buffer statistics."""
-        dist = self.domain_distribution()
-        label_dist = {}
-        for entry in self.buffer:
-            lbl = entry["label"]
-            label_dist[lbl] = label_dist.get(lbl, 0) + 1
-
-        return {
-            "size": len(self.buffer),
-            "max_size": self.max_size,
-            "total_seen": self.total_seen,
-            "fill_ratio": len(self.buffer) / self.max_size if self.max_size > 0 else 0,
-            "domains": dist,
-            "labels": label_dist,
-        }

@@ -1,8 +1,6 @@
 """V3 Elastic Weight Consolidation — Prevents catastrophic forgetting in C(x).
 
 Paper: Kirkpatrick et al., "Overcoming catastrophic forgetting in neural networks" (PNAS, 2017)
-Config: [lens_evolution] in atlas.conf
-Telemetry: telemetry/ewc_events.jsonl
 
 Computes the diagonal Fisher Information Matrix after each domain training,
 then adds a penalty term during retraining that discourages moving weights
@@ -15,18 +13,9 @@ weight snapshot, and lambda controls regularization strength.
 """
 
 import os
-from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-
-
-@dataclass
-class EWCConfig:
-    enabled: bool = False
-    lambda_ewc: float = 1000.0
-    fisher_samples: int = 500
-    state_path: str = ""
 
 
 class ElasticWeightConsolidation:
@@ -146,29 +135,3 @@ class ElasticWeightConsolidation:
         self.reference_params = data["reference_params"]
         self.lambda_ewc = data.get("lambda_ewc", self.lambda_ewc)
         return True
-
-    def stats(self) -> dict:
-        """Return EWC state statistics."""
-        if not self.is_initialized:
-            return {
-                "initialized": False,
-                "lambda_ewc": self.lambda_ewc,
-            }
-
-        # Compute Fisher magnitude stats
-        total_fisher = 0.0
-        n_params = 0
-        max_fisher = 0.0
-        for n, f in self.fisher.items():
-            total_fisher += f.sum().item()
-            n_params += f.numel()
-            max_fisher = max(max_fisher, f.max().item())
-
-        return {
-            "initialized": True,
-            "lambda_ewc": self.lambda_ewc,
-            "n_parameters": n_params,
-            "mean_fisher": total_fisher / max(n_params, 1),
-            "max_fisher": max_fisher,
-            "n_layers": len(self.fisher),
-        }

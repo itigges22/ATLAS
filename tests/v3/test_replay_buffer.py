@@ -19,7 +19,7 @@ import pytest
 # geometric-lens is a separate service; add it to path for direct imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))
 
-from geometric_lens.replay_buffer import ReplayBuffer, ReplayBufferConfig
+from geometric_lens.replay_buffer import ReplayBuffer
 
 
 # --- Helpers ---
@@ -50,22 +50,6 @@ def fill_buffer(buf: ReplayBuffer, n: int, domain: str = "LCB",
         label = "PASS" if i % 2 == 0 else "FAIL"
         buf.add(make_embedding(dim), label, domain, epoch=0,
                 difficulty_q=(i % 4) + 1)
-
-
-# --- Config ---
-
-class TestReplayBufferConfig:
-    def test_defaults(self):
-        cfg = ReplayBufferConfig()
-        assert cfg.enabled is False
-        assert cfg.max_size == 5000
-        assert cfg.replay_ratio == 0.30
-
-    def test_custom(self):
-        cfg = ReplayBufferConfig(enabled=True, max_size=1000, replay_ratio=0.5)
-        assert cfg.enabled is True
-        assert cfg.max_size == 1000
-        assert cfg.replay_ratio == 0.5
 
 
 # --- Basic Operations ---
@@ -346,32 +330,6 @@ class TestReplayBufferPersistence:
             assert len(buf2) == 50
             assert buf2.total_seen == 50
             assert set(buf2.domains) == {"LCB", "SciCode"}
-
-
-# --- Stats ---
-
-class TestReplayBufferStats:
-    def test_stats_empty(self):
-        buf = ReplayBuffer(max_size=100)
-        stats = buf.stats()
-        assert stats["size"] == 0
-        assert stats["fill_ratio"] == 0.0
-        assert stats["domains"] == {}
-        assert stats["labels"] == {}
-
-    def test_stats_populated(self):
-        buf = ReplayBuffer(max_size=100)
-        for _ in range(5):
-            buf.add(make_embedding(), "PASS", "LCB", 0, 1)
-        for _ in range(3):
-            buf.add(make_embedding(), "FAIL", "SciCode", 0, 2)
-
-        stats = buf.stats()
-        assert stats["size"] == 8
-        assert stats["max_size"] == 100
-        assert stats["fill_ratio"] == pytest.approx(0.08)
-        assert stats["domains"] == {"LCB": 5, "SciCode": 3}
-        assert stats["labels"] == {"PASS": 5, "FAIL": 3}
 
 
 # --- Edge Cases ---

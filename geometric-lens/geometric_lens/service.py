@@ -2,7 +2,7 @@
 
 Provides:
 - evaluate(embedding) -> energy scalar (C(x))
-- evaluate_gx(query) -> XGBoost G(x) verdict dict
+- evaluate_combined(query) -> C(x) + G(x) verdict dict
 - is_enabled() -> bool
 """
 
@@ -544,57 +544,6 @@ def get_model_info() -> dict:
     info["total_params"] = cost_params
 
     return info
-
-
-def evaluate_gx(query: str) -> dict:
-    """Score code quality using XGBoost G(x) classifier.
-
-    Returns dict with gx_score (0-1 probability of PASS), verdict, and metadata.
-    Falls back gracefully if XGBoost model is not available.
-    """
-    if not is_enabled() or not _ensure_models_loaded():
-        return {"gx_score": 0.5, "verdict": "unavailable", "gx_available": False}
-
-    (_, gx_xgboost, gx_pca_components, gx_pca_mean,
-     gx_top_dims, _, gx_thresholds) = _snapshot_weights()
-
-    if gx_xgboost is None:
-        return {"gx_score": 0.5, "verdict": "unavailable", "gx_available": False}
-
-    try:
-        import numpy as np
-        from geometric_lens.embedding_extractor import extract_embedding
-
-        start = time.monotonic()
-
-        emb = extract_embedding(query)
-        emb_np = np.array(emb, dtype=np.float32).reshape(1, -1)
-
-        # PCA transform
-        x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
-
-        # XGBoost prediction
-        proba = gx_xgboost.predict_proba(x_pca)[0]
-        gx_score = float(proba[1])  # probability of PASS class
-
-        verdict = _gx_verdict(gx_score, gx_thresholds)
-
-        elapsed_ms = (time.monotonic() - start) * 1000
-        logger.debug(f"G(x) score: {gx_score:.4f} ({verdict}), latency={elapsed_ms:.1f}ms")
-
-        return {
-            "gx_score": gx_score,
-            "verdict": verdict,
-            "top_dims": gx_top_dims[:10] if gx_top_dims else [],
-            "gx_available": True,
-            "latency_ms": round(elapsed_ms, 1),
-        }
-
-    except Exception as e:
-        logger.error(f"G(x) evaluation failed: {e}", exc_info=True)
-        return {"gx_score": 0.5, "verdict": "error", "gx_available": False,
-                "error": f"{type(e).__name__}: G(x) evaluation failed "
-                         "(see service log)"}
 
 
 def evaluate_combined(query: str) -> dict:

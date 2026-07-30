@@ -39,10 +39,6 @@ def set_embedding_contract(contract: Optional[dict]) -> None:
     _legacy_shape_warn["warned"] = False
 
 
-def get_embedding_contract() -> Optional[dict]:
-    return dict(_EMBEDDING_CONTRACT) if _EMBEDDING_CONTRACT else None
-
-
 def _l2_norm(vec: List[float]) -> float:
     return math.sqrt(sum(v * v for v in vec))
 
@@ -204,14 +200,6 @@ def observe_embedding_convention(
     return {"pooling": "mean", "response_shape": "flat",
             "normalized": abs(norm - 1.0) <= 0.05,
             "norm_tolerance": 0.05}
-
-
-def extract_embeddings_batch(texts: List[str]) -> List[List[float]]:
-    """Extract embeddings for multiple texts sequentially."""
-    results = []
-    for text in texts:
-        results.append(extract_embedding(text))
-    return results
 
 
 def extract_per_token(text: str) -> Tuple[List[List[float]], int]:

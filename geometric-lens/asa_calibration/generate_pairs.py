@@ -247,14 +247,6 @@ REJECTION_PREAMBLES = [
 # Template definitions — each yields a (user, ast_prefix, edit_prefix) triple
 # ---------------------------------------------------------------------------
 
-def render_pos(template: str, **kw) -> str:
-    return template.format(**kw)
-
-
-def render_neg(template: str, **kw) -> str:
-    return template.format(**kw)
-
-
 def template_function(rng: random.Random) -> tuple[str, str, str]:
     file = rng.choice(PY_FILES)
     name = rng.choice(FUNCTION_NAMES)
@@ -262,10 +254,10 @@ def template_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {name} function in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
-                     kind="function", file=file)
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="function", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=name, selector=selector, kind="function", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="function", file=file)
     return user, pos, neg
 
 
@@ -277,10 +269,10 @@ def template_decorated_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {decorator} {name} handler in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
-                     kind="function", file=file) + " The decorator comes along automatically."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="function", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=name, selector=selector, kind="function", file=file) + " The decorator comes along automatically."
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="function", file=file)
     return user, pos, neg
 
 
@@ -292,10 +284,10 @@ def template_stacked_decorator_function(rng: random.Random) -> tuple[str, str, s
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {name} handler in {file} (stacked decorators: {stack}) to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
-                     kind="function", file=file) + " The full decorator stack is preserved by structural_edit."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="function", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=name, selector=selector, kind="function", file=file) + " The full decorator stack is preserved by structural_edit."
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="function", file=file)
     return user, pos, neg
 
 
@@ -306,10 +298,10 @@ def template_async_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the async {name} function in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
-                     kind="function", file=file) + " async signatures are handled the same as sync."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="function", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=name, selector=selector, kind="function", file=file) + " async signatures are handled the same as sync."
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="function", file=file)
     return user, pos, neg
 
 
@@ -320,10 +312,10 @@ def template_generator_function(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"function:{name}"
     user = f"{verb} the {name} generator in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
-                     kind="function", file=file) + " A yield-based generator is just a function for the AST."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="function", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=name, selector=selector, kind="function", file=file) + " A yield-based generator is just a function for the AST."
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="function", file=file)
     return user, pos, neg
 
 
@@ -334,10 +326,10 @@ def template_class(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"class:{name}"
     user = f"{verb} the {name} class in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
-                     kind="class", file=file)
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="class", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=name, selector=selector, kind="class", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="class", file=file)
     return user, pos, neg
 
 
@@ -350,10 +342,10 @@ def template_decorated_class(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(PY_GOALS)
     selector = f"class:{name}"
     user = f"{verb} the {decorator} {name} class in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=name, selector=selector,
-                     kind="class", file=file) + " The class decorator is captured automatically."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="class", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=name, selector=selector, kind="class", file=file) + " The class decorator is captured automatically."
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="class", file=file)
     return user, pos, neg
 
 
@@ -365,10 +357,10 @@ def template_html_element(rng: random.Random) -> tuple[str, str, str]:
     selector = element
     elem_name = element.strip("<>")
     user = f"{verb} the {element} element in {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name=elem_name, selector=selector,
-                     kind="element", file=file)
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=elem_name, selector=selector,
-                     kind="element", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name=elem_name, selector=selector, kind="element", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=elem_name, selector=selector, kind="element", file=file)
     return user, pos, neg
 
 
@@ -378,10 +370,10 @@ def template_html_body_redesign(rng: random.Random) -> tuple[str, str, str]:
     goal = rng.choice(HTML_GOALS)
     selector = "<body>"
     user = f"{verb} the body of {file} to {goal}."
-    pos = render_pos(rng.choice(PROSE_STRUCTURAL_EDIT), name="body", selector=selector,
-                     kind="element", file=file)
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name="body", selector=selector,
-                     kind="element", file=file)
+    pos = rng.choice(PROSE_STRUCTURAL_EDIT).format(
+        name="body", selector=selector, kind="element", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name="body", selector=selector, kind="element", file=file)
     return user, pos, neg
 
 
@@ -394,8 +386,8 @@ def template_post_rejection_function(rng: random.Random) -> tuple[str, str, str]
     user = preamble + f"The {name} function needs to {goal} — replace it."
     pos = "Switching to structural_edit selector " + selector + \
           " — whole-function swap is the right tool for an existing-file rewrite, edit_file would force me to copy the whole function body."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="function", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="function", file=file)
     return user, pos, neg
 
 
@@ -408,8 +400,8 @@ def template_post_rejection_class(rng: random.Random) -> tuple[str, str, str]:
     user = preamble + f"The {name} class needs to {goal} — refactor it."
     pos = "Switching to structural_edit selector " + selector + \
           " — whole-class swap is the right tool for an existing-file rewrite."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="class", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="class", file=file)
     return user, pos, neg
 
 
@@ -423,8 +415,8 @@ def template_post_rejection_html(rng: random.Random) -> tuple[str, str, str]:
     user = preamble + f"Need to swap the {element} so it can {goal} — the whole element changes."
     pos = "Switching to structural_edit with selector " + selector + " on " + file + \
           " — whole-element swap, doesn't truncate on long content the way edit_file can."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=elem_name, selector=selector,
-                     kind="element", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=elem_name, selector=selector, kind="element", file=file)
     return user, pos, neg
 
 
@@ -438,8 +430,8 @@ def template_entire_keyword(rng: random.Random) -> tuple[str, str, str]:
     user = f"{verb} the entire {name} function in {file} to {goal}."
     pos = "I'll use structural_edit selector " + selector + \
           " — the user said 'entire function', that's a whole-node rewrite which is structural_edit's specialty."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name, selector=selector,
-                     kind="function", file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name, selector=selector, kind="function", file=file)
     return user, pos, neg
 
 
@@ -463,8 +455,8 @@ def template_swap_keyword(rng: random.Random) -> tuple[str, str, str]:
         name_for_prose = name
     pos = "structural_edit with selector " + selector + \
           " — 'swap' is the structural keyword, exactly what structural_edit handles."
-    neg = render_neg(rng.choice(PROSE_EDIT_FILE), name=name_for_prose, selector=selector,
-                     kind=kind, file=file)
+    neg = rng.choice(PROSE_EDIT_FILE).format(
+        name=name_for_prose, selector=selector, kind=kind, file=file)
     return user, pos, neg
 
 

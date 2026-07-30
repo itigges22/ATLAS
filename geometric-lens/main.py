@@ -407,7 +407,6 @@ async def root():
             "pattern_context": "POST /internal/patterns/context",
             "pattern_write_internal": "POST /internal/patterns/write",
             "cache_stats": "GET /internal/cache/stats",
-            "lens_stats": "GET /internal/lens/stats",
             "lens_evaluate": "GET/POST /internal/lens/evaluate",
             "lens_score_text": "POST /internal/lens/score-text",
             "lens_gx_score": "POST /internal/lens/gx-score",
@@ -538,20 +537,6 @@ async def cache_stats():
 # ──────────────────────────────────────────────────────────────
 # Geometric Lens: Internal Monitoring Endpoints
 # ──────────────────────────────────────────────────────────────
-
-@app.get("/internal/lens/stats")
-async def lens_stats():
-    """Get Geometric Lens status — model info, enabled state."""
-    try:
-        from geometric_lens.service import get_model_info
-        return get_model_info()
-    except Exception as e:
-        return {
-            "loaded": False,
-            "enabled": False,
-            "error": _safe_detail(e, "lens stats"),
-        }
-
 
 class LensEvaluateBody(BaseModel):
     query: Optional[str] = None
