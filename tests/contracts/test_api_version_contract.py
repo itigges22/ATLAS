@@ -15,10 +15,12 @@ from tests.contracts import go_source
 REPO = Path(__file__).resolve().parents[2]
 
 CANONICAL_CODES = [
-    "unauthorized", "invalid_input", "unsupported_operation",
-    "permission_denied", "timeout", "cancelled", "dependency_unavailable",
-    "incompatible_artifact", "resource_limit", "sandbox_policy_rejected",
-    "model_failure", "internal_error",
+    "unauthorized",
+    "invalid_input",
+    "unsupported_operation",
+    "dependency_unavailable",
+    "resource_limit",
+    "internal_error",
 ]
 
 

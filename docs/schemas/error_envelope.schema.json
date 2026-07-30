@@ -4,18 +4,29 @@
   "title": "ATLAS error envelope",
   "description": "Stable error shape. Clients switch on `error` (a closed error-code set); `detail` is a human message that may change.",
   "type": "object",
-  "required": ["error", "detail", "api_version"],
+  "required": [
+    "error",
+    "detail",
+    "api_version"
+  ],
   "properties": {
     "error": {
       "type": "string",
-      "enum": ["unauthorized", "invalid_input", "unsupported_operation",
-               "permission_denied", "timeout", "cancelled",
-               "dependency_unavailable", "incompatible_artifact",
-               "resource_limit", "sandbox_policy_rejected",
-               "model_failure", "internal_error"]
+      "enum": [
+        "unauthorized",
+        "invalid_input",
+        "unsupported_operation",
+        "dependency_unavailable",
+        "resource_limit",
+        "internal_error"
+      ]
     },
-    "detail": {"type": "string"},
-    "api_version": {"type": "string"}
+    "detail": {
+      "type": "string"
+    },
+    "api_version": {
+      "type": "string"
+    }
   },
   "additionalProperties": false
 }

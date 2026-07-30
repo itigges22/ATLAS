@@ -82,7 +82,7 @@ def test_iter_events_connects_and_receives_initial_sentinel(running_proxy):
     `: connected` SSE comment must NOT appear as a typed event
     (it's a control frame). The connection must stay open without
     parse errors."""
-    from atlas.events import iter_events
+    from tests.cli.event_harness import iter_events
     url = f"http://127.0.0.1:{running_proxy}/events"
 
     # iter_events returns a generator. Pull next() with a thread-side

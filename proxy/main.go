@@ -638,26 +638,20 @@ const ProtocolVersion = 1
 type ErrorCode string
 
 const (
-	ErrUnauthorized     ErrorCode = "unauthorized"
-	ErrInvalidInput     ErrorCode = "invalid_input"
-	ErrUnsupported      ErrorCode = "unsupported_operation"
-	ErrPermissionDenied ErrorCode = "permission_denied"
-	ErrTimeout          ErrorCode = "timeout"
-	ErrCancelled        ErrorCode = "cancelled"
-	ErrDependencyDown   ErrorCode = "dependency_unavailable"
-	ErrIncompatible     ErrorCode = "incompatible_artifact"
-	ErrResourceLimit    ErrorCode = "resource_limit"
-	ErrSandboxRejected  ErrorCode = "sandbox_policy_rejected"
-	ErrModelFailure     ErrorCode = "model_failure"
-	ErrInternal         ErrorCode = "internal_error"
+	ErrUnauthorized   ErrorCode = "unauthorized"
+	ErrInvalidInput   ErrorCode = "invalid_input"
+	ErrUnsupported    ErrorCode = "unsupported_operation"
+	ErrDependencyDown ErrorCode = "dependency_unavailable"
+	ErrResourceLimit  ErrorCode = "resource_limit"
+	ErrInternal       ErrorCode = "internal_error"
 )
 
 // AllErrorCodes is the canonical closed set (asserted by the contract
-// test against the documented taxonomy).
+// test against the documented taxonomy). Every code here is emitted by
+// a live writeError call — aspirational codes were pruned 2026-08-05.
 var AllErrorCodes = []ErrorCode{
-	ErrUnauthorized, ErrInvalidInput, ErrUnsupported, ErrPermissionDenied,
-	ErrTimeout, ErrCancelled, ErrDependencyDown, ErrIncompatible,
-	ErrResourceLimit, ErrSandboxRejected, ErrModelFailure, ErrInternal,
+	ErrUnauthorized, ErrInvalidInput, ErrUnsupported,
+	ErrDependencyDown, ErrResourceLimit, ErrInternal,
 }
 
 // ErrorEnvelope is the stable error shape: a code (switch on this), a

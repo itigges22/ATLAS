@@ -219,8 +219,8 @@ Status legend: ✅ done · 🔜 queued · ⏸ owner decision · ❌ rejected (do
 | A24 | `truncate` vs `truncateStr` (keep `truncateForCorrective`) | COLLAPSE | 🔜 Tier 2 |
 | A25 | `reInlineTemplate` pre-pass for one sentence fragment | judgment | 🔜 with A22 |
 | A26 | 15 TB2-era calibration comments; 34 PC-ticket citations | restate/strip | 🔜 docs-adjacent pass |
-| A27 | 6 never-emitted ErrorCode consts (API surface, contract-pinned) | ⏸ owner | ⏸ |
-| A28 | `EvtMetric` emitted, zero consumers | ⏸ wire or delete | ⏸ |
+| A27 | 6 never-emitted ErrorCode consts | DELETE | ✅ pruned: schema enum + canonical set now = the six codes writeError actually emits |
+| A28 | `EvtMetric` | **❌ REVERSED**: audit claim stale — today 3 emit sites (agent.go token totals + v3-plan stages) and 2 model.go handler cases. KEEP. | ❌ |
 | A29 | **rpg.go quarantine LEAKY**: `planConstraintsForTarget`/`regenerateOnDrift`/`reportRPGDrift` called from tools.go write paths; RPG fields in types.go; 16MB SSE buffer in v3_bridge.go sized for RPG | ⏸ owner (4-file decision) | ⏸ |
 | A30 | `ATLAS_GRAMMAR_MODE=loose` flagged dead by audit | **❌ REJECTED** — Gemma requires loose (done-spam on strict); documented instead | ❌ |
 | A31 | lens.go/gates.go/detectors.go/tools.go header comments understate contents | FIX headers | 🔜 |
@@ -323,8 +323,10 @@ recommendation before any action.
   no client ever saw them; not a breaking change in practice).
 - A28 EvtMetric: DELETE emission + type across proxy/tui/events.py + schema
   (emitted once, consumed nowhere).
-- E7/C27 events.py: slim the in-package module to the spec anchor (EVENT_TYPES +
-  envelope shape, ~60 lines); the test-harness functions move under tests/.
+- E7/C27 events.py: ✅ split — spec (EVENT_TYPES, Event, errors, make_event,
+  parse_envelope; 214 lines) stays in-package; consumer/assertion harness
+  (iter_sse_lines, iter_events, is_terminal, collect, assert_monotonic) moved
+  to tests/cli/event_harness.py.
 | E2 | **geometric-lens as a separate service** — post-cut it serves only `/health`,`/ready`,`/internal/*` (score-per-step, patterns, sandbox/analyze). Could fold into v3-service: one Python service, one image, one compose entry, one auth story. Cost: v3 image gains torch (~752MB); lens restart currently doesn't kill v3. | Wait for cut c4-c6 to land, then size the real remaining surface. | 🔎 after cut |
 | E3 | **graph/ vs symbols.py** — after the B9-B11 collapses, graph/'s unique value is import-resolution + reachability for `unresolved_calls`/`repair_context`. May fold into symbols.py entirely, deleting the package. | B1/B4-B6 first (dead route + engines), then re-measure. | 🔎 after B-wave |
 | E4 | **sandbox as separate container** | Isolation IS the feature (untrusted code execution). KEEP — recorded so it isn't re-asked. | ❌ keep |

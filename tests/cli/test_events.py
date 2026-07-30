@@ -16,13 +16,11 @@ from atlas.events import (
     EVENT_TYPES,
     LegacyEventError,
     SchemaError,
-    assert_monotonic,
-    is_terminal,
-    iter_sse_lines,
     make_event,
     new_event_id,
     parse_envelope,
 )
+from tests.cli.event_harness import assert_monotonic, is_terminal, iter_sse_lines
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +266,8 @@ def test_iter_events_skips_sse_control_frames():
     `: heartbeat` SSE comment lines. iter_events must skip them
     (they're not envelopes) without raising. Same for `event: result`
     legacy framing on v3-service's done sequence."""
-    from atlas.events import iter_sse_lines, parse_envelope, LegacyEventError
+    from atlas.events import parse_envelope, LegacyEventError
+    from tests.cli.event_harness import iter_sse_lines
     raw = (
         b": connected\n\n"
         b": heartbeat\n\n"
