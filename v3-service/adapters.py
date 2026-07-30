@@ -355,6 +355,11 @@ class SandboxAdapter:
     multi-file imports resolve. Without this, a candidate that does
     `from utils import helper` fails ImportError in the sandbox even
     though it would work on the user's machine.
+
+    `test_input` is piped to the run as standard input (the /execute
+    `stdin` field) — the same contract the bench's SStarSandboxAdapter
+    implements. S* distinguishing inputs and derivation-chain step test
+    cases reach the candidate under test through it.
     """
 
     def __init__(self, project_files: Optional[Dict[str, str]] = None):
@@ -366,6 +371,10 @@ class SandboxAdapter:
             "language": "python",
             "timeout": 15,
         }
+        if test_input:
+            # Empty string keeps the executor default (inherit server
+            # stdin) — every no-input call site passes "" positionally.
+            body["stdin"] = test_input
         if self.project_files:
             body["files"] = self.project_files
         try:

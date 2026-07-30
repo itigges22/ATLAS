@@ -714,18 +714,19 @@ class V3PipelineService:
             for c in candidates if not c.get("passed")
         ]
 
-        # Self-test generation for repair verification — algorithmic only.
-        # Interactive tasks repair against compile-smoke (PC-022).
-        if task_type == "algorithmic":
+        # Repair verifies against the SAME self-tests phase 0 generated —
+        # verified_sandbox closes over them. Regenerate only when phase 0
+        # produced none (e.g. a transient LLM failure); a failed retry here
+        # must not downgrade an existing good set to None. Interactive
+        # tasks repair against compile-smoke (PC-022).
+        if task_type == "algorithmic" and not (self_tests and self_tests.test_cases):
             emit("self_test_gen", "Generating self-tests...")
             try:
                 self_tests = self.self_test_gen.generate(problem, llm, task_id)
                 emit("self_test_done", f"{len(self_tests.test_cases)} test cases generated")
+                result["total_tokens"] += self_tests.generation_tokens
             except Exception as e:
-                self_tests = None
                 emit("self_test_error", str(e)[:200])
-        else:
-            self_tests = None
 
         # GH #39 point 3: build call-graph context for the failing
         # function once, reuse across PR-CoT + refinement. Skips
