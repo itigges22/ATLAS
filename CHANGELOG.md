@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+### Simplification campaign (2026-07-29 → 2026-08)
+
+One component-by-component pass over the whole tree — merge the fragments,
+split the God-files, cut what nothing calls — with the test suites as the
+invariant. [REFACTOR_MAIN.md](REFACTOR_MAIN.md) is the full tracker
+(method, audits, per-item disposition ledgers). Headline numbers, measured
+from the campaign's first commit: **3,047 → 514 tracked files, net
+≈ −56,500 lines including data**.
+
+- **One chat surface.** The pipe-mode `/solve` REPL is gone; bare `atlas`
+  launches the TUI (no-TTY prints a pointer to `atlas doctor` and exits
+  nonzero). The proxy launch/align/stop lifecycle moved to
+  `atlas/runtime.py`. The TUI itself merged 15 files → 9; the proxy
+  consolidated 33 files → 12, its tests 61 → 24 mirror files.
+- **Retrieval/routing stack removed, this time for good** (the 2026-07-22
+  removal below was reverted for per-component review; that review is now
+  done). PageIndex/BM25 retrieval, the confidence router, the lens `/v1/*`
+  surface (projects, tasks, queue, chat/completions, auth), the cache
+  consolidator + LTM tier, and dead lens routes (`/internal/lens/stats`,
+  cache flush/consolidate, `/v1/patterns/write`) are gone.
+- **Pattern-cache reader added.** What replaces retrieval:
+  `POST /internal/patterns/context` serves lessons from previous sessions
+  (type + recency + success scoring, co-occurrence expansion), and the
+  agent loop injects the top ≤3 as a `[system note]` — always-on,
+  fail-soft, no flag.
+- **RPG planning removed everywhere** (it was never shipped in the v3
+  image); the A/B on the reference 12B showed no improvement at ~10x
+  planning latency. [#148](https://github.com/itigges22/ATLAS/issues/148)
+  is the record.
+- **V2/TB2 benchmark subgraph and the five superseded trainer scripts
+  removed.** The onboarding loop is fully CLI-driven: `atlas bench` →
+  `atlas lens build --from-results`, and every lens build now writes a
+  `provenance.json` manifest into the activated bundle.
+- **Code moved to where it fires.** The V3 pipeline stages live in
+  `v3-service/stages/`; the benchmark harness is `atlas/bench/` inside the
+  pip-installed package (repo-root `benchmark/` holds data only);
+  `atlas/cli/*` flattened to `atlas/*`; `v3-service/main.py` split into
+  flat siblings (adapters/scoring/symbols/planning/pipeline).
+- **Debris ledgers executed.** Dead routes (`/v3/run`,
+  `/internal/call_graph` and its Datalog/Prolog engines), the inert
+  metacognitive module, aspirational error codes (the taxonomy is now the
+  six codes `writeError` actually emits), the never-incremented health
+  counters, duplicate parse-failure/template-walker/read-ledger mechanisms,
+  and seven unused dataset loaders.
+
 ### Reverted: the removals below were undone on 2026-07-22
 
 The RPG, wavelet, retrieval, and ablation-data removals described in this section
