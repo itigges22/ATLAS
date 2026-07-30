@@ -93,8 +93,8 @@
 4. **[Geometric Lens](docs/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/ARCHITECTURE.md#why-geometric-lens))
    - [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - model-hidden-dim→512→128→1 MLP that scores candidate quality
    - [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble used for selection
-   - [RAG / PageIndex V2](docs/ARCHITECTURE.md#rag--pageindex-v2) - AST-aware code retrieval and project indexing
-   - [Confidence Router](docs/ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling routes compute to the candidates that need it
+   - [Per-step scoring](docs/API.md#geometric-lens-port-8099) - per-token C(x)/G(x) scoring of writes, with per-model calibrated thresholds driving interventions
+   - [Pattern cache](docs/ARCHITECTURE.md#pattern-cache) - lessons from previous sessions, injected into new runs
 
 5. **[Sandbox](docs/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
    - Multi-language execution: Python, Rust, Go, C, Shell, others
@@ -166,9 +166,9 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 - Agent reliability: tool-result visibility fix, read-dedup, traceback → directed-edit, `move_file`, pip-install / case-mismatch steers, sandbox shell policy + host-sized cgroup limits.
 - Structural call-graph reasoning ([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125), thanks [@yogthos](https://github.com/yogthos)); ARCHITECTURE.md translated to zh-CN / ja / ko ([#25](https://github.com/itigges22/ATLAS/issues/25)).
 
-**V3.2** - Next milestone: deeper code reasoning and planning.
-- Architecture-first planning phase - RPG-style plan-then-fill: plan at module scope, then implement at function scope ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)).
-- Structural code reasoning (tail) - solver-backed reachability + syntax-agnostic wavelet decomposition for multi-resolution "which files matter" retrieval ([#39](https://github.com/itigges22/ATLAS/issues/39)).
+**V3.2** - Next milestone: deeper code reasoning.
+- RPG-style architecture-first planning was built ([#120](https://github.com/itigges22/ATLAS/issues/120)), A/B-measured, and removed: no improvement on the reference model at ~10x planning latency. [#148](https://github.com/itigges22/ATLAS/issues/148) is the record; the design study is [docs/reports/RPG_WAVELET_PLANNING_V3_2.md](docs/reports/RPG_WAVELET_PLANNING_V3_2.md).
+- Structural code reasoning (tail) - deepen the shipped call-graph layer ([#39](https://github.com/itigges22/ATLAS/issues/39)).
 - Reasoning with sampling - efficiency and quality gains ([#9](https://github.com/itigges22/ATLAS/issues/9)).
 - Deferred infra: automated HuggingFace submission pipeline ([#102](https://github.com/itigges22/ATLAS/issues/102)); ROCm on K3s / Kubernetes; formal registry-model benchmarks - LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28)).
 

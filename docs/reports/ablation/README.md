@@ -79,12 +79,12 @@ All conditions used:
 - **1 seed per condition** (k=3 candidates per task in Phase 1)
 - **Hardware**: RTX 5060 Ti 16GB, single GPU
 
-To reproduce condition D (74.6%):
+To reproduce condition D (74.6%) with the current runner (the dataset is
+always LiveCodeBench v5 — there is no `--dataset` flag):
 
 ```bash
 cd /path/to/ATLAS
-python benchmark/v3_runner.py \
-  --dataset livecodebench \
+python -m atlas.bench.v3_runner \
   --selection-strategy lens \
   --no-phase2 \
   --run-id condition_d_reproduction
@@ -93,8 +93,7 @@ python benchmark/v3_runner.py \
 To reproduce condition A (baseline):
 
 ```bash
-python benchmark/v3_runner.py \
-  --dataset livecodebench \
+python -m atlas.bench.v3_runner \
   --baseline \
   --run-id condition_a_reproduction
 ```

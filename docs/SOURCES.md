@@ -33,7 +33,6 @@ The premise behind ATLAS: scaling inference compute on a frozen model can match 
 
 ### V3 Pipeline — Phase 2 (Intelligent Compute, shipped)
 
-- **Liu et al., 2025.** *Compute-Optimal TTS: 0.5B beats GPT-4o.* arXiv [2512.02008](https://arxiv.org/abs/2512.02008). Motivates the Confidence Router with difficulty-aware routing.
 - **Feng & Odonnat, 2025.** *Blend-ASC: Adaptive Sample Complexity for Efficient Test-Time Compute.* arXiv [2511.12309](https://arxiv.org/abs/2511.12309). **Primary citation for Blend-ASC adaptive-k allocation.**
 - **ReASC, 2026.** *Early Stopping for Test-Time Compute.* arXiv [2601.02970](https://arxiv.org/abs/2601.02970). **Primary citation for ReASC confidence-based early stopping.**
 - **Li et al. (UC Berkeley), 2025.** *S\*: Test Time Scaling for Code Generation via Distinguishing Inputs.* arXiv [2502.14382](https://arxiv.org/abs/2502.14382). **Primary citation for S\* candidate selection** (replaced the V2 Best-of-K approach).
@@ -42,7 +41,7 @@ The premise behind ATLAS: scaling inference compute on a frozen model can match 
 
 - **Chen et al., 2022.** *CodeT: Code Generation with Generated Tests.* [ICLR 2023](https://openreview.net/forum?id=ktrw68Cmu9c). Blueprint for self-generated test harnesses in PR-CoT repair.
 - **Zhang et al., 2023.** *Self-Edit: Fault-Aware Code Editor for Code Generation.* arXiv [2305.04087](https://arxiv.org/abs/2305.04087). Execution feedback loop — informs the refinement phase.
-- **Shinn et al., 2023.** *Reflexion: Language Agents with Verbal Reinforcement Learning.* NeurIPS 2023. Verbal self-correction — foundational for the metacognitive component of Phase 3.
+- **Shinn et al., 2023.** *Reflexion: Language Agents with Verbal Reinforcement Learning.* NeurIPS 2023. Verbal self-correction — informs the self-correcting posture of the Phase 3 repair strategies.
 - **FunPRM, 2025.** *Function-Level Process Reward Models.* Meta-learning correction via function decomposition. Reference for fine-grained PRM signals in V3 repair.
 - **ThinkPRM, 2025.** *Generative Verification via Reasoning.* Thinking-first verification outperforming direct generation. Basis for the thinking-first repair posture.
 
@@ -62,19 +61,13 @@ Tree-sitter-backed structural tooling: `structural_edit`, the symbol index, the 
 
 - **Sotnikov, D., 2026.** *chiasmus: tree-sitter + solver call graph for code analysis.* GitHub [yogthos/chiasmus](https://github.com/yogthos/chiasmus). Inspiration for the structural code-reasoning layer.
 
-### RAG / PageIndex V2 (shipped)
-
-- **VectifyAI, 2025.** *MAFIN 2.5 / PageIndex.* Product / reasoning-based retrieval over tree structures. **Basis for the PageIndex V2 indexer** (tree-sitter AST + BM25 + LLM-guided traversal).
-
 ### Pattern Cache & Memory (shipped)
 
-The Confidence Router uses a pattern cache with tiered decay (CACHE_HIT / FAST_PATH / STANDARD / HARD_PATH), co-occurrence graph, and STM→LTM promotion.
+The pattern cache serves lessons from previous sessions back into the agent loop, scored by pattern-type match, recency decay, and success rate, with co-occurrence expansion (see ARCHITECTURE.md § Pattern cache).
 
-- **Ebbinghaus, 1885.** *Über das Gedächtnis* (On Memory). The forgetting curve — memory strength decays roughly exponentially with time. Underlies the tiered decay schedule.
-- **ACT-R** (Anderson et al.). Adaptive Control of Thought-Rational. ~30-day half-life for activation — numeric baseline for cache decay.
-- **Luhmann, N.** *Zettelkasten System.* Knowledge management via displacement and organic pruning — conceptual model for cache eviction.
-- **Behrouz et al. (Google Research), 2025.** *Titans: Learning to Memorize at Test Time.* arXiv [2501.00663](https://arxiv.org/abs/2501.00663). Surprise-based memory. **Implemented** via category-surprise momentum in `geometric-lens/cache/consolidator.py`.
-- **Park et al., 2025.** *Memoria: Human-Inspired Memory Architecture.* arXiv [2310.03052](https://arxiv.org/abs/2310.03052). Hebbian learning + lifespan-based memory. **Implemented** via the `Count(i,j) / Count(i,i)` edge-weight formulation in `geometric-lens/cache/co_occurrence.py` and the STM→LTM promotion criteria in `consolidator.py`.
+- **Ebbinghaus, 1885.** *Über das Gedächtnis* (On Memory). The forgetting curve — memory strength decays roughly exponentially with time. **Implemented** as the decay term in `geometric-lens/cache/pattern_scorer.py`.
+- **ACT-R** (Anderson et al.). Adaptive Control of Thought-Rational. ~30-day half-life for activation — numeric baseline for the decay half-life.
+- **Park et al., 2025.** *Memoria: Human-Inspired Memory Architecture.* arXiv [2310.03052](https://arxiv.org/abs/2310.03052). Hebbian learning + lifespan-based memory. **Implemented** via the `Count(i,j) / Count(i,i)` edge-weight formulation in `geometric-lens/cache/co_occurrence.py`.
 
 ### Lens Evolution — continual learning (shipped)
 
@@ -93,13 +86,17 @@ Papers that informed architectural decisions by describing what *not* to do.
 
 ## 2. Deprecated / superseded
 
-Research that informed V1, V2, or V3.0 components that are *not* part of the current release. Kept for historical context.
+Research that informed components that are *not* part of the current release. Kept for historical context.
+
+- **Liu et al., 2025.** *Compute-Optimal TTS: 0.5B beats GPT-4o.* arXiv [2512.02008](https://arxiv.org/abs/2512.02008). Motivated the Confidence Router's difficulty-aware routing. **The router was removed in the 2026-08 simplification** — it was reachable only through lens endpoints nothing in the product called.
+- **VectifyAI, 2025.** *MAFIN 2.5 / PageIndex.* Reasoning-based retrieval over tree structures. Basis for the PageIndex V2 indexer (tree-sitter AST + BM25 + LLM-guided traversal), **removed with the retrieval stack in the 2026-08 simplification**.
+- **Behrouz et al. (Google Research), 2025.** *Titans: Learning to Memorize at Test Time.* arXiv [2501.00663](https://arxiv.org/abs/2501.00663). Surprise-based memory — informed the cache consolidator's category-surprise momentum. **The consolidator (and the STM→LTM promotion it drove) was removed**; the surviving pattern cache uses plain decay + success scoring.
 
 - **Leviathan et al., 2023.** *Fast Inference from Transformers via Speculative Decoding.* ICML 2023, arXiv [2211.17192](https://arxiv.org/abs/2211.17192). 2-3× speedup via draft models. **Used in V3.0's 14B spec-decode configuration; the current reference configuration runs 9B without a draft model** (hybrid DeltaNet architecture, `--parallel 4` single-slot decoding). The V3.0 spec-decode entrypoint has been removed from the tree; see git history for the configuration.
 - **Hu et al., 2021.** *LoRA: Low-Rank Adaptation of Large Language Models.* arXiv [2106.09685](https://arxiv.org/abs/2106.09685). **Conceptual reference only.** ATLAS does not apply LoRA to the base model — weights stay frozen. Retained here because it seeded the PEFT mindset behind the small-auxiliary-network pattern used by the Lens.
 - **Dettmers et al., 2023.** *QLoRA: Efficient Finetuning of Quantized LLMs.* arXiv [2305.14314](https://arxiv.org/abs/2305.14314). **Conceptual reference only.** Same status as LoRA — no QLoRA adapters on the base model.
-- **Zhang et al., 2024.** *RAFT: Adapting Language Model to Domain Specific RAG.* arXiv [2403.10131](https://arxiv.org/abs/2403.10131). Considered during RAG design but **not directly implemented** — the router handles distractor tolerance empirically rather than through RAFT-style training.
-- **Asai et al., 2023.** *Self-RAG: Retrieve-Generate-Critique with self-reflection.* arXiv [2310.11511](https://arxiv.org/abs/2310.11511). **Not directly implemented.** The proxy makes retrieval decisions via the Confidence Router, not Self-RAG critique tokens.
+- **Zhang et al., 2024.** *RAFT: Adapting Language Model to Domain Specific RAG.* arXiv [2403.10131](https://arxiv.org/abs/2403.10131). Considered during the (since-removed) RAG design but **never directly implemented**.
+- **Asai et al., 2023.** *Self-RAG: Retrieve-Generate-Critique with self-reflection.* arXiv [2310.11511](https://arxiv.org/abs/2310.11511). **Not implemented** — and the retrieval stack it would have informed was removed.
 
 ---
 

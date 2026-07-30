@@ -11,6 +11,7 @@
 | `gx_xgboost.json` | 17K | G(x) XGBoost ensemble — native XGBoost JSON dump (preferred loader path, see PC-031). |
 | `gx_weights.json` | ~11M | G(x) PCA projection + training stats (hidden-dim→128). |
 | `gx_thresholds.json` | <1K | Per-model `severe`, `off_rails`, and `low` operating thresholds. |
+| `provenance.json` | <2K | Build manifest written by `atlas lens build`/`retrain` into every activated bundle: dataset, sample counts, metrics, hyperparameters, per-file SHA-256. Consumed by `atlas artifact verify/snapshot/rollback`. |
 
 `gx_xgboost.pkl` (the legacy pickle fallback) is removed on retrain —
 `save_gx` deletes it so a previous model's pickle can't shadow the JSON.
@@ -43,24 +44,24 @@ Note: The large training files (>2MB) are stored on HuggingFace, not in the git 
 | `retrain_stats.json` | C(x) retrain: Val AUC 0.8245, 800 samples |
 | `gx_train_stats.json` | G(x) XGBoost: 13,398 samples, PCA-128 + SupCon + LDA |
 
-## Training Scripts
+## Training
 
-Located in `/scripts/`:
-- `retrain_cx.py` — Retrain C(x) cost field from full dataset
-- `retrain_cx_phase0.py` — Phase 0 C(x) training (597 samples)
-- `retrain_lens_from_results.py` — Retrain from benchmark results
-- `collect_lens_training_data.py` — Collect embeddings from benchmark runs
-- `prepare_lens_training.py` — Prepare training data
-
-## Reproduction
+All training is CLI-driven — `atlas lens build` trains both halves
+(C(x) + G(x)), calibrates the per-model thresholds, and writes the
+`provenance.json` manifest into the activated bundle:
 
 ```bash
-# Download full dataset from HuggingFace
-# Place in geometric-lens/geometric_lens/models/
+# From a bench run's per-task results (the onboarding path):
+atlas bench --run-id mymodel_lens --tasks 200
+atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 
-# Retrain C(x) from Phase 0 data (597 embeddings, ~2 min)
-python scripts/retrain_cx_phase0.py
+# From a labeled sample file ({"text": ..., "label": 0|1} array/JSONL —
+# the canonical set is on the HuggingFace dataset above):
+atlas lens build --samples path/to/labeled.json
 
-# Retrain C(x) from full data (13,398 embeddings)
-python scripts/retrain_cx.py
+# From your own collected agent-use corpus:
+atlas lens retrain
 ```
+
+See [docs/CLI.md § atlas lens](../../../docs/CLI.md#atlas-lens) for flags
+and minimum sample requirements.

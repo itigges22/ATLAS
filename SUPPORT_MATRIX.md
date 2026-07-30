@@ -73,7 +73,7 @@ interventions are firing. These are **separate** dimensions and every
 status surface (the proxy `/v1/calibration/status` endpoint, the TUI
 badge, `atlas doctor`, `atlas lens check`) reports the same seven so
 they cannot disagree — the CLI/TUI/doctor all read the endpoint, which
-computes them in one place (`proxy/calibration_status.go`).
+computes them in one place (`proxy/lens.go`).
 
 | Dimension | Meaning | Statuses |
 |---|---|---|
@@ -101,7 +101,7 @@ supported (A/B-validated). The gemma reference install additionally has
 
 ### Lens bundle provenance
 
-A retrained lens bundle auto-writes `provenance.json`:
+Every bundle activated by `atlas lens build`/`retrain` auto-writes `provenance.json`:
 backbone + dim + quant + layer, dataset, training commit,
 hyperparameters, seed, train/val split, validation metrics,
 normalization + thresholds, creation time, and SHA-256 of every artifact

@@ -1,114 +1,67 @@
-# ATLAS Benchmark Suite
+# ATLAS Benchmark Harness (`atlas.bench`)
 
-## V3.1 (Qwen3.5-9B) — In Progress
+The benchmark harness ships inside the `atlas` package so a pip-installed
+CLI can run the whole model-onboarding loop without extra checkout state.
+The user-facing entry point is `atlas bench` (see
+[docs/CLI.md § atlas bench](../../docs/CLI.md#atlas-bench)); this package is
+what it drives.
 
-The V3 pipeline runner (`v3_runner.py` + the modules in `v3/`) targets
-the V3.1.0 model+topology: Qwen3.5-9B-Q6_K with the PlanSearch /
-DivSampling / Budget Forcing / PR-CoT / Refinement / Derivation stack.
-Ablation work is tracked under `scripts/run_v31_ablation.sh` (a
-6-condition study, A–F, on hardware tier `medium`).
-Headline 9B numbers are not yet published — `docs/SOURCES.md`
-"Known Limitations" lists this as a V3.1.x roadmap item.
+## What it's for
 
-Until the 9B numbers land, the **V3 (14B) results in
-[`docs/reports/V3_ABLATION_STUDY.md`](../../docs/reports/V3_ABLATION_STUDY.md)**
-are the canonical published evidence (74.6% LiveCodeBench v5 pass@1,
-599 tasks, 4 ablation conditions).
+Candidate generation for lens training first, scoreboard second:
 
-### How the benchmark path differs from the product path
+1. `atlas bench` runs `atlas.bench.v3_runner` in **baseline mode** (V3
+   pipeline phases off) against whatever model llama-server has loaded.
+2. Each task's generated candidate is executed locally and written as
+   `benchmark/results/<run-id>/v3_lcb/per_task/*.json` with `code` +
+   `passed` labels.
+3. `atlas lens build --from-results <that dir>` trains the model's own
+   C(x)/G(x) bundle from those labels (and merges any banked embeddings
+   from `telemetry/embeddings.emb`).
 
-The phase engines (`benchmark/v3/*`), candidate selection, S*, and the
-lens service backend (identity checks, thresholds, C(x)/G(x) math,
-artifact resolution) are one shared implementation — v3-service imports
-these modules directly. The orchestrators differ deliberately, and
-benchmark numbers should be read with these differences in mind:
+The pass@1 summary printed at the end is the secondary product.
 
-- **Lens usage.** The benchmark scores C(x) only
-  (`/internal/lens/score-text`). The product additionally requests
-  per-step G(x) scoring and applies the severe-veto / per-step
-  threshold stack to every write — that product-side quality gate is
-  not measured by benchmark pass rates.
-- **Candidate budget.** The benchmark runs a fixed k=3 and logs
-  BlendASC/ReASC as telemetry only; the product allocates k adaptively
-  from calibrated C(x) energy when calibration is present.
-- **Probe budget.** The product probes with a light→standard→nothink
-  cascade; the benchmark issues a single standard probe.
-- **Verification oracle.** The benchmark verifies against the dataset's
+## Layout
+
+| Module | Purpose |
+|---|---|
+| `v3_runner.py` | Runner entry point (`python -m atlas.bench.v3_runner`). Baseline and V3-mode runs, resume-on-rerun, telemetry banking, ablation knobs (`ATLAS_V3_*`, docs/CONFIGURATION.md § 8.9). |
+| `runner.py` | Code execution: isolated subprocesses with resource limits, assertion (`execute_code`) and stdin/stdout (`execute_code_stdio`) modes. |
+| `config.py` | Connectivity + paths: resolves llama/lens URLs and the model name from the deployment's `.env` (Docker) or `atlas.conf` (K3s); results land under repo-root `benchmark/`. |
+| `models.py` | Data models (`BenchmarkTask`, results). |
+| `best_of_k.py` | Candidate scoring/selection helpers (energy-based). |
+| `geo_learning.py` | Embedding banking: extracts and stores per-candidate embeddings + labels as the bench runs, so lens training gets several labeled samples per task. |
+| `datasets/` | Dataset loaders — LiveCodeBench v5 (`livecodebench.py`) over the `base.py` download/cache contract. Caches under repo-root `benchmark/datasets/.cache/`. |
+
+The V3 pipeline **stages** the runner exercises are not in this package:
+they live in `v3-service/stages/` (shared with the deployed service — one
+implementation, two callers). The runner puts the checkout's `v3-service/`
+on `sys.path` at startup.
+
+Repo-root `benchmark/` holds only data: dataset caches and
+`benchmark/results/<run-id>/` output.
+
+## Relationship to the product path
+
+The stage engines, candidate selection, S*, and the lens backend are one
+shared implementation with the deployed v3-service. The orchestrators
+differ deliberately; read bench numbers with that in mind:
+
+- **Lens usage.** The bench scores C(x) via `/internal/lens/score-text`;
+  the product additionally runs per-step G(x) scoring and threshold
+  interventions on every write.
+- **Verification oracle.** The bench verifies against the dataset's
   ground-truth tests; the product has no oracle at runtime and uses
-  SelfTestGen + build/syntax gates instead.
+  self-tests + build/syntax gates instead.
+- **Candidate budget.** `atlas bench` is baseline-mode (one candidate per
+  task); the product allocates candidates adaptively when V3 fires.
 
-Failure sentinels are aligned (an unscorable candidate reads as the
-neutral `(0.0, 0.5)` on both paths), and benchmark candidate ordering
-is energy-sorted like the product's, so scoring cannot diverge
-silently within the shared stages.
+## Published results
 
----
-
-## V2 Benchmark (Historical)
-
-The V2 path runs against the older topology (`Fox 9B` / `Qwen3-14B`
-with `--method best-of-K` selection). Preserved here for
-reproducibility of the V2 results table below and the legacy
-`runner.py` + `v2_runner.py` modules.
-
-Run: `./run_v2_benchmark.sh`
-Config: See `config.py` for parameters.
-
-## What's Measured
-
-- **LiveCodeBench v5** (primary): Coding problem-solving, 599 tasks, stdin/stdout evaluation
-- **GPQA Diamond**: Knowledge reasoning, 198 multiple-choice questions
-- **IFBench**: Instruction following, 300 tasks. **Note:** IFBench evaluation is incomplete -- evaluate_ifbench_loose() defaults to True for ~11/15 instruction categories. IFBench is excluded from headline results pending proper implementation.
-- **SciCode**: Scientific coding, ~80 multi-step problems (341 sub-problems)
-- **Custom**: Real-world coding tasks, 100 problems from `benchmark/custom/tasks.json`
-
-## V2 Results Summary
-
-| Benchmark | Tasks | pass@1 | Conditions |
-|-----------|-------|--------|------------|
-| LiveCodeBench v5 | 599 | 36-41% | k=3, Geometric Lens selection |
-| GPQA Diamond | 198 | 47.0% | k=5, MCQ |
-| Custom | 100 | 53-55% | k=1 |
-| SciCode | 341 | 14.7% sub-problems | k=1 |
-
-Run ID: `v2_run_20260217_125310`
-Hardware: RTX 5060 Ti 16GB VRAM
-Throughput: 109 tasks/hr aggregate
-
-All results from a single benchmark run. Not averaged across multiple runs; variance unknown.
-
-## Reproducing Results
-
-1. Ensure cluster is running: `kubectl get pods -n atlas`
-2. Lock codebase: `git stash` any changes
-3. Run: `./run_v2_benchmark.sh`
-4. Results written to: `benchmark/results/`
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `runner.py` | Base benchmark runner (function + stdio modes, ChatML formatting, code extraction) |
-| `cli.py` | Command-line interface (`python3 -m benchmark.cli --humaneval --dry-run`, etc.) |
-| `config.py` | Benchmark configuration loaded from `atlas.conf` |
-| `models.py` | Data models: BenchmarkTask, AttemptResult, TaskResult, BenchmarkRun |
-| `datasets/` | Dataset loaders (HumanEval, MBPP, EvalPlus, LiveCodeBench v5, GPQA, IFBench, SciCode) |
-| `analysis/` | Cost analysis, hardware info, pass@k metric |
-| `custom/` | 100 custom benchmark tasks + validator |
-| **V3 pipeline (active)** | |
-| `v3_runner.py` | V3 benchmark runner entry point (PlanSearch + DivSampling + PR-CoT, ablation conditions A–F) |
-| `v3/` | 18 V3 pipeline modules (plan_search.py, div_sampling.py, budget_forcing.py, pr_cot.py, refinement_loop.py, etc.) |
-| **V2 (historical)** | |
-| `v2_runner.py` | V2 benchmark orchestrator (phases 0–6, telemetry, Mode A/B) |
-| `v2_report.py` | V2 result analysis and reporting |
-| `best_of_k.py` | Best-of-K selection with Geometric Lens (V2-era, superseded by V3 S* candidate selection) |
-| `geo_learning.py` | Geometric Lens retraining pipeline |
-| `run_v2_benchmark.sh` | V2 benchmark launch script with pre-flight checks |
-
-## V1 Benchmark (Archived)
-
-V1 is preserved in the git history under the `v1.0.0` tag — check it
-out (`git checkout v1.0.0`) if you need the original runner or report
-text. The V1 results file (`v1_benchmark_report.md`) was removed
-during the V2 → V2.5 reorg and is no longer reachable from the V3.1.0
-working tree.
+The canonical published evidence is the V3 (14B) ablation study —
+74.6% LiveCodeBench v5 pass@1, 599 tasks, 4 conditions:
+[docs/reports/V3_ABLATION_STUDY.md](../../docs/reports/V3_ABLATION_STUDY.md),
+raw traces indexed in
+[docs/reports/ablation/README.md](../../docs/reports/ablation/README.md).
+Per-registry-model numbers are tracked in
+[#28](https://github.com/itigges22/ATLAS/issues/28).

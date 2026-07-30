@@ -12,7 +12,7 @@ llama-server unchanged.
 TUI ─┐
      ├─→ ATLAS Proxy (:8090) ──┬─→ llama-server  (:8080)
 CLI ─┘                          ├─→ V3 service    (:8070)
-                                ├─→ Lens / RAG    (:8099)
+                                ├─→ Lens          (:8099)
                                 └─→ Sandbox       (:30820)
 ```
 
@@ -24,7 +24,7 @@ Each user message drives an agent loop that runs until the model emits
 1. **Pre-flight plan** (PC-179 / PC-206) — `v3-service` `/v3/plan` is
    called to seed an explicit step list. 3 candidates sampled, scored
    heuristically, best plan pinned. The active step is injected into
-   the system prompt every turn (`plan_reminder.go`).
+   the system prompt every turn (`gates.go`).
 2. **Grammar-constrained generation** — `llama-server` is strongly steered
    toward a JSON envelope: `tool_call`, `text`, or `done`. GBNF +
    `response_format: json_object` constrains decoding, while the proxy recovers
@@ -36,11 +36,11 @@ Each user message drives an agent loop that runs until the model emits
    `stop_background`). Per-tool
    guardrails: read-tracking, mtime checks, default-deny patterns,
    suspicious-shrinkage guard (`guardrails.go`).
-4. **V3 routing for T2+ writes** — when a file edit qualifies (≥ 50
-   lines, ≥ 3 logic indicators, both request- and file-tier ≥ T2 per
-   PC-042), the edit is offloaded to `v3-service` and the bridge
-   re-emits each pipeline stage onto `/events` as a `v3:<stage>`
-   envelope.
+4. **V3 routing for T2+ writes** — when the file being written
+   qualifies (≥ 10 lines with logic indicators, or a recognized
+   code/markup extension — `classifyFileTier` in `tools.go`), the
+   write is offloaded to `v3-service` and the bridge re-emits each
+   pipeline stage onto `/events` as a `v3:<stage>` envelope.
 5. **Adherence + stuck-pattern gates** — every turn is scored against
    the active plan step (`gates.go`) and three stuck-pattern
    detectors (tool/reasoning repetition in `detectors.go`, claim
@@ -51,10 +51,10 @@ Each user message drives an agent loop that runs until the model emits
 
 | Tier | Description | Treatment |
 |------|-------------|-----------|
-| T0 | Conversational (hi, thanks) | No agent loop, passthrough to llama-server |
-| T1 | Simple / short edits, low complexity | Agent loop runs; tool calls executed directly. No V3 offload. |
-| T2 | Multi-file or non-trivial logic, 50+ lines, 3+ logic indicators | Agent loop runs; `write_file` / `edit_file` may route through V3 (PlanSearch / DivSampling / Budget Forcing / PR-CoT / Refinement / Derivation, S\* candidate selection). |
-| T3 | Hard tasks (new app, architecture-scale) | Same as T2 with higher turn budget and verification thresholds. |
+| T0 | Conversational (hi, thanks) | Agent loop capped at 5 turns; no plan mode; text response only |
+| T1 | Config/data/style/prose files, or under 10 lines | Tool calls executed directly. No V3 offload. |
+| T2 | ≥ 10 lines with logic indicators, or a recognized code/markup extension | `write_file` / `edit_file` may route through V3 (PlanSearch / DivSampling / Budget Forcing / PR-CoT / Refinement / Derivation, S\* candidate selection). |
+| T3 | Escalated from cyclomatic complexity (CC ≥ 16) | Same V3 treatment as T2. |
 
 ## Usage
 

@@ -660,7 +660,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **Cause:** You're hitting the wrong endpoint. The agent loop only runs on `POST /v1/agent`. `POST /v1/chat/completions` (and anything else under `/v1/`) is a transparent passthrough to llama-server — no tools, no V3, no streaming chat events.
 
-**Fix:** Point your client at `POST http://localhost:8090/v1/agent`. The Bubbletea TUI (`atlas` / `atlas tui`) and the built-in `/solve` REPL both do this automatically. If you're writing a third-party client, see [docs/API.md](API.md) for the `/v1/agent` SSE event protocol. There is no longer an `ATLAS_AGENT_LOOP` env-var toggle — the split is endpoint-based, not config-based.
+**Fix:** Point your client at `POST http://localhost:8090/v1/agent`. The Bubbletea TUI (`atlas` / `atlas tui`) does this automatically. If you're writing a third-party client, see [docs/API.md](API.md) for the `/v1/agent` SSE event protocol. There is no longer an `ATLAS_AGENT_LOOP` env-var toggle — the split is endpoint-based, not config-based.
 
 ### V3 Pipeline Not Firing on Feature Files
 

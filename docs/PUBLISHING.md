@@ -49,7 +49,7 @@ registry field it sets differ:
 1. **Pre-flight** — checks credentials and tooling: `HF_TOKEN` set, `huggingface_hub` installed, `gh` present or not. It then verifies the artifact: the lens flow checks the artifact files exist and the calibration JSONs are complete and valid; the ASA flow validates the `.gguf` and its model marker instead. The torch checkpoint itself is not loaded as a gate — a failed dim probe warns and continues.
 2. **Hash** — SHA-256s the artifact so the PR carries a tamper-detectable fingerprint.
 3. **Upload to HF** — creates the repo (idempotent), uploads the artifact files, and generates a model card README with license + base-model badge.
-4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested diff for `atlas/cli/commands/model_registry.py`.
+4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested diff for `atlas/commands/model_registry.py`.
 5. **Open the PR** — with `gh` installed and authed, the PR is built entirely through the GitHub API (branch created on your fork if you can't push upstream, a complete `Model(...)` registry entry committed) and opened against the `dev` branch — no local git checkout needed. If the model is already registered upstream or `gh` is unavailable, the body is printed for manual paste into https://github.com/itigges22/ATLAS/compare.
 
 `--dry-run` runs pre-flight, hash, and PR-body render but skips the HF upload
@@ -95,7 +95,7 @@ the `.pt`), G(x) (`gx_xgboost.json`, `gx_weights.json`), `model_identity.json`,
 `cx_normalization.json`, and `gx_thresholds.json`.
 
 After any re-publish, update the `lens_artifact_sha256` / `asa_artifact_sha256`
-entries for the model in `atlas/cli/commands/model_registry.py` — the installer
+entries for the model in `atlas/commands/model_registry.py` — the installer
 verifies downloads against those hashes and will refuse files that don't match
 the pinned values. For HF LFS objects the hash is the `x-linked-etag` response
 header of the `resolve/` URL; for small non-LFS files use `sha256sum` on the

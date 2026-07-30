@@ -18,7 +18,7 @@ calibration file is only valid with the cost field it was derived from.
 | Split | 230 train (157/73) · 57 val (39/18) |
 | Training commit | e2d0c4c (dev) |
 | llama.cpp rev | 2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1 |
-| Trainer | `scripts/retrain_lens_from_results.py`, `retrain_cost_field_bce` |
+| Trainer | `scripts/retrain_lens_from_results.py`, `retrain_cost_field_bce` (historical — the script has since been removed; the equivalent path today is `atlas lens build --from-results`) |
 | Hyperparameters | epochs 100 (early-stopped 60, patience 10), BCE loss |
 | Seed | 42 (fixed in the script) |
 | Metrics | val AUC **0.732**, train AUC 0.805, val acc 73.7%, Spearman ρ 0.464 |
@@ -29,10 +29,13 @@ calibration file is only valid with the cost field it was derived from.
 
 ### Reproduce
 
+The original run used `scripts/retrain_lens_from_results.py`, which has
+since been removed. The equivalent today (also retrains G(x) and writes
+the bundle's `provenance.json`):
+
 ```bash
-ATLAS_MODEL_NAME=gemma-4-12b-it-Q4_K_M \
-  python3 scripts/retrain_lens_from_results.py \
-  --results-dir benchmark/results/gemma_lens/v3_lcb/per_task --epochs 100
+atlas lens build --force --epochs 100 \
+  --from-results benchmark/results/gemma_lens/v3_lcb/per_task
 docker compose restart geometric-lens   # or POST /internal/lens/reload
 ```
 

@@ -1,10 +1,10 @@
 # ATLAS CLI Guide
 
 The ATLAS CLI launches the inference stack and drops you into an interactive
-coding session. The canonical chat client is the native Bubbletea TUI
-(`atlas tui`). Plain `atlas` in an interactive
-terminal launches the same TUI; pipe mode falls through to the built-in
-`/solve` REPL.
+coding session. The chat client is the native Bubbletea TUI: plain `atlas`
+in an interactive terminal launches it (`atlas tui` is the explicit form).
+The TUI needs a real terminal — with piped stdin/stdout, `atlas` prints a
+pointer to `atlas doctor` plus the subcommand list and exits nonzero.
 
 ---
 
@@ -14,7 +14,6 @@ terminal launches the same TUI; pipe mode falls through to the built-in
 cd /path/to/your/project
 atlas              # interactive: launches the TUI
 atlas tui          # explicit form
-echo "fix bug" | atlas   # pipe mode: routes through /solve
 atlas --continue   # resume the most recent session in this directory
 atlas --resume     # pick a past session from a list
 atlas --resume <id># resume a specific session by id
@@ -59,7 +58,7 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
    binary is missing or stale (older than the TUI sources). `tui/go.mod`
    requires Go 1.26.2+; older toolchains auto-fetch the required
    version. (~10 s on first run.)
-3. **Ensures atlas-proxy is running** via `_ensure_proxy()`. If the
+3. **Ensures atlas-proxy is running** via `atlas.runtime.ensure_proxy()`. If the
    proxy's `/workspace` bind-mount doesn't already cover your current
    directory, the wrapper force-recreates the proxy container with the
    correct mount (~5 s) so tool calls can read and write your files.
@@ -393,7 +392,7 @@ mount has to point at the directory you're working in.
 
 `atlas tui` aligns this automatically:
 
-1. On startup, `_ensure_proxy()` checks whether the proxy's existing
+1. On startup, `atlas.runtime.ensure_proxy()` checks whether the proxy's existing
    `/workspace` mount covers `os.getcwd()`.
 2. If not, it force-recreates the `atlas-proxy` container with
    `ATLAS_PROJECT_DIR=$(pwd)` so the bind mount points at your cwd.
@@ -552,10 +551,12 @@ Full walkthrough: [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#a
 
 ## atlas bench
 
-Runs the baseline benchmark against whatever model llama-server has loaded:
-generates a candidate per task, executes it, and writes per-task results with
-`code` + `passed` labels. This is the candidate-build step of model onboarding —
-its output feeds `atlas lens build --from-results`. Connectivity (llama/lens
+Generates and self-labels candidates for whatever model llama-server has
+loaded: one candidate per task, executed in a local subprocess, written as
+per-task results with `code` + `passed` labels. This is first and foremost the
+candidate-build step of model onboarding — its output feeds
+`atlas lens build --from-results`; the pass@1 summary it prints at the end is
+the secondary product. Connectivity (llama/lens
 URLs) resolves from the deployment's config (`.env` on Docker, `atlas.conf` on
 K3s); explicit `LLAMA_URL`/`ATLAS_LENS_URL` env vars override.
 
@@ -569,10 +570,9 @@ atlas bench                                  # full dataset (hours on a local mo
 |---|---|---|
 | `--tasks N` | `0` (all) | how many tasks to run |
 | `--run-id NAME` | `bench_livecodebench_<ts>` | names the run; results land in `benchmark/results/<run-id>/` |
-| `--strategy` | `random` | candidate selection (`lens`/`random`/`logprob`/`oracle`) |
+| `--strategy` | `random` | candidate selection (`lens`/`random`/`logprob`/`oracle`). The run itself is always the runner's **baseline path** (V3 pipeline phases off) — the strategy only picks which generated candidate is recorded, so it changes the scoreboard, not the training corpus. |
 
 On completion it prints the matching `atlas lens build --force --from-results …` command.
-(Also available as `/bench [--tasks N] [--strategy NAME]` in the pipe-mode `/solve` REPL.)
 
 **Interrupted runs resume.** Each task's result is written atomically as it
 completes; re-running the same `atlas bench` command skips finished tasks
@@ -653,10 +653,10 @@ build only embeds the new samples. The cache sits beside its input:
 embedding dim and invalidates the cache automatically.
 
 After a successful build:
-1. `cost_field.pt`, `gx_xgboost.json`, `gx_weights.json`, both calibration files, and `model_identity.json` land in the artifact dir (default `geometric-lens/geometric_lens/models/`, override with `--artifact-dir`). The identity file prevents a same-width artifact from being reused with a different model.
+1. `cost_field.pt`, `gx_xgboost.json`, `gx_weights.json`, both calibration files, `model_identity.json`, and a `provenance.json` manifest (dataset, sample counts, metrics, hyperparameters, per-file hashes — consumed by `atlas artifact verify/snapshot/rollback`) land in the artifact dir (default `geometric-lens/geometric_lens/models/`, override with `--artifact-dir`). The identity file prevents a same-width artifact from being reused with a different model.
 2. Restart the lens service so it loads them: `docker compose restart geometric-lens`.
 3. Re-run `atlas lens check` — should now report `compat`.
-4. Run `atlas lens publish` (below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/cli/commands/model_registry.py` to set `lens_status="supported"`.
+4. Run `atlas lens publish` (below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/commands/model_registry.py` to set `lens_status="supported"`.
 
 ### `atlas lens retrain`
 
@@ -696,7 +696,7 @@ atlas lens publish <model> --skip-pr            # upload to HF, print PR body fo
 **Pipeline:**
 1. SHA-256 + size of `cost_field.pt` for the PR's verification checklist.
 2. `huggingface_hub` `create_repo` (idempotent) + uploads the full artifact bundle: `cost_field.pt`, `model_identity.json`, `cx_normalization.json`, `cost_field.safetensors` (when at least as fresh as the `.pt`), `gx_xgboost.json`, `gx_weights.json`, `gx_thresholds.json` (when present), and an auto-generated `README.md` model card.
-3. Renders a registry-PR markdown body with a verification checklist + suggested Python diff for `atlas/cli/commands/model_registry.py`.
+3. Renders a registry-PR markdown body with a verification checklist + suggested Python diff for `atlas/commands/model_registry.py`.
 4. Opens the registry PR through the GitHub API (`gh api` — resolve base branch, fork if needed, branch, commit, open PR; no local git checkout) if `gh` is installed + authenticated; otherwise prints the body for manual paste.
 
 **Requirements:**

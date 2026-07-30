@@ -1,5 +1,7 @@
 # V3.2 — Architecture-First Planning (RPG-style plan-then-fill over wavelet bands)
 
+> **Removed.** The RPG/wavelet planning stack described below was built, A/B-measured (no improvement on the reference 12B at ~10x planning latency), and removed from the codebase in the 2026-08 simplification. This document is the design record; [#148](https://github.com/itigges22/ATLAS/issues/148) tracks the removal.
+
 Tracks **[#120](https://github.com/itigges22/ATLAS/issues/120)**. Builds on the wavelet
 decomposition angle from **[#39](https://github.com/itigges22/ATLAS/issues/39)**.
 

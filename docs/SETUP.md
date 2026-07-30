@@ -338,7 +338,7 @@ ATLAS targets two CPU architectures: `x86_64` (default, all backends available) 
 
 - **NVIDIA DGX Spark** (Grace-Blackwell GB10) — CUDA via sbsa base image, compute cap 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** — CUDA via l4t base image, compute cap 8.7
-- **Apple Silicon (M1/M2/M3/M4)** — Vulkan via MoltenVK in Docker Desktop (slow path); native Metal install tracked at [#32](https://github.com/itigges22/ATLAS/issues/32) for the fast path
+- **Apple Silicon (M1/M2/M3/M4)** — Vulkan via MoltenVK in Docker Desktop (slow path); the shipped fast path is the native hybrid Metal install — see [SETUP_MACOS.md](SETUP_MACOS.md)
 - **Snapdragon X Elite** (Windows on ARM laptops) — Vulkan via the Adreno driver
 - **Raspberry Pi 5** — Vulkan via Mesa V3D driver, expect CPU-tier performance
 - **Ampere Altra / AWS Graviton workstations** — Vulkan via lavapipe (CPU fallback, since no consumer arm64 dGPU yet)
@@ -468,13 +468,13 @@ curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Functional test
-echo "Create hello.py that prints hello world" | atlas
+# Functional test: full install diagnostic (services, artifacts, e2e smoke)
+atlas doctor
 ```
 
 All health endpoints should return `{"status": "ok"}` or `{"status": "healthy"}`.
 
-> **Note:** Plain `atlas` in an interactive terminal launches the Bubbletea TUI for the full agent loop (tool calls, V3 pipeline, file read/write). Pipe mode (e.g. the `echo | atlas` form above) routes through the built-in `/solve` flow for scripted/one-shot use.
+> **Note:** Plain `atlas` in an interactive terminal launches the Bubbletea TUI for the full agent loop (tool calls, V3 pipeline, file read/write). The TUI needs a real terminal — piped stdin/stdout prints a pointer to `atlas doctor` and exits.
 
 ### Stopping
 
@@ -858,11 +858,14 @@ To enable C(x)/G(x) scoring, you need trained model weights. Pre-trained weights
 
 Place weight files in `geometric-lens/geometric_lens/models/` (or mount via `ATLAS_LENS_MODELS` in Docker Compose). The service loads them automatically on startup.
 
-Training scripts are provided in `scripts/` if you want to train on your own benchmark data:
-- `scripts/retrain_cx_phase0.py` — Initial C(x) training from collected embeddings
-- `scripts/retrain_cx.py` — Production C(x) retraining with class weights
-- `scripts/collect_lens_training_data.py` — Collect pass/fail embeddings from benchmark runs
-- `scripts/prepare_lens_training.py` — Prepare and validate training data format
+To train on your own benchmark data, the whole loop is CLI-driven:
+
+```bash
+atlas bench --run-id mymodel_lens --tasks 200    # generate + self-label candidates
+atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
+```
+
+`atlas lens build` trains both lens halves, calibrates the thresholds, and writes a `provenance.json` manifest into the activated bundle. See [CLI.md § atlas lens](CLI.md#atlas-lens).
 
 ### Bringing your own model
 
@@ -919,6 +922,10 @@ Total wall time on a 16GB GPU: ~5 minutes. Build runs on the same
 hardware the model lives on; the resulting vector is model-specific
 (do not move an `ast_edit_steering.gguf` built against
 one model's artifacts to a host running a different base model).
+
+> The `ast_edit_steering` filename is intentional and stable: the registry
+> SHA-pins it and the `.model` marker sits beside it, so it keeps the name
+> even though the tool it steers is now called `structural_edit`.
 
 **Override behavior** (set in `.env` if you want to tune):
 

@@ -185,7 +185,12 @@ fi
 ### Running Tests
 
 ```bash
-# Run the developer quality gate
+# Run the developer quality gate. Its python test gates cover the same
+# suites CI runs: python-tests runs tests/v3, tests/v3-service, tests/cli,
+# tests/infrastructure, tests/concurrency, tests/perf, tests/contracts,
+# and tests/e2e; python-tests-lens runs geometric-lens/tests in its own
+# process (as CI does). tests/e2e skips cleanly without the built proxy
+# binary; the lens gate needs the lens requirements (CPU torch is enough).
 python scripts/production-readiness.py
 
 # Run only the test-integrity validator
