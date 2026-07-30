@@ -340,6 +340,48 @@ recommendation before any action.
 | E16 | **proxy test-file confetti** — 49 test files, 43 named for deleted subjects (the folder complaint) | ✅ merged along production seams: 61 → 24 .go files | ✅ |
 | E17 | **datasets/ breadth** — 8 loaders, only livecodebench ever invoked | ✅ seven deleted | ✅ |
 
+## V3 pipeline efficacy ledger (2026-07-31 review; full report in session transcript)
+
+**Meta-finding: TWO ORCHESTRATORS.** pipeline.py (live) vs atlas/bench/v3_runner.py
+(bench) disagree on k policy, S* adapter, probe thinking, ACE/ReASC presence,
+vetoes (live-only), constraints plumbing (bench-only). The 74.6% ablation
+certifies the BENCH orchestrator; the live cascade has never been benchmarked
+as-wired. Bench-learned fixes (k=3 pin, S* stdin adapter) never reached live.
+
+| Stage | Verdict | Evidence |
+|---|---|---|
+| probe | KEEP | bench-validated early exit |
+| plan_search | KEEP (simplify: fake threadpools, dead :400 expr) | **+12.4pp** — the workhorse |
+| div_sampling | KEEP | fallback generator, ~free |
+| self_test_gen | KEEP (dedupe double-gen = D2) | legitimizes Phase 3 |
+| pr_cot | KEEP → verify-as-you-go | **36/42 rescues** |
+| refinement_loop | KEEP, simplify hard (merge 2 calls; consume hyp 2-3; delete inert geometry filter + escalate_after) | 6/42 rescues |
+| candidate_selection | KEEP | 30 live lines; ablation baselines |
+| embedding_store | KEEP (bench) | feeds lens training |
+| llm_client | KEEP | the model-agnosticism layer |
+| budget_forcing | SIMPLIFY → tokens table (⏸ owner-data) | Wait-injection = 0 callers; live thinking silently off |
+| blend_asc dynamic k | **CUT-live, pin k=3** ⏸ owner-data | +0.0pp; bench already demoted to telemetry |
+| s_star | **CUT-live** ⏸ owner-data | +0.0pp; stdin dropped in live; scores "didn't crash" |
+| derivation_chains | **CUT** ⏸ owner-data | **0/194 rescues**, ≤17 calls, verification fiction; roadmap already prescribed removal |
+| ace_pipeline | **CUT** ⏸ owner-data | learns task-id strings into a playbook discarded at exit |
+| reasc | **CUT** ⏸ owner-data | runner records its verdict and ignores it |
+| lens_feedback | MEASURE (bench flag A/B) | postdates ablation |
+
+**Composition defects D1-D8** (full text in review): D1 veto→repair-pool hole
+(vetoed stub can ship) · D2 duplicate self-test gen w/ None-downgrade · D3 two
+orchestrators · D4 live SandboxAdapter drops test_input (verification = "ran
+with empty stdin") · D5 EmbedAdapter→[] disarms geometry filter silently · D6
+live constraints plumbing vacuous · D7 dead knobs/code inside stages · D8 live
+stage telemetry nonexistent (docstrings advertise bench-only JSONL).
+
+**Execution state:** D1/D2/D4/D7/D8 fixes dispatched (data-independent);
+stage CUTS ON HOLD for the owner's H200 bench dataset
+(~/Desktop/atlas-benchmark-data on the MacBook → rsync to
+/home/isaac/atlas-benchmark-data; not yet arrived). Minimal-equivalent target:
+6 stages, worst-case live calls ~40→~20, expected pass-rate cost zero.
+Owner root-cause note: this complexity is the likely source of the TUI-visible
+bugs (stub writes = D1; hangs-then-baseline = derivation burning the 180s cap).
+
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
 - `v3-service/graph/` — clean layered DAG, no cycles, each file one concern. Minor: trim
