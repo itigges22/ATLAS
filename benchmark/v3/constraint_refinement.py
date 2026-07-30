@@ -124,8 +124,6 @@ Failure analysis:
 - Violated constraints: {violated_constraints}
 - Suggested new constraints: {new_constraints}
 
-{warnings_section}
-
 Generate {n} REFINED constraint sets. Each must:
 1. Include ALL original constraints
 2. Add at least 1 NEW constraint that specifically prevents the identified failure pattern
@@ -276,7 +274,6 @@ class ConstraintRefiner:
                failure_analysis: FailureAnalysis,
                original_constraints: List[str],
                failed_embeddings: Optional[List[List[float]]] = None,
-               metacognitive_warnings: Optional[List[str]] = None,
                llm_call: Optional[LLMCallable] = None,
                embed_call: Optional[EmbedCallable] = None,
                task_id: str = "") -> RefinementResult:
@@ -287,7 +284,6 @@ class ConstraintRefiner:
             failure_analysis: Analysis from 3A.
             original_constraints: Constraints from Phase 1.
             failed_embeddings: Embeddings of failed solutions.
-            metacognitive_warnings: Warnings from 3F.
             llm_call: LLM callable for hypothesis generation.
             embed_call: Embedding callable for distance checking.
             task_id: Task identifier for telemetry.
@@ -306,7 +302,6 @@ class ConstraintRefiner:
         # Build refinement prompt
         prompt = self._build_prompt(
             problem, failure_analysis, original_constraints,
-            metacognitive_warnings
         )
 
         response, tokens, gen_time = llm_call(
@@ -362,8 +357,7 @@ class ConstraintRefiner:
 
     def _build_prompt(self, problem: str,
                       failure_analysis: FailureAnalysis,
-                      original_constraints: List[str],
-                      warnings: Optional[List[str]] = None) -> str:
+                      original_constraints: List[str]) -> str:
         """Build the refinement prompt."""
         original_text = '\n'.join(f"- {c}" for c in original_constraints) \
             if original_constraints else "(none)"
@@ -372,18 +366,12 @@ class ConstraintRefiner:
         new_text = '\n'.join(f"- {c}" for c in failure_analysis.new_constraints) \
             if failure_analysis.new_constraints else "(none)"
 
-        warnings_section = ""
-        if warnings:
-            warnings_section = "Model-specific warnings:\n" + \
-                '\n'.join(f"- {w}" for w in warnings)
-
         user_content = REFINEMENT_PROMPT.format(
             problem=problem,
             original_constraints=original_text,
             common_pattern=failure_analysis.common_pattern or "(none identified)",
             violated_constraints=violated_text,
             new_constraints=new_text,
-            warnings_section=warnings_section,
             n=self.config.num_hypotheses,
         )
 

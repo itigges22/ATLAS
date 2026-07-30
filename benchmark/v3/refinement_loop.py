@@ -188,7 +188,6 @@ class RefinementLoop:
             sandbox_run: Optional[SandboxCallable] = None,
             embed_call: Optional[EmbedCallable] = None,
             code_gen: Optional[CodeGenCallable] = None,
-            metacognitive_warnings: Optional[List[str]] = None,
             task_id: str = "") -> RefinementResult:
         """Execute the refinement loop.
 
@@ -200,7 +199,6 @@ class RefinementLoop:
             sandbox_run: Sandbox callable for testing.
             embed_call: Embedding callable for distance checking.
             code_gen: Code generation callable.
-            metacognitive_warnings: Warnings from 3F.
             task_id: Task identifier for telemetry.
 
         Returns:
@@ -251,7 +249,7 @@ class RefinementLoop:
             # Step 2: Refine constraints
             refinement = self.constraint_refiner.refine(
                 problem, analysis, original_constraints,
-                all_failed_embeddings, metacognitive_warnings,
+                all_failed_embeddings,
                 llm_call, embed_call, task_id=task_id,
             )
 

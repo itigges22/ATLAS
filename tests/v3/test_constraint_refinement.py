@@ -402,16 +402,6 @@ class TestRefineEnabled:
         # Some may have been filtered
         assert result.total_generated >= len(result.hypotheses)
 
-    def test_metacognitive_warnings_included(self, cr_enabled, sample_failure_analysis):
-        mock_llm = MockLLM("HYPOTHESIS 1:\nAPPROACH: test\nCONSTRAINTS:\n- NEW: new thing here")
-        cr_enabled.refine(
-            problem="test", failure_analysis=sample_failure_analysis,
-            original_constraints=[], llm_call=mock_llm,
-            metacognitive_warnings=["Beware of integer overflow"],
-        )
-        prompt = mock_llm.calls[0]["prompt"]
-        assert "integer overflow" in prompt
-
     def test_llm_params(self, cr_enabled, sample_failure_analysis):
         mock_llm = MockLLM("response")
         cr_enabled.refine(

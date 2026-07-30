@@ -22,7 +22,6 @@ from benchmark.v3.failure_analysis import FailingCandidate
 from benchmark.v3.pr_cot import PRCoT, PRCoTConfig
 from benchmark.v3.refinement_loop import RefinementLoop, RefinementLoopConfig
 from benchmark.v3.derivation_chains import DerivationChains, DerivationChainsConfig
-from benchmark.v3.metacognitive import MetacognitiveProfile, MetacognitiveConfig
 from benchmark.v3.self_test_gen import SelfTestGen, SelfTestGenConfig
 from benchmark.v3.candidate_selection import CandidateInfo, select_candidate
 
@@ -93,7 +92,6 @@ class V3PipelineService:
         self.pr_cot = PRCoT(PRCoTConfig(enabled=True))
         self.refinement_loop = RefinementLoop(RefinementLoopConfig(enabled=True))
         self.derivation_chains = DerivationChains(DerivationChainsConfig(enabled=True))
-        self.metacognitive = MetacognitiveProfile(MetacognitiveConfig(enabled=True))
         self.self_test_gen = SelfTestGen(SelfTestGenConfig(enabled=True))
 
     def run(self, problem: str, task_id: str = "cli",
@@ -704,9 +702,6 @@ class V3PipelineService:
         else:
             self_tests = None
 
-        # Metacognitive warnings
-        metacog_warnings = self.metacognitive.get_warnings([], task_id)
-
         # GH #39 point 3: build call-graph context for the failing
         # function once, reuse across PR-CoT + refinement. Skips
         # cleanly when stderr isn't a Python traceback or the failing
@@ -796,7 +791,6 @@ class V3PipelineService:
                     llm_call=llm,
                     sandbox_run=sandbox,
                     embed_call=embed,
-                    metacognitive_warnings=metacog_warnings,
                     task_id=task_id,
                 )
                 result["total_tokens"] += ref_result.total_tokens

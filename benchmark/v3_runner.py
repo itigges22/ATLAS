@@ -21,7 +21,6 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
       - PR-CoT repair (quick fix, 1-2 attempts)
       - Full refinement loop:
         - 3A: Failure analysis
-        - 3F: Metacognitive compensations
         - 3B: Constraint refinement
         - 3D: Derivation chains (if complex)
         - 3E: Loop orchestration (max 2 iterations)
@@ -77,9 +76,6 @@ from benchmark.v3.refinement_loop import (
 )
 from benchmark.v3.derivation_chains import (
     DerivationChains, DerivationChainsConfig,
-)
-from benchmark.v3.metacognitive import (
-    MetacognitiveProfile, MetacognitiveConfig, BenchmarkResult,
 )
 from benchmark.v3.ace_pipeline import ACEPipeline, ACEConfig
 from benchmark.v3.self_test_gen import SelfTestGen, SelfTestGenConfig
@@ -578,10 +574,6 @@ class V3Pipeline:
             DerivationChainsConfig(enabled=self.enable_phase3),
             telemetry_dir=telemetry_dir,
         )
-        self.metacognitive = MetacognitiveProfile(
-            MetacognitiveConfig(enabled=self.enable_phase3),
-            telemetry_dir=telemetry_dir,
-        )
         self.ace = ACEPipeline(
             ACEConfig(enabled=self.enable_phase3),
             telemetry_dir=telemetry_dir,
@@ -906,18 +898,6 @@ class V3Pipeline:
             except LLMConnectionError as e:
                 result["telemetry"]["fallback_error"] = str(e)
 
-        # Get metacognitive warnings (for Phase 3 reuse)
-        metacog_warnings = []
-        if self.enable_phase3:
-            try:
-                categories = self._infer_categories(task)
-                metacog_warnings = self.metacognitive.get_warnings(
-                    categories, task_id=task_id,
-                )
-            except Exception:
-                # best-effort: swallow on failure (caller continues)
-                pass
-
         latency["phase1_gen_ms"] = (time.time() - phase1_start) * 1000
         result["candidates_generated"] = len(candidates)
 
@@ -1126,13 +1106,9 @@ class V3Pipeline:
                 best_failing = failing[0]
                 error_msg = best_failing.error_output or "All test cases failed"
 
-                # Enrich problem context with metacognitive warnings
-                # and ACE principles for better-guided repairs
+                # Enrich problem context with ACE principles for
+                # better-guided repairs
                 enriched_problem = task.prompt
-                if metacog_warnings:
-                    enriched_problem += "\n\nKnown pitfalls for this problem type:"
-                    for w in metacog_warnings:
-                        enriched_problem += f"\n- {w}"
                 if ace_context:
                     enriched_problem += f"\n\n{ace_context}"
 
@@ -1177,7 +1153,6 @@ class V3Pipeline:
                     llm_call=ref_llm,
                     sandbox_run=self_verify_sandbox,
                     embed_call=embed,
-                    metacognitive_warnings=metacog_warnings,
                     task_id=task_id,
                 )
                 phase3_extra_tokens += ref_llm.total_tokens
@@ -1201,15 +1176,8 @@ class V3Pipeline:
                     f"Candidate {c['index']}: {c.get('stderr', 'failed')[:200]}"
                     for c in candidates if c.get("passed") is False
                 )
-                # Enrich with metacognitive context for derivation
-                dc_problem = task.prompt
-                if metacog_warnings:
-                    dc_problem += "\n\nKnown pitfalls for this problem type:"
-                    for w in metacog_warnings:
-                        dc_problem += f"\n- {w}"
-
                 dc_result = self.derivation_chains.solve(
-                    problem=dc_problem,
+                    problem=task.prompt,
                     failure_context=failure_context,
                     llm_call=dc_llm,
                     sandbox_run=sandbox,
@@ -1285,29 +1253,6 @@ class V3Pipeline:
             # best-effort: swallow on failure (caller continues)
             pass
 
-    def _build_generation_prompt(self, task: BenchmarkTask,
-                                  constraints: List[str],
-                                  metacog_warnings: List[str],
-                                  ace_context: str,
-                                  candidate_index: int) -> str:
-        """Build a generation prompt with V3 enhancements."""
-        parts = [task.prompt]
-
-        if constraints:
-            parts.append("\n\nIMPORTANT constraints to satisfy:")
-            for c in constraints:
-                parts.append(f"- {c}")
-
-        if metacog_warnings:
-            parts.append("\n\nKnown pitfalls for this problem type:")
-            for w in metacog_warnings:
-                parts.append(f"- {w}")
-
-        if ace_context:
-            parts.append(f"\n\n{ace_context}")
-
-        return '\n'.join(parts)
-
     def _infer_categories(self, task: BenchmarkTask) -> List[str]:
         """Infer problem categories from task metadata."""
         categories = []
@@ -1353,26 +1298,6 @@ class V3Pipeline:
             event[key] = value
         try:
             append_jsonl(self.telemetry_dir / "v3_events.jsonl", event)
-        except Exception:
-            # best-effort: swallow on failure (caller continues)
-            pass
-
-    def collect_benchmark_results(self, results: Dict[str, Dict]) -> None:
-        """Post-benchmark: feed results to metacognitive + ACE."""
-        benchmark_results = []
-        for task_id, r in results.items():
-            categories = r.get("telemetry", {}).get("categories", ["general"])
-            benchmark_results.append(BenchmarkResult(
-                task_id=task_id,
-                category=categories[0] if categories else "general",
-                passed=r["passed"],
-                code=r.get("code", ""),
-            ))
-
-        # Metacognitive analysis
-        try:
-            llm = LLMAdapter(self.runner)
-            self.metacognitive.analyze_benchmark(benchmark_results, llm_call=llm)
         except Exception:
             # best-effort: swallow on failure (caller continues)
             pass
@@ -1678,11 +1603,6 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         enable_feedback=enable_feedback,
     ) as runner:
         results = runner.run_lcb(tasks)
-
-        # Post-benchmark analysis
-        print("\n" + "-" * 60)
-        print("Post-benchmark analysis...")
-        runner.pipeline.collect_benchmark_results(results)
 
     # Summary
     passed = sum(1 for r in results.values() if r.get("passed"))
