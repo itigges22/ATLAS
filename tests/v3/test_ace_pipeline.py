@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import pytest
 
-from benchmark.v3.ace_pipeline import (
+from stages.ace_pipeline import (
     ACEConfig,
     ACEEvent,
     ACEPipeline,

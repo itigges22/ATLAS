@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 
 import pytest
 
-from benchmark.v3.pr_cot import (
+from stages.pr_cot import (
     PERSPECTIVES,
     PRCoT,
     PRCoTConfig,

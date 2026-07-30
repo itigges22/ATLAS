@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from benchmark.v3.budget_forcing import (
+from stages.budget_forcing import (
     BUDGET_TIERS,
     WAIT_INJECTION_TEXT,
     BudgetForcing,

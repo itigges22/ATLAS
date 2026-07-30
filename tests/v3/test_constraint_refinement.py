@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-from benchmark.v3.constraint_refinement import (
+from stages.constraint_refinement import (
     ConstraintRefinementConfig,
     ConstraintRefinementEvent,
     ConstraintRefiner,
@@ -15,7 +15,7 @@ from benchmark.v3.constraint_refinement import (
     filter_by_distance,
     parse_hypotheses,
 )
-from benchmark.v3.failure_analysis import FailureAnalysis
+from stages.failure_analysis import FailureAnalysis
 
 
 # ---------------------------------------------------------------------------

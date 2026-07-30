@@ -5,19 +5,13 @@ write hook."""
 import json
 import os
 import re
-import sys
 import threading
 import time
 import urllib.request
 import urllib.error
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Add project root to path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from benchmark.llm_client import chatml_to_messages
+from stages.llm_client import chatml_to_messages
 
 # --- Configuration -----------------------------------------------------------
 

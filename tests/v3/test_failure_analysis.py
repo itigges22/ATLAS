@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-from benchmark.v3.failure_analysis import (
+from stages.failure_analysis import (
     FAILURE_CATEGORIES,
     FailingCandidate,
     FailureAnalysis,

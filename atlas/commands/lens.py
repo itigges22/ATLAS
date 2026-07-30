@@ -584,10 +584,12 @@ def _load_telemetry_embeddings(emb_path: str,
     labeled samples per task, not one. Returns ({"embedding", "label"}
     dicts, n_skipped) with UNKNOWN labels and dim mismatches dropped.
     """
-    root = cli_env.atlas_root()
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from benchmark.v3.embedding_store import EmbeddingReader
+    # stages/ (the V3 pipeline stages) lives in v3-service — same pattern
+    # as the geometric-lens sys.path setup above.
+    v3_dir = os.path.join(cli_env.atlas_root(), "v3-service")
+    if v3_dir not in sys.path:
+        sys.path.insert(0, v3_dir)
+    from stages.embedding_store import EmbeddingReader
 
     out: List[Dict] = []
     skipped = 0

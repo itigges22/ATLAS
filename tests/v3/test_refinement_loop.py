@@ -5,19 +5,19 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-from benchmark.v3.refinement_loop import (
+from stages.refinement_loop import (
     IterationResult,
     RefinementLoop,
     RefinementLoopConfig,
     RefinementLoopEvent,
     RefinementResult,
 )
-from benchmark.v3.failure_analysis import (
+from stages.failure_analysis import (
     FailingCandidate,
     FailureAnalysisConfig,
     FailureAnalyzer,
 )
-from benchmark.v3.constraint_refinement import (
+from stages.constraint_refinement import (
     ConstraintRefinementConfig,
     ConstraintRefiner,
     RefinedHypothesis,

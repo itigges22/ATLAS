@@ -1,4 +1,5 @@
-"""LLM generation for the benchmark / V3 pipeline.
+"""LLM generation and response post-processing for the V3 pipeline and
+the bench harness.
 
 `chat_completion()` calls llama-server's /v1/chat/completions endpoint with
 structured messages, so the model's embedded chat template is applied
@@ -11,21 +12,52 @@ handling.
 """
 
 import json
+import os
 import re
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+from typing import Dict, List, Optional
 
-try:
-    from benchmark.config import (service_token_headers as _auth_headers,
-                                  install_urllib_opener as
-                                  _install_auth_opener)
-except ImportError:  # direct-script use from benchmark/
-    from config import (service_token_headers as _auth_headers,
-                        install_urllib_opener as _install_auth_opener)
+
+def _service_token() -> str:
+    """Internal-auth token (empty = auth disabled). Resolution: explicit
+    ATLAS_SERVICE_TOKEN_FILE, the container secret mount, then the repo
+    checkout's secrets/ file (stages/ lives under v3-service/, so
+    parents[2] is the repo root)."""
+    explicit = os.environ.get("ATLAS_SERVICE_TOKEN_FILE")
+    candidates = [explicit] if explicit else [
+        "/run/atlas-secrets/service-token",
+        str(Path(__file__).resolve().parents[2] / "secrets" / "service-token"),
+    ]
+    for path in candidates:
+        try:
+            with open(path) as fh:
+                return fh.read().strip()
+        except OSError:
+            continue
+    return ""
+
+
+def _auth_headers() -> dict:
+    tok = _service_token()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+def _install_auth_opener() -> None:
+    """Cover every urllib call site in the bench pipeline with the
+    internal-auth header (urllib merges these under explicit per-request
+    headers)."""
+    tok = _service_token()
+    if not tok:
+        return
+    opener = urllib.request.build_opener()
+    opener.addheaders = [("Authorization", f"Bearer {tok}")]
+    urllib.request.install_opener(opener)
+
 
 _install_auth_opener()
-from typing import Dict, List, Optional
 
 try:
     import httpx
@@ -63,6 +95,70 @@ def strip_reasoning_leak(text: str) -> str:
     if "<think>" in out:
         out = out.split("<think>", 1)[0]
     return out.strip()
+
+
+def extract_code(response: str) -> str:
+    """
+    Extract code from an LLM response.
+
+    Handles various formats:
+    - Markdown code blocks with any language label (```python, ```javascript, ...)
+    - Plain code blocks (``` ... ```)
+    - Raw code without blocks
+    - optional <think>...</think> reasoning blocks (stripped before extraction)
+
+    Args:
+        response: Raw LLM response text
+
+    Returns:
+        Extracted Python code
+    """
+    # Strip template-emitted thinking blocks first; they can consume tokens
+    # before the actual code output
+    think_pattern = r'<think>.*?</think>'
+    response = re.sub(think_pattern, '', response, flags=re.DOTALL).strip()
+
+    # Safety net: strip unclosed <think> tags (edge case where
+    # thinking mode doesn't fully strip thinking)
+    if '<think>' in response and '</think>' not in response:
+        response = response[:response.index('<think>')].strip()
+
+    # Try MBPP [BEGIN]...[DONE] delimiters first
+    begin_done_pattern = r'\[BEGIN\]\s*\n(.*?)(?:\[DONE\]|$)'
+    begin_matches = re.findall(begin_done_pattern, response, re.DOTALL)
+    if begin_matches:
+        # Return the last match (the model's answer, not the few-shot examples)
+        return begin_matches[-1].strip()
+
+    # Extract fenced code with an optional language label. The V3 service
+    # supports multiple languages, so limiting labels to Python leaves fences
+    # such as ```javascript in the returned source and causes false syntax
+    # failures downstream.
+    pattern = r'```[^\S\r\n]*[A-Za-z0-9_+.#-]*[^\S\r\n]*\r?\n(.*?)```'
+    matches = re.findall(pattern, response, re.DOTALL)
+
+    if matches:
+        # Return the longest match (likely the main code block)
+        return max(matches, key=len).strip()
+
+    # No code blocks found, assume raw code
+    # Strip common prefixes/suffixes
+    code = response.strip()
+
+    # Remove common LLM artifacts
+    lines = code.split('\n')
+    filtered_lines = []
+    for line in lines:
+        # Skip lines that look like explanations
+        if line.strip().startswith('Here') and ':' in line:
+            continue
+        if line.strip().startswith('This function'):
+            continue
+        if line.strip().startswith('The function'):
+            continue
+        filtered_lines.append(line)
+
+    return '\n'.join(filtered_lines).strip()
 
 
 def chatml_to_messages(prompt: str) -> List[Dict[str, str]]:

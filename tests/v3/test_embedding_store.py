@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from benchmark.v3.embedding_store import EmbeddingWriter, EmbeddingReader
+from stages.embedding_store import EmbeddingWriter, EmbeddingReader
 
 
 class TestEmbeddingStore:

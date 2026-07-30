@@ -27,8 +27,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# stages/ (the V3 pipeline stages) lives in v3-service
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "v3-service"))
 
-from benchmark.v3.candidate_selection import CandidateInfo, select_candidate
+from stages.candidate_selection import CandidateInfo, select_candidate
 
 
 # Ablation condition definitions

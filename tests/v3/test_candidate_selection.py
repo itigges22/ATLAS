@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from benchmark.v3.candidate_selection import (
+from stages.candidate_selection import (
     CandidateInfo,
     select_lens,
     select_random,

@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir torch==2.13.0 \
         --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r /tmp/v3-requirements.txt
 
-# Copy benchmark modules (V3 pipeline depends on them)
-COPY benchmark/ /app/benchmark/
+# V3 pipeline stages (candidate generation, selection, repair)
+COPY v3-service/stages/ /app/stages/
 COPY v3-service/main.py /app/main.py
 COPY v3-service/adapters.py /app/adapters.py
 COPY v3-service/scoring.py /app/scoring.py

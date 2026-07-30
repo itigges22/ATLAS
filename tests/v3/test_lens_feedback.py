@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from benchmark.v3.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
+from stages.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ class TestRecordAndRetrain:
         assert len(collector._all_data) == 3
         assert collector._retrain_count == 0
 
-    @patch("benchmark.v3.lens_feedback.urllib.request.urlopen")
+    @patch("stages.lens_feedback.urllib.request.urlopen")
     def test_triggers_retrain_at_threshold(self, mock_urlopen,
                                             telemetry_dir, dummy_embedding):
         """Buffer hitting interval triggers retrain POST."""
@@ -114,7 +114,7 @@ class TestRecordAndRetrain:
         assert len(collector._all_data) == 5  # Kept for next retrain
         mock_urlopen.assert_called_once()
 
-    @patch("benchmark.v3.lens_feedback.urllib.request.urlopen")
+    @patch("stages.lens_feedback.urllib.request.urlopen")
     def test_skips_retrain_insufficient_labels(self, mock_urlopen,
                                                 telemetry_dir,
                                                 dummy_embedding):
@@ -197,7 +197,7 @@ class TestComponentPropagation:
 
 
 class TestTelemetry:
-    @patch("benchmark.v3.lens_feedback.urllib.request.urlopen")
+    @patch("stages.lens_feedback.urllib.request.urlopen")
     def test_retrain_event_logged(self, mock_urlopen, telemetry_dir,
                                    dummy_embedding):
         mock_response = MagicMock()
@@ -237,7 +237,7 @@ class TestTelemetry:
         assert event["new_midpoint"] == pytest.approx(9.5)
         assert "timestamp" in event
 
-    @patch("benchmark.v3.lens_feedback.urllib.request.urlopen")
+    @patch("stages.lens_feedback.urllib.request.urlopen")
     def test_propagation_event_logged(self, mock_urlopen, telemetry_dir,
                                        dummy_embedding):
         mock_response = MagicMock()

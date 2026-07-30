@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from benchmark.llm_client import strip_reasoning_leak
+from .llm_client import strip_reasoning_leak
 
 from .budget_forcing import BudgetForcing, get_system_prompt
 

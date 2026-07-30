@@ -5,8 +5,8 @@ from typing import Optional, Tuple
 
 import pytest
 
-from benchmark.v3.budget_forcing import BudgetForcing, BudgetForcingConfig
-from benchmark.v3.plan_search import (
+from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
+from stages.plan_search import (
     CODE_GENERATION_PROMPT,
     CONSTRAINT_EXTRACTION_PROMPT,
     PLAN_CONSTRUCTION_PROMPT,

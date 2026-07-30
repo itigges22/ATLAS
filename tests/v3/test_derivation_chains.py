@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 
 import pytest
 
-from benchmark.v3.derivation_chains import (
+from stages.derivation_chains import (
     DerivationChainEvent,
     DerivationChains,
     DerivationChainsConfig,

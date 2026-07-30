@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from benchmark.v3.blend_asc import (
+from stages.blend_asc import (
     DEFAULT_K_TABLE,
     BlendASC,
     BlendASCConfig,
@@ -13,7 +13,7 @@ from benchmark.v3.blend_asc import (
     compute_k,
     lookup_k,
 )
-from benchmark.v3.budget_forcing import normalize_energy
+from stages.budget_forcing import normalize_energy
 
 
 # ---------------------------------------------------------------------------

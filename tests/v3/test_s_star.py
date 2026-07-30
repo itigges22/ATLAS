@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 
 import pytest
 
-from benchmark.v3.s_star import (
+from stages.s_star import (
     DISTINGUISHING_INPUT_PROMPT,
     CandidateScore,
     SStar,

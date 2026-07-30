@@ -48,42 +48,44 @@ sys.stdout.reconfigure(line_buffering=True)
 
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# The V3 pipeline stages live in v3-service/stages/ — put v3-service on
+# sys.path the same way the CLI does for geometric-lens.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "v3-service"))
 
 from benchmark.config import config
-from benchmark.llm_client import chat_completion, chatml_to_messages
 from benchmark.models import BenchmarkTask
-from benchmark.runner import BenchmarkRunner, LLMConnectionError, extract_code
 from benchmark.runner import execute_code, execute_code_stdio
 from benchmark.geo_learning import extract_embedding_urllib
 from benchmark.best_of_k import score_candidate
 
-# V3 components
-from benchmark.v3.budget_forcing import BudgetForcing, BudgetForcingConfig
-from benchmark.v3.plan_search import PlanSearch, PlanSearchConfig
-from benchmark.v3.div_sampling import DivSampling, DivSamplingConfig
-from benchmark.v3.blend_asc import BlendASC, BlendASCConfig
-from benchmark.v3.reasc import ReASC, ReASCConfig
-from benchmark.v3.s_star import SStar, SStarConfig, CandidateScore
-from benchmark.v3.failure_analysis import (
+# V3 pipeline stages (shared with the V3 service)
+from stages.llm_client import chat_completion, chatml_to_messages, extract_code
+from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
+from stages.plan_search import PlanSearch, PlanSearchConfig
+from stages.div_sampling import DivSampling, DivSamplingConfig
+from stages.blend_asc import BlendASC, BlendASCConfig
+from stages.reasc import ReASC, ReASCConfig
+from stages.s_star import SStar, SStarConfig, CandidateScore
+from stages.failure_analysis import (
     FailureAnalyzer, FailureAnalysisConfig, FailingCandidate,
 )
-from benchmark.v3.constraint_refinement import (
+from stages.constraint_refinement import (
     ConstraintRefiner, ConstraintRefinementConfig,
 )
-from benchmark.v3.pr_cot import PRCoT, PRCoTConfig
-from benchmark.v3.refinement_loop import (
+from stages.pr_cot import PRCoT, PRCoTConfig
+from stages.refinement_loop import (
     RefinementLoop, RefinementLoopConfig,
 )
-from benchmark.v3.derivation_chains import (
+from stages.derivation_chains import (
     DerivationChains, DerivationChainsConfig,
 )
-from benchmark.v3.ace_pipeline import ACEPipeline, ACEConfig
-from benchmark.v3.self_test_gen import SelfTestGen, SelfTestGenConfig
-from benchmark.v3.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
-from benchmark.v3.candidate_selection import (
+from stages.ace_pipeline import ACEPipeline, ACEConfig
+from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
+from stages.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
+from stages.candidate_selection import (
     CandidateInfo, select_candidate,
 )
-from benchmark.v3.embedding_store import EmbeddingWriter
+from stages.embedding_store import EmbeddingWriter
 
 
 # --- Constants ----------------------------------------------------------------
@@ -220,7 +222,7 @@ def self_verify_execute(results: List[Tuple[bool, str, str]],
 
 
 class LLMAdapter:
-    """Adapts BenchmarkRunner to the V3 LLMCallable signature:
+    """Adapts chat_completion to the V3 LLMCallable signature:
     (prompt, temperature, max_tokens, seed) -> (response, tokens, time_ms).
 
     The prompt may be a ChatML string assembled by V3 components or raw text;
@@ -242,9 +244,9 @@ class LLMAdapter:
     _llm_lock = threading.Lock()
     _parallel_mode = os.environ.get("ATLAS_LLM_PARALLEL", "0") == "1"
 
-    def __init__(self, runner: BenchmarkRunner, max_retries: int = 2,
+    def __init__(self, llm_url: str = "", max_retries: int = 2,
                  timeout: int = 900):
-        self.runner = runner
+        self.llm_url = llm_url or LLAMA_URL
         self.max_retries = max_retries
         # Scale timeout by parallel tasks — shared GPU bandwidth means each
         # call takes proportionally longer with more concurrent tasks.
@@ -288,7 +290,7 @@ class LLMAdapter:
 
         def _generate():
             return chat_completion(
-                self.runner.llm_url,
+                self.llm_url,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -435,14 +437,13 @@ class V3Pipeline:
     cascade and return the result.
     """
 
-    def __init__(self, runner: BenchmarkRunner, telemetry_dir: Path,
+    def __init__(self, telemetry_dir: Path,
                  llama_url: str = LLAMA_URL,
                  enable_phase1: bool = True,
                  enable_phase2: bool = True,
                  enable_phase3: bool = True,
                  enable_feedback: bool = False,
                  selection_strategy: str = "lens"):
-        self.runner = runner
         self.telemetry_dir = telemetry_dir
         self.llama_url = llama_url
         self.enable_phase1 = enable_phase1
@@ -607,7 +608,7 @@ class V3Pipeline:
         """
         start_time = time.time()
         task_id = task_id or task.task_id
-        llm = LLMAdapter(self.runner)
+        llm = LLMAdapter(self.llama_url)
         sandbox = SandboxAdapter(task)
         embed = EmbedAdapter(self.llama_url)
 
@@ -666,8 +667,6 @@ class V3Pipeline:
                         "passed": None,
                     }
                     result["total_tokens"] += tokens
-            except LLMConnectionError:
-                raise
             except Exception as e:
                 result["telemetry"]["probe_error"] = str(e)
             latency["probe_ms"] = (time.time() - probe_start) * 1000
@@ -778,7 +777,7 @@ class V3Pipeline:
                 # PlanSearch does multiple sequential LLM calls (constraint
                 # extraction + plan construction + code gen). Use a longer
                 # timeout to handle long competition prompts at 9B speed.
-                ps_llm = LLMAdapter(self.runner, timeout=300)
+                ps_llm = LLMAdapter(self.llama_url, timeout=300)
                 ps_result = self.plan_search.generate(
                     problem=problem_with_context, task_id=task_id,
                     llm_call=ps_llm, num_plans=remaining_k,
@@ -828,7 +827,7 @@ class V3Pipeline:
                     )
                     max_tok = self.budget_forcing.get_max_tokens(bf_tier)
                     # Each thread creates its own LLMAdapter for thread safety
-                    thread_llm = LLMAdapter(self.runner)
+                    thread_llm = LLMAdapter(self.llama_url)
                     response, tokens, t_ms = thread_llm(
                         chatml, DIVERSITY_TEMPERATURE, max_tok,
                         42 + extra_idx,
@@ -870,33 +869,30 @@ class V3Pipeline:
         # tokens). Published Qwen3.5 benchmarks use full thinking mode
         # with temp=0.6 (65.6% LCB v6 with thinking vs ~39% without).
         if not candidates:
+            chatml = self.budget_forcing.format_chatml(
+                task.prompt, "standard",
+            )
+            response, tokens, t_ms = llm(
+                chatml, BASE_TEMPERATURE, MAX_TOKENS, 42,
+            )
+            code = extract_code(response)
             try:
-                chatml = self.budget_forcing.format_chatml(
-                    task.prompt, "standard",
+                energy_raw, energy_norm = score_candidate(
+                    code, LENS_URL,
                 )
-                response, tokens, t_ms = llm(
-                    chatml, BASE_TEMPERATURE, MAX_TOKENS, 42,
-                )
-                code = extract_code(response)
-                try:
-                    energy_raw, energy_norm = score_candidate(
-                        code, LENS_URL,
-                    )
-                except Exception:
-                    energy_raw, energy_norm = 0.0, 0.5
-                candidates.append({
-                    "index": 0,
-                    "code": code,
-                    "response": response,
-                    "tokens": tokens,
-                    "time_ms": t_ms,
-                    "energy": energy_raw,
-                    "energy_norm": energy_norm,
-                    "passed": None,
-                })
-                result["total_tokens"] += tokens
-            except LLMConnectionError as e:
-                result["telemetry"]["fallback_error"] = str(e)
+            except Exception:
+                energy_raw, energy_norm = 0.0, 0.5
+            candidates.append({
+                "index": 0,
+                "code": code,
+                "response": response,
+                "tokens": tokens,
+                "time_ms": t_ms,
+                "energy": energy_raw,
+                "energy_norm": energy_norm,
+                "passed": None,
+            })
+            result["total_tokens"] += tokens
 
         latency["phase1_gen_ms"] = (time.time() - phase1_start) * 1000
         result["candidates_generated"] = len(candidates)
@@ -1101,7 +1097,7 @@ class V3Pipeline:
         # --- Strategy 1: PR-CoT quick repair (2-6 LLM calls) ---
         if failing:
             phase3_strategies_tried.append("pr_cot")
-            pr_llm = LLMAdapter(self.runner, timeout=300)
+            pr_llm = LLMAdapter(self.llama_url, timeout=300)
             try:
                 best_failing = failing[0]
                 error_msg = best_failing.error_output or "All test cases failed"
@@ -1144,7 +1140,7 @@ class V3Pipeline:
         # --- Strategy 2: Refinement Loop (3-15 LLM calls) ---
         if not result["passed"] and failing:
             phase3_strategies_tried.append("refinement")
-            ref_llm = LLMAdapter(self.runner, timeout=300)
+            ref_llm = LLMAdapter(self.llama_url, timeout=300)
             try:
                 ref_result = self.refinement_loop.run(
                     problem=task.prompt,
@@ -1170,7 +1166,7 @@ class V3Pipeline:
         # --- Strategy 3: Derivation Chains (up to 17 LLM calls) ---
         if not result["passed"]:
             phase3_strategies_tried.append("derivation")
-            dc_llm = LLMAdapter(self.runner, timeout=300)
+            dc_llm = LLMAdapter(self.llama_url, timeout=300)
             try:
                 failure_context = "; ".join(
                     f"Candidate {c['index']}: {c.get('stderr', 'failed')[:200]}"
@@ -1314,9 +1310,8 @@ class V3BenchmarkRunner:
         self.run_dir = Path(run_dir)
         self.telemetry_dir = self.run_dir / "telemetry"
         self.telemetry_dir.mkdir(parents=True, exist_ok=True)
-        self.runner = BenchmarkRunner(max_retries=10)
         self.pipeline = V3Pipeline(
-            self.runner, self.telemetry_dir,
+            self.telemetry_dir,
             enable_phase1=enable_phase1,
             enable_phase2=enable_phase2,
             enable_phase3=enable_phase3,
@@ -1324,15 +1319,6 @@ class V3BenchmarkRunner:
             selection_strategy=selection_strategy,
         )
         self._start_time = time.time()
-
-    def close(self):
-        self.runner.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.close()
 
     def run_lcb(self, tasks: List[BenchmarkTask],
                 phase_name: str = "v3_lcb") -> Dict[str, Dict]:
@@ -1594,15 +1580,15 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     print(f"\nRunning V3 pipeline on {len(tasks)} tasks...")
     print("-" * 60)
 
-    with V3BenchmarkRunner(
+    runner = V3BenchmarkRunner(
         run_dir,
         enable_phase1=enable_phase1,
         enable_phase2=enable_phase2,
         enable_phase3=enable_phase3,
         selection_strategy=selection_strategy,
         enable_feedback=enable_feedback,
-    ) as runner:
-        results = runner.run_lcb(tasks)
+    )
+    results = runner.run_lcb(tasks)
 
     # Summary
     passed = sum(1 for r in results.values() if r.get("passed"))

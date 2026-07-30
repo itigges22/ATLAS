@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from benchmark.v3.reasc import (
+from stages.reasc import (
     ReASC,
     ReASCConfig,
     ReASCEvent,

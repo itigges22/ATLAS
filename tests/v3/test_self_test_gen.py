@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import pytest
 
-from benchmark.v3.self_test_gen import (
+from stages.self_test_gen import (
     SelfTestGenConfig,
     SelfTestGen,
     GeneratedTestCase,

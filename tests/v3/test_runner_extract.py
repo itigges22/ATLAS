@@ -1,4 +1,4 @@
-from benchmark.runner import extract_code
+from stages.llm_client import extract_code
 
 
 def test_extract_code_accepts_non_python_language_fence():

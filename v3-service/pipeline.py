@@ -3,27 +3,22 @@ verification, the lens/structural/call-graph vetoes, candidate selection,
 the repair phases, and the /v3/generate problem builder."""
 
 import re
-import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Add project root to path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from benchmark.runner import extract_code
-from benchmark.v3.budget_forcing import BudgetForcing, BudgetForcingConfig
-from benchmark.v3.plan_search import PlanSearch, PlanSearchConfig
-from benchmark.v3.div_sampling import DivSampling, DivSamplingConfig
-from benchmark.v3.blend_asc import BlendASC, BlendASCConfig
-from benchmark.v3.s_star import SStar, SStarConfig, CandidateScore
-from benchmark.v3.failure_analysis import FailingCandidate
-from benchmark.v3.pr_cot import PRCoT, PRCoTConfig
-from benchmark.v3.refinement_loop import RefinementLoop, RefinementLoopConfig
-from benchmark.v3.derivation_chains import DerivationChains, DerivationChainsConfig
-from benchmark.v3.self_test_gen import SelfTestGen, SelfTestGenConfig
-from benchmark.v3.candidate_selection import CandidateInfo, select_candidate
+from stages.llm_client import extract_code
+from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
+from stages.plan_search import PlanSearch, PlanSearchConfig
+from stages.div_sampling import DivSampling, DivSamplingConfig
+from stages.blend_asc import BlendASC, BlendASCConfig
+from stages.s_star import SStar, SStarConfig, CandidateScore
+from stages.failure_analysis import FailingCandidate
+from stages.pr_cot import PRCoT, PRCoTConfig
+from stages.refinement_loop import RefinementLoop, RefinementLoopConfig
+from stages.derivation_chains import DerivationChains, DerivationChainsConfig
+from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
+from stages.candidate_selection import CandidateInfo, select_candidate
 
 import adapters
 import scoring

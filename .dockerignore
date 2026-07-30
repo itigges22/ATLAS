@@ -3,9 +3,9 @@
 # Dockerfiles in proxy/, geometric-lens/, sandbox/, inference/ use
 # their own subdirectory as context and are unaffected by this file.
 #
-# Goal: keep the v3 build context to just `benchmark/` + the `v3-service/`
-# Python modules (what its Dockerfile actually COPYs), so CI doesn't ship
-# docs/ + tests/ + proxy sources / etc. across the wire on every build.
+# Goal: keep the v3 build context to just the `v3-service/` Python modules
+# (what its Dockerfile actually COPYs), so CI doesn't ship docs/ + tests/ +
+# proxy sources / etc. across the wire on every build.
 
 # VCS + CI
 .git/
@@ -43,9 +43,9 @@ docs/reports/ablation/
 v2_5_results/
 v2_5_1_results/
 v2_5_1/
-benchmark/datasets/.cache/
-benchmark/results/
-benchmark/result/
+# Not COPY'd by the v3 image (stages/ ships from v3-service/); also holds
+# heavy runtime output (results/, datasets/.cache/).
+benchmark/
 
 # Build / cache / Python
 __pycache__/

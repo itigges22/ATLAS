@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from benchmark.v3.div_sampling import (
+from stages.div_sampling import (
     DEFAULT_PERTURBATIONS,
     DivSampling,
     DivSamplingConfig,
