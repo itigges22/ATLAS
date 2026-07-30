@@ -9,8 +9,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import graph  # noqa: E402
+from graph.analyses import callees  # noqa: E402
+from graph.extract import extract_file, is_js, is_supported, js_available  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not graph.js_available(),
+pytestmark = pytest.mark.skipif(not js_available(),
                                 reason="tree-sitter JavaScript grammar not installed")
 
 JS_FIXTURE = """import { clean } from "./helpers.js";
@@ -50,7 +52,7 @@ GOLDEN = {
 
 class TestJsGoldenParity:
     def test_matches_chiasmus(self):
-        g = graph.extract_file("pipe.js", JS_FIXTURE)
+        g = extract_file("pipe.js", JS_FIXTURE)
         got = {
             "defines": sorted([[d.name, d.kind] for d in g.defines]),
             "calls": sorted([[c.caller, c.callee] for c in g.calls]),
@@ -61,11 +63,11 @@ class TestJsGoldenParity:
 
     def test_new_expression_not_a_call(self):
         # `new Pipeline()` must not appear as a call edge.
-        g = graph.extract_file("pipe.js", JS_FIXTURE)
+        g = extract_file("pipe.js", JS_FIXTURE)
         assert all(c.callee != "Pipeline" for c in g.calls)
 
     def test_method_contains(self):
-        g = graph.extract_file("pipe.js", JS_FIXTURE)
+        g = extract_file("pipe.js", JS_FIXTURE)
         pairs = {(c.parent, c.child) for c in g.contains}
         assert ("Pipeline", "run") in pairs and ("Pipeline", "load") in pairs
 
@@ -80,9 +82,9 @@ class TestMixedProject:
         names = {d.name for d in g.defines}
         assert {"py_fn", "js_fn"} <= names
         # analyses work across the merged multi-language graph
-        assert graph.callees(g, "js_fn") == ["helper"]
+        assert callees(g, "js_fn") == ["helper"]
 
     def test_is_supported(self):
-        assert graph.is_js("x.js") and graph.is_js("x.mjs")
-        assert graph.is_supported("x.py") and graph.is_supported("x.jsx")
-        assert not graph.is_supported("x.md")
+        assert is_js("x.js") and is_js("x.mjs")
+        assert is_supported("x.py") and is_supported("x.jsx")
+        assert not is_supported("x.md")

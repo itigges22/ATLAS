@@ -9,8 +9,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import graph  # noqa: E402
+from graph.extract import available as extraction_available  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not graph.extraction_available(),
+pytestmark = pytest.mark.skipif(not extraction_available(),
                                 reason="tree-sitter Python grammar not installed")
 
 # main -> service.run -> load -> read; process is a sibling consumer of load.

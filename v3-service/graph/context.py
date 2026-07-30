@@ -1,11 +1,12 @@
 """Graph-backed context builders for the repair loop and symbol injection.
 
-Phase 2 (#39 point 3): `repair_context` replaces the shipped 1-hop
-call_chain_context with a real reachability slice — the path from an entry point
-down to the failing function, its transitive callers (impact set), and its
-callees. Phase 3 (#39 point 4): `symbol_neighborhood` returns a named symbol's
-graph neighborhood so context injection can pull in the structurally related
-code instead of name-matched snippets.
+Phase 2 (#39 point 3): `repair_context` builds the failure-context block for
+the repair model — with `transitive=True` a real reachability slice (the path
+from an entry point down to the failing function, its transitive callers, and
+its callees), with `transitive=False` the direct 1-hop callers/callees only
+(the flag-off repair path). Phase 3 (#39 point 4): `symbol_neighborhood`
+returns a named symbol's graph neighborhood so context injection can pull in
+the structurally related code instead of name-matched snippets.
 
 Both reuse the native analyses; no new traversal logic.
 """
@@ -59,10 +60,14 @@ def repair_context(
     file_map: Dict[str, str],
     function_name: str,
     max_items: int = 8,
+    transitive: bool = True,
 ) -> str:
-    """Markdown reachability slice around a failing function for the repair
-    model. Returns "" when the function isn't in the graph (caller skips the
-    block rather than diluting the error with a useless 'no matches')."""
+    """Markdown call-graph slice around a failing function for the repair
+    model. `transitive=True` adds the entry-point witness path and the
+    transitive impact set; `transitive=False` stays at direct callers and
+    callees (1 hop). Returns "" when the function isn't in the graph (caller
+    skips the block rather than diluting the error with a useless
+    'no matches')."""
     if not function_name or not file_map:
         return ""
     if not any(is_supported(p) for p in file_map):
@@ -74,9 +79,9 @@ def repair_context(
         return ""
 
     direct_callers = analyses.callers(graph, function_name)
-    impact = analyses.impact(graph, function_name)
     callees = analyses.callees(graph, function_name)
-    witness = _entry_path_to(graph, function_name)
+    impact = analyses.impact(graph, function_name) if transitive else []
+    witness = _entry_path_to(graph, function_name) if transitive else []
 
     sb: List[str] = [f"## Call-graph context for failing function `{function_name}`", ""]
     sb.append(f"Defined in: {', '.join('`' + f + '`' for f in defined_files)}")

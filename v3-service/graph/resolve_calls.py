@@ -27,106 +27,16 @@ from . import extract as _extract
 from .resolve import resolve_imports
 from .types import CodeGraph
 
-# Compact builtin set; the caller (v3-service) can pass its fuller PY_BUILTINS.
-_DEFAULT_BUILTINS = frozenset({
-    "print", "len", "range", "int", "str", "float", "bool", "list", "dict",
-    "tuple", "set", "frozenset", "type", "isinstance", "issubclass", "getattr",
-    "setattr", "hasattr", "super", "open", "enumerate", "zip", "map", "filter",
-    "sorted", "reversed", "sum", "min", "max", "abs", "round", "any", "all",
-    "repr", "format", "iter", "next", "id", "hash", "ord", "chr", "bytes",
-    "bytearray", "object", "property", "staticmethod", "classmethod", "vars",
-    "dir", "callable", "exec", "eval", "globals", "locals", "input",
-})
-
-
-def direct_call_names(code: str) -> List[str]:
-    """Direct-identifier call targets in `code` (e.g. `foo()`), in source order.
-    Skips attribute/subscript/chained calls — those need receiver-type info the
-    static graph doesn't have. Mirrors v3-service `_extract_python_call_targets`."""
-    if not _extract.available():
-        return []
-    try:
-        parser = _extract._ts.Parser(_extract._PY_LANG)
-        tree = parser.parse(bytes(code, "utf-8"))
-    except Exception:
-        return []
-    out: List[str] = []
-    stack = [tree.root_node]
-    while stack:
-        node = stack.pop()
-        if node.type == "call":
-            for child in node.children:
-                if child.type == "identifier":
-                    out.append(_extract._text(child))
-                    break
-                if child.type != "(":
-                    break  # attribute / subscript → skip
-        stack.extend(node.children)
-    return out
-
-
-def _collect_identifiers(node, out: Set[str]) -> None:
-    stack = [node]
-    while stack:
-        n = stack.pop()
-        if n.type == "identifier":
-            out.add(_extract._text(n))
-        for i in range(n.child_count):
-            stack.append(n.child(i))
-
-
-def bound_names(code: str) -> Set[str]:
-    """Every name bound anywhere in the file: def/class names, function and
-    lambda parameters, assignment / walrus / augmented-assignment targets, loop
-    variables, `with`/`except as` aliases, and global/nonlocal declarations.
-
-    A call to a name in this set must NOT be flagged unresolved — it could be a
-    local, a parameter, or an assigned callable. Over-collecting (e.g. picking up
-    identifiers inside parameter type annotations) is deliberately safe: it can
-    only cause the veto to MISS a bug, never to reject valid code. Without this,
-    `def run(cb): return cb()` and `x = lambda: 1; x()` are false positives.
-    """
-    if not _extract.available():
-        return set()
-    try:
-        parser = _extract._ts.Parser(_extract._PY_LANG)
-        tree = parser.parse(bytes(code, "utf-8"))
-    except Exception:
-        return set()
-
-    names: Set[str] = set()
-    stack = [tree.root_node]
-    while stack:
-        n = stack.pop()
-        t = n.type
-        if t in ("function_definition", "class_definition"):
-            nm = n.child_by_field_name("name")
-            if nm is not None:
-                names.add(_extract._text(nm))
-        elif t in ("parameters", "lambda_parameters"):
-            _collect_identifiers(n, names)
-        elif t in ("assignment", "augmented_assignment"):
-            left = n.child_by_field_name("left")
-            if left is not None:
-                _collect_identifiers(left, names)
-        elif t == "named_expression":
-            # walrus `(g := ...)` — tree-sitter names the target field `name`.
-            target = n.child_by_field_name("name")
-            if target is not None:
-                _collect_identifiers(target, names)
-        elif t in ("for_statement", "for_in_clause"):
-            left = n.child_by_field_name("left")
-            if left is not None:
-                _collect_identifiers(left, names)
-        elif t == "as_pattern":
-            alias = n.child_by_field_name("alias")
-            if alias is not None:
-                _collect_identifiers(alias, names)
-        elif t in ("global_statement", "nonlocal_statement"):
-            _collect_identifiers(n, names)
-        for i in range(n.child_count):
-            stack.append(n.child(i))
-    return names
+# The single tree-sitter walk implementations live in symbols.py (the
+# structural-veto core); this module reuses them rather than keeping a
+# parallel pair. PY_BUILTINS is the complete interpreter-derived builtin
+# namespace — symbols.py documents why a hand-curated subset is a bug
+# class (any gap is a false VETO of valid code).
+from symbols import (
+    PY_BUILTINS,
+    _extract_python_bound_names,
+    _extract_python_call_targets,
+)
 
 
 def _defs_by_file(graph: CodeGraph) -> Dict[str, Set[str]]:
@@ -153,13 +63,14 @@ def unresolved_calls(
         return {"ok": False, "error": "tree-sitter not installed"}
 
     project_files = project_files or {}
-    builtins = builtins or set(_DEFAULT_BUILTINS)
+    builtins = builtins or PY_BUILTINS
+    candidate_bytes = candidate_code.encode("utf-8")
 
     cand = _extract.extract_file(candidate_path, candidate_code)
     # All names bound anywhere in the file (params, locals, assignments, defs),
     # not just def/class names — otherwise callbacks and assigned callables
-    # false-positive. See bound_names.
-    local = bound_names(candidate_code) | {d.name for d in cand.defines}
+    # false-positive. See symbols._extract_python_bound_names.
+    local = _extract_python_bound_names(candidate_bytes) | {d.name for d in cand.defines}
     import_names: Set[str] = set()
     for i in cand.imports:
         if i.name == "*":
@@ -196,7 +107,7 @@ def unresolved_calls(
     if not strict:
         resolved |= project_symbols
 
-    calls = direct_call_names(candidate_code)
+    calls = _extract_python_call_targets(candidate_bytes)
     unresolved: List[str] = []
     seen: Set[str] = set()
     if not lenient:

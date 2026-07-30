@@ -3,8 +3,7 @@
 Faithful port of chiasmus `src/graph/native-analyses.ts` and
 `src/graph/entry-points.ts`. These run directly on the CodeGraph with plain
 traversal (BFS / Tarjan SCC), no solver — the same design choice chiasmus made:
-everyday structural queries are native; the optional Prolog layer (facts.py) is
-for custom rule queries only.
+everyday structural queries are native.
 
 `path` returns the call chain as a list of names (Python-friendly) rather than
 chiasmus's Prolog-list string; the node sequence is identical.
@@ -333,32 +332,6 @@ def dead_code(graph: CodeGraph, entry_points: Optional[List[str]] = None) -> Lis
     return out
 
 
-def complexity(graph: CodeGraph) -> dict:
-    """Graph-shape complexity signal (issue #39 point 2, optional tier
-    enrichment): per-node fan-in (callers) and fan-out (callees), plus the
-    maxima across the graph. Complements cyclomatic complexity, which already
-    ships, with structural coupling — a function called from many places or
-    calling many others is higher-risk to change."""
-    idx = _build_index(graph)
-    nodes = sorted(idx.nodes)
-    per_node = {}
-    max_fan_in = 0
-    max_fan_out = 0
-    for n in nodes:
-        fan_in = len(idx.rev.get(n, ()))
-        fan_out = len(idx.adj.get(n, ()))
-        per_node[n] = {"fan_in": fan_in, "fan_out": fan_out}
-        max_fan_in = max(max_fan_in, fan_in)
-        max_fan_out = max(max_fan_out, fan_out)
-    return {
-        "max_fan_in": max_fan_in,
-        "max_fan_out": max_fan_out,
-        "n_nodes": len(nodes),
-        "n_edges": len(graph.calls),
-        "per_node": per_node,
-    }
-
-
 def run_analysis(graph: CodeGraph, analysis: str, target: Optional[str] = None,
                  frm: Optional[str] = None, to: Optional[str] = None,
                  entry_points: Optional[List[str]] = None):
@@ -379,6 +352,4 @@ def run_analysis(graph: CodeGraph, analysis: str, target: Optional[str] = None,
         return detect_entry_points(graph)
     if analysis == "dead-code":
         return dead_code(graph, entry_points)
-    if analysis == "complexity":
-        return complexity(graph)
     raise ValueError(f"unknown analysis: {analysis}")

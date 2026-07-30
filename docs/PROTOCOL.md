@@ -23,13 +23,13 @@ The protocol uses three SSE comment / control patterns. None are envelope events
 |---|---|---|
 | `: connected\n\n` | First body byte after a successful `/events` connection (atlas-proxy only) | Forces the response headers + first body chunk to leave the server immediately. Without it, Go buffers the response until the first envelope or 15s heartbeat fires, and clients with short connect timeouts see "no response received". |
 | `: heartbeat\n\n` | Every 15s during quiet stretches (atlas-proxy only) | Keeps proxies / load balancers from idling out the connection. |
-| `event: result\ndata: {...}\n\n` | Right before stream end on v3-service's `/v3/run`, `/v3/generate`, and `/v3/plan` | Carries the final `result` dict (pipeline result or plan). The proxy bridge consumes it to build the tool result / plan; envelope subscribers on `/events` never see it. |
+| `event: result\ndata: {...}\n\n` | Right before stream end on v3-service's `/v3/generate` and `/v3/plan` | Carries the final `result` dict (pipeline result or plan). The proxy bridge consumes it to build the tool result / plan; envelope subscribers on `/events` never see it. |
 
 The Python `iter_sse_lines` helper already filters comment lines (any line starting with `:`) automatically. Named-event lines (`event: result`) come through prefixed (`result: <data>`) so the caller can distinguish them.
 
 ## Single-session broadcast model (current limitation)
 
-atlas-proxy's `/events` endpoint broadcasts every envelope from every concurrent agent session to every connected subscriber — there is no `session_id` field in the envelope and no `?session_id=X` filter on the endpoint. With one ATLAS running at a time, a subscriber sees only its own session. v3-service's `/v3/run` is per-request streaming, so no interleaving occurs there.
+atlas-proxy's `/events` endpoint broadcasts every envelope from every concurrent agent session to every connected subscriber — there is no `session_id` field in the envelope and no `?session_id=X` filter on the endpoint. With one ATLAS running at a time, a subscriber sees only its own session. v3-service's SSE endpoints are per-request streaming, so no interleaving occurs there.
 
 ## Envelope
 
@@ -171,7 +171,7 @@ Closes one agent pass. The `/events` broker is a persistent stream — it keeps 
 | Service | Endpoint | Notes |
 |---|---|---|
 | atlas-proxy | `GET /events` | Broadcasts all envelope events from any active session to every connected subscriber. Heartbeat every 15s to defeat proxy idle timeouts. |
-| v3-service | `POST /v3/run`, `POST /v3/generate`, `POST /v3/plan` | Emit legacy `{stage, detail}` frames plus a terminal `event: result` control frame — no envelopes (see below). |
+| v3-service | `POST /v3/generate`, `POST /v3/plan` | Emit legacy `{stage, detail}` frames plus a terminal `event: result` control frame — no envelopes (see below). |
 
 ## v3-service streams and typed events
 

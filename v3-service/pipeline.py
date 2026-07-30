@@ -18,8 +18,7 @@ from benchmark.v3.plan_search import PlanSearch, PlanSearchConfig
 from benchmark.v3.div_sampling import DivSampling, DivSamplingConfig
 from benchmark.v3.blend_asc import BlendASC, BlendASCConfig
 from benchmark.v3.s_star import SStar, SStarConfig, CandidateScore
-from benchmark.v3.failure_analysis import FailureAnalyzer, FailureAnalysisConfig, FailingCandidate
-from benchmark.v3.constraint_refinement import ConstraintRefiner, ConstraintRefinementConfig
+from benchmark.v3.failure_analysis import FailingCandidate
 from benchmark.v3.pr_cot import PRCoT, PRCoTConfig
 from benchmark.v3.refinement_loop import RefinementLoop, RefinementLoopConfig
 from benchmark.v3.derivation_chains import DerivationChains, DerivationChainsConfig
@@ -94,8 +93,6 @@ class V3PipelineService:
         self.pr_cot = PRCoT(PRCoTConfig(enabled=True))
         self.refinement_loop = RefinementLoop(RefinementLoopConfig(enabled=True))
         self.derivation_chains = DerivationChains(DerivationChainsConfig(enabled=True))
-        self.failure_analyzer = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        self.constraint_refiner = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
         self.metacognitive = MetacognitiveProfile(MetacognitiveConfig(enabled=True))
         self.self_test_gen = SelfTestGen(SelfTestGenConfig(enabled=True))
 
@@ -123,20 +120,18 @@ class V3PipelineService:
 
         # PC-048: derive language from the target file's extension. Used
         # only by smoke_compile_check below to pick the right syntax
-        # checker. Defaults to Python when no file_path is
-        # supplied, preserving previous behavior for /v3/run callers.
+        # checker. Defaults to Python when no file_path is supplied.
         _ext = Path(file_path).suffix.lower() if file_path else ""
+        # Only languages scoring.smoke_compile_check can actually verify —
+        # an entry here that the checker rejects would fail every candidate
+        # with "verification unavailable" instead of checking anything.
         _ext_to_lang = {
             ".py": "python", ".pyw": "python",
             ".html": "html", ".htm": "html",
             ".json": "json",
             ".yaml": "yaml", ".yml": "yaml",
-            ".css": "css",
             ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
             ".ts": "typescript", ".tsx": "typescript",
-            ".md": "markdown", ".markdown": "markdown",
-            ".txt": "text", ".rst": "text",
-            ".toml": "toml",
             ".xml": "xml",
             ".sh": "bash", ".bash": "bash",
             ".go": "go",
@@ -609,8 +604,7 @@ class V3PipelineService:
                 for c in passing:
                     try:
                         res = unresolved_calls(
-                            file_path, c.get("code", ""), files,
-                            builtins=set(symbols.PY_BUILTINS), strict=True)
+                            file_path, c.get("code", ""), files, strict=True)
                     except Exception as cge:
                         print(f"  [call_graph] veto skipped for cand {c.get('index')}: {cge}",
                               flush=True)
@@ -713,28 +707,23 @@ class V3PipelineService:
         # Metacognitive warnings
         metacog_warnings = self.metacognitive.get_warnings([], task_id)
 
-        # GH #39 point 3: build call-chain context for the failing
+        # GH #39 point 3: build call-graph context for the failing
         # function once, reuse across PR-CoT + refinement. Skips
         # cleanly when stderr isn't a Python traceback or the failing
         # function isn't defined in the project — both arms get plain
-        # error_output in that case.
+        # error_output in that case. When ATLAS_CALL_GRAPH is on the
+        # block is a multi-hop reachability slice (entry-point path,
+        # transitive impact, callees); flag-off it stays at direct
+        # callers/callees (1 hop). Fail-soft on any graph failure.
         chain_context_block = ""
         if failing:
             failing_func = symbols._failing_function_from_stderr(failing[0].error_output)
             if failing_func and files:
-                # Phase 2 (#39 point 3): when the call graph is enabled, build a
-                # multi-hop reachability slice (entry-point path, transitive
-                # impact, callees) instead of the 1-hop callers/callees block.
-                # Falls back to the shipped builder on flag-off or any failure.
-                chain_context_block = ""
                 try:
                     from graph import call_graph_enabled as _cg_on, repair_context as _cg_repair
-                    if _cg_on():
-                        chain_context_block = _cg_repair(files, failing_func)
+                    chain_context_block = _cg_repair(files, failing_func, transitive=_cg_on())
                 except Exception as cge:
                     print(f"  [phase3] graph repair-context skipped: {cge}", flush=True)
-                if not chain_context_block:
-                    chain_context_block = symbols.call_chain_context(files, failing_func)
                 if chain_context_block:
                     emit("call_chain_context",
                          f"Built call-chain for failing `{failing_func}`",
@@ -785,7 +774,6 @@ class V3PipelineService:
             check_client()
             emit("refinement", "Starting refinement loop...",
                  strategy="refinement", failing=len(failing))
-            constraints = []  # from PlanSearch
             # GH #39 point 3: enrich each failing candidate's error_output
             # with call-chain context so the refinement loop sees it on
             # every iteration. Cheap (chain_context_block is built once
@@ -804,7 +792,7 @@ class V3PipelineService:
                 ref_result = self.refinement_loop.run(
                     problem=problem,
                     failing_candidates=failing_for_refinement,
-                    original_constraints=constraints,
+                    original_constraints=[],
                     llm_call=llm,
                     sandbox_run=sandbox,
                     embed_call=embed,

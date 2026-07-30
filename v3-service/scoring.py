@@ -141,12 +141,10 @@ def smoke_compile_check(code: str, sandbox, language: str = "python") -> Tuple[b
 
     Replaces synthetic-I/O self-tests for tasks where (input -> output)
     pairs are nonsensical (curses games, pygame apps, flask servers, …).
-    Runs inside the sandbox so any import-time crashes show up as stderr.
 
-    PC-048: language-aware. Python, JavaScript, TypeScript, Go, Rust,
-    C/C++, Bash, HTML, XML, JSON, and YAML files use the sandbox syntax
-    checker. Unknown formats fail explicitly instead of being accepted
-    without evidence.
+    PC-048: language-aware. Everything the sandbox /syntax-check endpoint
+    covers goes through it; anything else fails explicitly instead of
+    being accepted without evidence.
     """
     lang = (language or "python").lower()
 
@@ -154,82 +152,12 @@ def smoke_compile_check(code: str, sandbox, language: str = "python") -> Tuple[b
         "python", "py", "javascript", "typescript", "go", "java", "kotlin",
         "rust", "c", "cpp", "ruby", "php", "bash", "html", "htm", "xml", "json", "yaml", "yml",
     }
-    if hasattr(sandbox, "syntax_check") and lang in verified_languages:
-        normalized = {
-            "py": "python", "htm": "html", "yml": "yaml",
-        }.get(lang, lang)
-        return sandbox.syntax_check(code, normalized)
-
-    if lang in ("html", "htm"):
-        smoke = (
-            "import sys\n"
-            "from html.parser import HTMLParser\n"
-            f"_src = {code!r}\n"
-            "class _Strict(HTMLParser):\n"
-            "    def error(self, msg):\n"
-            "        raise ValueError(msg)\n"
-            "try:\n"
-            "    _p = _Strict()\n"
-            "    _p.feed(_src)\n"
-            "    _p.close()\n"
-            "    print('SMOKE_OK')\n"
-            "except Exception as e:\n"
-            "    print(f'HTML_PARSE_ERROR: {e}', file=sys.stderr)\n"
-            "    sys.exit(1)\n"
-        )
-        ok, out, err = sandbox(smoke)
-        return (ok and "SMOKE_OK" in out), out, err
-
-    if lang == "json":
-        smoke = (
-            "import json, sys\n"
-            f"_src = {code!r}\n"
-            "try:\n"
-            "    json.loads(_src)\n"
-            "    print('SMOKE_OK')\n"
-            "except json.JSONDecodeError as e:\n"
-            "    print(f'JSON_PARSE_ERROR: {e}', file=sys.stderr)\n"
-            "    sys.exit(1)\n"
-        )
-        ok, out, err = sandbox(smoke)
-        return (ok and "SMOKE_OK" in out), out, err
-
-    if lang in ("yaml", "yml"):
-        smoke = (
-            "import sys\n"
-            f"_src = {code!r}\n"
-            "try:\n"
-            "    import yaml\n"
-            "    yaml.safe_load(_src)\n"
-            "    print('SMOKE_OK')\n"
-            "except ImportError:\n"
-            # PyYAML not installed in sandbox — pass-through so we don't
-            # block legitimate edits on a missing optional dep.
-            "    print('SMOKE_OK')\n"
-            "except Exception as e:\n"
-            "    print(f'YAML_PARSE_ERROR: {e}', file=sys.stderr)\n"
-            "    sys.exit(1)\n"
-        )
-        ok, out, err = sandbox(smoke)
-        return (ok and "SMOKE_OK" in out), out, err
-
-    if lang not in ("python", "py"):
+    if lang not in verified_languages or not hasattr(sandbox, "syntax_check"):
         return False, "", f"syntax verification unavailable for language: {lang}"
-
-    # Default: Python compile smoke
-    smoke = (
-        "import ast, sys\n"
-        f"_src = {code!r}\n"
-        "try:\n"
-        "    ast.parse(_src)\n"
-        "    compile(_src, '<smoke>', 'exec')\n"
-        "    print('SMOKE_OK')\n"
-        "except SyntaxError as e:\n"
-        "    print(f'SYNTAX_ERROR: {e}', file=sys.stderr)\n"
-        "    sys.exit(1)\n"
-    )
-    ok, out, err = sandbox(smoke)
-    return (ok and "SMOKE_OK" in out), out, err
+    normalized = {
+        "py": "python", "htm": "html", "yml": "yaml",
+    }.get(lang, lang)
+    return sandbox.syntax_check(code, normalized)
 
 
 BUILD_EVIDENCE_LIMIT = 4000

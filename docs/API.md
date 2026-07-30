@@ -526,22 +526,6 @@ The pipeline emits stages as it progresses. Not all stages appear in every run �
 
 </details>
 
-### POST /v3/run
-
-Simplified endpoint for running the pipeline on a problem description (used by the CLI).
-
-**Request:**
-```json
-{
-  "problem": "Write a function that finds the longest palindromic substring",
-  "task_id": "cli",
-  "stream": true,
-  "files": {"main.py": "# existing code..."}
-}
-```
-
-**Response:** Same SSE format as `/v3/generate`.
-
 ### POST /v3/plan
 
 Generates a step-by-step plan for a coding task using diverse LLM sampling and heuristic scoring. Used by the proxy's agent loop to seed each turn with explicit step guidance — see [ARCHITECTURE.md § Plan Mode](ARCHITECTURE.md#plan-mode-per-turn-pre-flight) for the consumer side.
@@ -736,28 +720,6 @@ Resolve every direct-identifier call in a Python source against its local defs, 
 ```
 
 `ok: false` means the check could not run (tree-sitter unavailable, non-UTF-8 source) and the caller fails open. Malformed Python does not produce `ok: false` — tree-sitter parses tolerantly. `unresolved` is the complete list (no cap): the caller diffs original-vs-edited lists, and a truncated list would make that comparison unsound. `wildcard_imports: true` reports that the source contains `from x import *`; unresolved reporting is suppressed in that case (the wildcard may supply any name), so it always accompanies an empty `unresolved`.
-
-### POST /internal/call_graph
-
-Structural call-graph query over supplied files: builds a project call graph and runs a native O(V+E) analysis on it. Gated by `ATLAS_CALL_GRAPH` — returns `ok: false` when the flag is off.
-
-**Request:**
-```json
-{
-  "file_map": {"app.py": "...", "pkg/util.py": "..."},
-  "analysis": "callers",
-  "target": "total_value"
-}
-```
-
-`analysis` is one of `callers` | `callees` | `reachability` | `path` | `impact` | `cycles` | `dead-code` | `entry-points` | `complexity` | `facts` (Prolog facts + rules for an external solver) | `closure` (all transitive-reachability pairs). `target` applies to callers/callees/impact; `from`/`to` to reachability/path; `entry_points` (optional) to dead-code and facts.
-
-**Response:**
-```json
-{"ok": true, "analysis": "callers", "result": ["checkout", "render_cart"]}
-```
-
-`{"ok": false, "error": "..."}` on failure or when the flag is off; HTTP 400 for an unknown analysis or invalid body.
 
 ### GET /health
 

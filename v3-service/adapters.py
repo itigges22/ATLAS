@@ -79,8 +79,7 @@ _PHASE_RETRY_COUNT = {
     "pr_cot": 3,            # required PR-CoT repair
     "refinement": 4,        # required refinement loop
     "derivation": 5,        # required derivation chains
-    "fallback": 5,          # nothing passed; best-by-energy returned
-    "none": 5,
+    "none": 5,              # nothing passed; best-by-energy returned
 }
 
 
@@ -90,8 +89,6 @@ def _post_pattern_outcome(problem: str, result: dict):
     Runs in a background thread so it never delays the response. Errors are
     logged but never raised — the pattern cache is best-effort, not load-bearing.
     """
-    import threading
-
     # Capture the correlation ID on the request thread — the ContextVar
     # doesn't propagate into a newly created thread.
     try:
@@ -151,7 +148,6 @@ class LLMAdapter:
     def __init__(self, progress_callback=None, thinking: bool = False):
         self.call_count = 0
         self.total_tokens = 0
-        self.last_logprobs: List[float] = []
         self._progress = progress_callback
         self.thinking = thinking
 

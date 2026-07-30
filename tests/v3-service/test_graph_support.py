@@ -1,5 +1,5 @@
-"""Tests for graph support pieces: import resolution, Prolog facts, cache,
-flag, and the build_graph entry point (issue #39, Phase 0)."""
+"""Tests for graph support pieces: import resolution, cache, flag, and the
+build_graph entry point (issue #39, Phase 0)."""
 
 import sys
 from pathlib import Path
@@ -9,60 +9,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import graph  # noqa: E402
-from graph.types import (  # noqa: E402
-    CodeGraph, DefinesFact, CallsFact, ImportsFact, ExportsFact, ContainsFact, FileNode,
-)
-from graph.facts import escape_atom, graph_to_prolog, BUILTIN_RULES  # noqa: E402
+from graph.analyses import reachability  # noqa: E402
+from graph.extract import available as extraction_available  # noqa: E402
+from graph.types import CodeGraph, ImportsFact  # noqa: E402
 from graph.resolve import resolve_imports, _module_name  # noqa: E402
 from graph.cache import FileGraphCache, file_hash  # noqa: E402
 from graph.flags import call_graph_enabled, ENV_VAR  # noqa: E402
 
-_HAS_TS = graph.extraction_available()
-
-
-class TestEscapeAtom:
-    def test_bare_atom(self):
-        assert escape_atom("main") == "main"
-        assert escape_atom("foo_bar2") == "foo_bar2"
-
-    def test_quoted(self):
-        assert escape_atom("Foo") == "'Foo'"
-        assert escape_atom("a/b.py") == "'a/b.py'"
-
-    def test_escapes_quote_and_backslash(self):
-        assert escape_atom("a'b") == "'a\\'b'"
-        assert escape_atom("a\\b") == "'a\\\\b'"
-
-
-class TestGraphToProlog:
-    def test_emits_facts_and_rules(self):
-        g = CodeGraph(
-            defines=[DefinesFact("a.py", "main", "function", 1)],
-            calls=[CallsFact("main", "helper")],
-            imports=[ImportsFact("a.py", "os", "os")],
-            exports=[ExportsFact("a.py", "main")],
-            contains=[ContainsFact("Svc", "run")],
-            files=[FileNode("a.py", "python", 10)],
-        )
-        prog = graph_to_prolog(g)
-        assert "defines('a.py', main, function, 1)." in prog
-        assert "calls(main, helper)." in prog
-        assert "imports('a.py', os, os)." in prog
-        assert "exports('a.py', main)." in prog
-        assert "contains('Svc', run)." in prog
-        assert "entry_point(main)." in prog
-        assert BUILTIN_RULES in prog  # the reaches/path/dead rules are appended
-
-    def test_resolved_imports_emitted(self):
-        g = CodeGraph(imports=[ImportsFact("a.py", "h", "pkg.util", resolved="pkg/util.py")])
-        prog = graph_to_prolog(g)
-        assert "imports_resolved('a.py', h, 'pkg/util.py')." in prog
-
-    def test_explicit_entry_points(self):
-        g = CodeGraph(exports=[ExportsFact("a.py", "main"), ExportsFact("a.py", "other")])
-        prog = graph_to_prolog(g, entry_points=["main"])
-        assert "entry_point(main)." in prog
-        assert "entry_point(other)." not in prog
+_HAS_TS = extraction_available()
 
 
 class TestModuleName:
@@ -172,7 +126,7 @@ class TestBuildGraph:
         imp = next(i for i in g.imports if i.name == "helper")
         assert imp.resolved == "pkg/util.py"
         # reachability across the project graph
-        assert graph.reachability(g, "main", "helper") is True
+        assert reachability(g, "main", "helper") is True
 
     def test_ignores_non_python(self):
         g = graph.build_graph({"a.md": "# not code", "b.json": "{}"})

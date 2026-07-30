@@ -1,6 +1,6 @@
 """Tree-sitter structural tooling: friendly-selector structural edits, symbol
-indexing, direct-call resolution (structural_score), call-chain context, and
-cyclomatic complexity."""
+indexing, direct-call resolution (structural_score), traceback frame parsing,
+and cyclomatic complexity."""
 
 import re
 
@@ -548,22 +548,14 @@ def structural_score(project_symbols, candidate_code: str,
     }
 
 
-# GH #39 point 3: Phase 3 repair with call-chain context.
+# GH #39 point 3: Phase 3 repair with call-graph context.
 #
 # When all candidates fail sandbox and we drop to PR-CoT / refinement,
 # the repair model gets `error` (raw stderr) + `code` (the failing
 # candidate). It has to guess from the traceback alone what the
-# failing function does inside the project, who calls it, what it
-# depends on. With a call graph we can hand it that context directly.
-#
-# v1 approach: parse the deepest frame from a Python traceback to get
-# the failing function name, then walk file_map to find:
-#   - which file defines that function
-#   - which other project functions call it (direct callers, 1 hop)
-#   - which other project functions IT calls (direct callees, 1 hop)
-# Format as a markdown block, append to the error field passed to
-# PR-CoT / refinement so the repair LLM sees it as part of failure
-# context.
+# failing function does inside the project. This module contributes the
+# traceback parse (which function failed); the context block itself is
+# built by graph.repair_context.
 
 # Python traceback frame: `File "path", line N, in funcname`
 _TRACEBACK_FRAME_RE = re.compile(r'File "[^"]+", line \d+, in (\S+)')
@@ -584,138 +576,6 @@ def _failing_function_from_stderr(stderr: str):
         if not name.startswith("<"):
             return name
     return None
-
-
-def _python_call_targets_per_function(source: bytes):
-    """Return {function_name: list[called_identifier_names]} for the
-    file. Top-level functions only; class methods aggregate under their
-    class name (we don't track method-level callers in v1)."""
-    if not _STRUCTURAL_EDIT_AVAILABLE:
-        return {}
-    try:
-        parser = _ts.Parser(_PY_LANG)
-        tree = parser.parse(source)
-    except Exception:
-        return {}
-
-    out = {}
-
-    def text_of(node):
-        return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
-
-    for node in tree.root_node.children:
-        target = node
-        if node.type == "decorated_definition":
-            for c in node.children:
-                if c.type in ("function_definition", "class_definition"):
-                    target = c
-                    break
-        if target.type not in ("function_definition", "class_definition"):
-            continue
-        # Find function/class name
-        name = None
-        for c in target.children:
-            if c.type == "identifier":
-                name = text_of(c)
-                break
-        if not name:
-            continue
-        # Extract direct-identifier calls from the function body
-        calls = []
-        stack = list(target.children)
-        while stack:
-            n = stack.pop()
-            if n.type == "call":
-                for child in n.children:
-                    if child.type == "identifier":
-                        calls.append(text_of(child))
-                        break
-                    if child.type not in ("(",):
-                        break
-            stack.extend(n.children)
-        out[name] = calls
-    return out
-
-
-def call_chain_context(file_map: dict, function_name: str, max_callers: int = 6, max_callees: int = 6) -> str:
-    """Build a markdown block describing direct callers + callees of
-    function_name across file_map's project. Returns empty string when
-    the function isn't found anywhere — caller should skip injection
-    in that case rather than dilute the error context with a useless
-    'no matches' block."""
-    if not function_name or not file_map or not _STRUCTURAL_EDIT_AVAILABLE:
-        return ""
-
-    # Pass 1: per-file map of {func: callees}. Also locate definition.
-    per_file = {}  # path -> {func: [calls]}
-    defined_in = None
-    for path, source_text in file_map.items():
-        if not path.lower().endswith(".py"):
-            continue
-        try:
-            src_bytes = source_text.encode("utf-8")
-        except (UnicodeEncodeError, AttributeError):
-            continue
-        funcs = _python_call_targets_per_function(src_bytes)
-        per_file[path] = funcs
-        if defined_in is None and function_name in funcs:
-            defined_in = path
-
-    if defined_in is None:
-        return ""
-
-    # Pass 2: callers — any (path, func) where func's body calls function_name
-    callers = []
-    for path, funcs in per_file.items():
-        for fname, calls in funcs.items():
-            if fname == function_name and path == defined_in:
-                continue  # don't list the function as its own caller
-            if function_name in calls:
-                callers.append((path, fname))
-
-    # Callees: the target function's own calls
-    callees = per_file.get(defined_in, {}).get(function_name, [])
-    # Dedup callees while preserving order
-    seen = set()
-    unique_callees = []
-    for c in callees:
-        if c in seen:
-            continue
-        seen.add(c)
-        unique_callees.append(c)
-
-    sb = [f"## Call-chain context for failing function `{function_name}`"]
-    sb.append("")
-    sb.append(f"Defined in: `{defined_in}`")
-    sb.append("")
-
-    if callers:
-        capped = callers[:max_callers]
-        sb.append(f"**Direct callers in project ({len(callers)} found):**")
-        for path, fname in capped:
-            sb.append(f"- `{fname}` in {path}")
-        if len(callers) > max_callers:
-            sb.append(f"- ... and {len(callers) - max_callers} more")
-        sb.append("")
-    else:
-        sb.append("**Direct callers in project:** (none found — this function may be an entry point or only called by external code)")
-        sb.append("")
-
-    if unique_callees:
-        capped = unique_callees[:max_callees]
-        sb.append(f"**Functions called by `{function_name}` ({len(unique_callees)} unique):**")
-        for c in capped:
-            sb.append(f"- `{c}`")
-        if len(unique_callees) > max_callees:
-            sb.append(f"- ... and {len(unique_callees) - max_callees} more")
-        sb.append("")
-    else:
-        sb.append(f"**Functions called by `{function_name}`:** (none — leaf function)")
-        sb.append("")
-
-    sb.append("Use this map to scope your fix: changing what `" + function_name + "` calls may require updating its callers; changing its callees may not.")
-
-    return "\n".join(sb)
 
 
 def cyclomatic_complexity(path: str, source_text: str) -> dict:

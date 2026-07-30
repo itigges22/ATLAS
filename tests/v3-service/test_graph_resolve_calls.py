@@ -12,8 +12,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import graph  # noqa: E402
+from graph.extract import available as extraction_available  # noqa: E402
+from symbols import _extract_python_call_targets  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not graph.extraction_available(),
+pytestmark = pytest.mark.skipif(not extraction_available(),
                                 reason="tree-sitter Python grammar not installed")
 
 
@@ -26,7 +28,7 @@ def _unresolved(cand_code, project=None, strict=True):
 class TestDirectCallNames:
     def test_identifier_calls_only(self):
         code = "def f():\n    g()\n    obj.method()\n    h(x)\n"
-        names = graph.direct_call_names(code)
+        names = _extract_python_call_targets(code.encode("utf-8"))
         assert "g" in names and "h" in names
         assert "method" not in names  # attribute call skipped
 

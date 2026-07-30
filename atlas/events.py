@@ -40,9 +40,9 @@ only means truncation for consumers reading a single pass.
 Legacy shape
 ------------
 
-v3-service's own `/v3/run` SSE emits the legacy
-`{"stage": ..., "detail": ...}` shape (consumed by the Go proxy bridge,
-proxy/v3_bridge.go — not by this module). `parse_envelope` raises
+v3-service's own SSE endpoints (`/v3/generate`, `/v3/plan`) emit the
+legacy `{"stage": ..., "detail": ...}` shape (consumed by the Go proxy
+bridge, proxy/v3_bridge.go — not by this module). `parse_envelope` raises
 `LegacyEventError` on that shape so callers fall back explicitly rather
 than silently mis-parsing.
 """

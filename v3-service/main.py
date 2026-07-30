@@ -6,10 +6,10 @@ Exposes the full V3 pipeline (PlanSearch, DivSampling, BudgetForcing, BlendASC,
 S*, PR-CoT, RefinementLoop, DerivationChains, etc.) as an HTTP service that
 the Go proxy can call for T2/T3 tasks.
 
-For CLI use, test cases are generated via SelfTestGen since we don't have
-benchmark ground truth. The sandbox runs syntax/runtime checks on all candidates.
+Test cases are generated via SelfTestGen since we don't have benchmark
+ground truth. The sandbox runs syntax/runtime checks on all candidates.
 
-Streams progress events back as SSE for real-time CLI feedback.
+Streams progress events back as SSE for real-time feedback.
 
 The pipeline itself lives in flat sibling modules: adapters.py (service
 clients), scoring.py (candidate verification), symbols.py (tree-sitter
@@ -70,9 +70,7 @@ class V3Handler(BaseHTTPRequestHandler):
         _set_rid(self.headers.get("X-ATLAS-Request-ID", ""))
         if not self._authorized():
             return
-        if self.path == "/v3/run":
-            self._handle_run()
-        elif self.path == "/v3/generate":
+        if self.path == "/v3/generate":
             self._handle_generate()
         elif self.path == "/v3/plan":
             self._handle_plan()
@@ -82,8 +80,6 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_cyclomatic_complexity()
         elif self.path == "/internal/symbol_index":
             self._handle_symbol_index()
-        elif self.path == "/internal/call_graph":
-            self._handle_call_graph()
         elif self.path == "/internal/outline":
             self._handle_outline()
         elif self.path == "/internal/pycheck":
@@ -104,63 +100,6 @@ class V3Handler(BaseHTTPRequestHandler):
             self._json_response(200, {"status": "ok", "service": "v3-pipeline"})
         else:
             self._json_response(404, {"error": "not found"})
-
-    def _handle_run(self):
-        content_len = int(self.headers.get("Content-Length", 0))
-        try:
-            body = json.loads(self.rfile.read(content_len) or b"{}")
-        except json.JSONDecodeError as e:
-            self._json_response(400, {"error": f"invalid JSON body: {e}"})
-            return
-
-        problem = body.get("problem", "")
-        task_id = body.get("task_id", "cli")
-        stream = body.get("stream", True)
-        files = body.get("files", {})
-
-        if not problem:
-            self._json_response(400, {"error": "missing 'problem' field"})
-            return
-
-        if stream:
-            # SSE streaming
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-
-            def emit_sse(stage, detail="", **data):
-                payload = {"stage": stage, "detail": detail}
-                if data:
-                    payload["data"] = data
-                event = json.dumps(payload)
-                try:
-                    self.wfile.write(f"data: {event}\n\n".encode())
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    # Client gone — flag it so pipeline.run aborts at the
-                    # next phase boundary instead of grinding on.
-                    emit_sse.disconnected = True
-                except Exception:
-                    # best-effort: swallow on failure (caller continues)
-                    pass
-
-            try:
-                result = pipeline.run(problem, task_id, progress_callback=emit_sse, files=files)
-            except ClientDisconnected as e:
-                print(f"[run] pipeline aborted: {e}", flush=True)
-                return
-            _post_pattern_outcome(problem, result)
-
-            # Final result event
-            final = json.dumps(result, default=str)
-            self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
-        else:
-            result = pipeline.run(problem, task_id, files=files)
-            _post_pattern_outcome(problem, result)
-            self._json_response(200, result)
 
     def _handle_generate(self):
         """Handle /v3/generate — accepts arbitrary file generation requests from Go proxy.
@@ -256,13 +195,17 @@ class V3Handler(BaseHTTPRequestHandler):
         except ClientDisconnected as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
-        _post_pattern_outcome(problem, result)
 
         # If baseline code was provided and pipeline didn't produce anything better,
         # use the baseline
         if not result.get("code") and baseline_code:
             result["code"] = baseline_code
             result["phase_solved"] = "baseline"
+
+        # After baseline substitution, not before — the pattern cache must
+        # see the solution that is actually returned (it saw solution=""
+        # on baseline-only results when this fired earlier).
+        _post_pattern_outcome(problem, result)
 
         # Send final result
         response = {
@@ -481,76 +424,6 @@ class V3Handler(BaseHTTPRequestHandler):
             flush=True,
         )
         self._json_response(200, result)
-
-    def _handle_call_graph(self):
-        """POST /internal/call_graph — structural call-graph query (issue #39).
-
-        Builds (cached) a project call graph from the supplied files and runs a
-        native analysis on it. No solver; O(V+E) traversal.
-
-        Request:
-            {"file_map": {"app.py": "...", "pkg/util.py": "..."},
-             "analysis": "callers" | "callees" | "reachability" | "path" |
-                         "impact" | "cycles" | "dead-code" | "entry-points" | "facts",
-             "target": "<name>",        # callers/callees/impact
-             "from": "<name>", "to": "<name>",   # reachability/path
-             "entry_points": ["main"]}  # dead-code (optional)
-        Response:
-            {"ok": true, "analysis": "...", "result": <analysis result>}
-            or {"ok": false, "error": "..."}
-
-        Gated by ATLAS_CALL_GRAPH; returns ok=false when the flag is off so the
-        feature stays inert until enabled.
-        """
-        content_len = int(self.headers.get("Content-Length", 0))
-        try:
-            body = json.loads(self.rfile.read(content_len) or b"{}")
-        except json.JSONDecodeError as e:
-            self._json_response(400, {"ok": False, "error": f"invalid JSON body: {e}"})
-            return
-
-        try:
-            from graph import (
-                build_graph, run_analysis, graph_to_prolog, call_graph_enabled,
-                reachable_pairs,
-            )
-        except Exception as e:  # pragma: no cover - import guard
-            self._json_response(200, {"ok": False, "error": f"graph package unavailable: {e}"})
-            return
-
-        if not call_graph_enabled():
-            self._json_response(200, {"ok": False, "error": "ATLAS_CALL_GRAPH disabled"})
-            return
-
-        file_map = body.get("file_map") or {}
-        analysis = body.get("analysis", "facts")
-        try:
-            g = build_graph(file_map)
-            if analysis == "facts":
-                # Prolog facts + rules for an external solver (chiasmus_verify / SWI).
-                result = graph_to_prolog(g, entry_points=body.get("entry_points"))
-            elif analysis == "closure":
-                # Phase 5: the transitive reaches/2 relation via the in-process
-                # Datalog engine — a relation the native single-pair API doesn't
-                # expose directly. Returned as [from, to] pairs.
-                result = [list(p) for p in reachable_pairs(g)]
-            else:
-                result = run_analysis(
-                    g, analysis,
-                    target=body.get("target"),
-                    frm=body.get("from"),
-                    to=body.get("to"),
-                    entry_points=body.get("entry_points"),
-                )
-        except ValueError as e:
-            self._json_response(400, {"ok": False, "error": str(e)})
-            return
-        except Exception as e:
-            self._json_response(200, {"ok": False, "error": f"call_graph failed: {e}"})
-            return
-
-        print(f"  [call_graph] {len(file_map)} files, analysis={analysis} → ok", flush=True)
-        self._json_response(200, {"ok": True, "analysis": analysis, "result": result})
 
     def _handle_pycheck(self):
         """POST /internal/pycheck — does this Python source parse?
