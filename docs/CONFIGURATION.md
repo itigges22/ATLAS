@@ -373,6 +373,7 @@ the V3 service.
 | `ATLAS_V3_PORT` | `8070` | Port to listen on |
 | `ATLAS_MODEL_NAME` | `local-model` | Neutral fallback request identifier; deployments pass the selected model explicitly |
 | `ATLAS_PLAN_THINKING` | `0` | Enable template-level reasoning during V3 plan generation for models that support it. `0` keeps planner `max_tokens=2048`; `1` raises it to `8192` so reasoning does not consume the plan JSON budget. |
+| `ATLAS_V3_TELEMETRY_DIR` | `/data/telemetry` | Container-side directory for live-pipeline stage telemetry: the same per-stage `*.jsonl` files the bench runner writes (`plan_search_events.jsonl`, `s_star_events.jsonl`, …) plus one `pipeline_summary.jsonl` line per task (task id, phases run with outcome and duration, veto events, final `phase_solved`). Compose mounts the `v3-telemetry` named volume at the default path so lines survive container restarts. Set `0`/`off`/`none` to disable. Fail-soft: an unwritable directory disables telemetry and never affects generation. |
 
 ### Internal Constants
 

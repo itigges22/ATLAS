@@ -75,6 +75,9 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_V3_PORT": Field("port"),
     "ATLAS_V3_TIMEOUT": Field("int", min=0, max=86_400),
     "ATLAS_V3_URL": Field("str"),
+    # Container-side stage-telemetry dir for the live V3 pipeline
+    # (telemetry/*.jsonl + per-task pipeline summary); 0/off disables.
+    "ATLAS_V3_TELEMETRY_DIR": Field("str"),
     "ATLAS_PLAN_THINKING": Field("str"),
     "ATLAS_SHELL_SNAPSHOT_MAX_FILES": Field("int", min=0, max=100_000_000),
     "ATLAS_SHELL_SNAPSHOT_MAX_BYTES": Field("int", min=0),

@@ -1,9 +1,13 @@
 """The V3 pipeline orchestrator: probe, candidate generation, sandbox
 verification, the lens/structural/call-graph vetoes, candidate selection,
-the repair phases, and the /v3/generate problem builder."""
+the repair phases, stage telemetry, and the /v3/generate problem builder."""
 
+import json
+import os
 import re
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +31,98 @@ import symbols
 BASE_TEMPERATURE = 0.6
 DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
+
+
+# --- Stage telemetry ---------------------------------------------------------
+
+# Serializes pipeline-summary appends across the ThreadingHTTPServer's
+# request threads. Stage JSONL appends need no lock: each event is one
+# small O_APPEND write.
+_SUMMARY_LOCK = threading.Lock()
+
+_TELEMETRY_DISABLE_VALUES = {"0", "off", "none", "disabled", "false"}
+
+# stage name -> summary phase. Stages not listed (token/llm_*/task_type/…)
+# don't contribute a phase row.
+_STAGE_PHASE = {}
+for _phase, _stages in {
+    "probe": ("probe", "probe_light", "probe_retry", "probe_failed",
+              "probe_error", "probe_scored", "probe_sandbox", "probe_pass"),
+    "self_test": ("self_test_gen", "self_test_done", "self_test_error",
+                  "self_test_skip"),
+    "allocation": ("phase2", "phase2_allocated"),
+    "generation": ("phase1", "plansearch", "plansearch_done",
+                   "plansearch_error", "divsampling", "divsampling_done",
+                   "divsampling_error", "lens_per_step"),
+    "sandbox": ("sandbox_test", "sandbox_pass", "sandbox_fail",
+                "sandbox_done", "smoke_check", "interactive_lint",
+                "self_test_verify", "build_verify_unavailable"),
+    "veto": ("lens_veto", "structural_veto", "call_graph_veto"),
+    "selection": ("s_star", "s_star_winner", "s_star_error", "selected"),
+    "repair_pr_cot": ("phase3", "call_chain_context", "pr_cot",
+                      "pr_cot_pass", "pr_cot_failed", "pr_cot_error"),
+    "repair_refinement": ("refinement", "refinement_pass",
+                          "refinement_failed", "refinement_error",
+                          "refinement_verify_failed"),
+    "repair_derivation": ("derivation", "derivation_pass",
+                          "derivation_failed", "derivation_error"),
+    "fallback": ("fallback", "fallback_all_vetoed"),
+}.items():
+    for _s in _stages:
+        _STAGE_PHASE[_s] = _phase
+
+_VETO_STAGES = frozenset(("lens_veto", "structural_veto", "call_graph_veto"))
+
+
+def _resolve_telemetry_dir() -> Optional[Path]:
+    """Resolve the stage-telemetry directory for the live service.
+
+    ``ATLAS_V3_TELEMETRY_DIR`` names the directory; a disable value
+    (``0``/``off``/``none``/``disabled``/``false``) turns telemetry off;
+    unset/empty falls back to ``/data/telemetry`` when writable (the
+    compose volume), else telemetry is disabled. Resolution never
+    raises — telemetry must not break generation.
+    """
+    configured = os.environ.get("ATLAS_V3_TELEMETRY_DIR", "").strip()
+    if configured.lower() in _TELEMETRY_DISABLE_VALUES:
+        return None
+    candidate = Path(configured) if configured else Path("/data/telemetry")
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe = candidate / ".write_probe"
+        probe.touch()
+        probe.unlink()
+        return candidate
+    except OSError as e:
+        if configured:
+            print(f"  [telemetry] {candidate} not writable ({e}) — "
+                  f"stage telemetry disabled", flush=True)
+        return None
+
+
+def _summarize_phases(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fold the run's progress events into ordered per-phase rows.
+
+    Each row carries the phase name, the stage that closed it (its
+    outcome marker), that stage's detail, and the span between the
+    phase's first and last event. Derived purely from the events the
+    run already emits — no extra instrumentation in the hot path.
+    """
+    rows: List[Dict[str, Any]] = []
+    by_phase: Dict[str, Dict[str, Any]] = {}
+    for ev in events:
+        phase = _STAGE_PHASE.get(ev.get("stage", ""))
+        if phase is None:
+            continue
+        row = by_phase.get(phase)
+        if row is None:
+            row = {"phase": phase, "first_ms": round(ev.get("t", 0.0) * 1000)}
+            by_phase[phase] = row
+            rows.append(row)
+        row["outcome"] = ev.get("stage", "")
+        row["detail"] = str(ev.get("detail", ""))[:120]
+        row["duration_ms"] = round(ev.get("t", 0.0) * 1000) - row["first_ms"]
+    return rows
 
 
 # --- V3 Pipeline Orchestrator ------------------------------------------------
@@ -78,16 +174,27 @@ class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
     def __init__(self):
-        # ALL V3 components enabled — same as benchmark runner with all phases active
-        self.budget_forcing = BudgetForcing(BudgetForcingConfig(enabled=True))
-        self.plan_search = PlanSearch(PlanSearchConfig(enabled=True))
-        self.div_sampling = DivSampling(DivSamplingConfig(enabled=True))
-        self.blend_asc = BlendASC(BlendASCConfig(enabled=True))
-        self.s_star = SStar(SStarConfig(enabled=True))
-        self.pr_cot = PRCoT(PRCoTConfig(enabled=True))
-        self.refinement_loop = RefinementLoop(RefinementLoopConfig(enabled=True))
-        self.derivation_chains = DerivationChains(DerivationChainsConfig(enabled=True))
-        self.self_test_gen = SelfTestGen(SelfTestGenConfig(enabled=True))
+        # ALL V3 components enabled — same as benchmark runner with all phases
+        # active. Stage telemetry mirrors the bench runner's telemetry/*.jsonl
+        # into ATLAS_V3_TELEMETRY_DIR so live-orchestrator runs are measurable.
+        self.telemetry_dir = _resolve_telemetry_dir()
+        t = self.telemetry_dir
+        self.budget_forcing = BudgetForcing(BudgetForcingConfig(enabled=True),
+                                            telemetry_dir=t)
+        self.plan_search = PlanSearch(PlanSearchConfig(enabled=True),
+                                      telemetry_dir=t)
+        self.div_sampling = DivSampling(DivSamplingConfig(enabled=True),
+                                        telemetry_dir=t)
+        self.blend_asc = BlendASC(BlendASCConfig(enabled=True),
+                                  telemetry_dir=t)
+        self.s_star = SStar(SStarConfig(enabled=True), telemetry_dir=t)
+        self.pr_cot = PRCoT(PRCoTConfig(enabled=True), telemetry_dir=t)
+        self.refinement_loop = RefinementLoop(RefinementLoopConfig(enabled=True),
+                                              telemetry_dir=t)
+        self.derivation_chains = DerivationChains(
+            DerivationChainsConfig(enabled=True), telemetry_dir=t)
+        self.self_test_gen = SelfTestGen(SelfTestGenConfig(enabled=True),
+                                         telemetry_dir=t)
 
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
@@ -106,7 +213,74 @@ class V3PipelineService:
             build_command: Optional project build command to run against an
                 ephemeral candidate overlay after syntax/self-tests pass.
             working_dir: Container workspace root used by the sandbox overlay.
+
+        Writes one pipeline-summary telemetry line per task (fail-soft;
+        see _write_pipeline_summary) around the actual pipeline body.
         """
+        start = time.time()
+        result: Optional[Dict[str, Any]] = None
+        error = ""
+        try:
+            result = self._run_impl(
+                problem, task_id=task_id, progress_callback=progress_callback,
+                files=files, file_path=file_path, build_command=build_command,
+                working_dir=working_dir)
+            return result
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            raise
+        finally:
+            self._write_pipeline_summary(task_id, result, error, start)
+
+    def _write_pipeline_summary(self, task_id: str,
+                                result: Optional[Dict[str, Any]],
+                                error: str, start: float) -> None:
+        """Append one summary line to telemetry/pipeline_summary.jsonl.
+
+        Carries the per-task shape the bench runner gets for free from its
+        per-task JSON files: phases run (outcome + duration, folded from the
+        run's progress events), veto events, and the final result fields.
+        Fail-soft by construction — a telemetry error never reaches the
+        caller, so it can never break generation.
+        """
+        if self.telemetry_dir is None:
+            return
+        try:
+            events = (result or {}).get("events") or []
+            line = {
+                "schema": "v3_pipeline_summary_v1",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "task_id": task_id,
+                "passed": bool((result or {}).get("passed")),
+                "phase_solved": (result or {}).get("phase_solved", "none"),
+                "task_type": (result or {}).get("task_type", ""),
+                "candidates_generated": (result or {}).get("candidates_generated", 0),
+                "total_tokens": (result or {}).get("total_tokens", 0),
+                "total_time_ms": round(
+                    (result or {}).get("total_time_ms")
+                    or (time.time() - start) * 1000),
+                "phases": _summarize_phases(events),
+                "veto_events": [
+                    {"stage": ev.get("stage", ""),
+                     "index": (ev.get("data") or {}).get("index", -1),
+                     "detail": str(ev.get("detail", ""))[:120]}
+                    for ev in events if ev.get("stage") in _VETO_STAGES
+                ],
+            }
+            if error:
+                line["error"] = error[:300]
+            with _SUMMARY_LOCK:
+                with open(self.telemetry_dir / "pipeline_summary.jsonl", "a") as f:
+                    f.write(json.dumps(line) + "\n")
+        except Exception as e:
+            print(f"  [telemetry] pipeline summary write failed (non-fatal): {e}",
+                  flush=True)
+
+    def _run_impl(self, problem: str, task_id: str = "cli",
+                  progress_callback=None, files: Dict[str, str] = None,
+                  file_path: str = "", build_command: str = "",
+                  working_dir: str = "/workspace") -> Dict[str, Any]:
+        """The pipeline body — see run() for the argument contract."""
         start = time.time()
         events = []
         files = files or {}

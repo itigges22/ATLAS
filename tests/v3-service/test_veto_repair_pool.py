@@ -112,6 +112,8 @@ class FakeSelfTestGen:
 
 
 def _make_service(monkeypatch, plan_codes, pr_cot):
+    # Keep the test hermetic: never probe the host's /data/telemetry.
+    monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", "off")
     monkeypatch.setattr(adapters, "LLMAdapter", FakeLLM)
     monkeypatch.setattr(adapters, "SandboxAdapter", FakeSandbox)
     monkeypatch.setattr(adapters, "EmbedAdapter", FakeEmbed)

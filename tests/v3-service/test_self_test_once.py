@@ -67,6 +67,8 @@ def _tests(n=2):
 
 
 def _run_pipeline(monkeypatch, self_test_gen):
+    # Keep the test hermetic: never probe the host's /data/telemetry.
+    monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", "off")
     monkeypatch.setattr(adapters, "LLMAdapter", FakeLLM)
     monkeypatch.setattr(adapters, "SandboxAdapter", FailingSandbox)
     monkeypatch.setattr(adapters, "EmbedAdapter", FakeEmbed)

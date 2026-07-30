@@ -142,9 +142,15 @@ services:
       # Plan-generation thinking mode (read inside this process — must be
       # forwarded here or setting it in .env has no effect).
       - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-}
+      # Stage telemetry (telemetry/*.jsonl + per-task pipeline summary)
+      # for the live pipeline, persisted on the v3-telemetry volume.
+      # Container-side path; set 0/off in .env to disable. Fail-soft:
+      # an unwritable dir disables telemetry, never generation.
+      - ATLAS_V3_TELEMETRY_DIR=${ATLAS_V3_TELEMETRY_DIR:-/data/telemetry}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     volumes:
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
+      - v3-telemetry:/data/telemetry
     ports:
       - "127.0.0.1:${ATLAS_V3_PORT:-8070}:8070"
     depends_on:
@@ -398,6 +404,7 @@ services:
 
 volumes:
   lens-state:
+  v3-telemetry:
 
 networks:
   atlas:
