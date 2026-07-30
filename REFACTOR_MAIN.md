@@ -332,7 +332,13 @@ recommendation before any action.
 | E4 | **sandbox as separate container** | Isolation IS the feature (untrusted code execution). KEEP — recorded so it isn't re-asked. | ❌ keep |
 | E5 | **benchmark/ remainder** (runner, best_of_k, geo_learning, models, v3/) | Load-bearing for `atlas bench` → lens training loop. KEEP. | ❌ keep |
 | E6 | **scripts/ remainder** after C-wave — each survivor must justify itself vs an `atlas` command or CI use. | Inventory post-cut. | 🔎 |
-| E7 | **atlas/cli/events.py in the shipped package** (C27) | spec-as-test-fixture; EVENT_TYPES is the contract anchor. | ⏸ owner |
+| E7 | **atlas/cli/events.py in the shipped package** (C27) | ✅ split: spec stays (214), harness → tests/cli/event_harness.py | ✅ |
+| E12 | **benchmark/v3 IS v3-service, misfiled** — pipeline.py imports 11+ modules from benchmark.v3/llm_client/runner; the v3 image COPYs benchmark/ for exactly this reason. Owner spotted it via "geo_learning in v3-service". | Relocation running: stages → `v3-service/stages/`, harness (v3_runner, datasets, geo_learning, models, config, best_of_k) → `atlas/bench/` (pip-installed CLI becomes onboarding-self-contained); results path preserved for --from-results. | 🔜 agent |
+| E13 | **metacognitive.py** — doubly inert in production: profile_path="" (no table loads) AND get_warnings([], …) (loop can't run); returns [] on every live call. Name is false. | DELETE (owner rule: not working + not truly metacognitive) | 🔜 agent |
+| E14 | **geo_learning.py** — real 378-line embedding-banking module, single caller (v3_runner) | KEEP as module; moves with the harness to atlas/bench/ | 🔜 agent |
+| E15 | **sandbox → v3-service fold?** | **NO — security boundary**: generated code must execute outside the orchestrator's container (privileges/blast radius). Reaffirms E4. | ❌ keep |
+| E16 | **proxy test-file confetti** — 49 test files, 43 named for deleted subjects (the folder complaint) | ✅ merged along production seams: 61 → 24 .go files | ✅ |
+| E17 | **datasets/ breadth** — 8 loaders, only livecodebench ever invoked | ✅ seven deleted | ✅ |
 
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
