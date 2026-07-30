@@ -1,7 +1,7 @@
 """V3 Budget Forcing (Feature 1C) — Extended Reasoning via Token Budget Control.
 
-Controls model thinking depth by tier. Detects premature thinking termination
-and injects "Wait" continuation tokens to force extended reasoning on hard problems.
+Controls model thinking depth by tier: each tier maps to a system prompt
+(direct vs. think-step-by-step) and a max-token budget.
 
 Paper: Muennighoff et al., Stanford (arxiv:2501.19393)
 Config: [budget_forcing] in atlas.conf
@@ -9,10 +9,10 @@ Telemetry: telemetry/budget_forcing_events.jsonl
 
 Budget Tiers:
   nothink  — 0 thinking tokens (thinking disabled via the shared client)
-  light    — up to 1024 thinking tokens, no Wait injection
-  standard — up to 2048 thinking tokens, Wait at <512
-  hard     — up to 4096 thinking tokens, Wait at <1024
-  extreme  — up to 8192 thinking tokens, Wait at <2048
+  light    — up to 1024 thinking tokens
+  standard — up to 2048 thinking tokens
+  hard     — up to 4096 thinking tokens
+  extreme  — up to 8192 thinking tokens
 
 Energy-to-tier mapping uses normalized Lens energy (sigmoid scale 0-1):
   energy < 0.10 → nothink  (easy, don't waste tokens)
@@ -25,11 +25,10 @@ If no energy available (first generation, no Lens score), uses default_tier.
 
 import json
 import math
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +40,6 @@ class BudgetForcingConfig:
     """Configuration for Budget Forcing."""
     enabled: bool = False
     default_tier: str = "standard"
-    max_wait_injections: int = 3
     energy_midpoint: float = 9.5
     energy_steepness: float = 0.5
 
@@ -49,6 +47,8 @@ class BudgetForcingConfig:
 # ---------------------------------------------------------------------------
 # Budget tier definitions
 # ---------------------------------------------------------------------------
+# inject_wait / wait_threshold are currently unread — nothing performs Wait
+# injection. Retained pending the tier-table review.
 
 BUDGET_TIERS: Dict[str, Dict] = {
     "nothink": {
@@ -94,9 +94,6 @@ _SYSTEM_PROMPT_THINK = (
     "You are an expert programmer. Think step by step about the problem "
     "before writing code."
 )
-
-# Continuation text injected when the model tries to end thinking early
-WAIT_INJECTION_TEXT = "Wait, let me reconsider.\n"
 
 
 # ---------------------------------------------------------------------------
@@ -197,114 +194,6 @@ def get_system_prompt(tier: str) -> str:
     return _SYSTEM_PROMPT_THINK
 
 
-def estimate_thinking_tokens(response_text: str) -> int:
-    """Estimate the number of tokens in the thinking section.
-
-    Uses a simple heuristic: ~4 characters per token (conservative for code).
-    The actual token count comes from the LLM response metadata when available.
-
-    Args:
-        response_text: The thinking text (content between <think> tags).
-
-    Returns:
-        Estimated token count.
-    """
-    if not response_text:
-        return 0
-    # Rough heuristic: 4 chars per token for English/code mix
-    return max(1, len(response_text) // 4)
-
-
-def extract_thinking(response: str) -> Tuple[str, str]:
-    """Split a response into thinking and output portions.
-
-    Handles:
-    - <think>...</think> followed by code
-    - Empty think blocks: <think>\\n\\n</think>
-    - No think block (nothink mode)
-    - Unclosed <think> tags
-
-    Args:
-        response: Raw LLM response text.
-
-    Returns:
-        Tuple of (thinking_text, output_text). thinking_text is empty string
-        if no thinking block found.
-    """
-    if not response:
-        return ("", "")
-
-    # Match <think>...</think> block at start of response
-    match = re.match(r'<think>(.*?)</think>\s*', response, re.DOTALL)
-    if match:
-        thinking = match.group(1).strip()
-        output = response[match.end():].strip()
-        return (thinking, output)
-
-    # Unclosed <think> — treat everything after <think> as thinking
-    if response.startswith('<think>'):
-        thinking = response[len('<think>'):].strip()
-        return (thinking, "")
-
-    # No thinking block
-    return ("", response.strip())
-
-
-def should_inject_wait(thinking_text: str, thinking_token_count: int,
-                       tier: str) -> bool:
-    """Determine if Wait injection is needed.
-
-    Args:
-        thinking_text: The current thinking text.
-        thinking_token_count: Actual or estimated token count of thinking.
-        tier: Current budget tier.
-
-    Returns:
-        True if Wait should be injected (thinking ended too early).
-    """
-    tier_config = BUDGET_TIERS.get(tier)
-    if tier_config is None:
-        return False
-    if not tier_config["inject_wait"]:
-        return False
-    if thinking_token_count >= tier_config["wait_threshold"]:
-        return False
-    # Only inject if there's actual thinking content (not empty)
-    # and it looks like the model tried to finish
-    return len(thinking_text.strip()) > 0
-
-
-def build_continuation_prompt(original_chatml: str, thinking_so_far: str) -> str:
-    """Build a prompt for continuing generation after Wait injection.
-
-    Takes the original ChatML prompt (up through ``<|im_start|>assistant\\n``)
-    and appends the thinking so far plus the Wait injection inside a ``<think>``
-    block, so the model resumes reasoning instead of finishing early.
-
-    MODEL-AGNOSTIC NOTE: assistant-turn pre-fill / mid-``<think>`` continuation
-    is not expressible over ``/v1/chat/completions`` (the shared client posts
-    discrete messages and lets the model's own template open/close reasoning).
-    The ``<think>`` marker here is a best-effort convention: on models that use
-    it the continuation resumes their reasoning; on models that don't, the
-    block is simply prior assistant text plus a "Wait, reconsider" nudge, which
-    still degrades gracefully — the model just continues normally rather than
-    inside a reasoning span. Callers that route through the chat client should
-    pass ``thinking_so_far`` as prior assistant context and ``WAIT_INJECTION_TEXT``
-    as a follow-up user turn instead of relying on raw ``<think>`` pre-fill.
-
-    Args:
-        original_chatml: The full ChatML prompt that was sent initially.
-        thinking_so_far: The thinking text extracted from the truncated response.
-
-    Returns:
-        New prompt for the continuation call.
-    """
-    return (
-        f"{original_chatml}"
-        f"<think>\n{thinking_so_far}\n{WAIT_INJECTION_TEXT}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
@@ -312,8 +201,8 @@ def build_continuation_prompt(original_chatml: str, thinking_so_far: str) -> str
 class BudgetForcing:
     """Budget Forcing controller for V3 extended reasoning.
 
-    Manages thinking budget tier selection, prompt formatting, Wait injection
-    detection, and telemetry logging.
+    Manages thinking budget tier selection, prompt formatting, and
+    telemetry logging.
 
     Args:
         config: BudgetForcingConfig instance.
@@ -382,37 +271,6 @@ class BudgetForcing:
         if tier == "nothink":
             return 4096  # Code output only, no thinking overhead
         return tier_config["max_thinking"] + 4096
-
-    def process_response(self, response: str, tier: str,
-                         actual_thinking_tokens: Optional[int] = None
-                         ) -> Tuple[bool, Optional[str]]:
-        """Process an LLM response and determine if Wait injection is needed.
-
-        Args:
-            response: Raw LLM response text.
-            tier: Current budget tier.
-            actual_thinking_tokens: Token count from LLM metadata (preferred).
-                If None, estimates from text length.
-
-        Returns:
-            Tuple of (needs_injection, continuation_thinking).
-            If needs_injection is True, continuation_thinking contains the
-            thinking text to use in the continuation prompt.
-        """
-        if not self.config.enabled or tier == "nothink":
-            return (False, None)
-
-        thinking, _output = extract_thinking(response)
-
-        if actual_thinking_tokens is not None:
-            token_count = actual_thinking_tokens
-        else:
-            token_count = estimate_thinking_tokens(thinking)
-
-        if should_inject_wait(thinking, token_count, tier):
-            return (True, thinking)
-
-        return (False, None)
 
     def log_event(self, task_id: str, tier: str,
                   raw_energy: Optional[float] = None,

@@ -667,7 +667,6 @@ Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER` | `"standard"` | Default Budget Forcing tier when difficulty estimation is unavailable |
-| `ATLAS_V3_BUDGET_FORCING_MAX_WAIT_INJECTIONS` | `3` | Max "Wait, let me reconsider…" injections per generation |
 | `ATLAS_V3_PLAN_SEARCH_NUM_PLANS` | `3` | Plans generated per problem (overrides `PlanSearchConfig.num_plans`) |
 | `ATLAS_V3_BLEND_ASC_DEFAULT_K` | `3` | Default K candidates when adaptive routing is unavailable |
 | `ATLAS_V3_REASC_CONFIDENCE_THRESHOLD` | `-0.5` | Logprob threshold for ReASC early-stop |

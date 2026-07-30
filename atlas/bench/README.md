@@ -29,7 +29,7 @@ The pass@1 summary printed at the end is the secondary product.
 | `runner.py` | Code execution: isolated subprocesses with resource limits, assertion (`execute_code`) and stdin/stdout (`execute_code_stdio`) modes. |
 | `config.py` | Connectivity + paths: resolves llama/lens URLs and the model name from the deployment's `.env` (Docker) or `atlas.conf` (K3s); results land under repo-root `benchmark/`. |
 | `models.py` | Data models (`BenchmarkTask`, results). |
-| `best_of_k.py` | Candidate scoring/selection helpers (energy-based). |
+| `best_of_k.py` | Lens candidate scoring (`score_candidate`, used by `v3_runner`). |
 | `geo_learning.py` | Embedding banking: extracts and stores per-candidate embeddings + labels as the bench runs, so lens training gets several labeled samples per task. |
 | `datasets/` | Dataset loaders — LiveCodeBench v5 (`livecodebench.py`) over the `base.py` download/cache contract. Caches under repo-root `benchmark/datasets/.cache/`. |
 

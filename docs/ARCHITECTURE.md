@@ -326,15 +326,15 @@ Legend: blue = generation, green = verification/selection, brown = repair.
 - **DivSampling** applies perturbation diversity: 4 roles (competitive_programmer, systems_engineer, mathematician, pragmatist) + 4 instructions (step_by_step, edge_case_first, complexity_aware, constraint_driven) + 4 styles (functional, pythonic, optimize_iteratively, structured)
 - **Budget Forcing** controls thinking token allocation:
 
-| Tier | Thinking Tokens | Wait Injection |
-|------|----------------|----------------|
-| nothink | 0 | Template-level thinking disabled |
-| light | 1,024 | None |
-| standard | 2,048 | If thinking ends < 512 tokens |
-| hard | 4,096 | If thinking ends < 1,024 tokens |
-| extreme | 8,192 | If thinking ends < 2,048 tokens |
+| Tier | Thinking Tokens |
+|------|----------------|
+| nothink | 0 (template-level thinking disabled) |
+| light | 1,024 |
+| standard | 2,048 |
+| hard | 4,096 |
+| extreme | 8,192 |
 
-Wait injection appends "Wait, let me reconsider.\n" to request a longer reasoning pass. Tier selection uses the selected model's calibrated C(x) energy; absent calibration, ATLAS uses the configured default budget rather than another model's constants.
+Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-token budget. Tier selection uses the selected model's calibrated C(x) energy; absent calibration, ATLAS uses the configured default budget rather than another model's constants.
 
 **Phase 2: Verification and Selection**
 

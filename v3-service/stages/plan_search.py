@@ -20,7 +20,6 @@ within this massively narrowed space rather than searching blindly.
 import json
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -395,55 +394,32 @@ class PlanSearch:
             )]
             result.constraint_sets = constraint_sets
 
-        # Step 2: Plan Construction (parallel across constraint sets)
-        plans: List[Plan] = [None] * len(constraint_sets)
-        [0] * len(constraint_sets)
+        # Steps 2 and 3 run sequentially on purpose: both LLM adapters
+        # serialize generation behind a lock (the service adapter always,
+        # the bench adapter unless ATLAS_LLM_PARALLEL spends its
+        # concurrency at the task level), so a thread pool here added
+        # threads without parallelism.
 
-        def _build_plan(i, cs):
-            plan, tokens, t = self._step2_construct_plan(
+        # Step 2: Plan Construction
+        plans: List[Plan] = []
+        for i, cs in enumerate(constraint_sets):
+            plan, tokens, _t = self._step2_construct_plan(
                 problem, cs, llm_call, budget_tier,
                 seed=base_seed + i + 100
             )
-            return i, plan, tokens
-
-        if len(constraint_sets) > 1:
-            with ThreadPoolExecutor(max_workers=len(constraint_sets)) as pool:
-                futures = [pool.submit(_build_plan, i, cs)
-                           for i, cs in enumerate(constraint_sets)]
-                for future in as_completed(futures):
-                    i, plan, tokens = future.result()
-                    plans[i] = plan
-                    step2_tokens += tokens
-        else:
-            for i, cs in enumerate(constraint_sets):
-                _, plan, tokens = _build_plan(i, cs)
-                plans[i] = plan
-                step2_tokens += tokens
+            plans.append(plan)
+            step2_tokens += tokens
         result.plans = plans
 
-        # Step 3: Code Generation (parallel across plans)
-        candidates: List[str] = [None] * len(plans)
-
-        def _gen_code(i, plan):
-            code, tokens, t = self._step3_generate_code(
+        # Step 3: Code Generation
+        candidates: List[str] = []
+        for i, plan in enumerate(plans):
+            code, tokens, _t = self._step3_generate_code(
                 problem, plan, llm_call, budget_tier,
                 seed=base_seed + i + 200
             )
-            return i, code, tokens
-
-        if len(plans) > 1:
-            with ThreadPoolExecutor(max_workers=len(plans)) as pool:
-                futures = [pool.submit(_gen_code, i, p)
-                           for i, p in enumerate(plans)]
-                for future in as_completed(futures):
-                    i, code, tokens = future.result()
-                    candidates[i] = code
-                    step3_tokens += tokens
-        else:
-            for i, plan in enumerate(plans):
-                _, code, tokens = _gen_code(i, plan)
-                candidates[i] = code
-                step3_tokens += tokens
+            candidates.append(code)
+            step3_tokens += tokens
         result.candidates = candidates
 
         total_time = (time.time() - total_start) * 1000

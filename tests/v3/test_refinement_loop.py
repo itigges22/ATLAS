@@ -676,5 +676,4 @@ class TestDataStructures:
         cfg = RefinementLoopConfig()
         assert cfg.enabled is False
         assert cfg.max_iterations == 2
-        assert cfg.escalate_after == 1
         assert cfg.max_time_ms == 120000.0

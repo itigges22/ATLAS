@@ -6,16 +6,11 @@ import pytest
 
 from stages.budget_forcing import (
     BUDGET_TIERS,
-    WAIT_INJECTION_TEXT,
     BudgetForcing,
     BudgetForcingConfig,
-    build_continuation_prompt,
-    estimate_thinking_tokens,
-    extract_thinking,
     get_system_prompt,
     normalize_energy,
     select_tier,
-    should_inject_wait,
 )
 
 
@@ -56,14 +51,6 @@ class TestDisabledNoop:
         assert bf_disabled.select_tier(raw_energy=15.0) == "nothink"
         assert bf_disabled.select_tier(raw_energy=2.0) == "nothink"
         assert bf_disabled.select_tier() == "nothink"
-
-    def test_process_response_never_injects(self, bf_disabled):
-        response = "<think>Short thought</think>\ndef foo(): pass"
-        needs, continuation = bf_disabled.process_response(
-            response, tier="hard", actual_thinking_tokens=5
-        )
-        assert needs is False
-        assert continuation is None
 
 
 # ---------------------------------------------------------------------------
@@ -190,138 +177,6 @@ class TestGetSystemPrompt:
 
 
 # ---------------------------------------------------------------------------
-# Test: Thinking extraction
-# ---------------------------------------------------------------------------
-
-class TestExtractThinking:
-
-    def test_normal_think_block(self):
-        response = "<think>I need to use a hash map.</think>\ndef solve(): pass"
-        thinking, output = extract_thinking(response)
-        assert thinking == "I need to use a hash map."
-        assert output == "def solve(): pass"
-
-    def test_empty_think_block(self):
-        response = "<think>\n\n</think>\ndef solve(): pass"
-        thinking, output = extract_thinking(response)
-        assert thinking == ""
-        assert output == "def solve(): pass"
-
-    def test_no_think_block(self):
-        response = "def solve(): pass"
-        thinking, output = extract_thinking(response)
-        assert thinking == ""
-        assert output == "def solve(): pass"
-
-    def test_unclosed_think_block(self):
-        response = "<think>Still thinking about this..."
-        thinking, output = extract_thinking(response)
-        assert "Still thinking" in thinking
-        assert output == ""
-
-    def test_empty_response(self):
-        assert extract_thinking("") == ("", "")
-
-    def test_multiline_thinking(self):
-        response = (
-            "<think>\nStep 1: Parse input\n"
-            "Step 2: Process\nStep 3: Output\n</think>\n"
-            "```python\ndef solve(): pass\n```"
-        )
-        thinking, output = extract_thinking(response)
-        assert "Step 1" in thinking
-        assert "Step 3" in thinking
-        assert "def solve" in output
-
-
-# ---------------------------------------------------------------------------
-# Test: Wait injection logic
-# ---------------------------------------------------------------------------
-
-class TestShouldInjectWait:
-
-    def test_nothink_never_injects(self):
-        assert should_inject_wait("some thinking", 10, "nothink") is False
-
-    def test_light_never_injects(self):
-        assert should_inject_wait("some thinking", 10, "light") is False
-
-    def test_standard_injects_below_threshold(self):
-        """Standard tier: threshold=512, should inject if <512 tokens."""
-        assert should_inject_wait("I think we need...", 100, "standard") is True
-
-    def test_standard_no_inject_above_threshold(self):
-        """Standard tier: threshold=512, should not inject if >=512 tokens."""
-        assert should_inject_wait("Long thinking...", 600, "standard") is False
-
-    def test_hard_injects_below_threshold(self):
-        """Hard tier: threshold=1024."""
-        assert should_inject_wait("some thought", 500, "hard") is True
-
-    def test_hard_no_inject_above_threshold(self):
-        assert should_inject_wait("some thought", 1100, "hard") is False
-
-    def test_extreme_injects_below_threshold(self):
-        """Extreme tier: threshold=2048."""
-        assert should_inject_wait("short", 100, "extreme") is True
-
-    def test_extreme_no_inject_above_threshold(self):
-        assert should_inject_wait("long enough", 2100, "extreme") is False
-
-    def test_empty_thinking_no_inject(self):
-        """Don't inject if thinking is empty (model didn't think at all)."""
-        assert should_inject_wait("", 0, "hard") is False
-        assert should_inject_wait("   ", 0, "hard") is False
-
-    def test_unknown_tier_no_inject(self):
-        assert should_inject_wait("thinking", 10, "nonexistent") is False
-
-
-# ---------------------------------------------------------------------------
-# Test: Continuation prompt building
-# ---------------------------------------------------------------------------
-
-class TestBuildContinuationPrompt:
-
-    def test_basic_continuation(self):
-        original = (
-            "<|im_start|>system\nYou are an expert.\n<|im_end|>\n"
-            "<|im_start|>user\nSolve this.\n<|im_end|>\n"
-            "<|im_start|>assistant\n"
-        )
-        thinking = "I need to use dynamic programming"
-        result = build_continuation_prompt(original, thinking)
-        assert result.startswith(original)
-        assert "<think>" in result
-        assert "dynamic programming" in result
-        assert WAIT_INJECTION_TEXT in result
-
-    def test_continuation_preserves_original_prompt(self):
-        original = "<|im_start|>system\nTest<|im_end|>\n<|im_start|>assistant\n"
-        result = build_continuation_prompt(original, "thought")
-        assert result.startswith(original)
-
-
-# ---------------------------------------------------------------------------
-# Test: Token estimation
-# ---------------------------------------------------------------------------
-
-class TestEstimateThinkingTokens:
-
-    def test_empty_string(self):
-        assert estimate_thinking_tokens("") == 0
-
-    def test_short_text(self):
-        # "Hello" = 5 chars → 5//4 = 1
-        assert estimate_thinking_tokens("Hello") >= 1
-
-    def test_long_text(self):
-        text = "a" * 4000  # ~1000 tokens
-        est = estimate_thinking_tokens(text)
-        assert 800 <= est <= 1200
-
-
-# ---------------------------------------------------------------------------
 # Test: BudgetForcing class (integration)
 # ---------------------------------------------------------------------------
 
@@ -350,40 +205,6 @@ class TestBudgetForcingClass:
         assert bf_enabled.get_max_tokens("standard") == 2048 + 4096
         assert bf_enabled.get_max_tokens("hard") == 4096 + 4096
         assert bf_enabled.get_max_tokens("extreme") == 8192 + 4096
-
-    def test_process_response_needs_injection(self, bf_enabled):
-        """Short thinking in 'hard' tier should trigger injection."""
-        response = "<think>Quick thought.</think>\ndef solve(): pass"
-        needs, continuation = bf_enabled.process_response(
-            response, tier="hard", actual_thinking_tokens=50
-        )
-        assert needs is True
-        assert continuation == "Quick thought."
-
-    def test_process_response_sufficient_thinking(self, bf_enabled):
-        """Long enough thinking should not trigger injection."""
-        response = "<think>Long analysis...</think>\ndef solve(): pass"
-        needs, continuation = bf_enabled.process_response(
-            response, tier="hard", actual_thinking_tokens=1500
-        )
-        assert needs is False
-        assert continuation is None
-
-    def test_process_response_nothink_tier(self, bf_enabled):
-        """Nothink tier never triggers injection."""
-        response = "<think>Short</think>\ncode"
-        needs, _ = bf_enabled.process_response(
-            response, tier="nothink", actual_thinking_tokens=5
-        )
-        assert needs is False
-
-    def test_process_response_estimates_tokens(self, bf_enabled):
-        """Without actual_thinking_tokens, estimates from text."""
-        # 100 chars ≈ 25 tokens → below standard threshold (512)
-        short_thinking = "x" * 100
-        response = f"<think>{short_thinking}</think>\ndef solve(): pass"
-        needs, _ = bf_enabled.process_response(response, tier="standard")
-        assert needs is True
 
     def test_select_tier_enabled(self, bf_enabled):
         """Enabled BudgetForcing selects by energy."""
@@ -476,60 +297,6 @@ class TestBudgetTierDefinitions:
 
 
 # ---------------------------------------------------------------------------
-# Test: AC-1C-1 — Extends thinking by >=50%
-# ---------------------------------------------------------------------------
-
-class TestAC1C1ThinkingExtension:
-    """AC-1C-1: Budget forcing extends thinking by >=50% on early-termination."""
-
-    def test_wait_injection_extends_thinking(self, bf_enabled):
-        """Simulate: model stops at 200 tokens in 'hard' tier (threshold=1024).
-        After Wait injection, model continues. Final thinking should be >=50% more."""
-        # First response: 200 tokens of thinking (early termination)
-        needs, thinking = bf_enabled.process_response(
-            "<think>Short analysis of the problem.</think>\ndef solve(): pass",
-            tier="hard",
-            actual_thinking_tokens=200,
-        )
-        assert needs is True
-
-        # Simulate continuation: model adds more thinking after Wait
-        # In real usage, the runner would concatenate and re-call LLM
-        # Here we verify the mechanism detects early termination
-        # and that the continuation prompt structure is correct
-        original_prompt = bf_enabled.format_chatml("Solve X", "hard")
-        cont = build_continuation_prompt(original_prompt, thinking)
-        assert WAIT_INJECTION_TEXT in cont
-        # The continuation prompt should cause the model to produce more thinking
-        # Verification: if the model produces 300 more tokens, total = 500
-        # 500/200 = 2.5x = +150% >= 50% ✓
-
-    def test_multiple_injections_compound(self, bf_enabled):
-        """Multiple Wait injections should further extend thinking."""
-        # First: 100 tokens
-        needs1, t1 = bf_enabled.process_response(
-            "<think>First thought.</think>\ncode",
-            tier="extreme",
-            actual_thinking_tokens=100,
-        )
-        assert needs1 is True
-        # Second: 500 tokens (still below extreme threshold 2048)
-        needs2, t2 = bf_enabled.process_response(
-            "<think>First thought.\nWait, let me reconsider.\nMore thinking.</think>\ncode",
-            tier="extreme",
-            actual_thinking_tokens=500,
-        )
-        assert needs2 is True
-        # Third: 2100 tokens (above threshold)
-        needs3, _ = bf_enabled.process_response(
-            "<think>Very long analysis...</think>\ncode",
-            tier="extreme",
-            actual_thinking_tokens=2100,
-        )
-        assert needs3 is False
-
-
-# ---------------------------------------------------------------------------
 # Test: AC-1C-2 — HARD_PATH tasks >=5% improvement
 # (Offline validation — measured during benchmark, tested structurally here)
 # ---------------------------------------------------------------------------
@@ -549,36 +316,6 @@ class TestAC1C2HardPathImprovement:
         """Tasks with FAIL-like energy should get maximum reasoning."""
         tier = bf_enabled.select_tier(raw_energy=14.0)
         assert tier == "extreme"
-
-
-# ---------------------------------------------------------------------------
-# Test: AC-1C-3 — Token injection does not corrupt output
-# ---------------------------------------------------------------------------
-
-class TestAC1C3NoCorrruption:
-    """AC-1C-3: Wait injection does not corrupt generation output."""
-
-    def test_continuation_prompt_well_formed(self, bf_enabled):
-        """Continuation prompt should be valid ChatML."""
-        prompt = bf_enabled.format_chatml("Solve: find max sum subarray", "hard")
-        cont = build_continuation_prompt(prompt, "I should use Kadane's algorithm")
-        # Must contain the original prompt structure
-        assert "<|im_start|>system" in cont
-        assert "<|im_start|>user" in cont
-        assert "<|im_start|>assistant" in cont
-        # Must have think block with the continuation
-        assert "<think>" in cont
-        assert "Kadane" in cont
-        assert WAIT_INJECTION_TEXT in cont
-        # Must NOT have premature end-of-turn
-        assert cont.count("<|im_end|>") == 2  # system + user only
-
-    def test_extract_thinking_preserves_code(self):
-        """Code after thinking should be extracted intact."""
-        code = "def solve(nums):\n    return max(nums)"
-        response = f"<think>Use max builtin.</think>\n{code}"
-        _, output = extract_thinking(response)
-        assert output == code
 
 
 # ---------------------------------------------------------------------------

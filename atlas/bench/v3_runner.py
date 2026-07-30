@@ -473,9 +473,6 @@ class V3Pipeline:
             v3["bf_default_tier"] = conf.get(
                 "ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER", "standard",
             ).strip('"')
-            v3["bf_max_wait"] = int(conf.get(
-                "ATLAS_V3_BUDGET_FORCING_MAX_WAIT_INJECTIONS", "3",
-            ))
             v3["ps_num_plans"] = int(conf.get(
                 "ATLAS_V3_PLAN_SEARCH_NUM_PLANS", "3",
             ))
@@ -516,7 +513,6 @@ class V3Pipeline:
             BudgetForcingConfig(
                 enabled=self.enable_phase1,
                 default_tier=self._v3_conf.get("bf_default_tier", "standard"),
-                max_wait_injections=self._v3_conf.get("bf_max_wait", 3),
             ),
             telemetry_dir=telemetry_dir,
         )

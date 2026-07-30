@@ -8,7 +8,8 @@ When Phase 1+2 candidates all fail, the loop:
   4. Tests in sandbox
   5. Learns from result (success → Pattern Cache, fail → iterate)
 
-Escalates to verified derivation chains (3D) after 2 failed iterations.
+When the loop exhausts its iterations unsolved, the caller (pipeline
+orchestrator / bench runner) moves on to its next repair strategy.
 
 Config: [refinement_loop] in atlas.conf
 Telemetry: telemetry/refinement_loop_events.jsonl
@@ -59,7 +60,6 @@ class RefinementLoopConfig:
     """Configuration for the Refinement Loop."""
     enabled: bool = False
     max_iterations: int = 2
-    escalate_after: int = 1
     max_time_ms: float = 120000.0
 
 
