@@ -72,7 +72,7 @@ atlas-proxy-v2                          # listens on :8090
 |---------|---------|-------------|
 | ATLAS_INFERENCE_URL | http://localhost:8080 | llama-server inference URL |
 | ATLAS_LLAMA_URL | (= ATLAS_INFERENCE_URL) | Override for llama-server target |
-| ATLAS_LENS_URL | http://localhost:8099 | Lens / RAG API with C(x)+G(x) |
+| ATLAS_LENS_URL | http://localhost:8099 | Geometric Lens API (C(x)+G(x) scoring, pattern cache) |
 | ATLAS_SANDBOX_URL | http://localhost:30820 | Code execution sandbox |
 | ATLAS_V3_URL | http://localhost:8070 | V3 pipeline service |
 | ATLAS_PROXY_PORT | 8090 | Proxy listen port |

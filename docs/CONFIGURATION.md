@@ -579,7 +579,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 > **Note:** `atlas.conf` is only used by K3s deployment scripts. Docker Compose uses `.env` instead. The two files configure different deployment targets and should not be mixed.
 
-> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark/v3 ablation runner. Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.11).
+> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark ablation runner (`atlas.bench.v3_runner`). Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.11).
 
 ### 8.1 Cluster & Network
 
@@ -592,7 +592,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | `ATLAS_LENS_NODEPORT` | `31144` | geometric-lens external port |
 | `ATLAS_LLAMA_NODEPORT` | `32735` | llama-server external port |
 | `ATLAS_SANDBOX_NODEPORT` | `30820` | sandbox external port |
-| `ATLAS_V3_NODEPORT` | `30070` | v3-service external port. The template exposes it on NodePort `30070` by default (debug access to `/v3/*`); delete the `type: NodePort` / `nodePort:` lines in `templates/atlas-v3-deployment.yaml.tmpl` to make the service cluster-internal. |
+| `ATLAS_V3_NODEPORT` | `30070` | v3-service external port. The template exposes it on NodePort `30070` by default (debug access to `/v3/*`); delete the `type: NodePort` / `nodePort:` lines in `templates/v3-service-deployment.yaml.tmpl` to make the service cluster-internal. |
 | `ATLAS_LLAMA_PORT` | `8080` | llama-server internal port (matches Dockerfile EXPOSE) |
 | `ATLAS_LENS_PORT` | `8099` | geometric-lens internal port |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy internal port |

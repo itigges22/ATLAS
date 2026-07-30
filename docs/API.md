@@ -1179,6 +1179,6 @@ A minimal client needs four things (plus one header):
 3. **POST `/cancel`** with `{session_id}` when the user wants to abort.
 4. *(Optional)* **GET `/events`** in a background goroutine/thread for the global typed-envelope feed if you want a pipeline-progress sidebar.
 
-The TUI ([atlas tui](CLI.md)) is a Go reference implementation (~3 kloc) — its `model.go` shows how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example.
+The TUI ([atlas tui](CLI.md)) is a Go reference implementation — its `model.go`/`events.go` show how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example.
 
 This document and the TUI source are the canonical reference for building a client.
