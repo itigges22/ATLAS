@@ -24,8 +24,19 @@ PYTHON_TARGETS = (
     "v3-service",
     "sandbox",
 )
+# Mirrors the CI python-tests matrix (.github/workflows/test.yml) plus the
+# e2e-acceptance suite, so the documented local gate runs what CI gates on.
+# tests/e2e skips cleanly when the proxy binary isn't built;
+# tests/infrastructure's integration-marked tests are excluded by the
+# repo-wide `-m 'not integration'` addopts.
 PYTEST_PATHS = ("tests/v3", "tests/v3-service", "tests/cli",
-                "tests/concurrency", "tests/perf", "tests/contracts")
+                "tests/infrastructure", "tests/concurrency", "tests/perf",
+                "tests/contracts", "tests/e2e")
+# geometric-lens/tests runs as its own gate (python-tests-lens), matching
+# its dedicated CI matrix leg: geometric-lens/ and v3-service/ both define
+# top-level modules named `pipeline`/`main`, so the two trees cannot share
+# one pytest process.
+LENS_PYTEST_PATH = "geometric-lens/tests"
 
 
 @dataclass(frozen=True)
@@ -149,6 +160,15 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             (python, "-m", "pytest", *pytest_paths, "--no-header", "-q"),
             available=lambda: _module_available("pytest"),
             unavailable_reason="pytest is not installed",
+        ),
+        # Separate process on purpose — see the LENS_PYTEST_PATH comment.
+        "python-tests-lens": Gate(
+            "python-tests-lens",
+            (python, "-m", "pytest", LENS_PYTEST_PATH, "--no-header", "-q"),
+            available=lambda: (_module_available("pytest")
+                               and _module_available("torch")),
+            unavailable_reason="pytest/torch not installed "
+                               "(pip install -r geometric-lens/requirements.txt)",
         ),
         "go-proxy-test": Gate(
             "go-proxy-test",
