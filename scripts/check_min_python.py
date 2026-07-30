@@ -32,11 +32,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# scripts/ and benchmark/ are included because they run under the developer's
-# own interpreter — `atlas bench` and `atlas lens build` are driven
-# from the host, not a container, so the floor applies to them the same way.
+# scripts/ is included because it runs under the developer's own
+# interpreter — `atlas bench` and `atlas lens build` are driven from the
+# host, not a container, so the floor applies the same way (the bench
+# harness itself lives under atlas/).
 DEFAULT_TARGETS = ("atlas", "geometric-lens", "v3-service", "sandbox",
-                   "scripts", "benchmark", "tests")
+                   "scripts", "tests")
 
 # Directories that never ship to a user's interpreter.
 SKIP_PARTS = {"__pycache__", ".venv", "node_modules", "build", "dist"}

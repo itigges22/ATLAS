@@ -7,8 +7,8 @@ non-hardware metrics that CI can gate on every run: CLI import time,
 proxy binary size, and service image sizes. A regression in those is a
 CI failure; hardware fields are recorded (nullable) for later import.
 
-    python -m benchmark.perf.harness measure  > result.json
-    python -m benchmark.perf.harness check result.json   # gate vs budgets
+    python -m tests.perf.harness measure  > result.json
+    python -m tests.perf.harness check result.json   # gate vs budgets
 """
 
 import json

@@ -43,7 +43,7 @@ else:
     # the benchmark suite does (.env on Docker, K3s NodePorts as fallback),
     # so the live-stack tests hit whichever deploy is actually running.
     try:
-        from benchmark.config import config as _atlas_config
+        from atlas.bench.config import config as _atlas_config
         _llama_default = _atlas_config.llama_url
         _lens_default = _atlas_config.rag_url
     except Exception:

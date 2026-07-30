@@ -73,7 +73,7 @@ def test_runner_invocation_command_env_and_cwd(tmp_path, monkeypatch):
 
     assert len(calls) == 1
     cmd = calls[0]["cmd"]
-    assert cmd[1:3] == ["-m", "benchmark.v3_runner"]
+    assert cmd[1:3] == ["-m", "atlas.bench.v3_runner"]
     assert "--baseline" in cmd
     assert cmd[cmd.index("--run-id") + 1] == "r1"
     assert cmd[cmd.index("--selection-strategy") + 1] == "lens"

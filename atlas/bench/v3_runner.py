@@ -46,17 +46,18 @@ from typing import Any, Dict, List, Optional, Tuple
 # Force line-buffered stdout
 sys.stdout.reconfigure(line_buffering=True)
 
-# Add parent to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-# The V3 pipeline stages live in v3-service/stages/ — put v3-service on
-# sys.path the same way the CLI does for geometric-lens.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "v3-service"))
+from atlas.env import atlas_root
 
-from benchmark.config import config
-from benchmark.models import BenchmarkTask
-from benchmark.runner import execute_code, execute_code_stdio
-from benchmark.geo_learning import extract_embedding_urllib
-from benchmark.best_of_k import score_candidate
+# The V3 pipeline stages live in v3-service/stages/ (shared with the V3
+# service image) — put the checkout's v3-service on sys.path the same way
+# the CLI does for geometric-lens.
+sys.path.insert(0, str(Path(atlas_root()) / "v3-service"))
+
+from atlas.bench.config import config
+from atlas.bench.models import BenchmarkTask
+from atlas.bench.runner import execute_code, execute_code_stdio
+from atlas.bench.geo_learning import extract_embedding_urllib
+from atlas.bench.best_of_k import score_candidate
 
 # V3 pipeline stages (shared with the V3 service)
 from stages.llm_client import chat_completion, chatml_to_messages, extract_code
@@ -1478,7 +1479,7 @@ class V3BenchmarkRunner:
 
 def load_lcb_tasks():
     """Load LiveCodeBench dataset."""
-    from benchmark.datasets import LiveCodeBenchDataset
+    from atlas.bench.datasets import LiveCodeBenchDataset
     ds = LiveCodeBenchDataset()
     ds.load()
     return ds.tasks

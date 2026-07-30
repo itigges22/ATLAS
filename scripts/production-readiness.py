@@ -20,7 +20,6 @@ ROOT = Path(__file__).resolve().parent.parent
 PYTHON_TARGETS = (
     "atlas",
     "tests",
-    "benchmark",
     "geometric-lens",
     "v3-service",
     "sandbox",
@@ -201,7 +200,7 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
                 "atlas/config_schema.py",
                 "atlas/upgrade_engine.py",
                 "atlas/artifact_manifest.py",
-                "benchmark/perf/harness.py",
+                "tests/perf/harness.py",
                 "geometric-lens/geometric_lens/provenance.py",
             ),
             cwd=ROOT,

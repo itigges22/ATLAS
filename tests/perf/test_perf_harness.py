@@ -1,6 +1,6 @@
 """Performance harness: schema stability + budget gate."""
 
-from benchmark.perf import harness
+from tests.perf import harness
 
 
 def test_measure_has_stable_schema():

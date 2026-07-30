@@ -136,8 +136,8 @@ jobs:
       - name: Measure + gate against budgets
         run: |
           ATLAS_PROXY_BINARY=/tmp/test-atlas-proxy \
-            python -m benchmark.perf.harness measure > /tmp/perf.json
-          python -m benchmark.perf.harness check /tmp/perf.json
+            python -m tests.perf.harness measure > /tmp/perf.json
+          python -m tests.perf.harness check /tmp/perf.json
 
   ruff:
     name: ruff (python lint)

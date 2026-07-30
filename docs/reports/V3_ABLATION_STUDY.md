@@ -6,7 +6,7 @@
 > targets Qwen3.5-9B with the same V3 pipeline (PlanSearch / DivSampling
 > / Budget Forcing / PR-CoT / Refinement / Derivation), but formal 9B
 > benchmark numbers are mid-run and not yet published — see
-> [`benchmark/README.md`](../../benchmark/README.md) "V3.1 (Qwen3.5-9B) —
+> [`atlas/bench/README.md`](../../atlas/bench/README.md) "V3.1 (Qwen3.5-9B) —
 > In Progress". Forward-looking V3.1 predictions in §10 below were the
 > author's plan at write time (2026-03); some shifted during
 > implementation (e.g. G(x) was kept and deployed, not redesigned from

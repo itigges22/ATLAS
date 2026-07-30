@@ -18,7 +18,7 @@ the documentation lives. For component internals see
 | `geometric-lens/` | Scoring (C(x)/G(x)), RAG indexing and retrieval, confidence routing, pattern cache, ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
 | `sandbox/` | Isolated multi-language code execution and shell, with workspace containment | — |
 | `inference/` | llama-server Docker builds (CUDA / ROCm / Vulkan) and model-neutral entrypoints | — |
-| `benchmark/` | Benchmark runners, dataset loaders, and the V3 pipeline modules | [benchmark/README.md](../benchmark/README.md) |
+| `benchmark/` | Benchmark runners, dataset loaders, and the V3 pipeline modules | [atlas/bench/README.md](../atlas/bench/README.md) |
 | `scripts/` | Install, deploy, K3s, and training/retraining automation | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
 | `tests/` | Cross-cutting test suite: CLI, infrastructure, V3, and v3-service | — |

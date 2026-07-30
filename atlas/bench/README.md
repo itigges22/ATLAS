@@ -11,7 +11,7 @@ Headline 9B numbers are not yet published — `docs/SOURCES.md`
 "Known Limitations" lists this as a V3.1.x roadmap item.
 
 Until the 9B numbers land, the **V3 (14B) results in
-[`docs/reports/V3_ABLATION_STUDY.md`](../docs/reports/V3_ABLATION_STUDY.md)**
+[`docs/reports/V3_ABLATION_STUDY.md`](../../docs/reports/V3_ABLATION_STUDY.md)**
 are the canonical published evidence (74.6% LiveCodeBench v5 pass@1,
 599 tasks, 4 ablation conditions).
 

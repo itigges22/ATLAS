@@ -1,7 +1,8 @@
 """
-Benchmark-specific configuration.
+Bench-specific configuration.
 
-Reads settings from atlas.conf and provides defaults for benchmark operations.
+Reads settings from atlas.conf / .env and resolves the runtime output
+directory (repo-root benchmark/) for results and dataset caches.
 """
 
 import os
@@ -9,13 +10,10 @@ from pathlib import Path
 
 
 def get_project_root() -> Path:
-    """Get the ATLAS project root directory."""
-    current = Path(__file__).resolve().parent
-    while current != current.parent:
-        if (current / "atlas.conf").exists():
-            return current
-        current = current.parent
-    return Path(__file__).resolve().parent.parent
+    """Get the ATLAS project root directory (canonical resolution lives
+    in atlas.env — works from any cwd and for editable installs)."""
+    from atlas.env import atlas_root
+    return Path(atlas_root())
 
 
 def parse_atlas_conf() -> dict:
@@ -97,39 +95,22 @@ class BenchmarkConfig:
         self._root = get_project_root()
 
     @property
-    def project_root(self) -> Path:
-        """Project root directory."""
-        return self._root
-
-    @property
     def benchmark_dir(self) -> Path:
-        """Benchmark module directory."""
+        """Runtime output directory for bench runs. Stays at repo-root
+        benchmark/ (not inside the atlas package) so results keep the
+        path that `atlas lens build --from-results` expects and dataset
+        caches never land in site-packages."""
         return self._root / "benchmark"
 
     @property
-    def datasets_dir(self) -> Path:
-        """Datasets directory."""
-        return self.benchmark_dir / "datasets"
-
-    @property
     def cache_dir(self) -> Path:
-        """Dataset cache directory."""
-        return self.datasets_dir / ".cache"
-
-    @property
-    def custom_dir(self) -> Path:
-        """Custom tasks directory."""
-        return self.benchmark_dir / "custom"
+        """Dataset download cache."""
+        return self.benchmark_dir / "datasets" / ".cache"
 
     @property
     def results_dir(self) -> Path:
         """Results output directory."""
         return self.benchmark_dir / "results"
-
-    @property
-    def submissions_dir(self) -> Path:
-        """Submissions directory."""
-        return self.results_dir / "submissions"
 
     @property
     def llama_url(self) -> str:
@@ -162,89 +143,6 @@ class BenchmarkConfig:
             return f"http://localhost:{port}"
         port = self._conf.get("ATLAS_LENS_NODEPORT", "31144")
         return f"http://localhost:{port}"
-
-    @property
-    def llama_api_url(self) -> str:
-        """URL for llama-server OpenAI-compatible API."""
-        return f"{self.llama_url}/v1"
-
-    @property
-    def model_name(self) -> str:
-        """Main model filename — Docker .env (ATLAS_MODEL_FILE) first, then
-        atlas.conf (ATLAS_MAIN_MODEL)."""
-        return (self._env.get("ATLAS_MODEL_FILE")
-                or self._conf.get("ATLAS_MAIN_MODEL", ""))
-
-    @property
-    def default_timeout_seconds(self) -> int:
-        """Default timeout for code execution."""
-        return 30
-
-    @property
-    def default_memory_limit_mb(self) -> int:
-        """Default memory limit for code execution."""
-        return 512
-
-    @property
-    def default_k(self) -> int:
-        """Default number of attempts per task."""
-        return 1
-
-    @property
-    def default_temperature_pass1(self) -> float:
-        """Temperature for pass@1 (greedy decoding)."""
-        return 0.0
-
-    @property
-    def default_temperature_passk(self) -> float:
-        """Temperature for pass@k evaluation."""
-        return 0.8
-
-    @property
-    def gpu_tdp_watts(self) -> float:
-        """GPU TDP in watts (RTX 5060 Ti)."""
-        return 180.0
-
-    @property
-    def gpu_cost_usd(self) -> float:
-        """Estimated GPU cost in USD."""
-        return 450.0
-
-    @property
-    def gpu_lifetime_hours(self) -> float:
-        """Expected GPU lifetime in hours (5 years, 8 hours/day)."""
-        return 5 * 365 * 8
-
-    @property
-    def cloud_pricing(self) -> dict:
-        """Cloud API pricing per 1M tokens (input/output)."""
-        return {
-            "gpt-4o": {"input": 5.0, "output": 15.0},
-            "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-            "claude-sonnet": {"input": 3.0, "output": 15.0},
-            "claude-haiku": {"input": 0.25, "output": 1.25}
-        }
-
-    @property
-    def qwen3_14b_baselines(self) -> dict:
-        """Published Qwen3 baseline scores (retained for V1/V2 comparison)."""
-        return {
-            "humaneval_pass1": 0.67,       # ~65-70%
-            "mbpp_pass1": 0.734,           # 73.4% per tech report (3-shot)
-            "humaneval_plus_pass1": 0.61,  # EvalPlus leaderboard estimate
-            "mbpp_plus_pass1": 0.65,       # EvalPlus leaderboard estimate
-            # Measured in-repo: 54.9% single-generation baseline on the
-            # 599-task LiveCodeBench set (docs/reports/V3_ABLATION_STUDY.md).
-            "livecodebench_pass1": 0.549,
-            # No published or measured figure; unvalidated estimate.
-            "scicode_pass1": 0.10,
-        }
-
-    def ensure_directories(self) -> None:
-        """Ensure all required directories exist."""
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        self.submissions_dir.mkdir(parents=True, exist_ok=True)
 
 
 # Global config instance

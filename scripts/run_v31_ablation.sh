@@ -68,7 +68,7 @@ run_A() {
 
     preflight_check || return 1
 
-    python3 -m benchmark.v3_runner \
+    python3 -m atlas.bench.v3_runner \
         --run-id "${A_RUN_ID}" \
         --baseline \
         2>&1 | tee "${LOG_DIR}/condition_A.log"
@@ -86,7 +86,7 @@ run_F() {
 
     preflight_check || return 1
 
-    python3 -m benchmark.v3_runner \
+    python3 -m atlas.bench.v3_runner \
         --run-id "${F_RUN_ID}" \
         --selection-strategy lens \
         2>&1 | tee "${LOG_DIR}/condition_F.log"

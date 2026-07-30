@@ -41,7 +41,7 @@ class TestLlamaModels:
         import os
         expected = None
         try:
-            from benchmark.config import config as _cfg
+            from atlas.bench.config import config as _cfg
             expected = (_cfg.model_name or "").lower()
         except Exception:
             expected = None

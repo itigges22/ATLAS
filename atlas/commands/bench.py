@@ -23,10 +23,10 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     code: 0 on success (including a fully-resumed run), 1 when the runner
     fails or produces nothing.
 
-    Delegates to the V3 runner but displays progress inline. The runner is
-    launched with the repo root as its working directory (the `benchmark`
-    package resolves via cwd and results are written under the repo), so the
-    command behaves the same from any directory.
+    Delegates to the V3 runner (atlas.bench.v3_runner) but displays progress
+    inline. The runner is launched with the repo root as its working
+    directory (results are written under repo-root benchmark/results/), so
+    the command behaves the same from any directory.
     """
     display.phase_label(f"Benchmark: {dataset}")
 
@@ -35,7 +35,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
     # Build runner command
     run_id = run_id or f"bench_{dataset}_{int(time.time())}"
     cmd = [
-        sys.executable, "-m", "benchmark.v3_runner",
+        sys.executable, "-m", "atlas.bench.v3_runner",
         "--run-id", run_id,
         "--baseline",
         "--selection-strategy", selection_strategy,
