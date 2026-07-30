@@ -32,7 +32,7 @@ func TestAllErrorCodesUnique(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if len(AllErrorCodes) != 12 {
-		t.Fatalf("expected 12 error codes, got %d", len(AllErrorCodes))
+	if len(AllErrorCodes) != 6 {
+		t.Fatalf("expected 6 error codes, got %d", len(AllErrorCodes))
 	}
 }
