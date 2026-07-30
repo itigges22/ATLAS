@@ -10,8 +10,8 @@ import os
 import sys
 from typing import Dict, List, Optional
 
-from atlas.cli import compose as compose_config
-from atlas.cli import config_schema as cs
+from atlas import compose as compose_config
+from atlas import config_schema as cs
 
 
 def _read_env(path: str) -> Dict[str, str]:

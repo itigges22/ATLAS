@@ -78,13 +78,13 @@ def test_every_tui_handler_has_a_producer():
 def test_envelope_types_agree_across_implementations():
     """The 7 typed-envelope types must match across the Go producer
     (proxy/events.go), the Go consumer (tui/consumer.go), and the
-    Python spec (atlas/cli/events.py)."""
+    Python spec (atlas/events.py)."""
     go_src = (REPO / "proxy" / "events.go").read_text()
     go_types = set(re.findall(r'Evt\w+\s*=\s*"([a-z_]+)"', go_src))
 
-    py_src = (REPO / "atlas" / "cli" / "events.py").read_text()
+    py_src = (REPO / "atlas" / "events.py").read_text()
     m = re.search(r"EVENT_TYPES\s*=\s*\(([^)]+)\)", py_src)
-    assert m, "EVENT_TYPES not found in atlas/cli/events.py"
+    assert m, "EVENT_TYPES not found in atlas/events.py"
     py_types = set(re.findall(r'"([a-z_]+)"', m.group(1)))
 
     tui_src = go_source("tui", "Envelope")

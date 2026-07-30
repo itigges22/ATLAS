@@ -924,7 +924,7 @@ ensure_default_model_selected() {
     # install never runs the wizard, so an empty selection would kill the
     # model-download step — and even with ATLAS_BOOTSTRAP_SKIP_MODELS=1,
     # compose's ${ATLAS_MODEL_FILE:?} guard. Default to the registry's
-    # recommended model (atlas/cli/commands/model_registry.py — the
+    # recommended model (atlas/commands/model_registry.py — the
     # lens-supported development target) so the advertised fully-automatic
     # flow actually completes. An existing non-empty selection is respected.
     local default_model_file="Qwen3.5-9B-Q6_K.gguf"
@@ -963,7 +963,7 @@ persist_backend_selection() {
     # Record which inference backend matches the detected hardware into .env
     # so every post-install lifecycle command selects the SAME docker-compose
     # overlays the bootstrap used. atlas compose, atlas doctor's start hint,
-    # the REPL's proxy recreation, and the compose resolver in atlas/cli/
+    # the REPL's proxy recreation, and the compose resolver in atlas/
     # compose.py all read ATLAS_BACKEND; without it they fall back to the base
     # CUDA file and fail on GPU-less hosts with "could not select device
     # driver nvidia". Keys mirror compose_files_args + _OVERLAY_BY_BACKEND:
@@ -1136,7 +1136,7 @@ install_go() {
 
 build_atlas_tui() {
     # Pre-build the TUI binary so `atlas tui` works immediately. The Python
-    # wrapper at atlas/cli/commands/tui.py CAN build on first run, but it
+    # wrapper at atlas/commands/tui.py CAN build on first run, but it
     # only does so silently — and if Go isn't on PATH for that shell yet
     # (because .bashrc wasn't sourced) the user just gets "binary not found
     # and Go is not available". Pre-building dodges both.
@@ -1559,7 +1559,7 @@ run_doctor() {
     local install_dir="${ATLAS_INSTALL_DIR:-$(pwd)}"
     local doctor_out doctor_rc
     set +e
-    doctor_out=$(cd "$install_dir" && python3 -m atlas.cli.commands.doctor --quick --no-color 2>&1)
+    doctor_out=$(cd "$install_dir" && python3 -m atlas.commands.doctor --quick --no-color 2>&1)
     doctor_rc=$?
     set -e
 

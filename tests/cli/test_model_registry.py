@@ -1,4 +1,4 @@
-"""Tests for atlas.cli.commands.model_registry (PC-056).
+"""Tests for atlas.commands.model_registry (PC-056).
 
 Covers:
   - REGISTRY shape + lens_status truth (only 9B is supported today)
@@ -9,7 +9,7 @@ Covers:
   - stable public field names on the Model record
 """
 
-from atlas.cli.commands import model_registry
+from atlas.commands import model_registry
 
 
 # ---------------------------------------------------------------------------

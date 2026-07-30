@@ -1,4 +1,4 @@
-"""Tests for atlas.cli.commands.model (PC-056) — the CLI command.
+"""Tests for atlas.commands.model (PC-056) — the CLI command.
 
 Network-touching paths (the actual urllib download in install) are
 out of scope here — those are integration tests run against a fresh
@@ -20,7 +20,7 @@ mocked filesystem state:
 import json
 from typing import Optional
 
-from atlas.cli.commands import model, model_registry, tier
+from atlas.commands import model, model_registry, tier
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +529,7 @@ def test_install_oversized_part_within_slack_does_not_refuse(tmp_path,
     def fake_urlopen(*a, **kw):
         raise urllib.error.URLError("network disabled in test")
 
-    import atlas.cli.commands.model as model_mod
+    import atlas.commands.model as model_mod
     monkeypatch.setattr(model_mod.urllib.request, "urlopen", fake_urlopen)
     rc = model.main(["install", "Qwen3.5-9B-Q6_K", "--models-dir",
                      str(tmp_path), "--no-color"])
@@ -581,7 +581,7 @@ def _install_with_fake_urlopen(monkeypatch, body: bytes, status: int = 200,
                                 raise_for: Optional[Exception] = None):
     """Wire up a fake urlopen that returns the given body. If captured is
     a list, each Request is appended to it for header inspection."""
-    import atlas.cli.commands.model as model_mod
+    import atlas.commands.model as model_mod
 
     def fake(req, timeout=60):
         if captured is not None:
@@ -614,7 +614,7 @@ def test_download_fresh_install_succeeds_with_correct_sha(tmp_path, monkeypatch,
     expected_sha = hashlib.sha256(body).hexdigest()
 
     # Patch the registry temporarily so the 9B's expected sha matches our body.
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
     patched = type(original)(
         name=original.name, tier=original.tier,
@@ -647,7 +647,7 @@ def test_download_sha_mismatch_deletes_part(tmp_path, monkeypatch, capsys):
     body = b"\0" * (101 * 1024 * 1024)
     wrong_sha = "f" * 64  # definitely not the SHA of zero bytes
 
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
     patched = type(original)(
         name=original.name, tier=original.tier,
@@ -687,7 +687,7 @@ def test_download_resume_continues_hash_correctly(tmp_path, monkeypatch, capsys)
     with open(p, "wb") as f:
         f.write(full_body[:half])
 
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
     patched = type(original)(
         name=original.name, tier=original.tier,
@@ -732,7 +732,7 @@ def test_download_server_ignores_range_restarts_cleanly(tmp_path,
     with open(p, "wb") as f:
         f.write(b"GARBAGE" * 10000)  # ~70 KB of junk
 
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
     patched = type(original)(
         name=original.name, tier=original.tier,
@@ -770,7 +770,7 @@ def test_download_sends_authorization_header_with_hf_token(tmp_path,
     body = b"z" * (101 * 1024 * 1024)
     expected_sha = hashlib.sha256(body).hexdigest()
 
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
     patched = type(original)(
         name=original.name, tier=original.tier,
@@ -847,7 +847,7 @@ def _patch_registry_artifact_hashes(monkeypatch, name: str, body: bytes):
     """Point the registry entry's per-artifact hashes at the fake body the
     test serves, so download verification passes on fixture bytes."""
     import dataclasses
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
 
     digest = hashlib.sha256(body).hexdigest()
     original_by_name = reg.by_name
@@ -985,7 +985,7 @@ def test_install_no_artifacts_flag_skips_artifact_download(tmp_path, monkeypatch
     fetch. Useful for air-gapped installs or when training Lens locally."""
     body = b"\0" * (101 * 1024 * 1024)
     expected_sha = hashlib.sha256(body).hexdigest()
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
     patched = type(original)(
         name=original.name, tier=original.tier,
@@ -1062,7 +1062,7 @@ def test_install_artifacts_nothing_registered_is_distinct_failure(
 # ---------------------------------------------------------------------------
 
 def _patched_9b(monkeypatch, sha):
-    import atlas.cli.commands.model_registry as reg
+    import atlas.commands.model_registry as reg
     original = reg.by_name("Qwen3.5-9B-Q6_K")
     patched = type(original)(
         name=original.name, tier=original.tier,

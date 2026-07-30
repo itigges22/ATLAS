@@ -22,8 +22,8 @@ import time
 import urllib.request
 from typing import Dict, List, Optional
 
-from atlas.cli import compose as compose_config
-from atlas.cli import redact
+from atlas import compose as compose_config
+from atlas import redact
 
 # Config keys whose values are masked in the bundle (in addition to the
 # generic private-value filter). The service token is dropped entirely.
@@ -104,7 +104,7 @@ def _recent_logs(atlas_root: str, lines: int) -> Dict[str, str]:
 
 def _doctor_json(atlas_root: str) -> object:
     """Embed the doctor report (already private-value-safe)."""
-    from atlas.cli.commands import doctor
+    from atlas.commands import doctor
     import io
     buf = io.StringIO()
     # doctor.main exits via SystemExit on failure; the report on stdout is

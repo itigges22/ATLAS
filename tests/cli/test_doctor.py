@@ -1,4 +1,4 @@
-"""Tests for atlas.cli.commands.doctor (focused on #32 macOS hybrid).
+"""Tests for atlas.commands.doctor (focused on #32 macOS hybrid).
 
 The existing doctor checks (gpu, compose, container health, etc) don't
 have unit tests yet — they're integration-shaped and mostly tested by
@@ -15,7 +15,7 @@ real CI runs. These tests cover the new check_metal_native() added in
 import json
 import sys
 
-from atlas.cli.commands import doctor
+from atlas.commands import doctor
 
 
 def test_e2e_smoke_uses_public_proxy_path(monkeypatch):
@@ -93,7 +93,7 @@ def test_lens_weights_report_legacy_bundle_as_uncalibrated(
 
 
 def test_doctor_does_not_pass_unmarked_asa_vector(monkeypatch, tmp_path):
-    from atlas.cli.commands import asa
+    from atlas.commands import asa
 
     verdict = asa.ASACheckVerdict(
         verdict="needs-build",

@@ -8,7 +8,7 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Dict, Optional, List, Tuple
 
-from atlas.cli import compose as compose_config
+from atlas import compose as compose_config
 
 # Shell env wins; otherwise the Docker .env's port keys drive the URLs.
 INFERENCE_URL = compose_config.service_url("llama")

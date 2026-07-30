@@ -113,7 +113,7 @@ jobs:
               echo "✓ .env has all required keys (model selection non-empty)"
 
               # 2. Python CLI is installed and importable
-              python3 -m atlas.cli.commands.doctor --help >/dev/null \
+              python3 -m atlas.commands.doctor --help >/dev/null \
                 || { echo "::error::atlas Python CLI not importable"; exit 1; }
               echo "✓ atlas Python module installed"
 

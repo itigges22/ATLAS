@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from atlas.cli import repl
+from atlas import repl
 
 
 def _metal_root(tmp_path):

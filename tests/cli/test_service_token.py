@@ -7,7 +7,7 @@ import os
 import stat
 from pathlib import Path
 
-from atlas.cli import token as token_mod
+from atlas import token as token_mod
 
 
 def test_read_token_missing_file(tmp_path, monkeypatch):
@@ -51,7 +51,7 @@ def test_permission_check_passes_strict(tmp_path, monkeypatch):
 
 
 def test_init_step_generates_and_keeps_token(tmp_path):
-    from atlas.cli.commands import init as init_mod
+    from atlas.commands import init as init_mod
 
     class Args:
         dry_run = False

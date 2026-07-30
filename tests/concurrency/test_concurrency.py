@@ -7,8 +7,8 @@ services carry their own `-race` coverage; these cover the Python side.
 
 import threading
 
-from atlas.cli import upgrade_engine as eng
-from atlas.cli import redact
+from atlas import upgrade_engine as eng
+from atlas import redact
 
 
 def _root(tmp_path, tag="v1.0.0"):
@@ -100,7 +100,7 @@ def test_filter_is_stateless_under_threads():
 
 def test_env_tag_write_is_atomic(tmp_path):
     """Concurrent _set_env_tag-style writes leave a valid .env."""
-    from atlas.cli.commands.upgrade import _set_env_tag
+    from atlas.commands.upgrade import _set_env_tag
     root = _root(tmp_path)
     errs = []
 

@@ -32,11 +32,11 @@ import time
 import urllib.request
 from typing import Dict, List, Optional, Tuple
 
-from atlas.cli import compose as compose_config
+from atlas import compose as compose_config
 
 
 # Shared ANSI colors + unicode-safe output primitives.
-from atlas.cli.display import (
+from atlas.display import (
     RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL,
     DASH, OK_MARK as OK, NO_MARK as NO, WARN_MARK as WARN,
     safe_print as _safe_print,
@@ -52,7 +52,7 @@ def _find_atlas_root() -> str:
     # Walk up from this file to the repo root (the dir holding docker-compose.yml).
     here = os.path.dirname(os.path.abspath(__file__))
     cur = here
-    for _ in range(8):
+    for _ in range(7):
         if os.path.exists(os.path.join(cur, "docker-compose.yml")):
             return cur
         parent = os.path.dirname(cur)
@@ -367,7 +367,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.url:
         _safe_print("[1/5] Fetching unregistered model via `atlas model install "
                     "--url`…")
-        from atlas.cli.commands import model as model_cmd
+        from atlas.commands import model as model_cmd
         inst_args = ["install", "--url", args.url]
         if args.file:
             inst_args += ["--file", args.file]
@@ -389,7 +389,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 ans = "n"
             apply_env = ans in ("", "y", "yes")
         if apply_env:
-            from atlas.cli.commands import fit as fit_module
+            from atlas.commands import fit as fit_module
             env_path = fit_module._write_env({
                 "ATLAS_MODEL_FILE": fname,
                 "ATLAS_MODEL_NAME": fname.rsplit(".", 1)[0],
@@ -437,8 +437,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # so a configuration that doesn't fit refuses to start rather than
     # spilling layers to CPU.
     try:
-        from atlas.cli.commands import fit as fit_mod
-        from atlas.cli.commands.tier import detect_gpu, primary_gpu
+        from atlas.commands import fit as fit_mod
+        from atlas.commands.tier import detect_gpu, primary_gpu
         gpu = primary_gpu(detect_gpu())
         if gpu is not None:
             meta = fit_mod.read_gguf_meta(model_path)
@@ -493,7 +493,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Step 4 — lens check.
     _safe_print("[3/5] Geometric Lens dimension check…")
     try:
-        from atlas.cli.commands import lens as lens_cmd
+        from atlas.commands import lens as lens_cmd
         lens_cmd.main(["check"] + (["--no-color"] if args.no_color else []))
     except SystemExit:
         # lens check is invoked as a nested CLI and reports its own verdict;

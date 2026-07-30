@@ -14,8 +14,8 @@ import shutil
 import sys
 from typing import List, Optional
 
-from atlas.cli import artifact_manifest as am
-from atlas.cli import compose as compose_config
+from atlas import artifact_manifest as am
+from atlas import compose as compose_config
 
 SNAPSHOT_DIR = ".previous-bundle"
 # Files that constitute a bundle snapshot (mirrors

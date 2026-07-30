@@ -41,15 +41,15 @@ import time
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
-from atlas.cli import compose as compose_config
-from atlas.cli import env as cli_env
-from atlas.cli import publishing
-from atlas.cli.client import LlamaProbe, post_json_or_none, probe_llama
-from atlas.cli.commands import model_registry
+from atlas import compose as compose_config
+from atlas import env as cli_env
+from atlas import publishing
+from atlas.client import LlamaProbe, post_json_or_none, probe_llama
+from atlas.commands import model_registry
 
 
 # Shared ANSI colors + unicode-safe output primitives.
-from atlas.cli.display import (
+from atlas.display import (
     RESET, BOLD, RED, GREEN, YELLOW as YELL,
     safe_print as _safe_print,
 )
@@ -58,9 +58,9 @@ from atlas.cli.display import (
 # ---------------------------------------------------------------------------
 # Artifact resolution + dim inspection
 # ---------------------------------------------------------------------------
-# The llama-server probe (LlamaProbe, probe_llama) lives in atlas.cli.client
+# The llama-server probe (LlamaProbe, probe_llama) lives in atlas.client
 # with the other service HTTP machinery; the publish/registry helpers live
-# in atlas.cli.publishing, shared with `atlas asa publish` and
+# in atlas.publishing, shared with `atlas asa publish` and
 # `atlas publish`.
 
 def _canonical_model_identity(value: Optional[str]) -> str:
@@ -1177,7 +1177,7 @@ def _render_registry_pr_body(model_name: str, hf_repo: str,
     """Markdown body for the registry-add PR.
 
     Includes the suggested Python diff so the maintainer can paste it
-    directly into atlas/cli/commands/model_registry.py.
+    directly into atlas/commands/model_registry.py.
     """
     dim_label = (f"{dim}" if dim
                  else "(unverified — install torch on the publisher's host "
@@ -1199,7 +1199,7 @@ HuggingFace at https://huggingface.co/{hf_repo}.
 
 ### Suggested registry diff
 
-Add the following to `atlas/cli/commands/model_registry.py` (or update
+Add the following to `atlas/commands/model_registry.py` (or update
 the existing entry's `lens_status` from `no-artifacts`/`unverified`
 to `supported`):
 
@@ -1419,7 +1419,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     # the artifacts were validated on); fall back to medium.
     entry_tier = "medium"
     try:
-        from atlas.cli.commands.tier import classify, probe
+        from atlas.commands.tier import classify, probe
         entry_tier = classify(probe()).tier
     except Exception:
         # Host tier detection is optional publishing metadata; medium is the

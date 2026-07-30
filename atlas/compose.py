@@ -44,7 +44,7 @@ def find_atlas_root() -> str:
     """The repo root (the directory holding docker-compose.yml), resolved
     from this file so it works from any cwd; falls back to the cwd."""
     here = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(5):
+    for _ in range(4):
         if os.path.exists(os.path.join(here, "docker-compose.yml")):
             return here
         here = os.path.dirname(here)

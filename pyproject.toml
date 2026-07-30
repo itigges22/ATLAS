@@ -40,7 +40,7 @@ Issues = "https://github.com/itigges22/ATLAS/issues"
 Changelog = "https://github.com/itigges22/ATLAS/blob/main/CHANGELOG.md"
 
 [project.scripts]
-atlas = "atlas.cli.repl:run"
+atlas = "atlas.repl:run"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

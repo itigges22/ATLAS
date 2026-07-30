@@ -26,21 +26,21 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Tuple
 
-from atlas.cli import compose as compose_config
-from atlas.cli.commands import tier
+from atlas import compose as compose_config
+from atlas.commands import tier
 
 # Shared ANSI colors + unicode-safe output primitives.
-from atlas.cli.display import (
+from atlas.display import (
     RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL,
     UNICODE_OK, DASH, safe_print as _safe_print,
 )
 
-# Env-derived defaults live in atlas.cli.env (shared with fit, lens,
+# Env-derived defaults live in atlas.env (shared with fit, lens,
 # publish); re-imported here so doctor.MODEL_FILE-style access keeps
 # working. Monkeypatching doctor.<NAME> steers doctor's own checks only —
-# fit/lens/publish read atlas.cli.env directly, so patch that module to
+# fit/lens/publish read atlas.env directly, so patch that module to
 # steer them.
-from atlas.cli.env import (
+from atlas.env import (
     _ENV, PROXY_URL, LLAMA_URL, LENS_URL, SANDBOX_URL, V3_URL,
     MODEL_DIR, MODEL_FILE, MODEL_NAME, LLAMA_PORT, LENS_MODELS_DIR,
 )
@@ -547,7 +547,7 @@ def check_internal_auth(atlas_root: str) -> List[CheckResult]:
         after rotation without restart). Token values never appear in
         output.
     """
-    from atlas.cli import token as token_mod
+    from atlas import token as token_mod
     results: List[CheckResult] = []
     ok, detail = token_mod.check_file_permissions(atlas_root)
     tok = token_mod.read_token(atlas_root)
@@ -673,7 +673,7 @@ def check_lens_weights(atlas_root: str) -> CheckResult:
     C(x) normalization, and G(x) thresholds are present and valid.
     """
     try:
-        from atlas.cli.commands import lens as lens_cmd, model_registry
+        from atlas.commands import lens as lens_cmd, model_registry
     except ImportError as exc:
         return CheckResult("lens_weights", "skip",
                            "Lens validation unavailable", str(exc))
@@ -740,7 +740,7 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
     part of install (with HuggingFace prebuilt fallback).
     """
     try:
-        from atlas.cli.commands import asa as _asa
+        from atlas.commands import asa as _asa
         verdict = _asa._check_asa(atlas_root)
     except Exception as exc:
         return CheckResult("asa_steering", "warn",
@@ -810,7 +810,7 @@ def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
     a separate `/data` mount would get a misleading disk check.
     """
     try:
-        from atlas.cli.commands import tier
+        from atlas.commands import tier
     except ImportError as e:
         return CheckResult("tier_constraints", "skip",
             "tier module unavailable", str(e))
@@ -854,7 +854,7 @@ def check_tier_match() -> CheckResult:
     elsewhere and want a smaller-than-recommended model).
     """
     try:
-        from atlas.cli.commands import tier, model_registry
+        from atlas.commands import tier, model_registry
     except ImportError as e:
         return CheckResult("tier_match", "skip",
             "tier module unavailable", str(e))
@@ -871,7 +871,7 @@ def check_tier_match() -> CheckResult:
         # say "supported" while the .pt files are missing — config
         # drift that would otherwise hide G(x) silently no-opping.
         try:
-            from atlas.cli.commands import model_registry
+            from atlas.commands import model_registry
             atlas_root = _find_atlas_root()
             artifact_state = model_registry.lens_artifacts_present(
                 rec_model, atlas_root)
@@ -924,7 +924,7 @@ def check_tier_match() -> CheckResult:
     # actually missing on disk — config drift between registry claim
     # and reality.
     try:
-        from atlas.cli.commands import model_registry
+        from atlas.commands import model_registry
         actual_model_record = model_registry.by_name(
             actual_model.rsplit(".", 1)[0])
         if actual_model_record is not None and \
@@ -1158,8 +1158,8 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool,
 def _find_atlas_root() -> str:
     """Locate the ATLAS repo root (where docker-compose.yml lives)."""
     here = os.path.dirname(os.path.abspath(__file__))
-    # atlas/cli/commands -> atlas/cli -> atlas -> ATLAS
-    for _ in range(5):
+    # atlas/commands -> atlas -> ATLAS
+    for _ in range(4):
         if os.path.exists(os.path.join(here, "docker-compose.yml")):
             return here
         here = os.path.dirname(here)

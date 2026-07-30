@@ -54,11 +54,11 @@ import sys
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional, Tuple
 
-from atlas.cli.commands import model_registry
+from atlas.commands import model_registry
 
 # Shared ANSI colors + unicode-safe output primitives.
 # NOTE: fit.py imports _safe_print from this module — keep the alias.
-from atlas.cli.display import (
+from atlas.display import (
     RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL, CYAN,
     UNICODE_OK, DASH, safe_print as _safe_print,
 )
@@ -1025,7 +1025,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _emit_list(args, color)
 
     if args.subcommand == "fit":
-        from atlas.cli.commands import fit as fit_module
+        from atlas.commands import fit as fit_module
         return fit_module.emit_fit(args, color)
 
     p = probe(install_dir=args.install_dir)

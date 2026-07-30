@@ -4,7 +4,7 @@ import pathlib
 
 import pytest
 
-from atlas.cli import compose
+from atlas import compose
 
 
 def _root(tmp_path: pathlib.Path) -> str:

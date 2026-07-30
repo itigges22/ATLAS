@@ -38,7 +38,7 @@ def _find_root() -> str:
     """The checkout root (dir holding docker-compose.yml), resolved from
     this file — same convention as bench/doctor."""
     cur = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(8):
+    for _ in range(7):
         if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
             return cur
         parent = os.path.dirname(cur)

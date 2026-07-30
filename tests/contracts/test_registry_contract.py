@@ -5,7 +5,7 @@ exception; every downloadable artifact must be hash-pinned; artifact
 filenames must be ones the runtime actually consumes.
 """
 
-from atlas.cli.commands import model_registry
+from atlas.commands import model_registry
 
 # Artifact filenames with a runtime consumer (lens loader / doctor /
 # llama entrypoint). A registry entry referencing anything else is

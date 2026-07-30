@@ -1,7 +1,7 @@
 import os
 
-from atlas.cli import runtime_artifacts
-from atlas.cli.commands import tui
+from atlas import runtime_artifacts
+from atlas.commands import tui
 
 
 def _executable(path, content="binary"):

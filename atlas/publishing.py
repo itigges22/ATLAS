@@ -17,14 +17,14 @@ import os
 import time
 from typing import List, Optional
 
-from atlas.cli.commands import model_registry
-from atlas.cli.display import (
+from atlas.commands import model_registry
+from atlas.display import (
     RESET, RED, GREEN, YELLOW,
     safe_print as _safe_print,
 )
 
 UPSTREAM_REPO = "itigges22/ATLAS"
-REGISTRY_PATH = "atlas/cli/commands/model_registry.py"
+REGISTRY_PATH = "atlas/commands/model_registry.py"
 
 
 def resolve_model_arg(arg: Optional[str]) -> Optional[model_registry.Model]:

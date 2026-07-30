@@ -1,4 +1,4 @@
-"""Tests for atlas/cli/commands/lens.py (PC-057 + PC-058).
+"""Tests for atlas/commands/lens.py (PC-057 + PC-058).
 
 Coverage strategy:
 - `_check_model` and `_emit_check` are tested by patching `probe_llama` to
@@ -14,8 +14,8 @@ import json
 
 import pytest
 
-from atlas.cli import publishing
-from atlas.cli.commands import lens
+from atlas import publishing
+from atlas.commands import lens
 
 
 # ---------------------------------------------------------------------------

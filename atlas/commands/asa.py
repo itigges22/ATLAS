@@ -45,17 +45,17 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
-from atlas.cli import compose as compose_config
-from atlas.cli import publishing
-from atlas.cli.client import LlamaProbe, probe_llama
-from atlas.cli.commands import model_registry
+from atlas import compose as compose_config
+from atlas import publishing
+from atlas.client import LlamaProbe, probe_llama
+from atlas.commands import model_registry
 # Canonical resolver; imported under the module-local name so tests can
 # pin the root with monkeypatch.setattr(asa, "_atlas_root", ...).
-from atlas.cli.env import atlas_root as _atlas_root
+from atlas.env import atlas_root as _atlas_root
 
 
 # Shared ANSI colors + unicode-safe output primitives.
-from atlas.cli.display import (
+from atlas.display import (
     RESET, BOLD, RED, GREEN, YELLOW as YELL,
     safe_print as _safe_print,
 )
@@ -115,7 +115,7 @@ def _gguf_block_count(path: str) -> int:
     n_layer. Keyed off general.architecture, so any GGUF works."""
     import struct
     try:
-        from atlas.cli.gguf import read_gguf_kv
+        from atlas.gguf import read_gguf_kv
         found = {}
         with open(path, "rb") as f:
             for key, val in read_gguf_kv(f):
@@ -564,7 +564,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     # Stamp the vector's metadata with the real model's architecture and
     # layer count (read from the configured GGUF) instead of placeholders.
     try:
-        from atlas.cli.commands import fit as fit_module
+        from atlas.commands import fit as fit_module
         model_path = fit_module._default_model_path()
         if model_path:
             meta = fit_module.read_gguf_meta(model_path)
@@ -784,7 +784,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         # No model argument — fall back to the configured model, the same
         # resolution every other subcommand uses.
         try:
-            from atlas.cli.commands import fit as fit_module
+            from atlas.commands import fit as fit_module
             mp = fit_module._default_model_path()
             if mp:
                 model_label = os.path.splitext(os.path.basename(mp))[0]

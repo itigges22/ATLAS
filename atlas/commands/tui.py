@@ -22,13 +22,13 @@ import subprocess
 import sys
 from typing import List, Optional
 
-from atlas.cli.runtime_artifacts import go_binary_is_current
+from atlas.runtime_artifacts import go_binary_is_current
 
 
 def _find_atlas_dir() -> str:
     """Walk up from this file looking for the ATLAS repo root."""
     d = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(6):
+    for _ in range(5):
         if os.path.exists(os.path.join(d, "tui", "go.mod")):
             return d
         d = os.path.dirname(d)
@@ -110,7 +110,7 @@ def main(argv: List[str]) -> int:
     # force-recreate when cwd is outside the bind. The recreate is ~5s
     # — fast enough to do unconditionally, and necessary for tool calls
     # to work (the proxy can only read/write paths under its mount).
-    from atlas.cli.repl import (
+    from atlas.repl import (
         DEMO_RAW_CAPABILITY,
         PROXY_URL,
         _ensure_proxy,
@@ -134,7 +134,7 @@ def main(argv: List[str]) -> int:
     # lookup wouldn't find it. Only the PATH crosses the env boundary,
     # never the token value.
     if not os.environ.get("ATLAS_SERVICE_TOKEN_FILE"):
-        from atlas.cli import token as _token
+        from atlas import token as _token
         tok_path = _token.token_path()
         if os.path.isfile(tok_path):
             os.environ["ATLAS_SERVICE_TOKEN_FILE"] = tok_path
@@ -164,7 +164,7 @@ def main(argv: List[str]) -> int:
     # `docker compose up` on the macOS hybrid path (#118). Stop it
     # explicitly here before exec so the cleanup actually runs.
     try:
-        from atlas.cli import repl as _repl
+        from atlas import repl as _repl
         _repl._stop_local_proxy()
     except ImportError:
         # repl import failed for some reason — best-effort cleanup,

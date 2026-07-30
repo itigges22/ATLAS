@@ -49,16 +49,16 @@ import urllib.error
 import urllib.request
 from typing import List, Optional, Tuple
 
-from atlas.cli import compose as compose_config
-from atlas.cli.commands import model_registry, tier
-from atlas.cli.commands.model_registry import Model
+from atlas import compose as compose_config
+from atlas.commands import model_registry, tier
+from atlas.commands.model_registry import Model
 # HF token resolution is shared publish machinery; the canonical resolver
-# (which also reads HUGGINGFACE_HUB_TOKEN) lives in atlas.cli.publishing.
-from atlas.cli.publishing import hf_token as _hf_token
+# (which also reads HUGGINGFACE_HUB_TOKEN) lives in atlas.publishing.
+from atlas.publishing import hf_token as _hf_token
 
 
 # Shared ANSI colors + unicode-safe output primitives.
-from atlas.cli.display import (
+from atlas.display import (
     RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL,
     UNICODE_OK, DASH, safe_print as _safe_print,
 )

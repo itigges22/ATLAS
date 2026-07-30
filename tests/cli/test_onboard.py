@@ -1,6 +1,6 @@
 """Model onboarding tests for backend-specific inference lifecycles."""
 
-from atlas.cli.commands import onboard
+from atlas.commands import onboard
 
 
 def test_metal_onboarding_never_starts_cuda_container(monkeypatch, tmp_path):
@@ -45,8 +45,8 @@ def test_url_flow_with_apply_writes_env_keys(monkeypatch, capsys):
     """`atlas onboard --url ... --apply` writes ATLAS_MODEL_FILE +
     ATLAS_MODEL_NAME into .env after the download instead of only telling
     the user to hand-edit."""
-    from atlas.cli.commands import model as model_cmd
-    from atlas.cli.commands import fit as fit_module
+    from atlas.commands import model as model_cmd
+    from atlas.commands import fit as fit_module
 
     monkeypatch.setattr(model_cmd, "main", lambda argv: 0)
     written = {}
@@ -69,8 +69,8 @@ def test_url_flow_with_apply_writes_env_keys(monkeypatch, capsys):
 def test_url_flow_without_apply_keeps_manual_instructions(monkeypatch,
                                                             capsys):
     """Declined/non-interactive: the printed hand-edit fallback stays."""
-    from atlas.cli.commands import model as model_cmd
-    from atlas.cli.commands import fit as fit_module
+    from atlas.commands import model as model_cmd
+    from atlas.commands import fit as fit_module
 
     monkeypatch.setattr(model_cmd, "main", lambda argv: 0)
 

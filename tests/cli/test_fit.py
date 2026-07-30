@@ -1,6 +1,6 @@
 """Runtime sizing invariants not tied to a particular model family."""
 
-from atlas.cli.commands.fit import GIB, GGUFMeta, fit_runtime_knobs
+from atlas.commands.fit import GIB, GGUFMeta, fit_runtime_knobs
 
 
 def _model() -> GGUFMeta:

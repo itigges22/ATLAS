@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from atlas.cli import upgrade_engine as eng
+from atlas import upgrade_engine as eng
 
 
 def _root(tmp_path, tag="v1.0.0"):
@@ -246,7 +246,7 @@ def test_rollback_to_missing_tag_restores_env(tmp_path):
 def test_real_set_env_tag_appends_newline_first(tmp_path):
     # .env whose last line lacks a trailing newline: the appended tag
     # must not be glued onto it.
-    from atlas.cli.commands.upgrade import _set_env_tag
+    from atlas.commands.upgrade import _set_env_tag
     root = _root(tmp_path, "v1.0.0")
     env = os.path.join(root, ".env")
     with open(env, "w") as fh:

@@ -35,10 +35,10 @@ import struct
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
-from atlas.cli.gguf import read_gguf_kv
+from atlas.gguf import read_gguf_kv
 # Canonical resolver; imported under the module-local name so tests can
 # pin the root with monkeypatch.setattr(fit, "_atlas_root", ...).
-from atlas.cli.env import atlas_root as _atlas_root
+from atlas.env import atlas_root as _atlas_root
 
 GIB = 1024 ** 3
 
@@ -320,7 +320,7 @@ def fit_runtime_knobs(meta: GGUFMeta, vram_gib: float,
 # ---------------------------------------------------------------------------
 
 def _default_model_path() -> Optional[str]:
-    from atlas.cli import env as cli_env
+    from atlas import env as cli_env
     root = _atlas_root()
     base = (cli_env.MODEL_DIR if os.path.isabs(cli_env.MODEL_DIR)
             else os.path.join(root, cli_env.MODEL_DIR))
@@ -378,7 +378,7 @@ def _cwd_deployment_root() -> Optional[str]:
 
 
 def emit_fit(args: argparse.Namespace, color: bool) -> int:
-    from atlas.cli.commands.tier import detect_gpu, primary_gpu, _safe_print
+    from atlas.commands.tier import detect_gpu, primary_gpu, _safe_print
 
     explicit = getattr(args, "model", None)
     if explicit and not os.path.isfile(explicit):

@@ -3,7 +3,7 @@
 import re
 import time
 
-from atlas.cli import display, client
+from atlas import display, client
 
 
 def build_messages(problem: str) -> list:

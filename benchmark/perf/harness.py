@@ -29,7 +29,7 @@ def _cli_import_time_s() -> float:
     a regression here means an accidental heavy dependency)."""
     start = time.perf_counter()
     proc = subprocess.run(
-        [sys.executable, "-c", "import atlas.cli.repl"],
+        [sys.executable, "-c", "import atlas.repl"],
         cwd=str(REPO), capture_output=True, timeout=60)
     elapsed = round(time.perf_counter() - start, 3)
     if proc.returncode != 0:
@@ -37,7 +37,7 @@ def _cli_import_time_s() -> float:
         # regression this metric exists to catch (a new heavy/broken
         # dependency) would record a GREAT time and pass the gate.
         raise RuntimeError(
-            "importing atlas.cli.repl failed:\n"
+            "importing atlas.repl failed:\n"
             + proc.stderr.decode(errors="replace"))
     return elapsed
 

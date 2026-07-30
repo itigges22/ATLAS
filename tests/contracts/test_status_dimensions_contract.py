@@ -58,6 +58,6 @@ def test_intervention_neutrality_is_documented():
 def test_doctor_reads_the_endpoint_not_a_private_copy():
     # doctor must render dimensions from the shared endpoint (so it
     # agrees with the TUI) rather than recomputing them.
-    src = (REPO / "atlas" / "cli" / "commands" / "doctor.py").read_text()
+    src = (REPO / "atlas" / "commands" / "doctor.py").read_text()
     assert "/v1/calibration/status" in src
     assert "check_status_dimensions" in src

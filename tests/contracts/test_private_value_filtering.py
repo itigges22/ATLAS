@@ -31,7 +31,7 @@ PY_COPIES = [
     REPO / "geometric-lens" / "geometric_lens" / "private_values.py",
     REPO / "sandbox" / "private_values.py",
     REPO / "v3-service" / "private_values.py",
-    REPO / "atlas" / "cli" / "redact.py",
+    REPO / "atlas" / "redact.py",
 ]
 
 

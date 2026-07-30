@@ -11,7 +11,7 @@
 /SECURITY.md            @itigges22
 /sandbox/               @itigges22
 /scripts/               @itigges22
-/atlas/cli/commands/model_registry.py  @itigges22
+/atlas/commands/model_registry.py  @itigges22
 /docs/RELEASE.md        @itigges22
 /docs/PUBLISHING.md     @itigges22
 

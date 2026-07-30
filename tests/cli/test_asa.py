@@ -1,4 +1,4 @@
-"""Tests for atlas/cli/commands/asa.py (PC-061).
+"""Tests for atlas/commands/asa.py (PC-061).
 
 Coverage strategy mirrors test_lens.py: probe_llama() is monkey-patched
 to return synthetic LlamaProbe records (no HTTP, no llama-server
@@ -12,8 +12,8 @@ import json
 
 import pytest
 
-from atlas.cli import publishing
-from atlas.cli.commands import asa
+from atlas import publishing
+from atlas.commands import asa
 
 
 # ---------------------------------------------------------------------------

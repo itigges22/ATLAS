@@ -5,7 +5,7 @@ secret-ish values, and runs values through the private-value filter.
 No services required (the collectors are unit-tested in isolation).
 """
 
-from atlas.cli.commands import diagnostics
+from atlas.commands import diagnostics
 
 
 def test_filtered_env_drops_token_and_masks_secrets(tmp_path):

@@ -16,8 +16,8 @@ import time
 import urllib.request
 from typing import Dict, List, Optional
 
-from atlas.cli import compose as compose_config
-from atlas.cli import upgrade_engine as eng
+from atlas import compose as compose_config
+from atlas import upgrade_engine as eng
 
 
 def _compose(atlas_root: str, args: List[str], timeout: int = 600) -> None:
@@ -189,7 +189,7 @@ def _readiness(atlas_root: str, timeout_s: int = 180) -> bool:
 
 def _smoke(atlas_root: str) -> bool:
     """Quick doctor as the post-upgrade smoke check."""
-    from atlas.cli.commands import doctor
+    from atlas.commands import doctor
     try:
         rc = doctor.main(["--quick", "--json"])
     except SystemExit as e:

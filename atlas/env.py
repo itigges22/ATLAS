@@ -10,7 +10,7 @@ importing each other.
 import os
 from typing import Dict
 
-from atlas.cli import compose as compose_config
+from atlas import compose as compose_config
 
 
 def atlas_root() -> str:
@@ -40,11 +40,11 @@ def _read_dotenv() -> Dict[str, str]:
     walking up from this file. Lets the model/dir checks reflect what's actually
     configured when the shell env doesn't export ATLAS_MODEL_FILE."""
     cur = os.path.dirname(os.path.abspath(__file__))
-    # 7 hops from atlas/cli reaches the same highest ancestor as the
-    # previous 8 hops from atlas/cli/commands — the walk must not gain an
+    # 6 hops from atlas/ reaches the same highest ancestor as the
+    # previous 7 hops from atlas/cli — the walk must not gain an
     # extra ancestor (in venv layouts one more hop can reach $HOME and
     # pick up a foreign ~/.env).
-    for _ in range(7):
+    for _ in range(6):
         envp = os.path.join(cur, ".env")
         if os.path.exists(envp):
             out: Dict[str, str] = {}

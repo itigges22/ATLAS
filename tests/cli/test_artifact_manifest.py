@@ -7,8 +7,8 @@ release key is present.
 
 import json
 
-from atlas.cli import artifact_manifest as am
-from atlas.cli.commands import artifact
+from atlas import artifact_manifest as am
+from atlas.commands import artifact
 
 
 def _bundle(tmp_path):

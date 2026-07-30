@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from atlas.cli.commands import bench
+from atlas.commands import bench
 
 
 class _FakeProc:

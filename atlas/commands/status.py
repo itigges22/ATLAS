@@ -1,6 +1,6 @@
 """Status command — check health of all ATLAS services."""
 
-from atlas.cli import display, client
+from atlas import display, client
 
 
 def status():

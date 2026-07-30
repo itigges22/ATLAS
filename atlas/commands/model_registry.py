@@ -72,7 +72,7 @@ import os
 from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional
 
-from atlas.cli import compose as compose_config
+from atlas import compose as compose_config
 
 
 @dataclass(frozen=True)

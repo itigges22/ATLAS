@@ -1,6 +1,6 @@
-"""Tests for atlas.cli.client seams against the real service contracts."""
+"""Tests for atlas.client seams against the real service contracts."""
 
-from atlas.cli import client
+from atlas import client
 
 
 def test_run_sandbox_reads_success_field(monkeypatch):

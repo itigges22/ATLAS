@@ -1,6 +1,6 @@
 """Typed config schema: validation + migration."""
 
-from atlas.cli import config_schema as cs
+from atlas import config_schema as cs
 
 
 def test_valid_config_passes():
@@ -95,7 +95,7 @@ def test_resolve_typed_missing_is_none():
 
 
 def test_migrate_preserves_comments_and_blanks(tmp_path):
-    from atlas.cli.commands import config as cfg
+    from atlas.commands import config as cfg
     p = tmp_path / ".env"
     p.write_text("# header comment\nATLAS_CTX_SIZE=131072\n\n"
                  "# deprecated below\nATLAS_REGISTRY=old\n")

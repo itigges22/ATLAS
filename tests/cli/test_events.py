@@ -1,4 +1,4 @@
-"""Tests for atlas.cli.events (PC-061) — event protocol schema + consumer.
+"""Tests for atlas.events (PC-061) — event protocol schema + consumer.
 
 The schema is the contract every producer (v3-service Python, atlas-proxy
 Go) implements. These tests pin the contract: a malformed envelope must
@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from atlas.cli.events import (
+from atlas.events import (
     EVENT_TYPES,
     LegacyEventError,
     SchemaError,
@@ -268,7 +268,7 @@ def test_iter_events_skips_sse_control_frames():
     `: heartbeat` SSE comment lines. iter_events must skip them
     (they're not envelopes) without raising. Same for `event: result`
     legacy framing on v3-service's done sequence."""
-    from atlas.cli.events import iter_sse_lines, parse_envelope, LegacyEventError
+    from atlas.events import iter_sse_lines, parse_envelope, LegacyEventError
     raw = (
         b": connected\n\n"
         b": heartbeat\n\n"

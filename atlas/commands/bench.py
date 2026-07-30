@@ -7,13 +7,13 @@ import sys
 import time
 from pathlib import Path
 
-from atlas.cli import display
-from atlas.cli import env as cli_env
+from atlas import display
+from atlas import env as cli_env
 
 
 def _atlas_root() -> Path:
     """The repo root, as a Path. Canonical resolution lives in
-    atlas.cli.env; kept as a module hook so tests can pin the root."""
+    atlas.env; kept as a module hook so tests can pin the root."""
     return Path(cli_env.atlas_root())
 
 

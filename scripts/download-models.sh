@@ -85,7 +85,7 @@ declare -A KNOWN_MODEL_URLS=(
 )
 
 # SHA-256 per model file, mirroring the `sha256` fields in
-# atlas/cli/commands/model_registry.py (HF x-linked-etag values). The
+# atlas/commands/model_registry.py (HF x-linked-etag values). The
 # Python installer (`atlas model install`) already verifies these; this
 # map closes the same gap on the shell path. Files without an entry get
 # the size sanity check only — add the hash when a new model lands in
@@ -179,7 +179,7 @@ download_lens_weights() {
     fi
     log_info "Installing compatible Lens/ASA artifacts for $selected"
     PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -m atlas.cli model install-artifacts "$selected" \
+        python3 -m atlas model install-artifacts "$selected" \
         --models-dir "$ATLAS_MODELS_DIR" --no-color
 }
 

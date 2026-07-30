@@ -62,7 +62,7 @@ def get_gpu_info() -> Dict[str, Any]:
     # Vendor-agnostic detection via tier — keeps the SMI parsing logic
     # in one place (tier.py) rather than duplicated across files.
     try:
-        from atlas.cli.commands import tier
+        from atlas.commands import tier
         gpus = tier.detect_gpu()
     except Exception:
         gpus = []

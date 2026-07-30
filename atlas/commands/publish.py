@@ -24,16 +24,16 @@ import os
 import sys
 from typing import List, Optional
 
-from atlas.cli import publishing
-from atlas.cli import env as cli_env
-from atlas.cli.display import (
+from atlas import publishing
+from atlas import env as cli_env
+from atlas.display import (
     RESET, RED, GREEN, YELLOW as YELL,
     safe_print as _safe_print,
 )
-from atlas.cli.commands import lens as lens_module
-from atlas.cli.commands import asa as asa_module
-from atlas.cli.commands.lens import _render_registry_pr_body
-from atlas.cli.commands.asa import (
+from atlas.commands import lens as lens_module
+from atlas.commands import asa as asa_module
+from atlas.commands.lens import _render_registry_pr_body
+from atlas.commands.asa import (
     _read_cvector_meta, _render_asa_pr_body,
     _configured_vector_path, _host_resolve_vector_path,
 )
@@ -47,7 +47,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     model_label = matched.name if matched else (args.model or "")
     if not model_label:
         try:
-            from atlas.cli.commands import fit as fit_module
+            from atlas.commands import fit as fit_module
             mp = fit_module._default_model_path()
             if mp:
                 model_label = os.path.splitext(os.path.basename(mp))[0]
@@ -155,7 +155,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
 
     entry_tier = "medium"
     try:
-        from atlas.cli.commands.tier import classify, probe
+        from atlas.commands.tier import classify, probe
         entry_tier = classify(probe()).tier
     except Exception:
         # Tier is advisory registry metadata; medium is the safe fallback.

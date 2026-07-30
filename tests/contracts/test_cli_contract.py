@@ -7,7 +7,7 @@ and appear in the CLI docs; removed commands must stay gone from docs.
 import importlib
 from pathlib import Path
 
-from atlas.cli.repl import _SUBCOMMAND_HELP
+from atlas.repl import _SUBCOMMAND_HELP
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -19,7 +19,7 @@ def test_every_subcommand_has_a_main():
     for name, _desc in _SUBCOMMAND_HELP:
         if name in INLINE:
             continue
-        mod = importlib.import_module(f"atlas.cli.commands.{name}")
+        mod = importlib.import_module(f"atlas.commands.{name}")
         assert callable(getattr(mod, "main", None)), (
             f"subcommand {name!r} has no callable main() — "
             "advertised commands must be implemented")
@@ -39,7 +39,7 @@ def test_removed_surfaces_stay_removed():
     checks = [
         ("docs/API.md", "plan_tasks"),
         ("docs/ARCHITECTURE.md", "plan_tasks"),
-        ("atlas/cli/display.py", "/ablation"),
+        ("atlas/display.py", "/ablation"),
     ]
     for rel, needle in checks:
         text = (REPO / rel).read_text()

@@ -33,7 +33,7 @@ import shutil
 import sys
 from typing import List, Optional, Tuple
 
-from atlas.cli.commands import model, model_registry, tier
+from atlas.commands import model, model_registry, tier
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ from atlas.cli.commands import model, model_registry, tier
 # ---------------------------------------------------------------------------
 
 # Shared ANSI colors + unicode-safe output primitives.
-from atlas.cli.display import (
+from atlas.display import (
     RESET, BOLD, RED, GREEN, YELLOW,
     safe_print as _safe_print,
 )

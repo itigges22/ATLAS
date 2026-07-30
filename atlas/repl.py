@@ -16,9 +16,9 @@ import atexit
 import json
 from typing import Optional, List
 
-from atlas.cli import client, compose as compose_config, display
-from atlas.cli.commands import solve, status, bench
-from atlas.cli.runtime_artifacts import go_binary_is_current
+from atlas import client, compose as compose_config, display
+from atlas.commands import solve, status, bench
+from atlas.runtime_artifacts import go_binary_is_current
 
 
 # Shell env wins; otherwise the Docker .env's port keys drive the URLs.
@@ -78,7 +78,7 @@ def _find_go() -> Optional[str]:
 def _find_atlas_dir() -> str:
     """Find the ATLAS repo root (where proxy/ source lives)."""
     d = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(5):
+    for _ in range(4):
         if os.path.exists(os.path.join(d, "proxy", "main.go")):
             return d
         d = os.path.dirname(d)
@@ -752,7 +752,7 @@ def _dispatch_subcommand(name: str, argv: List[str]) -> int:
     if name == "compose":
         return _run_compose(argv)
     import importlib
-    module = importlib.import_module(f"atlas.cli.commands.{name}")
+    module = importlib.import_module(f"atlas.commands.{name}")
     return module.main(argv)
 
 
@@ -789,7 +789,7 @@ def run():
     # call the CLI makes (proxy, llama, lens, v3, sandbox). No-op when
     # secrets/service-token doesn't exist.
     try:
-        from atlas.cli.token import install_urllib_opener
+        from atlas.token import install_urllib_opener
         install_urllib_opener()
     except Exception:
         pass  # auth is best-effort on the client side; servers enforce
@@ -815,7 +815,7 @@ def run():
     # the TUI and runs the built-in /solve flow so scripts and CI usage
     # don't get a fullscreen UI they can't drive.
     if sys.stdin.isatty() and sys.stdout.isatty():
-        from atlas.cli.commands import tui
+        from atlas.commands import tui
         sys.exit(tui.main(sys.argv[1:]))
 
     display.banner()

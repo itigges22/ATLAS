@@ -1,4 +1,4 @@
-"""Tests for atlas.cli.commands.init (PC-054) — the first-run install wizard.
+"""Tests for atlas.commands.init (PC-054) — the first-run install wizard.
 
 The wizard is a thin composer over tier + model_registry + model.install,
 so these tests focus on the wizard's own behavior:
@@ -20,7 +20,7 @@ import stat
 
 import pytest
 
-from atlas.cli.commands import init, tier
+from atlas.commands import init, tier
 
 
 # The wizard refuses on cpu tier (PC-054) — correct production behavior,
@@ -423,7 +423,7 @@ def test_refuses_on_cpu_tier(tmp_path, monkeypatch, capsys):
     root = _make_atlas_root(tmp_path)
 
     # Force a cpu probe regardless of the actual host.
-    from atlas.cli.commands import tier
+    from atlas.commands import tier
     cpu_probe = tier.Probe(
         has_gpu=False, gpu_name=None, vram_gb=0.0, gpu_count=0,
         system_ram_gb=8.0, cpu_cores=4, disk_free_gb=100.0, platform="linux")

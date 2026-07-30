@@ -1,4 +1,4 @@
-"""Tests for atlas.cli.commands.tier (PC-055 + PC-055.1 + PC-055.2).
+"""Tests for atlas.commands.tier (PC-055 + PC-055.1 + PC-055.2).
 
 These tests cover the bugs we caught across paranoid passes — keeping
 them as regression coverage means the next bug is caught by `pytest`
@@ -22,7 +22,7 @@ import tempfile
 
 import pytest
 
-from atlas.cli.commands import tier, model_registry
+from atlas.commands import tier, model_registry
 
 
 # ---------------------------------------------------------------------------
