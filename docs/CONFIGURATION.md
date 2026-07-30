@@ -23,7 +23,7 @@ These variables are read by `docker-compose.yml` and control host-side port mapp
 
 **Precedence** (highest first): process environment → `.env` file →
 in-code default. An empty value in a higher layer is treated as unset
-and falls through. `atlas.cli.config_schema.resolve_typed()` is the
+and falls through. `atlas.config_schema.resolve_typed()` is the
 single resolver that implements this.
 
 | Variable | Default | Description |
@@ -72,7 +72,7 @@ Docker Compose also sets inter-service URLs using Docker networking (e.g., `http
 
 **Restart policy.** Every service in `docker-compose.yml` runs with `restart: unless-stopped`, so the stack comes back up after a host reboot or a container crash without a manual `docker compose up`.
 
-**Removed variables (`.env`).** These keys from older installs are ignored on read; `atlas config validate` flags them and `atlas config migrate` drops them: `ATLAS_REGISTRY` (the model registry is in-package), `ATLAS_REDIS_MAXMEMORY` and `ATLAS_REDIS_MEM` (lens state moved from Redis to SQLite — `SQLITE_DB_PATH`, § 4; [ADR 0007](adr/0007-sqlite-state-store.md)), and `ATLAS_ENABLE_TRAINING` (training is always available). K3s-side removals are listed in § 8.11.
+**Removed variables (`.env`).** These keys from older installs are ignored on read; `atlas config validate` flags them and `atlas config migrate` drops them: `ATLAS_REGISTRY` (the model registry is in-package), `ATLAS_REDIS_MAXMEMORY` and `ATLAS_REDIS_MEM` (lens state moved from Redis to SQLite — `SQLITE_DB_PATH`, § 4; [ADR 0007](adr/0007-sqlite-state-store.md)), `ATLAS_ENABLE_TRAINING` (training is always available), and `ATLAS_RPG_PLANNING` (RPG planning was removed — [issue #148](https://github.com/itigges22/ATLAS/issues/148) is the record). K3s-side removals are listed in § 8.11.
 
 `PARALLEL_SLOTS` and `KV_CACHE_TYPE_K/V` are accepted as fallbacks, but the
 canonical `ATLAS_*` names take precedence and are what `atlas init` and
@@ -165,9 +165,9 @@ stops at the one step only you can do (the rebuild); the manual flow is:
    atlas asa build
    ```
    (The candidate sandbox executes locally via a `python3` subprocess — only
-   llama-server + geometric-lens are network dependencies. For scripted use,
-   `scripts/retrain_lens_from_results.py --results-dir <dir>` remains available
-   and resolves its ports the same way.)
+   llama-server + geometric-lens are network dependencies. `atlas lens build`
+   also writes a `provenance.json` manifest — dataset, sample counts, metrics,
+   hyperparameters, per-file hashes — into every activated bundle.)
 
    **Per-model calibration.** The learned C(x) energy scale and G(x) score
    distribution are model-specific. `atlas lens build` therefore writes
@@ -257,10 +257,10 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | `ATLAS_DRY_PENALTY_LAST_N` | `2048` | DRY lookback window (tokens). Bounded rather than llama.cpp's `-1` (whole context), which would make every earlier turn's text count as a repetition source. |
 | `ATLAS_REPEAT_PENALTY` | `1.0` (off) | Classic repetition penalty. Off by default: it scores individual tokens and degrades code generation. Available for the pure repeated-whitespace degeneration that DRY's newline sequence-breaker cannot see. Setting any value other than `1.0` also sends `ATLAS_REPEAT_LAST_N`. |
 | `ATLAS_REPEAT_LAST_N` | `64` | Lookback for `ATLAS_REPEAT_PENALTY`. Only sent when that penalty is enabled. |
-| `ATLAS_PERMISSION_TIMEOUT_SEC` | `600` | Fail-safe timeout (seconds) on interactive permission requests (`proxy/permission_gate.go`). If no decision arrives at `POST /v1/permission` and the client neither disconnects nor cancels, the tool call is denied rather than hanging the turn. Compose forwards it from `.env` to the proxy container. |
+| `ATLAS_PERMISSION_TIMEOUT_SEC` | `600` | Fail-safe timeout (seconds) on interactive permission requests (`proxy/permissions.go`). If no decision arrives at `POST /v1/permission` and the client neither disconnects nor cancels, the tool call is denied rather than hanging the turn. Compose forwards it from `.env` to the proxy container. |
 | `ATLAS_ALLOW_CREDENTIAL_READS` | unset | By default the agent refuses to read known sensitive configuration files into model context (`.env`, `.env.*` except `.env.example`, `.netrc`, `.npmrc`, `.pypirc`, `*.pem`, `*.key`, SSH private keys, `.aws/credentials`, `.kube/config`, `.docker/config.json`, `secrets/service-token`, `secrets/api-keys.json`) — their contents would otherwise flow into prompts, logs, and session files. Set `1` to explicitly include them when you know a file is non-sensitive; the refusal message names this override. Compose forwards it from `.env` to the proxy container. |
-| `ATLAS_GRAMMAR_MODE` | `strict` | Schema-constrained JSON sampling. Default `strict` ships the full tool-call schema in `response_format` so llama-server's C-side sampler converts it to internal GBNF and the token decoder can ONLY emit our `tool_call/text/done` union. Set to `loose` to send a `{"type":"json_object"}` payload instead — escape hatch for models that handle schema-to-GBNF poorly. |
-| `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | Path to the ASA control-vector GGUF. The proxy reads this only for the `/v1/calibration/status` presence/marker probe; the vector itself is loaded by the llama-server entrypoint (see § 6 for `ATLAS_CONTROL_VECTOR_SCALE`, `_LAYER_RANGE`, `_ALLOW_UNVERIFIED` — those are entrypoint-consumed, not proxy). On Docker the *path* is not overridable via `.env` — compose does not forward it, so the entrypoint default applies in both containers; the scale/layer-range/allow-unverified siblings *are* forwarded. |
+| `ATLAS_GRAMMAR_MODE` | `strict` | Schema-constrained JSON sampling. Default `strict` ships the full tool-call schema in `response_format` so llama-server's C-side sampler converts it to internal GBNF and the token decoder can ONLY emit our `tool_call/text/done` union. Set to `loose` to send a `{"type":"json_object"}` payload instead (valid JSON, no shape enforcement). **`loose` is REQUIRED for Gemma-family models** — strict schema-GBNF makes them spam `done` instead of calling tools. |
+| `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | Path to the ASA control-vector GGUF (the filename is intentionally stable — the registry SHA-pins it and the `.model` marker sits beside it — even though the tool it steers is now called `structural_edit`). The proxy reads this only for the `/v1/calibration/status` presence/marker probe; the vector itself is loaded by the llama-server entrypoint (see § 6 for `ATLAS_CONTROL_VECTOR_SCALE`, `_LAYER_RANGE`, `_ALLOW_UNVERIFIED` — those are entrypoint-consumed, not proxy). Compose forwards all four `ATLAS_CONTROL_VECTOR*` keys from `.env` to the llama-server container, which is what loads the vector; the proxy container keeps its in-code default path for the probe. |
 | `ATLAS_CALL_GRAPH` | `0` | Structural call-graph reasoning. When enabled (`1`/`true`/`yes`/`on`), the proxy attaches intra-file call edges to `read_file`/`outline_file` output and symbol-index snippets; v3-service reads the same flag for its graph-based veto and repair context. Default off. |
 | `ATLAS_WORKSPACE_DIR` | (proxy's container `/workspace`) | Working-dir override that the proxy substitutes for the TUI-supplied `working_dir` field. Set inside the container so file tools always resolve under `/workspace` regardless of what the client sends. |
 | `ATLAS_VERIFY_IN` | `sandbox` | Where `run_command` and the V3 verify path execute: `sandbox` (default) routes through the sandbox container; `host` runs commands directly on the proxy host (only safe when the proxy itself is local, not containerized). Per-project override: `[execution] target = "host"` in `.atlas/config.toml`. |
@@ -276,10 +276,10 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | Error loop breaker | 3 consecutive failures on the **same path** | Path-aware — same `(tool, path)` 3× breaks the loop; rotating failure paths do not trip it |
 | T2 trigger (V3 activation) | `lines ≥ 10` AND (`hasLogicIndicators` ≥ 2 family matches OR known code/markup extension) | `classifyFileTier` in `proxy/tools.go`. Config files / data exts / styles / prose / shell scripts always T1; under 10 lines always T1; recognized code/markup extensions auto-T2 even without logic-indicator matches. |
 | write_file rejection | Existing files > 5 lines | Forces `structural_edit` (whole node, .py/.html/.htm) or `edit_file` (surgical). Skipped when the existing file looks corrupted on disk (self-heal). |
-| Session file manifest | Fires on the write that takes the session's created-file set to ≥ 2, once per new file | `[system note]` listing every file the session created, so later files reference earlier ones (`render_template`, `<script src>`) instead of re-creating or inlining them. The same set is merged into V3's `project_context`, which otherwise only carries files the model has *read*. `proxy/session_manifest.go`. |
-| Asset-graph lint | After each successful write/edit/move/delete; advisory, deduped, skipped for projects > 400 files | Cross-file coherence findings as `[system note]`s + an `asset_lint` SSE event: templates no `render_template` names, orphaned `.js`/`.css` in `static/` OR flat layouts, `src`/`href`/`url_for` targets that don't exist, `render_template`/`{% extends %}` names with no template file, and `fetch()`/form-action URLs no Flask route matches. Never blocks a write or a `done`. `proxy/asset_lint.go`. |
-| Fallback syntax gate | `edit_file`; the `write_file` iteration fast-path, V3-error fallback, and V3-winner baseline check (NOT the T0/T1 direct path — see the structural gate row) | Routes the would-be content through the sandbox `/syntax-check`; confirmed-unparsable content is rejected instead of landing on disk with `success=true` (truncated tool calls). Fail-open when the sandbox is unreachable or the type unsupported. `edit_file` and the iteration fast-path block only healthy→broken transitions (repairs of already-broken files, and content the strict checker rejects both before and after such as multi-doc YAML or JSONC, proceed). `proxy/syntax_gate.go`. |
-| Structural gate (#147) | Every `.py` write path: `edit_file`, `structural_edit`, and all `write_file` branches (V3 winner, V3-error fallback, iteration fast-path, T0/T1 direct) | Resolves the composed post-edit file through v3-service `POST /internal/structural_check` and refuses a write that INTRODUCES an unresolved direct-identifier call — a call the file neither imports, defines, binds, nor gets from builtins would raise `NameError` at runtime while parsing fine. Same healthy→broken rule as the syntax gate (a pre-existing unresolved name mid-repair is allowed; an uncheckable original — transient service failure, unreadable file — fails open). A vetoed V3 winner falls back to the model's own gate-passing baseline instead of rejecting (the offending call is V3-authored). Python-only; fail-open when v3-service is unreachable or tree-sitter unavailable. `project_context` is the session's read and written `.py` files (truncated to 4 KB each) minus the edited file's own pre-edit body. `BypassV3` (demo baseline pane) skips the direct-path `write_file` gate so the baseline stays the raw model; the edit-path and iteration fast-path gates run in all modes. `proxy/structural_gate.go`. |
+| Session file manifest | Fires on the write that takes the session's created-file set to ≥ 2, once per new file | `[system note]` listing every file the session created, so later files reference earlier ones (`render_template`, `<script src>`) instead of re-creating or inlining them. The same set is merged into V3's `project_context`, which otherwise only carries files the model has *read*. `proxy/context.go`. |
+| Asset-graph lint | After each successful write/edit/move/delete; advisory, deduped, skipped for projects > 400 files | Cross-file coherence findings as `[system note]`s + an `asset_lint` SSE event: templates no `render_template` names, orphaned `.js`/`.css` in `static/` OR flat layouts, `src`/`href`/`url_for` targets that don't exist, `render_template`/`{% extends %}` names with no template file, and `fetch()`/form-action URLs no Flask route matches. Never blocks a write or a `done`. `proxy/gates.go`. |
+| Fallback syntax gate | `edit_file`; the `write_file` iteration fast-path, V3-error fallback, and V3-winner baseline check (NOT the T0/T1 direct path — see the structural gate row) | Routes the would-be content through the sandbox `/syntax-check`; confirmed-unparsable content is rejected instead of landing on disk with `success=true` (truncated tool calls). Fail-open when the sandbox is unreachable or the type unsupported. `edit_file` and the iteration fast-path block only healthy→broken transitions (repairs of already-broken files, and content the strict checker rejects both before and after such as multi-doc YAML or JSONC, proceed). `proxy/gates.go`. |
+| Structural gate (#147) | Every `.py` write path: `edit_file`, `structural_edit`, and all `write_file` branches (V3 winner, V3-error fallback, iteration fast-path, T0/T1 direct) | Resolves the composed post-edit file through v3-service `POST /internal/structural_check` and refuses a write that INTRODUCES an unresolved direct-identifier call — a call the file neither imports, defines, binds, nor gets from builtins would raise `NameError` at runtime while parsing fine. Same healthy→broken rule as the syntax gate (a pre-existing unresolved name mid-repair is allowed; an uncheckable original — transient service failure, unreadable file — fails open). A vetoed V3 winner falls back to the model's own gate-passing baseline instead of rejecting (the offending call is V3-authored). Python-only; fail-open when v3-service is unreachable or tree-sitter unavailable. `project_context` is the session's read and written `.py` files (truncated to 4 KB each) minus the edited file's own pre-edit body. `BypassV3` (demo baseline pane) skips the direct-path `write_file` gate so the baseline stays the raw model; the edit-path and iteration fast-path gates run in all modes. `proxy/gates.go`. |
 | Honesty gates & permission modes | verification / action / claim-check gates run in **every** mode including `yolo` | Yolo skips permission prompts, not completion checks; bounces stay capped by `maxGateBounces` so unattended runs can't loop. |
 | Suspicious-shrinkage guard | `oldSize ≥ 100B` AND `newSize < 64B` | Rejects writes that replace a non-trivial file with a stub (doctype-only / mid-output cut). See `validateNotSuspiciouslyShrunk`. |
 | Per-step grammar gate | Trigger: write_file rejection on existing .py/.html/.htm > 5 lines | Bans `edit_file` and `write_file` from GBNF tool-name production for next decision |
@@ -290,7 +290,7 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | Search results limit | 200 matches | Prevents context flooding |
 | File search skip | Files > 1 MB | Performance |
 | max_tokens | 8,192 (override via `ATLAS_MAX_TOKENS`) | Per-turn generation ceiling sent to llama-server |
-| temperature (agent loop) | 0.3 default; 0.7 on retry after a stuck-loop nudge | Sent to llama-server. Per-service — V3 (§ 3) and the REPL (§ 7) use their own defaults. |
+| temperature (agent loop) | 0.3 default; 0.7 on retry after a stuck-loop nudge | Sent to llama-server. Per-service — V3 (§ 3) uses its own default. |
 
 ### Stuck-pattern detectors
 
@@ -298,14 +298,14 @@ These 8 safety detectors run in place of a per-tier turn cap. Each fires indepen
 
 | Detector | Threshold | Source |
 |----------|-----------|--------|
-| Tool-call repetition | Same `(tool, args)` signature `3×` within the last `8` calls. `write_file` signatures key on the target path alone — a whole-file rewrite of the same path counts as repetition even when each attempt's content differs; `edit_file`/`structural_edit` keep full-args signatures so distinct surgical edits don't trip it. | `proxy/tool_repeat.go` (`toolRepeatThreshold=3`, `toolRepeatWindow=8`) |
-| Reasoning repetition | Same reasoning snippet `2×` consecutive turns | `proxy/reasoning_repeat.go` (`reasoningRepeatThreshold=2`) |
-| Lens regression | `gx_score_min` runs `2` consecutive turns below the selected artifact's `low` threshold, OR one turn below its `severe` threshold; disabled if uncalibrated | `proxy/lens_score.go`, `gx_thresholds.json` |
+| Tool-call repetition | Same `(tool, args)` signature `3×` within the last `8` calls. `write_file` signatures key on the target path alone — a whole-file rewrite of the same path counts as repetition even when each attempt's content differs; `edit_file`/`structural_edit` keep full-args signatures so distinct surgical edits don't trip it. | `proxy/detectors.go` (`toolRepeatThreshold=3`, `toolRepeatWindow=8`) |
+| Reasoning repetition | Same reasoning snippet `2×` consecutive turns | `proxy/detectors.go` (`reasoningRepeatThreshold=2`) |
+| Lens regression | `gx_score_min` runs `2` consecutive turns below the selected artifact's `low` threshold, OR one turn below its `severe` threshold; disabled if uncalibrated | `proxy/lens.go`, `gx_thresholds.json` |
 | Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → skip | `proxy/agent.go` |
 | Path-aware error-loop | 3 consecutive failures on the **same** path (rotating paths don't trip) | `proxy/agent.go` (`consecutiveErrors >= 3` + path match) |
 | Action gate | Turn emits `done` but the user prompt has action-intent and no successful write/edit/structural_edit fired this loop | `proxy/agent.go` (action_gate) |
 | Verification gate | Turn emits `done` after a fix-intent prompt with no successful verification command this loop | `proxy/agent.go` (verification_gate) |
-| Claim-check gate | `done` summary makes universal claims (`works perfectly`, `tested all routes`) without backing evidence, OR the prompt asks for multi-issue work | `proxy/agent.go` + `proxy/claim_check.go` |
+| Claim-check gate | `done` summary makes universal claims (`works perfectly`, `tested all routes`) without backing evidence, OR the prompt asks for multi-issue work | `proxy/agent.go` + `proxy/gates.go` |
 
 ### Plan-mode auto-revision (plan_adherence)
 
@@ -341,7 +341,7 @@ These checks are enforced regardless of permission mode — `yolo` does NOT bypa
 
 ### Symbol indexing (per-session startup)
 
-`proxy/symbol_index.go` scans the project once per `/v1/agent` session to seed a symbol → file map so the planner can resolve names like `dashboard` to `app/dashboard.py` without re-reading the tree on every turn.
+`proxy/context.go` scans the project once per `/v1/agent` session to seed a symbol → file map so the planner can resolve names like `dashboard` to `app/dashboard.py` without re-reading the tree on every turn.
 
 | Setting | Value | Description |
 |---------|-------|-------------|
@@ -396,7 +396,7 @@ the V3 service.
 
 ## 4. Geometric Lens
 
-Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence routing, and pattern caching.
+Python FastAPI service for C(x)/G(x) scoring (`/internal/lens/*`) and the pattern cache (`/internal/patterns/*`). Every route it serves is internal to the stack; the proxy and v3-service are its only callers.
 
 ### Environment Variables
 
@@ -405,14 +405,7 @@ Python FastAPI service for C(x)/G(x) scoring, RAG/project indexing, confidence r
 | `GEOMETRIC_LENS_ENABLED` | `false` | Enable C(x)/G(x) scoring. Docker Compose sets this to `true`. |
 | `LLAMA_URL` | `http://llama-server:8080` | llama-server endpoint. Read by `config.py:LlamaConfig` and also by `embedding_extractor.py` as the embedding source. |
 | `LLAMA_EMBED_URL` | (falls back to `LLAMA_URL`) | Dedicated embedding endpoint. Use this if you have a separate embedding server; otherwise embeddings reuse the LLAMA_URL host. |
-| `ROUTING_ENABLED` | `true` | Master switch for the confidence-router pipeline. Setting `false` short-circuits routing and uses STANDARD for every query. |
-| `PROJECT_DATA_DIR` | `/data/projects` | Directory for project index storage |
-| `SQLITE_DB_PATH` | `/data/state/geometric_state.db` | SQLite state store (pattern cache, co-occurrence graph, confidence-router posteriors, task queue, metrics). Lives on the `lens-state` named volume mounted at `/data/state`. Outage behavior is split: the pattern cache, co-occurrence graph, and confidence router degrade gracefully (neutral routing, empty cache); the task-queue endpoints (`/v1/tasks/*`) return 503 when the store is unavailable. Learned state (patterns, router posteriors) is TTL-less and lives in this one file — volume loss resets learning. |
-| `SANDBOX_URL` | `http://sandbox:8020` | Sandbox endpoint used by the lens's own `sandbox_client.py` (separate from `ATLAS_SANDBOX_URL` read by atlas-proxy). |
-| `SANDBOX_TIMEOUT` | `30` | Per-request timeout (seconds) when the lens itself calls the sandbox. |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8080` | Allowed CORS origins (comma-separated) |
-| `CONFIG_PATH` | `/app/config/config.yaml` | Path to YAML config file (optional, defaults used if missing) |
-| `API_KEYS_PATH` | `/app/secrets/api-keys.json` | Path to API keys JSON. The lens's `/v1/*` endpoints return 401 until a key file is mounted. To mount one in Docker, uncomment the `${ATLAS_SECRETS_DIR:-./secrets}:/app/secrets:ro` volume line in `docker-compose.yml` and point `ATLAS_SECRETS_DIR` at the host directory holding `api-keys.json`. |
+| `SQLITE_DB_PATH` | `/data/state/geometric_state.db` | SQLite state store (pattern cache, co-occurrence graph, metrics). Lives on the `lens-state` named volume mounted at `/data/state`. When the store is unavailable the service degrades gracefully: scoring keeps answering and pattern-context reads return empty. Learned state is TTL-less and lives in this one file — volume loss resets it to the seed patterns. |
 | `ATLAS_ALLOW_PICKLE_GX` | unset | Opt-in for loading the legacy `gx_xgboost.pkl` G(x) format. Unpickling executes arbitrary code, so the service refuses `.pkl` by default and asks for the JSON export (`gx_xgboost.json`). Set to `1` once to load an old bundle, then re-export. |
 
 ### Scoring Model Parameters
@@ -428,32 +421,9 @@ Missing or invalid calibration never falls back to another model's values.
 C(x) reports a neutral normalized score and G(x) reports `uncalibrated`;
 threshold-based intervention remains disabled while raw telemetry stays visible.
 
-### Confidence Router
+### Pattern cache
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| CACHE_HIT route cost | 1 | Cheapest route (k=0 retrieval) |
-| FAST_PATH route cost | 50 | Quick route (k=1) |
-| STANDARD route cost | 300 | Default route (k=5) |
-| HARD_PATH route cost | 1,500 | Expensive route (k=20) |
-| BM25 k1 | 1.5 | BM25 term frequency saturation |
-| BM25 b | 0.75 | BM25 document length normalization |
-| Tree search max depth | 6 | LLM-guided traversal depth |
-| Tree search max calls | 40 | Maximum LLM scoring calls |
-| Pattern cache STM capacity | 100 | Short-term memory max entries |
-
-### Project Indexing Limits (YAML-overridable via `CONFIG_PATH`)
-
-These come from `geometric-lens/config.py:LimitsConfig` and `RetrievalConfig`. They are NOT env-var-configurable on their own — override by mounting a YAML file at `CONFIG_PATH` with matching nested keys.
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `limits.max_files` | 10,000 | Per-project file cap during indexing |
-| `limits.max_loc` | 500,000 | Per-project lines-of-code cap |
-| `limits.max_size_mb` | 100 | Per-file size cap (MB) — larger files are skipped |
-| `limits.project_ttl_hours` | 24 | Project index TTL before re-index |
-| `retrieval.top_k` | 20 | Default top-K returned per retrieval call |
-| `retrieval.context_budget_tokens` | 8,000 | Max tokens of retrieved context returned to the caller |
+The lens stores patterns from completed sessions (SQLite, `SQLITE_DB_PATH`) and serves them back through one read endpoint, `POST /internal/patterns/context`. Matching is pattern-type + recency + success rate (no retrieval index): the task text is heuristically classified, candidate patterns are scored through `pattern_scorer.compute_score` (Ebbinghaus decay), and 1-hop co-occurrence expansion adds linked patterns. The proxy calls this in the agent-loop setup and injects the top ≤3 results as one `[system note]` block (hard 600-char cap, fail-soft on any error — see § 2). There are no tuning knobs; behavior is always-on and degrades to "no injection" when the lens or its store is unavailable.
 
 ---
 
@@ -470,7 +440,6 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 | `ATLAS_SANDBOX_WORKSPACE_ROOT` | `/workspace` | The bind-mounted project root the executor confines `cwd` to. Container deployments keep the default; the E2E acceptance test overrides it to run the executor on the host under a temp dir. |
 | `ATLAS_SANDBOX_UID` / `ATLAS_SANDBOX_GID` | `1000` | Runtime uid/gid of the (non-root) sandbox container. `atlas init` writes the invoking user's ids so `/workspace` writes keep the right owner — the container drops all capabilities, so ownership must match. |
 | `ATLAS_PROXY_UID` / `ATLAS_PROXY_GID` | `1000` | Runtime uid/gid of the atlas-proxy container — same rationale as the sandbox ids: the proxy writes two host bind mounts (`/workspace` for file tools, `/data/lens_training` for lens sample banking), and the image's baked-in non-root user (uid 1001) can't write operator-owned dirs. `atlas init` writes the invoking user's ids. |
-| `ATLAS_RPG_PLANNING` | `0` | V3.2 RPG-style architecture-first planning (issue #120, EXPERIMENTAL). When on, `/v3/plan` builds a Repository Planning Graph (capabilities → files → signatures → data-flow edges) via the wavelet coarse band, plan steps carry per-node interface constraints into generation, drifted nodes get one corrective regeneration, and surviving drift is surfaced with the affected downstream subgraph. Off (default) leaves planning and generation byte-identical to the flat path. Read inside the v3-service container (forwarded by compose). See `docs/reports/RPG_WAVELET_PLANNING_V3_2.md`. |
 | `ATLAS_SANDBOX_CPUS` | `2` (compose fallback); `atlas init` writes ~75% of host cores | CPU quota for the sandbox container so a runaway build can't starve llama-server. The compose fallback is a conservative `2` so a raw `docker compose up` is never unlimited; `atlas init` writes ~75% of host cores (floor 1) — the recommended setting. `0` removes the cap (unlimited — not recommended). |
 | `ATLAS_SERVICE_TOKEN_FILE` | `/run/atlas-secrets/service-token` (containers) / `<root>/secrets/service-token` (host) | Path to the per-installation internal-auth token. Generated by `atlas init` (0600); mounted read-only into every Docker-Compose service. Present => all services require `Authorization: Bearer <token>` on non-health routes and clients inject it automatically. Absent => auth disabled (pre-token behavior; doctor warns). The K3s templates do not mount the token, so internal auth is disabled on K3s (doctor warns there too). Rotate with `atlas init --rotate-token` + `docker compose restart`. The token value itself never goes in `.env`, argv, or logs. |
 | `ATLAS_SECRETS_DIR` | `./secrets` | Host dir mounted read-only at `/run/atlas-secrets` in every service (holds `service-token`; the lens api-keys mount is separate). |
@@ -581,8 +550,8 @@ table; bootstrap-only knobs (`ATLAS_BOOTSTRAP_*` and friends) in
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_PROXY_URL` | `http://localhost:${ATLAS_PROXY_PORT:-8090}` | atlas-proxy endpoint (used by `atlas doctor`, the REPL, and honored by the TUI as its `--proxy` default) |
-| `ATLAS_RAG_URL` | (unset) | Deprecated spelling of `ATLAS_LENS_URL`, still honoured by `atlas/cli/client.py` so an existing `.env` keeps working. `ATLAS_LENS_URL` now takes precedence; it previously did not. Prefer `ATLAS_LENS_URL`. |
+| `ATLAS_PROXY_URL` | `http://localhost:${ATLAS_PROXY_PORT:-8090}` | atlas-proxy endpoint (used by `atlas doctor` and honored by the TUI as its `--proxy` default) |
+| `ATLAS_RAG_URL` | (unset) | Deprecated spelling of `ATLAS_LENS_URL`, still honoured by `atlas/client.py` so an existing `.env` keeps working. `ATLAS_LENS_URL` takes precedence. Prefer `ATLAS_LENS_URL`. |
 | `ATLAS_AUTO_WORKSPACE` | `1` | On TUI launch, the CLI checks whether the Docker proxy/sandbox `/workspace` binds cover your cwd and recreates those containers pointed at your project when they don't. Set `0` to keep whatever bind the containers already have. |
 | `ATLAS_MODELS_DIR` | `./models` | Host directory holding GGUF model files (used by `atlas doctor` and `atlas model`). |
 | `ATLAS_MODEL_FILE` | **required** | Selected model filename inside `ATLAS_MODELS_DIR`. |
@@ -594,21 +563,13 @@ table; bootstrap-only knobs (`ATLAS_BOOTSTRAP_*` and friends) in
 | `ATLAS_ROOT` | (cwd) | Repo-root override read by `atlas onboard` when the checkout can't be resolved from the working directory. |
 | `ATLAS_GPU_VENDOR` | (auto-detected) | Process-env override read by `atlas init` / `atlas tier` on multi-vendor hosts: `nvidia`, `amd`, `apple`, `intel`. Auto-detect picks the largest-VRAM GPU. Not read from `.env`. |
 | `ATLAS_UPSTREAM_REPO` | `itigges22/ATLAS` | GitHub repo that `atlas lens publish` / `atlas publish` open the registry PR against. Override to target a fork. |
-| `ATLAS_PARALLEL_TASKS` | `4` (worker count) | Benchmark runner: number of tasks `benchmark.v3_runner` processes concurrently (default `4`; the runner's per-call timeout scaler reads the same var with default `1`). `atlas bench` pins it to `1` — the safe setting for any model; export a higher value only when driving `benchmark.v3_runner` directly on hardware that can take it. |
+| `ATLAS_PARALLEL_TASKS` | `4` (worker count) | Benchmark runner: number of tasks `atlas.bench.v3_runner` processes concurrently (default `4`; the runner's per-call timeout scaler reads the same var with default `1`). `atlas bench` pins it to `1` — the safe setting for any model; export a higher value only when driving `atlas.bench.v3_runner` directly on hardware that can take it. |
 | `ATLAS_LLM_PARALLEL` | `0` | Benchmark runner: set `1` to allow concurrent llama-server calls instead of serialized generation. |
-| `ATLAS_API_KEYS_PATH` | `./secrets/api-keys.json` | Read by the TUI to locate the lens API-key file (the lens container itself reads `API_KEYS_PATH`, § 4). |
+| `ATLAS_API_KEYS_PATH` | `./secrets/api-keys.json` | Read by the TUI to locate the bearer-token file written by `atlas init`; the token is attached to `/v1/agent` requests for forward compatibility (the proxy does not currently enforce it). |
 | `ATLAS_UPGRADE_PULL_TIMEOUT` | `3600` | Timeout (seconds) `atlas upgrade` allows for pulling the target images before the staged upgrade aborts and restores the previous release. |
 | `ATLAS_UPGRADE_SKIP_VERIFY` | (unset) | Set `1` to skip the keyless cosign signature verification `atlas upgrade` runs on each target image before applying. |
 
-### Generation Parameters
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| max_tokens | 8,192 | Max output tokens |
-| temperature | 0.6 | REPL generation temperature (per-service; the agent loop in § 2 uses 0.3) |
-| top_k | 20 | Top-K sampling |
-| top_p | 0.95 | Nucleus sampling |
-| stop | (none) | No stop sequences are sent. llama-server applies the GGUF's own chat template (`--jinja`), so no hand-built stop tokens are needed. |
+The CLI sends no generation parameters of its own beyond `atlas.client.chat_stream`'s defaults (`max_tokens=8192`, `temperature=0.6`); interactive generation runs through the proxy's agent loop (§ 2) and the TUI. No stop sequences are sent anywhere — llama-server applies the GGUF's own chat template (`--jinja`).
 
 ---
 
@@ -701,7 +662,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 ### 8.9 V3 ablation knobs (benchmark-only)
 
-Consumed by `benchmark/v3_runner.py:_load_v3_config` for ablation studies. The production `v3-service` reads its own constants from `benchmark/v3/*.py` config dataclasses and does NOT pick these up at runtime.
+Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The production `v3-service` reads its own constants from the `v3-service/stages/*.py` config dataclasses and does NOT pick these up at runtime.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

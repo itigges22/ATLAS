@@ -1,6 +1,6 @@
 # ATLAS Event Protocol
 
-ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). This document is the wire-format spec — atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/consumer.go`); `atlas/cli/events.py` is the canonical Python implementation, used by the test suite.
+ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). This document is the wire-format spec — atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/chat.go`); `atlas/events.py` is the canonical Python spec implementation (envelope types, `make_event`, `parse_envelope`), used by the test suite via the consumer harness in `tests/cli/event_harness.py`.
 
 ## Transport
 
@@ -13,7 +13,7 @@ data: {"event_id":"evt_aabb1122",...}
 
 ```
 
-(Two newlines terminate the frame.) The Python helper `atlas.cli.events.iter_sse_lines` handles the framing.
+(Two newlines terminate the frame.) The Python test helper `iter_sse_lines` (`tests/cli/event_harness.py`) handles the framing.
 
 ### SSE control frames (server → client only)
 
@@ -177,22 +177,20 @@ Closes one agent pass. The `/events` broker is a persistent stream — it keeps 
 
 v3-service's endpoints emit the legacy `{stage, detail}` shape (with an optional `data` key when structured data rides along). Envelope consumers subscribe to atlas-proxy's `GET /events` instead — the proxy's v3 bridge translates the `{stage, detail}` frames it receives from v3-service into envelopes.
 
-Consumers reading a mixed stream must filter the non-envelope frames — the Python helper `atlas.cli.events.iter_events()` does this automatically: `{stage, detail}` frames (with or without `data`) raise `LegacyEventError` and are skipped, and `result:`/`done:` control frames are skipped as stream control rather than parsed as envelopes.
+Consumers reading a mixed stream must filter the non-envelope frames — the Python test helper `iter_events()` (`tests/cli/event_harness.py`) does this automatically: `{stage, detail}` frames (with or without `data`) raise `LegacyEventError` and are skipped, and `result:`/`done:` control frames are skipped as stream control rather than parsed as envelopes.
 
-## Consumer library: `atlas/cli/events.py`
+## Python implementation: `atlas/events.py`
 
-Python consumers should not parse SSE frames themselves. Use:
+`atlas/events.py` is the spec module shipped with the CLI: `EVENT_TYPES`, the `Event` dataclass, `make_event(type, stage, payload)` for producers, and `parse_envelope(blob)` for consumers — `parse_envelope` raises `LegacyEventError` if the blob is the v3-service `{stage, detail}` shape and `SchemaError` if it's malformed:
 
 ```python
-from atlas.cli.events import iter_events
+from atlas.events import parse_envelope
 
-for ev in iter_events("http://localhost:8090/events"):
-    print(ev.type, ev.stage, ev.payload)
-    if ev.type == "done":
-        break
+ev = parse_envelope(blob)      # one frame → Event
+print(ev.type, ev.stage, ev.payload)
 ```
 
-`iter_events(url)` yields `Event` dataclass objects with typed fields. `parse_envelope(blob)` parses one frame; raises `LegacyEventError` if the blob is the v3-service `{stage, detail}` shape, `SchemaError` if it's malformed.
+The streaming consumer helpers (`iter_sse_lines`, `iter_events`, `is_terminal`, `collect`, `assert_monotonic`) live in the test harness, `tests/cli/event_harness.py` — they are assertion tooling for the suite, not part of the shipped package.
 
 ## Stage names from v3-service
 

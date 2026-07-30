@@ -60,13 +60,13 @@ API contract documented in [API.md § POST /v3/plan](API.md#post-v3plan).
 | `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — opens the SSE stream, forwards progress events to the callback, returns the final `Plan` from the `event: result` frame. `reqCtx` binds the agent's request context so `/cancel` aborts an in-flight plan. Mirrors `callV3GenerateStreaming` for V3-pipeline runs. |
 | `proxy/types.go` | `V3PlanRequest`, `Plan`, `PlanStep` types. `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
 | `proxy/agent.go` | `samplePlanContext()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier + message length. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
-| `proxy/plan_adherence.go` | `matchPlanStep()` (loose tool-name + path-suffix match), `recordPlanAdherence()` (per-tool-call accounting; recon tools — `read_file`/`list_directory`/`find_file`/`search_files` — are neutral: they satisfy no step but never extend `off_streak`), `revisePlan()` (regenerate with `FilesRead` carried forward as extra context). |
+| `proxy/gates.go` | `matchPlanStep()` (loose tool-name + path-suffix match), `recordPlanAdherence()` (per-tool-call accounting; recon tools — `read_file`/`list_directory`/`find_file`/`search_files` — are neutral: they satisfy no step but never extend `off_streak`), `revisePlan()` (regenerate with `FilesRead` carried forward as extra context). |
 
 The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rendered as a numbered list with a `✓` marker on the verify step only, and the verify step is called out as the "evidence-of-fix" step that the verification gate guards against `done`. (The ☐/✓/⚐ per-step glyphs belong to the TUI rendering — see below.)
 
 ### tui: rendering (Go)
 
-`tui/plan.go` defines `planView` (state on the model) plus three `applyPlan*` handlers wired into `tui/model.go`'s chat dispatcher:
+`tui/state.go` defines `planView` (state on the model) plus three `applyPlan*` handlers wired into `tui/model.go`'s chat dispatcher:
 
 | Event | Handler | UI effect |
 |---|---|---|
@@ -78,7 +78,7 @@ The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rende
 
 ## Tunables
 
-Defined in `proxy/plan_adherence.go`:
+Defined in `proxy/gates.go`:
 
 | Constant | Default | Rationale |
 |---|---|---|
@@ -114,6 +114,6 @@ Both are paid up front before the agent's first tool call. The investment is rec
 |---|---|---|
 | v3-service plan endpoint | `tests/v3-service/test_plan_scoring.py` (scorer); parser smoke-tested via `curl /v3/plan` | scorer recognizes language-specific linters as verification commands and does not credit recon calls as verification; parser tolerance (fences, prose preamble, brace-depth nesting) is exercised by the 3-candidate sampler |
 | proxy bridge | `proxy/v3_bridge_test.go` | SSE parse, missing-result error, stage routing |
-| proxy hook | `proxy/plan_hook_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
-| proxy adherence | `proxy/plan_adherence_test.go` | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
+| proxy hook | `proxy/agent_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
+| proxy adherence | `proxy/gates_test.go` | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
 | TUI rendering | `tui/plan_test.go` | `planView` state transitions, plan_loaded replacement on revise, off-plan silence |

@@ -45,7 +45,7 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/health` | GET | Liveness + counters — always 200, `status` reports `"ok"` or `"degraded"` |
+| `/health` | GET | Liveness — always 200, `status` reports `"ok"` or `"degraded"` |
 | `/ready` | GET | Readiness probe — 200 only when inference, lens scoring (`lens/ready`), the sandbox, and v3-service are all healthy; 503 otherwise. Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
 | `/version` | GET | API version, SSE protocol version, and the full error-code set — see [Versioning and error codes](#versioning-and-error-codes) |
 
@@ -112,6 +112,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_structural_veto` | A sandbox-passing candidate was rejected because tree-sitter found direct-identifier calls resolving to no local def, import, builtin, or project symbol. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
 | `v3_call_chain_context` | Phase-3 repair injected a call-chain context block for the failing function. Informational. | `stage`, `detail`, `function` (string — the failing function name) |
 | `symbol_index_injected` | Turn-zero auto-injection of function/class snippets for symbols named in the user message. | `matched` (string[] — matched symbol names), `n_files` (int — project files scanned), `skipped` (int — symbols that didn't resolve) |
+| `pattern_context_injected` | Turn-zero injection of the lens pattern-cache reader's results (`POST /internal/patterns/context`): lessons from previous sessions whose pattern type matches the task, injected as one `[system note]` block. Absent when the lens is unreachable or returns nothing (fail-soft). | `count` (int — patterns injected, ≤3), `types` (string[] — the injected patterns' types) |
 | `agent_lens_score` | Lens scored a `write_file` or `edit_file` tool call's content. Fires per write/edit before tool execution. | `tool` (`write_file`\|`edit_file`), `turn` (int), `n_tokens` (int), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `latency_ms` (float) |
 | `agent_lens_intervention` | Lens detected consecutive low-quality writes against the model's `low`/`severe` thresholds and queued a corrective for the next LLM call. Absent when calibration is missing. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
 | `agent_repeat_intervention` | Proxy saw the same `(tool_name, args)` signature ≥3× in the last 8 turns and queued a corrective. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
@@ -221,7 +222,7 @@ The correlation key is `session_id` + `tool_call_id`, so multiple destructive ca
 
 Subscribe to the **global typed-envelope broker**. Unlike `/v1/agent` (per-request stream of one turn), `/events` is a long-lived pub/sub feed of structured envelopes from across the proxy: agent loop boundaries, tool calls, V3 stage transitions, metrics. Multiple clients can subscribe simultaneously; slow consumers drop events rather than blocking producers.
 
-**Envelope wire format** (matches `atlas/cli/events.py` exactly). A `stage_start` example (`duration_ms` is only set on `stage_end` / `tool_result` and the final `done`):
+**Envelope wire format** (matches `atlas/events.py` exactly). A `stage_start` example (`duration_ms` is only set on `stage_end` / `tool_result` and the final `done`):
 ```json
 {
   "event_id": "evt_a1b2c3d4",
@@ -307,7 +308,7 @@ curl http://localhost:8090/v1/calibration/status | jq .
 
 ### POST /feedback
 
-Records a human verdict on the most recent pass for a session as weighted lens training samples (`proxy/lens_samples.go`). The TUI's `/good`, `/bad`, and per-file accept/deny review flow post here. Per-file verdicts take precedence; when a file carries no verdict, the pass-level thumbs labels it coarsely (with lower weight). A denial is recorded as a confident negative regardless of the pass thumbs.
+Records a human verdict on the most recent pass for a session as weighted lens training samples (`proxy/lens.go`). The TUI's `/good`, `/bad`, and per-file accept/deny review flow post here. Per-file verdicts take precedence; when a file carries no verdict, the pass-level thumbs labels it coarsely (with lower weight). A denial is recorded as a confident negative regardless of the pass thumbs.
 
 **Request:**
 ```json
@@ -406,7 +407,7 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `tail_background` | Fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
 | `stop_background` | Terminate a backgrounded job by `job_id`. |
 
-**Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`proxy/workspace.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
+**Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`proxy/context.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
 
 **Write deny-list.** A safety deny-list applies in every permission mode, including `yolo` (`proxy/permissions.go`): `write_file`/`edit_file` targets matching `.env`, `*.pem`, `*.key`, or `*credentials*` are refused, as are `run_command` invocations matching destructive patterns (`rm -rf /`, `mkfs*`, `dd if=... of=/dev/...`).
 
@@ -434,8 +435,7 @@ curl http://localhost:8090/health
   "lens_ready": true,
   "sandbox": true,
   "port": "8090",
-  "capabilities": ["demo_raw_completion_v1"],
-  "stats": {"requests": 42, "repairs": 3, "sandbox_passes": 38, "sandbox_fails": 4}
+  "capabilities": ["demo_raw_completion_v1"]
 }
 ```
 
@@ -732,7 +732,7 @@ curl http://localhost:8070/health
 
 ## Geometric Lens (Port 8099)
 
-Energy-based code scoring using C(x) cost field and G(x) quality prediction. Also serves as the RAG API for project indexing and retrieval.
+Energy-based code scoring using C(x) cost field and G(x) quality prediction, plus the pattern cache (lessons from previous sessions, served back to the agent loop). Every route is internal to the stack — the proxy and v3-service are the only callers.
 
 > **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
 
@@ -796,38 +796,39 @@ curl http://localhost:8099/ready
 
 Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
 
+### POST /internal/patterns/context
+
+The pattern-cache read path. Returns patterns from previous sessions whose pattern type matches the task text, scored by type match + recency + success rate, with 1-hop co-occurrence expansion. The proxy calls this in its agent-loop setup and injects the results as a `[system note]` block (see the `pattern_context_injected` event on `/v1/agent`). Served patterns get their access stats updated in the background.
+
+**Request:**
+```json
+{"task": "fix the broken index.html template", "top_k": 3}
+```
+
+**Response:**
+```json
+{
+  "patterns": [
+    {"summary": "...", "content": "...", "type": "error_fix", "age_days": 3.2}
+  ]
+}
+```
+
 ### Additional endpoints
 
-These are not part of the public API. **Internal** rows are consumed by other ATLAS services in-stack; **Experimental** rows have no in-stack consumer today and may change or be removed without notice.
+These are not part of the public API — every row is consumed by other ATLAS services in-stack. They require the service token when one is configured (`secrets/service-token`, see CONFIGURATION.md `ATLAS_SERVICE_TOKEN_FILE`) and are open otherwise.
 
-The `/v1/*` endpoints below require `Authorization: Bearer <key>`, validated against the locally-loaded `api-keys.json` (plus the installation's service token, which is auto-accepted); requests without a valid key get 401. The `/internal/*` endpoints require the service token when one is configured (`secrets/service-token`, see CONFIGURATION.md `ATLAS_SERVICE_TOKEN_FILE`) and are open otherwise.
-
-| Endpoint | Method | Status | Description |
-|----------|--------|--------|-------------|
-| `/` | GET | Internal | Service banner — name, version, a few endpoint pointers |
-| `/v1/projects/sync` | POST | Experimental | Sync/index a project codebase |
-| `/v1/projects/{id}/status` | GET | Experimental | Get project index status |
-| `/v1/projects` | GET | Experimental | List indexed projects |
-| `/v1/projects/{id}` | DELETE | Experimental | Delete a project index |
-| `/v1/chat/completions` | POST | Experimental | RAG-augmented chat completions |
-| `/v1/models` | GET | Experimental | List available models |
-| `/v1/tasks/submit` | POST | Experimental | Submit async task |
-| `/v1/tasks/{id}/status` | GET | Experimental | Get task status |
-| `/v1/queue/stats` | GET | Experimental | Task queue statistics |
-| `/v1/patterns/write` | POST | Experimental | Write pattern data (bearer-token variant of `/internal/patterns/write`) |
-| `/internal/patterns/write` | POST | Internal | Write pattern data — unauthenticated in-stack path used by v3-service; mirrors `/v1/patterns/write` |
-| `/internal/cache/stats` | GET | Internal | Cache statistics |
-| `/internal/cache/flush` | POST | Internal | Flush cache |
-| `/internal/cache/consolidate` | POST | Internal | Consolidate cache entries |
-| `/internal/router/stats` | GET | Internal | Confidence router statistics |
-| `/internal/router/reset` | POST | Internal | Reset router posteriors |
-| `/internal/router/feedback` | POST | Internal | Record routing feedback |
-| `/internal/lens/evaluate` | GET/POST | Internal | Evaluate text through Lens (C(x) energy; testing aid) |
-| `/internal/lens/score-text` | POST | Internal | Score text (C(x) only) |
-| `/internal/lens/retrain` | POST | Internal | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
-| `/internal/lens/reload` | POST | Internal | Reload model weights (refreshes the `/ready` state) |
-| `/internal/lens/score-per-step` | POST | Internal | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
-| `/internal/sandbox/analyze` | POST | Internal | Sandbox result analysis |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Service banner — name, version, a few endpoint pointers |
+| `/internal/patterns/write` | POST | Write pattern data — in-stack path used by v3-service after a successful run |
+| `/internal/cache/stats` | GET | Pattern-cache statistics |
+| `/internal/lens/evaluate` | GET/POST | Evaluate text through Lens (C(x) energy; testing aid) |
+| `/internal/lens/score-text` | POST | Score text (C(x) only) |
+| `/internal/lens/retrain` | POST | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
+| `/internal/lens/reload` | POST | Reload model weights (refreshes the `/ready` state) |
+| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
+| `/internal/sandbox/analyze` | POST | Sandbox result analysis |
 
 ---
 
@@ -1155,9 +1156,9 @@ code set), never on `detail`** (the human message may change):
 ```
 
 Codes: `unauthorized`, `invalid_input`, `unsupported_operation`,
-`permission_denied`, `timeout`, `cancelled`, `dependency_unavailable`,
-`incompatible_artifact`, `resource_limit`, `sandbox_policy_rejected`,
-`model_failure`, `internal_error`. Machine-readable schemas live in `docs/schemas/`: the full
+`dependency_unavailable`, `resource_limit`, `internal_error` — the
+closed set is exactly what live `writeError` calls emit
+(`AllErrorCodes` in `proxy/main.go`). Machine-readable schemas live in `docs/schemas/`: the full
 OpenAPI 3.1 spec for this surface (`proxy_openapi.yaml`, parity-checked
 against the registered routes in CI) plus JSON Schemas for the error and
 SSE envelopes.

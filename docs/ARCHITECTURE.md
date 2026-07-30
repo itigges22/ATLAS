@@ -52,7 +52,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 | **Vulkan** (cross-vendor fallback) | Preview | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
 | **SYCL** (Intel Arc) | Roadmap — Intel Arc uses `vulkan` today | TBD | TBD | — |
 
-**Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/cli/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` into `.env`. Detection resolves to the packaged native backend when one exists: CUDA for NVIDIA, ROCm for AMD on x86_64, the hybrid Metal path on macOS. When no native backend is packaged for the host (Intel Arc, AMD on arm64, unrecognized vendors), the wizard offers the Vulkan universal fallback (default-yes): one image covers AMD, Intel, Adreno, MoltenVK, and the lavapipe CPU rasterizer, at roughly 20–40% below a tuned native backend. It refuses — rather than writing a `.env` that won't boot — only when nothing usable exists. Each backend has its own pre-built image; users don't run a fat image that ships every backend's libraries.
+**Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` into `.env`. Detection resolves to the packaged native backend when one exists: CUDA for NVIDIA, ROCm for AMD on x86_64, the hybrid Metal path on macOS. When no native backend is packaged for the host (Intel Arc, AMD on arm64, unrecognized vendors), the wizard offers the Vulkan universal fallback (default-yes): one image covers AMD, Intel, Adreno, MoltenVK, and the lavapipe CPU rasterizer, at roughly 20–40% below a tuned native backend. It refuses — rather than writing a `.env` that won't boot — only when nothing usable exists. Each backend has its own pre-built image; users don't run a fat image that ships every backend's libraries.
 
 **Bring-your-own-model surface (V3.1.1).** `atlas lens check` is a cheap pre-flight against a running llama-server that reports whether the loaded model is Lens-compatible. `atlas lens build --samples <path>` wraps `geometric-lens/geometric_lens/training.py` to train fresh C(x) (`cost_field.pt`) **and** G(x) (XGBoost) artifacts at the model's native embedding dim. Together they let users swap in non-default GGUFs without forking the lens code — the C(x) constructor accepts arbitrary `input_dim`, so the only thing that changes per-model is the trained weights. See [CLI.md § atlas lens](CLI.md#atlas-lens) for the user-facing flow; `atlas lens publish` (or the combined `atlas publish`) uploads the artifacts to HuggingFace and opens the registry PR that pins their hashes.
 
@@ -76,7 +76,7 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 | **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` passes through to llama-server unchanged. |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) energy scoring, G(x) XGBoost quality prediction, RAG/project indexing; owns the SQLite state store (`SQLITE_DB_PATH` on the `lens-state` volume) backing the pattern cache, co-occurrence graph, task queue, and router state |
+| **geometric-lens** | 8099 | Python (FastAPI) | Internal `/internal/*` scoring service: C(x) energy scoring, G(x) XGBoost quality prediction, per-step scoring, plus the pattern cache (read + write); owns the SQLite state store (`SQLITE_DB_PATH` on the `lens-state` volume) backing the pattern cache and co-occurrence graph |
 | **sandbox** | 30820 (host) / 8020 (container) | Python (FastAPI) | Isolated code execution, compilation, linting, test running |
 
 ---
@@ -85,28 +85,22 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 
 The proxy is the entry point for chat front-ends. It accepts user messages on `/v1/agent` (typed event stream — what the TUI uses) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. The `/v1/chat/completions` endpoint is a transparent passthrough to llama-server; it is kept for SDK compatibility and does not run the agent loop. See [API.md](API.md) for the full event-type catalogue.
 
-```mermaid
-graph LR
-    subgraph core["Core Loop"]
-        Grammar["Grammar"] --> AgentLoop["Agent Loop"] --> TierClass["Tier Classifier"]
-    end
-    subgraph tools["Tools"]
-        ReadF["read_file"] ~~~ WriteF["write_file"] ~~~ EditF["edit_file"] ~~~ RunCmd["run_command"]
-    end
-    subgraph pipeline["Verify-Repair"]
-        VR["Verify-Repair"] --> BOK["Best-of-K"] --> BV["Build Verifier"]
-    end
-    subgraph format["I/O"]
-        SSE["SSE / Events"] --> V3Bridge["V3 Bridge"] --> ProjDet["Project Detector"]
-    end
+The proxy is 12 Go files, one concern each:
 
-    core --> tools --> pipeline --> format
-
-    style core fill:#1a3a5c,color:#fff
-    style tools fill:#333,color:#fff
-    style pipeline fill:#2d5016,color:#fff
-    style format fill:#555,color:#fff
-```
+| File | Owns |
+|---|---|
+| `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
+| `agent.go` | The agent loop: turn state, LLM calls, plan generation, pattern-context injection, stuck-loop breakers |
+| `tools.go` | The 14 tool definitions + executors, tier classification, tool-call grammar |
+| `gates.go` | Honesty/plan gates: claim-check, structural, syntax, plan-adherence, plan-reminder, asset lint |
+| `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
+| `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
+| `permissions.go` | Permission gate (`/v1/permission`), trust mode, hard-blocked patterns |
+| `lens.go` | Lens scoring calls, lens-sample banking (`/feedback`), calibration status |
+| `guardrails.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip) |
+| `events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
+| `v3_bridge.go` | SSE client for v3-service `/v3/generate` + `/v3/plan` |
+| `types.go` | Shared types, tiers, turn caps |
 
 ### Agent Loop Flow
 
@@ -175,7 +169,7 @@ Four model-independent defenses compose in the proxy:
    warns against whole-file/whole-function use; structural_edit's description
    says REQUIRED for >10-line / whole-node swaps; write_file's says
    NEW files only.
-2. **Conditional GBNF grammar** (`proxy/grammar.go`,
+2. **Conditional GBNF grammar** (`proxy/tools.go`,
    `proxy/agent.go:stepExclusions`). When a write_file is rejected on
    an existing .py/.html/.htm file >5 lines, the next LLM call is
    constrained by a GBNF grammar that bans edit_file and write_file
@@ -250,7 +244,9 @@ See [PLAN_MODE.md](PLAN_MODE.md) for the full flow, components, tunables, skip c
 
 ### Safety Limits
 
-Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails.go` and `proxy/agent.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `structural_edit`, and every `write_file` branch; under BypassV3 only the non-iterating T0/T1 direct `write_file` skips it, so the demo baseline pane shows the raw model, while the edit paths and the iteration fast-path stay gated in all modes) lives in `proxy/structural_gate.go`. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
+Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails.go` and `proxy/agent.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `structural_edit`, and every `write_file` branch; under BypassV3 only the non-iterating T0/T1 direct `write_file` skips it, so the demo baseline pane shows the raw model, while the edit paths and the iteration fast-path stay gated in all modes) lives in `proxy/gates.go`. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
+
+**Pattern-context injection.** During run setup — next to the symbol-index injection — the proxy asks the lens pattern-cache reader (`POST /internal/patterns/context`) for lessons from previous sessions whose pattern type matches the user message, and injects the top ≤3 as one `[system note]` block (hard 600-char cap). Strictly fail-soft: any error, timeout, or empty result skips the block, so the lens being down never costs a turn. Emits `pattern_context_injected` on the `/v1/agent` stream. `fetchPatternContext` in `proxy/agent.go`; the serving side is § 5 → [Pattern cache](#pattern-cache).
 
 **Fast-path writes during active iteration.** V3 fires on the *first* write of a T2+ file (baseline generation). But once the model has written a file and just saw it fail a run, the next write is a targeted fix in an edit-test-fix loop — it skips V3 (still syntax- and structural-gated) and writes directly. V3's full pipeline is multi-minute per call and, on a file mid-debug, frequently completes without a usable result and falls back anyway; paying that latency per iteration throttles the loop to a handful of cycles. The fast-path keys off `SessionWrites[path]` plus a failed most-recent run referencing the file.
 
@@ -349,18 +345,17 @@ Wait injection appends "Wait, let me reconsider.\n" to request a longer reasonin
 **Phase 3: Repair** (if 0/K pass) — three strategies, sequential with early exit:
 
 - **Failure Analysis**: categorize failures (wrong_algorithm, implementation_bug, edge_case_miss, time_limit, format_error, partial_correct)
-- **Metacognitive Evaluation**: inject compensating constraints derived from the observed failure category
 - **PR-CoT**: 4 perspectives (logical_consistency, information_completeness, biases, alternative_solutions) x (analysis + repair) = ~8 LLM calls, up to 3 rounds
 - **Refinement Loop**: Failure Analysis → Constraint Refinement → Code Gen → Test → Learn. 2 iterations, 120s budget, ~5+ LLM calls each. Cosine distance filtering (>= 0.15) prevents hypothesis repetition
 - **Derivation Chains**: decompose into up to 5 sub-problems, sandbox-verify each, compose final. ~7+ LLM calls
 
 ### Module Map
 
-18 Python modules in `benchmark/v3/`. `v3-service/pipeline.py` orchestrates 13 of them; `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`benchmark/v3_runner.py`), and `ablation_analysis` is a standalone analysis script (not shown):
+The pipeline stages are 17 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 13 of them (12 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR
-    Main["main.py"] --> PS["PlanSearch 1A"]
+    Main["pipeline.py"] --> PS["PlanSearch 1A"]
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
     Main --> BASC["BlendASC 2A"]
@@ -368,19 +363,17 @@ graph LR
     Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
-    Main --> CR["ConstraintRefiner 3B"]
     Main --> PRCOT["PR-CoT 3C"]
     Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
-    Main --> MC["Metacognitive 3F"]
     Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
+    Main --> LLM["LLMClient"]
     Bench --> LF["LensFeedback"]
     Bench --> ES["EmbeddingStore"]
 
     RL --> FA
-    RL --> CR
-    RL --> DC
+    RL --> CR["ConstraintRefiner 3B"]
     BASC --> BF
     REASC --> BF
     LF --> BASC
@@ -400,20 +393,20 @@ graph LR
     style PRCOT fill:#5c3a1a,color:#fff
     style DC fill:#5c3a1a,color:#fff
     style RL fill:#5c3a1a,color:#fff
-    style MC fill:#5c3a1a,color:#fff
     style ACE fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff
+    style LLM fill:#333,color:#fff
     style LF fill:#333,color:#fff
     style ES fill:#333,color:#fff
 ```
 
-Legend: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 3 (repair), gray = utilities. Modules fed by `v3_runner.py` are bench-runner-only; the service does not call them.
+Legend: blue = Phase 1 (generation), green = Phase 2 (selection), brown = Phase 3 (repair), gray = utilities. Modules fed by `v3_runner.py` are bench-runner-only; the service does not call them. The service itself is `main.py` (HTTP handler) → `pipeline.py` (orchestrator) → `planning.py` / `scoring.py` / `symbols.py` / `adapters.py` flat siblings.
 
 ---
 
 ## 5. Geometric Lens
 
-Neural scoring system that evaluates code quality without executing it by analyzing the geometric structure of model embeddings. Runs entirely on CPU. Also serves as the RAG API for project indexing, retrieval, confidence routing, and pattern caching.
+Neural scoring system that evaluates code quality without executing it by analyzing the geometric structure of model embeddings. Runs entirely on CPU. The service surface is internal-only (`/internal/*`): C(x)/G(x) scoring (single-shot and per-step) plus the [pattern cache](#pattern-cache) that feeds lessons from previous sessions back into the agent loop.
 
 #### Why "Geometric Lens"?
 
@@ -442,8 +435,6 @@ graph LR
     EWC["EWC\nFisher information\nprevents catastrophic forgetting"] --> TR
     RB["Replay Buffer\ndomain-stratified\n30% old / 70% new"] --> TR
 
-    MT["Metric Tensor\ndiagonal G(x) in PCA space\n(code exists, not deployed)"] -.-> CORR["Correction Engine\n-α · G⁻¹ · ∇C"]
-
     style EE fill:#333,color:#fff
     style CX fill:#2d5016,color:#fff
     style GX fill:#2d5016,color:#fff
@@ -451,8 +442,6 @@ graph LR
     style TR fill:#1a3a5c,color:#fff
     style EWC fill:#1a3a5c,color:#fff
     style RB fill:#1a3a5c,color:#fff
-    style MT fill:#555,color:#ccc
-    style CORR fill:#555,color:#ccc
 ```
 
 The following figures describe the frozen reference artifacts used for the
@@ -478,61 +467,35 @@ between two different models.
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, the service degrades gracefully: C(x) returns neutral energy, G(x) returns `gx_score: 0.5` and `verdict: "unavailable"`. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
-### RAG / PageIndex V2
+### Pattern cache
+
+Cross-session memory: patterns written after successful runs are served back to future agent loops as context.
 
 ```mermaid
 graph LR
-    subgraph indexing["Indexing Pipeline"]
-        AST["AST Parser\ntree-sitter Python"] --> TB["Tree Builder\nhierarchical index"]
-        TB --> BM25I["BM25 Index\ninverted index, k1=1.5"]
-        TB --> SUM["Summarizer\nLLM-generated summaries"]
-        BM25I --> PERS["Persistence\nJSON to disk"]
-        SUM --> PERS
+    subgraph write["Write path (v3-service, post-run)"]
+        PE["Pattern Extractor"] --> PS["Pattern Store\nSQLite"]
+        PS --> COO["Co-occurrence Graph\nHebbian edge weights"]
     end
 
-    subgraph retrieval["Retrieval"]
-        BM25S["BM25 Searcher\nmin_score=0.1, top_k=20"]
-        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6, max_calls=40"]
-        HYB["Hybrid Retriever\nroutes: bm25_first / tree_only / both"]
-        BM25S --> HYB
-        TreeS --> HYB
+    subgraph read["Read path (/internal/patterns/context)"]
+        CLS["Task-type classifier\n(heuristic, on the task text)"] --> PSC["Pattern Scorer\ntype match × Ebbinghaus decay × success"]
+        PSC --> EXP["1-hop expansion\nco_occurrence.get_linked_patterns"]
+        EXP --> OUT["top-k patterns\n→ proxy [system note] injection"]
     end
 
-    style indexing fill:#1a3a5c,color:#fff
-    style retrieval fill:#2d5016,color:#fff
+    PS --> PSC
+    COO --> EXP
+
+    style write fill:#1a3a5c,color:#fff
+    style read fill:#2d5016,color:#fff
 ```
 
-### Confidence Router & Pattern Cache
+Modules: `geometric-lens/cache/{pattern_store, pattern_extractor, pattern_scorer, co_occurrence, seed_patterns}.py`. Matching is pattern-type + recency + success rate — there is no retrieval index; the store seeds itself with `seed_patterns` on first boot, and every serve updates the pattern's access stats. The consumer side is the proxy's pattern-context injection (§ 3).
 
-```mermaid
-graph LR
-    subgraph router["Confidence Router"]
-        SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
-        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
-        TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
-        FB["Feedback Recorder\nSQLite-backed"]
-        FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
-        SIG --> DIFF --> TS --> FC
-        FB --> TS
-    end
+<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
 
-    subgraph cache["Pattern Cache"]
-        PS["Pattern Store\nSQLite: STM (100) / LTM / PERSISTENT"]
-        PM["Pattern Matcher\nBM25 over summaries"]
-        PE["Pattern Extractor\nLLM-driven"]
-        PSC["Pattern Scorer\nEbbinghaus decay"]
-        COO["Co-occurrence Graph\nlinked pattern retrieval"]
-        PE --> PS
-        PS --> PM
-        PM --> PSC
-        PS --> COO
-    end
-
-    style router fill:#5c3a1a,color:#fff
-    style cache fill:#5c3a1a,color:#fff
-```
-
-4 routes with cost-weighted Thompson Sampling: CACHE_HIT (cost=1, k=0) → FAST_PATH (cost=50, k=1) → STANDARD (cost=300, k=5) → HARD_PATH (cost=1500, k=20).
+> **Removed subsystems.** Earlier releases shipped a RAG/PageIndex project indexer, a BM25 pattern matcher, and a Thompson-Sampling confidence router inside the lens. They were reachable only through lens endpoints nothing in the product called, and were removed in the 2026-08 simplification campaign (see CHANGELOG). The pattern cache above is what remains of that stack, rebuilt around a single always-on reader.
 
 ---
 
