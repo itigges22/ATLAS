@@ -456,6 +456,28 @@ lesson from the 2026-08-05 concurrent-agent incident).
 
 ---
 
+## Lens healthcheck: the obvious fix is a startup deadlock (2026-08-01)
+
+`docker-compose.yml` probes the lens with `/health`, which returns 200
+unconditionally by design — so a self-test-failed lens is invisible to
+Docker while the proxy already gates correctly on `/ready`
+(proxy/main.go handleReady). The tempting one-liner (swap the probe to
+`/ready`) **must not be applied as-is**:
+
+- `v3-service` and `atlas-proxy` both `depends_on: geometric-lens:
+  condition: service_healthy`.
+- `/ready` 503s whenever the lens self-test fails — **including the
+  ordinary fresh-install case** ("lens model files missing — run
+  `atlas lens build`").
+
+So the naive swap leaves a brand-new install permanently unhealthy and
+v3-service + atlas-proxy never start at all. Any real fix needs one of:
+relax those two `depends_on` to `service_started`; or bound the failure
+(`start_period` + finite `retries`, so the container reports unhealthy
+without blocking dependents); or gate the probe on
+`GEOMETRIC_LENS_ENABLED`. Decide deliberately — this is a
+first-run-experience change, not a healthcheck tweak.
+
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
 - `v3-service/graph/` — clean layered DAG, no cycles, each file one concern. Minor: trim
