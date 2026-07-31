@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from stages.llm_client import extract_code
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
+from stages import cxgx_gate
 from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
 from stages.failure_analysis import FailingCandidate
@@ -31,14 +32,6 @@ import symbols
 BASE_TEMPERATURE = 0.6
 DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
-
-# Candidate count when the probe fails, pinned to the bench orchestrator's
-# own decision. The C(x)-only dynamic allocator's k tracked the lens's
-# normalization scale, not task difficulty, across the H200 join — see the
-# blend_asc removal commit. The tier feeds BudgetForcing prompt/max-token
-# selection for the DivSampling fill.
-DEFAULT_K = 3
-DEFAULT_TIER = "standard"
 
 
 # --- Stage telemetry ---------------------------------------------------------
@@ -512,14 +505,27 @@ class V3PipelineService:
                     return False, out, f"Self-test:{p}/{total}. "+";".join(fails[:3]), verification_evidence
             return verify_build_if_requested(out, err)
 
-        # Score and test probe with self-generated tests
+        # Score and test probe with self-generated tests. The probe is the
+        # only candidate the CxGx gate below can see, so it is scored with
+        # the combined C(x)+G(x) call — one embedding extraction, both
+        # models — rather than C(x) alone.
+        probe_scores = dict(scoring.NEUTRAL_COMBINED)
         probe_energy_raw, probe_energy_norm = 0.0, 0.5
         probe_cx_calibrated = False
         probe_passed = False
         if probe_code:
-            probe_energy_raw, probe_energy_norm, probe_cx_calibrated = scoring.score_candidate(probe_code)
+            probe_scores = scoring.score_candidate_combined(probe_code)
+            probe_energy_raw = probe_scores["cx_energy"]
+            probe_energy_norm = probe_scores["cx_normalized"]
+            probe_cx_calibrated = probe_scores["cx_calibrated"]
             norm_label = f"{probe_energy_norm:.2f}" if probe_cx_calibrated else "uncalibrated"
-            emit("probe_scored", f"C(x)={probe_energy_raw:.2f} norm={norm_label}")
+            emit("probe_scored",
+                 f"C(x)={probe_energy_raw:.2f} norm={norm_label} "
+                 f"G(x)={probe_scores['gx_score']:.2f} "
+                 f"({probe_scores['verdict']})",
+                 gx_score=probe_scores["gx_score"],
+                 gx_available=probe_scores["gx_available"],
+                 verdict=probe_scores["verdict"])
             probe_passed, probe_stdout, probe_stderr, probe_evidence = verified_sandbox(probe_code)
             emit("probe_sandbox", f"passed={probe_passed} stderr={probe_stderr[:80] if probe_stderr else ''}")
             result["total_tokens"] += tokens
@@ -536,12 +542,39 @@ class V3PipelineService:
             result["events"] = events
             return result
 
-        # ===== PHASE 2: K ALLOCATION (pinned) =====
+        # ===== PHASE 2: CxGx K ALLOCATION =====
+        # The probe failed verification, so this task is not trivial: C(x)
+        # picks a base tier, G(x) escalates it, and k never drops below the
+        # gate's k=3 floor (what this phase allocated unconditionally
+        # before the gate existed).
+        #
+        # Live-path difference from the bench the gate was measured on: the
+        # proxy's V3 bridge abandons this call after ATLAS_V3_TIMEOUT
+        # (default 180s), a cap the bench never had. An unbounded escalation
+        # to k=8 here would spend the whole budget on generation and hand
+        # the user a timeout fallback instead of the k=3 answer the clock
+        # could have produced — the failure mode the phase-3 refinement gate
+        # already fixes. So the remaining wall-clock and the per-call
+        # latency observed on THIS task go into the allocation, and the gate
+        # lowers the tier to what the budget can actually generate. The
+        # floor is not budget-dependent: k=3 is what would have run anyway.
         check_client()
         emit("phase2", "Allocating compute budget...")
-        k, budget_tier = DEFAULT_K, DEFAULT_TIER
+        alloc = cxgx_gate.allocate(
+            cx_normalized=probe_energy_norm,
+            cx_calibrated=probe_cx_calibrated,
+            gx_score=probe_scores["gx_score"],
+            gx_available=probe_scores["gx_available"],
+            gx_verdict=probe_scores["verdict"],
+            remaining_ms=_remaining_budget_ms(start),
+            observed_llm_call_ms=getattr(llm, "avg_call_ms", 0.0),
+        )
+        k, budget_tier = alloc.k, alloc.tier
         bf_tier = budget_tier
-        emit("phase2_allocated", f"k={k} tier={budget_tier}", k=k, tier=budget_tier)
+        emit("phase2_allocated", f"k={k} tier={budget_tier}",
+             k=k, tier=budget_tier, base_tier=alloc.base_tier,
+             gx_escalation=alloc.gx_escalation,
+             capped_from=alloc.capped_from, reason=alloc.reason)
 
         # ===== PHASE 1: CONSTRAINT-DIVERSE CANDIDATE GENERATION =====
         emit("phase1", f"Generating {k} diverse candidates...", k=k)

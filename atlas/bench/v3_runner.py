@@ -12,7 +12,8 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
       - Sandbox test all k
       - If any pass → Lens selects best → DONE
 
-    Phase 2: Compute allocation (k=3 pinned)
+    Phase 2: CxGx compute allocation (probe C(x) tier + G(x) escalation,
+             floored at k=3)
 
     Phase 3: Verified iterative refinement (if 0/k pass)
       - PR-CoT repair (quick fix, 1-2 attempts)
@@ -52,11 +53,14 @@ from atlas.bench.config import config
 from atlas.bench.models import BenchmarkTask
 from atlas.bench.runner import execute_code, execute_code_stdio
 from atlas.bench.geo_learning import extract_embedding_urllib
-from atlas.bench.best_of_k import score_candidate
+from atlas.bench.best_of_k import (
+    NEUTRAL_COMBINED, score_candidate, score_candidate_combined,
+)
 
 # V3 pipeline stages (shared with the V3 service)
 from stages.llm_client import chat_completion, chatml_to_messages, extract_code
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
+from stages import cxgx_gate
 from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
 from stages.failure_analysis import (
@@ -541,12 +545,14 @@ class V3Pipeline:
         latency = {}
 
         # ===== PROBE: quick candidate for a data-driven early exit =====
-        # Generate a single candidate; its lens energy feeds candidate
-        # sorting and selection. Uses "standard" tier (up to 2048 thinking
-        # tokens) — matches Qwen3.5 published benchmark settings where
-        # thinking is enabled. Gives the model enough reasoning budget to
-        # solve harder tasks at probe, reducing cascade into Phase 3.
+        # Generate a single candidate; its lens scores feed candidate
+        # sorting, selection, and the CxGx allocation gate below. Uses
+        # "standard" tier (up to 2048 thinking tokens) — matches Qwen3.5
+        # published benchmark settings where thinking is enabled. Gives the
+        # model enough reasoning budget to solve harder tasks at probe,
+        # reducing cascade into Phase 3.
         probe_candidate = None
+        probe_scores = dict(NEUTRAL_COMBINED)
 
         if self.enable_phase1:
             probe_start = time.time()
@@ -557,12 +563,27 @@ class V3Pipeline:
                 )
                 probe_code = extract_code(response)
                 if probe_code:
+                    # Combined C(x)+G(x) probe scoring: one embedding
+                    # extraction feeds the cost field AND the XGBoost
+                    # quality classifier, so the gate below sees both
+                    # signals at the price of the C(x) call it replaced.
                     try:
-                        energy_raw, energy_norm = score_candidate(
+                        probe_scores = score_candidate_combined(
                             probe_code, LENS_URL,
                         )
+                        energy_raw = probe_scores["cx_energy"]
+                        energy_norm = probe_scores["cx_normalized"]
                     except Exception:
                         energy_raw, energy_norm = 0.0, 0.5
+                    result["telemetry"]["probe_cx_normalized"] = energy_norm
+                    result["telemetry"]["probe_cx_calibrated"] = (
+                        probe_scores["cx_calibrated"])
+                    result["telemetry"]["probe_gx_score"] = (
+                        probe_scores["gx_score"])
+                    result["telemetry"]["probe_gx_available"] = (
+                        probe_scores["gx_available"])
+                    result["telemetry"]["probe_gx_verdict"] = (
+                        probe_scores["verdict"])
                     probe_candidate = {
                         "index": 0,
                         "code": probe_code,
@@ -606,23 +627,41 @@ class V3Pipeline:
                 pass
             result["telemetry"]["probe_sandbox_passed"] = probe_passed_sandbox
 
-        # ===== Phase 2: K + Budget Tier (k=3 pinned) =====
+        # ===== Phase 2: CxGx K + Budget Tier allocation =====
         phase2_start = time.time()
         if probe_passed_sandbox:
             # Data-driven early exit: probe already passes sandbox.
             # No need to generate more candidates.
             k = 1
             budget_tier = "nothink"
+            bf_tier = self.budget_forcing.select_tier()
             result["telemetry"]["probe_early_exit"] = True
         else:
-            # Probe FAILED sandbox — we need diverse candidates. k is
-            # pinned to 3 so PlanSearch runs: the C(x)-only dynamic
-            # allocator's k tracked the lens's normalization scale, not
-            # task difficulty (H200 join), and short probe code on 9B
-            # normalized to <0.05 — always mapping to k=1.
-            k = 3
-            budget_tier = "standard"
-        bf_tier = self.budget_forcing.select_tier()
+            # Probe FAILED sandbox — we need diverse candidates, and the
+            # probe's own lens scores say how many. C(x) normalized energy
+            # picks a base tier, G(x) escalates it when the quality
+            # classifier contradicts C(x), and k never falls below 3.
+            #
+            # The bench has no outer wall-clock cap (the live pipeline's
+            # ATLAS_V3_TIMEOUT has no counterpart here), so no budget cap
+            # is passed: this is the arm the four-way triangulation
+            # measured — 66.9% gated vs 64.6% fixed-k=3 vs 61.7% for the
+            # same tier mix shuffled across tasks, n=175/arm.
+            alloc = cxgx_gate.allocate(
+                cx_normalized=probe_scores["cx_normalized"],
+                cx_calibrated=probe_scores["cx_calibrated"],
+                gx_score=probe_scores["gx_score"],
+                gx_available=probe_scores["gx_available"],
+                gx_verdict=probe_scores["verdict"],
+            )
+            k = alloc.k
+            budget_tier = alloc.tier
+            bf_tier = alloc.tier
+            result["telemetry"]["gated_k"] = alloc.k
+            result["telemetry"]["gated_tier"] = alloc.tier
+            result["telemetry"]["gated_base_tier"] = alloc.base_tier
+            result["telemetry"]["gx_escalation"] = alloc.gx_escalation
+            result["telemetry"]["alloc_reason"] = alloc.reason
 
         latency["phase2_alloc_ms"] = (time.time() - phase2_start) * 1000
         result["telemetry"]["adaptive_k"] = k
@@ -1305,7 +1344,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
                 lens_data = json.loads(resp.read().decode('utf-8'))
             if lens_data.get("error"):
                 print(f"  Lens model: NOT LOADED ({lens_data['error']})")
-                print("    Probe scoring unavailable — k=3 as always")
+                print("    Probe scoring unavailable — CxGx gate falls back to k=3")
             else:
                 print(f"  Lens model: OK (energy={lens_data.get('energy', '?')})")
             lens_ok = True
@@ -1314,7 +1353,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
             if lens_attempt == 0:
                 time.sleep(3)
     if not lens_ok:
-        print("  Lens model: UNAVAILABLE — Phase 2 will use default k=3")
+        print("  Lens model: UNAVAILABLE — CxGx gate falls back to k=3")
 
     # Load dataset
     print("\nLoading LiveCodeBench...", end=" ", flush=True)

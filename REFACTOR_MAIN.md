@@ -360,21 +360,42 @@ as-wired. Bench-learned fixes (k=3 pin, S* stdin adapter) never reached live.
 | embedding_store | KEEP (bench) | feeds lens training |
 | llm_client | KEEP | the model-agnosticism layer |
 | budget_forcing | SIMPLIFY → tokens table (⏸ owner-data) | Wait-injection = 0 callers; live thinking silently off |
-| blend_asc dynamic k | ✅ **CUT everywhere, k=3 pinned** (1c64a3d) | +0.0pp; H200: allocation tracked normalization scale, not task; see cxgx-patch note below |
+| blend_asc dynamic k | ✅ **CUT everywhere, k=3 pinned** (1c64a3d) | +0.0pp; H200: allocation tracked normalization scale, not task; superseded by cxgx_gate below |
+| cxgx_gate | ✅ **SHIPPED both paths, default on** | 66.9% gated vs 64.6% fixed-k=3 vs 61.7% randomgate at n=175/arm; k>=3 floor makes worst case = the pin it replaces |
 | s_star | ✅ **CUT everywhere** (e2e6b03) | +0.0pp; H200: 118 tiebreaks all 0-0, 110/110 winners = lens min-energy, WITH the fixed stdin adapter |
 | derivation_chains | ✅ **CUT** (466a114) | **0/485 H200 rescues** (0/194 local), ≤17 calls, verification fiction; roadmap already prescribed removal |
 | ace_pipeline | ✅ **CUT** (6c4ee2b) | learned task-id strings into a playbook discarded at exit |
 | reasc | ✅ **CUT** (6c4ee2b) | runner recorded its verdict and ignored it |
 | lens_feedback | MEASURE (bench flag A/B) | postdates ablation |
 
-**Future feature preserved (2026-07-31, k-pin commit):** the C(x)-only
-dynamic allocator was cut (its k tracked the lens normalization scale, not
-task difficulty), but the owner's **cxgx-patch allocator** (C(x) normalized
-+ G(x) XGBoost escalation + k>=3 floors) measured **+2..+5 pp at 79% of
-brute-force cost** on the H200 dataset. The code+data live in the owner's
-dataset at `/home/isaac/atlas-benchmark-data/cxgx-patch/` — candidate for a
-proper feature behind a bench A/B. Deliberately NOT copied into the tree
-with the cut.
+**CxGx allocation gate — shipped (2026-07-31).** The C(x)-only allocator
+stayed cut (its k tracked the lens normalization scale, not task
+difficulty, and with no floor it gave k=1 to 60% of tasks that had just
+failed the probe). Its successor is in the tree as
+`v3-service/stages/cxgx_gate.py`, shared by both orchestrators: C(x)
+normalized energy picks a base tier, the G(x) XGBoost score escalates it
++1/+2 against the model's calibrated severe boundary, and a hard **k >= 3
+floor** means the gate can only add candidates to the old pin, never
+starve generation. The four-arm triangulation on the owner's H200 dataset
+(n=175/arm): gated **66.9%** · fixed k=3 64.6% · same tier mix shuffled
+across tasks 61.7% · all-k=8 67.4% at ~27% more tokens; reproduced on the
+v5 task set at 83.4% vs 80.6%. The shuffled arm is the load-bearing
+control — beating it by 5.1 pp at matched spend is what says the lens
+signal carries information rather than the compute alone.
+
+Two deliberate divergences from the owner's `cxgx-patch/v3_runner.py`
+reference: (1) the live path is budget-aware — the proxy's
+`ATLAS_V3_TIMEOUT` cap has no bench counterpart, so an escalation that
+cannot be generated inside the remaining wall-clock is lowered to what can
+be (same reasoning as the aada0c4 refinement gate), reserving one
+refinement iteration so the extra candidates cannot starve Phase 3;
+(2) the G(x) bands are anchored to the model's `gx_thresholds.json` severe
+boundary rather than hardcoded at 0.60/0.45, which are that boundary and
+0.75x it for the benched model — hardcoding them would repeat the defect
+that made the lens's own thresholds per-model. The `ATLAS_CXGX_GATE` /
+`_FORCE_TIER` / `_RANDOM_MAP` env arms and `random_tiers_v6.json` stayed in
+the dataset: they are the experiment's ablation scaffolding, and the
+experiment is already run.
 
 **Composition defects D1-D8** (full text in review): D1 veto→repair-pool hole
 (vetoed stub can ship) · D2 duplicate self-test gen w/ None-downgrade · D3 two
@@ -387,10 +408,11 @@ stage telemetry nonexistent (docstrings advertise bench-only JSONL).
 dataset arrived (/home/isaac/atlas-benchmark-data) and the CUT WAVE IS
 EXECUTED (2026-07-31, local commits on dev): derivation 466a114 · S*
 e2e6b03 · k-pin 1c64a3d · ACE+ReASC 6c4ee2b · refinement budget gate
-aada0c4 · proxy max_tokens clamp (owner-D8, this commit). Stage tree
-17 → 12 modules. Worst-case live LLM calls ≈47 → ≈27 (≈21 on the
-interactive path when the budget gate forecloses refinement); k is now
-hard-bounded at 3. Owner root-cause note validated: the TUI-visible
+aada0c4 · proxy max_tokens clamp (owner-D8). Stage tree 17 → 12 modules,
+then 13 with the CxGx gate. Worst-case live LLM calls ≈47 → ≈27 (≈21 on
+the interactive path when the budget gate forecloses refinement); k is
+floored at 3 and escalates only as far as the wall-clock allows (bench:
+up to 8, unbounded). Owner root-cause note validated: the TUI-visible
 hangs-then-baseline was derivation burning the 180s cap; stub writes = D1.
 
 **H200 ops findings (record-only, out of repo scope except D8/A3):**

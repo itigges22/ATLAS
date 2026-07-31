@@ -102,7 +102,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_llm_start` / `v3_llm_end` | V3's internal LLMAdapter started / finished a call (planner, candidate generation, repair, etc.) | `detail` (string), `call` (int), `tokens` (int, on `llm_end`), `elapsed_ms` (int, on `llm_end`), `max_tokens`, `temperature` (on `llm_start`) |
 | `v3_token` | V3's internal LLM streamed a token | `text` (delta string) |
 | `v3_reasoning_token` | V3's internal LLM streamed a `reasoning_content` delta. Separate from `reasoning_token` so it targets the V3 streaming row rather than the agent's LLM row. | `text` (delta string) |
-| `v3_phase` | V3 phase transition (`phase1`, `phase2`, `phase2_allocated`) | `stage`, `detail`, plus `k` (candidate count) and `tier` on `phase2_allocated` |
+| `v3_phase` | V3 phase transition (`phase1`, `phase2`, `phase2_allocated`) | `stage`, `detail`, plus the CxGx allocation on `phase2_allocated`: `k` (candidate count, never below 3), `tier`, `base_tier` (the tier C(x) picked before escalation), `gx_escalation` (int, 0/1/2 tiers added by G(x)), `capped_from` (string, the tier before the wall-clock cap lowered it; empty when uncapped), `reason` (`gated`\|`budget_capped`\|`uncalibrated`) |
 | `v3_plansearch` | PlanSearch step (`plansearch`, `plansearch_done`, `plansearch_error`) | `stage`, `detail`, `plans` (int), `candidates` (int, on `_done`), `tokens` (int, on `_done`) |
 | `v3_divsampling` | DivSampling step (`divsampling`, `divsampling_done`, `divsampling_error`) | `stage`, `detail`, `slots` (int), `total` (int, on `_done`) |
 | `v3_sandbox` | Per-candidate sandbox test (`sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`) | `stage`, `detail`, `index` (int), `elapsed_ms` (int), `energy` (float, on `_pass`), `stderr` (string, first 120 chars on `_fail`), `passed` / `total` (on `_done`) |
@@ -488,9 +488,9 @@ All fields are optional except the task itself. `tier` defaults to 2.
 **Response (SSE stream):**
 ```
 data: {"stage": "probe", "detail": "Generating probe candidate..."}
-data: {"stage": "probe_scored", "detail": "C(x)=0.72 norm=0.68"}
-data: {"stage": "phase2_allocated", "detail": "k=3 tier=standard", "data": {"k": 3, "tier": "standard"}}
-data: {"stage": "plansearch", "detail": "Generating 3 plans...", "data": {"plans": 3}}
+data: {"stage": "probe_scored", "detail": "C(x)=0.72 norm=0.68 G(x)=0.81 (likely_correct)", "data": {"gx_score": 0.81, "gx_available": true, "verdict": "likely_correct"}}
+data: {"stage": "phase2_allocated", "detail": "k=3 tier=standard", "data": {"k": 3, "tier": "standard", "base_tier": "standard", "gx_escalation": 0, "capped_from": "", "reason": "gated"}}
+data: {"stage": "plansearch", "detail": "Generating 2 plans...", "data": {"plans": 2}}
 data: {"stage": "sandbox_test", "detail": "Testing 3 candidates...", "data": {"candidates": 3}}
 data: {"stage": "sandbox_pass", "detail": "Candidate 1 passed", "data": {"index": 1, "elapsed_ms": 420, "energy": 0.34}}
 data: {"stage": "sandbox_done", "detail": "1/3 passed", "data": {"passed": 1, "total": 3}}

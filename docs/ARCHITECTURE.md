@@ -281,7 +281,7 @@ flowchart LR
     SB1 --> Pass1{"Pass?"}
     Pass1 -->|"Yes"| Done["Done"]
 
-    Pass1 -->|"No"| PS["PlanSearch"] --> DS["DivSampling"] --> BF["BudgetForcing"] --> Build["Build Check"] --> Score2["Score K"] --> SB2["Test K"]
+    Pass1 -->|"No"| Alloc["CxGx Gate\nk >= 3"] --> PS["PlanSearch"] --> DS["DivSampling"] --> BF["BudgetForcing"] --> Build["Build Check"] --> Score2["Score K"] --> SB2["Test K"]
 
     SB2 --> AnyPass{"Passed?"}
     AnyPass -->|"1+"| Select["Lens Select"] --> Done
@@ -294,6 +294,7 @@ flowchart LR
     style Entry fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
     style Probe fill:#1a3a5c,color:#fff
+    style Alloc fill:#1a3a5c,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
@@ -314,9 +315,15 @@ Legend: blue = generation, green = verification/selection, brown = repair.
 
 **Phase 0: Probe** generates a single baseline candidate with progressive budget retry (light → standard → nothink). It is scored with the selected model's C(x)/G(x) artifacts and tested in the sandbox. If it passes, the pipeline exits immediately.
 
+**Candidate Allocation: the CxGx gate** (emitted as `phase2` / `phase2_allocated`) decides how many candidates the failed probe earns. The probe's combined C(x)+G(x) score (one embedding extraction, both models) drives a two-step rule: the calibrated C(x) normalized energy picks a base tier on the same ladder Budget Forcing uses, and the G(x) quality score escalates that tier by +1 when it falls below the model's calibrated severe boundary and +2 when it falls well below (0.75x it) — the case where the probe looks cheap to C(x) but wrong to G(x). The tier sets k (`nothink` 1, `standard` 3, `hard` 5, `extreme` 8) under a hard **k >= 3 floor**, so the gate can only add candidates to the previously pinned k=3, never remove them; its worst case is the old behavior. Both signals require this model's calibration files (`cx_normalization.json`, `gx_thresholds.json`): a missing, unreachable, or uncalibrated lens allocates exactly k=3 at `standard`, so an uncalibrated bundle runs the pipeline it ran before rather than routing on a scale that means nothing for it.
+
+The floor is the difference between this and the C(x)-only allocator removed earlier: that one had no floor, so it handed k=1 to tasks whose probe had *just failed* and measured +0.0 pp. Four-arm triangulation at n=175/arm: gated 66.9%, fixed k=3 64.6%, same tier mix shuffled across tasks 61.7%, everything at k=8 67.4% for ~27% more tokens. Beating the shuffled arm by 5.1 pp at matched spend is what says the lens signal carries information rather than the compute alone.
+
+Live-path difference: the proxy's V3 bridge abandons a pipeline call after `ATLAS_V3_TIMEOUT` (default 180s), a cap the bench never had, so an unbounded escalation to k=8 would spend the budget on generation and return a timeout fallback instead of the k=3 answer the clock could have produced. The live orchestrator therefore passes its remaining wall-clock and the per-call latency observed on that task, and the gate lowers the tier to what the budget can actually generate — reserving one refinement iteration so the escalation cannot starve Phase 3 — never below the floor. The bench runner passes no budget and allocates exactly what was measured. `v3-service/stages/cxgx_gate.py`, shared by both orchestrators.
+
 **Phase 1: Constraint-Driven Generation**
 
-- **PlanSearch** generates 3 structurally different implementation plans by extracting distinct constraint sets
+- **PlanSearch** generates structurally different implementation plans by extracting distinct constraint sets — one per allocated candidate slot the probe did not already fill (k-1)
 - **DivSampling** applies perturbation diversity: 4 roles (competitive_programmer, systems_engineer, mathematician, pragmatist) + 4 instructions (step_by_step, edge_case_first, complexity_aware, constraint_driven) + 4 styles (functional, pythonic, optimize_iteratively, structured)
 - **Budget Forcing** controls thinking token allocation:
 
@@ -344,11 +351,12 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 ### Module Map
 
-The pipeline stages are 12 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 10 of them (9 directly; `constraint_refinement` via the refinement loop); `lens_feedback` and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
+The pipeline stages are 13 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 11 of them (10 directly; `constraint_refinement` via the refinement loop); `lens_feedback` and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR
-    Main["pipeline.py"] --> PS["PlanSearch 1A"]
+    Main["pipeline.py"] --> CG["CxGx Gate"]
+    Main --> PS["PlanSearch 1A"]
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
     Main --> CS["CandidateSelection"]
@@ -362,10 +370,13 @@ graph LR
 
     RL --> FA
     RL --> CR["ConstraintRefiner 3B"]
+    CG -->|"tier table"| BF
+    CG -->|"budget helpers"| RL
     LF --> BF
 
     style Main fill:#333,color:#fff
     style Bench fill:#333,color:#fff
+    style CG fill:#1a3a5c,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff

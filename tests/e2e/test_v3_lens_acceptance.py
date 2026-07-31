@@ -205,9 +205,11 @@ class _FakeLensHandler(http.server.BaseHTTPRequestHandler):
                 energy, norm = 5.0, 0.50
             else:
                 energy, norm = 9.0, 0.15
-            self._reply({"cx_energy": energy, "cx_normalized": norm,
+            self._reply({"enabled": True,
+                         "cx_energy": energy, "cx_normalized": norm,
                          "cx_calibrated": True,
-                         "gx_score": 0.9, "gx_available": True})
+                         "gx_score": 0.9, "gx_available": True,
+                         "verdict": "likely_correct"})
         elif self.path == "/internal/lens/score-per-step":
             # Healthy per-step aggregate: gx_score_min well above the
             # severe threshold, so the lens veto must NOT fire.

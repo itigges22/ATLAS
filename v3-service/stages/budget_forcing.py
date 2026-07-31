@@ -187,6 +187,17 @@ def select_tier(raw_energy: Optional[float] = None,
         return "extreme"
 
 
+def get_max_tokens(tier: str) -> int:
+    """Return the max token budget for a tier (thinking + output).
+
+    Adds a 4096-token buffer for code output on top of the thinking budget.
+    """
+    tier_config = BUDGET_TIERS.get(tier, BUDGET_TIERS["standard"])
+    if tier == "nothink":
+        return 4096  # Code output only, no thinking overhead
+    return tier_config["max_thinking"] + 4096
+
+
 def get_system_prompt(tier: str) -> str:
     """Return the system prompt for a given budget tier."""
     if tier == "nothink":
@@ -263,14 +274,9 @@ class BudgetForcing:
         )
 
     def get_max_tokens(self, tier: str) -> int:
-        """Return the max token budget for a tier (thinking + output).
-
-        Adds a 4096-token buffer for code output on top of the thinking budget.
-        """
-        tier_config = BUDGET_TIERS.get(tier, BUDGET_TIERS["standard"])
-        if tier == "nothink":
-            return 4096  # Code output only, no thinking overhead
-        return tier_config["max_thinking"] + 4096
+        """Return the max token budget for a tier. Delegates to the
+        module-level get_max_tokens()."""
+        return get_max_tokens(tier)
 
     def log_event(self, task_id: str, tier: str,
                   raw_energy: Optional[float] = None,

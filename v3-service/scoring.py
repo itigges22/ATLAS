@@ -69,12 +69,25 @@ def score_candidate_per_step(code: str) -> dict:
         return {}
 
 
-def score_candidate(code: str) -> Tuple[float, float, bool]:
-    """Score code with Geometric Lens C(x).
+NEUTRAL_COMBINED = {
+    "cx_energy": 0.0, "cx_normalized": 0.5, "cx_calibrated": False,
+    "gx_score": 0.5, "gx_available": False, "verdict": "unavailable",
+}
 
-    Returns ``(raw_energy, normalized_energy, calibrated)``. The normalized
-    value is neutral when this model has no calibration and must not drive
-    adaptive routing in that case.
+
+def score_candidate_combined(code: str) -> Dict[str, Any]:
+    """Score code with Geometric Lens C(x) AND G(x) in one call.
+
+    `/internal/lens/gx-score` extracts the embedding once and runs both
+    models on it, so the pair costs no more than C(x) alone. Returns
+    ``cx_energy``, ``cx_normalized``, ``cx_calibrated``, ``gx_score``,
+    ``gx_available`` and ``verdict``; the CxGx allocation gate reads all
+    six, everything else reads the C(x) three through score_candidate.
+
+    Fail-soft: any transport error, a disabled lens, or a malformed body
+    yields the neutral dict — ``cx_calibrated``/``gx_available`` false, so
+    callers can tell "the lens said neutral" from "the lens said nothing"
+    and the gate degrades to its k=3 floor instead of routing on noise.
 
     Timeout note: 10s was tight under load — the lens shares the box with
     V3's streaming generator and llama-server, and a single hot probe
@@ -91,14 +104,30 @@ def score_candidate(code: str) -> Tuple[float, float, bool]:
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
-            return (
-                data.get("cx_energy", 0.0),
-                data.get("cx_normalized", 0.5),
-                bool(data.get("cx_calibrated", False)),
-            )
+        if not data.get("enabled", False):
+            return dict(NEUTRAL_COMBINED)
+        return {
+            "cx_energy": data.get("cx_energy", 0.0),
+            "cx_normalized": data.get("cx_normalized", 0.5),
+            "cx_calibrated": bool(data.get("cx_calibrated", False)),
+            "gx_score": data.get("gx_score", 0.5),
+            "gx_available": bool(data.get("gx_available", False)),
+            "verdict": data.get("verdict", "unavailable"),
+        }
     except Exception as e:
         print(f"  [lens] score_candidate failed: {e} — using neutral uncalibrated score", flush=True)
-        return 0.0, 0.5, False
+        return dict(NEUTRAL_COMBINED)
+
+
+def score_candidate(code: str) -> Tuple[float, float, bool]:
+    """Score code with Geometric Lens C(x).
+
+    Returns ``(raw_energy, normalized_energy, calibrated)``. The normalized
+    value is neutral when this model has no calibration and must not drive
+    adaptive routing in that case.
+    """
+    d = score_candidate_combined(code)
+    return d["cx_energy"], d["cx_normalized"], d["cx_calibrated"]
 
 
 # --- Task-type classifier (PC-022) -------------------------------------------
