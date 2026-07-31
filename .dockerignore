@@ -18,31 +18,22 @@ geometric-lens/
 sandbox/
 inference/
 templates/
-training_data/
-plans/
 docs/
 tests/
 
 # Local-only state
 .atlas/
-.aider*
-!.aider.model.settings.yml
-!.aider.model.metadata.json
 .claude/
 *claude*
 *Claude*
 CLAUDE.md
 ISSUES.md
-DELETE_BEFORE_PUSH/
 
 # Heavy artifacts
 models/
 data/
 projects/
 docs/reports/ablation/
-v2_5_results/
-v2_5_1_results/
-v2_5_1/
 # Not COPY'd by the v3 image (stages/ ships from v3-service/); also holds
 # heavy runtime output (results/, datasets/.cache/).
 benchmark/
@@ -78,7 +69,6 @@ node_modules/
 *.crt
 secrets/
 *secret*
-.jwt_secret
 atlas.conf
 
 # IDE / OS

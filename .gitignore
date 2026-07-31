@@ -4,7 +4,6 @@
 
 # ----- User Configuration -----
 atlas.conf
-.jwt_secret
 *.local.conf
 *.local
 # Compose dev-mode override (local copy of docker-compose.override.yml.example)
@@ -89,7 +88,6 @@ logs/
 
 # ----- Data directories -----
 data/
-training_data/
 projects/
 
 # ----- Secrets -----
@@ -130,18 +128,6 @@ bin/
 *-darwin-*
 *-linux-*
 
-# ----- Development artifacts -----
-validation_results.json
-validate_geometric_lens.py
-v2_verification_report.md
-
-# ----- V1 vestiges (embedding-service replaced; V2.5 uses nomic-embed sidecar) -----
-embedding-service/
-
-# ----- V1 manifest templates (Qdrant and embedding-service removed in V2) -----
-templates/qdrant-deployment.yaml.tmpl
-templates/embedding-deployment.yaml.tmpl
-
 # ----- K3s render output -----
 # manifests/ is generated from templates/*.yaml.tmpl by
 # scripts/generate-manifests.sh (or install.sh's process_templates step) at
@@ -154,13 +140,6 @@ manifests/
 # ----- Benchmark -----
 benchmark/datasets/.cache/
 benchmark/results/
-benchmark/result/
-v2_5_results/
-V2_5_RALPH_LOOP_PROMPT.md
-
-# ----- V2.5 results (development history, not final published result) -----
-v2_5_1_results/
-v2_5_1/
 
 # ----- V3 ablation results: COMMITTED (raw evidence behind 74.6% claim) -----
 # v3_ablation_results/ is NOT gitignored — it contains per-task pass/fail data
@@ -179,8 +158,6 @@ v2_5_1/
 
 # ----- Go build artifacts -----
 proxy/atlas-proxy
-proxy/atlas-proxy-v2
-proxy/cmd/
 tui/atlas-tui
 
 # ----- Geometric Lens large files (on HuggingFace, not in git) -----
@@ -198,12 +175,7 @@ geometric-lens/data/*
 # ----- Runtime artifacts -----
 *.pid
 nohup.out
-highscores.json
 
-# ----- Geometric Lens analysis artifacts (one-off, not runtime) -----
-geometric-lens/geometric_lens/gate_analysis.py
-geometric-lens/geometric_lens/gate_embeddings.json
-geometric-lens/geometric_lens/gate_report.json
 _agenttest/
 
 # Lens training corpus collected from agent use (local, per-machine)
