@@ -13,16 +13,28 @@ func TestRepeatDetectorFiresOnIdenticalCalls(t *testing.T) {
 	ctx := &AgentContext{}
 	args := json.RawMessage(`{"path":"app.py","offset":0,"limit":100}`)
 	for i := 0; i < 2; i++ {
-		if _, repeating := recordToolCall(ctx, "read_file", args); repeating {
+		if _, _, repeating := recordToolCall(ctx, "read_file", args); repeating {
 			t.Fatalf("fired at call %d, want threshold 3", i+1)
 		}
 	}
-	msg, repeating := recordToolCall(ctx, "read_file", args)
+	msg, obs, repeating := recordToolCall(ctx, "read_file", args)
 	if !repeating {
 		t.Fatal("identical call 3x must fire")
 	}
 	if !strings.Contains(msg, "read_file") {
 		t.Fatalf("corrective doesn't name the tool: %q", msg)
+	}
+	// The observation carries the streak the detector just erased.
+	if obs.Count != toolRepeatThreshold {
+		t.Errorf("observation count = %d, want %d", obs.Count, toolRepeatThreshold)
+	}
+	// The detector owns the reset: the window is empty on return, so the
+	// same streak can't fire a second corrective.
+	if len(ctx.RecentToolCalls) != 0 {
+		t.Errorf("firing must clear the window, got %d entries", len(ctx.RecentToolCalls))
+	}
+	if _, _, again := recordToolCall(ctx, "read_file", args); again {
+		t.Error("the call right after a fire must start a fresh streak")
 	}
 }
 
@@ -30,7 +42,7 @@ func TestRepeatDetectorCanonicalizesJSONFormatting(t *testing.T) {
 	ctx := &AgentContext{}
 	recordToolCall(ctx, "run_command", json.RawMessage(`{"command":"pytest","timeout":30}`))
 	recordToolCall(ctx, "run_command", json.RawMessage(`{"timeout":30,"command":"pytest"}`))
-	_, repeating := recordToolCall(ctx, "run_command", json.RawMessage(`{ "command" : "pytest", "timeout" : 30 }`))
+	_, _, repeating := recordToolCall(ctx, "run_command", json.RawMessage(`{ "command" : "pytest", "timeout" : 30 }`))
 	if !repeating {
 		t.Fatal("key order / whitespace variations of the same call must match")
 	}
@@ -50,11 +62,11 @@ func TestWriteFileReassertionKeyedOnPathAndContent(t *testing.T) {
 		args := json.RawMessage(fmt.Sprintf(
 			`{"path":"app.py","content":"from flask import Flask\napp = Flask(__name__)%s"}`,
 			strings.Repeat(" ", i)))
-		if _, repeating := recordToolCall(ctx, "write_file", args); repeating {
+		if _, _, repeating := recordToolCall(ctx, "write_file", args); repeating {
 			t.Fatalf("fired at write %d, want threshold 3", i+1)
 		}
 	}
-	msg, repeating := recordToolCall(ctx, "write_file",
+	msg, _, repeating := recordToolCall(ctx, "write_file",
 		json.RawMessage(`{"path":"app.py","content":"from flask import Flask\napp = Flask(__name__)"}`))
 	if !repeating {
 		t.Fatal("reassertion of the same logical content must fire")
@@ -68,7 +80,7 @@ func TestWriteFileDifferentPathsDoNotFire(t *testing.T) {
 	ctx := &AgentContext{}
 	for i, p := range []string{"app.py", "static/game.js", "templates/index.html"} {
 		args := json.RawMessage(fmt.Sprintf(`{"path":"%s","content":"x"}`, p))
-		if _, repeating := recordToolCall(ctx, "write_file", args); repeating {
+		if _, _, repeating := recordToolCall(ctx, "write_file", args); repeating {
 			t.Fatalf("multi-file scaffolding flagged as a loop at write %d (%s)", i+1, p)
 		}
 	}
@@ -81,7 +93,7 @@ func TestEditFileKeepsFullArgsSignature(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		args := json.RawMessage(fmt.Sprintf(
 			`{"path":"app.py","old_str":"v%d","new_str":"v%d"}`, i, i+1))
-		if _, repeating := recordToolCall(ctx, "edit_file", args); repeating {
+		if _, _, repeating := recordToolCall(ctx, "edit_file", args); repeating {
 			t.Fatalf("distinct edits to one path flagged as a loop at edit %d", i+1)
 		}
 	}
@@ -97,7 +109,7 @@ func TestWriteFileRepeatOutsideWindowDoesNotFire(t *testing.T) {
 			json.RawMessage(fmt.Sprintf(`{"path":"f%d.py"}`, i)))
 	}
 	recordToolCall(ctx, "write_file", wf)
-	if _, repeating := recordToolCall(ctx, "write_file", wf); repeating {
+	if _, _, repeating := recordToolCall(ctx, "write_file", wf); repeating {
 		t.Fatal("two in-window writes must not fire (threshold 3)")
 	}
 }
@@ -105,7 +117,7 @@ func TestWriteFileRepeatOutsideWindowDoesNotFire(t *testing.T) {
 // Iteration must NOT be flagged as repetition: rewriting the same file
 // with materially different content (fixing successive compiler errors)
 // produces different signatures, so the detector stays silent. Regression
-// for TB2 2026-07-19 (polyglot killed mid-fix by the path-only key).
+// for 2026-07-19 (a polyglot task killed mid-fix by the path-only key).
 func TestWriteFileIterationNotRepeat(t *testing.T) {
 	ctx := &AgentContext{}
 	versions := []string{
@@ -114,7 +126,7 @@ func TestWriteFileIterationNotRepeat(t *testing.T) {
 		`{"path":"main.py.c","content":"#include <stdio.h>\nint main(){ printf(\"x\"); return 0; }"}`,
 	}
 	for i, v := range versions {
-		_, repeating := recordToolCall(ctx, "write_file", json.RawMessage(v))
+		_, _, repeating := recordToolCall(ctx, "write_file", json.RawMessage(v))
 		if repeating {
 			t.Errorf("version %d: iteration flagged as repetition", i)
 		}
@@ -134,7 +146,7 @@ func TestWriteFileReassertionStillCaught(t *testing.T) {
 	}
 	fired := false
 	for _, v := range versions {
-		if _, r := recordToolCall(ctx, "write_file", json.RawMessage(v)); r {
+		if _, _, r := recordToolCall(ctx, "write_file", json.RawMessage(v)); r {
 			fired = true
 		}
 	}
@@ -155,7 +167,7 @@ func TestWriteFileIndentationChangeIsIteration(t *testing.T) {
 		`{"path":"m.py","content":"def f():\n        return 1"}`, // 8-space
 	}
 	for i, v := range versions {
-		if _, r := recordToolCall(ctx, "write_file", json.RawMessage(v)); r {
+		if _, _, r := recordToolCall(ctx, "write_file", json.RawMessage(v)); r {
 			t.Fatalf("indentation change at write %d flagged as reassertion", i+1)
 		}
 	}
@@ -169,15 +181,15 @@ func TestWriteFileIndentationChangeIsIteration(t *testing.T) {
 func TestRecordReasoningTriggersOnConsecutiveRepeat(t *testing.T) {
 	ctx := &AgentContext{}
 	// Turn 1: first reasoning. No intervention.
-	if msg, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure."); fired || msg != "" {
+	if msg, _, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure."); fired || msg != "" {
 		t.Fatalf("turn 1: expected no fire, got fired=%v msg=%q", fired, msg)
 	}
 	// Turn 2: same opening prefix. count=1 (not yet at threshold of 2).
-	if msg, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure."); fired || msg != "" {
+	if msg, _, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure."); fired || msg != "" {
 		t.Fatalf("turn 2: expected no fire (count=1, threshold=2), got fired=%v msg=%q", fired, msg)
 	}
 	// Turn 3: same opening prefix again. count=2. FIRES.
-	msg, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure.")
+	msg, obs, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure.")
 	if !fired {
 		t.Fatalf("turn 3: expected intervention, got no fire")
 	}
@@ -187,6 +199,27 @@ func TestRecordReasoningTriggersOnConsecutiveRepeat(t *testing.T) {
 	if !strings.Contains(msg, "3 consecutive turns") {
 		t.Errorf("intervention should report 3 consecutive turns, got: %s", msg)
 	}
+	// The observation is what the caller renders its log line and its
+	// agent_reasoning_intervention payload from, so it must carry the
+	// same count the message reports and the snippet that repeated.
+	if obs.Count != 3 {
+		t.Errorf("observation count = %d, want 3 consecutive turns", obs.Count)
+	}
+	if obs.Snippet != normalizeReasoningSnippet("Now I need to read the file to understand the structure.") {
+		t.Errorf("observation snippet = %q, want the normalized repeated opening", obs.Snippet)
+	}
+	// The detector owns the reset. Reading the streak back off ctx now
+	// sees the cleared values — which is exactly why the observation is
+	// returned instead.
+	if ctx.ConsecutiveReasoningRepeats != 0 || ctx.LastReasoningSnippet != "" {
+		t.Errorf("firing must clear the streak; got repeats=%d snippet=%q",
+			ctx.ConsecutiveReasoningRepeats, ctx.LastReasoningSnippet)
+	}
+	// A fourth identical turn starts over rather than re-firing the
+	// same loop immediately.
+	if _, _, again := recordReasoning(ctx, "Now I need to read the file to understand the structure."); again {
+		t.Error("the turn right after a fire must start a fresh streak")
+	}
 }
 
 func TestRecordReasoningResetOnDivergence(t *testing.T) {
@@ -194,18 +227,18 @@ func TestRecordReasoningResetOnDivergence(t *testing.T) {
 	recordReasoning(ctx, "Now I need to read the file.")
 	recordReasoning(ctx, "Now I need to read the file.")
 	// Turn 3: model commits to a different thought — counter resets.
-	if _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); fired {
+	if _, _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); fired {
 		t.Error("divergent reasoning should reset the counter, no intervention expected")
 	}
 	if ctx.ConsecutiveReasoningRepeats != 0 {
 		t.Errorf("counter should reset to 0 after divergence, got %d", ctx.ConsecutiveReasoningRepeats)
 	}
 	// Turn 4: similar to turn 3 (the new pattern). count=1.
-	if _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); fired {
+	if _, _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); fired {
 		t.Error("turn 4 should be count=1 (one repeat), no fire yet")
 	}
 	// Turn 5: third identical → FIRES.
-	if _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); !fired {
+	if _, _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); !fired {
 		t.Error("turn 5 should fire (count=2 of new pattern)")
 	}
 }
@@ -214,7 +247,7 @@ func TestRecordReasoningIgnoresEmptyTurns(t *testing.T) {
 	ctx := &AgentContext{}
 	recordReasoning(ctx, "Now I need to read the file.")
 	// Turn 2: empty reasoning (model committed straight to action). Counter resets.
-	if _, fired := recordReasoning(ctx, ""); fired {
+	if _, _, fired := recordReasoning(ctx, ""); fired {
 		t.Error("empty reasoning should not fire")
 	}
 	if ctx.ConsecutiveReasoningRepeats != 0 || ctx.LastReasoningSnippet != "" {
@@ -259,7 +292,7 @@ func TestRecordReasoningRespectsPrefixLength(t *testing.T) {
 func TestRecordReasoningDoesNotFireOnSingleRepeat(t *testing.T) {
 	ctx := &AgentContext{}
 	recordReasoning(ctx, "Looking at the file...")
-	if _, fired := recordReasoning(ctx, "Looking at the file..."); fired {
+	if _, _, fired := recordReasoning(ctx, "Looking at the file..."); fired {
 		t.Error("single repeat (turn 2 = turn 1) should not fire — needs 2 consecutive repeats")
 	}
 }
@@ -419,7 +452,7 @@ func TestTracebackSteerSkipsStdlib(t *testing.T) {
 	}
 }
 
-// The missing-binary loop (TB2 bench 2026-07-18): `git clone ...` in a
+// The missing-binary loop (observed 2026-07-18): `git clone ...` in a
 // sandbox without git. The steer must name the binary, state that
 // apt-get can't work (non-root, read-only), and point at alternatives.
 func TestMissingCommandSteerBashForm(t *testing.T) {
@@ -462,7 +495,7 @@ func TestMissingCommandSteerNoFalsePositive(t *testing.T) {
 	}
 }
 
-// The broken-verification-command loop (TB2 2026-07-19, regex-chess): the
+// The broken-verification-command loop (observed 2026-07-19, regex-chess): the
 // model verifies with `python3 -c "...; def f(): ..."` — a multi-statement
 // script that can't parse on a -c line — and the SyntaxError is in the
 // command, not the solution. Steer must move the test to a file.
@@ -494,7 +527,7 @@ func TestBrokenInlineScriptSteerNoSyntaxError(t *testing.T) {
 
 // Truncation robustness: the sandbox clipped the output before the
 // "SyntaxError:" line, leaving only the "<string>" frame. The steer must
-// still fire (TB2 2026-07-19 regression — keyword gate missed this).
+// still fire (2026-07-19 regression — the keyword gate missed this).
 func TestBrokenInlineScriptSteerTruncatedOutput(t *testing.T) {
 	cmd := `python3 -c "import json, re; def all_legal(fen): return []"`
 	out := `  File "<string>", line 1` + "\n" + `    import json, re; def all_legal(fen): return []`

@@ -483,8 +483,10 @@ type AgentContext struct {
 	// Tool-call repetition detector: rolling window of recent (tool,
 	// args) signatures. When the same signature appears
 	// toolRepeatThreshold times within the last toolRepeatWindow
-	// entries, the loop injects a corrective system message. See
-	// proxy/detectors.go for the detection logic.
+	// entries, the loop injects a corrective system message. Owned by
+	// the detector — recordToolCall appends to it and clears it as it
+	// fires; callers go through resetToolRepeatWindow rather than
+	// assigning here. See proxy/detectors.go for the detection logic.
 	RecentToolCalls []string
 
 	// Reasoning-repetition detector state (May 10 2026, BiasBusters
@@ -492,7 +494,9 @@ type AgentContext struct {
 	// stream. When the same opening prose ("Now I need to look at the
 	// file" / similar) appears across consecutive turns, the loop
 	// injects a corrective so the model breaks out of the thought loop.
-	// See proxy/detectors.go for the detection logic.
+	// The streak fields are owned by the detector: recordReasoning
+	// clears them as it fires and hands the count and snippet back in
+	// its repeatObservation. See proxy/detectors.go.
 	LastTurnReasoning           string
 	LastReasoningSnippet        string
 	ConsecutiveReasoningRepeats int

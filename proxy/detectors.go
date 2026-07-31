@@ -9,9 +9,10 @@
 //	recordReasoning — the same reasoning prefix emitted turn after turn,
 //	                  the prose sibling of the above.
 //
-// Each keeps a rolling window on AgentContext, fires once its window crosses
-// a threshold, and returns a corrective the loop injects before the next LLM
-// call.
+// Each keeps a rolling window on AgentContext, fires once that window crosses
+// a threshold, clears the window itself, and returns the corrective the loop
+// injects before the next LLM call plus a repeatObservation describing the
+// streak it just erased.
 //
 // Steers — stateless, one per recognizable failure in command output:
 //
@@ -47,6 +48,23 @@ import (
 	"strings"
 )
 
+// repeatObservation is what a detector saw at the moment it fired.
+//
+// A detector clears its own window as it fires, so by the time the caller
+// runs, the state that described the streak is already gone. Everything a
+// caller needs to report the detection — its log line, its SSE payload —
+// comes back in here instead of being read back off AgentContext.
+type repeatObservation struct {
+	// Count is the length of the streak: how many times the repeated
+	// signature appeared in the tool-call window, or how many consecutive
+	// turns opened with the same reasoning prefix.
+	Count int
+	// Snippet is the normalized reasoning prefix that repeated. Empty for
+	// the tool-call detector, whose repeat is identified by the tool name
+	// the caller already has in hand.
+	Snippet string
+}
+
 // Tool-call repetition detector. Catches the structural loop that lens
 // scoring doesn't see: the model calls the SAME (tool, args) pair
 // multiple times in close succession (e.g. read_file('app.py') 4 times
@@ -76,14 +94,16 @@ const (
 )
 
 // recordToolCall pushes a (tool_name, args) signature into ctx's
-// rolling window and returns the corrective message + true when the
-// same signature has appeared toolRepeatThreshold times within the
-// last toolRepeatWindow entries. Returns ("", false) otherwise.
+// rolling window and returns the corrective message, an observation of
+// the streak, and true when the same signature has appeared
+// toolRepeatThreshold times within the last toolRepeatWindow entries.
+// Returns ("", zero observation, false) otherwise.
 //
-// Caller is responsible for resetting ctx.RecentToolCalls after acting
-// on the corrective so we don't re-fire on the same crash on the next
-// iteration.
-func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (string, bool) {
+// Firing clears the window: one streak produces one corrective, and the
+// next turn is judged on its own calls. The caller renders its log line
+// and event from the returned observation rather than reading back state
+// this call has already discarded.
+func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (string, repeatObservation, bool) {
 	sig := toolCallSignature(toolName, args)
 	ctx.RecentToolCalls = append(ctx.RecentToolCalls, sig)
 	if len(ctx.RecentToolCalls) > toolRepeatWindow {
@@ -97,8 +117,12 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 		}
 	}
 	if count < toolRepeatThreshold {
-		return "", false
+		return "", repeatObservation{}, false
 	}
+
+	resetToolRepeatWindow(ctx)
+	obs := repeatObservation{Count: count}
+
 	if toolName == "write_file" {
 		if p := writeFilePath(args); p != "" {
 			return fmt.Sprintf(
@@ -106,7 +130,7 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 					"whole file, and the on-disk version is the verified result of your previous write — rewriting it "+
 					"from memory just loops. Read the file to see what is actually there, then either make one targeted "+
 					"change with edit_file or structural_edit, or respond with done if the request is satisfied.",
-				p, count, toolRepeatWindow), true
+				p, count, toolRepeatWindow), obs, true
 		}
 	}
 	return fmt.Sprintf(
@@ -116,7 +140,16 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 			"(b) try a sibling tool — find_file if a path is unclear, run_command if a tool is failing in a confusing "+
 			"way, (c) declare done if you've already gathered enough information, or (d) ask the user for clarification "+
 			"if the task is ambiguous.",
-		toolName, count, toolRepeatWindow), true
+		toolName, count, toolRepeatWindow), obs, true
+}
+
+// resetToolRepeatWindow drops the tool-call window so the next call
+// starts a fresh streak. recordToolCall calls it as it fires; the agent
+// loop's runaway-write backstop calls it when that separate trigger
+// raises the same corrective, leaving the detector in the state a normal
+// fire would have left it in.
+func resetToolRepeatWindow(ctx *AgentContext) {
+	ctx.RecentToolCalls = nil
 }
 
 // writeFilePath extracts the path argument from write_file args ("" on
@@ -244,15 +277,17 @@ const (
 )
 
 // recordReasoning updates ctx with the current turn's reasoning
-// snippet and returns the corrective message + true when the same
-// snippet has appeared reasoningRepeatThreshold consecutive times.
-// Returns ("", false) otherwise. Empty reasoning resets the counter
+// snippet and returns the corrective message, an observation of the
+// streak, and true when the same snippet has appeared
+// reasoningRepeatThreshold consecutive times. Returns ("", zero
+// observation, false) otherwise. Empty reasoning resets the counter
 // (the detector only flags STUCK thinking, not absence of thinking).
 //
-// Caller should reset ctx.ConsecutiveReasoningRepeats and
-// ctx.LastReasoningSnippet to "" after acting on the corrective so
-// the same loop doesn't re-fire on the next iteration.
-func recordReasoning(ctx *AgentContext, reasoning string) (string, bool) {
+// Firing clears the streak so the same loop can't fire twice. The
+// returned observation carries the count and the snippet the caller
+// needs to describe the detection — reading them back off ctx would
+// see the cleared values.
+func recordReasoning(ctx *AgentContext, reasoning string) (string, repeatObservation, bool) {
 	snippet := normalizeReasoningSnippet(reasoning)
 	if snippet == "" {
 		// No reasoning emitted (or pure whitespace) — break the streak.
@@ -261,7 +296,7 @@ func recordReasoning(ctx *AgentContext, reasoning string) (string, bool) {
 		// reward, not flag as a continuation.
 		ctx.ConsecutiveReasoningRepeats = 0
 		ctx.LastReasoningSnippet = ""
-		return "", false
+		return "", repeatObservation{}, false
 	}
 
 	if ctx.LastReasoningSnippet != "" && snippet == ctx.LastReasoningSnippet {
@@ -272,8 +307,17 @@ func recordReasoning(ctx *AgentContext, reasoning string) (string, bool) {
 	ctx.LastReasoningSnippet = snippet
 
 	if ctx.ConsecutiveReasoningRepeats < reasoningRepeatThreshold {
-		return "", false
+		return "", repeatObservation{}, false
 	}
+
+	// Consecutive TURNS is one more than the number of repeats: the turn
+	// that opened the streak plus every turn that echoed it.
+	obs := repeatObservation{
+		Count:   ctx.ConsecutiveReasoningRepeats + 1,
+		Snippet: ctx.LastReasoningSnippet,
+	}
+	ctx.ConsecutiveReasoningRepeats = 0
+	ctx.LastReasoningSnippet = ""
 
 	return fmt.Sprintf(
 		"⚠ Reasoning repetition detected: your reasoning has opened with the same prose for %d consecutive turns "+
@@ -281,9 +325,9 @@ func recordReasoning(ctx *AgentContext, reasoning string) (string, bool) {
 			"different tool call, run a verification command, or emit `done` if the task is complete — OR change "+
 			"the investigation direction (read a different file, try a different selector, ask the user for "+
 			"clarification). Don't rephrase the same thought.",
-		ctx.ConsecutiveReasoningRepeats+1,
+		obs.Count,
 		truncateForCorrective(reasoning, 60),
-	), true
+	), obs, true
 }
 
 // normalizeReasoningSnippet lowercases, collapses whitespace, and

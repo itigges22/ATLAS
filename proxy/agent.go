@@ -919,9 +919,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					}
 				}
 			}
-			if msg, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
-				if runawayWrite && msg == "" {
+			if msg, _, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
+				if runawayWrite && !repeating {
 					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/structural_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
+					// The detector clears its window only when IT fires.
+					// The backstop is a separate trigger for the same
+					// corrective, so clear it here too.
+					resetToolRepeatWindow(ctx)
 				}
 				log.Printf("[agent] tool-call repetition at turn %d on %s — queuing corrective for next turn", turn, parsed.Name)
 				ctx.Stream("agent_repeat_intervention", map[string]interface{}{
@@ -930,7 +934,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					"reason": msg,
 				})
 				pendingRepeatCorrective = msg
-				ctx.RecentToolCalls = nil // reset so we don't re-fire
 				repeatDetections++
 				// Steer-before-kill ladder. On the FIRST detection, fall
 				// through: pendingRepeatCorrective is injected below and the
@@ -981,18 +984,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// — three different angles on "model is stuck", catching
 			// different shapes of stuck-ness.
 			pendingReasoningCorrective := ""
-			if msg, repeating := recordReasoning(ctx, ctx.LastTurnReasoning); repeating {
-				log.Printf("[agent] reasoning repetition at turn %d (consecutive=%d) — queuing corrective", turn, ctx.ConsecutiveReasoningRepeats+1)
+			if msg, obs, repeating := recordReasoning(ctx, ctx.LastTurnReasoning); repeating {
+				log.Printf("[agent] reasoning repetition at turn %d (consecutive=%d) — queuing corrective", turn, obs.Count)
 				ctx.Stream("agent_reasoning_intervention", map[string]interface{}{
 					"turn":        turn,
-					"consecutive": ctx.ConsecutiveReasoningRepeats + 1,
+					"consecutive": obs.Count,
 					"reason":      msg,
-					"snippet":     ctx.LastReasoningSnippet,
+					"snippet":     obs.Snippet,
 				})
 				pendingReasoningCorrective = msg
-				// Reset so we don't re-fire on the same loop.
-				ctx.ConsecutiveReasoningRepeats = 0
-				ctx.LastReasoningSnippet = ""
 			}
 
 			// Score write_file/edit_file content with the geometric lens
