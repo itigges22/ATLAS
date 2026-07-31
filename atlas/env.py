@@ -8,7 +8,6 @@ importing each other.
 """
 
 import os
-from typing import Dict
 
 from atlas import compose as compose_config
 
@@ -41,52 +40,11 @@ def atlas_root() -> str:
     return os.path.abspath(os.getcwd())
 
 
-def _read_dotenv() -> Dict[str, str]:
-    """Parse the compose .env (the Docker deployment's source of truth) by
-    walking up from this file. Lets the model/dir checks reflect what's actually
-    configured when the shell env doesn't export ATLAS_MODEL_FILE."""
-    cur = os.path.dirname(os.path.abspath(__file__))
-    # 6 hops from atlas/ reaches the same highest ancestor as the
-    # previous 7 hops from atlas/cli — the walk must not gain an
-    # extra ancestor (in venv layouts one more hop can reach $HOME and
-    # pick up a foreign ~/.env).
-    for _ in range(6):
-        envp = os.path.join(cur, ".env")
-        if os.path.exists(envp):
-            out: Dict[str, str] = {}
-            try:
-                with open(envp, encoding="utf-8-sig") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("export "):
-                            line = line[len("export "):].lstrip()
-                        if line and not line.startswith("#") and "=" in line:
-                            k, v = line.split("=", 1)
-                            # Drop a whitespace-preceded inline comment.
-                            stripped = v.lstrip()
-                            if stripped.startswith("#") and stripped != v:
-                                # Empty value followed by an inline comment
-                                # ("KEY= # note") parses as empty.
-                                v = ""
-                            else:
-                                v = stripped
-                                head, hash_sep, _ = v.partition("#")
-                                if hash_sep and head and head[-1] in " \t":
-                                    v = head
-                            out[k.strip()] = v.strip().strip('"').strip("'")
-            except OSError:
-                # An unreadable optional .env is treated as absent; callers
-                # continue with process-environment values and diagnostics.
-                pass
-            return out
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    return {}
-
-
-_ENV = _read_dotenv()
+# The compose .env at the resolved repo root. It is the Docker deployment's
+# source of truth, so the model/dir checks below reflect what is actually
+# configured even when the shell doesn't export ATLAS_MODEL_FILE. Parsing
+# lives in compose.read_env_file — one .env parser for the whole CLI.
+_ENV = compose_config.read_env_file(atlas_root())
 
 
 def _env_int(name: str, default: int) -> int:

@@ -49,42 +49,6 @@ def _c(s: str, color: str, on: bool) -> str:
 
 
 # --- helpers ----------------------------------------------------------------
-def _read_env_file(atlas_root: str) -> Dict[str, str]:
-    """Parse the compose .env (KEY=VALUE lines) into a dict. The .env is the
-    authoritative source for ATLAS_MODEL_FILE — it isn't necessarily exported
-    into the shell environment."""
-    out: Dict[str, str] = {}
-    path = os.path.join(atlas_root, ".env")
-    try:
-        # utf-8-sig strips a leading BOM (Windows editors) so the first key
-        # isn't read as '﻿ATLAS_MODEL_FILE' and silently lost.
-        with open(path, encoding="utf-8-sig") as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("export "):
-                    line = line[len("export "):].lstrip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                # Drop a whitespace-preceded inline comment ("8080  # note").
-                stripped = v.lstrip()
-                if stripped.startswith("#") and stripped != v:
-                    # Empty value followed by an inline comment
-                    # ("KEY= # note") parses as empty.
-                    v = ""
-                else:
-                    v = stripped
-                    head, hash_sep, _ = v.partition("#")
-                    if hash_sep and head and head[-1] in " \t":
-                        v = head
-                out[k.strip()] = v.strip().strip('"').strip("'")
-    except OSError:
-        # An unreadable optional .env is treated as empty so explicit command
-        # arguments and process-environment values can still drive onboarding.
-        pass
-    return out
-
-
 def _run(cmd: List[str], timeout: int = 60,
          cwd: Optional[str] = None) -> Tuple[int, str, str]:
     try:
@@ -344,7 +308,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     color = sys.stdout.isatty() and not args.no_color
     atlas_root = _find_atlas_root()
-    env = _read_env_file(atlas_root)
+    env = compose_config.read_env_file(atlas_root)
 
     _safe_print(_c(f"{BOLD}ATLAS onboard{RESET}" if color else "ATLAS onboard",
                    "", False) + f" {DASH} drop-in a model")

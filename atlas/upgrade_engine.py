@@ -12,7 +12,6 @@ restore-on-failure) is deterministically testable without Docker or a
 registry. The default callables shell out to docker compose + doctor.
 """
 
-import contextlib
 import json
 import os
 import re
@@ -20,6 +19,8 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
+
+from atlas import compose as compose_config
 
 RESTORE_DIR = ".atlas-upgrade"
 RESTORE_POINT = "restore-point.json"
@@ -64,17 +65,10 @@ def _env_path(atlas_root: str) -> str:
 
 
 def read_env_tag(atlas_root: str, default: str = "latest") -> str:
-    """Current ATLAS_IMAGE_TAG from .env (the deployed release marker)."""
-    path = _env_path(atlas_root)
-    # A missing/unreadable .env means the default tag is in effect.
-    with contextlib.suppress(OSError):
-        with open(path) as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("ATLAS_IMAGE_TAG="):
-                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    return val or default
-    return default
+    """Current ATLAS_IMAGE_TAG from .env (the deployed release marker). A
+    missing/unreadable .env means the default tag is in effect."""
+    values = compose_config.read_env_file(atlas_root)
+    return values.get("ATLAS_IMAGE_TAG") or default
 
 
 def write_restore_point(atlas_root: str, previous_tag: str, target_tag: str,

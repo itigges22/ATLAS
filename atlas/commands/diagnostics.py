@@ -41,22 +41,15 @@ def _run(cmd: List[str], cwd: Optional[str] = None, timeout: int = 30) -> str:
 
 
 def _filtered_env(atlas_root: str) -> Dict[str, str]:
+    """The .env, masked for sharing. A missing or unreadable file just means
+    an empty env section (read_env_file already treats it as absent)."""
     out: Dict[str, str] = {}
-    path = os.path.join(atlas_root, ".env")
-    # No .env (or unreadable) just means an empty env section.
-    with contextlib.suppress(OSError):
-        with open(path) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k, v = k.strip(), v.strip().strip('"').strip("'")
-                if any(d in k for d in _DROP_KEYS):
-                    continue  # never include the token, even masked
-                if any(s in k.upper() for s in _SECRET_KEYS) and v:
-                    v = "[MASKED]"
-                out[k] = redact.filter_private_values(v)
+    for k, v in compose_config.read_env_file(atlas_root).items():
+        if any(d in k for d in _DROP_KEYS):
+            continue  # never include the token, even masked
+        if any(s in k.upper() for s in _SECRET_KEYS) and v:
+            v = "[MASKED]"
+        out[k] = redact.filter_private_values(v)
     return out
 
 

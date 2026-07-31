@@ -8,23 +8,11 @@
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from atlas import compose as compose_config
 from atlas import env as cli_env
 from atlas import config_schema as cs
-
-
-def _read_env(path: str) -> Dict[str, str]:
-    out: Dict[str, str] = {}
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            out[k.strip()] = v.strip().strip('"').strip("'")
-    return out
 
 
 def _default_env() -> str:
@@ -32,7 +20,7 @@ def _default_env() -> str:
 
 
 def _validate(path: str) -> int:
-    env = _read_env(path)
+    env = compose_config.read_env_path(path)
     result = cs.validate(env)
     for w in result["warnings"]:
         print(f"  warning: {w}")
@@ -46,7 +34,7 @@ def _validate(path: str) -> int:
 
 
 def _migrate(path: str, dry_run: bool = False) -> int:
-    env = _read_env(path)
+    env = compose_config.read_env_path(path)
     _migrated, notes = cs.migrate(env)
     for n in notes:
         print(f"  {n}")

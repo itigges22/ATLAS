@@ -131,25 +131,10 @@ def _resolve_backend(atlas_root: Optional[str] = None) -> Optional[str]:
     Returns the backend id string ('cuda' | 'rocm' | 'vulkan' | 'metal')
     or None if no backend is configured anywhere.
     """
-    val = os.environ.get("ATLAS_BACKEND")
-    if val:
-        return val.strip().lower()
     if not atlas_root:
-        return None
-    env_path = os.path.join(atlas_root, ".env")
-    if not os.path.isfile(env_path):
-        return None
-    try:
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("ATLAS_BACKEND="):
-                    return line.split("=", 1)[1].strip().strip("'\"").lower()
-    except OSError:
-        return None
-    return None
+        val = os.environ.get("ATLAS_BACKEND")
+        return val.strip().lower() if val else None
+    return compose_config.resolve_backend(atlas_root)
 
 
 def check_arch() -> CheckResult:

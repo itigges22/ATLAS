@@ -104,8 +104,15 @@ def container_id(
 
 def read_env_file(atlas_root: str) -> Dict[str, str]:
     """Read the checkout's Compose ``.env`` without executing shell code."""
+    return read_env_path(os.path.join(atlas_root, ".env"))
+
+
+def read_env_path(path: str) -> Dict[str, str]:
+    """Parse one ``.env``-shaped file. The single .env parser for the CLI:
+    ``KEY=VALUE`` lines, an optional ``export`` prefix, ``#`` comments
+    (whole-line and whitespace-preceded inline), and surrounding quotes
+    stripped. Never executes the file."""
     values: Dict[str, str] = {}
-    path = os.path.join(atlas_root, ".env")
     try:
         with open(path, encoding="utf-8-sig") as fh:
             for raw in fh:
