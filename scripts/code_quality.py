@@ -40,9 +40,11 @@ MAX_FILE_LINES = 400
 class QualityReport:
     files: int = 0
     total_lines: int = 0
-    lint_violations: int = 0
+    lint_defects: int = 0        # pyflakes F-codes + E9: real bugs
+    lint_style: int = 0          # whitespace/length: cosmetic
     lint_available: bool = False
     unused_imports: int = 0
+    defect_codes: list[str] = field(default_factory=list)
     max_complexity: int = 0
     max_complexity_where: str = ""
     max_function_lines: int = 0
@@ -56,9 +58,11 @@ class QualityReport:
         return {
             "files": self.files,
             "total_lines": self.total_lines,
-            "lint_violations": self.lint_violations,
+            "lint_defects": self.lint_defects,
+            "lint_style": self.lint_style,
             "lint_available": self.lint_available,
             "unused_imports": self.unused_imports,
+            "defect_codes": self.defect_codes,
             "max_complexity": self.max_complexity,
             "max_complexity_where": self.max_complexity_where,
             "max_function_lines": self.max_function_lines,
@@ -149,7 +153,20 @@ def analyze(root: Path, baseline: set[str] | None = None) -> QualityReport:
             issues = json.loads(proc.stdout or "[]")
         except json.JSONDecodeError:
             issues = []
-        rep.lint_violations = len(issues)
+        # Split real defects from cosmetics. An earlier version reported one
+        # number, and on a sample run 31 of 34 "violations" were trailing
+        # whitespace while the single genuine finding — an undefined name —
+        # was lost in it. A score dominated by whitespace drives the wrong
+        # work, so F-codes (pyflakes: undefined names, unused names,
+        # redefinitions) and E9 (syntax) are counted apart from W/E501.
+        for i in issues:
+            code = str(i.get("code") or "")
+            if code.startswith("F") or code.startswith("E9"):
+                rep.lint_defects += 1
+                if code not in rep.defect_codes:
+                    rep.defect_codes.append(code)
+            else:
+                rep.lint_style += 1
         rep.unused_imports = sum(1 for i in issues
                                  if str(i.get("code", "")).startswith("F401"))
 
@@ -169,8 +186,12 @@ def analyze(root: Path, baseline: set[str] | None = None) -> QualityReport:
             f"(over {MAX_FILE_LINES})")
     if rep.unused_imports:
         rep.findings.append(f"{rep.unused_imports} unused import(s)")
-    if rep.lint_violations:
-        rep.findings.append(f"{rep.lint_violations} lint violation(s)")
+    if rep.lint_defects:
+        rep.findings.append(
+            f"{rep.lint_defects} real lint defect(s) "
+            f"[{', '.join(sorted(rep.defect_codes))}]")
+    # Style nits are reported but are NOT a finding: trailing whitespace says
+    # nothing about whether the code is any good.
     return rep
 
 
@@ -195,8 +216,10 @@ def main() -> int:
           f"max complexity {rep.max_complexity}"
           + (f" ({rep.max_complexity_where})" if rep.max_complexity_where else ""))
     if rep.lint_available:
-        print(f"lint violations {rep.lint_violations}   "
-              f"unused imports {rep.unused_imports}")
+        print(f"real defects {rep.lint_defects}"
+              + (f" {sorted(rep.defect_codes)}" if rep.defect_codes else "")
+              + f"   unused imports {rep.unused_imports}"
+              f"   style nits {rep.lint_style}")
     else:
         print("lint: ruff unavailable — skipped")
     if rep.findings:

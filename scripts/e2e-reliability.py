@@ -977,7 +977,8 @@ def report(sessions: list[Session], known: set[str]) -> None:
         worst_cx = max(q, key=lambda r: r.get("max_complexity", 0))
         worst_fn = max(q, key=lambda r: r.get("max_function_lines", 0))
         worst_file = max(q, key=lambda r: r.get("max_file_lines", 0))
-        lint = sum(r.get("lint_violations", 0) for r in q)
+        defects = sum(r.get("lint_defects", 0) for r in q)
+        style = sum(r.get("lint_style", 0) for r in q)
         unused = sum(r.get("unused_imports", 0) for r in q)
         broken = sum(len(r.get("syntax_errors") or []) for r in q)
         clean = sum(1 for r in q if not r.get("findings"))
@@ -988,7 +989,11 @@ def report(sessions: list[Session], known: set[str]) -> None:
               f" ({worst_fn.get('max_function_where') or 'n/a'})")
         print(f"  longest file                       {worst_file.get('max_file_lines', 0)} lines"
               f" ({worst_file.get('max_file_where') or 'n/a'})")
-        print(f"  lint violations / unused imports   {lint} / {unused}")
+        codes = sorted({c for r in q for c in (r.get("defect_codes") or [])})
+        print(f"  real lint defects                  {defects}"
+              + (f" {codes}" if codes else ""))
+        print(f"  unused imports                     {unused}")
+        print(f"  style nits (not scored)            {style}")
         print(f"  files left unparseable             {broken}")
 
     observed: set[str] = set()
