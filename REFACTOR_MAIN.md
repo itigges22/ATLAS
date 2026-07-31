@@ -565,6 +565,29 @@ builtins, comprehensions, star-imports), the existing check is deliberately
 narrow and fails open, and a false positive BLOCKS a legitimate write. Widening
 it is an owner call.
 
+**Open finding O4 — every gate can pass while the claim is false.** The single
+most important result of the measured runs. A session ran `structural_edit` on
+`function:index`, the edit SUCCEEDED, the file parsed, the app served 200 to
+curl, and the model reported adding "a `paused` boolean, a spacebar event
+listener, and a check in the `draw` function". None of it was in the template.
+Every honesty gate was satisfied on its own terms: a productive change landed
+(action gate), a verification command ran and passed (verification gate), the
+file is syntactically valid (syntax gate), no unresolved call appeared
+(structural gate). What none of them can see is that *the change was made to
+the wrong node* — `index()` only renders the module-level `HTML_TEMPLATE`, so
+rewriting it cannot affect the JS. **Verification proves the app still runs, not
+that the requested feature exists**, and no current gate closes that gap.
+
+Two contributing defects, both fixed: the tag-selector message told the model to
+"rewrite the whole function holding the template" when no function holds it
+(84d4054), and `structural_edit` accepted a replacement that was mostly the
+model's own deliberation as `#` comments ("Wait, the instruction is to update
+the JS inside the HTML_TEMPLATE string") because comments are valid Python.
+The second is NOT fixed: detecting reasoning-leaked-as-comments risks rejecting
+legitimate comments, so it is an owner call. The general problem — a
+feature-level post-condition, rather than "it still runs" — is the real gap, and
+is what `scripts/e2e-reliability.py` checks per task and the product does not.
+
 **Open finding O3 — V3 rewrites the whole file on a 3-line structural_edit.**
 Session 5's `structural_edit` targeted `function:index` with 78 chars of content;
 V3 activated post-splice and returned a file with comments stripped throughout,
