@@ -2144,6 +2144,21 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	if chosen == "" {
 		chosen = content
 	}
+	// A candidate only counts as an improvement if it does not break what it
+	// was handed. V3 regenerates the whole file, so it can reintroduce a
+	// defect the model had already repaired; the write gates downstream would
+	// then reject the edit and quote a line number from a candidate the model
+	// never saw, sending it to hunt a bug that is not in the file (observed
+	// 2026-07-31: an edit rejected for a stray paren V3 reintroduced, then
+	// three dead turns searching a clean file). Drop the candidate here so the
+	// caller keeps the model's own content and the gates below only ever judge
+	// content the model actually wrote.
+	if chosen != content {
+		if reason := v3CandidateRegression(ctx, path, content, chosen); reason != "" {
+			log.Printf("[v3] discarding candidate for %s — %s; keeping the caller's content", logPath(path), reason)
+			return content, V3EditMetadata{}, nil
+		}
+	}
 	return chosen, V3EditMetadata{
 		Used:                 true,
 		CandidatesTested:     v3Result.CandidatesTested,

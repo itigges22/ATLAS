@@ -607,6 +607,27 @@ func embeddedScriptGate(ctx *AgentContext, path, original, edited string) string
 	return msg
 }
 
+// v3CandidateRegression reports why a V3 candidate is worse than the content
+// it was generated from, or "" when the candidate is safe to adopt. It runs
+// the same healthy->broken checks the write paths enforce, but scored against
+// the caller's content rather than the file on disk, so a candidate that
+// regresses the model's work is dropped at the V3 boundary instead of
+// surfacing downstream as a rejection the model has no way to act on.
+func v3CandidateRegression(ctx *AgentContext, path, baseline, candidate string) string {
+	if synErr, ok := checkFallbackSyntax(ctx, path, candidate); !ok {
+		if _, baseOK := checkFallbackSyntax(ctx, path, baseline); baseOK {
+			return fmt.Sprintf("it does not parse (%s)", truncateStr(synErr, 120))
+		}
+	}
+	if embeddedScriptGate(ctx, path, baseline, candidate) != "" {
+		return "it breaks an embedded script"
+	}
+	if introduced := editIntroducesUnresolved(ctx, path, baseline, candidate); len(introduced) > 0 {
+		return fmt.Sprintf("it introduces unresolved call(s) %v", logPaths(introduced))
+	}
+	return ""
+}
+
 // embeddedScriptRejectionFor unwraps a checkFallbackSyntax error that turned
 // out to be an embedded-script finding. (message, true) when it is one — the
 // message is already model-ready — else ("", false).

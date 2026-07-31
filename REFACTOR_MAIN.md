@@ -446,6 +446,30 @@ direction: lens/lint on embedded <script> blocks or a headless page probe.
 disabled with a clear log line (fail-soft verified working); live volume
 chowned + Dockerfile pre-creates the path owned by appuser.
 
+**E2E 2026-07-31 (two sessions, post-F1-gate stack).** Session 1 (localStorage
+high score): model degenerated into repeated `)**\rVert` LaTeX at 1,215 chars;
+content-loop cut fired **correctly** (verified `isLoopingTail` against the real
+template — no false positive), truncated output failed the syntax gate 3x, the
+path-aware breaker ended the session honestly. Nothing corrupt reached disk.
+Session 2 (spacebar pause) exposed **D9**.
+
+**D9 — V3 candidate regressions were charged to the model.** `edit_file` and
+`structural_edit` hand their spliced content to `improveContentWithV3` and
+write back whatever returns; V3 regenerates the *whole file*, so it can
+reintroduce a defect the model had already repaired. The downstream write gate
+then rejected the edit quoting a line number that exists only in a candidate
+the model never saw, and the model spent its last three turns hunting a defect
+in a file verified clean on disk (`edit_file` → "string to replace not found").
+`write_file` never had this hole: its V3 path already falls back to the model's
+baseline. **Root fix at the V3 boundary, not at the three gate sites:**
+`improveContentWithV3` now runs `v3CandidateRegression` (syntax /
+embedded-script / unresolved-call, scored against the *caller's* content, not
+the file) and drops a regressing candidate, returning the caller's content with
+zero V3 metadata. Downstream gates therefore only ever judge model-authored
+content, so their existing messages are accurate again and need no change.
+Guarded by three tests at the boundary; the drop test reproduces the E2E
+failure and fails without the fix.
+
 ## Detector unification spec (Phase 3c — behavior-identical stage 1)
 
 **The six detectors are not redundant — their PLUMBING is.** Each observes

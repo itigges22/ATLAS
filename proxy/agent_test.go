@@ -1840,6 +1840,86 @@ func TestWriteFileV3BothBrokenRejects(t *testing.T) {
 	}
 }
 
+// edit_file and structural_edit hand their spliced content to
+// improveContentWithV3 and write whatever comes back. A candidate that
+// regresses that content must be dropped at the boundary: otherwise the write
+// gates reject the edit and quote a line number from a candidate the model
+// never saw, and it spends its remaining turns hunting a defect that is not in
+// the file (the observed E2E failure). The caller's content must come back
+// carrying NO V3 metadata, since nothing V3 produced was used.
+func TestImproveContentV3DropsRegressingCandidate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	modelEdit := "def index():\n    return 'ok'\n"
+	candidate := "def index():\n    return render_template('index.html')\n"
+
+	v3 := v3AndStructuralServer(t, candidate, "render_template")
+	defer v3.Close()
+	sb := fakeSyntaxSandbox(t, "")
+	defer sb.Close()
+	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+
+	out, meta, err := improveContentWithV3(path, modelEdit, ctx)
+	if err != nil {
+		t.Fatalf("improveContentWithV3 error: %v", err)
+	}
+	if out != modelEdit {
+		t.Errorf("regressing candidate must be dropped for the caller's content, got %q", out)
+	}
+	if meta.Used || meta.PhaseSolved != "" || meta.WinningScore != 0 {
+		t.Errorf("dropped candidate must carry no V3 metadata, got %+v", meta)
+	}
+}
+
+// The caller's own content is already broken, so the candidate is not a
+// regression: it is returned and the downstream gate rejects with a message
+// about content the model genuinely wrote.
+func TestImproveContentV3KeepsCandidateWhenCallerAlreadyBroken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	modelEdit := "def index():\n    return render_template('x')\n"
+	candidate := "def index():\n    return render_template('index.html')\n"
+
+	v3 := v3AndStructuralServer(t, candidate, "render_template")
+	defer v3.Close()
+	sb := fakeSyntaxSandbox(t, "")
+	defer sb.Close()
+	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+
+	out, meta, err := improveContentWithV3(path, modelEdit, ctx)
+	if err != nil {
+		t.Fatalf("improveContentWithV3 error: %v", err)
+	}
+	if out != candidate || !meta.Used {
+		t.Errorf("candidate must survive when the caller's content is broken too, got out=%q used=%v", out, meta.Used)
+	}
+}
+
+// A clean candidate is returned with full telemetry (the non-drop path).
+func TestImproveContentV3KeepsCleanCandidate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	modelEdit := "def index():\n    return 'ok'\n"
+	candidate := "def index():\n    return 'better'\n"
+
+	v3 := v3AndStructuralServer(t, candidate, "render_template")
+	defer v3.Close()
+	sb := fakeSyntaxSandbox(t, "")
+	defer sb.Close()
+	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+
+	out, meta, err := improveContentWithV3(path, modelEdit, ctx)
+	if err != nil {
+		t.Fatalf("improveContentWithV3 error: %v", err)
+	}
+	if out != candidate {
+		t.Errorf("clean candidate must be adopted, got %q", out)
+	}
+	if !meta.Used || meta.PhaseSolved != "phase1" {
+		t.Errorf("clean candidate must keep V3 telemetry, got %+v", meta)
+	}
+}
+
 // A user cancel while the winner-gate structural check is in flight must
 // land nothing on disk.
 func TestWriteFileV3CancelDuringGateWritesNothing(t *testing.T) {
