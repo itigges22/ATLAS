@@ -758,13 +758,29 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             compile(new_content, path, "exec")
         except SyntaxError as e:
             snippet = (e.text or "").strip()
+            # When the content really is entity-encoded, say so FIRST. The
+            # generic checklist below already mentions entities, but a
+            # SyntaxError from `&lt;head&gt;` points at a line far from the
+            # cause (an unterminated string several lines down), and a model
+            # handed a line number plus a list of five things to check tends
+            # to re-emit the same encoding. Observed live: two consecutive
+            # entity-encoded replacements, neither corrected.
+            entities = [ent for ent in ("&lt;", "&gt;", "&quot;", "&amp;", "&#39;")
+                        if ent in content]
+            lead = ""
+            if entities:
+                lead = (f"Your replacement contains HTML-escaped characters "
+                        f"({', '.join(entities)}) where the file needs literal "
+                        f"ones. Re-emit it with literal < > \" & — a JSON string "
+                        f"carries those directly and must not entity-encode them. ")
             return {"success": False, "error": (
                 f"structural_edit: the replacement makes {path} invalid Python — "
                 f"SyntaxError at line {e.lineno}: {e.msg}"
                 + (f" (offending line: {snippet})" if snippet else "")
-                + '. The file was NOT modified. Check your quoting (no doubled '
-                  'quotes like ["id""], no escaped \\" inside the content, no '
-                  'HTML entities like &quot;) and re-emit the full node.'
+                + f". The file was NOT modified. {lead}"
+                + ('Check your quoting (no doubled '
+                   'quotes like ["id""], no escaped \\" inside the content, no '
+                   'HTML entities like &quot;) and re-emit the full node.')
             )}
 
     return {

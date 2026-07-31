@@ -72,3 +72,31 @@ def test_non_tag_unknown_python_selector_still_lists_selectors():
     q, _, err = main._ast_selector_to_query("def:index", "python")
     assert q is None and err
     assert "function:NAME, class:NAME" in err
+
+
+def test_entity_encoded_replacement_names_the_encoding_first():
+    """A SyntaxError from `&lt;head&gt;` points several lines from the cause.
+
+    The generic checklist already mentions entities, but a model handed a line
+    number plus five things to check re-emits the same encoding — observed
+    live, twice in one session. When the content really is entity-encoded, say
+    so before the checklist.
+    """
+    src = ("from flask import Flask\napp = Flask(__name__)\n\n"
+           "@app.route('/')\ndef index():\n    return 'ok'\n")
+    bad = ('@app.route(\'/\')\ndef index():\n'
+           '    return render_template_string("""\n&lt;html&gt;\n<p>x</p>\n')
+    res = main.structural_edit("app.py", src, "function:index", bad)
+    assert not res.get("success")
+    err = res["error"]
+    assert "HTML-escaped characters" in err
+    assert "&lt;" in err and "&gt;" in err
+
+
+def test_plain_syntax_error_does_not_claim_entity_encoding():
+    src = ("from flask import Flask\napp = Flask(__name__)\n\n"
+           "@app.route('/')\ndef index():\n    return 'ok'\n")
+    res = main.structural_edit("app.py", src, "function:index",
+                               "@app.route('/')\ndef index():\n    return 'oops\n")
+    assert not res.get("success")
+    assert "HTML-escaped characters" not in res["error"]
