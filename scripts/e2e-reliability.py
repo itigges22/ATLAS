@@ -418,6 +418,78 @@ TASKS["ask_bug"] = Task(
 )
 
 
+# --- small rung: a feature added to a real 1.7k-line file ---------------
+#
+# Everything above works in a ~200-line workspace. This is the first rung
+# where the model must LOCATE the right place in a file too long to hold in
+# one look, and where the failure that matters is not "did it work" but "did
+# it break the twelve things that already worked".
+
+_EXECUTOR = REPO / "sandbox" / "executor_server.py"
+_EXISTING_LANGS = ("python", "javascript", "typescript", "go", "java",
+                   "kotlin", "rust", "ruby", "php", "bash", "json", "yaml")
+
+
+def _check_add_toml(ws: Path) -> tuple[bool, str]:
+    src_path = ws / "executor_server.py"
+    src = src_path.read_text()
+    try:
+        ast.parse(src)
+    except SyntaxError as e:
+        return False, f"broke the file: {e.msg} (line {e.lineno})"
+
+    # Regression first — this is the "did everything break" question, and it
+    # matters more than the feature.
+    # Must still be DISPATCHED, not merely mentioned. A first version tested
+    # for the bare string and passed a file whose python branch had been
+    # renamed away — "python" also appears in comments and error text.
+    def dispatched(name: str) -> bool:
+        return bool(re.search(rf'lang\s*==\s*[\'"]{name}[\'"]', src)
+                    or re.search(rf'lang\s+in\s*\([^)]*[\'"]{name}[\'"]', src))
+
+    lost = [name for name in _EXISTING_LANGS if not dispatched(name)]
+    if lost:
+        return False, f"removed existing language handling: {lost}"
+
+    if not dispatched("toml"):
+        return False, "no toml branch added"
+    if not re.search(r"import\s+toml|tomllib|tomli", src):
+        return False, "toml branch added but nothing parses TOML"
+
+    # Behavioural: the added branch has to actually accept valid TOML and
+    # reject broken TOML. Exercised by importing just the checker, so this
+    # does not need the server running.
+    probe = ws / "_probe_toml.py"
+    probe.write_text(
+        "import ast, sys\n"
+        "src = open(%r).read()\n"
+        "tree = ast.parse(src)\n"
+        "fn = next((n for n in ast.walk(tree)\n"
+        "           if isinstance(n, ast.FunctionDef) and 'toml' in ast.dump(n)), None)\n"
+        "print('FOUND' if fn else 'MISSING')\n" % str(src_path))
+    p = subprocess.run([sys.executable, str(probe)], capture_output=True,
+                       text=True, timeout=60)
+    probe.unlink(missing_ok=True)
+    if "FOUND" not in p.stdout:
+        return False, "toml appears in the file but not inside any function"
+    return True, "toml handling added, all 12 existing languages intact, file parses"
+
+
+TASKS["smallrung_toml"] = Task(
+    name="smallrung_toml",
+    prompt=("executor_server.py exposes a syntax-check routine that dispatches "
+            "on a `lang` variable and already handles python, json, yaml and "
+            "several other languages. Add support for TOML: accept lang "
+            "\"toml\", parse the code with Python's tomllib (or the toml "
+            "package), and append any parse error to the same `errors` list "
+            "the other branches use. Change nothing else — the existing "
+            "language branches must keep working exactly as they do now."),
+    files={"executor_server.py": _EXECUTOR.read_text()},
+    check=_check_add_toml,
+    must_exist=("executor_server.py",),
+)
+
+
 def _check_multifile(ws: Path) -> tuple[bool, str]:
     """A real multi-file program: separate modules, working CLI, passing tests.
 
