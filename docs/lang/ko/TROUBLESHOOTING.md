@@ -806,7 +806,7 @@ curl -s http://localhost:8080/embedding \
 
 **원인:** 표준 Compose 배포는 lens 모델 디렉토리를 읽기 전용(`:ro`)으로 컨테이너에 마운트하므로, 서비스 내 재학습 엔드포인트가 새 가중치를 쓸 수 없습니다. 엔드포인트는 학습 전에 쓰기 가능 여부를 탐침하고, 학습 실행을 낭비하는 대신 처음부터 거부합니다.
 
-**해결:** 재학습을 호스트 측에서 실행하세요 — `atlas lens retrain`(피드백 코퍼스) 또는 `atlas lens build`(벤치 후보)가 호스트에 아티팩트를 쓰고, 서비스가 `/internal/lens/reload`(또는 `docker compose restart geometric-lens`)로 다시 로드합니다. 벤치마크 기반 온라인 재캘리브레이션(`lens_feedback`)은 거부를 로그로 남기고 샘플 버퍼를 유지하므로 잃는 것은 없습니다.
+**해결:** 재학습을 호스트 측에서 실행하세요 — `atlas lens retrain`(피드백 코퍼스) 또는 `atlas lens build`(벤치 후보)가 호스트에 아티팩트를 쓰고, `docker compose restart geometric-lens`로 로드합니다(서비스는 시작 시 아티팩트를 읽습니다). 벤치마크 기반 온라인 재캘리브레이션(`lens_feedback`)은 거부를 로그로 남기고 샘플 버퍼를 유지하므로 잃는 것은 없습니다.
 
 ---
 

@@ -469,8 +469,8 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
             logger.error(f"Failed to reload models from {model_dir}: {e}",
                          exc_info=True)
             _load_attempted = True
-            # The message reaches /internal/lens/reload and /retrain HTTP
-            # responses — full detail stays in the log above.
+            # The message reaches the /internal/lens/retrain HTTP response —
+            # full detail stays in the log above.
             return {"status": "error",
                     "message": f"{type(e).__name__}: reload failed "
                                "(see service log)"}

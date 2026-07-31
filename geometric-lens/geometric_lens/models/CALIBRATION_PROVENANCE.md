@@ -36,7 +36,7 @@ the bundle's `provenance.json`):
 ```bash
 atlas lens build --force --epochs 100 \
   --from-results benchmark/results/gemma_lens/v3_lcb/per_task
-docker compose restart geometric-lens   # or POST /internal/lens/reload
+docker compose restart geometric-lens   # the service reads artifacts at startup
 ```
 
 ### Status

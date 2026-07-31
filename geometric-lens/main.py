@@ -4,7 +4,7 @@ import tempfile
 import threading
 import uuid
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
@@ -102,9 +102,9 @@ _BOOT_STATE_DEFAULTS: Dict[str, Any] = {
 }
 _BOOT_STATE: Dict[str, Any] = dict(_BOOT_STATE_DEFAULTS)
 
-# Serializes /internal/lens/retrain and /internal/lens/reload against each
-# other — both mutate the geometric_lens.service module globals and (for
-# retrain) the on-disk artifacts.
+# Serializes concurrent /internal/lens/retrain calls against each other —
+# retrain mutates both the geometric_lens.service module globals and the
+# on-disk artifacts.
 _lens_weights_lock = threading.Lock()
 
 
@@ -395,29 +395,6 @@ def ready():
     return payload
 
 
-@app.get("/")
-async def root():
-    """Root endpoint."""
-    return {
-        "service": "Geometric Lens API",
-        "version": "3.0.1",
-        "endpoints": {
-            "health": "GET /health",
-            "ready": "GET /ready",
-            "pattern_context": "POST /internal/patterns/context",
-            "pattern_write_internal": "POST /internal/patterns/write",
-            "cache_stats": "GET /internal/cache/stats",
-            "lens_evaluate": "GET/POST /internal/lens/evaluate",
-            "lens_score_text": "POST /internal/lens/score-text",
-            "lens_gx_score": "POST /internal/lens/gx-score",
-            "lens_score_per_step": "POST /internal/lens/score-per-step",
-            "lens_retrain": "POST /internal/lens/retrain",
-            "lens_reload": "POST /internal/lens/reload",
-            "sandbox_analyze": "POST /internal/sandbox/analyze",
-        }
-    }
-
-
 # ──────────────────────────────────────────────────────────────
 # Pattern Cache: Write Path + Monitoring Endpoints
 # ──────────────────────────────────────────────────────────────
@@ -513,64 +490,9 @@ async def write_pattern_internal(request: PatternWriteRequest):
     return {"status": "accepted", "message": "Pattern extraction started in background"}
 
 
-@app.get("/internal/cache/stats")
-async def cache_stats():
-    """Get Pattern Cache statistics — size, hit rate, tier distribution, top patterns."""
-    from cache.pattern_store import get_pattern_store
-
-    store = get_pattern_store()
-    stats = store.get_stats()
-
-    # Add top patterns by score
-    if stats.get("available"):
-        top_stm = store.get_stm_patterns(limit=5)
-
-        stats["top_stm"] = [
-            {"id": p.id, "type": p.type.value, "summary": p.summary[:80],
-             "access_count": p.access_count, "surprise": p.surprise_score}
-            for p in top_stm
-        ]
-
-    return stats
-
-
 # ──────────────────────────────────────────────────────────────
 # Geometric Lens: Internal Monitoring Endpoints
 # ──────────────────────────────────────────────────────────────
-
-class LensEvaluateBody(BaseModel):
-    query: Optional[str] = None
-    text: Optional[str] = None
-
-
-@app.api_route("/internal/lens/evaluate", methods=["GET", "POST"])
-def lens_evaluate(request: Request, query: str = None,
-                  body: Optional[LensEvaluateBody] = None):
-    """Evaluate a query through the Geometric Lens (for testing).
-
-    Accepts GET with ?query= param or POST with JSON {"query": "..."}.
-    Malformed POST bodies fail pydantic validation and return a structured
-    422 instead of an unhandled 500.
-    """
-    if request.method == "POST" and body is not None:
-        query = body.query if body.query is not None else (body.text or "")
-    if not query:
-        raise HTTPException(status_code=422, detail="Missing 'query' parameter")
-    try:
-        from geometric_lens.service import evaluate_energy, is_enabled
-        if not is_enabled():
-            return {"enabled": False, "message": "Geometric Lens disabled"}
-
-        raw_energy, normalized = evaluate_energy(query)
-
-        return _apply_drift_flags({
-            "enabled": True,
-            "energy": raw_energy,
-            "energy_normalized": normalized,
-        })
-    except Exception as e:
-        return {"error": _safe_detail(e, "lens evaluate")}
-
 
 class LensScoreTextRequest(BaseModel):
     text: str
@@ -792,34 +714,6 @@ def lens_retrain(request: LensRetrainRequest):
             return {"status": "error", "error": _safe_detail(e, "lens retrain")}
 
 
-@app.post("/internal/lens/reload")
-def lens_reload():
-    """Reload Geometric Lens weights from disk after retraining."""
-    try:
-        from geometric_lens.service import reload_weights, get_model_info
-        with _lens_weights_lock:
-            result = reload_weights()
-            # Refresh the boot-state cache so /ready reflects the new state.
-            if result.get("status") == "reloaded":
-                _run_lens_self_test()
-                # Report the authoritative post-self-test state, not the
-                # transient summary from reload_weights() — that summary's
-                # gx_loaded/cx fields are captured mid-swap and can read
-                # stale, which the host-side retrain script prints verbatim
-                # and misled operators into thinking G(x) failed to load.
-                info = get_model_info()
-                return {
-                    "status": "reloaded",
-                    "gx_loaded": bool(info.get("gx_loaded")),
-                    "cx_calibrated": bool(info.get("cx_calibrated")),
-                    "gx_calibrated": bool(info.get("gx_calibrated")),
-                    "artifact_model": info.get("artifact_model"),
-                }
-        return {"status": result.get("status", "unknown"), **result}
-    except Exception as e:
-        return {"status": "error", "error": _safe_detail(e, "lens reload")}
-
-
 @app.post("/internal/lens/gx-score")
 def lens_gx_score(request: LensScoreTextRequest):
     """Combined C(x) + G(x) scoring in a single call.
@@ -896,73 +790,6 @@ def lens_score_per_step(request: LensScorePerStepRequest):
             "enabled": True, "gx_available": False,
             "per_step": [], "aggregate": {}, "n_tokens": 0,
             "error": _safe_detail(e, "lens score-per-step"),
-        }
-
-
-# ---------------------------------------------------------------------------
-# Sandbox Analysis Endpoint
-# ---------------------------------------------------------------------------
-
-class SandboxAnalyzeRequest(BaseModel):
-    code: str
-    stdout: str = ""
-    stderr: str = ""
-    passed: bool = False
-    expected_output: Optional[str] = None
-    include_gx: bool = True
-
-
-@app.post("/internal/sandbox/analyze")
-def sandbox_analyze(request: SandboxAnalyzeRequest):
-    """Analyze sandbox output with structured error classification and G(x) scoring.
-
-    Combines sandbox error parsing with G(x) quality prediction
-    to produce actionable repair instructions.
-    """
-    try:
-        from sandbox_analysis import analyze_sandbox_output, build_repair_prompt
-
-        gx_score = None
-        gx_result = {}
-
-        # Optionally score with G(x)
-        if request.include_gx and request.code:
-            try:
-                from geometric_lens.service import evaluate_combined, is_enabled
-                if is_enabled():
-                    gx_result = evaluate_combined(f"SOLUTION: {request.code}")
-                    gx_score = gx_result.get("gx_score")
-            except Exception as e:
-                logger.warning(f"G(x) scoring in sandbox/analyze failed: {e}")
-
-        analysis = analyze_sandbox_output(
-            passed=request.passed,
-            stdout=request.stdout,
-            stderr=request.stderr,
-            expected_output=request.expected_output,
-            gx_score=gx_score,
-        )
-
-        repair_prompt = ""
-        if not analysis.passed:
-            repair_prompt = build_repair_prompt(
-                analysis=analysis,
-                gx_score=gx_score,
-            )
-
-        result = analysis.to_dict()
-        result["repair_prompt"] = repair_prompt
-        if gx_result:
-            result["gx_score"] = gx_result.get("gx_score", 0.5)
-            result["cx_energy"] = gx_result.get("cx_energy", 0.0)
-            result["cx_normalized"] = gx_result.get("cx_normalized", 0.5)
-            result["verdict"] = gx_result.get("verdict", "unavailable")
-
-        return result
-    except Exception as e:
-        return {
-            "error": _safe_detail(e, "sandbox analysis"),
-            "passed": False,
         }
 
 

@@ -820,15 +820,10 @@ These are not part of the public API — every row is consumed by other ATLAS se
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Service banner — name, version, a few endpoint pointers |
 | `/internal/patterns/write` | POST | Write pattern data — in-stack path used by v3-service after a successful run |
-| `/internal/cache/stats` | GET | Pattern-cache statistics |
-| `/internal/lens/evaluate` | GET/POST | Evaluate text through Lens (C(x) energy; testing aid) |
 | `/internal/lens/score-text` | POST | Score text (C(x) only) |
 | `/internal/lens/retrain` | POST | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
-| `/internal/lens/reload` | POST | Reload model weights (refreshes the `/ready` state) |
 | `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
-| `/internal/sandbox/analyze` | POST | Sandbox result analysis |
 
 ---
 

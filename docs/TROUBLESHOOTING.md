@@ -889,7 +889,7 @@ The `--embeddings` flag is set by the llama-server entrypoint in every deploymen
 
 **Cause:** The standard Compose deployment mounts the lens models directory into the container read-only (`:ro`), so the in-service retrain endpoint cannot write new weights. The endpoint probes writability before training and refuses up front rather than burning a training run.
 
-**Fix:** Run the retrain host-side — `atlas lens retrain` (feedback corpus) or `atlas lens build` (bench candidates) write the artifacts on the host, then the service reloads them via `/internal/lens/reload` (or `docker compose restart geometric-lens`). Benchmark-driven online recalibration (`lens_feedback`) logs the refusal and keeps its sample buffer, so nothing is lost.
+**Fix:** Run the retrain host-side — `atlas lens retrain` (feedback corpus) or `atlas lens build` (bench candidates) write the artifacts on the host, then `docker compose restart geometric-lens` loads them (the service reads its artifacts at startup). Benchmark-driven online recalibration (`lens_feedback`) logs the refusal and keeps its sample buffer, so nothing is lost.
 
 ---
 

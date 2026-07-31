@@ -786,7 +786,7 @@ curl -s http://localhost:8080/embedding \
 
 **原因：** 标准的 Compose 部署把 lens 模型目录以只读（`:ro`）挂载进容器，因此服务内的重训练端点无法写出新权重。该端点在训练前会探测可写性，宁可提前拒绝也不浪费一轮训练。
 
-**解决方法：** 在主机侧运行重训练 —— `atlas lens retrain`（反馈语料）或 `atlas lens build`（bench 候选）在主机上写出工件，然后服务通过 `/internal/lens/reload` 重新加载（或 `docker compose restart geometric-lens`）。基准驱动的在线重校准（`lens_feedback`）会记录这次拒绝并保留其样本缓冲区，因此不会丢失任何东西。
+**解决方法：** 在主机侧运行重训练 —— `atlas lens retrain`（反馈语料）或 `atlas lens build`（bench 候选）在主机上写出工件，然后 `docker compose restart geometric-lens` 加载它们（服务在启动时读取工件）。基准驱动的在线重校准（`lens_feedback`）会记录这次拒绝并保留其样本缓冲区，因此不会丢失任何东西。
 
 ---
 
