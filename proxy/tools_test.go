@@ -1035,3 +1035,38 @@ func TestCallGraphFooterMarksItselfAsNotFileContent(t *testing.T) {
 		t.Error("the end-of-file marker must precede the analysis section")
 	}
 }
+
+// read_file numbers lines "N<tab>content" for reference, and nothing said so.
+// A model reasonably concluded the file itself was tab-delimited: an
+// otherwise correct grid-puzzle solution parsed every line as
+// line.split('\t')[1], found no tabs in the real file, built an empty grid
+// and printed 0. The payload has to disclaim its own formatting.
+func TestReadFileDisclaimsItsLineNumbering(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "grid.txt"),
+		[]byte("..#\n#..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.Ctx = context.Background()
+
+	res, err := readFileTool().Execute(json.RawMessage(`{"path":"grid.txt"}`), ctx)
+	if err != nil || res == nil || !res.Success {
+		t.Fatalf("read_file failed: %v %+v", err, res)
+	}
+	var out ReadFileOutput
+	if err := json.Unmarshal(res.Data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(out.Content, "NOT in the file") {
+		t.Errorf("read_file must disclaim its line numbering, got %q", out.Content)
+	}
+	// The disclaimer must precede the numbered body, or it explains nothing.
+	if strings.Index(out.Content, "NOT in the file") > strings.Index(out.Content, "1\t") {
+		t.Error("the disclaimer must come before the numbered lines")
+	}
+	// And the actual content still has to be there, numbered as before.
+	if !strings.Contains(out.Content, "1\t..#") {
+		t.Errorf("numbered content missing: %q", out.Content)
+	}
+}

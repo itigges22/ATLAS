@@ -694,11 +694,22 @@ def tui_handled_types() -> set[str]:
 
 def run_session(task: Task, rep: int, url: str, workspace: Path,
                 subdir: str, timeout: int) -> Session:
-    # Reset the fixture so every rep starts from the same state.
+    # Wipe the workspace, then lay down only this task's fixtures. Resetting
+    # the fixtures alone is not isolation: solve.py from a previous AoC task
+    # survived into the next one, and a session that wrote nothing would have
+    # been scored on the earlier task's program.
+    if workspace.exists():
+        for leftover in sorted(workspace.rglob("*"), reverse=True):
+            try:
+                if leftover.is_file() or leftover.is_symlink():
+                    leftover.unlink()
+                elif leftover.is_dir():
+                    leftover.rmdir()
+            except OSError:
+                pass
+    workspace.mkdir(parents=True, exist_ok=True)
     for name, content in task.files.items():
         (workspace / name).write_text(content)
-    for stale in workspace.glob("*.pyc"):
-        stale.unlink()
 
     # sandbox_subdir, NOT working_dir. The proxy deliberately overrides the
     # client's working_dir with ATLAS_WORKSPACE_DIR (agent.go): the TUI sends

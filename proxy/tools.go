@@ -248,8 +248,18 @@ func readFileTool() *ToolDef {
 				}
 			}
 
-			// Build numbered output (matches Claude Code's cat -n format)
+			// Build numbered output (matches Claude Code's cat -n format).
+			//
+			// The "N<tab>" prefix is presentation, and nothing in the payload
+			// said so, so a model reasonably concluded the file itself is
+			// tab-delimited. Observed live: an otherwise correct solution to a
+			// grid puzzle parsed every line as `line.split('\t')[1]`, found no
+			// tabs in the real file, built an empty grid and printed 0. Say it
+			// once, up front, for any read a program might be written against.
 			var sb strings.Builder
+			sb.WriteString("(Line numbers and the tab after them are added by " +
+				"read_file for reference. They are NOT in the file — code that " +
+				"reads this file must not parse them.)\n")
 			for i := start; i < end; i++ {
 				fmt.Fprintf(&sb, "%d\t%s\n", i+1, lines[i])
 			}
