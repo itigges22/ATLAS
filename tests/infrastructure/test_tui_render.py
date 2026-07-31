@@ -11,6 +11,7 @@ the painted frames back. Live-stack test: deselected by the default
 `-m 'not integration'`, run it with `-m integration` on a host with the stack up
 and `tui/atlas-tui` built.
 """
+import errno
 import fcntl
 import os
 import pty
@@ -69,14 +70,20 @@ def painted() -> str:
         if proc.poll() is not None:
             break
 
-    try:
-        os.write(master, b"/quit\r")
-        time.sleep(1.0)
-        if proc.poll() is None:
-            os.write(master, b"\x03")
-            time.sleep(0.5)
-    except OSError:
-        pass
+    # Ask it to quit; a TUI that already exited has closed the pty, which
+    # makes the write fail. That is the expected race, not a fault, so it is
+    # narrowed to the already-gone errnos and the terminate() below is what
+    # actually guarantees the process is reaped.
+    if proc.poll() is None:
+        try:
+            os.write(master, b"/quit\r")
+            time.sleep(1.0)
+            if proc.poll() is None:
+                os.write(master, b"\x03")
+                time.sleep(0.5)
+        except OSError as e:
+            if e.errno not in (errno.EIO, errno.EBADF, errno.EPIPE):
+                raise
     if proc.poll() is None:
         proc.terminate()
         try:
