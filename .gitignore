@@ -195,3 +195,5 @@ geometric-lens/geometric_lens/models/.previous-bundle/
 docs/reports/ablation/condition_[a-d]*/v3_lcb/per_task/
 docs/reports/ablation/condition_[a-d]*/summary.json
 .docs-audit-findings.md
+.loop-prompt.md
+.loop-progress.md
