@@ -13,7 +13,6 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
       - If any pass → Lens selects best → DONE
 
     Phase 2: Compute allocation (k=3 pinned)
-      - ReASC → early stopping on low-confidence
 
     Phase 3: Verified iterative refinement (if 0/k pass)
       - PR-CoT repair (quick fix, 1-2 attempts)
@@ -21,7 +20,6 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
         - 3A: Failure analysis
         - 3B: Constraint refinement
         - 3E: Loop orchestration (max 2 iterations)
-      - 3G: ACE learning from successes
 
 Telemetry: results/<run_id>/telemetry/v3_events.jsonl
 """
@@ -61,7 +59,6 @@ from stages.llm_client import chat_completion, chatml_to_messages, extract_code
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
 from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
-from stages.reasc import ReASC, ReASCConfig
 from stages.failure_analysis import (
     FailureAnalyzer, FailureAnalysisConfig, FailingCandidate,
 )
@@ -72,7 +69,6 @@ from stages.pr_cot import PRCoT, PRCoTConfig
 from stages.refinement_loop import (
     RefinementLoop, RefinementLoopConfig,
 )
-from stages.ace_pipeline import ACEPipeline, ACEConfig
 from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
 from stages.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
 from stages.candidate_selection import (
@@ -398,14 +394,12 @@ class V3Pipeline:
     def __init__(self, telemetry_dir: Path,
                  llama_url: str = LLAMA_URL,
                  enable_phase1: bool = True,
-                 enable_phase2: bool = True,
                  enable_phase3: bool = True,
                  enable_feedback: bool = False,
                  selection_strategy: str = "lens"):
         self.telemetry_dir = telemetry_dir
         self.llama_url = llama_url
         self.enable_phase1 = enable_phase1
-        self.enable_phase2 = enable_phase2
         self.enable_phase3 = enable_phase3
         self.selection_strategy = selection_strategy
 
@@ -417,7 +411,6 @@ class V3Pipeline:
 
         # Initialize V3 components
         self._init_phase1(telemetry_dir)
-        self._init_phase2(telemetry_dir)
         self._init_phase3(telemetry_dir)
         self._init_feedback(telemetry_dir, enable_feedback)
 
@@ -432,12 +425,6 @@ class V3Pipeline:
             ).strip('"')
             v3["ps_num_plans"] = int(conf.get(
                 "ATLAS_V3_PLAN_SEARCH_NUM_PLANS", "3",
-            ))
-            v3["reasc_confidence"] = float(conf.get(
-                "ATLAS_V3_REASC_CONFIDENCE_THRESHOLD", "-0.5",
-            ))
-            v3["reasc_energy"] = float(conf.get(
-                "ATLAS_V3_REASC_ENERGY_THRESHOLD", "0.10",
             ))
             v3["ewc_lambda"] = float(conf.get(
                 "ATLAS_V3_EWC_LAMBDA", "1000.0",
@@ -480,16 +467,6 @@ class V3Pipeline:
             telemetry_dir=telemetry_dir,
         )
 
-    def _init_phase2(self, telemetry_dir):
-        self.reasc = ReASC(
-            ReASCConfig(
-                enabled=self.enable_phase2,
-                confidence_threshold=self._v3_conf.get("reasc_confidence", -0.5),
-                energy_threshold=self._v3_conf.get("reasc_energy", 0.10),
-            ),
-            telemetry_dir=telemetry_dir,
-        )
-
     def _init_phase3(self, telemetry_dir):
         fa_config = FailureAnalysisConfig(enabled=self.enable_phase3)
         cr_config = ConstraintRefinementConfig(enabled=self.enable_phase3)
@@ -503,10 +480,6 @@ class V3Pipeline:
             RefinementLoopConfig(enabled=self.enable_phase3),
             failure_analyzer=self.failure_analyzer,
             constraint_refiner=self.constraint_refiner,
-            telemetry_dir=telemetry_dir,
-        )
-        self.ace = ACEPipeline(
-            ACEConfig(enabled=self.enable_phase3),
             telemetry_dir=telemetry_dir,
         )
         self.self_test_gen = SelfTestGen(
@@ -556,15 +529,13 @@ class V3Pipeline:
         # Per-phase latency tracking
         latency = {}
 
-        # ===== PROBE: Quick candidate for Lens energy estimation =====
-        # Generate a single candidate to get energy signal for the ReASC
-        # telemetry and Budget Forcing tier selection.
-        # Uses "standard" tier (up to 2048 thinking tokens) — matches
-        # Qwen3.5 published benchmark settings where thinking is enabled.
-        # Gives the model enough reasoning budget to solve harder tasks
-        # at probe, reducing cascade into Phase 3.
+        # ===== PROBE: quick candidate for a data-driven early exit =====
+        # Generate a single candidate; its lens energy feeds candidate
+        # sorting and selection. Uses "standard" tier (up to 2048 thinking
+        # tokens) — matches Qwen3.5 published benchmark settings where
+        # thinking is enabled. Gives the model enough reasoning budget to
+        # solve harder tasks at probe, reducing cascade into Phase 3.
         probe_candidate = None
-        probe_energy_raw = None
 
         if self.enable_phase1:
             probe_start = time.time()
@@ -579,11 +550,6 @@ class V3Pipeline:
                         energy_raw, energy_norm = score_candidate(
                             probe_code, LENS_URL,
                         )
-                        # Sentinel check: (0.0, 0.5) means Lens models
-                        # not loaded. Leave probe_energy_raw as None so
-                        # Phase 2 falls back to default k=3.
-                        if not (energy_raw == 0.0 and energy_norm == 0.5):
-                            probe_energy_raw = energy_raw
                     except Exception:
                         energy_raw, energy_norm = 0.0, 0.5
                     probe_candidate = {
@@ -636,9 +602,8 @@ class V3Pipeline:
             # No need to generate more candidates.
             k = 1
             budget_tier = "nothink"
-            bf_tier = self.budget_forcing.select_tier()
             result["telemetry"]["probe_early_exit"] = True
-        elif self.enable_phase2 and probe_energy_raw is not None:
+        else:
             # Probe FAILED sandbox — we need diverse candidates. k is
             # pinned to 3 so PlanSearch runs: the C(x)-only dynamic
             # allocator's k tracked the lens's normalization scale, not
@@ -646,18 +611,7 @@ class V3Pipeline:
             # normalized to <0.05 — always mapping to k=1.
             k = 3
             budget_tier = "standard"
-            bf_tier = self.budget_forcing.select_tier()
-
-            # Log the ReASC evaluation for telemetry (not gating)
-            should_stop, reasc_reason = self.reasc.evaluate(
-                probe_energy_raw, llm.last_logprobs, task_id=task_id,
-            )
-            result["telemetry"]["reasc_stopped"] = should_stop
-            result["telemetry"]["reasc_reason"] = reasc_reason
-        else:
-            k = 3
-            budget_tier = "standard"
-            bf_tier = self.budget_forcing.select_tier()
+        bf_tier = self.budget_forcing.select_tier()
 
         latency["phase2_alloc_ms"] = (time.time() - phase2_start) * 1000
         result["telemetry"]["adaptive_k"] = k
@@ -672,30 +626,16 @@ class V3Pipeline:
         if probe_candidate:
             candidates.append(probe_candidate)
 
-        # Get ACE playbook context for this task
-        ace_context = ""
-        if self.enable_phase3:
-            try:
-                categories = self._infer_categories(task)
-                ace_context = self.ace.get_context(categories, task_id=task_id)
-            except Exception:
-                # best-effort: swallow on failure (caller continues)
-                pass
-
         # Generate constraint-diverse candidates via PlanSearch
         remaining_k = max(0, k - len(candidates))
         if self.enable_phase1 and remaining_k > 0:
             try:
-                problem_with_context = task.prompt
-                if ace_context:
-                    problem_with_context = f"{task.prompt}\n\n{ace_context}"
-
                 # PlanSearch does multiple sequential LLM calls (constraint
                 # extraction + plan construction + code gen). Use a longer
                 # timeout to handle long competition prompts at 9B speed.
                 ps_llm = LLMAdapter(self.llama_url, timeout=300)
                 ps_result = self.plan_search.generate(
-                    problem=problem_with_context, task_id=task_id,
+                    problem=task.prompt, task_id=task_id,
                     llm_call=ps_llm, num_plans=remaining_k,
                 )
                 result["total_tokens"] += ps_llm.total_tokens
@@ -980,14 +920,8 @@ class V3Pipeline:
                 best_failing = failing[0]
                 error_msg = best_failing.error_output or "All test cases failed"
 
-                # Enrich problem context with ACE principles for
-                # better-guided repairs
-                enriched_problem = task.prompt
-                if ace_context:
-                    enriched_problem += f"\n\n{ace_context}"
-
                 repair_result = self.pr_cot.repair(
-                    problem=enriched_problem,
+                    problem=task.prompt,
                     code=best_failing.code,
                     error=error_msg,
                     llm_call=pr_llm,
@@ -1008,7 +942,6 @@ class V3Pipeline:
                             result["passed"] = True
                             result["code"] = repair_code
                             result["phase_solved"] = "pr_cot"
-                            self._learn_from_success(task, task_id, "pr_cot")
                             break
                     except Exception:
                         continue
@@ -1037,7 +970,6 @@ class V3Pipeline:
                         result["code"] = ref_result.winning_code
                         result["phase_solved"] = "refinement"
                         result["telemetry"]["refinement_iterations"] = ref_result.total_iterations
-                        self._learn_from_success(task, task_id, "refinement")
             except Exception as e:
                 result["telemetry"]["refinement_error"] = str(e)
 
@@ -1067,59 +999,6 @@ class V3Pipeline:
                 self.lens_feedback.apply_to_components(self.budget_forcing)
         except Exception:
             pass  # Never crash benchmark for feedback
-
-    def _learn_from_success(self, task: BenchmarkTask,
-                            task_id: str, method: str) -> None:
-        """Extract and store a principle from a successfully solved task."""
-        try:
-            categories = self._infer_categories(task)
-            category = categories[0] if categories else ""
-
-            # Check if this relates to existing principles
-            related = self.ace.find_related(
-                f"Solved via {method}", categories,
-            )
-
-            if len(related) >= 2:
-                # Derive a composed principle from related ones
-                self.ace.derive(
-                    parent_ids=[r.entry_id for r in related[:3]],
-                    new_principle=f"Solved via {method}: {task_id} (builds on {category} principles)",
-                    category=category,
-                    task_id=task_id,
-                )
-            else:
-                self.ace.learn(
-                    principle=f"Solved via {method}: {task_id}",
-                    category=category,
-                    task_id=task_id,
-                )
-        except Exception:
-            # best-effort: swallow on failure (caller continues)
-            pass
-
-    def _infer_categories(self, task: BenchmarkTask) -> List[str]:
-        """Infer problem categories from task metadata."""
-        categories = []
-        prompt_lower = task.prompt.lower()
-
-        if any(w in prompt_lower for w in ["sort", "binary search", "heap"]):
-            categories.append("sorting_searching")
-        if any(w in prompt_lower for w in ["graph", "tree", "bfs", "dfs", "node"]):
-            categories.append("graph_theory")
-        if any(w in prompt_lower for w in ["dynamic programming", "dp", "memoiz"]):
-            categories.append("dynamic_programming")
-        if any(w in prompt_lower for w in ["string", "substring", "palindrome"]):
-            categories.append("string_processing")
-        if any(w in prompt_lower for w in ["bit", "xor", "bitwise", "shift"]):
-            categories.append("bitwise")
-        if any(w in prompt_lower for w in ["math", "prime", "gcd", "modulo"]):
-            categories.append("mathematics")
-
-        if not categories:
-            categories.append("general")
-
-        return categories
 
     def _log_v3_event(self, task_id: str, result: Dict) -> None:
         """Log a unified V3 pipeline event to JSONL.
@@ -1154,7 +1033,7 @@ class V3BenchmarkRunner:
     """Runs V3 benchmark with full pipeline."""
 
     def __init__(self, run_dir: Path, enable_phase1=True,
-                 enable_phase2=True, enable_phase3=True,
+                 enable_phase3=True,
                  enable_feedback=False, selection_strategy="lens"):
         self.run_dir = Path(run_dir)
         self.telemetry_dir = self.run_dir / "telemetry"
@@ -1162,7 +1041,6 @@ class V3BenchmarkRunner:
         self.pipeline = V3Pipeline(
             self.telemetry_dir,
             enable_phase1=enable_phase1,
-            enable_phase2=enable_phase2,
             enable_phase3=enable_phase3,
             enable_feedback=enable_feedback,
             selection_strategy=selection_strategy,
@@ -1334,7 +1212,7 @@ def load_lcb_tasks():
 
 
 def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
-                     enable_phase1=True, enable_phase2=True,
+                     enable_phase1=True,
                      enable_phase3=True, selection_strategy="lens",
                      enable_feedback=False):
     """Run V3 benchmark on LiveCodeBench."""
@@ -1350,7 +1228,6 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         "start_time": datetime.now(timezone.utc).isoformat(),
         "version": "v3",
         "enable_phase1": enable_phase1,
-        "enable_phase2": enable_phase2,
         "enable_phase3": enable_phase3,
         "selection_strategy": selection_strategy,
         "enable_feedback": enable_feedback,
@@ -1364,7 +1241,6 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     print(f"  Run ID: {run_id}")
     print(f"  Results: {run_dir}")
     print(f"  Phase 1: {'ON' if enable_phase1 else 'OFF'}")
-    print(f"  Phase 2: {'ON' if enable_phase2 else 'OFF'}")
     print(f"  Phase 3: {'ON' if enable_phase3 else 'OFF'}")
     print("=" * 60)
 
@@ -1432,7 +1308,6 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     runner = V3BenchmarkRunner(
         run_dir,
         enable_phase1=enable_phase1,
-        enable_phase2=enable_phase2,
         enable_phase3=enable_phase3,
         selection_strategy=selection_strategy,
         enable_feedback=enable_feedback,
@@ -1480,8 +1355,6 @@ def main():
                         help="Limit number of tasks")
     parser.add_argument("--no-phase1", action="store_true",
                         help="Disable Phase 1 features")
-    parser.add_argument("--no-phase2", action="store_true",
-                        help="Disable Phase 2 features")
     parser.add_argument("--no-phase3", action="store_true",
                         help="Disable Phase 3 features")
     parser.add_argument("--baseline", action="store_true",
@@ -1495,7 +1368,6 @@ def main():
 
     if args.baseline:
         args.no_phase1 = True
-        args.no_phase2 = True
         args.no_phase3 = True
 
     run_dir = run_v3_benchmark(
@@ -1503,7 +1375,6 @@ def main():
         smoke_only=args.smoke,
         max_tasks=args.max_tasks,
         enable_phase1=not args.no_phase1,
-        enable_phase2=not args.no_phase2,
         enable_phase3=not args.no_phase3,
         selection_strategy=args.selection_strategy,
         enable_feedback=args.enable_feedback,

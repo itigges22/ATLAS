@@ -344,27 +344,24 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 ### Module Map
 
-The pipeline stages are 14 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 10 of them (9 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
+The pipeline stages are 12 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 10 of them (9 directly; `constraint_refinement` via the refinement loop); `lens_feedback` and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR
     Main["pipeline.py"] --> PS["PlanSearch 1A"]
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
-    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
     Main --> PRCOT["PR-CoT 3C"]
     Main --> RL["RefinementLoop 3E"]
-    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
     Main --> LLM["LLMClient"]
-    Bench --> LF["LensFeedback"]
+    Bench["v3_runner.py\n(bench only)"] --> LF["LensFeedback"]
     Bench --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR["ConstraintRefiner 3B"]
-    REASC --> BF
     LF --> BF
 
     style Main fill:#333,color:#fff
@@ -372,13 +369,11 @@ graph LR
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
-    style REASC fill:#2d5016,color:#fff
     style CS fill:#2d5016,color:#fff
     style FA fill:#5c3a1a,color:#fff
     style CR fill:#5c3a1a,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
     style RL fill:#5c3a1a,color:#fff
-    style ACE fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff
     style LLM fill:#333,color:#fff
     style LF fill:#333,color:#fff

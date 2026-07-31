@@ -33,7 +33,6 @@ The premise behind ATLAS: scaling inference compute on a frozen model can match 
 
 ### V3 Pipeline — Phase 2 (Intelligent Compute, shipped)
 
-- **ReASC, 2026.** *Early Stopping for Test-Time Compute.* arXiv [2601.02970](https://arxiv.org/abs/2601.02970). **Primary citation for ReASC confidence-based early stopping.**
 - **Li et al. (UC Berkeley), 2025.** *S\*: Test Time Scaling for Code Generation via Distinguishing Inputs.* arXiv [2502.14382](https://arxiv.org/abs/2502.14382). **Primary citation for S\* candidate selection** (replaced the V2 Best-of-K approach).
 
 ### V3 Pipeline — Phase 3 (Verified Iterative Refinement, shipped)
