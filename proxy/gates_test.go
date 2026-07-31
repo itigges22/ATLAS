@@ -1226,3 +1226,31 @@ func TestUnreadOverwriteAllowsSessionOwnedAndCorrupted(t *testing.T) {
 		t.Error("a corrupted file must stay overwritable")
 	}
 }
+
+// `f"{d["k"]}"` is valid from Python 3.12 (PEP 701) and a SyntaxError on
+// 3.11, which is what the sandbox runs. The model is not wrong so much as too
+// new, and a session hit the wall clock re-emitting the same nesting because
+// the advice sat in a parenthetical after two other sentences.
+func TestFStringRejectionLeadsWithTheQuotingFix(t *testing.T) {
+	msg := fallbackSyntaxRejection("todo.py",
+		"print(f\"{i}: {item[\"text\"]}\")\n",
+		"SyntaxError: f-string: unmatched '[' (line 1)")
+	if !strings.Contains(msg, "f-string quoting error") {
+		t.Errorf("must lead with the quoting diagnosis, got %q", msg)
+	}
+	if !strings.Contains(msg, "3.12") {
+		t.Errorf("must explain the version reason, got %q", msg)
+	}
+	if !strings.Contains(msg, "the other quote") {
+		t.Errorf("must name the fix, got %q", msg)
+	}
+}
+
+// A non-f-string syntax error keeps the general message.
+func TestNonFStringSyntaxErrorKeepsGeneralAdvice(t *testing.T) {
+	msg := fallbackSyntaxRejection("a.py", "def f(:\n    pass\n",
+		"SyntaxError: invalid syntax (line 1)")
+	if strings.Contains(msg, "f-string quoting error") {
+		t.Errorf("plain syntax error must not claim an f-string problem: %q", msg)
+	}
+}

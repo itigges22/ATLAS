@@ -828,6 +828,23 @@ func fallbackSyntaxRejection(path, content, syntaxErr string) string {
 			}
 		}
 	}
+	// An f-string error is almost always quote nesting, and the model is not
+	// wrong so much as too new: `f"{d["k"]}"` is valid from Python 3.12
+	// (PEP 701) and a SyntaxError on 3.11, which is what the sandbox runs.
+	// Leading with that turns a confusing rejection into a one-step fix.
+	// Observed live: a session hit the wall clock re-emitting the same
+	// nesting, because the advice sat in a parenthetical after two other
+	// sentences.
+	if strings.Contains(strings.ToLower(syntaxErr), "f-string") {
+		return fmt.Sprintf(
+			"Your content for %s has an f-string quoting error (%s) — it was NOT "+
+				"written.%s Nesting the SAME quote character inside an f-string, "+
+				"like f\"{d[\"k\"]}\", needs Python 3.12; this environment runs an "+
+				"older Python, so it is a syntax error here. Use the other quote "+
+				"inside — f\"{d['k']}\" — or pull the value into a variable first. "+
+				"Do NOT resend the same content unchanged.",
+			path, truncateStr(syntaxErr, 200), quoted)
+	}
 	return fmt.Sprintf(
 		"Your content for %s has a syntax error (%s) — it was NOT written. The "+
 			"content is NOT truncated; it is complete but INVALID.%s Fix THAT "+
