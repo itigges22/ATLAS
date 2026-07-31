@@ -2692,7 +2692,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// Path translation: the TUI sends its host cwd (e.g. /home/isaac/snake)
 	// as working_dir, but the proxy runs in a container where that path
 	// doesn't exist — only /workspace (the bind-mount target) does. The
-	// startup wrapper (atlas/cli/repl.py:_align_workspace) already aligns
+	// startup wrapper (atlas/runtime.py:_align_workspace) already aligns
 	// the bind mount to the user's cwd, so /workspace IS the user's cwd
 	// from the proxy's perspective. Use ATLAS_WORKSPACE_DIR (set in
 	// docker-compose.yml) as the canonical write target. The original

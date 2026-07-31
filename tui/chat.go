@@ -3,7 +3,7 @@
 //
 // Two SSE protocols flow into this TUI:
 //
-//   /events  — typed Envelope stream (consumer.go) — pipeline visibility
+//   /events  — typed Envelope stream (streamEvents, below) — pipeline visibility
 //   /v1/agent — {type, data} chat stream (this file) — assistant reply
 //   /v1/chat/completions — standard OpenAI SSE used only by the raw demo pane
 //
@@ -422,8 +422,8 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 // sees `data: [DONE]` (clean end-of-turn) or io.EOF.
 func parseChatSSE(ctx context.Context, r io.Reader, out chan<- chatEvent) error {
 	scanner := bufio.NewScanner(r)
-	// tool_result frames carry diff blobs; bump the buffer like
-	// consumer.go does for the same reason.
+	// tool_result frames carry diff blobs; bump the buffer for the
+	// same reason streamEvents does below.
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
 	for scanner.Scan() {
@@ -528,7 +528,7 @@ func loadBearerToken() string {
 }
 
 // Internal service auth, client side. The `atlas` launcher
-// (atlas/cli/commands/tui.py) resolves the checkout's
+// (atlas/commands/tui.py) resolves the checkout's
 // secrets/service-token and passes its path via
 // ATLAS_SERVICE_TOKEN_FILE; a cwd-relative secrets/service-token is
 // the fallback for direct binary runs from the checkout. No token =>
@@ -577,7 +577,7 @@ func installTokenTransport() {
 // PC-062: SSE event consumer for the TUI.
 //
 // Mirrors the Envelope struct in proxy/events.go and the Python
-// dataclass in atlas/cli/events.py. The schema contract is documented
+// dataclass in atlas/events.py. The schema contract is documented
 // in docs/PROTOCOL.md — any change here MUST be made in lockstep
 // across all three implementations.
 //
@@ -586,7 +586,7 @@ func installTokenTransport() {
 // resumable: if /events drops, we reconnect with exponential backoff.
 
 // Envelope is the wire-format event. Field tags MUST match
-// atlas/cli/events.py and proxy/events.go exactly.
+// atlas/events.py and proxy/events.go exactly.
 type Envelope struct {
 	EventID    string                 `json:"event_id"`
 	Timestamp  float64                `json:"timestamp"`

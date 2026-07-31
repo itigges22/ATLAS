@@ -1,7 +1,7 @@
 // Typed event protocol for atlas-proxy.
 //
-// Mirrors the schema defined in atlas/cli/events.py so the same Python
-// consumer (atlas/cli/events.py) can read events from both v3-service
+// Mirrors the schema defined in atlas/events.py so the same Python
+// consumer (atlas/events.py) can read events from both v3-service
 // and atlas-proxy. The envelope shape is documented in docs/PROTOCOL.md.
 //
 // Architecture: a global pub/sub broker. Producers (agent loop, tool
@@ -24,7 +24,7 @@ import (
 )
 
 // Envelope is the wire-format event. JSON tags match the Python dataclass
-// in atlas/cli/events.py exactly — any change here MUST also be made there.
+// in atlas/events.py exactly — any change here MUST also be made there.
 type Envelope struct {
 	EventID    string                 `json:"event_id"`
 	Timestamp  float64                `json:"timestamp"`

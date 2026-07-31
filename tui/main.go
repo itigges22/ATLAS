@@ -6,7 +6,7 @@
 // in interactive mode; pipe mode falls back to the built-in REPL.
 //
 // Bubbletea model is in model.go; pane rendering in panes.go;
-// chat/agent client in chat.go; SSE consumer in consumer.go.
+// chat/agent client and the /events SSE consumer both in chat.go.
 
 package main
 

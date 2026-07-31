@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from . import go_source
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -81,3 +83,21 @@ def test_translated_readme_badge_matches(lang):
     assert f"version-V{version}-" in path.read_text(), (
         f"docs/lang/{lang}/README.md version badge must contain "
         f"'version-V{version}-' (pyproject.toml says {version})")
+
+
+def test_proxy_startup_banner_matches():
+    """The proxy prints its version at startup from a hardcoded literal.
+
+    It is the only version surface that lives in code rather than a doc, so
+    without this a release bump leaves the running service announcing the
+    previous version while every documented surface says the new one.
+    Located by content marker, not filename, so consolidating proxy files
+    does not silently drop the check.
+    """
+    version = _truth()
+    src = go_source("proxy", "ATLAS Proxy v")
+    m = re.search(r'"ATLAS Proxy v(\d+\.\d+\.\d+) starting', src)
+    assert m, "proxy startup banner must say 'ATLAS Proxy vX.Y.Z starting'"
+    assert m.group(1) == version, (
+        f"proxy startup banner says {m.group(1)!r}, "
+        f"pyproject.toml says {version!r}")

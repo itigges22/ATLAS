@@ -27,11 +27,11 @@ COPY v3-service/structured_log.py /app/structured_log.py
 COPY v3-service/graph/ /app/graph/
 
 # Non-root application account created inside this image. The V3 service
-# writes nothing to the container fs at runtime (telemetry disabled; it
-# proxies to llama/lens/sandbox), so /app stays root-owned + world-
-# readable and the app user needs no writable app directory. HOME is a
-# writable home for any library cache; bytecode caching is disabled so
-# Python never tries to write .pyc into the read-only /app.
+# writes only to /data/telemetry (stage telemetry, fail-soft) and HOME
+# (library caches) — everything else it does is proxied to
+# llama/lens/sandbox — so /app stays root-owned + world-readable and the
+# app user needs no writable app directory. Bytecode caching is disabled
+# so Python never tries to write .pyc into the read-only /app.
 ENV PYTHONDONTWRITEBYTECODE=1
 RUN useradd --create-home --uid 1001 --user-group appuser && \
     # Pre-create the telemetry path owned by appuser: a named volume
