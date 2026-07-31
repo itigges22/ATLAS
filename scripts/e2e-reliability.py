@@ -452,12 +452,14 @@ def h6_service_fault(s: Session) -> list[str]:
     return out
 
 
-def h7_background_leak(sandbox: str) -> list[str]:
-    """Background jobs must not outlive the session that started them.
+def h7_background_leak(sandbox: str, s: Session) -> list[str]:
+    """A background job may outlive the session, but not silently.
 
-    An observed session started a server to verify its own work, and every
-    later run of that app in the SAME session failed with "Address already in
-    use" — a conflict the session created and could not clear.
+    Persistence is deliberate: an agent loop is one user message, so killing
+    jobs at its end would break "start the dev server" followed by "now curl
+    it". The defect is a job that keeps its port with nobody told — the next
+    turn then fails on a bound port with no explanation. So this fires only
+    when jobs are running AND the session never said so.
     """
     if not sandbox:
         return []
@@ -465,10 +467,16 @@ def h7_background_leak(sandbox: str) -> list[str]:
                         "ps -eo args | grep -v grep | grep -c 'python app' || true"],
                        capture_output=True, text=True, timeout=30)
     n = (p.stdout or "0").strip()
-    if n.isdigit() and int(n) > 0:
-        return [f"H7 background leak: {n} job(s) still running in the sandbox "
-                f"after the session ended"]
-    return []
+    if not (n.isdigit() and int(n) > 0):
+        return []
+    announced = any(
+        "still running" in str((e.get("data") or {}).get("summary") or "").lower()
+        or "stop_background" in str((e.get("data") or {}).get("summary") or "")
+        for e in s.of_type("done"))
+    if announced:
+        return []
+    return [f"H7 silent background leak: {n} job(s) still holding ports and the "
+            f"session never said so"]
 
 
 # --------------------------------------------------------------------------
@@ -667,7 +675,7 @@ def main() -> int:
             s.defects += h4_gate_escape(s)
             s.defects += h5_corrupt_write(s, task)
             s.defects += h6_service_fault(s)
-            s.defects += h7_background_leak(args.sandbox_container)
+            s.defects += h7_background_leak(args.sandbox_container, s)
             sessions.append(s)
             if args.save_events:
                 d = Path(args.save_events)

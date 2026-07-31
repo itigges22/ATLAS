@@ -184,3 +184,26 @@ def test_tui_handled_types_is_populated_and_has_the_core_events(rel):
     assert len(handled) > 30, f"only found {len(handled)} — dispatcher not located?"
     for core in ("tool_call", "tool_result", "done", "text", "error"):
         assert core in handled, f"TUI dispatcher has no case for {core!r}"
+
+
+# --- H7 silent background leak -------------------------------------------
+
+def test_h7_is_silent_when_the_session_announced_the_jobs(rel, tmp_path, monkeypatch):
+    """Persistence is deliberate; the defect is persistence nobody was told about.
+
+    An agent loop is one user message, so killing jobs at its end would break
+    "start the dev server" then "now curl it". H7 must therefore fire on
+    silence, not on the jobs existing.
+    """
+    monkeypatch.setattr(rel.subprocess, "run",
+                        lambda *a, **k: type("P", (), {"stdout": "2", "returncode": 0})())
+    announced = _session(rel, [{"type": "done", "data": {"summary":
+        "Done.\n\nStill running in the sandbox:\n  abc — python app.py\n"
+        "These keep their ports until stopped. Use stop_background to end them."}}],
+        tmp_path)
+    assert rel.h7_background_leak("atlas-sandbox-1", announced) == []
+
+    silent = _session(rel, [{"type": "done", "data": {"summary": "Added the toggle."}}],
+                      tmp_path)
+    found = rel.h7_background_leak("atlas-sandbox-1", silent)
+    assert found and "silent background leak" in found[0]

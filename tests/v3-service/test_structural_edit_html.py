@@ -104,3 +104,44 @@ def test_plain_syntax_error_does_not_claim_entity_encoding():
                                "@app.route('/')\ndef index():\n    return 'oops\n")
     assert not res.get("success")
     assert "HTML-escaped characters" not in res["error"]
+
+
+# --- semantic no-op gate (O4) -------------------------------------------
+
+_APP = ("from flask import Flask, render_template_string\napp = Flask(__name__)\n\n"
+        'HTML_TEMPLATE = """<script>let x=1;</script>"""\n\n'
+        "@app.route('/')\ndef index():\n    return render_template_string(HTML_TEMPLATE)\n")
+
+
+def test_comment_only_replacement_is_rejected():
+    """The observed false-done: deliberation written into the node as comments.
+
+    The splice succeeded, the file parsed, the app answered curl, and the model
+    reported adding a pause that was never in the template. Comments are absent
+    from the AST, so comparing parsed trees answers "did anything executable
+    change" exactly.
+    """
+    replacement = ("@app.route('/')\ndef index():\n"
+                   "    return render_template_string(HTML_TEMPLATE) # JS is in the string.\n\n"
+                   "# Wait, the instruction is to update the JS inside HTML_TEMPLATE.\n"
+                   "# I should use edit_file to target the string literal.\n")
+    res = main.structural_edit("app.py", _APP, "function:index", replacement)
+    assert not res.get("success")
+    assert "changes no code" in res["error"]
+    # It must also say where the code actually lives, or the model retries the
+    # same node with different comments.
+    assert "edit_file" in res["error"]
+
+
+def test_real_code_change_still_applies():
+    replacement = ("@app.route('/')\ndef index():\n"
+                   "    return render_template_string(HTML_TEMPLATE, title='x')\n")
+    res = main.structural_edit("app.py", _APP, "function:index", replacement)
+    assert res.get("success"), res
+
+
+def test_no_op_gate_fails_open_when_the_original_is_broken():
+    """A file mid-repair must not be blocked by a gate that cannot parse it."""
+    res = main.structural_edit("app.py", "def index(:\n    pass\n",
+                               "function:index", "def index():\n    pass\n")
+    assert "changes no code" not in res.get("error", "")

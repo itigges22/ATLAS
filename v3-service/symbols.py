@@ -785,6 +785,33 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                    'HTML entities like &quot;) and re-emit the full node.')
             )}
 
+        # Semantic no-op gate. The proxy already rejects a replacement that is
+        # byte-identical to the node, but a model that has lost the thread
+        # writes its deliberation into the node as comments and leaves the code
+        # untouched — observed live: the replacement for index() carried "Wait,
+        # the instruction is to update the JS inside the HTML_TEMPLATE string"
+        # as five comment lines, the splice succeeded, the file parsed, the app
+        # answered curl, and the model reported a feature it had never added.
+        # Comments are absent from the AST, so comparing the parsed trees is
+        # exactly the "did anything executable change" question, and it costs
+        # one parse. Fails open when the ORIGINAL does not parse — a repair in
+        # progress must not be blocked.
+        try:
+            import ast as _ast
+            if _ast.dump(_ast.parse(source_text)) == _ast.dump(_ast.parse(new_content)):
+                return {"success": False, "error": (
+                    f"structural_edit: your replacement for `{selector}` changes "
+                    f"no code — only comments or formatting differ, so {path} "
+                    f"would behave exactly as it does now and the task is not "
+                    f"done. If the code you need to change is inside a string "
+                    f"literal (an HTML template, a SQL block), no selector "
+                    f"reaches it: use edit_file anchored on one unique line from "
+                    f"inside that string. Otherwise re-emit the node with the "
+                    f"executable change actually in it."
+                )}
+        except SyntaxError:
+            pass
+
     return {
         "success": True,
         "language": language,

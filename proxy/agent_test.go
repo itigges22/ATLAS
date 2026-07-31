@@ -2028,3 +2028,24 @@ func TestOwnBackgroundJobHintSilentWithNoJobs(t *testing.T) {
 		t.Errorf("no running jobs must produce no hint, got %q", h)
 	}
 }
+
+// Background jobs outlive the agent loop on purpose — a loop is one user
+// message, so killing them would break "start the server" then "now curl it".
+// The defect was that they did so silently: the next turn hits a bound port
+// with no explanation and the user is never told anything is still running.
+func TestLiveBackgroundJobNoteNamesRunningJobs(t *testing.T) {
+	ctx := &AgentContext{BackgroundJobs: map[string]string{"7216f34ccea3": "python app.py"}}
+	note := liveBackgroundJobNote(ctx)
+	if !strings.Contains(note, "7216f34ccea3") || !strings.Contains(note, "python app.py") {
+		t.Errorf("note must name the job and its command, got %q", note)
+	}
+	if !strings.Contains(note, "stop_background") {
+		t.Errorf("note must name the remedy, got %q", note)
+	}
+}
+
+func TestLiveBackgroundJobNoteEmptyWhenNothingRuns(t *testing.T) {
+	if n := liveBackgroundJobNote(&AgentContext{}); n != "" {
+		t.Errorf("no jobs must add nothing to the summary, got %q", n)
+	}
+}

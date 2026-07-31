@@ -699,7 +699,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				st.bounce(ctx, gate, rejection)
 				continue
 			}
-			ctx.Stream("done", map[string]string{"summary": parsed.Summary})
+			ctx.Stream("done", map[string]string{
+				"summary": parsed.Summary + liveBackgroundJobNote(ctx),
+			})
 			return nil
 
 		case "text":

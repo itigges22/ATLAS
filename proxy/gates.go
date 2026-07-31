@@ -607,6 +607,34 @@ func embeddedScriptGate(ctx *AgentContext, path, original, edited string) string
 	return msg
 }
 
+// liveBackgroundJobNote reports background jobs still running as the turn
+// ends, for appending to the done summary.
+//
+// Jobs deliberately outlive the agent loop: a loop is one user message, so
+// killing them here would break "start the dev server" followed by "now curl
+// it". What is wrong is that they outlive it SILENTLY — the sandbox has no
+// session concept and only reaps after two hours, so the next turn's
+// `python app.py` fails on a bound port with no indication of why, and the
+// user is never told anything is still running. Naming them keeps the
+// behaviour and removes the surprise.
+func liveBackgroundJobNote(ctx *AgentContext) string {
+	if ctx == nil || len(ctx.BackgroundJobs) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(ctx.BackgroundJobs))
+	for id := range ctx.BackgroundJobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var sb strings.Builder
+	sb.WriteString("\n\nStill running in the sandbox:")
+	for _, id := range ids {
+		fmt.Fprintf(&sb, "\n  %s — %s", id, truncateStr(ctx.BackgroundJobs[id], 80))
+	}
+	sb.WriteString("\nThese keep their ports until stopped. Use stop_background to end them.")
+	return sb.String()
+}
+
 // ownBackgroundJobHint names the model's own background job when a command
 // just failed because that job is holding the resource.
 //
