@@ -81,7 +81,6 @@ HTML_TEMPLATE = """
          const box = 20;
          let score = 0;
          let gameActive = true;
-         let isPaused = false;
         
          let snake = [
             {x: 160, y: 160}, 
@@ -101,18 +100,6 @@ HTML_TEMPLATE = """
         document.addEventListener('keydown', function(e) {
             const key = e.key;
             
-            if (key === ' ' || key === 'p' || key === 'P') {
-                if (!gameActive) return;
-                isPaused = !isPaused;
-                if (isPaused) {
-                    overlay.style.display = 'block';
-                    msgElement.innerText = 'PAUSED';
-                } else {
-                    overlay.style.display = 'none';
-                }
-                return;
-            }
-
             if(key === 'ArrowLeft' && direction !== 'RIGHT') nextDirection = 'LEFT';
             else if(key === 'ArrowUp' && direction !== 'DOWN') nextDirection = 'UP';
             else if(key === 'ArrowRight' && direction !== 'LEFT') nextDirection = 'RIGHT';
@@ -120,7 +107,7 @@ HTML_TEMPLATE = """
         });
 
         function draw() {
-            if(!gameActive || isPaused) return;
+            if(!gameActive) return;
 
             direction = nextDirection;
 

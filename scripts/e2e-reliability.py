@@ -82,23 +82,45 @@ def _read_fixture(name: str) -> str:
 
 
 def _check_flask_pause(ws: Path) -> tuple[bool, str]:
-    """The pause toggle must exist in the embedded JS, and the JS must parse.
+    """A pause toggle wired into the game loop, with the JS still parsing.
 
-    Landing a UI string that advertises pause without the state variable and a
-    keydown branch is not success — an observed session did exactly that.
+    Three separate things, all required. An earlier, looser version of this
+    check accepted the bare token `32` or a stray `Space` anywhere in the
+    file and reported a pass against a fixture that had not been touched —
+    a reliability check that can pass without the work being done is worse
+    than no check, so each clause below names a distinct piece of the
+    feature and the state variable has to be one the keydown handler
+    actually assigns.
     """
     src = (ws / "app.py").read_text()
     js = _extract_script(src)
     if js is None:
         return False, "no <script> block survived"
-    has_state = re.search(r"\b(paused|isPaused|gamePaused)\b", js) is not None
-    has_key = re.search(r"(?:' '|\"\s\"|Space|32|Spacebar)", js) is not None
-    if not (has_state and has_key):
-        return False, f"pause state={has_state} spacebar-handler={has_key}"
+
     ok, err = _js_parses(js)
     if not ok:
         return False, f"embedded JS broken: {err}"
-    return True, "pause state + spacebar handler present, JS parses"
+
+    # 1. A boolean the code flips, not merely a word that appears somewhere.
+    state = None
+    for m in re.finditer(r"\b(?:let|var|const)\s+(\w*[Pp]aused?\w*)\s*=", js):
+        state = m.group(1)
+        break
+    if not state:
+        return False, "no pause state variable declared"
+    if not re.search(rf"\b{re.escape(state)}\s*=\s*(?:!\s*{re.escape(state)}|true|false)", js):
+        return False, f"{state} is declared but never toggled"
+
+    # 2. A keyboard branch on the spacebar specifically.
+    if not re.search(r"(?:key|code)\s*===?\s*['\"](?: |Space|Spacebar)['\"]"
+                     r"|keyCode\s*===?\s*32", js):
+        return False, f"{state} exists but nothing binds the spacebar"
+
+    # 3. The loop has to actually honour it, or the key toggles a dead flag.
+    if not re.search(rf"if\s*\([^)]*\b{re.escape(state)}\b", js):
+        return False, f"{state} is toggled but the game loop never checks it"
+
+    return True, f"{state} declared, toggled, spacebar-bound, honoured by the loop"
 
 
 def _check_add_function(ws: Path) -> tuple[bool, str]:
@@ -472,17 +494,25 @@ def tui_handled_types() -> set[str]:
 # --------------------------------------------------------------------------
 
 def run_session(task: Task, rep: int, url: str, workspace: Path,
-                container_ws: str, timeout: int) -> Session:
+                subdir: str, timeout: int) -> Session:
     # Reset the fixture so every rep starts from the same state.
     for name, content in task.files.items():
         (workspace / name).write_text(content)
     for stale in workspace.glob("*.pyc"):
         stale.unlink()
 
+    # sandbox_subdir, NOT working_dir. The proxy deliberately overrides the
+    # client's working_dir with ATLAS_WORKSPACE_DIR (agent.go): the TUI sends
+    # its HOST cwd, which does not exist inside the container, and the bind
+    # mount is aligned so /workspace already IS the user's directory.
+    # Passing a subdir through working_dir is therefore silently ignored, and
+    # an earlier version of this harness had every session operating on
+    # /workspace while the checks read the subdirectory — so real successes
+    # were scored as failures. sandbox_subdir is the field that scopes a run.
     body = json.dumps({
         "message": task.prompt,
-        "working_dir": container_ws,
         "mode": "yolo",
+        "sandbox_subdir": subdir,
         "session_id": f"reliability-{task.name}-{rep}",
     }).encode()
     req = urllib.request.Request(f"{url}/v1/agent", data=body,
@@ -523,8 +553,11 @@ def main() -> int:
     ap.add_argument("--url", default=os.environ.get("ATLAS_PROXY_URL",
                                                     "http://127.0.0.1:8090"))
     ap.add_argument("--workspace", default=os.environ.get("ATLAS_PROJECT_DIR", ""),
-                    help="host path the proxy has mounted at --container-workspace")
-    ap.add_argument("--container-workspace", default="/workspace")
+                    help="host path of the subdirectory named by --subdir")
+    ap.add_argument("--subdir", default="_reliability",
+                    help="workspace subdirectory to confine each run to "
+                         "(sent as sandbox_subdir); --workspace must be the "
+                         "host path of this same subdirectory")
     ap.add_argument("--sandbox-container", default="atlas-sandbox-1",
                     help="'' to skip the background-leak check")
     ap.add_argument("--tasks", default=",".join(TASKS))
@@ -568,7 +601,7 @@ def main() -> int:
                                 "pkill", "-f", "python app"],
                                capture_output=True, timeout=30)
             s = run_session(task, rep, args.url, ws,
-                            args.container_workspace, args.timeout)
+                            args.subdir, args.timeout)
             s.defects += h1_protocol(s, known)
             s.defects += h2_false_rejection(s)
             s.defects += h3_dead_end_steering(s)
