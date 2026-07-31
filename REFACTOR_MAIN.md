@@ -515,6 +515,71 @@ with the shared counter the exit passes ungated.
 > claim that the model lied. The fixture has since been stripped of the pause
 > so the task is genuinely undone.
 
+### Measured-reliability campaign 2026-07-31 (later) — harness + task + quality
+
+`scripts/e2e-reliability.py` runs real sessions against the live stack and
+reports three things that must not be conflated: **Harness Integrity** (did
+ATLAS's own plumbing do anything wrong — should be 100%), **Task Success**
+(did the change land — bounded by the model), and **code quality** of what the
+agent wrote (measured, never judged: McCabe complexity, function/file length,
+pyflakes defects separated from style nits). Task suite: 4 AoC-style puzzles
+with holdout inputs, a 3-file CLI app, 3 code edits, 2 conversational probes.
+`scripts/code_quality.py` runs standalone. Detectors H1-H9 are unit-tested
+against synthetic streams AND replayed against the captured sessions.
+
+**Why holdout inputs.** The model sees `input.txt`; the check re-runs its
+program against an input it never saw. Not theoretical: on `aoc_shoal` the
+model recognised the puzzle from training, wrote the canonical textbook
+example over the real input without reading it, and solved that instead —
+reporting honestly, "created input.txt with sample data".
+
+**Cycle 1 (corrected): task 5/8, harness 7/8.** All four harness defects came
+from one session that hit the wall clock. Turn counts fell sharply as the
+messages got accurate (sonar 7→3, course 8→5). Quality: worst complexity 10
+(limit 15), longest function 66 lines, longest file 71 — structure is fine;
+6 real defects (F821 undefined name, F841, 3×F401) is the honest weak spot.
+
+**Product fixes, each traced to an observed session, not a hunch:**
+
+*ATLAS confusing the model with its own output* — the call-graph footer read as
+file content (`old_str` anchored on it); `read_file`'s `N<tab>` numbering parsed
+as tab-delimited data (a correct grid algorithm printed 0); entity-encoded
+content reported as an unrelated syntax error.
+
+*Gates wrong or silent* — D9 V3 candidates blamed on the model; D11 one honesty
+gate starving the other three; O4 a semantic no-op accepted as a completed edit;
+rejected tool calls emitting no `tool_result`; `write_file` clobbering a file
+nobody had read.
+
+*Steering that led nowhere* — `<tag>` selectors offered for `.py`; "rewrite the
+function holding the template" when no function holds it; "match byte-for-byte"
+for degenerate output carrying `\rVert`; the f-string fix buried in a
+parenthetical.
+
+*Environment* — proxy on ~/demo vs sandbox on ~/demo2 (every session edited one
+tree and verified another; `atlas doctor` catches it and was never run);
+sandbox Python 3.11 rejecting `f"{d["k"]}"`, valid from 3.12 (PEP 701) — base
+bumped to 3.13.
+
+**The pattern.** The largest category is ATLAS *misleading* the model, not
+failing to catch it. The gates were mostly right; what was broken was what
+ATLAS said afterward — which is also why turn counts dropped once the messages
+became accurate.
+
+**Harness bugs found in the measurement itself** (recorded because five of them
+produced confidently wrong numbers): `working_dir` silently overridden so
+sessions ran outside the checked directory; a pause check that passed against
+an untouched fixture; a fixture that already implemented the feature; H2
+matching a CORRECT rejection; H6 reading the wrong payload key; H7 encoding a
+wrong assumption about job lifetime; no workspace isolation between tasks; every
+fixture treated as immutable, failing a task for doing what it was told.
+
+**Open for an owner call:** O1-O3 above, plus whether `/syntax-check` (12
+languages, the gate behind most blocked writes) should stay in `sandbox/` — it
+is not a sandboxing concern, and an upstream runtime like NVIDIA OpenShell
+would not provide it (its base image also ships only Python+Node, so the
+12-toolchain burden returns as bring-your-own-container).
+
 ### E2E campaign 2026-07-31 — five sessions, one fixture
 
 Fixture: the 208-line Flask snake game (`/workspace/app.py`), a Python file whose
