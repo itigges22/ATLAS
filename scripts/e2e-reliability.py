@@ -562,6 +562,14 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             for raw in resp:
+                # urlopen's timeout is per-read, so a session that keeps
+                # streaming never trips it. One observed session looped past
+                # 20 minutes against a 900s cap, trying to satisfy a self-test
+                # it had written with the wrong expectation.
+                if time.time() - t0 > timeout:
+                    events.append({"type": "error", "data": {
+                        "error": f"harness cap: session exceeded {timeout}s"}})
+                    break
                 line = raw.decode("utf-8", "replace").strip()
                 if not line.startswith("data: "):
                     continue
