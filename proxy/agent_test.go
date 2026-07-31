@@ -1895,6 +1895,39 @@ func TestImproveContentV3KeepsCandidateWhenCallerAlreadyBroken(t *testing.T) {
 	}
 }
 
+// V3 output arrives wrapped in a markdown fence often enough that both callers
+// used to strip it after the fact. The strip now happens at the boundary, and
+// it MUST run before the regression check: a fenced candidate does not parse as
+// Python, so checking first would drop good candidates as "broken" and silently
+// disable V3 for every fenced response.
+func TestImproveContentV3SanitizesBeforeJudgingCandidate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	modelEdit := "def index():\n    return 'ok'\n"
+	code := "def index():\n    return 'better'\n"
+	fenced := "Looking at the task, I need to update the handler.\n\n```python\n" + code + "```\n"
+
+	v3 := v3AndStructuralServer(t, fenced, "render_template")
+	defer v3.Close()
+	sb := fakeSyntaxSandbox(t, "```") // a surviving fence would fail the gate
+	defer sb.Close()
+	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+
+	out, meta, err := improveContentWithV3(path, modelEdit, ctx)
+	if err != nil {
+		t.Fatalf("improveContentWithV3 error: %v", err)
+	}
+	if strings.Contains(out, "```") || strings.Contains(out, "Looking at the task") {
+		t.Errorf("wrapper must be stripped at the boundary, got %q", out)
+	}
+	if strings.TrimSpace(out) != strings.TrimSpace(code) {
+		t.Errorf("expected the unwrapped code, got %q", out)
+	}
+	if !meta.Used {
+		t.Error("a fenced but otherwise clean candidate must still be adopted, not dropped as unparseable")
+	}
+}
+
 // A clean candidate is returned with full telemetry (the non-drop path).
 func TestImproveContentV3KeepsCleanCandidate(t *testing.T) {
 	dir := t.TempDir()

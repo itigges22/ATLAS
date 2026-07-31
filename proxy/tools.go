@@ -1634,15 +1634,6 @@ func editFileTool() *ToolDef {
 					}
 					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
 				} else if improved != "" {
-					// V3 sometimes returns code wrapped in markdown
-					// fences (the underlying llama-server response had a
-					// preamble it didn't strip). Sanitise here too —
-					// otherwise every V3-improved file ships with a
-					// "Looking at the task..." header on disk.
-					if cleanedImproved, sanitized := sanitizeFileContent(input.Path, improved); sanitized {
-						log.Printf("[edit_file] sanitised V3 output for %s", input.Path)
-						improved = cleanedImproved
-					}
 					newContent = improved
 					v3Out = meta
 				}
@@ -1962,10 +1953,6 @@ func structuralEditTool() *ToolDef {
 					}
 					log.Printf("[structural_edit] V3 failed: %v — falling back to structurally edited content", err)
 				} else if improved != "" {
-					if cleanedImproved, sanitized := sanitizeFileContent(input.Path, improved); sanitized {
-						log.Printf("[structural_edit] sanitised V3 output for %s", input.Path)
-						improved = cleanedImproved
-					}
 					finalContent = improved
 					v3Out = meta
 				}
@@ -2143,6 +2130,15 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	chosen := v3Result.Code
 	if chosen == "" {
 		chosen = content
+	}
+	// V3 sometimes returns code wrapped in markdown fences (the underlying
+	// llama-server response had a preamble it didn't strip). Strip it here,
+	// at the boundary, so the regression check below judges the code rather
+	// than the wrapper — a fenced candidate is not a broken one — and so
+	// neither caller ships a "Looking at the task..." header to disk.
+	if cleaned, sanitized := sanitizeFileContent(path, chosen); sanitized {
+		log.Printf("[v3] sanitised candidate for %s", logPath(path))
+		chosen = cleaned
 	}
 	// A candidate only counts as an improvement if it does not break what it
 	// was handed. V3 regenerates the whole file, so it can reintroduce a
