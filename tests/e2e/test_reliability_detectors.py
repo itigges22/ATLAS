@@ -237,3 +237,23 @@ def test_h8_silent_on_a_normal_old_str(rel, tmp_path):
         {"type": "done", "data": {"summary": "x"}},
     ], tmp_path)
     assert rel.h8_anchored_on_injected_text(s) == []
+
+
+def test_h2_silent_on_a_message_that_blames_the_models_content(rel, tmp_path):
+    """"Your content for X has a syntax error" is the CORRECT message.
+
+    It blames the submission, and the file on disk is clean precisely because
+    the write was refused. An earlier version of this detector matched it and
+    reported a harness defect on a session where ATLAS behaved perfectly —
+    a false-positive detector is worse than a missing one, because it sends
+    someone chasing a bug that is not there.
+    """
+    (tmp_path / "store.py").write_text("x = 1\n")
+    s = _session(rel, [
+        _call("write_file", path="store.py"),
+        _fail("Your content for store.py has a syntax error (SyntaxError: "
+              "unmatched ')') — it was NOT written. The content is NOT "
+              "truncated; it is complete but INVALID."),
+        {"type": "done", "data": {"summary": "x"}},
+    ], tmp_path)
+    assert rel.h2_false_rejection(s) == []

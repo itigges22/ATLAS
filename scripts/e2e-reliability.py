@@ -480,6 +480,15 @@ def h2_false_rejection(s: Session) -> list[str]:
         if d.get("success"):
             continue
         err = str(d.get("error") or "")
+        # "Your content for X has a syntax error — it was NOT written" is the
+        # CORRECT message: it blames the model's submission, and the file on
+        # disk is clean precisely because the write was refused. The defect
+        # this detector exists for is the opposite — naming the FILE as
+        # defective when the file is fine, which sends the model hunting a bug
+        # that is not there. Matching both inflated the defect count and would
+        # have had someone chasing a non-bug.
+        if re.search(r"your content for", err, re.I):
+            continue
         m = re.search(r"([\w./-]+\.(?:py|html|htm|js)) has a .*syntax error", err)
         if not m:
             continue
