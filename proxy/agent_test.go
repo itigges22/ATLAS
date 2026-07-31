@@ -2095,3 +2095,51 @@ func TestWriteFileRejectsUnparseableContentWithoutCallingV3(t *testing.T) {
 		t.Error("nothing should have landed on disk")
 	}
 }
+
+// A rejection that lands after the tool_call event has gone out must still
+// produce a tool_result, or the consumer sees a call that never resolves.
+// Observed live: a model tried to overwrite a fixture input, the
+// surgical-edit gate refused, and the session's tool_call and tool_result
+// counts disagreed by one — the TUI printed the call row and nothing after.
+func TestBounceToolCallEmitsAMatchingResult(t *testing.T) {
+	var events []string
+	ctx := &AgentContext{
+		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+	}
+	st := &runState{turn: 3, response: "{}"}
+	st.bounceToolCall(ctx, "write_file", "write_file is for creating files")
+
+	var results int
+	for _, e := range events {
+		if e == "tool_result" {
+			results++
+		}
+	}
+	if results != 1 {
+		t.Errorf("expected exactly one tool_result, got %d (events=%v)", results, events)
+	}
+	// The model still has to receive the rejection in its conversation.
+	if len(ctx.Messages) < 2 {
+		t.Fatalf("bounce must append the assistant+tool messages, got %d", len(ctx.Messages))
+	}
+	last := ctx.Messages[len(ctx.Messages)-1]
+	if last.Role != "tool" || !strings.Contains(last.Content, "creating files") {
+		t.Errorf("rejection must reach the model, got %+v", last)
+	}
+}
+
+// The exit gates fire before any tool_call is streamed, so they must NOT
+// emit a result for a call the consumer never saw.
+func TestPlainBounceEmitsNoToolResult(t *testing.T) {
+	var events []string
+	ctx := &AgentContext{
+		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+	}
+	st := &runState{turn: 1, response: "{}"}
+	st.bounce(ctx, "verification_gate", "run the tests first")
+	for _, e := range events {
+		if e == "tool_result" {
+			t.Errorf("a gate bounce must not fabricate a tool_result, got %v", events)
+		}
+	}
+}

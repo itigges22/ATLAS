@@ -221,6 +221,24 @@ func (s *runState) bounce(ctx *AgentContext, toolName, rejection string) {
 	})
 }
 
+// bounceToolCall is bounce for a rejection that lands AFTER the tool_call
+// event has already gone out. Without a matching tool_result the consumer
+// sees a call that never resolves: the TUI prints the call row and nothing
+// after it, so the user is never told the tool was refused and why.
+//
+// Observed live: a model tried to overwrite a fixture input file, the
+// surgical-edit gate correctly refused, and the refusal reached the model
+// (through ctx.Messages) but never the event stream — the session's tool_call
+// and tool_result counts disagreed by one.
+func (s *runState) bounceToolCall(ctx *AgentContext, toolName, rejection string) {
+	s.bounce(ctx, toolName, rejection)
+	ctx.Stream("tool_result", map[string]interface{}{
+		"tool":    toolName,
+		"success": false,
+		"error":   rejection,
+	})
+}
+
 // exitGates runs the completion-honesty gates a done or text exit must
 // clear, in order: verification, done-without-action, expected-output,
 // claim-check. claimText is the completion claim to check structurally
@@ -779,7 +797,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				var testParse map[string]interface{}
 				if err := json.Unmarshal(parsed.Args, &testParse); err != nil {
 					log.Printf("[agent] truncated args detected for %s at turn %d", parsed.Name, turn)
-					st.bounce(ctx, parsed.Name, "Your output was truncated — the content is too long for a single tool call. For existing files, use edit_file with small targeted changes (replace specific functions or sections). For new files, keep them under 100 lines per write_file call.")
+					st.bounceToolCall(ctx, parsed.Name, "Your output was truncated — the content is too long for a single tool call. For existing files, use edit_file with small targeted changes (replace specific functions or sections). For new files, keep them under 100 lines per write_file call.")
 					consecutiveErrors++
 					if consecutiveErrors >= 3 {
 						ctx.Stream("done", map[string]string{"summary": "Stopped: content too large for tool calls. Try requesting smaller, targeted changes."})
@@ -792,7 +810,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// Enforce the workspace boundary before any pre-execution gate reads
 			// a path. executeToolCall repeats this check for parallel dispatch.
 			if rejection := validateToolWorkspacePaths(parsed.Name, parsed.Args, ctx); rejection != "" {
-				st.bounce(ctx, parsed.Name, rejection)
+				st.bounceToolCall(ctx, parsed.Name, rejection)
 				consecutiveErrors++
 				continue
 			}
@@ -856,7 +874,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								wfInput.Path, existingLines, structuralHint)
 							// %q quotes + escapes the path (go/log-injection).
 							log.Printf("[agent] rejecting write_file for existing %q (%d lines)", wfInput.Path, existingLines)
-							st.bounce(ctx, "write_file", rejection)
+							st.bounceToolCall(ctx, "write_file", rejection)
 							continue
 						}
 						if existingLines > 5 {
@@ -890,7 +908,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// reason string (go/log-injection).
 						log.Printf("[agent] rejecting run_command %q: %q",
 							truncateStr(rc.Command, 80), rejection)
-						st.bounce(ctx, "run_command", rejection)
+						st.bounceToolCall(ctx, "run_command", rejection)
 						continue
 					}
 				}
@@ -911,7 +929,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					if rejection := validateRunCommand(rb.Command, ctx.WorkingDir); rejection != "" {
 						log.Printf("[agent] rejecting run_background %q: %q",
 							truncateStr(rb.Command, 80), rejection)
-						st.bounce(ctx, "run_background", rejection)
+						st.bounceToolCall(ctx, "run_background", rejection)
 						continue
 					}
 				}
