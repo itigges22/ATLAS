@@ -16,6 +16,7 @@ from typing import List, Optional
 
 from atlas import artifact_manifest as am
 from atlas import compose as compose_config
+from atlas import env as cli_env
 
 SNAPSHOT_DIR = ".previous-bundle"
 # Files that constitute a bundle snapshot (mirrors
@@ -29,7 +30,7 @@ BUNDLE_FILES = [
 
 
 def _default_dir() -> str:
-    root = compose_config.find_atlas_root()
+    root = cli_env.atlas_root()
     return os.path.join(root, "geometric-lens", "geometric_lens", "models")
 
 

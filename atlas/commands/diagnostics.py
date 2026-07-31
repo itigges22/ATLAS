@@ -23,6 +23,7 @@ import urllib.request
 from typing import Dict, List, Optional
 
 from atlas import compose as compose_config
+from atlas import env as cli_env
 from atlas import redact
 
 # Config keys whose values are masked in the bundle (in addition to the
@@ -155,7 +156,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.print_help()
         return 1
 
-    atlas_root = compose_config.find_atlas_root()
+    atlas_root = cli_env.atlas_root()
     bundle = _collect(atlas_root, args.log_lines)
 
     out = args.output or f"atlas-diagnostics-{time.strftime('%Y%m%d-%H%M%S')}.json"

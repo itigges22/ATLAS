@@ -43,6 +43,7 @@ from atlas.display import (
 from atlas.env import (
     _ENV, PROXY_URL, LLAMA_URL, LENS_URL, SANDBOX_URL, V3_URL,
     MODEL_DIR, MODEL_FILE, MODEL_NAME, LLAMA_PORT, LENS_MODELS_DIR,
+    atlas_root as _find_atlas_root,
 )
 
 EXPECTED_SERVICES = [
@@ -1153,18 +1154,6 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool,
     else:
         _safe_print(f"  {RED if color else ''}ATLAS install has failures {DASH} re-run with -v for detail.{RESET if color else ''}")
     return 1 if n_fail else 0
-
-
-def _find_atlas_root() -> str:
-    """Locate the ATLAS repo root (where docker-compose.yml lives)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    # atlas/commands -> atlas -> ATLAS
-    for _ in range(4):
-        if os.path.exists(os.path.join(here, "docker-compose.yml")):
-            return here
-        here = os.path.dirname(here)
-    # Fallback: cwd
-    return os.getcwd()
 
 
 def main(argv: Optional[List[str]] = None) -> int:

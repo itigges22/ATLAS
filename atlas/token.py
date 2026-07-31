@@ -21,6 +21,8 @@ import stat
 import urllib.request
 from typing import Optional, Tuple
 
+from atlas.env import atlas_root as _find_root
+
 DEFAULT_RELATIVE_PATH = os.path.join("secrets", "service-token")
 CONTAINER_PATH = "/run/atlas-secrets/service-token"
 HEADER = "Authorization"
@@ -32,20 +34,6 @@ def token_path(atlas_root: Optional[str] = None) -> str:
         return explicit
     root = atlas_root or _find_root()
     return os.path.join(root, DEFAULT_RELATIVE_PATH)
-
-
-def _find_root() -> str:
-    """The checkout root (dir holding docker-compose.yml), resolved from
-    this file — same convention as bench/doctor."""
-    cur = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(7):
-        if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    return os.getcwd()
 
 
 def read_token(atlas_root: Optional[str] = None) -> str:

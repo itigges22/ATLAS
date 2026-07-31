@@ -32,7 +32,6 @@ Implementation notes:
       access. 401 without token prints a helpful "set HF_TOKEN" message.
 - ATLAS_MODELS_DIR resolution: --models-dir flag > ATLAS_MODELS_DIR env
   > ./models/ relative to atlas_root (containing docker-compose.yml).
-  Mirrors doctor's atlas_root finder.
 - --dry-run prints what would happen without touching the network or disk;
   used by tests + by users who want to verify URLs without committing.
 """
@@ -50,6 +49,9 @@ import urllib.request
 from typing import List, Optional, Tuple
 
 from atlas import compose as compose_config
+# The repo-root resolver, imported under a module-local name so tests can
+# pin it with monkeypatch.setattr(model, "_find_atlas_root", ...).
+from atlas.env import atlas_root as _find_atlas_root
 from atlas.commands import model_registry, tier
 from atlas.commands.model_registry import Model
 # HF token resolution is shared publish machinery; the canonical resolver
@@ -62,28 +64,6 @@ from atlas.display import (
     RESET, BOLD, DIM, RED, GREEN, YELLOW as YELL,
     UNICODE_OK, DASH, safe_print as _safe_print,
 )
-
-
-# ---------------------------------------------------------------------------
-# Path resolution — mirror doctor's atlas_root logic
-# ---------------------------------------------------------------------------
-
-def _find_atlas_root() -> str:
-    """The repo root (the directory holding docker-compose.yml). Resolved from
-    this file first so commands work from any cwd, then by walking up from the
-    cwd; falls back to the cwd."""
-    starts = (os.path.dirname(os.path.abspath(__file__)),
-              os.path.abspath(os.getcwd()))
-    for start in starts:
-        cur = start
-        while True:
-            if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
-                return cur
-            parent = os.path.dirname(cur)
-            if parent == cur:
-                break
-            cur = parent
-    return os.path.abspath(os.getcwd())
 
 
 def _resolve_models_dir(arg_models_dir: Optional[str]) -> str:

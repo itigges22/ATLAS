@@ -195,7 +195,7 @@ def _pick_gpu(probe: "tier.Probe", args: argparse.Namespace,
 
 
 # ---------------------------------------------------------------------------
-# Path resolution — share atlas_root with model.py / doctor.py
+# Path resolution
 # ---------------------------------------------------------------------------
 
 def _find_atlas_root() -> Optional[str]:
@@ -203,7 +203,10 @@ def _find_atlas_root() -> Optional[str]:
 
     Returns None if no compose file is found in any ancestor — the wizard
     refuses to write .env / secrets/ into a non-checkout directory rather
-    than silently dumping config wherever the user happens to be.
+    than silently dumping config wherever the user happens to be. That
+    refusal is why this is not `env.atlas_root()`: that resolver searches
+    from its own file first and falls back to the cwd, so it always
+    answers with *some* directory.
     """
     cur = os.path.abspath(os.getcwd())
     while True:

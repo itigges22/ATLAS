@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from atlas import __main__ as main_mod
-from atlas import compose
+from atlas import env as cli_env
 
 
 def _metal_root(tmp_path):
@@ -43,7 +43,7 @@ def test_compose_subcommand_passes_through_to_docker_compose(
     root = _metal_root(tmp_path)
     calls = []
 
-    monkeypatch.setattr(compose, "find_atlas_root", lambda: root)
+    monkeypatch.setattr(cli_env, "atlas_root", lambda: root)
     monkeypatch.setattr(subprocess, "call",
                         lambda cmd, **kwargs: calls.append(cmd) or 0)
     monkeypatch.setattr(sys, "argv", ["atlas", "compose", "ps"])
@@ -57,8 +57,7 @@ def test_compose_subcommand_passes_through_to_docker_compose(
 
 
 def test_compose_subcommand_requires_checkout(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(compose, "find_atlas_root",
-                        lambda: str(tmp_path))
+    monkeypatch.setattr(cli_env, "atlas_root", lambda: str(tmp_path))
     monkeypatch.setattr(sys, "argv", ["atlas", "compose", "ps"])
     with pytest.raises(SystemExit) as exc:
         main_mod.main()

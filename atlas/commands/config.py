@@ -11,6 +11,7 @@ import sys
 from typing import Dict, List, Optional
 
 from atlas import compose as compose_config
+from atlas import env as cli_env
 from atlas import config_schema as cs
 
 
@@ -27,7 +28,7 @@ def _read_env(path: str) -> Dict[str, str]:
 
 
 def _default_env() -> str:
-    return os.path.join(compose_config.find_atlas_root(), ".env")
+    return os.path.join(cli_env.atlas_root(), ".env")
 
 
 def _validate(path: str) -> int:

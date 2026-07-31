@@ -11,6 +11,7 @@ import sys
 from typing import List, Optional
 
 from atlas import compose as compose_config
+from atlas import env as cli_env
 from atlas import upgrade_engine as eng
 from atlas.commands.upgrade import _default_steps
 
@@ -25,7 +26,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--yes", action="store_true")
     args = parser.parse_args(argv)
 
-    atlas_root = compose_config.find_atlas_root()
+    atlas_root = cli_env.atlas_root()
     if not os.path.isfile(os.path.join(atlas_root, "docker-compose.yml")):
         print("atlas rollback: run from an ATLAS checkout.", file=sys.stderr)
         return 1

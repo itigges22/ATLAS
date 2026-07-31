@@ -22,10 +22,11 @@ import json
 from typing import Optional, List
 
 from atlas import compose as compose_config
+from atlas import env as cli_env
 from atlas.runtime_artifacts import go_binary_is_current
 
 # Shell env wins; otherwise the Docker .env's port keys drive the URLs.
-_ENV_VALUES = compose_config.read_env_file(compose_config.find_atlas_root())
+_ENV_VALUES = compose_config.read_env_file(cli_env.atlas_root())
 PROXY_PORT = compose_config.service_port("proxy", values=_ENV_VALUES)
 PROXY_URL = os.environ.get("ATLAS_PROXY_URL", f"http://localhost:{PROXY_PORT}")
 INFERENCE_URL = compose_config.service_url("llama", values=_ENV_VALUES)
@@ -368,7 +369,7 @@ def _compose_container(service: str, fallback: str) -> str:
     """Resolve a compose service's container via `docker compose ps -q`
     so non-default project names (COMPOSE_PROJECT_NAME, renamed checkout
     dirs) still work; fall back to the conventional name."""
-    root = compose_config.find_atlas_root()
+    root = cli_env.atlas_root()
     return compose_config.container_id(root, service, fallback=fallback) or fallback
 
 

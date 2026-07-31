@@ -64,7 +64,8 @@ def _run_compose(argv: List[str]) -> int:
     project's compose file set (backend overlays included)."""
     import subprocess
     from atlas import compose as compose_config
-    atlas_dir = compose_config.find_atlas_root()
+    from atlas import env as cli_env
+    atlas_dir = cli_env.atlas_root()
     if not os.path.isfile(os.path.join(atlas_dir, "docker-compose.yml")):
         print("atlas compose: no docker-compose.yml found — run from an "
               "ATLAS checkout.", file=sys.stderr)

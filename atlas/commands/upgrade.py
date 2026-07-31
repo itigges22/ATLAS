@@ -17,6 +17,7 @@ import urllib.request
 from typing import Dict, List, Optional
 
 from atlas import compose as compose_config
+from atlas import env as cli_env
 from atlas import upgrade_engine as eng
 
 
@@ -244,7 +245,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"(image tags carry no leading v — using {normalized})")
         args.to = normalized
 
-    atlas_root = compose_config.find_atlas_root()
+    atlas_root = cli_env.atlas_root()
     if not os.path.isfile(os.path.join(atlas_root, "docker-compose.yml")):
         print("atlas upgrade: run from an ATLAS checkout.", file=sys.stderr)
         return 1

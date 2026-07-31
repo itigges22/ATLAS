@@ -40,17 +40,6 @@ _SERVICES = {
 }
 
 
-def find_atlas_root() -> str:
-    """The repo root (the directory holding docker-compose.yml), resolved
-    from this file so it works from any cwd; falls back to the cwd."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(4):
-        if os.path.exists(os.path.join(here, "docker-compose.yml")):
-            return here
-        here = os.path.dirname(here)
-    return os.getcwd()
-
-
 def service_port(
     service: str,
     atlas_root: Optional[str] = None,
@@ -63,7 +52,10 @@ def service_port(
     port = env.get(port_key)
     if not port:
         if values is None:
-            values = read_env_file(atlas_root or find_atlas_root())
+            # Function-local: atlas.env imports this module, so the repo-root
+            # resolver can only be reached lazily from here.
+            from atlas.env import atlas_root as _resolve_root
+            values = read_env_file(atlas_root or _resolve_root())
         port = values.get(port_key)
     return port or default_port
 

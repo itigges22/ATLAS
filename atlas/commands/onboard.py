@@ -33,6 +33,7 @@ import urllib.request
 from typing import Dict, List, Optional, Tuple
 
 from atlas import compose as compose_config
+from atlas.env import atlas_root as _find_atlas_root
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -48,20 +49,6 @@ def _c(s: str, color: str, on: bool) -> str:
 
 
 # --- helpers ----------------------------------------------------------------
-def _find_atlas_root() -> str:
-    # Walk up from this file to the repo root (the dir holding docker-compose.yml).
-    here = os.path.dirname(os.path.abspath(__file__))
-    cur = here
-    for _ in range(7):
-        if os.path.exists(os.path.join(cur, "docker-compose.yml")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    return os.environ.get("ATLAS_ROOT", os.getcwd())
-
-
 def _read_env_file(atlas_root: str) -> Dict[str, str]:
     """Parse the compose .env (KEY=VALUE lines) into a dict. The .env is the
     authoritative source for ATLAS_MODEL_FILE — it isn't necessarily exported

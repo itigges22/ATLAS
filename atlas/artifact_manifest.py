@@ -18,25 +18,15 @@ import os
 import subprocess
 from typing import List, Optional, Tuple
 
+from atlas.env import atlas_root
+
 MANIFEST = "provenance.json"
 SIGNATURE = "provenance.json.sig"
 NAMESPACE = "atlas-artifact"
 
 
-def _repo_root() -> str:
-    cur = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(7):
-        if os.path.isfile(os.path.join(cur, "docker-compose.yml")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    return os.getcwd()
-
-
 def _allowed_signers() -> str:
-    return os.path.join(_repo_root(), ".github", "allowed_signers")
+    return os.path.join(atlas_root(), ".github", "allowed_signers")
 
 
 def _signing_key() -> Optional[str]:

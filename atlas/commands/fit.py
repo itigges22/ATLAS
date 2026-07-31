@@ -365,7 +365,9 @@ def _write_env(values: Dict[str, str]) -> str:
 
 def _cwd_deployment_root() -> Optional[str]:
     """The nearest directory at-or-above cwd holding a docker-compose.yml —
-    a deployment the operator may believe `--write` targets."""
+    a deployment the operator may believe `--write` targets. Distinct from
+    `_atlas_root()` on purpose: comparing the two is what lets `--write`
+    warn that it is about to edit a different checkout's .env."""
     cur = os.getcwd()
     for _ in range(8):
         if os.path.exists(os.path.join(cur, "docker-compose.yml")):

@@ -18,8 +18,14 @@ def atlas_root() -> str:
     this file first so commands work from any cwd, then by walking up from the
     cwd; falls back to the cwd.
 
-    The canonical resolver — command modules that need a patchable module
-    attribute import it as `_atlas_root`.
+    The one resolver — command modules that need a patchable module
+    attribute import it under a local alias (`_atlas_root`,
+    `_find_atlas_root`). Two callers deliberately do NOT use it because
+    they ask a different question: `init._find_atlas_root` walks the cwd
+    only and returns None outside a checkout (the wizard must refuse to
+    write .env/secrets into an arbitrary directory, which this function's
+    cwd fallback would defeat), and `fit._cwd_deployment_root` exists to
+    contrast the cwd's deployment with this one so `--write` can warn.
     """
     starts = (os.path.dirname(os.path.abspath(__file__)),
               os.path.abspath(os.getcwd()))
