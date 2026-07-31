@@ -6,9 +6,10 @@ must pass against every implementation:
   - Go: proxy/private_values.go (exercised by `go test` in CI; here we
     assert the file exists and pins the same placeholder so drift is
     caught even in Python-only runs)
-  - Python x3: the canonical copy in geometric-lens plus its
-    byte-identical copies in sandbox/ and v3-service/ (separate
-    containers, no shared package — identity is the parity mechanism)
+  - Python x4: geometric-lens/geometric_lens/private_values.py and its
+    byte-identical copies in sandbox/, v3-service/, and the CLI
+    (atlas/redact.py) — four separate containers and one pip package,
+    no shared module, so byte identity IS the parity mechanism
 
 Every fixture value is obviously fake; no real credentials exist in
 this repository's test data.
