@@ -83,12 +83,14 @@ def _ast_selector_to_query(selector: str, language: str):
             # grammar, not an element, so no selector can address it — say what
             # does work instead of listing selectors that miss the intent.
             return None, None, (
-                f"selector '{selector}' is HTML-only and this is a Python file. Markup "
-                f"inside a Python string is a single string literal to the Python "
-                f"grammar, so no selector reaches into it. Either use "
-                f"structural_edit with function:NAME to rewrite the whole function "
-                f"holding the template, or use edit_file with old_str set to a "
-                f"unique line copied byte-for-byte from inside the template."
+                f"selector '{selector}' is HTML-only and this is a Python file. "
+                f"Markup inside a Python string is one string literal to the Python "
+                f"grammar, so NO selector reaches into it. Use edit_file, with "
+                f"old_str set to a short unique line copied byte-for-byte from "
+                f"inside the template — anchor on the one line you are changing, "
+                f"not the whole block. Do NOT reach for function:NAME here: the "
+                f"template is usually a module-level constant, so rewriting a "
+                f"function that merely renders it changes nothing."
             )
         return None, None, (
             f"unknown selector '{selector}' for python. Supported: function:NAME, class:NAME"

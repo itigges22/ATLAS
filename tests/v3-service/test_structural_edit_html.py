@@ -65,7 +65,11 @@ def test_html_tag_on_python_file_names_the_escape_hatch():
     q, _, err = main._ast_selector_to_query("<script>", "python")
     assert q is None and err
     assert "HTML-only" in err
-    assert "function:NAME" in err and "edit_file" in err
+    assert "edit_file" in err
+    # Must NOT send the model to function:NAME. A live session followed that
+    # advice, rewrote index() -- which only renders the module-level
+    # HTML_TEMPLATE -- and the pause it "added" never reached the template.
+    assert "Do NOT reach for function:NAME" in err
 
 
 def test_non_tag_unknown_python_selector_still_lists_selectors():
