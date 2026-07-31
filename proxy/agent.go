@@ -854,6 +854,29 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// wiring, and got blocked from fixing it.
 						sessionOwned := ctx.SessionWrites[wfInput.Path]
 						corrupted := looksCorruptedOnDisk(existingPath, string(existing))
+						// Existing, never read, not ours: refuse regardless of
+						// size. The >5-line rule below is about "is a surgical
+						// edit cheaper than a rewrite", which is a different
+						// question from "should this be replaced at all" — and
+						// you cannot know a file should be replaced when you
+						// have never looked at it. edit_file and
+						// structural_edit already demand a read first; this
+						// closes the one path that did not.
+						//
+						// Observed twice: given a 1-line puzzle input, the
+						// model recognised the puzzle from training, wrote the
+						// canonical textbook example over the real input
+						// without reading it, and solved the wrong data while
+						// honestly reporting "created input.txt with sample
+						// data".
+						if isUnreadOverwrite(ctx, existingPath, corrupted, sessionOwned) {
+							rejection := fmt.Sprintf(
+								"%s already exists and this session has not read it. Use read_file first: if it holds input or configuration you were given, you need its real contents, not a replacement. If you have read it and still mean to replace the whole file, use edit_file or structural_edit.",
+								wfInput.Path)
+							log.Printf("[agent] rejecting write_file over unread existing %q (%d lines)", wfInput.Path, existingLines)
+							st.bounceToolCall(ctx, "write_file", rejection)
+							continue
+						}
 						if existingLines > 5 && !corrupted && !sessionOwned {
 							// GH #39: when the existing file is .py or .html
 							// and the model is replacing the whole thing,

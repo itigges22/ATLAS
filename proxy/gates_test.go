@@ -1188,3 +1188,41 @@ func TestStrayCarriageReturnsCleanTextIsZero(t *testing.T) {
 		t.Errorf("clean text must be 0, got %d", n)
 	}
 }
+
+// Given a 1-line puzzle input, a model recognised the puzzle from training,
+// wrote the canonical textbook example over the real input WITHOUT reading
+// it, and solved the wrong data — honestly reporting "created input.txt with
+// sample data". The >5-line rule did not apply and nothing else asked whether
+// the file should be replaced at all.
+func TestUnreadOverwriteIsRefusedRegardlessOfSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "input.txt")
+	if err := os.WriteFile(path, []byte("3,4,3,1,2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier2Medium)
+
+	if !isUnreadOverwrite(ctx, path, false, false) {
+		t.Error("an existing, unread, not-session-owned file must be protected")
+	}
+	// Once read, replacing it is the model's call again.
+	ctx.RecordFileRead(path, "3,4,3,1,2\n")
+	if isUnreadOverwrite(ctx, path, false, false) {
+		t.Error("after read_file the overwrite must be allowed through")
+	}
+}
+
+func TestUnreadOverwriteAllowsSessionOwnedAndCorrupted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "draft.py")
+	ctx := NewAgentContext(dir, Tier2Medium)
+
+	// The agent's own draft: it must be able to correct its first pass.
+	if isUnreadOverwrite(ctx, path, false, true) {
+		t.Error("a session-owned file must stay overwritable")
+	}
+	// A corrupted file can only be repaired by full replacement.
+	if isUnreadOverwrite(ctx, path, true, false) {
+		t.Error("a corrupted file must stay overwritable")
+	}
+}

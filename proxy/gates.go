@@ -667,6 +667,21 @@ func ownBackgroundJobHint(ctx *AgentContext, errMsg string) string {
 	return sb.String()
 }
 
+// isUnreadOverwrite reports whether a write_file would replace an existing
+// file this session has never read and did not itself create.
+//
+// Separate from the ">5 lines" rule, which asks whether a surgical edit is
+// cheaper than a rewrite. This asks whether the file should be replaced at
+// all, and the answer is no when nobody has looked at it: edit_file and
+// structural_edit already require a read first, and this was the one write
+// path that did not.
+func isUnreadOverwrite(ctx *AgentContext, resolvedPath string, corrupted, sessionOwned bool) bool {
+	if ctx == nil || corrupted || sessionOwned {
+		return false
+	}
+	return !ctx.WasFileRead(resolvedPath)
+}
+
 // strayCarriageReturns counts CRs that are not part of a CRLF pair.
 //
 // A CRLF file is normal and must not be flagged, but bare or repeated CRs in
