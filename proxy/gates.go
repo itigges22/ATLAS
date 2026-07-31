@@ -835,7 +835,23 @@ func fallbackSyntaxRejection(path, content, syntaxErr string) string {
 	// Observed live: a session hit the wall clock re-emitting the same
 	// nesting, because the advice sat in a parenthetical after two other
 	// sentences.
-	if strings.Contains(strings.ToLower(syntaxErr), "f-string") {
+	// "unexpected character after line continuation character" is Python
+	// telling you a backslash is followed by something other than a newline.
+	// The wording names the mechanism, not the mistake, and a model that has
+	// started emitting stray backslashes cannot act on it — observed three
+	// times in one session, all on the same file, until the wall clock ran
+	// out. Name the character and where it is.
+	lowerErr := strings.ToLower(syntaxErr)
+	if strings.Contains(lowerErr, "line continuation character") {
+		return fmt.Sprintf(
+			"Your content for %s has a stray backslash (%s) — it was NOT "+
+				"written.%s A backslash only means line-continuation when it is "+
+				"the LAST character on its line; anywhere else Python rejects "+
+				"the file. Remove it, or write \\\\ if you meant a literal "+
+				"backslash. Do NOT resend the same content unchanged.",
+			path, truncateStr(syntaxErr, 200), quoted)
+	}
+	if strings.Contains(lowerErr, "f-string") {
 		return fmt.Sprintf(
 			"Your content for %s has an f-string quoting error (%s) — it was NOT "+
 				"written.%s Nesting the SAME quote character inside an f-string, "+

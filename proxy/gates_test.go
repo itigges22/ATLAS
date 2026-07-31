@@ -1254,3 +1254,34 @@ func TestNonFStringSyntaxErrorKeepsGeneralAdvice(t *testing.T) {
 		t.Errorf("plain syntax error must not claim an f-string problem: %q", msg)
 	}
 }
+
+// "unexpected character after line continuation character" names the
+// mechanism, not the mistake. A model that has started emitting stray
+// backslashes cannot act on it — observed three times in one session, all on
+// the same file, until the wall clock ran out.
+func TestStrayBackslashRejectionNamesTheCharacter(t *testing.T) {
+	msg := fallbackSyntaxRejection("todo.py", "print(\"hi\") \\ x\n",
+		"SyntaxError: unexpected character after line continuation character (line 1)")
+	if !strings.Contains(msg, "stray backslash") {
+		t.Errorf("must name the character, got %q", msg)
+	}
+	if !strings.Contains(msg, "LAST character on its line") {
+		t.Errorf("must say when a backslash is legal, got %q", msg)
+	}
+}
+
+// The f-string branch must survive the refactor that introduced lowerErr.
+func TestFStringBranchStillFiresAfterBackslashBranch(t *testing.T) {
+	msg := fallbackSyntaxRejection("a.py", "x=1\n",
+		"SyntaxError: f-string: unmatched '['")
+	if !strings.Contains(msg, "f-string quoting error") {
+		t.Errorf("f-string diagnosis lost: %q", msg)
+	}
+}
+
+func TestPlainSyntaxErrorGetsNeitherSpecialCase(t *testing.T) {
+	msg := fallbackSyntaxRejection("a.py", "def f(:\n", "SyntaxError: invalid syntax")
+	if strings.Contains(msg, "stray backslash") || strings.Contains(msg, "f-string quoting") {
+		t.Errorf("plain error must keep the general message: %q", msg)
+	}
+}
