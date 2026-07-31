@@ -257,7 +257,7 @@ Status legend: ✅ done · 🔜 queued · ⏸ owner decision · ❌ rejected (do
 | B25 | `render_pos`/`render_neg` identical wrappers | COLLAPSE | 🔜 |
 | B26 | `ast_edit_steering.gguf` filename kept post-rename | **❌ REJECTED as debris** — SHA-pinned by registry, documented in CHANGELOG | ❌ |
 | B27 | retrieval cut (whole-file list, main.py/pipeline.py regions, sqlite tables, Dockerfile/compose/docs collateral; ≈4,294 net) with 6-commit sequence; hazard: reader rewrite (c4) must land WITH pattern_matcher deletion | CUT | ✅ all six commits done (c4 733e6a8 reader, c5 b48eca7, c6 d985885 + cc4e717 reqs) |
-| B28 | `sandbox_analysis.py` looks cuttable but has live caller (client.py /internal/sandbox/analyze) | **KEEP** | ❌ do not cut |
+| B28 | `sandbox_analysis.py` + `/internal/sandbox/analyze` | **CORRECTED 2026-08-01: the claimed caller does not exist.** atlas/client.py has no such call; a whole-tree grep finds only the route, its own module, and docs. The July audit was wrong and I recorded it as KEEP. Now DELETE with W2. | 🔜 W2 |
 | B29 | lens dead knobs: CORS_ORIGINS, ROUTING_ENABLED, CONFIG_PATH, API_KEYS_PATH, SANDBOX_URL prefix mismatch, `_energy_disabled_logged` | DIE-WITH-CUT | 🔜 (c5/c6) |
 | B30 | `ATLAS_ALLOW_PICKLE_GX` legit but undeclared in schema | FIX | 🔜 |
 
@@ -327,7 +327,7 @@ recommendation before any action.
   parse_envelope; 214 lines) stays in-package; consumer/assertion harness
   (iter_sse_lines, iter_events, is_terminal, collect, assert_monotonic) moved
   to tests/cli/event_harness.py.
-| E2 | **geometric-lens as a separate service** — post-cut it serves only `/health`,`/ready`,`/internal/*` (score-per-step, patterns, sandbox/analyze). Could fold into v3-service: one Python service, one image, one compose entry, one auth story. Cost: v3 image gains torch (~752MB); lens restart currently doesn't kill v3. | Wait for cut c4-c6 to land, then size the real remaining surface. | 🔎 after cut |
+| E2 | **geometric-lens as a separate service** | **VERDICT: KEEP SEPARATE** (measured 2026-08-01). The fold trades a container for a shared failure domain + restart schedule between a stateful torch model-server (147 MB weights, SQLite state, rebuilt on `atlas lens build`, seconds to boot) and a stateless AST/orchestration service (0.72 MB code, sub-second boot) — disjoint rebuild triggers, one GIL, and a lens OOM would newly take out structural_check/pycheck/outline/symbol_index/structural_edit//v3/plan//v3/generate. Measured benefit: **2.8 ms per pipeline run** (8 cross-hops × ~0.35 ms; the hop is 0.03% of the `score-per-step` call it rides on) and ~15 lines of duplicated auth. **Revisit only when BOTH**: the lens stops loading torch/.pt at startup, AND the product decides a degraded lens should fail T2/T3 writes anyway (i.e. proxy handleReady no longer distinguishes lens_ready from v3). | ❌ keep |
 | E3 | **graph/ vs symbols.py** — after the B9-B11 collapses, graph/'s unique value is import-resolution + reachability for `unresolved_calls`/`repair_context`. May fold into symbols.py entirely, deleting the package. | B1/B4-B6 first (dead route + engines), then re-measure. | 🔎 after B-wave |
 | E4 | **sandbox as separate container** | Isolation IS the feature (untrusted code execution). KEEP — recorded so it isn't re-asked. | ❌ keep |
 | E5 | **benchmark/ remainder** (runner, best_of_k, geo_learning, models, v3/) | Load-bearing for `atlas bench` → lens training loop. KEEP. | ❌ keep |
