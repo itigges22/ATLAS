@@ -6,17 +6,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps before copying source so code edits do not invalidate
-# the expensive Torch/tree-sitter layers during local image rebuilds.
-# Versions are pinned in requirements.txt for reproducible builds. Torch
-# comes from the CPU-only index first so pip cannot pick a CUDA/NCCL wheel;
-# the remaining pinned deps (tree-sitter grammars) resolve from PyPI. The
-# version here MUST match requirements.txt's torch pin (contract-tested):
-# a mismatch makes the second pip "upgrade" torch from PyPI, silently
-# dragging the ~8 GB nvidia/cu* dependency stack into a CPU-only image.
+# the tree-sitter layer during local image rebuilds. This service parses and
+# orchestrates; it never scores — all tensor work lives in geometric-lens,
+# so no torch here (it shipped ~900 MB of it unimported until 2026-08-01).
 COPY v3-service/requirements.txt /tmp/v3-requirements.txt
-RUN pip install --no-cache-dir torch==2.13.0 \
-        --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir -r /tmp/v3-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/v3-requirements.txt
 
 # V3 pipeline stages (candidate generation, selection, repair)
 COPY v3-service/stages/ /app/stages/

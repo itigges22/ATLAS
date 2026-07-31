@@ -16,11 +16,12 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 
+# geometric-lens is the only service that ships torch: it owns C(x)/G(x)
+# scoring. v3-service parses and orchestrates and imports no torch — see
+# test_v3_service_ships_no_torch below, which keeps it that way.
 SERVICES = [
     ("geometric-lens", REPO / "geometric-lens" / "Dockerfile",
      REPO / "geometric-lens" / "requirements.txt"),
-    ("v3-service", REPO / "v3-service" / "Dockerfile",
-     REPO / "v3-service" / "requirements.txt"),
 ]
 
 DOCKERFILE_TORCH = re.compile(r"pip install [^&]*?torch==([0-9][\w.+]*)")
@@ -57,3 +58,27 @@ def test_torch_preinstall_uses_cpu_index(name, dockerfile, requirements):
         f"{name}: the torch pre-install must use the CPU-only index "
         f"(--index-url https://download.pytorch.org/whl/cpu)."
     )
+
+
+def test_v3_service_ships_no_torch():
+    """v3-service must not install torch: it imports none.
+
+    It shipped ~900 MB of unimported torch until 2026-08-01 (E2/W1) —
+    the image was 1.37 GB, nearly all of it a tensor stack the service
+    never touches. Scoring lives in geometric-lens, inference in
+    llama-server. If a stage ever genuinely needs torch, call the lens
+    rather than re-adding a second copy of it here.
+    """
+    for path in (REPO / "v3-service" / "requirements.txt",
+                 REPO / "v3-service" / "Dockerfile"):
+        assert not re.search(r"(?m)^\s*torch[=<>~ ]|pip install[^&\n]*torch",
+                             path.read_text()), (
+            f"{path.name} reintroduces torch into v3-service. No module "
+            f"under v3-service/ imports it; route tensor work to the lens.")
+
+    src = " ".join(
+        p.read_text() for p in (REPO / "v3-service").rglob("*.py")
+        if "__pycache__" not in str(p))
+    assert not re.search(r"(?m)^\s*(import torch|from torch\b)", src), (
+        "a v3-service module imports torch — either route the work to "
+        "geometric-lens or update this contract deliberately.")
