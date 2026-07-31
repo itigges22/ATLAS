@@ -26,6 +26,7 @@ Usage:
 import argparse
 import json
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -34,6 +35,7 @@ from typing import Dict, List, Optional, Tuple
 
 from atlas import compose as compose_config
 from atlas.env import atlas_root as _find_atlas_root
+from atlas.gguf import read_gguf_kv
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -68,41 +70,14 @@ def _http_ok(url: str, timeout: int = 4) -> bool:
 
 
 def _gguf_arch(path: str) -> Optional[str]:
-    """Read general.architecture from a GGUF header. Returns None on any
-    parse trouble (best-effort — the runtime log scan is the real gate)."""
-    import struct
+    """general.architecture from the GGUF header. None on any parse trouble
+    (best-effort — the runtime log scan is the real gate)."""
     try:
         with open(path, "rb") as f:
-            if f.read(4) != b"GGUF":
-                return None
-            struct.unpack("<I", f.read(4))[0]          # version
-            struct.unpack("<Q", f.read(8))[0]          # n_tensors
-            n_kv = struct.unpack("<Q", f.read(8))[0]
-
-            def rd_str() -> str:
-                n = struct.unpack("<Q", f.read(8))[0]
-                return f.read(n).decode("utf-8", "replace")
-
-            for _ in range(min(n_kv, 64)):
-                key = rd_str()
-                t = struct.unpack("<I", f.read(4))[0]
-                if key == "general.architecture" and t == 8:
-                    return rd_str()
-                # Skip this value by type (only need to reach the arch key,
-                # which GGUF writers emit first; bail if we hit a complex type).
-                if t == 8:
-                    rd_str()
-                elif t in (0, 1, 7):
-                    f.read(1)
-                elif t in (2, 3):
-                    f.read(2)
-                elif t in (4, 5, 6):
-                    f.read(4)
-                elif t in (10, 11, 12):
-                    f.read(8)
-                else:
-                    return None  # array/unknown — stop guessing
-    except Exception:
+            for key, val in read_gguf_kv(f):
+                if key == "general.architecture":
+                    return str(val)
+    except (OSError, ValueError, struct.error):
         return None
     return None
 
