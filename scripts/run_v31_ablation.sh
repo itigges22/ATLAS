@@ -47,11 +47,18 @@ echo "  Strategy: Run A + F, derive B/C/D/E"
 echo "  Results: ${RESULT_BASE}/"
 echo "============================================================"
 
+# llama-server's URL, resolved the way every other tool resolves it:
+# ATLAS_INFERENCE_URL > ATLAS_LLAMA_PORT > .env > the compose default.
+# It used to be the K3s NodePort, hardcoded, so this preflight failed on
+# every Docker Compose host.
+LLAMA_HEALTH="$(python3 -c \
+    'from atlas import compose; print(compose.service_url("llama"))')/health"
+
 preflight_check() {
-    if ! curl -sf http://localhost:32735/health > /dev/null 2>&1; then
-        echo "  ERROR: llama-server not healthy. Waiting 60s..."
+    if ! curl -sf "$LLAMA_HEALTH" > /dev/null 2>&1; then
+        echo "  ERROR: llama-server not healthy at $LLAMA_HEALTH. Waiting 60s..."
         sleep 60
-        if ! curl -sf http://localhost:32735/health > /dev/null 2>&1; then
+        if ! curl -sf "$LLAMA_HEALTH" > /dev/null 2>&1; then
             echo "  FATAL: llama-server still not healthy. Aborting."
             return 1
         fi
