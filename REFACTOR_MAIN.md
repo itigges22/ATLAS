@@ -496,12 +496,24 @@ string is one string literal to the Python grammar, so no selector reaches in.
 gates shared a single bounce counter and are evaluated in fixed order, so
 whichever fired first could spend the whole allowance and silence the rest.
 Session 4 put all three bounces on the verification gate; `exitGates` then
-returned early at its head on every later exit, the done-without-action gate
-never ran, and the model exited having changed NOTHING while claiming the pause
-logic "is already present in the HTML_TEMPLATE string" (it was not). Each gate
-now carries its own budget and an exhausted gate falls through instead of
-returning early. `TestExitGatesOneGateCannotStarveAnother` reproduces it: with
-the shared counter the exit passes completely ungated.
+returned early at its head on every later exit, so the done-without-action gate
+never ran and the exit was completely ungated. Each gate now carries its own
+budget and an exhausted gate falls through instead of returning early.
+`TestExitGatesOneGateCannotStarveAnother` reproduces the starvation directly:
+with the shared counter the exit passes ungated.
+
+> **Correction (same day).** This entry first said session 4's model "exited
+> having changed NOTHING while claiming the pause logic is already present,
+> which it was not". The model was RIGHT: the fixture recovered from the
+> session-2 log already contained a complete spacebar pause (`isPaused`, a
+> `key === ' '` branch, and the draw loop honouring it). The check that
+> cleared it was `grep -c paused`, which is case-sensitive and does not match
+> `isPaused` — so sessions 2-5 were all asked to add a feature that was
+> already there, and session 4's "it is already present" was accurate
+> reporting, not a hallucination. The starvation defect is unaffected and is
+> proven by the test rather than by that session; what is retracted is the
+> claim that the model lied. The fixture has since been stripped of the pause
+> so the task is genuinely undone.
 
 ### E2E campaign 2026-07-31 — five sessions, one fixture
 
@@ -517,6 +529,13 @@ layers before each run (py_compile + `node --check` on the extracted script).
 | 3 | breaker | **D10**, plus 7009- and 6318-char `old_str` degenerating into tab-runs | fixed |
 | 4 | ungated exit | **D11** | fixed |
 | 5 | see below | model gamed the no-op check with a typo | OPEN — owner call |
+
+**Fixture caveat for sessions 2-5.** The fixture used for those runs already
+implemented the pause being asked for (see the D11 correction above), so their
+TASK outcomes carry no signal — the work was done before the session started.
+Their HARNESS outcomes stand: D9, D10 and D11 are all defects in how ATLAS
+routed, steered, or gated the work, and none of them depends on what the file
+contained. Sessions from the reliability harness onward use a stripped fixture.
 
 **The through-line across 1, 3 and 5 is one thing: the model has no structural
 way to edit markup inside a host-language string.** `structural_edit` cannot
