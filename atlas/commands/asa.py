@@ -868,8 +868,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     pr_url = publishing.open_registry_pr_via_api(
         model_label, title, pr_body,
         lambda content: publishing.registry_set_asa(
-            content, model_label, hf_repo, [vector_name]),
-        color)
+            content, model_label, hf_repo, [vector_name]))
     if pr_url:
         _safe_print(f"  {GREEN if color else ''}PR opened: "
                     f"{pr_url}{RESET if color else ''}")

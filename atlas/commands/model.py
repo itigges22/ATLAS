@@ -1137,7 +1137,7 @@ def _print_progress(seen: int, total: int, started: float, color: bool) -> None:
 # `atlas model verify` (PC-056.1)
 # ---------------------------------------------------------------------------
 
-def _verify_one(m: Model, models_dir: str, color: bool) -> Tuple[str, str]:
+def _verify_one(m: Model, models_dir: str) -> Tuple[str, str]:
     """Run verify_installed on a single model and return
     (status, message) for table rendering. Status is one of
     'ok', 'mismatch', 'no-expected', 'missing'."""
@@ -1206,7 +1206,7 @@ def _emit_verify(args: argparse.Namespace, color: bool) -> int:
         return 0
     any_mismatch = False
     for m in targets:
-        status, msg = _verify_one(m, models_dir, color)
+        status, msg = _verify_one(m, models_dir)
         icon = _verify_icon(status, color)
         name = f"{BOLD}{m.name}{RESET}" if color else m.name
         _safe_print(f"  {icon}  {name}")

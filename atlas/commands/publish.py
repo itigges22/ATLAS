@@ -197,7 +197,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     title = (f"Registry: add Lens + ASA artifacts for {model_label} "
              f"(via atlas publish)")
     pr_url = publishing.open_registry_pr_via_api(model_label, title, body,
-                                                 edit, color)
+                                                 edit)
     if pr_url:
         _safe_print(f"  {GREEN if color else ''}PR opened: "
                     f"{pr_url}{RESET if color else ''}")

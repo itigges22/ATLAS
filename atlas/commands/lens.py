@@ -118,11 +118,6 @@ def _inspect_cost_field(artifact_dir: str) -> ArtifactInspection:
                               error="no recognized first-layer weight key")
 
 
-# Back-compat shim — older callers (and the test suite) read just the dim.
-def _read_saved_cost_field_dim(artifact_dir: str) -> Optional[int]:
-    return _inspect_cost_field(artifact_dir).dim
-
-
 def _missing_runtime_artifacts(artifact_dir: str) -> List[str]:
     """Return files required for calibrated C(x)+G(x) operation."""
     required = (
@@ -1443,8 +1438,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
 
     pr_url = publishing.open_registry_pr_via_api(
         model_label, title, pr_body,
-        _edit_registry,
-        color)
+        _edit_registry)
     if pr_url:
         _safe_print(f"  {GREEN if color else ''}PR opened: "
                     f"{pr_url}{RESET if color else ''}")

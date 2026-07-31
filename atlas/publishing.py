@@ -237,7 +237,7 @@ def registry_set_asa(content: str, model_label: str, hf_repo: str,
 
 
 def open_registry_pr_via_api(model_label: str, title: str, body: str,
-                             edit_fn, color: bool) -> Optional[str]:
+                             edit_fn) -> Optional[str]:
     """Open a registry PR through the GitHub API — no local git checkout.
 
     edit_fn(content) -> new content or None. Flow: resolve user + base

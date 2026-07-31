@@ -3,8 +3,8 @@
 Coverage strategy:
 - `_check_model` and `_emit_check` are tested by patching `probe_llama` to
   return synthetic LlamaProbe records (no HTTP, no llama-server required).
-- `_read_saved_cost_field_dim` is exercised against a real torch.save'd
-  state dict so the pickle peek path is real, not mocked.
+- `_inspect_cost_field` is exercised against a real torch.save'd state
+  dict so the pickle peek path is real, not mocked.
 - `_load_training_samples` is tested against tmp_path-written JSON/JSONL.
 - `_emit_build`'s training step is exercised in --dry-run mode to keep
   tests fast (no actual CostField training).
@@ -57,10 +57,10 @@ def _write_complete_runtime_artifacts(path, model="test-model",
 
 
 # ---------------------------------------------------------------------------
-# _read_saved_cost_field_dim — real torch round-trip
+# _inspect_cost_field — real torch round-trip
 # ---------------------------------------------------------------------------
 
-def test_read_saved_cost_field_dim_inferred(tmp_path):
+def test_inspect_cost_field_dim_inferred(tmp_path):
     """A genuine save_cost_field artifact's input dim is recoverable."""
     torch = pytest.importorskip("torch")
     # Build a minimal state dict matching the CostField layout:
@@ -75,12 +75,12 @@ def test_read_saved_cost_field_dim_inferred(tmp_path):
         "net.4.bias":   torch.zeros(1),
     }
     torch.save(state, tmp_path / "cost_field.pt")
-    assert lens._read_saved_cost_field_dim(str(tmp_path)) == DIM
+    assert lens._inspect_cost_field(str(tmp_path)).dim == DIM
 
 
-def test_read_saved_cost_field_dim_missing_file(tmp_path):
+def test_inspect_cost_field_dim_missing_file(tmp_path):
     """No artifact file → returns None, not an exception."""
-    assert lens._read_saved_cost_field_dim(str(tmp_path)) is None
+    assert lens._inspect_cost_field(str(tmp_path)).dim is None
 
 
 # ---------------------------------------------------------------------------

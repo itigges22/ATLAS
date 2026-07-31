@@ -168,8 +168,7 @@ def check_arch() -> CheckResult:
 
 def check_gpu() -> CheckResult:
     """Dispatcher: pick the right vendor-specific GPU check or warn if no
-    GPU is detected. V3.1.1 — replaces the old check_nvidia() entry
-    point. NVIDIA + AMD supported; Metal/SYCL not yet packaged.
+    GPU is detected. NVIDIA + AMD supported; Metal/SYCL not yet packaged.
 
     #115 addition: AMD GPU on aarch64 -> warn rather than dispatch to the
     rocm container check, since rocm has no arm64 release. The check would
@@ -209,11 +208,6 @@ def check_gpu() -> CheckResult:
         f"vendor '{primary.vendor}' detected but Docker integration not yet supported "
         f"(SYCL -> roadmap)",
         f"primary GPU: {primary.name}")
-
-
-# Backwards-compat alias for any external callers that imported the old name.
-def check_nvidia() -> CheckResult:
-    return check_gpu()
 
 
 def _check_nvidia_via_docker() -> CheckResult:

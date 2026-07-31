@@ -285,8 +285,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     atlas_root = _find_atlas_root()
     env = compose_config.read_env_file(atlas_root)
 
-    _safe_print(_c(f"{BOLD}ATLAS onboard{RESET}" if color else "ATLAS onboard",
-                   "", False) + f" {DASH} drop-in a model")
+    hdr = f"{BOLD}ATLAS onboard{RESET}" if color else "ATLAS onboard"
+    _safe_print(f"{hdr} {DASH} drop-in a model")
     _safe_print()
 
     # Step 1 — optionally fetch an unregistered model first.

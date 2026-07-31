@@ -47,18 +47,6 @@ from atlas.display import (
 )
 
 
-def _ok(color: bool) -> str:
-    return f"{GREEN}OK{RESET}" if color else "OK"
-
-
-def _warn(color: bool) -> str:
-    return f"{YELLOW}WARN{RESET}" if color else "WARN"
-
-
-def _err(color: bool) -> str:
-    return f"{RED}FAIL{RESET}" if color else "FAIL"
-
-
 # ---------------------------------------------------------------------------
 # Prompt helpers (PC-054 audit fix — wizard is now actually interactive
 # unless --yes is passed or stdin isn't a TTY).

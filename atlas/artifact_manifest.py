@@ -1,4 +1,4 @@
-"""Sign and verify lens/ASA bundle manifests.
+"""Verify lens/ASA bundle manifests.
 
 Builds on the per-bundle provenance.json (geometric_lens.provenance):
 a bundle can carry an SSH signature over its manifest, and verification
@@ -7,9 +7,9 @@ every file's on-disk SHA-256 still matches the manifest. So a tampered
 artifact fails even if the manifest is intact, and a swapped manifest
 fails the signature — trust needs both integrity and a known signer.
 
-Uses the same SSH signing key as release tags (git config
-user.signingkey); no new key material. Signing needs the private key
-(maintainer machine); verification needs only allowed_signers.
+Signatures are produced out of band with the release signing key
+(`ssh-keygen -Y sign -n atlas-artifact provenance.json`, see
+docs/RELEASE.md); verification needs only allowed_signers.
 """
 
 import contextlib
@@ -27,33 +27,6 @@ NAMESPACE = "atlas-artifact"
 
 def _allowed_signers() -> str:
     return os.path.join(atlas_root(), ".github", "allowed_signers")
-
-
-def _signing_key() -> Optional[str]:
-    try:
-        key = subprocess.check_output(
-            ["git", "config", "--get", "user.signingkey"],
-            text=True, stderr=subprocess.DEVNULL).strip()
-        return key or None
-    except (subprocess.SubprocessError, OSError):
-        return None
-
-
-def sign_manifest(bundle_dir: str) -> str:
-    """Sign provenance.json with the configured SSH signing key. Returns
-    the signature path. Raises RuntimeError if signing isn't set up."""
-    key = _signing_key()
-    if not key:
-        raise RuntimeError(
-            "no SSH signing key configured (git config user.signingkey); "
-            "see docs/RELEASE.md signing setup")
-    manifest = os.path.join(bundle_dir, MANIFEST)
-    if not os.path.isfile(manifest):
-        raise RuntimeError(f"no {MANIFEST} in {bundle_dir}")
-    subprocess.check_call(
-        ["ssh-keygen", "-Y", "sign", "-f", key, "-n", NAMESPACE, manifest],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return os.path.join(bundle_dir, SIGNATURE)
 
 
 def _signature_principals(sig_path: str) -> List[str]:
