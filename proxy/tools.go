@@ -781,7 +781,26 @@ func writeFileTool() *ToolDef {
 			// iterate at run speed. V3 still owns the FIRST write of each
 			// file (the baseline generation where it adds value).
 			iterating := isActiveDebugIteration(ctx, input.Path)
+			// Content that does not parse gets the error now, not after the
+			// V3 timeout. V3 improves a working candidate; it does not exist
+			// to guess what a malformed one meant, and the post-V3 fallback
+			// rejects an unparseable baseline anyway — so spending the budget
+			// first only delays the same answer. The fast-path above cannot
+			// cover this: it keys off a SUCCESSFUL write of the file, and a
+			// model failing the syntax gate never records one, so it paid the
+			// full timeout on every attempt. Observed live: a degenerating
+			// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
+			// four times, each costing 180s before it was told anything.
 			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 && !iterating {
+				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
+						logPath(input.Path), truncateStr(synErr, 80))
+					return &ToolResult{
+						Success: false,
+						Error:   fallbackSyntaxRejection(input.Path, input.Content, synErr),
+					}, nil
+				}
+
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
 				res, err := writeFileWithV3(path, input.Content, ctx)
 				if err == nil && res != nil && res.Success {

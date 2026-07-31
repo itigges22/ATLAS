@@ -2049,3 +2049,49 @@ func TestLiveBackgroundJobNoteEmptyWhenNothingRuns(t *testing.T) {
 		t.Errorf("no jobs must add nothing to the summary, got %q", n)
 	}
 }
+
+// Content that does not parse must be rejected before the V3 budget is spent.
+// The debug fast-path cannot cover this: it keys off a SUCCESSFUL write of the
+// file, and a model failing the syntax gate never records one, so a
+// degenerating model paid the full V3 timeout on every attempt (observed:
+// markdown bold inside code, four times, 180s each).
+func TestWriteFileRejectsUnparseableContentWithoutCallingV3(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test_chunk.py")
+
+	v3Called := false
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/v3/generate") {
+			v3Called = true
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"unresolved":[]}`))
+	}))
+	defer v3.Close()
+	sb := fakeSyntaxSandbox(t, "**") // markdown bold marks the content invalid
+	defer sb.Close()
+	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+
+	// Must reach T2 or the V3 path (and this gate) never engages — the
+	// T0/T1 direct write is deliberately ungated. Mirrors the observed file:
+	// "test_chunk.py -> T2:medium (17 lines)".
+	body := "from chunk import chunks\n\n\ndef main():\n    data = [1, 2, **3**, 4, 5]\n" +
+		"    size = 2\n    result = chunks(data, size)\n    print(result)\n" +
+		"    for row in result:\n        if len(row) != size:\n            print('short')\n" +
+		"        else:\n            print('full')\n    return result\n\n\n" +
+		"if __name__ == '__main__':\n    main()\n"
+	args, _ := json.Marshal(map[string]string{"path": "test_chunk.py", "content": body})
+	res, err := writeFileTool().Execute(json.RawMessage(args), ctx)
+	if err != nil {
+		t.Fatalf("write_file: %v", err)
+	}
+	if res == nil || res.Success {
+		t.Fatalf("unparseable content must be rejected, got %+v", res)
+	}
+	if v3Called {
+		t.Error("V3 must not be called for content that does not parse")
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Error("nothing should have landed on disk")
+	}
+}
