@@ -1119,7 +1119,14 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
     elif lang in ("yaml", "yml"):
         try:
             import yaml
-            yaml.safe_load(code)
+            # safe_load_all, not safe_load: a multi-document file ("a: 1"
+            # --- "b: 2") is valid YAML and extremely common in Kubernetes
+            # and Compose manifests, but safe_load rejects it with "expected
+            # a single document in the stream". That false rejection is why
+            # the proxy's direct-write path carried no syntax gate at all,
+            # which let genuinely unparseable files reach disk. list() forces
+            # the generator so every document is actually parsed.
+            list(yaml.safe_load_all(code))
         except Exception as e:
             errors.append(str(e))
 

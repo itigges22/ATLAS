@@ -2143,3 +2143,46 @@ func TestPlainBounceEmitsNoToolResult(t *testing.T) {
 		}
 	}
 }
+
+// A NEW file that does not parse is unambiguously wrong. The direct-write
+// path carried no syntax gate because the sandbox's YAML checker rejected
+// multi-document files (valid YAML, and the shape every Kubernetes manifest
+// uses); with that checker fixed, the gate is safe here. Observed: a 4-line
+// test_discount.py with an unterminated string reached disk this way.
+func TestDirectWriteGatesAnUnparseableNewFile(t *testing.T) {
+	dir := t.TempDir()
+	sb := fakeSyntaxSandbox(t, "UNTERMINATED")
+	defer sb.Close()
+	ctx := writeGateCtx(t, "", sb.URL, dir)
+	ctx.V3URL = "" // force the direct path
+
+	res, err := writeFileTool().Execute(
+		json.RawMessage(`{"path":"t.py","content":"x = \"UNTERMINATED\n"}`), ctx)
+	if err != nil && res == nil {
+		t.Fatalf("write_file: %v", err)
+	}
+	if res != nil && res.Success {
+		t.Error("an unparseable new file must not reach disk")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "t.py")); statErr == nil {
+		t.Error("nothing should have been written")
+	}
+}
+
+// A clean new file still writes — the gate must not block ordinary creation.
+func TestDirectWriteAllowsACleanNewFile(t *testing.T) {
+	dir := t.TempDir()
+	sb := fakeSyntaxSandbox(t, "UNTERMINATED")
+	defer sb.Close()
+	ctx := writeGateCtx(t, "", sb.URL, dir)
+	ctx.V3URL = ""
+
+	res, err := writeFileTool().Execute(
+		json.RawMessage(`{"path":"ok.py","content":"x = 1\n"}`), ctx)
+	if err != nil {
+		t.Fatalf("write_file: %v", err)
+	}
+	if res == nil || !res.Success {
+		t.Fatalf("a clean new file must write, got %+v", res)
+	}
+}

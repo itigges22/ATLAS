@@ -872,6 +872,31 @@ func writeFileTool() *ToolDef {
 				}
 			}
 
+			// A NEW file that does not parse is unambiguously wrong, so the
+			// direct path gates it. The healthy->broken rule the gate uses
+			// elsewhere needs an "before" state; a file being created has
+			// none, which is exactly why this case is decidable.
+			//
+			// This path was ungated because the sandbox's YAML checker
+			// rejected multi-document files — valid YAML, and the shape every
+			// Kubernetes and Compose manifest uses. That checker is fixed
+			// (safe_load_all), so the one reason to skip the gate here is
+			// gone. Observed: a 4-line test_discount.py with an unterminated
+			// string reached disk through this path.
+			// os.Stat, not readOriginalForGate: that helper returns ("", true)
+			// for a MISSING file — its bool means "usable as a baseline", not
+			// "exists" — so testing it here silently skipped the gate.
+			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+					log.Printf("[write_file] new file %s does not parse — rejecting (%s)",
+						logPath(input.Path), truncateStr(synErr, 80))
+					return &ToolResult{
+						Success: false,
+						Error:   fallbackSyntaxRejection(input.Path, input.Content, synErr),
+					}, nil
+				}
+			}
+
 			// T1: Direct write — config, data, boilerplate
 			res, err := writeFileDirect(path, input.Content)
 			if err == nil && res != nil && res.Success {
