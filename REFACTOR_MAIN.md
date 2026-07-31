@@ -382,6 +382,20 @@ stage CUTS ON HOLD for the owner's H200 bench dataset
 Owner root-cause note: this complexity is the likely source of the TUI-visible
 bugs (stub writes = D1; hangs-then-baseline = derivation burning the 180s cap).
 
+**Dogfood 2026-08-01 (demo2, post-fix stack):** session completed done in 12
+turns / 9 tools. VALIDATED live: reader served 3 July-banked idiom patterns
+(learning loop closed for the first time); content-loop cut + parse-error
+steer both recovered; structural_edit emitted correctly by the model;
+verification gate honored (python run + serve before done). NEW FINDINGS:
+(F1) JS-inside-template-string blind spot — model introduced a stray-paren
+JS syntax error at app.py:121 that python-compile, server-run, and every
+gate structurally cannot see; done summary also misdescribed its own edit
+(claims nextDirection-buffer check; code checks direction). Candidate fix
+direction: lens/lint on embedded <script> blocks or a headless page probe.
+(F2) v3 telemetry volume mounted root-owned vs appuser(1001) → fail-soft
+disabled with a clear log line (fail-soft verified working); live volume
+chowned + Dockerfile pre-creates the path owned by appuser.
+
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
 - `v3-service/graph/` — clean layered DAG, no cycles, each file one concern. Minor: trim
