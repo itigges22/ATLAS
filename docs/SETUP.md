@@ -131,7 +131,7 @@ bash atlas-bootstrap.sh
 | Flag | Effect |
 |---|---|
 | `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | Don't install Docker (already managed) |
-| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | Skip the GPU runtime install (NVIDIA toolkit or ROCm setup). `ATLAS_BOOTSTRAP_SKIP_NVIDIA=1` is accepted as an alias. |
+| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | Skip the GPU runtime install (NVIDIA toolkit or ROCm setup). |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
 | `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built ~5 min after services come up; skipped automatically when no GPU is available) |

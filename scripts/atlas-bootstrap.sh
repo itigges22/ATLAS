@@ -35,7 +35,6 @@
 #                                     ref instead of tracking main)
 #   ATLAS_BOOTSTRAP_SKIP_DOCKER=1     skip Docker install (already managed)
 #   ATLAS_BOOTSTRAP_SKIP_GPU=1        skip GPU runtime install (NVIDIA toolkit or ROCm setup)
-#   ATLAS_BOOTSTRAP_SKIP_NVIDIA=1     [deprecated alias for ATLAS_BOOTSTRAP_SKIP_GPU]
 #   ATLAS_BOOTSTRAP_SKIP_MODELS=1     skip model download
 #   ATLAS_BOOTSTRAP_SKIP_COMPOSE=1    skip `docker compose up`
 #   ATLAS_BOOTSTRAP_SKIP_ASA=1        skip ASA steering-vector build (BiasBusters #4 — optional, ~5 min)
@@ -331,9 +330,9 @@ detect_gpu() {
         log_info "GPU: ${BOLD}${GPU_NAME}${NC} [${GPU_VENDOR}]"
     else
         log_warn "No GPU detected. ATLAS can run CPU-only but inference will be very slow."
-        log_warn "Set ATLAS_BOOTSTRAP_SKIP_GPU=1 (or legacy ATLAS_BOOTSTRAP_SKIP_NVIDIA=1)"
+        log_warn "Set ATLAS_BOOTSTRAP_SKIP_GPU=1 to install CPU-only"
         log_warn "  to suppress GPU steps and continue."
-        if [[ "${ATLAS_BOOTSTRAP_SKIP_GPU:-${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}}" != "1" ]]; then
+        if [[ "${ATLAS_BOOTSTRAP_SKIP_GPU:-0}" != "1" ]]; then
             die "No GPU detected. Re-run with ATLAS_BOOTSTRAP_SKIP_GPU=1 to install CPU-only."
         fi
     fi
@@ -494,7 +493,7 @@ install_nvidia_toolkit() {
     log_step "Step 2: NVIDIA Container Toolkit"
 
     if [[ $HAS_NVIDIA -eq 0 \
-       || "${ATLAS_BOOTSTRAP_SKIP_GPU:-${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}}" == "1" ]]; then
+       || "${ATLAS_BOOTSTRAP_SKIP_GPU:-0}" == "1" ]]; then
         log_skip "No NVIDIA GPU or skip flag set"
         return
     fi
@@ -606,7 +605,7 @@ install_rocm_setup() {
     log_step "Step 2: AMD ROCm runtime"
 
     if [[ $HAS_AMD -eq 0 \
-       || "${ATLAS_BOOTSTRAP_SKIP_GPU:-${ATLAS_BOOTSTRAP_SKIP_NVIDIA:-0}}" == "1" ]]; then
+       || "${ATLAS_BOOTSTRAP_SKIP_GPU:-0}" == "1" ]]; then
         log_skip "No AMD GPU or skip flag set"
         return
     fi

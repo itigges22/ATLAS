@@ -52,7 +52,7 @@ jobs:
             -v "$PWD":/atlas:ro \
             -w /work \
             -e ATLAS_BOOTSTRAP_SKIP_DOCKER=1 \
-            -e ATLAS_BOOTSTRAP_SKIP_NVIDIA=1 \
+            -e ATLAS_BOOTSTRAP_SKIP_GPU=1 \
             -e ATLAS_BOOTSTRAP_SKIP_MODELS=1 \
             -e ATLAS_BOOTSTRAP_SKIP_COMPOSE=1 \
             ${{ matrix.distro.image }} \
@@ -157,7 +157,7 @@ jobs:
             -v "$PWD":/atlas:ro \
             -w /work \
             -e ATLAS_BOOTSTRAP_SKIP_DOCKER=1 \
-            -e ATLAS_BOOTSTRAP_SKIP_NVIDIA=1 \
+            -e ATLAS_BOOTSTRAP_SKIP_GPU=1 \
             -e ATLAS_BOOTSTRAP_SKIP_MODELS=1 \
             -e ATLAS_BOOTSTRAP_SKIP_COMPOSE=1 \
             ubuntu:24.04 \
