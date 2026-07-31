@@ -452,6 +452,32 @@ def h6_service_fault(s: Session) -> list[str]:
     return out
 
 
+def h8_anchored_on_injected_text(s: Session) -> list[str]:
+    """The model anchored an edit on text ATLAS injected, not on file content.
+
+    read_file appends a call-graph footer to the content it returns, and the
+    loop injects "[system note]:" correctives. Neither is on disk, so an
+    old_str copied from them can never match — the edit fails through no fault
+    of the model's, and it burns a turn (a measured session spent all three of
+    its failures this way and stopped). Attributing that to the model would
+    make the harness understate exactly the defects it exists to find.
+    """
+    markers = ("## Call graph (within this file)", "[system note]:",
+               "--- end of ", "The lines below are ATLAS analysis")
+    out = []
+    for ev in s.of_type("tool_call"):
+        d = ev.get("data") or {}
+        old = str(((d.get("args") or {}).get("old_str")) or "")
+        if not old:
+            continue
+        for m in markers:
+            if m in old:
+                out.append(f"H8 injected-text anchor: {d.get('name')} old_str "
+                           f"copied ATLAS's own {m.strip()!r}, which is not on disk")
+                break
+    return out
+
+
 def h7_background_leak(sandbox: str, s: Session) -> list[str]:
     """A background job may outlive the session, but not silently.
 
@@ -675,6 +701,7 @@ def main() -> int:
             s.defects += h4_gate_escape(s)
             s.defects += h5_corrupt_write(s, task)
             s.defects += h6_service_fault(s)
+            s.defects += h8_anchored_on_injected_text(s)
             s.defects += h7_background_leak(args.sandbox_container, s)
             sessions.append(s)
             if args.save_events:

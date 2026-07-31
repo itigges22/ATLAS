@@ -207,3 +207,33 @@ def test_h7_is_silent_when_the_session_announced_the_jobs(rel, tmp_path, monkeyp
                       tmp_path)
     found = rel.h7_background_leak("atlas-sandbox-1", silent)
     assert found and "silent background leak" in found[0]
+
+
+# --- H8 anchored on ATLAS-injected text ----------------------------------
+
+def test_h8_flags_old_str_copied_from_the_call_graph_footer(rel, tmp_path):
+    """read_file appends a footer that is not on disk.
+
+    A measured session anchored edit_file on "## Call graph (within this
+    file)\\n- mean calls: ..." and spent all three of its failures on an edit
+    that could never match. Scoring that against the model would make the
+    harness understate the defects it exists to find.
+    """
+    s = _session(rel, [
+        _call("edit_file", path="stats.py",
+              old_str="\n\n\n## Call graph (within this file)\n"
+                      "- mean calls: ValueError, sum, len"),
+        _fail("string to replace not found in file."),
+        {"type": "done", "data": {"summary": "Stopped after 3 tool failures."}},
+    ], tmp_path)
+    found = rel.h8_anchored_on_injected_text(s)
+    assert found and "Call graph" in found[0]
+
+
+def test_h8_silent_on_a_normal_old_str(rel, tmp_path):
+    s = _session(rel, [
+        _call("edit_file", path="stats.py", old_str="def mean(values):"),
+        _fail("string to replace not found in file."),
+        {"type": "done", "data": {"summary": "x"}},
+    ], tmp_path)
+    assert rel.h8_anchored_on_injected_text(s) == []
