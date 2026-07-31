@@ -437,8 +437,13 @@ def h5_corrupt_write(s: Session, task: Task) -> list[str]:
 def h6_service_fault(s: Session) -> list[str]:
     out = []
     for ev in s.of_type("error"):
-        out.append(f"H6 service fault: error event "
-                   f"{str((ev.get('data') or {}).get('message'))[:120]!r}")
+        d = ev.get("data") or {}
+        # The proxy's error events carry "error" (see the TUI's own case);
+        # "message" is what this harness uses for a stream-level failure it
+        # synthesises. Reading only one of them reported every real error as
+        # the string "None".
+        detail = d.get("error") or d.get("message") or json.dumps(d)[:120]
+        out.append(f"H6 service fault: error event {str(detail)[:160]!r}")
     for ev in s.of_type("tool_result"):
         err = str((ev.get("data") or {}).get("error") or "")
         if re.search(r"\b5\d\d\b.*(?:proxy|v3|lens|sandbox)|connection refused|"
@@ -535,7 +540,7 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                 except json.JSONDecodeError:
                     events.append({"type": "__unparseable__", "raw": payload[:200]})
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        events.append({"type": "error", "data": {"message": f"stream failed: {e}"}})
+        events.append({"type": "error", "data": {"error": f"stream failed: {e}"}})
     wall = time.time() - t0
 
     s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
@@ -564,6 +569,10 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--json", dest="json_out", default="")
+    ap.add_argument("--save-events", default="",
+                    help="directory to write each session's raw event stream "
+                         "to; without it a failure can only be diagnosed from "
+                         "container logs, which roll")
     args = ap.parse_args()
 
     if not args.workspace:
@@ -610,6 +619,11 @@ def main() -> int:
             s.defects += h6_service_fault(s)
             s.defects += h7_background_leak(args.sandbox_container)
             sessions.append(s)
+            if args.save_events:
+                d = Path(args.save_events)
+                d.mkdir(parents=True, exist_ok=True)
+                (d / f"{task.name}-rep{rep}.jsonl").write_text(
+                    "\n".join(json.dumps(e) for e in s.events))
             turns = len(s.of_type("turn_start"))
             print(f"      task={'PASS' if s.task_passed else 'fail'} "
                   f"harness={'clean' if not s.defects else str(len(s.defects)) + ' defect(s)'} "
