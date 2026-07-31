@@ -69,12 +69,9 @@ ATLAS_PROJECTS_DIR="/opt/atlas/data/projects"
 # `atlas lens retrain` on the node reads the corpus the proxy writes.
 ATLAS_LENS_TRAINING_DIR="/opt/atlas/data/lens_training"
 
-# Housekeeping paths — not mounted into any pod. Used by install.sh
-# (creates ATLAS_LORA_DIR) and uninstall.sh (rm -rf both these and
-# ATLAS_DATA_DIR when --remove-data is set).
+# Parent of the lens state/projects paths above; uninstall.sh removes it
+# when --data is set.
 ATLAS_DATA_DIR="/opt/atlas/data"
-ATLAS_TRAINING_DIR="/opt/atlas/data/training"
-ATLAS_LORA_DIR="/opt/atlas/models/lora"
 
 #-------------------------------------------
 # Persistent Volume Sizes
@@ -89,9 +86,11 @@ ATLAS_PVC_PROJECTS_SIZE="20Gi"     # backs lens-projects PVC in the lens deploym
 # Pick a registry model with `atlas model recommend`, or provide a BYO GGUF.
 ATLAS_MAIN_MODEL="your-model.gguf"
 
-# Optional draft model for speculative decoding (gated by
-# ATLAS_ENABLE_SPECULATIVE below). It must be compatible with the selected
-# main model; leave blank unless that pairing has been validated.
+# Draft model for speculative decoding. Speculative decoding is
+# DELIBERATELY OFF: no entrypoint passes llama.cpp's draft flags, because
+# it measured slower than plain decoding on the reference serving host.
+# The knobs are kept so the decision stays visible — do not wire them up
+# without an A/B on your own hardware. See docs/CONFIGURATION.md.
 ATLAS_DRAFT_MODEL=""
 
 # Context window size (tokens). Size this for the selected model and hardware
@@ -119,19 +118,9 @@ ATLAS_SERVICE_MEMORY_REQUEST="512Mi"
 ATLAS_SERVICE_MEMORY_LIMIT="2Gi"
 
 #-------------------------------------------
-# Auth — JWT secret bootstrap
-#-------------------------------------------
-# Leave as "auto" to have scripts/lib/config.sh generate a random
-# 32-byte hex secret on first install and cache it in .jwt_secret.
-# (No service currently consumes the secret — this is forward-
-# compatible scaffolding for the eventual auth layer.)
-ATLAS_JWT_SECRET="auto"
-
-#-------------------------------------------
 # Feature Flags
 #-------------------------------------------
-# Enable speculative decoding only after selecting a draft GGUF explicitly
-# validated as compatible with the main model.
+# Speculative decoding. Deliberately off — see ATLAS_DRAFT_MODEL above.
 ATLAS_ENABLE_SPECULATIVE=false
 
 #-------------------------------------------

@@ -73,7 +73,7 @@ Docker Compose also sets inter-service URLs using Docker networking (e.g., `http
 
 **Restart policy.** Every service in `docker-compose.yml` runs with `restart: unless-stopped`, so the stack comes back up after a host reboot or a container crash without a manual `docker compose up`.
 
-**Removed variables (`.env`).** These keys from older installs are ignored on read; `atlas config validate` flags them and `atlas config migrate` drops them: `ATLAS_REGISTRY` (the model registry is in-package), `ATLAS_REDIS_MAXMEMORY` and `ATLAS_REDIS_MEM` (lens state moved from Redis to SQLite — `SQLITE_DB_PATH`, § 4; [ADR 0007](adr/0007-sqlite-state-store.md)), `ATLAS_ENABLE_TRAINING` (training is always available), and `ATLAS_RPG_PLANNING` (RPG planning was removed — [issue #148](https://github.com/itigges22/ATLAS/issues/148) is the record). K3s-side removals are listed in § 8.11.
+**Removed variables (`.env`).** These keys from older installs are ignored on read; `atlas config validate` flags them and `atlas config migrate` drops them: `ATLAS_REGISTRY` (the model registry is in-package), `ATLAS_REDIS_MAXMEMORY` and `ATLAS_REDIS_MEM` (lens state moved from Redis to SQLite — `SQLITE_DB_PATH`, § 4; [ADR 0007](adr/0007-sqlite-state-store.md)), `ATLAS_ENABLE_TRAINING` (training is always available), and `ATLAS_RPG_PLANNING` (RPG planning was removed — [issue #148](https://github.com/itigges22/ATLAS/issues/148) is the record). K3s-side removals are listed in § 8.10.
 
 `PARALLEL_SLOTS` and `KV_CACHE_TYPE_K/V` are accepted as fallbacks, but the
 canonical `ATLAS_*` names take precedence and are what `atlas init` and
@@ -581,7 +581,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 > **Note:** `atlas.conf` is only used by K3s deployment scripts. Docker Compose uses `.env` instead. The two files configure different deployment targets and should not be mixed.
 
-> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark ablation runner (`atlas.bench.v3_runner`). Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.11).
+> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark ablation runner (`atlas.bench.v3_runner`). Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.10).
 
 ### 8.1 Cluster & Network
 
@@ -608,9 +608,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | `ATLAS_MODELS_DIR` | `/opt/atlas/models` | GGUF model files. Mounted into llama-server at `/models` (read-only) via `hostPath` in `templates/llama-deployment.yaml.tmpl`. |
 | `ATLAS_PROJECTS_DIR` | `/opt/atlas/data/projects` | User project workspace. Bind-mounted at `/workspace` in BOTH atlas-proxy and sandbox pods (`hostPath` with `DirectoryOrCreate`) so the agent sees the same files in both. |
 | `ATLAS_LENS_TRAINING_DIR` | `/opt/atlas/data/lens_training` | Lens training-data corpus. Mounted at `/data/lens_training` in the atlas-proxy pod (`hostPath`, `DirectoryOrCreate`) so `atlas lens retrain` on the node reads the corpus the proxy writes. |
-| `ATLAS_DATA_DIR` | `/opt/atlas/data` | Housekeeping path. Printed at install time; `uninstall.sh` does `rm -rf "$ATLAS_DATA_DIR"` when `--remove-data` is set. Not mounted as a volume. |
-| `ATLAS_TRAINING_DIR` | `/opt/atlas/data/training` | Housekeeping path. Referenced by `uninstall.sh` cleanup; not mounted by any deployment template. |
-| `ATLAS_LORA_DIR` | `/opt/atlas/models/lora` | Housekeeping path. Created by `install.sh` and `download-models.sh`; nothing populates it today and it is not mounted into any pod. |
+| `ATLAS_DATA_DIR` | `/opt/atlas/data` | Parent of the lens state/projects paths. Printed at install time; `uninstall.sh` does `rm -rf "$ATLAS_DATA_DIR"` when `--data` is set. Not mounted as a volume itself. |
 
 ### 8.3 Persistent Volume sizes
 
@@ -624,7 +622,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_MAIN_MODEL` | **required** | Main GGUF filename. Becomes `MODEL_PATH=/models/<name>` inside the container. |
-| `ATLAS_DRAFT_MODEL` | (unset) | Optional compatible draft model for speculative decoding. Gated by `ATLAS_ENABLE_SPECULATIVE`. |
+| `ATLAS_DRAFT_MODEL` | (unset) | Draft model for speculative decoding. **Deliberately inert** — see `ATLAS_ENABLE_SPECULATIVE`. |
 | `ATLAS_CONTEXT_LENGTH` | `16384` | Context window in tokens, TOTAL across all slots (llama-server divides it by `ATLAS_PARALLEL_SLOTS`; at the default `1` slot, total = per-slot). V3's `--parallel 1` budget is sized around 16K; raise if you have GPU headroom and want longer turns. |
 | `ATLAS_PARALLEL_SLOTS` | `1` | Concurrent KV slots. V3 self-embeddings push VRAM tight on 16 GB cards, so `1` is the safe default. |
 
@@ -643,26 +641,20 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 > GPU is requested as a count (`nvidia.com/gpu: 1`), not a memory budget — there is no `ATLAS_LLAMA_GPU_MEMORY` knob.
 
-### 8.6 Auth bootstrap
+### 8.6 Feature flags
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_JWT_SECRET` | `auto` | Reserved. `auto` generates and caches a random 32-byte hex secret in `.jwt_secret`; no service consumes it yet. |
+| `ATLAS_ENABLE_SPECULATIVE` | `false` | **Speculative decoding is deliberately off, and the knob is deliberately not wired.** No entrypoint passes llama.cpp's draft flags (`-md` / `--model-draft`): on the reference serving host, speculative decoding measured *slower* than plain decoding for ATLAS's workload, whose generations are long and low-entropy enough that draft rejection dominates. The variable is kept so the decision stays visible rather than getting rediscovered and "fixed". If you want to revisit it, A/B it on your own hardware first — do not wire it up on principle. |
 
-### 8.7 Feature flags
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ATLAS_ENABLE_SPECULATIVE` | `false` | Gates draft-model download in `scripts/download-models.sh`. Enable it only after selecting a draft model compatible with the main model and runtime architecture. |
-
-### 8.8 Timeouts (seconds)
+### 8.7 Timeouts (seconds)
 
 | Variable | Default | Used by |
 |----------|---------|---------|
 | `ATLAS_LLM_TIMEOUT` | `120` | `scripts/verify-install.sh` for the smoke-test `curl` against llama-server |
 | `ATLAS_HEALTH_CHECK_TIMEOUT` | `10` | `scripts/verify-install.sh` `--max-time` for `curl` against each `/health` endpoint during post-install verification. (The healthchecks defined inside the K3s templates use hardcoded timeouts, not this var.) |
 
-### 8.9 V3 ablation knobs (benchmark-only)
+### 8.8 V3 ablation knobs (benchmark-only)
 
 Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The production `v3-service` reads its own constants from the `v3-service/stages/*.py` config dataclasses and does NOT pick these up at runtime.
 
@@ -676,7 +668,7 @@ Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The
 | `ATLAS_V3_LENS_FEEDBACK_ENABLED` | `false` | Toggle online lens recalibration during benchmark runs |
 | `ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL` | `50` | Retrain every N benchmark problems |
 
-### 8.10 Advanced
+### 8.9 Advanced
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -689,8 +681,8 @@ The install scripts also honor three runtime-only env vars (not in `atlas.conf` 
 |----------|---------|-------------|
 | `ATLAS_CONFIG_FILE` | (auto) | Path override for `atlas.conf` itself. `scripts/lib/config.sh` looks at this before falling back to `$K8S_DIR/atlas.conf`. |
 | `ATLAS_AUTO_CONFIRM` | `false` | Set to `true` in the environment to skip the interactive install prompts in `scripts/install.sh` |
-| `ATLAS_MODEL_URL` | (unset) | Explicit download-URL override for `scripts/download-models.sh` — wins over the registry-derived URL for `ATLAS_MAIN_MODEL`. |
+| `ATLAS_MODEL_URL` | (unset) | Direct GGUF URL for an unregistered model. `scripts/download-models.sh` passes it to `atlas model install --url`, bypassing the registry lookup. |
 
-### 8.11 Removed variables
+### 8.10 Removed variables
 
-Vars removed in earlier trims are ignored if left in an `atlas.conf`; see CHANGELOG. Most recently removed: `ATLAS_ENABLE_TRAINING` (was reserved with no reader — the nightly-retrain CronJob it anticipated was never built; lens retraining is the interactive `atlas lens retrain` / `/internal/lens/retrain` path).
+Vars removed in earlier trims are ignored if left in an `atlas.conf`; see CHANGELOG. Most recently removed: `ATLAS_JWT_SECRET` (generated a secret into `.jwt_secret` and a Kubernetes Secret that no pod ever mounted), `ATLAS_LORA_DIR` and `ATLAS_TRAINING_DIR` (directories `install.sh` created and `uninstall.sh` deleted, that nothing wrote to and no template mounted), and `ATLAS_ENABLE_TRAINING` (was reserved with no reader — the nightly-retrain CronJob it anticipated was never built; lens retraining is the interactive `atlas lens retrain` / `/internal/lens/retrain` path).

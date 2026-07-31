@@ -78,18 +78,6 @@ load_config() {
         [[ -z "$ATLAS_NODE_IP" ]] && ATLAS_NODE_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
     fi
 
-    # Handle auto-generation for JWT secret
-    if [[ "${ATLAS_JWT_SECRET:-auto}" == "auto" ]]; then
-        # Generate deterministic secret based on hostname (or random for new installs)
-        if [[ -f "$K8S_DIR/.jwt_secret" ]]; then
-            ATLAS_JWT_SECRET=$(cat "$K8S_DIR/.jwt_secret")
-        else
-            ATLAS_JWT_SECRET=$(openssl rand -hex 32)
-            echo "$ATLAS_JWT_SECRET" > "$K8S_DIR/.jwt_secret"
-            chmod 600 "$K8S_DIR/.jwt_secret"
-        fi
-    fi
-
     # Export all ATLAS_ variables
     export "${!ATLAS_@}"
 

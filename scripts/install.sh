@@ -55,15 +55,6 @@ validate_paths() {
         fi
     fi
 
-    # Check ATLAS_LORA_DIR (create if missing, it's optional)
-    if [[ ! -d "$ATLAS_LORA_DIR" ]]; then
-        log_warn "ATLAS_LORA_DIR does not exist, creating: $ATLAS_LORA_DIR"
-        mkdir -p "$ATLAS_LORA_DIR" 2>/dev/null || {
-            log_error "Failed to create ATLAS_LORA_DIR: $ATLAS_LORA_DIR"
-            errors=$((errors + 1))
-        }
-    fi
-
     # Check for placeholder paths that weren't updated
     if [[ "$ATLAS_MODELS_DIR" == *"yourusername"* ]] || [[ "$ATLAS_MODELS_DIR" == *"nobase"* ]]; then
         log_error "ATLAS_MODELS_DIR contains placeholder path: $ATLAS_MODELS_DIR"
@@ -392,11 +383,9 @@ setup_namespace() {
 
     # Create secrets if they don't exist
     if ! kubectl get secret atlas-secrets -n "$ATLAS_NAMESPACE" &> /dev/null; then
-        # Use JWT secret from config
         API_SECRET=$(openssl rand -hex 32)
 
         kubectl create secret generic atlas-secrets -n "$ATLAS_NAMESPACE" \
-            --from-literal=jwt-secret="$ATLAS_JWT_SECRET" \
             --from-literal=api-secret="$API_SECRET" || true
     fi
 
