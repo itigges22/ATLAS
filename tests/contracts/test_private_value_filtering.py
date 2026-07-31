@@ -17,22 +17,20 @@ this repository's test data.
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
 
 import pytest
 
-from tests.contracts import go_source
+from tests.contracts import (
+    COPY_NOTICE_MARKER,
+    PRIVATE_VALUE_COPIES as PY_COPIES,
+    REPO,
+    STRUCTURED_LOG_COPIES,
+    files_with_copy_notice,
+    go_source,
+)
 
-REPO = Path(__file__).resolve().parents[2]
 CORPUS = json.loads(
     (REPO / "tests" / "fixtures" / "private_value_fixtures.json").read_text())
-
-PY_COPIES = [
-    REPO / "geometric-lens" / "geometric_lens" / "private_values.py",
-    REPO / "sandbox" / "private_values.py",
-    REPO / "v3-service" / "private_values.py",
-    REPO / "atlas" / "redact.py",
-]
 
 
 def _load(path):
@@ -47,8 +45,30 @@ def test_python_copies_are_byte_identical():
     digests = {p: hashlib.sha256(p.read_bytes()).hexdigest()
                for p in PY_COPIES}
     assert len(set(digests.values())) == 1, (
-        "private_values.py copies drifted — edit all three together:\n"
+        f"private_values.py copies drifted — edit all {len(PY_COPIES)} "
+        "together:\n"
         + "\n".join(f"  {p}: {d[:16]}" for p, d in digests.items()))
+
+
+def test_no_unregistered_copies():
+    """Every copy-notice-bearing module in the repo is registered.
+
+    Byte-identity only protects the copies the registry knows about. A new
+    service that vendors either module without registering it here would
+    otherwise drift silently — the exact failure the parity contract exists
+    to prevent, one directory over.
+    """
+    registered = set(PY_COPIES) | set(STRUCTURED_LOG_COPIES)
+    found = files_with_copy_notice()
+    unregistered = sorted(str(p.relative_to(REPO)) for p in found - registered)
+    missing = sorted(str(p.relative_to(REPO)) for p in registered - found)
+    assert not unregistered, (
+        f"copies carrying the {COPY_NOTICE_MARKER!r} outside the registry in "
+        "tests/contracts/__init__.py — register them so byte-identity is "
+        "enforced:\n  " + "\n  ".join(unregistered))
+    assert not missing, (
+        "registered copies that are gone or lost their copy notice:\n  "
+        + "\n  ".join(missing))
 
 
 @pytest.mark.parametrize("copy_path", PY_COPIES, ids=lambda p: p.parent.name)

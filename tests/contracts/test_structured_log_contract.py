@@ -1,23 +1,32 @@
-"""structured_log.py copies stay byte-identical + behave correctly."""
+"""structured_log.py copies stay byte-identical + behave correctly.
+
+The copy list lives in tests/contracts/__init__.py — that registry is what
+puts a copy under contract, and test_no_unregistered_copies (in
+test_private_value_filtering.py) fails if a copy exists without being in it.
+"""
 
 import hashlib
 import importlib.util
 import logging
-from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-COPIES = [
-    REPO / "geometric-lens" / "geometric_lens" / "structured_log.py",
-    REPO / "sandbox" / "structured_log.py",
-    REPO / "v3-service" / "structured_log.py",
-]
+from tests.contracts import COPY_NOTICE_MARKER, STRUCTURED_LOG_COPIES as COPIES
 
 
 def test_copies_byte_identical():
     digests = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in COPIES}
     assert len(set(digests.values())) == 1, (
-        "structured_log.py copies drifted:\n"
+        f"structured_log.py copies drifted — edit all {len(COPIES)} together:\n"
         + "\n".join(f"  {p}: {d[:16]}" for p, d in digests.items()))
+
+
+def test_each_copy_points_at_this_contract():
+    """A reader who opens any copy must be told it is a copy, and where the
+    enforcement lives. Without this the notice is decoration that can rot."""
+    for path in COPIES:
+        text = path.read_text()
+        assert COPY_NOTICE_MARKER in text, f"{path}: no copy notice"
+        assert "tests/contracts/test_structured_log_contract.py" in text, (
+            f"{path}: copy notice does not name the enforcing test")
 
 
 def _load(path):

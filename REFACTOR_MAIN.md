@@ -469,6 +469,47 @@ lesson from the 2026-08-05 concurrent-agent incident).
 - lens `pattern_extractor.py`, `seed_patterns.py` — single-caller but substantial
   single-responsibility modules; single-caller ≠ fragment.
 
+### W3 — `structured_log.py` ×3 and `private_values.py` ×4: KEEP COPIES (2026-07-31)
+
+Verdict **(a) keep the copies, enforce and advertise the duplication**, not (b) a
+shared module. Three facts decide it:
+
+1. **Build contexts.** Only v3-service builds from the repo root
+   (`context: .`, `dockerfile: v3-service/Dockerfile`). geometric-lens builds from
+   `context: ./geometric-lens` and sandbox from `context: ./sandbox`, so neither can
+   `COPY` a repo-root shared path. Making them able to means flipping both contexts
+   to `.` (docker-compose.yml + both Dockerfiles + .dockerignore), which also hands
+   two images a repo-sized build context and a cache key that busts on any repo file.
+   That is a large, cache-hostile change to share 164 lines.
+2. **atlas/redact.py can never join.** It is a module of the `atlas` pip package, and
+   no service image installs that package (checked all three requirements files). So
+   even (b) leaves a copy outside the shared path, and the parity contract has to
+   exist regardless — (b) buys a smaller contract, not the removal of one.
+3. **The mechanism already works.** Both modules already open with a CANONICAL COPY
+   NOTICE naming the sibling copies and the enforcing test, and both contract tests
+   already assert byte-identity across the full copy set. Nothing was silently
+   drifting; the gap was in what happens to copies the contract does not know about.
+
+**Shipped with W3** (tests only, no service code touched):
+- Copy registry centralized in `tests/contracts/__init__.py` — one place to register
+  a copy, and registering is what puts it under contract.
+- `test_no_unregistered_copies` — discovers copies by the notice marker (not by
+  filename, since `atlas/redact.py` is the same module renamed) across every `.py` in
+  the repo and fails if one exists outside the registry. Closes the hole where a new
+  service vendoring either module escapes byte-identity enforcement entirely.
+- `test_each_copy_points_at_this_contract` — the notice must name the enforcing test,
+  so it cannot decay into decoration.
+
+**Follow-ups this could not land** (they must change every copy in one commit, and
+W3 held to geometric-lens/ + tests/):
+- **C22**, already on the ledger: `private_values.py`'s notice says the file exists
+  "in three places" and names geometric-lens/, sandbox/, v3-service/. There are four
+  — `atlas/redact.py` is the fourth, and its own copy of the notice therefore fails to
+  list itself. Correct text for all four copies: name all four paths explicitly.
+- Once C22 lands, strengthen `test_each_copy_points_at_this_contract` to assert the
+  notice names *every* registered copy path, not just the enforcing test. That closes
+  the loop: registry, notice, and enforcement can no longer disagree.
+
 ---
 
 ## Trivial cleanups (fold into whichever component step touches the file)
