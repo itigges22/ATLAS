@@ -2699,6 +2699,7 @@ func runCommandTool() *ToolDef {
 					errMsg = fmt.Sprintf("exit %d (no output)", out.ExitCode)
 				}
 				errMsg = truncateStr(errMsg, 400)
+				errMsg += ownBackgroundJobHint(ctx, errMsg)
 			}
 			return &ToolResult{
 				Success: out.ExitCode == 0,
@@ -3411,6 +3412,12 @@ func runBackgroundTool() *ToolDef {
 			if !tail.Running {
 				out.ExitCode = tail.ExitCode
 			}
+			if ctx.BackgroundJobs == nil {
+				ctx.BackgroundJobs = make(map[string]string)
+			}
+			if tail.Running {
+				ctx.BackgroundJobs[jobID] = input.Command
+			}
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
@@ -3470,6 +3477,7 @@ func stopBackgroundTool() *ToolDef {
 			if err != nil {
 				return &ToolResult{Success: false, Error: err.Error()}, nil
 			}
+			delete(ctx.BackgroundJobs, input.JobID)
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},

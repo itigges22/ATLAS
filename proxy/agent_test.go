@@ -1998,3 +1998,33 @@ func TestWriteFileV3CancelDuringGateWritesNothing(t *testing.T) {
 		t.Error("cancelled write must not land content on disk")
 	}
 }
+
+// A background server the model started to verify its own work keeps the port,
+// so its next run of the same app fails against "another program" it has no way
+// to identify — an observed session spent its remaining turns on that conflict.
+// The failure must name the model's own job.
+func TestOwnBackgroundJobHintNamesTheCulprit(t *testing.T) {
+	ctx := &AgentContext{BackgroundJobs: map[string]string{
+		"7216f34ccea3": "python app.py",
+	}}
+	hint := ownBackgroundJobHint(ctx, "Address already in use\nPort 5001 is in use by another program.")
+	if !strings.Contains(hint, "7216f34ccea3") || !strings.Contains(hint, "python app.py") {
+		t.Errorf("hint must name the job id and its command, got %q", hint)
+	}
+	if !strings.Contains(hint, "stop_background") {
+		t.Errorf("hint must name the remedy, got %q", hint)
+	}
+}
+
+func TestOwnBackgroundJobHintSilentWhenUnrelated(t *testing.T) {
+	ctx := &AgentContext{BackgroundJobs: map[string]string{"abc": "python app.py"}}
+	if h := ownBackgroundJobHint(ctx, "ModuleNotFoundError: No module named 'flask'"); h != "" {
+		t.Errorf("unrelated failure must not get a job hint, got %q", h)
+	}
+}
+
+func TestOwnBackgroundJobHintSilentWithNoJobs(t *testing.T) {
+	if h := ownBackgroundJobHint(&AgentContext{}, "Address already in use"); h != "" {
+		t.Errorf("no running jobs must produce no hint, got %q", h)
+	}
+}

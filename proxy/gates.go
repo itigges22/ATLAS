@@ -607,6 +607,38 @@ func embeddedScriptGate(ctx *AgentContext, path, original, edited string) string
 	return msg
 }
 
+// ownBackgroundJobHint names the model's own background job when a command
+// just failed because that job is holding the resource.
+//
+// The sandbox has no session concept — a job lives until stop_background or
+// the two-hour reaper — so a server the model started to verify its own work
+// keeps the port, and its next `python app.py` fails against "another
+// program" it has no way to identify. An observed session spent its remaining
+// turns on that conflict. Returns "" when nothing is running or the failure is
+// unrelated, so the common case is unchanged.
+func ownBackgroundJobHint(ctx *AgentContext, errMsg string) string {
+	if ctx == nil || len(ctx.BackgroundJobs) == 0 {
+		return ""
+	}
+	if !strings.Contains(strings.ToLower(errMsg), "address already in use") &&
+		!strings.Contains(strings.ToLower(errMsg), "port is already allocated") {
+		return ""
+	}
+	ids := make([]string, 0, len(ctx.BackgroundJobs))
+	for id := range ctx.BackgroundJobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var sb strings.Builder
+	sb.WriteString("\n\nThat port is held by a background job YOU started in this session")
+	for _, id := range ids {
+		fmt.Fprintf(&sb, "\n  job %s: %s", id, truncateStr(ctx.BackgroundJobs[id], 80))
+	}
+	sb.WriteString("\nStop it with stop_background before re-running, or probe the " +
+		"already-running service instead of starting a second copy.")
+	return sb.String()
+}
+
 // structuralSelectorHint names the selectors structural_edit actually accepts
 // for a file's language, or "" when the file has no structural support at all.
 //

@@ -457,6 +457,15 @@ type AgentContext struct {
 	// is announced to the model once.
 	ManifestAnnounced map[string]bool
 
+	// BackgroundJobs maps job_id -> command for jobs this loop started and
+	// has not stopped. A background server the model started to verify its
+	// own work keeps holding the port, so the model's next `python app.py`
+	// fails with "address already in use" — naming a program it cannot see.
+	// An observed session spent its remaining turns on that conflict.
+	// Tracked so the run_command failure can say which of the model's own
+	// jobs is holding the port.
+	BackgroundJobs map[string]string
+
 	// AssetLintSeen dedupes asset-graph lint findings (gates.go) so
 	// a persistent orphan is mentioned once, not after every write.
 	AssetLintSeen map[string]bool
