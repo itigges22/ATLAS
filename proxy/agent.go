@@ -163,6 +163,40 @@ type runState struct {
 	userWantsVerification bool
 	// Bounces spent across all four gates this run.
 	gateBounces int
+
+	// correctives queued by the loop-health detectors this turn, drained
+	// after the tool result so the next LLM call sees them in order:
+	// assistant(tool_call) → tool(result) → user([system note]: …).
+	//
+	// Role MUST be "user": some Jinja chat templates enforce "system
+	// message must be at the beginning" and 500 on a system role appended
+	// mid-conversation. The "[system note]:" prefix is how the model
+	// tells loop machinery from an actual user instruction.
+	//
+	// Several detectors firing on one turn is intentional — the model
+	// gets each signal, since they observe the same stuckness from
+	// different angles (identical args vs rehashed reasoning vs a lens
+	// quality crash).
+	correctives []string
+}
+
+// queueCorrective adds a loop-health corrective for this turn.
+func (s *runState) queueCorrective(msg string) {
+	if msg != "" {
+		s.correctives = append(s.correctives, msg)
+	}
+}
+
+// drainCorrectives appends every queued corrective to the conversation
+// and clears the queue. Called once per turn, after the tool result.
+func (s *runState) drainCorrectives(ctx *AgentContext) {
+	for _, msg := range s.correctives {
+		ctx.Messages = append(ctx.Messages, AgentMessage{
+			Role:    "user",
+			Content: "[system note]: " + msg,
+		})
+	}
+	s.correctives = nil
 }
 
 // bounce echoes the model's output plus a synthetic tool rejection into
@@ -1249,33 +1283,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// crashed the next LLM call with a 500. The "[system note]:"
 			// prefix is how the model knows it's loop-machinery feedback,
 			// not an actual user instruction.
-			if pendingLensCorrective != "" {
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "user",
-					Content: "[system note]: " + pendingLensCorrective,
-				})
-			}
-			// Tool-call repetition intervention: same pattern, different
-			// signal. If both fire on the same turn the model gets two
-			// stacked warnings — that's intentional, both signals are
-			// telling it the same thing from different angles.
-			if pendingRepeatCorrective != "" {
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "user",
-					Content: "[system note]: " + pendingRepeatCorrective,
-				})
-			}
-			// Reasoning-repetition intervention. Same shape as the two
-			// above — appended after the tool result so the next LLM
-			// call sees: assistant(tool_call) → tool(result) → user
-			// (reasoning warning). Stacks with the others when multiple
-			// fire; the model gets all three signals.
-			if pendingReasoningCorrective != "" {
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "user",
-					Content: "[system note]: " + pendingReasoningCorrective,
-				})
-			}
+			// Loop-health correctives, queued in signal order (lens
+			// quality crash, repeated call, rehashed reasoning) and drained
+			// through one path. Each slot holds at most one message: the
+			// repeat slot is deliberately overwritable, so the specific
+			// edit_file -> structural_edit steer above replaces the generic
+			// repeat warning instead of stacking with it.
+			st.queueCorrective(pendingLensCorrective)
+			st.queueCorrective(pendingRepeatCorrective)
+			st.queueCorrective(pendingReasoningCorrective)
+			st.drainCorrectives(ctx)
 
 			// Option 3 (issue #39): traceback → directed edit. When a
 			// run_command surfaced a Python traceback, mechanically extract
