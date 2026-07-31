@@ -61,21 +61,43 @@ check_pod() {
     return 0
 }
 
-# GPU check
+# GPU check. ATLAS ships four backends (cuda, rocm, vulkan, metal) and
+# `atlas tier` detects NVIDIA, AMD, and Apple GPUs, so an NVIDIA-only probe
+# used to hard-fail a perfectly good AMD, Vulkan, or CPU-only install.
 check_gpu() {
-    if nvidia-smi > /dev/null 2>&1; then
-        local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
-        local gpu_mem=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader | head -1)
-        check_pass "GPU detected: $gpu_name ($gpu_mem)"
+    local found=false
 
-        # Check GPU is available in K8s
+    if nvidia-smi > /dev/null 2>&1; then
+        found=true
+        check_pass "NVIDIA GPU: $(nvidia-smi --query-gpu=name,memory.total \
+            --format=csv,noheader | head -1)"
         if kubectl get nodes -o json | grep -q "nvidia.com/gpu"; then
-            check_pass "GPU available in Kubernetes"
+            check_pass "GPU advertised in Kubernetes (nvidia.com/gpu)"
         else
             check_warn "GPU not advertised in Kubernetes (may still work)"
         fi
-    else
-        check_fail "No NVIDIA GPU detected"
+    fi
+
+    if rocm-smi --showproductname > /dev/null 2>&1; then
+        found=true
+        check_pass "AMD GPU detected (rocm-smi)"
+        if kubectl get nodes -o json | grep -q "amd.com/gpu"; then
+            check_pass "GPU advertised in Kubernetes (amd.com/gpu)"
+        else
+            check_warn "GPU not advertised in Kubernetes (may still work)"
+        fi
+    fi
+
+    if [[ "$(uname -s)" == "Darwin" ]] \
+        && system_profiler SPDisplaysDataType > /dev/null 2>&1; then
+        found=true
+        check_pass "Apple GPU detected (Metal hybrid path)"
+    fi
+
+    if [[ "$found" == false ]]; then
+        # No vendor CLI. Vulkan (lavapipe) and CPU-only are supported
+        # deployments, so this is a warning, not a failure.
+        check_warn "No GPU detected — CPU/Vulkan fallback only (inference will be slow)"
     fi
 }
 
@@ -199,6 +221,7 @@ main() {
     check_pod "llama-server"
     check_pod "geometric-lens"
     check_pod "atlas-proxy"
+    check_pod "v3-service"
     check_pod "sandbox"
 
     # Service health endpoints - using NodePort values from config
@@ -207,6 +230,7 @@ main() {
     check_service "llama-server"   "http://localhost:${ATLAS_LLAMA_NODEPORT}/health"  "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "geometric-lens" "http://localhost:${ATLAS_LENS_NODEPORT}/health"   "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "atlas-proxy"    "http://localhost:${ATLAS_PROXY_NODEPORT}/health"  "$ATLAS_HEALTH_CHECK_TIMEOUT"
+    check_service "v3-service"     "http://localhost:${ATLAS_V3_NODEPORT}/health"     "$ATLAS_HEALTH_CHECK_TIMEOUT"
     check_service "sandbox"        "http://localhost:${ATLAS_SANDBOX_NODEPORT}/health" "$ATLAS_HEALTH_CHECK_TIMEOUT"
 
     # Functional checks
