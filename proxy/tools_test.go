@@ -1003,3 +1003,35 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+// The call-graph footer is concatenated onto the file content read_file
+// returns, so without an explicit boundary it reads as the file's last lines.
+// A live session anchored edit_file's old_str on "## Call graph (within this
+// file)\n- mean calls: ..." and the edit could never match — that text is not
+// on disk. The footer has to say where the file ends.
+func TestCallGraphFooterMarksItselfAsNotFileContent(t *testing.T) {
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"supported":true,"symbols":[
+			{"name":"mean","kind":"function","start_line":1,"end_line":3,"calls":["sum","len"]}]}`))
+	}))
+	defer v3.Close()
+	ctx := &AgentContext{V3URL: v3.URL, Ctx: context.Background()}
+
+	footer := callGraphFooter(ctx, "stats.py", "def mean(v):\n    return sum(v)/len(v)\n")
+	if footer == "" {
+		t.Skip("outline unavailable in this environment")
+	}
+	if !strings.Contains(footer, "--- end of stats.py ---") {
+		t.Errorf("footer must mark where the file ends, got %q", footer)
+	}
+	if !strings.Contains(footer, "NOT part of the file") {
+		t.Errorf("footer must disclaim being file content, got %q", footer)
+	}
+	if !strings.Contains(footer, "old_str") {
+		t.Errorf("footer must warn against anchoring on it, got %q", footer)
+	}
+	// The boundary has to come before the analysis, or it marks nothing.
+	if strings.Index(footer, "--- end of") > strings.Index(footer, "## Call graph") {
+		t.Error("the end-of-file marker must precede the analysis section")
+	}
+}

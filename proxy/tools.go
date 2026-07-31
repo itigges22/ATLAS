@@ -430,7 +430,16 @@ func callGraphFooter(ctx *AgentContext, path, source string) string {
 			continue
 		}
 		if !any {
-			sb.WriteString("\n\n## Call graph (within this file)\n")
+			// The footer is concatenated onto the file content the model
+			// reads, so without an explicit boundary it looks like the last
+			// lines of the file. Observed live: a model anchored edit_file's
+			// old_str on "## Call graph (within this file)\n- mean calls: ..."
+			// and the edit could never match, because that text is not on
+			// disk. Say where the file ends and that what follows is not it.
+			fmt.Fprintf(&sb, "\n\n--- end of %s ---\n", path)
+			sb.WriteString("The lines below are ATLAS analysis, NOT part of the file. " +
+				"Never copy them into old_str.\n")
+			sb.WriteString("## Call graph (within this file)\n")
 			any = true
 		}
 		sb.WriteString("- " + s.Name)
