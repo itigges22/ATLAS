@@ -1522,6 +1522,20 @@ func editFileTool() *ToolDef {
 				}
 			}
 			if actualOldStr == "" {
+				// Degenerate old_str: not drift the fuzzy matcher can rescue,
+				// but corrupted output. Observed across three sessions —
+				// runs of bare \r and a stray `\rVert` (a LaTeX fragment) in
+				// the middle of copied code. "Must match byte-for-byte" is
+				// useless advice for that, and the model re-sent an equally
+				// corrupted block each time. Name it, and ask for the short
+				// anchor that is far less likely to degenerate.
+				if n := strayCarriageReturns(input.OldStr); n >= 3 {
+					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` "+
+						"contains %d stray carriage returns and looks corrupted rather than copied "+
+						"— long blocks tend to come out this way. Re-emit `old_str` as ONE short "+
+						"unique line taken from the file (the single line you are changing), not a "+
+						"multi-line block.", n)
+				}
 				// Mismatch persists — return targeted error.
 				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
 					strings.Contains(input.OldStr, "&gt;") ||

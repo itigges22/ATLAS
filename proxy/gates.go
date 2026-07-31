@@ -667,6 +667,27 @@ func ownBackgroundJobHint(ctx *AgentContext, errMsg string) string {
 	return sb.String()
 }
 
+// strayCarriageReturns counts CRs that are not part of a CRLF pair.
+//
+// A CRLF file is normal and must not be flagged, but bare or repeated CRs in
+// an old_str are a reliable signature of a model that degenerated partway
+// through copying a block — observed across three sessions, one of which
+// emitted a literal `\rVert` (a LaTeX fragment) in the middle of JavaScript.
+func strayCarriageReturns(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\r' {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == '\n' {
+			i++ // a well-formed CRLF, skip its LF
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 // structuralSelectorHint names the selectors structural_edit actually accepts
 // for a file's language, or "" when the file has no structural support at all.
 //

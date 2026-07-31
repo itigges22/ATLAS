@@ -1164,3 +1164,27 @@ func TestEmbeddedStyleRejectionWording(t *testing.T) {
 		t.Errorf("css rejection must explain the browser-side breakage:\n%s", msg)
 	}
 }
+
+// A CRLF file is normal and must not be flagged; bare or repeated CRs in an
+// old_str are the signature of a model that degenerated partway through
+// copying a block. One observed old_str carried runs of \r plus a literal
+// `\rVert` — a LaTeX fragment — in the middle of JavaScript.
+func TestStrayCarriageReturnsIgnoresWellFormedCRLF(t *testing.T) {
+	crlf := "line one\r\nline two\r\nline three\r\n"
+	if n := strayCarriageReturns(crlf); n != 0 {
+		t.Errorf("CRLF text must not be flagged, got %d", n)
+	}
+}
+
+func TestStrayCarriageReturnsCountsDegenerateRuns(t *testing.T) {
+	degenerate := "        let gameActive = true;\n        \r\r\r\r\r\r\n        \rVert"
+	if n := strayCarriageReturns(degenerate); n < 3 {
+		t.Errorf("degenerate old_str must be flagged, got %d", n)
+	}
+}
+
+func TestStrayCarriageReturnsCleanTextIsZero(t *testing.T) {
+	if n := strayCarriageReturns("def f():\n    return 1\n"); n != 0 {
+		t.Errorf("clean text must be 0, got %d", n)
+	}
+}
