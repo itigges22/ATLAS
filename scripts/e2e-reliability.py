@@ -552,6 +552,51 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     return s
 
 
+def preflight(sandbox: str, subdir: str) -> list[str]:
+    """Refuse to measure a stack that is misconfigured.
+
+    The proxy and the sandbox each bind a host directory at /workspace, and
+    nothing in a session fails loudly when those differ: file tools write
+    through the proxy's mount while every run_command executes against the
+    sandbox's. A whole run then produces confident numbers about an
+    environment where edits and verification never met. That happened here —
+    proxy on ~/demo, sandbox on ~/demo2 — and cost a full run, so the harness
+    now checks before it spends an hour. `atlas doctor` reports the same thing
+    under workspace_mounts.
+    """
+    problems: list[str] = []
+    if not sandbox:
+        return problems
+
+    def mount_of(container: str) -> str:
+        p = subprocess.run(
+            ["docker", "inspect", container, "--format",
+             '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'],
+            capture_output=True, text=True, timeout=30)
+        return (p.stdout or "").strip()
+
+    proxy_mount = mount_of("atlas-atlas-proxy-1")
+    sandbox_mount = mount_of(sandbox)
+    if proxy_mount and sandbox_mount and proxy_mount != sandbox_mount:
+        problems.append(
+            f"proxy and sandbox bind DIFFERENT host dirs at /workspace "
+            f"(proxy={proxy_mount} sandbox={sandbox_mount}). Edits and "
+            f"verification would run on separate filesystems. Fix: set "
+            f"ATLAS_PROJECT_DIR in .env, then "
+            f"`docker compose up -d --force-recreate atlas-proxy sandbox`")
+
+    # The subdir has to be visible to the sandbox too, or every verification
+    # command fails with "cwd does not exist" and the task looks unsolvable.
+    if subdir:
+        p = subprocess.run(["docker", "exec", sandbox, "test", "-d",
+                            f"/workspace/{subdir}"], capture_output=True, timeout=30)
+        if p.returncode != 0:
+            problems.append(
+                f"/workspace/{subdir} does not exist inside {sandbox} — every "
+                f"run_command would fail with 'cwd does not exist'")
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -589,6 +634,11 @@ def main() -> int:
     selected = [TASKS[n] for n in args.tasks.split(",") if n in TASKS]
     if not selected:
         print(f"error: no known tasks in {args.tasks!r}", file=sys.stderr)
+        return 2
+
+    if problems := preflight(args.sandbox_container, args.subdir):
+        for line in problems:
+            print(f"error: {line}", file=sys.stderr)
         return 2
 
     known = tui_handled_types()
