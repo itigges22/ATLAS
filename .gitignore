@@ -194,3 +194,4 @@ geometric-lens/geometric_lens/models/.previous-bundle/
 # Condition E stays tracked — the discontinued partial run's only copy.
 docs/reports/ablation/condition_[a-d]*/v3_lcb/per_task/
 docs/reports/ablation/condition_[a-d]*/summary.json
+.docs-audit-findings.md

@@ -332,6 +332,22 @@ class TestEWCPersistence:
 # --- Performance ---
 
 class TestEWCPerformance:
+    @pytest.fixture(autouse=True)
+    def _single_threaded(self):
+        """Pin torch to one thread for the wall-clock assertions below.
+
+        These tests time a few hundred small tensor ops. At torch's default
+        thread count the intra-op pool oversubscribes any machine that is
+        doing something else, and the measurement reports contention rather
+        than the code's speed: the penalty timing lands ~44ms/call on a busy
+        8-core box against a 10ms budget, and ~0.1ms/call pinned. Pinning
+        makes the number mean what the assertion says it means.
+        """
+        prior = torch.get_num_threads()
+        torch.set_num_threads(1)
+        yield
+        torch.set_num_threads(prior)
+
     def test_fisher_computation_speed(self):
         """AC-4A-EWC-2: Fisher should compute in < 60s for small model.
         Full 4096-dim model tested separately if needed."""
