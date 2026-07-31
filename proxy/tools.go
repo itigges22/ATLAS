@@ -1274,6 +1274,25 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 	}
 
+	// Embedded-script gate (F1): V3 verifies a candidate by RUNNING it — the
+	// server starts and the page returns 200 — which is exactly the evidence a
+	// broken <script> block inside the rendered HTML survives. Nothing else on
+	// this path parses that JavaScript. Same healthy->broken rule; and when the
+	// WINNER is the one carrying the break, write the model's gate-passing
+	// baseline rather than blaming it for V3-authored content.
+	if original, origOK := readOriginalForGate(path); origOK {
+		if msg := embeddedScriptGate(ctx, path, original, code); msg != "" {
+			if code != baselineContent && embeddedScriptGate(ctx, path, original, baselineContent) == "" {
+				log.Printf("[write_file] V3 winner breaks an embedded script in %s — writing gate-passing baseline instead", logPath(path))
+				code = baselineContent
+				fellBack = true
+			} else {
+				log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
+		}
+	}
+
 	// The structural gate made HTTP calls; a user cancel during that window
 	// must not land content on disk, mirroring the main call's abort path above.
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
@@ -1605,6 +1624,12 @@ func editFileTool() *ToolDef {
 			if synErr, ok := checkFallbackSyntax(ctx, path, newContent); !ok {
 				if _, origOK := checkFallbackSyntax(ctx, path, content); origOK {
 					log.Printf("[edit_file] edited content for %s failed syntax gate: %s", input.Path, truncateStr(synErr, 120))
+					// An embedded-script finding is already model-ready and names
+					// its own fix; the generic wrapper's "check old_str/new_str"
+					// advice is wrong for JavaScript inside a string.
+					if msg, isEmbedded := embeddedScriptRejectionFor(synErr); isEmbedded {
+						return &ToolResult{Success: false, Error: msg}, nil
+					}
 					return &ToolResult{Success: false, Error: fmt.Sprintf(
 						"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
 						input.Path, truncateStr(synErr, 200))}, nil
@@ -1921,6 +1946,16 @@ func structuralEditTool() *ToolDef {
 			if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
 				log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
 				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+			}
+
+			// Embedded-script gate (F1): the post-splice check in v3-service
+			// proves the .py/.html parses, not that the JavaScript inside a
+			// <script> block does — and `<script>` is a first-class selector
+			// here, so this tool is the likeliest way to land broken JS.
+			// Healthy->broken, fail-soft.
+			if msg := embeddedScriptGate(ctx, path, source, finalContent); msg != "" {
+				log.Printf("[structural_edit] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
+				return &ToolResult{Success: false, Error: msg}, nil
 			}
 
 			// Atomic write — same pattern as edit_file/write_file.

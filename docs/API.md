@@ -721,6 +721,39 @@ Resolve every direct-identifier call in a Python source against its local defs, 
 
 `ok: false` means the check could not run (tree-sitter unavailable, non-UTF-8 source) and the caller fails open. Malformed Python does not produce `ok: false` — tree-sitter parses tolerantly. `unresolved` is the complete list (no cap): the caller diffs original-vs-edited lists, and a truncated list would make that comparison unsound. `wildcard_imports: true` reports that the source contains `from x import *`; unresolved reporting is suppressed in that case (the wildcard may supply any name), so it always accompanies an empty `unresolved`.
 
+### POST /internal/embedded_script_check
+
+Syntax-check the JavaScript (and brace-balance the CSS) *embedded* in a file — what `/internal/pycheck` and the sandbox's `/syntax-check` are both blind to, because they see the host language only. Two carriers are handled: `<script>`/`<style>` blocks in `.html`/`.htm`/`.jinja`/`.jinja2` files, and HTML held in a **Python string literal** (the `render_template_string` shape). Backs the proxy's embedded-script gate on `edit_file`, `structural_edit` and the `write_file` branches.
+
+**Request:**
+```json
+{"path": "app.py", "source": "<full file content>"}
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "findings": [
+    {
+      "line": 121,
+      "column": 86,
+      "kind": "javascript",
+      "where": "the <script> block inside the Python string HTML_TEMPLATE",
+      "message": "unexpected `)`",
+      "hint": "Nothing opened a `(` for it to close — delete the stray `)`, or add the `(` it was meant to close.",
+      "text": "else if(key === 'ArrowDown' && direction !== 'UP') nextDirection = 'DOWN');"
+    }
+  ]
+}
+```
+
+`line`/`column` are positions in the **file**, not in the extracted block, so the model can go straight to them. `kind` is `javascript` or `css`. At most 3 findings are returned, sorted by line; the caller reports the first.
+
+`ok: false` means the check could not run (tree-sitter-javascript missing from the build, non-UTF-8 source) and the caller fails open. An unsupported extension is `ok: true` with no findings — nothing was wrong with it.
+
+It backs a write-blocking gate, so it is conservative by construction: every ambiguous block reports nothing rather than guessing. No finding is produced when the `<script>`/`<style>` tag counts don't balance (a `</script>` inside a JS string truncates the raw text), for `<script src=...>` with no body, for a non-JS `type` (`text/template`, `application/json`, `importmap`, …), for a block still carrying template tags after `{{ }}` placeholder masking (`{% %}`, `<% %>`, multi-line placeholders), when masking those placeholders makes the block parse (the error was the template syntax), or when the Python string literal is an f-string, part of a concatenation, or contains a backslash escape (what Python renders then differs from the source bytes being parsed). Placeholder masking is length- and newline-preserving and runs only *after* the raw parse already failed, so it can only ever remove findings.
+
 ### GET /health
 
 ```bash

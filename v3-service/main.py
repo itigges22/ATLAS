@@ -30,8 +30,9 @@ from adapters import ClientDisconnected, _post_pattern_outcome
 from pipeline import V3PipelineService, _build_problem_from_request
 from planning import generate_plan
 from symbols import (structural_edit, structural_score, build_project_symbols,
-                     symbol_index, cyclomatic_complexity,
-                     _symbol_index_for_python_source, _STRUCTURAL_EDIT_AVAILABLE)
+                     symbol_index, cyclomatic_complexity, embedded_script_check,
+                     _symbol_index_for_python_source, _STRUCTURAL_EDIT_AVAILABLE,
+                     _EMBEDDED_SCRIPT_AVAILABLE)
 # The handler does not call these; tests exercise them through `import main`.
 from pipeline import _candidate_by_index, _make_self_test
 from planning import _score_plan
@@ -86,6 +87,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_pycheck()
         elif self.path == "/internal/structural_check":
             self._handle_structural_check()
+        elif self.path == "/internal/embedded_script_check":
+            self._handle_embedded_script_check()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -496,6 +499,42 @@ class V3Handler(BaseHTTPRequestHandler):
             "n_unresolved": struct.get("n_unresolved", 0),
             "wildcard_imports": struct.get("wildcard_imports", False),
         })
+
+    def _handle_embedded_script_check(self):
+        """POST /internal/embedded_script_check — does the JavaScript/CSS
+        EMBEDDED in this file parse?
+
+        Request:  {"path": "app.py", "source": "<file text>"}
+        Response: {"ok": bool, "findings": [{line, column, kind, where,
+                                            message, hint, text}]}
+
+        Covers what /internal/pycheck and the sandbox's /syntax-check are both
+        blind to: a `<script>` block inside an .html/.jinja file, and — the
+        2026-08-01 dogfooding case — inside a Python string literal handed to
+        render_template_string. A stray `)` in that JavaScript leaves the
+        Python compiling, the server starting and `curl /` returning 200 while
+        the page is dead in the browser.
+
+        `ok: false` means the check couldn't run (tree-sitter-javascript
+        missing, non-UTF-8 source) and the caller fails open. An unsupported
+        extension is `ok: true` with no findings — nothing was wrong with it.
+        Conservative by design: ambiguous blocks (template statement tags,
+        `<script src>`, non-JS `type`, escaped Python strings) report nothing.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"ok": False, "error": f"invalid JSON body: {e}"})
+            return
+        path = body.get("path", "") or ""
+        source = body.get("source", "") or ""
+        result = embedded_script_check(path, source)
+        if result.get("findings"):
+            first = result["findings"][0]
+            print(f"  [embedded_script] {path} line {first['line']}: "
+                  f"{first['kind']} {first['message']}", flush=True)
+        self._json_response(200, result)
 
     def _handle_outline(self):
         """POST /internal/outline — list a file's top-level functions/classes.

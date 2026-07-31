@@ -380,10 +380,28 @@ var syntaxGateLanguages = map[string]string{
 
 // checkFallbackSyntax returns ("", true) when `content` is safe to write
 // as a fallback: it parsed cleanly, or it could not be checked (sandbox
-// down, unsupported extension). Returns (firstError, false) when the
-// sandbox confirmed the content does not parse.
+// down, unsupported extension). Returns (firstError, false) when a checker
+// confirmed the content does not parse.
+//
+// Two checkers run, whole-file first: the sandbox parses the file in its own
+// language, then checkEmbeddedScript parses the JavaScript/CSS that lives
+// INSIDE it (a <script> block in an .html file, or in a Python string handed
+// to render_template_string). The sandbox's checker sees the Python or the
+// markup only, so a stray `)` in embedded JavaScript passed it (F1).
 func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool) {
-	if ctx == nil || ctx.SandboxURL == "" {
+	if ctx == nil {
+		return "", true
+	}
+	if msg, ok := checkSandboxSyntax(ctx, path, content); !ok {
+		return msg, false
+	}
+	return checkEmbeddedScript(ctx, path, content)
+}
+
+// checkSandboxSyntax is the whole-file half of checkFallbackSyntax: the
+// sandbox's /syntax-check in the file's own language.
+func checkSandboxSyntax(ctx *AgentContext, path, content string) (string, bool) {
+	if ctx.SandboxURL == "" {
 		return "", true
 	}
 	lang, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
@@ -431,6 +449,170 @@ func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool)
 	return first, false
 }
 
+// ---------------------------------------------------------------------------
+// Embedded-script gate (F1)
+// ---------------------------------------------------------------------------
+//
+// 2026-08-01 dogfooding: the model edited a Flask app whose whole UI is one
+// HTML string (`HTML_TEMPLATE = """..."""` → render_template_string) and left
+// a stray closing paren inside its <script> block:
+//
+//	else if(key === 'ArrowDown' && direction !== 'UP') nextDirection = 'DOWN');
+//
+// Every gate on the write path was structurally blind to it. The Python
+// compiles (the JavaScript is string content), so pycheck and the sandbox's
+// /syntax-check pass; the server starts and `curl /` returns 200, so the
+// verification gate passes and `done` is accepted — while the game is dead in
+// the browser. Nothing in the loop ever parses the JavaScript.
+//
+// checkEmbeddedScript closes that by routing the content through
+// v3-service /internal/embedded_script_check, which tree-sitter-parses the
+// JS/CSS inside <script>/<style> blocks — in .html/.htm/.jinja/.jinja2 files
+// and in Python string literals.
+//
+// Fail-soft everywhere: no V3 URL, an unreachable service, a missing grammar,
+// a parse timeout or an unsupported file type all mean "no finding", never a
+// blocked write. The far side is conservative in the same direction — an
+// ambiguous block (template statement tags, `<script src>`, a non-JS `type`,
+// an escaped Python string) reports nothing rather than guessing.
+
+// embeddedScriptErrPrefix marks a checkFallbackSyntax error as an
+// embedded-script finding. The message is pre-formatted for the model, so
+// callers hand it back verbatim instead of wrapping it in generic
+// "does not parse / check your old_str" advice that would be wrong here.
+const embeddedScriptErrPrefix = "embedded-script: "
+
+// embeddedScriptExts are the file types that can CARRY an embedded script.
+// Anything else short-circuits before any network call.
+var embeddedScriptExts = map[string]bool{
+	".py": true, ".html": true, ".htm": true, ".jinja": true, ".jinja2": true,
+}
+
+// embeddedScriptFinding mirrors one entry of the v3-service response.
+type embeddedScriptFinding struct {
+	Line    int    `json:"line"`
+	Column  int    `json:"column"`
+	Kind    string `json:"kind"`    // "javascript" | "css"
+	Where   string `json:"where"`   // "the <script> block inside the Python string HTML_TEMPLATE"
+	Message string `json:"message"` // "unexpected `)`"
+	Hint    string `json:"hint"`    // how to fix it
+	Text    string `json:"text"`    // the offending source line
+}
+
+// checkEmbeddedScript returns ("", true) when `content` has no broken embedded
+// script, or when the check could not run. Returns (prefixed rejection, false)
+// when v3-service confirms the embedded JavaScript/CSS does not parse.
+func checkEmbeddedScript(ctx *AgentContext, path, content string) (string, bool) {
+	if ctx == nil || ctx.V3URL == "" {
+		return "", true
+	}
+	if !embeddedScriptExts[strings.ToLower(filepath.Ext(path))] {
+		return "", true
+	}
+	// Cheap local pre-filter: no <script/<style anywhere means no network
+	// call. Most gated writes never touch the service because of this.
+	low := strings.ToLower(content)
+	if !strings.Contains(low, "<script") && !strings.Contains(low, "<style") {
+		return "", true
+	}
+	body, err := json.Marshal(map[string]string{"path": path, "source": content})
+	if err != nil {
+		return "", true
+	}
+	base := ctx.Ctx
+	if base == nil {
+		base = context.Background()
+	}
+	reqCtx, cancel := context.WithTimeout(base, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "POST",
+		ctx.V3URL+"/internal/embedded_script_check", bytes.NewReader(body))
+	if err != nil {
+		return "", true
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", true // fail-soft: unreachable service never blocks a write
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", true
+	}
+	var out struct {
+		OK       bool                    `json:"ok"`
+		Findings []embeddedScriptFinding `json:"findings"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.OK {
+		return "", true // grammar missing / non-UTF-8 -> fail-soft
+	}
+	if len(out.Findings) == 0 {
+		return "", true
+	}
+	return embeddedScriptErrPrefix + formatEmbeddedScriptRejection(path, out.Findings[0]), false
+}
+
+// embeddedScriptGate applies the healthy->broken rule the other write gates
+// use and returns the rejection text, or "" to allow the write. A file whose
+// embedded script was ALREADY broken before the change is a repair-in-progress
+// and is left alone; only a change that newly breaks it is blocked. Fail-soft:
+// "" whenever the check couldn't run.
+func embeddedScriptGate(ctx *AgentContext, path, original, edited string) string {
+	synErr, ok := checkEmbeddedScript(ctx, path, edited)
+	if ok {
+		return ""
+	}
+	if _, wasHealthy := checkEmbeddedScript(ctx, path, original); !wasHealthy {
+		return ""
+	}
+	msg, _ := embeddedScriptRejectionFor(synErr)
+	return msg
+}
+
+// embeddedScriptRejectionFor unwraps a checkFallbackSyntax error that turned
+// out to be an embedded-script finding. (message, true) when it is one — the
+// message is already model-ready — else ("", false).
+func embeddedScriptRejectionFor(syntaxErr string) (string, bool) {
+	if !strings.HasPrefix(syntaxErr, embeddedScriptErrPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(syntaxErr, embeddedScriptErrPrefix), true
+}
+
+// formatEmbeddedScriptRejection names the file, the line, the offending
+// construct and the fix — and spells out WHY the model's usual verification
+// missed it, because "I ran it and curled the page" is exactly the evidence
+// that made the broken snake game look done.
+func formatEmbeddedScriptRejection(path string, f embeddedScriptFinding) string {
+	lang, block, breakage := "JavaScript", "<script>", "the browser stops running the script at that point, so the page loads but nothing on it responds"
+	if f.Kind == "css" {
+		lang, block, breakage = "CSS", "<style>", "the browser drops the rest of the stylesheet, so the page loads unstyled"
+	}
+	host := "HTML"
+	if strings.ToLower(filepath.Ext(path)) == ".py" {
+		host = "Python"
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s has a %s syntax error in %s — it was NOT written.\n",
+		path, lang, f.Where)
+	fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)
+	if f.Text != "" {
+		fmt.Fprintf(&sb, "  %d | %s\n", f.Line, f.Text)
+	}
+	if f.Hint != "" {
+		fmt.Fprintf(&sb, "%s\n", f.Hint)
+	}
+	fmt.Fprintf(&sb,
+		"Running the file will NOT surface this: the %s syntax is valid, the server "+
+			"still starts and the page still returns 200 — but %s. Fix line %d inside "+
+			"the %s block and re-send the corrected content; do NOT resend it unchanged.",
+		host, breakage, f.Line, block)
+	return sb.String()
+}
+
 // reSyntaxLineNo pulls a 1-based line number out of a Python syntax error
 // message ("... (file, line 13)" or "at line 13"), when present.
 var reSyntaxLineNo = regexp.MustCompile(`line (\d+)`)
@@ -447,6 +629,12 @@ var reSyntaxLineNo = regexp.MustCompile(`line (\d+)`)
 //     `content` when the error carries a line number) and tell the model to
 //     FIX that line, explicitly forbidding an identical resend.
 func fallbackSyntaxRejection(path, content, syntaxErr string) string {
+	// An embedded-script finding arrives pre-formatted (it already names the
+	// line and the fix); the truncation/syntax-bug fork below is about the
+	// host file and would give wrong advice for JavaScript inside a string.
+	if msg, isEmbedded := embeddedScriptRejectionFor(syntaxErr); isEmbedded {
+		return msg
+	}
 	low := strings.ToLower(syntaxErr)
 	truncationShape := strings.Contains(low, "unexpected eof") ||
 		strings.Contains(low, "was never closed") ||

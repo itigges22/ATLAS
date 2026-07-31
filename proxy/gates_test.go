@@ -941,3 +941,226 @@ func TestFallbackSyntaxRejectionTruncation(t *testing.T) {
 		t.Errorf("truncation shape should advise resending complete content: %q", msg)
 	}
 }
+
+// --- embedded-script gate (F1) --------------------------------------------
+
+// The keydown handler from the 2026-08-01 dogfooding failure: a Flask app whose
+// UI is one HTML string, with one paren too many at the end of the last line.
+const strayParenLine = `            else if(key === 'ArrowDown' && direction !== 'UP') nextDirection = 'DOWN');`
+
+func flaskWithScript(handlerLine string) string {
+	return "from flask import Flask, render_template_string\n" +
+		"app = Flask(__name__)\n" +
+		"HTML_TEMPLATE = \"\"\"\n<html><body>\n  <canvas id=\"gameCanvas\"></canvas>\n" +
+		"  <script>\n    let nextDirection = 'RIGHT';\n" + handlerLine + "\n  </script>\n" +
+		"</body></html>\n\"\"\"\n" +
+		"@app.route('/')\ndef index():\n    return render_template_string(HTML_TEMPLATE)\n"
+}
+
+// fakeV3Embedded serves /internal/embedded_script_check: a finding for sources
+// containing `trigger`, clean otherwise. Counts requests so the tests can
+// assert the local pre-filter suppresses the call entirely.
+func fakeV3Embedded(t *testing.T, trigger string, calls *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/embedded_script_check" {
+			http.Error(w, "not found", 404)
+			return
+		}
+		if calls != nil {
+			*calls++
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body struct {
+			Source string `json:"source"`
+		}
+		_ = json.Unmarshal(raw, &body)
+		out := map[string]interface{}{"ok": true, "findings": []interface{}{}}
+		if trigger != "" && strings.Contains(body.Source, trigger) {
+			out["findings"] = []map[string]interface{}{{
+				"line": 7, "column": 86, "kind": "javascript",
+				"where":   "the <script> block inside the Python string HTML_TEMPLATE",
+				"message": "unexpected `)`",
+				"hint":    "Nothing opened a `(` for it to close — delete the stray `)`, or add the `(` it was meant to close.",
+				"text":    strings.TrimSpace(strayParenLine),
+			}}
+		}
+		b, _ := json.Marshal(out)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(b)
+	}))
+}
+
+// The gate consumes the finding and produces a rejection that names the file,
+// the line, the offending construct and the fix — and says why running the app
+// did not catch it.
+func TestEmbeddedScriptGateBlocksStrayParen(t *testing.T) {
+	srv := fakeV3Embedded(t, "'DOWN');", nil)
+	defer srv.Close()
+	ctx := structCtx(srv.URL)
+	original := flaskWithScript("            let x = 1;")
+	edited := flaskWithScript(strayParenLine)
+
+	msg := embeddedScriptGate(ctx, "app.py", original, edited)
+	if msg == "" {
+		t.Fatal("gate must block a write that breaks the embedded script")
+	}
+	for _, want := range []string{
+		"app.py",                     // the file
+		"line 7",                     // the line
+		"unexpected `)`",             // the offending construct
+		"delete the stray `)`",       // how to fix it
+		"HTML_TEMPLATE",              // which string to go fix
+		"it was NOT written",         // nothing landed
+		"still returns 200",          // why `curl` did not catch it
+		"do NOT resend it unchanged", // no verbatim retry
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+// Already-broken embedded script + still-broken result = repair-in-progress,
+// same healthy->broken rule the syntax and structural gates use.
+func TestEmbeddedScriptPreexistingBreakageAllowed(t *testing.T) {
+	srv := fakeV3Embedded(t, "'DOWN');", nil)
+	defer srv.Close()
+	ctx := structCtx(srv.URL)
+	broken := flaskWithScript(strayParenLine)
+	if msg := embeddedScriptGate(ctx, "app.py", broken, broken+"\n# one more try\n"); msg != "" {
+		t.Errorf("pre-existing breakage must be allowed:\n%s", msg)
+	}
+}
+
+// A fix must not be blocked by the gate that flagged the bug.
+func TestEmbeddedScriptGateAllowsTheFix(t *testing.T) {
+	srv := fakeV3Embedded(t, "'DOWN');", nil)
+	defer srv.Close()
+	ctx := structCtx(srv.URL)
+	broken := flaskWithScript(strayParenLine)
+	fixed := flaskWithScript(strings.Replace(strayParenLine, "'DOWN');", "'DOWN';", 1))
+	if msg := embeddedScriptGate(ctx, "app.py", broken, fixed); msg != "" {
+		t.Errorf("the corrected content must pass:\n%s", msg)
+	}
+}
+
+// Fail-soft: nothing about an unavailable checker may block a write.
+func TestEmbeddedScriptGateFailsSoft(t *testing.T) {
+	broken := flaskWithScript(strayParenLine)
+
+	// v3-service unreachable
+	if msg := embeddedScriptGate(structCtx("http://127.0.0.1:0"), "app.py", "", broken); msg != "" {
+		t.Errorf("unreachable v3 must fail soft: %s", msg)
+	}
+	// no V3 URL configured
+	if msg := embeddedScriptGate(structCtx(""), "app.py", "", broken); msg != "" {
+		t.Errorf("empty V3 URL must fail soft: %s", msg)
+	}
+	// nil ctx
+	if msg := embeddedScriptGate(nil, "app.py", "", broken); msg != "" {
+		t.Errorf("nil ctx must fail soft: %s", msg)
+	}
+	// grammar missing on the far side -> ok:false
+	unavailable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"error":"tree-sitter javascript grammar not installed in this build"}`))
+	}))
+	defer unavailable.Close()
+	if msg := embeddedScriptGate(structCtx(unavailable.URL), "app.py", "", broken); msg != "" {
+		t.Errorf("ok:false must fail soft: %s", msg)
+	}
+	// 5xx from the service
+	broke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", 500)
+	}))
+	defer broke.Close()
+	if msg := embeddedScriptGate(structCtx(broke.URL), "app.py", "", broken); msg != "" {
+		t.Errorf("5xx must fail soft: %s", msg)
+	}
+}
+
+// File types that cannot carry an embedded script, and content with no script
+// tag at all, must never reach the service.
+func TestEmbeddedScriptSkipsWithoutScriptTag(t *testing.T) {
+	calls := 0
+	srv := fakeV3Embedded(t, "'DOWN');", &calls)
+	defer srv.Close()
+	ctx := structCtx(srv.URL)
+
+	if _, ok := checkEmbeddedScript(ctx, "notes.md", flaskWithScript(strayParenLine)); !ok {
+		t.Error("an extension that cannot carry a script must pass")
+	}
+	if _, ok := checkEmbeddedScript(ctx, "app.py", "def f():\n    return 1\n"); !ok {
+		t.Error("python with no markup must pass")
+	}
+	if calls != 0 {
+		t.Errorf("expected no network calls for unscripted content, got %d", calls)
+	}
+	// ...and the real thing still does call.
+	if _, ok := checkEmbeddedScript(ctx, "app.py", flaskWithScript(strayParenLine)); ok {
+		t.Error("a broken embedded script must be reported")
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 network call, got %d", calls)
+	}
+}
+
+// checkFallbackSyntax carries the embedded check, so every write path already
+// wired to it inherits the gate — with the sandbox reporting the file itself
+// as perfectly valid Python.
+func TestCheckFallbackSyntaxCarriesEmbeddedCheck(t *testing.T) {
+	v3 := fakeV3Embedded(t, "'DOWN');", nil)
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "") // everything parses
+	defer sandbox.Close()
+	ctx := structCtx(v3.URL)
+	ctx.SandboxURL = sandbox.URL
+
+	synErr, ok := checkFallbackSyntax(ctx, "app.py", flaskWithScript(strayParenLine))
+	if ok {
+		t.Fatal("checkFallbackSyntax must report the embedded-script break")
+	}
+	if !strings.HasPrefix(synErr, embeddedScriptErrPrefix) {
+		t.Errorf("embedded finding must be tagged for the rejection formatter: %q", synErr)
+	}
+	if _, clean := checkFallbackSyntax(ctx, "app.py", flaskWithScript("            let x = 1;")); !clean {
+		t.Error("clean embedded script must pass checkFallbackSyntax")
+	}
+}
+
+// The generic syntax rejection would tell the model to resend complete content
+// or check its old_str — both wrong for a stray paren in embedded JavaScript.
+// fallbackSyntaxRejection must hand the pre-formatted finding through instead.
+func TestFallbackSyntaxRejectionPassesEmbeddedFindingThrough(t *testing.T) {
+	v3 := fakeV3Embedded(t, "'DOWN');", nil)
+	defer v3.Close()
+	ctx := structCtx(v3.URL)
+	synErr, _ := checkEmbeddedScript(ctx, "app.py", flaskWithScript(strayParenLine))
+
+	msg := fallbackSyntaxRejection("app.py", flaskWithScript(strayParenLine), synErr)
+	if strings.Contains(msg, "COMPLETE file content") || strings.Contains(msg, "cut off") {
+		t.Errorf("must not give truncation advice for an embedded-script bug:\n%s", msg)
+	}
+	if !strings.Contains(msg, "unexpected `)`") || strings.Contains(msg, embeddedScriptErrPrefix) {
+		t.Errorf("must hand back the unwrapped finding:\n%s", msg)
+	}
+	if _, isEmbedded := embeddedScriptRejectionFor("SyntaxError: invalid syntax"); isEmbedded {
+		t.Error("a plain syntax error must not be treated as an embedded finding")
+	}
+}
+
+// The CSS variant speaks to the stylesheet, not the script.
+func TestEmbeddedStyleRejectionWording(t *testing.T) {
+	msg := formatEmbeddedScriptRejection("templates/index.html", embeddedScriptFinding{
+		Line: 4, Kind: "css", Where: "the <style> block",
+		Message: "a `{` that is never closed",
+		Hint:    "Close the rule with `}`.",
+		Text:    "body { margin: 0;",
+	})
+	if !strings.Contains(msg, "CSS syntax error") || !strings.Contains(msg, "<style>") {
+		t.Errorf("css finding must be described as css:\n%s", msg)
+	}
+	if !strings.Contains(msg, "unstyled") || !strings.Contains(msg, "HTML syntax is valid") {
+		t.Errorf("css rejection must explain the browser-side breakage:\n%s", msg)
+	}
+}

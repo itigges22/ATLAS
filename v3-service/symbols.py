@@ -1,6 +1,6 @@
 """Tree-sitter structural tooling: friendly-selector structural edits, symbol
-indexing, direct-call resolution (structural_score), traceback frame parsing,
-and cyclomatic complexity."""
+indexing, direct-call resolution (structural_score), embedded-script syntax
+checking, traceback frame parsing, and cyclomatic complexity."""
 
 import re
 
@@ -31,6 +31,19 @@ except ImportError as _e:
     _STRUCTURAL_EDIT_AVAILABLE = False
     _PY_LANG = None
     _HTML_LANG = None
+
+# The JavaScript grammar backs embedded_script_check only, so it gets its own
+# availability flag: a build without it must still serve structural_edit and
+# the call-resolution checks. A missing grammar degrades to "no finding",
+# never a crash and never a blocked write.
+try:
+    import tree_sitter_javascript as _tsj
+    _JS_LANG = _ts.Language(_tsj.language())
+    _EMBEDDED_SCRIPT_AVAILABLE = True
+except Exception as _e:  # ImportError, or _ts undefined when tree-sitter is absent
+    print(f"[embedded_script] tree-sitter-javascript not available: {_e} — embedded-script check returns no findings", flush=True)
+    _EMBEDDED_SCRIPT_AVAILABLE = False
+    _JS_LANG = None
 
 
 def _ast_language_for_path(path: str):
@@ -750,3 +763,386 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
         "old_size": len(source),
         "new_size": len(new_bytes),
     }
+
+
+# --- embedded_script_check (finding F1) ---------------------------------------
+#
+# 2026-08-01 dogfooding: the model edited a Flask app whose entire UI is one
+# HTML string (`HTML_TEMPLATE = """..."""` handed to render_template_string)
+# and left a stray closing paren inside its <script> block:
+#     else if(key === 'ArrowDown' && direction !== 'UP') nextDirection = 'DOWN');
+# Every gate on the write path is structurally blind to that: the Python
+# compiles (the JavaScript is string content), the server starts, `curl /`
+# returns 200 — so the verification gate passed and `done` was accepted while
+# the game was dead in the browser.
+#
+# This checker parses the JavaScript (and brace-balances the CSS) that lives
+# INSIDE HTML — both in .html/.htm/.jinja/.jinja2 files and in Python string
+# literals — and reports tree-sitter ERROR / MISSING nodes with a file line
+# number.
+#
+# It backs a WRITE-BLOCKING gate, so it is conservative by construction:
+# every ambiguous case yields NO finding rather than a guess. Specifically it
+# declines to report when
+#   - the script/style tag counts don't balance (a `</script>` inside a JS
+#     string truncates the raw text and would produce a phantom error),
+#   - the block is `<script src=...>` with no body, or carries a non-JS
+#     `type` (text/template, application/json, importmap, ...),
+#   - the block still contains template tags after placeholder masking
+#     ({% %}, <% %>, multi-line {{ }}),
+#   - masking the {{ }} placeholders makes the block parse (the "error" was
+#     the template syntax, not the JavaScript),
+#   - the block comes from a Python string literal that is an f-string, is
+#     part of a concatenation, or contains a backslash escape (what Python
+#     renders then differs from the source bytes we would be parsing).
+
+_EMBEDDED_HTML_EXTS = (".html", ".htm", ".jinja", ".jinja2")
+
+# Whole-source cap. Above this the walk is skipped rather than risking a
+# multi-second parse inside a synchronous write gate.
+_EMBEDDED_MAX_BYTES = 400_000
+
+# Findings returned per call. The caller reports the first; the rest are
+# telemetry.
+_EMBEDDED_MAX_FINDINGS = 3
+
+# `type` values whose <script> body is JavaScript. Anything else is data or
+# another language (text/template, application/json, importmap, text/x-*) and
+# must never be JS-parsed.
+_JS_SCRIPT_TYPES = frozenset({
+    "", "module", "text/javascript", "application/javascript",
+    "text/ecmascript", "application/ecmascript",
+})
+
+# Template constructs. Expression placeholders can be masked (they stand where
+# a value goes); statement tags cannot (they wrap arbitrary control flow), so a
+# block still carrying one after masking is undecidable and gets no finding.
+_TEMPLATE_MARKERS = (b"{{", b"{%", b"<%")
+_JINJA_EXPR_RE = re.compile(rb"\{\{[^\n{}]*\}\}")
+_JINJA_COMMENT_RE = re.compile(rb"\{#[^\n]*#\}")
+
+# Closing delimiters, for the "you left a stray X" hint.
+_CLOSERS = {")": "(", "}": "{", "]": "["}
+
+
+def _embedded_available() -> bool:
+    return bool(_STRUCTURAL_EDIT_AVAILABLE and _EMBEDDED_SCRIPT_AVAILABLE)
+
+
+def _mask_placeholders(block: bytes) -> bytes:
+    """Replace Jinja/Django expression placeholders and comments with
+    equal-LENGTH filler so the JS parse sees an identifier where the template
+    interpolates a value. Length- and newline-preserving: every byte offset in
+    the masked block still points at the same byte of the real file."""
+    def _blank(m):
+        return bytes(c if c in (0x0A, 0x0D) else 0x20 for c in m.group(0))
+
+    def _ident(m):
+        return b"J" + b"x" * (m.end() - m.start() - 1)
+
+    return _JINJA_EXPR_RE.sub(_ident, _JINJA_COMMENT_RE.sub(_blank, block))
+
+
+def _has_template_marker(block: bytes) -> bool:
+    return any(marker in block for marker in _TEMPLATE_MARKERS)
+
+
+def _first_error_node(root):
+    """Earliest ERROR / MISSING node in the tree, or None. Doesn't descend
+    into an error node — the outermost one carries the offending text."""
+    best = None
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            if best is None or node.start_byte < best.start_byte:
+                best = node
+            continue
+        if node.has_error:
+            stack.extend(node.children)
+    return best
+
+
+def _js_error(block: bytes):
+    """(offset_in_block, message, hint) for the first JavaScript syntax error
+    in `block`, or None when it parses (or when template syntax makes the
+    answer undecidable).
+
+    Masking only ever REMOVES findings: the raw block is parsed first, so
+    legitimate JavaScript that happens to contain `{{` (a block inside a
+    block) is never masked into an error it didn't have.
+    """
+    parser = _ts.Parser(_JS_LANG)
+    tree = parser.parse(block)
+    if not tree.root_node.has_error:
+        return None
+    text = block
+    if _has_template_marker(block):
+        masked = _mask_placeholders(block)
+        if _has_template_marker(masked):
+            return None  # statement tags / multi-line placeholders — undecidable
+        tree = parser.parse(masked)
+        if not tree.root_node.has_error:
+            return None  # the error WAS the template syntax
+        text = masked
+    node = _first_error_node(tree.root_node)
+    if node is None:
+        return None
+
+    if node.is_missing:
+        token = node.type
+        return (node.start_byte,
+                f"a `{token}` is missing",
+                f"Add the missing `{token}`.")
+    snippet = text[node.start_byte:node.end_byte].decode("utf-8", "replace").strip()
+    if snippet in _CLOSERS:
+        opener = _CLOSERS[snippet]
+        return (node.start_byte,
+                f"unexpected `{snippet}`",
+                f"Nothing opened a `{opener}` for it to close — delete the stray "
+                f"`{snippet}`, or add the `{opener}` it was meant to close.")
+    if snippet and "\n" not in snippet and len(snippet) <= 24:
+        return (node.start_byte, f"unexpected `{snippet}`",
+                "Rewrite that statement so it parses as JavaScript.")
+    return (node.start_byte, "invalid JavaScript starts here",
+            "Rewrite that statement so it parses as JavaScript.")
+
+
+def _css_error(block: bytes):
+    """(offset_in_block, message, hint) for the first unbalanced brace in a CSS
+    body, or None.
+
+    Balance only — no CSS grammar ships with the service, and anything
+    finer-grained would be guesswork. Quoted strings and /* */ comments are
+    skipped so `content: "}"` and a commented-out rule can't trip it; a body
+    carrying template markers is skipped outright.
+    """
+    if _has_template_marker(block):
+        return None
+    opens = []
+    i, n = 0, len(block)
+    quote = 0
+    while i < n:
+        c = block[i]
+        if quote:
+            if c == 0x5C:  # backslash escape
+                i += 2
+                continue
+            if c == quote:
+                quote = 0
+            i += 1
+            continue
+        if c in (0x22, 0x27):  # " '
+            quote = c
+            i += 1
+            continue
+        if c == 0x2F and i + 1 < n and block[i + 1] == 0x2A:  # /*
+            end = block.find(b"*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        if c == 0x7B:  # {
+            opens.append(i)
+        elif c == 0x7D:  # }
+            if not opens:
+                return (i, "an extra `}`",
+                        "Delete the stray `}` — no rule is open at that point.")
+            opens.pop()
+        i += 1
+    if opens:
+        return (opens[0], "a `{` that is never closed",
+                "Close the rule with `}` — everything after an unclosed rule is "
+                "dropped by the browser.")
+    return None
+
+
+def _tag_counts_balance(html: bytes) -> bool:
+    """False when <script>/<style> open and close counts disagree — the shape
+    a `</script>` inside a JS string produces, which truncates tree-sitter's
+    raw_text and would make a valid block look broken."""
+    low = html.lower()
+    return (low.count(b"<script") == low.count(b"</script")
+            and low.count(b"<style") == low.count(b"</style"))
+
+
+def _start_tag_attributes(start_tag, source: bytes) -> dict:
+    """{lowercased attribute name: value text} for a tree-sitter-html start_tag."""
+    attrs = {}
+    for child in start_tag.children:
+        if child.type != "attribute":
+            continue
+        name, value = None, ""
+        for part in child.children:
+            if part.type == "attribute_name":
+                name = source[part.start_byte:part.end_byte].decode("utf-8", "replace").lower()
+            elif part.type == "quoted_attribute_value":
+                inner = [g for g in part.children if g.type == "attribute_value"]
+                if inner:
+                    value = source[inner[0].start_byte:inner[0].end_byte].decode("utf-8", "replace")
+            elif part.type == "attribute_value":
+                value = source[part.start_byte:part.end_byte].decode("utf-8", "replace")
+        if name:
+            attrs[name] = value
+    return attrs
+
+
+def _embedded_blocks(html: bytes, base_offset: int, where_suffix: str,
+                     no_escapes: bool):
+    """[(kind, absolute_body_offset, body_bytes, where)] for the parseable
+    <script>/<style> bodies in `html`. Empty when the document's tag counts
+    don't balance — see _tag_counts_balance."""
+    if not _tag_counts_balance(html):
+        return []
+    parser = _ts.Parser(_HTML_LANG)
+    tree = parser.parse(html)
+    out = []
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type not in ("script_element", "style_element"):
+            continue
+        kind = "javascript" if node.type == "script_element" else "css"
+        start_tag = next((c for c in node.children if c.type == "start_tag"), None)
+        raw = next((c for c in node.children if c.type == "raw_text"), None)
+        if start_tag is None or raw is None:
+            continue
+        attrs = _start_tag_attributes(start_tag, html)
+        if kind == "javascript":
+            if "src" in attrs:
+                continue  # the browser ignores an inline body on a src script
+            if attrs.get("type", "").strip().lower() not in _JS_SCRIPT_TYPES:
+                continue  # text/template, application/json, importmap, ...
+        body = html[raw.start_byte:raw.end_byte]
+        if not body.strip():
+            continue
+        if no_escapes and b"\\" in body:
+            # Python would render the escape, so the source bytes we'd parse
+            # are not the bytes the browser receives.
+            continue
+        tag = "<script>" if kind == "javascript" else "<style>"
+        out.append((kind, base_offset + raw.start_byte, body,
+                    f"the {tag} block{where_suffix}"))
+    return out
+
+
+def _python_html_strings(source: bytes):
+    """[(content_offset, content_bytes, where_suffix)] for Python string
+    literals whose content embeds HTML with a <script>/<style> block. Offsets
+    are into `source`, so a reported line number is the line in the .py file."""
+    parser = _ts.Parser(_PY_LANG)
+    tree = parser.parse(source)
+    out = []
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type != "string":
+            continue
+        if node.parent is not None and node.parent.type == "concatenated_string":
+            continue  # only half the document lives in this literal
+        prefix_node = next((c for c in node.children if c.type == "string_start"), None)
+        if prefix_node is not None:
+            prefix = source[prefix_node.start_byte:prefix_node.end_byte].decode("utf-8", "replace")
+            if "f" in prefix.lower().replace('"', "").replace("'", ""):
+                continue  # f-string: `{`/`}` are Python's, not JavaScript's
+        contents = [c for c in node.children if c.type == "string_content"]
+        if len(contents) != 1:
+            continue
+        content = source[contents[0].start_byte:contents[0].end_byte]
+        low = content.lower()
+        if b"<script" not in low and b"<style" not in low:
+            continue
+        out.append((contents[0].start_byte, content, _python_string_label(node, source)))
+    return out
+
+
+def _python_string_label(node, source: bytes) -> str:
+    """" inside the Python string HTML_TEMPLATE" when the literal is assigned
+    to a name, else " inside a Python string" — the model needs to know WHICH
+    string to go fix."""
+    parent = node.parent
+    while parent is not None and parent.type not in ("assignment", "module"):
+        parent = parent.parent
+    if parent is not None and parent.type == "assignment":
+        left = parent.child_by_field_name("left")
+        if left is not None and left.type == "identifier":
+            name = source[left.start_byte:left.end_byte].decode("utf-8", "replace")
+            return f" inside the Python string {name}"
+    return " inside a Python string"
+
+
+def _line_at(source: bytes, offset: int):
+    """(1-based line, 1-based column, stripped line text) for a byte offset."""
+    offset = max(0, min(offset, len(source)))
+    line_no = source.count(b"\n", 0, offset) + 1
+    line_start = source.rfind(b"\n", 0, offset) + 1
+    line_end = source.find(b"\n", offset)
+    if line_end < 0:
+        line_end = len(source)
+    text = source[line_start:line_end].decode("utf-8", "replace").strip()
+    if len(text) > 200:
+        text = text[:200] + " …"
+    return line_no, offset - line_start + 1, text
+
+
+def embedded_script_check(path: str, source_text: str) -> dict:
+    """Syntax-check the JavaScript / CSS embedded in `source_text`.
+
+    Handles two carriers:
+      (a) .html / .htm / .jinja / .jinja2 — <script> and <style> blocks;
+      (b) .py — HTML held in a string literal (the render_template_string
+          pattern), which is the shape that shipped a broken snake game.
+
+    Returns:
+        ok:       False when the check COULDN'T RUN (grammar missing, non-UTF-8
+                  source). Callers fail open on it. A file with no embedded
+                  script is ok:True with no findings.
+        findings: [{line, column, kind, where, message, hint, text}] against
+                  the FILE's line numbering, capped at _EMBEDDED_MAX_FINDINGS.
+    """
+    if not _embedded_available():
+        return {"ok": False, "error": "tree-sitter javascript grammar not installed in this build"}
+    try:
+        source = source_text.encode("utf-8")
+    except (UnicodeEncodeError, AttributeError) as e:
+        return {"ok": False, "error": f"source not utf-8: {e}"}
+
+    p = (path or "").lower()
+    if len(source) > _EMBEDDED_MAX_BYTES:
+        return {"ok": True, "findings": [], "skipped": "source larger than the embedded-check cap"}
+
+    try:
+        if p.endswith(_EMBEDDED_HTML_EXTS):
+            blocks = _embedded_blocks(source, 0, "", no_escapes=False)
+        elif p.endswith(".py"):
+            blocks = []
+            for offset, content, label in _python_html_strings(source):
+                blocks.extend(_embedded_blocks(content, offset, label, no_escapes=True))
+        else:
+            return {"ok": True, "findings": []}
+    except Exception as e:
+        return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
+
+    findings = []
+    for kind, offset, body, where in blocks:
+        try:
+            hit = _js_error(body) if kind == "javascript" else _css_error(body)
+        except Exception as e:
+            return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
+        if hit is None:
+            continue
+        block_offset, message, hint = hit
+        line, column, text = _line_at(source, offset + block_offset)
+        findings.append({
+            "line": line,
+            "column": column,
+            "kind": kind,
+            "where": where,
+            "message": message,
+            "hint": hint,
+            "text": text,
+        })
+        if len(findings) >= _EMBEDDED_MAX_FINDINGS:
+            break
+    findings.sort(key=lambda f: f["line"])
+    return {"ok": True, "findings": findings}
