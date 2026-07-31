@@ -244,7 +244,7 @@ proxy:
 - `v3:<phase>` — V3 sub-phases. `v3:plan` fires once per turn before
   the agent loop (see plan-mode rows in [Chat](#chat) below).
   Write/edit-triggered V3 adds `probe`, `plansearch`, `divsampling`,
-  `sandbox_test`, `s_star`, etc.
+  `sandbox_test`, etc.
 
 ### Chat
 

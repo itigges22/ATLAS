@@ -16,7 +16,6 @@ from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
 from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
 from stages.blend_asc import BlendASC, BlendASCConfig
-from stages.s_star import SStar, SStarConfig, CandidateScore
 from stages.failure_analysis import FailingCandidate
 from stages.pr_cot import PRCoT, PRCoTConfig
 from stages.refinement_loop import RefinementLoop, RefinementLoopConfig
@@ -57,7 +56,7 @@ for _phase, _stages in {
                 "sandbox_done", "smoke_check", "interactive_lint",
                 "self_test_verify", "build_verify_unavailable"),
     "veto": ("lens_veto", "structural_veto", "call_graph_veto"),
-    "selection": ("s_star", "s_star_winner", "s_star_error", "selected"),
+    "selection": ("selected",),
     "repair_pr_cot": ("phase3", "call_chain_context", "pr_cot",
                       "pr_cot_pass", "pr_cot_failed", "pr_cot_error"),
     "repair_refinement": ("refinement", "refinement_pass",
@@ -127,8 +126,8 @@ def _summarize_phases(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _candidate_by_index(candidates: List[Dict[str, Any]], index: int) -> Optional[Dict[str, Any]]:
     """Return the candidate dict whose original ``index`` field matches.
 
-    Selection modules (S*, lens) report winners by the candidate's original
-    index, but the ``passing`` list has been sorted and filtered — positional
+    Selection reports the winner by the candidate's original index, but
+    the ``passing`` list has been sorted and filtered — positional
     indexing would pick the wrong candidate (or IndexError). Returns None
     when no candidate carries that index.
     """
@@ -184,7 +183,6 @@ class V3PipelineService:
                                         telemetry_dir=t)
         self.blend_asc = BlendASC(BlendASCConfig(enabled=True),
                                   telemetry_dir=t)
-        self.s_star = SStar(SStarConfig(enabled=True), telemetry_dir=t)
         self.pr_cot = PRCoT(PRCoTConfig(enabled=True), telemetry_dir=t)
         self.refinement_loop = RefinementLoop(RefinementLoopConfig(enabled=True),
                                               telemetry_dir=t)
@@ -815,43 +813,11 @@ class V3PipelineService:
                     passing = cg_kept
 
         # ===== CANDIDATE SELECTION =====
+        # Lens selection: minimum C(x) energy among the passing candidates.
+        # (S* tiebreaking used to run first for 2+ passers; across 118 H200
+        # tiebreaks every pair scored 0-0 and 110/110 winners equaled the
+        # lens min-energy pick, so it carried zero discriminating signal.)
         if passing:
-            # S* tiebreaking if multiple passing candidates
-            if len(passing) >= 2:
-                emit("s_star", "Tiebreaking with S*...")
-                try:
-                    s_star_candidates = [
-                        CandidateScore(code=c["code"], raw_energy=c["energy"], index=c["index"])
-                        for c in passing[:2]
-                    ]
-                    tb_result = self.s_star.tiebreak(
-                        candidates=s_star_candidates,
-                        problem=problem,
-                        llm_call=llm,
-                        sandbox_run=sandbox,
-                        task_id=task_id,
-                    )
-                    if tb_result.triggered and tb_result.winner_index >= 0:
-                        # winner_index is the candidate's ORIGINAL index, not a
-                        # position in the sorted/filtered `passing` list — match
-                        # by field like the lens path below. No match falls
-                        # through to lens selection.
-                        winner = _candidate_by_index(passing, tb_result.winner_index)
-                        if winner is not None:
-                            emit("s_star_winner", f"Winner: candidate {winner['index']}",
-                                 index=winner["index"], energy=winner.get("energy_norm", 0.0))
-                            result["passed"] = True
-                            result["code"] = winner["code"]
-                            result["phase_solved"] = "phase1_sstar"
-                            result["total_time_ms"] = (time.time() - start) * 1000
-                            result["verification_evidence"] = winner.get("verification_evidence", [])
-                            result["winning_score"] = winner.get("energy_norm", 0.0)
-                            result["events"] = events
-                            return result
-                except Exception as e:
-                    emit("s_star_error", str(e)[:200])
-
-            # Lens selection from passing candidates
             ci_list = [
                 CandidateInfo(c["index"], c["code"], c["energy"], c["passed"])
                 for c in passing

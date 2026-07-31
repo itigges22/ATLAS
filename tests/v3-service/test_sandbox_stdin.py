@@ -8,8 +8,7 @@ ran with no input at all.
 These tests mock the HTTP layer and assert the input lands in the
 ``/execute`` request payload under the field name the sandbox schema
 declares (``ExecuteRequest.stdin`` in sandbox/executor_server.py), the
-same contract the bench's SStarSandboxAdapter implements via
-execute_code_stdio.
+same stdin contract the bench implements via execute_code_stdio.
 """
 
 import importlib.util

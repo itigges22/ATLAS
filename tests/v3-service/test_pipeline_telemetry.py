@@ -88,7 +88,7 @@ def test_env_dir_reaches_stages_and_summary_is_written(monkeypatch, tmp_path):
     assert service.telemetry_dir == tdir
     fresh = v3pipeline.V3PipelineService()
     assert fresh.plan_search.telemetry_dir == tdir
-    assert fresh.s_star.telemetry_dir == tdir
+    assert fresh.pr_cot.telemetry_dir == tdir
     assert fresh.refinement_loop.telemetry_dir == tdir
 
     result = service.run("write a real dashboard", task_id="d8-summary")

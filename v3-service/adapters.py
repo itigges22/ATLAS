@@ -69,7 +69,6 @@ def _service_headers(rid: str = "") -> dict:
 _PHASE_RETRY_COUNT = {
     "probe": 1,             # solved on first probe (phase_solved="probe")
     "phase1": 2,            # plan-search candidates passed
-    "phase1_sstar": 2,      # S* tiebreak among passing candidates
     "pr_cot": 3,            # required PR-CoT repair
     "refinement": 4,        # required refinement loop
     "none": 5,              # nothing passed; best-by-energy returned

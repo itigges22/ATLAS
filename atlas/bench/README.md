@@ -43,7 +43,7 @@ Repo-root `benchmark/` holds only data: dataset caches and
 
 ## Relationship to the product path
 
-The stage engines, candidate selection, S*, and the lens backend are one
+The stage engines, candidate selection, and the lens backend are one
 shared implementation with the deployed v3-service. The orchestrators
 differ deliberately; read bench numbers with that in mind:
 

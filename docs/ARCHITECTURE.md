@@ -284,8 +284,7 @@ flowchart LR
     Pass1 -->|"No"| PS["PlanSearch"] --> DS["DivSampling"] --> BF["BudgetForcing"] --> Build["Build Check"] --> Score2["Score K"] --> SB2["Test K"]
 
     SB2 --> AnyPass{"Passed?"}
-    AnyPass -->|"2+"| SStar["S* Tiebreak"] --> Done
-    AnyPass -->|"1"| Select["Lens Select"] --> Done
+    AnyPass -->|"1+"| Select["Lens Select"] --> Done
 
     AnyPass -->|"0"| FA["Failure Analysis"] --> PRCOT["PR-CoT"]
     PRCOT --> PRPass{"Pass?"}
@@ -298,7 +297,6 @@ flowchart LR
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
-    style SStar fill:#2d5016,color:#fff
     style Select fill:#2d5016,color:#fff
     style Score1 fill:#2d5016,color:#fff
     style Score2 fill:#2d5016,color:#fff
@@ -336,8 +334,7 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 - **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Java (`javac`), Kotlin (`kotlinc`), Rust (`rustc` on the sandbox `/execute` path; `Cargo.toml` projects are detected with `cargo build`, and `cargo check` is accepted only via the build-command allowlist), C/C++ (full `gcc`/`g++` compile with `-Wall` on `/execute`; `-fsyntax-only` applies only to the `/syntax-check` route), Ruby (`ruby -c`, no compile step — interpreted), PHP (`php -l`, no compile step — interpreted), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
 - **Vetoes**: three checks can reject a sandbox-passing candidate — the lens veto (per-step `gx_min` below the model's calibrated severe threshold: the code executes but the generation pattern collapsed toward a stub), the structural veto (tree-sitter finds a direct-identifier call resolving to no local def, import, builtin, or project symbol — a `NameError` in waiting), and the flag-gated call-graph veto (`ATLAS_CALL_GRAPH`: cross-file calls with no in-scope definition). A vetoed candidate is marked failed (`passed=false`, `vetoed_by`, veto reason as its error output) and joins the Phase-3 repair pool like any failing candidate; the final energy fallback never returns it. If every candidate is vetoed and repair fails, the pipeline returns no code and the caller substitutes its baseline
-- **S* Tiebreaking** (2+ passing): generates edge-case inputs, runs both candidates, majority wins
-- **Lens Selection** (1 passing or fallback): sort by C(x) energy, lowest wins
+- **Lens Selection** (1+ passing): sort by C(x) energy, lowest wins
 
 **Phase 3: Repair** (if 0/K pass, or every passer was vetoed) — two strategies, sequential with early exit:
 
@@ -347,7 +344,7 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 ### Module Map
 
-The pipeline stages are 16 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 12 of them (11 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
+The pipeline stages are 15 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 11 of them (10 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR
@@ -356,7 +353,6 @@ graph LR
     Main --> BF["BudgetForcing 1C"]
     Main --> BASC["BlendASC 2A"]
     Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
-    Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
     Main --> PRCOT["PR-CoT 3C"]
@@ -381,7 +377,6 @@ graph LR
     style BF fill:#1a3a5c,color:#fff
     style BASC fill:#2d5016,color:#fff
     style REASC fill:#2d5016,color:#fff
-    style SSTAR fill:#2d5016,color:#fff
     style CS fill:#2d5016,color:#fff
     style FA fill:#5c3a1a,color:#fff
     style CR fill:#5c3a1a,color:#fff

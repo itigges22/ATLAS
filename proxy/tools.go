@@ -3177,10 +3177,10 @@ func resolveAgentPath(ctx *AgentContext, path string) string {
 
 // v3StageToEvent maps a V3 pipeline stage name to the TUI event type
 // it should fire. Stages cluster by phase: PlanSearch / DivSampling /
-// Sandbox / S* / Phase 3 each get a dedicated event type so the TUI can
-// render specialized rows (counters, per-test results, strategy choice)
-// instead of a generic "v3_progress" string. Unknown stages fall back
-// to v3_progress.
+// Sandbox / selection / Phase 3 each get a dedicated event type so the
+// TUI can render specialized rows (counters, per-test results, strategy
+// choice) instead of a generic "v3_progress" string. Unknown stages fall
+// back to v3_progress.
 //
 // Names are intentionally short — they cross the SSE wire on every
 // pipeline stage transition (a typical T2 run emits 15–30 of them).
@@ -3194,7 +3194,7 @@ func v3StageToEvent(stage string) string {
 		return "v3_divsampling"
 	case "sandbox_test", "sandbox_pass", "sandbox_fail", "sandbox_done":
 		return "v3_sandbox"
-	case "s_star", "s_star_winner", "s_star_error", "selected":
+	case "selected":
 		return "v3_select"
 	case "phase3", "pr_cot", "pr_cot_pass", "pr_cot_failed", "pr_cot_error",
 		"refinement", "refinement_pass", "refinement_failed", "refinement_error",

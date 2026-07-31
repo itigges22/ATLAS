@@ -15,7 +15,6 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
     Phase 2: Adaptive compute allocation
       - Blend-ASC → adaptive K per difficulty
       - ReASC → early stopping on low-confidence
-      - S* → tiebreaking for borderline candidates
 
     Phase 3: Verified iterative refinement (if 0/k pass)
       - PR-CoT repair (quick fix, 1-2 attempts)
@@ -65,7 +64,6 @@ from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
 from stages.blend_asc import BlendASC, BlendASCConfig
 from stages.reasc import ReASC, ReASCConfig
-from stages.s_star import SStar, SStarConfig, CandidateScore
 from stages.failure_analysis import (
     FailureAnalyzer, FailureAnalysisConfig, FailingCandidate,
 )
@@ -365,40 +363,6 @@ class SandboxAdapter:
         return self_verify_execute(results, self.majority_threshold)
 
 
-class SStarSandboxAdapter:
-    """Dedicated sandbox adapter for S* tiebreaking.
-
-    Unlike SandboxAdapter which uses the task's test cases, this adapter
-    runs code with a specific stdin input and returns (ran_ok, stdout, stderr).
-    This enables S* to generate distinguishing inputs for stdio-mode tasks.
-    """
-
-    def __init__(self, task: BenchmarkTask, timeout_sec: int = 10,
-                 memory_mb: int = 512):
-        self.task = task
-        self.timeout_sec = timeout_sec
-        self.memory_mb = memory_mb
-
-    def __call__(self, code: str, test_input: str) -> Tuple[bool, str, str]:
-        code = wrap_class_solution(code, self.task)
-        if self.task.eval_mode == "stdio":
-            # Run with the specific distinguishing input as stdin
-            passed, stdout, stderr, _ = execute_code_stdio(
-                code, [test_input], ["__S_STAR_NO_EXPECTED__"],
-                timeout_sec=self.timeout_sec, memory_mb=self.memory_mb,
-            )
-            # For S*, "passed" means "ran without crash and produced output"
-            ran_ok = bool(stdout.strip()) and not stderr.strip()
-            return ran_ok, stdout, stderr
-        else:
-            # Function mode: test_input is test code
-            passed, stdout, stderr, _ = execute_code(
-                code, test_input,
-                timeout_sec=self.timeout_sec, memory_mb=self.memory_mb,
-            )
-            return passed, stdout, stderr
-
-
 class EmbedAdapter:
     """Adapts extract_embedding_urllib to V3 EmbedCallable.
 
@@ -480,9 +444,6 @@ class V3Pipeline:
             v3["reasc_energy"] = float(conf.get(
                 "ATLAS_V3_REASC_ENERGY_THRESHOLD", "0.10",
             ))
-            v3["s_star_delta"] = float(conf.get(
-                "ATLAS_V3_S_STAR_ENERGY_DELTA", "1.0",
-            ))
             v3["ewc_lambda"] = float(conf.get(
                 "ATLAS_V3_EWC_LAMBDA", "1000.0",
             ))
@@ -537,13 +498,6 @@ class V3Pipeline:
                 enabled=self.enable_phase2,
                 confidence_threshold=self._v3_conf.get("reasc_confidence", -0.5),
                 energy_threshold=self._v3_conf.get("reasc_energy", 0.10),
-            ),
-            telemetry_dir=telemetry_dir,
-        )
-        self.s_star = SStar(
-            SStarConfig(
-                enabled=self.enable_phase2,
-                energy_delta=self._v3_conf.get("s_star_delta", 1.0),
             ),
             telemetry_dir=telemetry_dir,
         )
@@ -930,7 +884,7 @@ class V3Pipeline:
                         passing_candidates.append(cand)
             # as_completed order is thread-completion order — run-dependent.
             # Sort by energy (ascending, matching the product pipeline) so
-            # S* pairs and the [0] fallbacks are deterministic.
+            # the [0] fallbacks are deterministic.
             passing_candidates.sort(key=lambda c: c.get("energy", 0.0))
         else:
             for cand in candidates:
@@ -964,7 +918,11 @@ class V3Pipeline:
         if candidates and not passing_candidates:
             result["code"] = candidates[0]["code"]  # Best by energy (sorted)
 
-        # ===== Select best passing candidate (with S* tiebreaking) =====
+        # ===== Select best passing candidate =====
+        # Selection-strategy pick (lens = min C(x) energy by default). S*
+        # tiebreaking used to run first for 2+ passers; across 118 H200
+        # tiebreaks with the fixed stdin adapter every pair scored 0-0 and
+        # 110/110 winners equaled the lens min-energy pick — zero signal.
         if passing_candidates:
             result["passed"] = True
             result["phase_solved"] = "phase1"
@@ -979,51 +937,11 @@ class V3Pipeline:
                 for c in passing_candidates
             ]
 
-            if len(passing_candidates) >= 2 and self.enable_phase2:
-                # S* tiebreaking: generate edge-case inputs to distinguish
-                # the top-2 passing candidates by energy
-                # Use dedicated S* sandbox that pipes specific stdin for stdio tasks
-                s_star_sandbox = SStarSandboxAdapter(task)
-                try:
-                    s_candidates = [
-                        CandidateScore(
-                            code=c["code"], raw_energy=c["energy"],
-                            index=c["index"],
-                        )
-                        for c in passing_candidates[:2]
-                    ]
-                    tb_result = self.s_star.tiebreak(
-                        candidates=s_candidates, problem=task.prompt,
-                        llm_call=llm, sandbox_run=s_star_sandbox,
-                        task_id=task_id,
-                    )
-                    if tb_result.triggered and tb_result.winner_index >= 0:
-                        winner = next(
-                            (c for c in passing_candidates
-                             if c["index"] == tb_result.winner_index),
-                            passing_candidates[0],
-                        )
-                        result["code"] = winner["code"]
-                        result["telemetry"]["s_star_triggered"] = True
-                    else:
-                        # Use selection strategy
-                        selected = select_candidate(
-                            candidate_infos, strategy=self.selection_strategy,
-                            seed=42,
-                        )
-                        result["code"] = selected.code if selected else passing_candidates[0]["code"]
-                except Exception:
-                    selected = select_candidate(
-                        candidate_infos, strategy=self.selection_strategy,
-                        seed=42,
-                    )
-                    result["code"] = selected.code if selected else passing_candidates[0]["code"]
-            else:
-                selected = select_candidate(
-                    candidate_infos, strategy=self.selection_strategy,
-                    seed=42,
-                )
-                result["code"] = selected.code if selected else passing_candidates[0]["code"]
+            selected = select_candidate(
+                candidate_infos, strategy=self.selection_strategy,
+                seed=42,
+            )
+            result["code"] = selected.code if selected else passing_candidates[0]["code"]
 
             result["telemetry"]["selection_strategy"] = self.selection_strategy
 

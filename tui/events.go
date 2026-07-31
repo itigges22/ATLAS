@@ -715,7 +715,7 @@ func formatV3StageEvent(eventType string, data json.RawMessage) string {
 		if p.Iterations > 0 {
 			body += fmt.Sprintf(" · %d iter · %d tok", p.Iterations, p.Tokens)
 		}
-	case "s_star_winner", "selected":
+	case "selected":
 		if p.Energy > 0 {
 			body += fmt.Sprintf(" · E=%.2f", p.Energy)
 		}
