@@ -354,17 +354,17 @@ as-wired. Bench-learned fixes (k=3 pin, S* stdin adapter) never reached live.
 | plan_search | KEEP (simplify: fake threadpools, dead :400 expr) | **+12.4pp** — the workhorse |
 | div_sampling | KEEP | fallback generator, ~free |
 | self_test_gen | KEEP (dedupe double-gen = D2) | legitimizes Phase 3 |
-| pr_cot | KEEP → verify-as-you-go | **36/42 rescues** |
-| refinement_loop | KEEP, simplify hard (merge 2 calls; consume hyp 2-3; delete inert geometry filter + escalate_after) | 6/42 rescues |
+| pr_cot | KEEP → verify-as-you-go | **36/42 rescues** (H200 join: 69/70) |
+| refinement_loop | KEEP; ✅ budget gate shipped (aada0c4): enters only when one iteration (~3 LLM calls at observed speed) fits the remaining budget — H200: 453/487 entries burned ~6 min at 0 iterations | 6/42 rescues |
 | candidate_selection | KEEP | 30 live lines; ablation baselines |
 | embedding_store | KEEP (bench) | feeds lens training |
 | llm_client | KEEP | the model-agnosticism layer |
 | budget_forcing | SIMPLIFY → tokens table (⏸ owner-data) | Wait-injection = 0 callers; live thinking silently off |
-| blend_asc dynamic k | **CUT-live, pin k=3** ⏸ owner-data | +0.0pp; bench already demoted to telemetry |
-| s_star | **CUT-live** ⏸ owner-data | +0.0pp; stdin dropped in live; scores "didn't crash" |
-| derivation_chains | **CUT** ⏸ owner-data | **0/194 rescues**, ≤17 calls, verification fiction; roadmap already prescribed removal |
-| ace_pipeline | **CUT** ⏸ owner-data | learns task-id strings into a playbook discarded at exit |
-| reasc | **CUT** ⏸ owner-data | runner records its verdict and ignores it |
+| blend_asc dynamic k | ✅ **CUT everywhere, k=3 pinned** (1c64a3d) | +0.0pp; H200: allocation tracked normalization scale, not task; see cxgx-patch note below |
+| s_star | ✅ **CUT everywhere** (e2e6b03) | +0.0pp; H200: 118 tiebreaks all 0-0, 110/110 winners = lens min-energy, WITH the fixed stdin adapter |
+| derivation_chains | ✅ **CUT** (466a114) | **0/485 H200 rescues** (0/194 local), ≤17 calls, verification fiction; roadmap already prescribed removal |
+| ace_pipeline | ✅ **CUT** (6c4ee2b) | learned task-id strings into a playbook discarded at exit |
+| reasc | ✅ **CUT** (6c4ee2b) | runner recorded its verdict and ignored it |
 | lens_feedback | MEASURE (bench flag A/B) | postdates ablation |
 
 **Future feature preserved (2026-07-31, k-pin commit):** the C(x)-only
@@ -383,13 +383,32 @@ with empty stdin") · D5 EmbedAdapter→[] disarms geometry filter silently · D
 live constraints plumbing vacuous · D7 dead knobs/code inside stages · D8 live
 stage telemetry nonexistent (docstrings advertise bench-only JSONL).
 
-**Execution state:** D1/D2/D4/D7/D8 fixes dispatched (data-independent);
-stage CUTS ON HOLD for the owner's H200 bench dataset
-(~/Desktop/atlas-benchmark-data on the MacBook → rsync to
-/home/isaac/atlas-benchmark-data; not yet arrived). Minimal-equivalent target:
-6 stages, worst-case live calls ~40→~20, expected pass-rate cost zero.
-Owner root-cause note: this complexity is the likely source of the TUI-visible
-bugs (stub writes = D1; hangs-then-baseline = derivation burning the 180s cap).
+**Execution state:** D1/D2/D4/D7/D8 fixes landed (data-independent). H200
+dataset arrived (/home/isaac/atlas-benchmark-data) and the CUT WAVE IS
+EXECUTED (2026-07-31, local commits on dev): derivation 466a114 · S*
+e2e6b03 · k-pin 1c64a3d · ACE+ReASC 6c4ee2b · refinement budget gate
+aada0c4 · proxy max_tokens clamp (owner-D8, this commit). Stage tree
+17 → 12 modules. Worst-case live LLM calls ≈47 → ≈27 (≈21 on the
+interactive path when the budget gate forecloses refinement); k is now
+hard-bounded at 3. Owner root-cause note validated: the TUI-visible
+hangs-then-baseline was derivation burning the 180s cap; stub writes = D1.
+
+**H200 ops findings (record-only, out of repo scope except D8/A3):**
+- BUGS.md **A3** (embed sidecar `--pooling` unpinned): **already fixed in
+  this repo** — the shipped entrypoint (`inference/entrypoint-v3.1.sh`,
+  used by Dockerfile.v31/rocm/vulkan) pins `--pooling
+  "$ATLAS_EMBED_POOLING"` (default `mean`) and the lens enforces the
+  convention via `model_identity.json`'s embedding_contract. The one
+  unpinned copy is `inference/entrypoint.sh`, half of the unbuilt
+  Dockerfile pair already queued for deletion as ledger item C8.
+- BUGS.md **A4/A5/A6**: owner-side ops findings on the H200 serving
+  host (out of repo scope) — recorded here so they are not re-derived.
+- Owner-**D8** (client-disconnect zombie generations saturating llama
+  slots): ✅ proxy-level clamp shipped in this commit —
+  `clampGenerationBody` forces an explicit bounded `max_tokens`/
+  `n_predict` onto every passthrough generation request
+  (ATLAS_MAX_COMPLETION_TOKENS, default 8192); the agent loop's own
+  calls already carried `ATLAS_MAX_TOKENS`.
 
 **Dogfood 2026-08-01 (demo2, post-fix stack):** session completed done in 12
 turns / 9 tools. VALIDATED live: reader served 3 July-banked idiom patterns

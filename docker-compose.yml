@@ -363,6 +363,9 @@ services:
       - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
       # Per-turn generation ceiling (tokens).
       - ATLAS_MAX_TOKENS=${ATLAS_MAX_TOKENS:-}
+      # Ceiling forced onto passthrough generation requests without an
+      # explicit (bounded) max_tokens/n_predict.
+      - ATLAS_MAX_COMPLETION_TOKENS=${ATLAS_MAX_COMPLETION_TOKENS:-}
       # Conversation-history token budget override.
       - ATLAS_AGENT_HISTORY_BUDGET=${ATLAS_AGENT_HISTORY_BUDGET:-}
       # Labeled-sample count at which the "retrain available" prompt fires.

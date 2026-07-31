@@ -52,6 +52,9 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_DEDUP_READS": Field("bool"),
     "ATLAS_SANDBOX_NET_INTERNAL": Field("bool"),
     "ATLAS_MAX_TOKENS": Field("int", min=0, max=1_000_000),
+    # Ceiling forced onto passthrough generation requests that carry no
+    # (or an unbounded) max_tokens/n_predict — see proxy clampGenerationBody.
+    "ATLAS_MAX_COMPLETION_TOKENS": Field("int", min=1, max=1_000_000),
     # Repetition-control sampling forwarded to llama-server. DRY scores
     # repeated sequences; repeat_penalty scores individual tokens and is off
     # by default because it degrades code, where indentation and keywords

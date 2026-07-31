@@ -256,6 +256,51 @@ func newProxyMux() *http.ServeMux {
 	return mux
 }
 
+// maxCompletionTokens is the ceiling every generation request leaving the
+// proxy must carry (ATLAS_MAX_COMPLETION_TOKENS, default 8192).
+func maxCompletionTokens() int {
+	return envIntOr("ATLAS_MAX_COMPLETION_TOKENS", 8192)
+}
+
+// clampGenerationBody guarantees an explicit completion bound on a
+// passthrough generation request. Without one, llama-server generates
+// with its default n_predict=-1 (until the context fills); a client
+// that disconnects mid-stream then leaves a zombie generation holding
+// the slot — the H200 ops data showed these saturating every slot.
+// The agent loop's own calls already carry max_tokens (agentMaxTokens);
+// this closes the passthrough path.
+//
+// Missing, non-positive (-1 means "unlimited" to llama), or
+// above-ceiling values are set to the ceiling. OpenAI-style endpoints
+// carry the bound as max_tokens; llama-native /completion(s) and
+// /infill as n_predict. Non-generation paths and unparseable bodies
+// pass through unchanged — this is a guarantee, not a validator.
+func clampGenerationBody(path string, body []byte) []byte {
+	var key string
+	switch path {
+	case "/v1/chat/completions", "/v1/completions":
+		key = "max_tokens"
+	case "/completion", "/completions", "/infill":
+		key = "n_predict"
+	default:
+		return body
+	}
+	var req map[string]interface{}
+	if err := json.Unmarshal(body, &req); err != nil || req == nil {
+		return body
+	}
+	ceiling := maxCompletionTokens()
+	if v, ok := req[key].(float64); ok && v > 0 && v <= float64(ceiling) {
+		return body
+	}
+	req[key] = ceiling
+	clamped, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return clamped
+}
+
 func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	// %q on the path quotes + escapes CR/LF so a crafted URL can't
 	// fake additional log entries (go/log-injection).
@@ -265,6 +310,9 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusRequestEntityTooLarge, ErrResourceLimit, "request body exceeds the configured limit")
 		return
+	}
+	if r.Method == http.MethodPost {
+		body = clampGenerationBody(r.URL.Path, body)
 	}
 	upstreamURL := inferenceURL + r.URL.RequestURI()
 	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(body))

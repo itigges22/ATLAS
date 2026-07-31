@@ -501,3 +501,79 @@ func TestFilteringWriterOnLogger(t *testing.T) {
 		t.Fatalf("placeholder missing: %q", out)
 	}
 }
+
+// Owner-D8: every generation request leaving the proxy carries an explicit
+// completion bound, so a client disconnect can't leave an unbounded zombie
+// generation holding a llama slot.
+func TestClampGenerationBody(t *testing.T) {
+	get := func(body []byte, key string) (float64, bool) {
+		var m map[string]interface{}
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Fatalf("clamped body is not JSON: %v", err)
+		}
+		v, ok := m[key].(float64)
+		return v, ok
+	}
+
+	t.Run("missing max_tokens gets the default ceiling", func(t *testing.T) {
+		out := clampGenerationBody("/v1/chat/completions",
+			[]byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+		if v, ok := get(out, "max_tokens"); !ok || v != 8192 {
+			t.Fatalf("want max_tokens=8192, got %v (present=%v)", v, ok)
+		}
+	})
+
+	t.Run("in-range value passes through untouched", func(t *testing.T) {
+		in := []byte(`{"max_tokens":512}`)
+		out := clampGenerationBody("/v1/chat/completions", in)
+		if string(out) != string(in) {
+			t.Fatalf("in-range body modified: %s", out)
+		}
+	})
+
+	t.Run("unlimited sentinel -1 is clamped", func(t *testing.T) {
+		out := clampGenerationBody("/v1/completions", []byte(`{"max_tokens":-1}`))
+		if v, _ := get(out, "max_tokens"); v != 8192 {
+			t.Fatalf("want clamp to 8192, got %v", v)
+		}
+	})
+
+	t.Run("above-ceiling value is clamped", func(t *testing.T) {
+		out := clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":900000}`))
+		if v, _ := get(out, "max_tokens"); v != 8192 {
+			t.Fatalf("want clamp to 8192, got %v", v)
+		}
+	})
+
+	t.Run("llama-native endpoints use n_predict", func(t *testing.T) {
+		out := clampGenerationBody("/completion", []byte(`{"prompt":"x"}`))
+		if v, ok := get(out, "n_predict"); !ok || v != 8192 {
+			t.Fatalf("want n_predict=8192, got %v (present=%v)", v, ok)
+		}
+	})
+
+	t.Run("env override sets the ceiling", func(t *testing.T) {
+		t.Setenv("ATLAS_MAX_COMPLETION_TOKENS", "1024")
+		out := clampGenerationBody("/v1/chat/completions", []byte(`{}`))
+		if v, _ := get(out, "max_tokens"); v != 1024 {
+			t.Fatalf("want max_tokens=1024, got %v", v)
+		}
+		out = clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":2048}`))
+		if v, _ := get(out, "max_tokens"); v != 1024 {
+			t.Fatalf("want clamp to 1024, got %v", v)
+		}
+	})
+
+	t.Run("non-generation paths and bad JSON pass through", func(t *testing.T) {
+		for _, c := range []struct{ path, body string }{
+			{"/health", `{}`},
+			{"/slots", `{"max_tokens":-1}`},
+			{"/v1/chat/completions", `not json`},
+		} {
+			out := clampGenerationBody(c.path, []byte(c.body))
+			if string(out) != c.body {
+				t.Fatalf("%s: body modified: %s", c.path, out)
+			}
+		}
+	})
+}
