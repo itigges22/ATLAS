@@ -15,7 +15,6 @@ from stages.llm_client import extract_code
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
 from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
-from stages.blend_asc import BlendASC, BlendASCConfig
 from stages.failure_analysis import FailingCandidate
 from stages.pr_cot import PRCoT, PRCoTConfig
 from stages.refinement_loop import RefinementLoop, RefinementLoopConfig
@@ -29,6 +28,14 @@ import symbols
 BASE_TEMPERATURE = 0.6
 DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
+
+# Candidate count when the probe fails, pinned to the bench orchestrator's
+# own decision. The C(x)-only dynamic allocator's k tracked the lens's
+# normalization scale, not task difficulty, across the H200 join — see the
+# blend_asc removal commit. The tier feeds BudgetForcing prompt/max-token
+# selection for the DivSampling fill.
+DEFAULT_K = 3
+DEFAULT_TIER = "standard"
 
 
 # --- Stage telemetry ---------------------------------------------------------
@@ -181,8 +188,6 @@ class V3PipelineService:
                                       telemetry_dir=t)
         self.div_sampling = DivSampling(DivSamplingConfig(enabled=True),
                                         telemetry_dir=t)
-        self.blend_asc = BlendASC(BlendASCConfig(enabled=True),
-                                  telemetry_dir=t)
         self.pr_cot = PRCoT(PRCoTConfig(enabled=True), telemetry_dir=t)
         self.refinement_loop = RefinementLoop(RefinementLoopConfig(enabled=True),
                                               telemetry_dir=t)
@@ -509,16 +514,10 @@ class V3PipelineService:
             result["events"] = events
             return result
 
-        # ===== PHASE 2: ADAPTIVE K ALLOCATION =====
+        # ===== PHASE 2: K ALLOCATION (pinned) =====
         check_client()
         emit("phase2", "Allocating compute budget...")
-        if probe_cx_calibrated:
-            k, budget_tier = self.blend_asc.allocate(
-                probe_energy_raw, task_id,
-                normalized_energy=probe_energy_norm,
-            )
-        else:
-            k, budget_tier = self.blend_asc.config.default_k, "standard"
+        k, budget_tier = DEFAULT_K, DEFAULT_TIER
         bf_tier = budget_tier
         emit("phase2_allocated", f"k={k} tier={budget_tier}", k=k, tier=budget_tier)
 

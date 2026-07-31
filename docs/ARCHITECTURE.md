@@ -344,14 +344,13 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 ### Module Map
 
-The pipeline stages are 15 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 11 of them (10 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
+The pipeline stages are 14 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 10 of them (9 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR
     Main["pipeline.py"] --> PS["PlanSearch 1A"]
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
-    Main --> BASC["BlendASC 2A"]
     Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
@@ -365,9 +364,7 @@ graph LR
 
     RL --> FA
     RL --> CR["ConstraintRefiner 3B"]
-    BASC --> BF
     REASC --> BF
-    LF --> BASC
     LF --> BF
 
     style Main fill:#333,color:#fff
@@ -375,7 +372,6 @@ graph LR
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
-    style BASC fill:#2d5016,color:#fff
     style REASC fill:#2d5016,color:#fff
     style CS fill:#2d5016,color:#fff
     style FA fill:#5c3a1a,color:#fff

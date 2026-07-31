@@ -2,7 +2,7 @@
 """
 ATLAS V3 Pipeline Service — HTTP wrapper around the V3 benchmark pipeline.
 
-Exposes the full V3 pipeline (PlanSearch, DivSampling, BudgetForcing, BlendASC,
+Exposes the full V3 pipeline (PlanSearch, DivSampling, BudgetForcing,
 PR-CoT, RefinementLoop, etc.) as an HTTP service that the Go proxy can
 call for T2/T3 tasks.
 

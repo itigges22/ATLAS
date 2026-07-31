@@ -12,8 +12,7 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
       - Sandbox test all k
       - If any pass → Lens selects best → DONE
 
-    Phase 2: Adaptive compute allocation
-      - Blend-ASC → adaptive K per difficulty
+    Phase 2: Compute allocation (k=3 pinned)
       - ReASC → early stopping on low-confidence
 
     Phase 3: Verified iterative refinement (if 0/k pass)
@@ -62,7 +61,6 @@ from stages.llm_client import chat_completion, chatml_to_messages, extract_code
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
 from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
-from stages.blend_asc import BlendASC, BlendASCConfig
 from stages.reasc import ReASC, ReASCConfig
 from stages.failure_analysis import (
     FailureAnalyzer, FailureAnalysisConfig, FailingCandidate,
@@ -435,9 +433,6 @@ class V3Pipeline:
             v3["ps_num_plans"] = int(conf.get(
                 "ATLAS_V3_PLAN_SEARCH_NUM_PLANS", "3",
             ))
-            v3["ba_default_k"] = int(conf.get(
-                "ATLAS_V3_BLEND_ASC_DEFAULT_K", "3",
-            ))
             v3["reasc_confidence"] = float(conf.get(
                 "ATLAS_V3_REASC_CONFIDENCE_THRESHOLD", "-0.5",
             ))
@@ -486,13 +481,6 @@ class V3Pipeline:
         )
 
     def _init_phase2(self, telemetry_dir):
-        self.blend_asc = BlendASC(
-            BlendASCConfig(
-                enabled=self.enable_phase2,
-                default_k=self._v3_conf.get("ba_default_k", 3),
-            ),
-            telemetry_dir=telemetry_dir,
-        )
         self.reasc = ReASC(
             ReASCConfig(
                 enabled=self.enable_phase2,
@@ -569,8 +557,8 @@ class V3Pipeline:
         latency = {}
 
         # ===== PROBE: Quick candidate for Lens energy estimation =====
-        # Generate a single candidate to get energy signal for Phase 2
-        # adaptive K allocation and Budget Forcing tier selection.
+        # Generate a single candidate to get energy signal for the ReASC
+        # telemetry and Budget Forcing tier selection.
         # Uses "standard" tier (up to 2048 thinking tokens) — matches
         # Qwen3.5 published benchmark settings where thinking is enabled.
         # Gives the model enough reasoning budget to solve harder tasks
@@ -641,7 +629,7 @@ class V3Pipeline:
                 pass
             result["telemetry"]["probe_sandbox_passed"] = probe_passed_sandbox
 
-        # ===== Phase 2: Adaptive K + Budget Tier =====
+        # ===== Phase 2: K + Budget Tier (k=3 pinned) =====
         phase2_start = time.time()
         if probe_passed_sandbox:
             # Data-driven early exit: probe already passes sandbox.
@@ -651,30 +639,16 @@ class V3Pipeline:
             bf_tier = self.budget_forcing.select_tier()
             result["telemetry"]["probe_early_exit"] = True
         elif self.enable_phase2 and probe_energy_raw is not None:
-            # Probe FAILED sandbox — we need diverse candidates.
-            # Energy-based k allocation (BlendASC) is uninformative for
-            # short probe code on 9B (raw ~1-4, all normalize to <0.05,
-            # always mapping to k=1). Use default k=3 so PlanSearch runs.
+            # Probe FAILED sandbox — we need diverse candidates. k is
+            # pinned to 3 so PlanSearch runs: the C(x)-only dynamic
+            # allocator's k tracked the lens's normalization scale, not
+            # task difficulty (H200 join), and short probe code on 9B
+            # normalized to <0.05 — always mapping to k=1.
             k = 3
             budget_tier = "standard"
             bf_tier = self.budget_forcing.select_tier()
 
-            # Log BlendASC/ReASC evaluations for telemetry (not gating)
-            k_blend, tier_blend = self.blend_asc.allocate(
-                raw_energy=probe_energy_raw,
-                task_id=task_id,
-                probe_tokens=(
-                    probe_candidate.get("tokens", 0)
-                    if probe_candidate else 0
-                ),
-                probe_time_ms=(
-                    probe_candidate.get("time_ms", 0.0)
-                    if probe_candidate else 0.0
-                ),
-            )
-            result["telemetry"]["blend_asc_k"] = k_blend
-            result["telemetry"]["blend_asc_tier"] = tier_blend
-
+            # Log the ReASC evaluation for telemetry (not gating)
             should_stop, reasc_reason = self.reasc.evaluate(
                 probe_energy_raw, llm.last_logprobs, task_id=task_id,
             )
@@ -1090,9 +1064,7 @@ class V3Pipeline:
             label = "PASS" if result.get("passed") else "FAIL"
             self.lens_feedback.record(embedding, label, task_id)
             if self.lens_feedback.needs_propagation:
-                self.lens_feedback.apply_to_components(
-                    self.blend_asc, self.budget_forcing,
-                )
+                self.lens_feedback.apply_to_components(self.budget_forcing)
         except Exception:
             pass  # Never crash benchmark for feedback
 
@@ -1430,7 +1402,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
                 lens_data = json.loads(resp.read().decode('utf-8'))
             if lens_data.get("error"):
                 print(f"  Lens model: NOT LOADED ({lens_data['error']})")
-                print("    Phase 2 (adaptive K) will use default k=3")
+                print("    Probe scoring unavailable — k=3 as always")
             else:
                 print(f"  Lens model: OK (energy={lens_data.get('energy', '?')})")
             lens_ok = True

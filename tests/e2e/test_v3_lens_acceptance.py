@@ -198,7 +198,7 @@ class _FakeLensHandler(http.server.BaseHTTPRequestHandler):
 
         if self.path == "/internal/lens/gx-score":
             # cand-A must win: lowest raw energy. Probe scores
-            # calibrated 0.15 normalized -> BlendASC allocates k=3.
+            # calibrated 0.15 normalized; the pipeline runs k=3.
             if "# cand-A" in text:
                 energy, norm = 2.0, 0.20
             elif "# cand-B" in text:

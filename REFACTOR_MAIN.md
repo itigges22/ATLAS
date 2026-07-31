@@ -367,6 +367,15 @@ as-wired. Bench-learned fixes (k=3 pin, S* stdin adapter) never reached live.
 | reasc | **CUT** ⏸ owner-data | runner records its verdict and ignores it |
 | lens_feedback | MEASURE (bench flag A/B) | postdates ablation |
 
+**Future feature preserved (2026-07-31, k-pin commit):** the C(x)-only
+dynamic allocator was cut (its k tracked the lens normalization scale, not
+task difficulty), but the owner's **cxgx-patch allocator** (C(x) normalized
++ G(x) XGBoost escalation + k>=3 floors) measured **+2..+5 pp at 79% of
+brute-force cost** on the H200 dataset. The code+data live in the owner's
+dataset at `/home/isaac/atlas-benchmark-data/cxgx-patch/` — candidate for a
+proper feature behind a bench A/B. Deliberately NOT copied into the tree
+with the cut.
+
 **Composition defects D1-D8** (full text in review): D1 veto→repair-pool hole
 (vetoed stub can ship) · D2 duplicate self-test gen w/ None-downgrade · D3 two
 orchestrators · D4 live SandboxAdapter drops test_input (verification = "ran

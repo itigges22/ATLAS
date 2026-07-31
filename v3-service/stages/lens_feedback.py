@@ -3,7 +3,7 @@
 After each task completes, records the final candidate's embedding + PASS/FAIL
 label. Every N tasks, triggers Lens retrain via the Geometric Lens endpoint. After
 retrain, recomputes sigmoid midpoint/steepness from the new energy distribution
-and propagates to Blend-ASC and Budget Forcing in-memory.
+and propagates to Budget Forcing in-memory.
 
 Config: [lens_feedback] in atlas.conf
 Telemetry: telemetry/lens_feedback_events.jsonl
@@ -198,16 +198,13 @@ class LensFeedbackCollector:
         self.current_steepness = 4.0 / max(separation, 0.1)
         self.needs_propagation = True
 
-    def apply_to_components(self, blend_asc, budget_forcing) -> None:
+    def apply_to_components(self, budget_forcing) -> None:
         """Propagate recalibrated normalization to V3 components."""
         if not self.needs_propagation:
             return
         if self.current_midpoint is None or self.current_steepness is None:
             return
 
-        if blend_asc is not None:
-            blend_asc.config.energy_midpoint = self.current_midpoint
-            blend_asc.config.energy_steepness = self.current_steepness
         if budget_forcing is not None:
             budget_forcing.config.energy_midpoint = self.current_midpoint
             budget_forcing.config.energy_steepness = self.current_steepness

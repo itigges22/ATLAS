@@ -158,24 +158,17 @@ class TestRecalibrationMath:
 
 
 class TestComponentPropagation:
-    def test_updates_blend_asc_and_budget_forcing(self, telemetry_dir):
+    def test_updates_budget_forcing(self, telemetry_dir):
         collector = make_collector(telemetry_dir)
         collector._recompute_normalization(pass_mean=3.0, fail_mean=12.0)
-
-        mock_blend = MagicMock()
-        mock_blend.config = MagicMock()
-        mock_blend.config.energy_midpoint = 9.5
-        mock_blend.config.energy_steepness = 0.5
 
         mock_bf = MagicMock()
         mock_bf.config = MagicMock()
         mock_bf.config.energy_midpoint = 9.5
         mock_bf.config.energy_steepness = 0.5
 
-        collector.apply_to_components(mock_blend, mock_bf)
+        collector.apply_to_components(mock_bf)
 
-        assert mock_blend.config.energy_midpoint == pytest.approx(7.5)
-        assert mock_blend.config.energy_steepness == pytest.approx(4.0 / 9.0)
         assert mock_bf.config.energy_midpoint == pytest.approx(7.5)
         assert mock_bf.config.energy_steepness == pytest.approx(4.0 / 9.0)
         assert collector.needs_propagation is False
@@ -185,15 +178,15 @@ class TestComponentPropagation:
         # needs_propagation is False by default, so apply should be a noop
         assert collector.needs_propagation is False
 
-        mock_blend = MagicMock()
-        mock_blend.config.energy_midpoint = 9.5
-        mock_blend.config.energy_steepness = 0.5
+        mock_bf = MagicMock()
+        mock_bf.config.energy_midpoint = 9.5
+        mock_bf.config.energy_steepness = 0.5
 
-        collector.apply_to_components(mock_blend, None)
+        collector.apply_to_components(mock_bf)
 
         # Values should remain unchanged
-        assert mock_blend.config.energy_midpoint == 9.5
-        assert mock_blend.config.energy_steepness == 0.5
+        assert mock_bf.config.energy_midpoint == 9.5
+        assert mock_bf.config.energy_steepness == 0.5
 
 
 class TestTelemetry:
@@ -259,11 +252,9 @@ class TestTelemetry:
         collector.record(dummy_embedding, "FAIL", "t2")
         collector.record(dummy_embedding, "FAIL", "t3")
 
-        mock_blend = MagicMock()
-        mock_blend.config = MagicMock()
         mock_bf = MagicMock()
         mock_bf.config = MagicMock()
-        collector.apply_to_components(mock_blend, mock_bf)
+        collector.apply_to_components(mock_bf)
 
         telemetry_file = telemetry_dir / "lens_feedback_events.jsonl"
         events = []

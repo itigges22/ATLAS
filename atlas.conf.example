@@ -157,9 +157,6 @@ ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER="standard"
 # PlanSearch (1A) — number of plans generated per problem
 ATLAS_V3_PLAN_SEARCH_NUM_PLANS=3
 
-# Blend-ASC (2A) — default K when adaptive routing is unavailable
-ATLAS_V3_BLEND_ASC_DEFAULT_K=3
-
 # ReASC (2B) — early-stopping thresholds
 ATLAS_V3_REASC_CONFIDENCE_THRESHOLD=-0.5
 ATLAS_V3_REASC_ENERGY_THRESHOLD=0.10

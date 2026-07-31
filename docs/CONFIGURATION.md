@@ -669,7 +669,6 @@ Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The
 |----------|---------|-------------|
 | `ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER` | `"standard"` | Default Budget Forcing tier when difficulty estimation is unavailable |
 | `ATLAS_V3_PLAN_SEARCH_NUM_PLANS` | `3` | Plans generated per problem (overrides `PlanSearchConfig.num_plans`) |
-| `ATLAS_V3_BLEND_ASC_DEFAULT_K` | `3` | Default K candidates when adaptive routing is unavailable |
 | `ATLAS_V3_REASC_CONFIDENCE_THRESHOLD` | `-0.5` | Logprob threshold for ReASC early-stop |
 | `ATLAS_V3_REASC_ENERGY_THRESHOLD` | `0.10` | C(x) threshold for ReASC early-stop |
 | `ATLAS_V3_EWC_LAMBDA` | `1000.0` | EWC regularization strength (Phase 4A-EWC) |
