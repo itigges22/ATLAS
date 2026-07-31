@@ -49,6 +49,8 @@ from pathlib import Path
 from typing import Callable
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "scripts"))
+from code_quality import analyze as analyze_quality  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Task suite
@@ -160,6 +162,102 @@ def _check_offbyone(ws: Path) -> tuple[bool, str]:
     return True, "chunks() drops no tail element"
 
 
+# --- AoC-style puzzles: exact-integer answers, holdout-verified ----------
+#
+# The answer is a specific number, so "did it work" needs no judgement. The
+# model sees input.txt; the check re-runs its program against a holdout input
+# it never saw, so hardcoding the number it was shown fails. `shoal` is the
+# one that separates understanding from transcription: the naive
+# per-individual simulation reaches ~1.6e12 elements and cannot finish, so
+# only the counting solution completes.
+
+AOC_DIR = REPO / "scripts" / "fixtures" / "aoc"
+
+
+def _aoc_answers() -> dict:
+    return json.loads((AOC_DIR / "answers.json").read_text())
+
+
+def _run_solution(ws: Path, timeout: int = 60) -> tuple[bool, str]:
+    prog = ws / "solve.py"
+    if not prog.exists():
+        return False, "solve.py was never created"
+    try:
+        p = subprocess.run([sys.executable, "solve.py"], cwd=str(ws),
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, f"solve.py did not finish within {timeout}s"
+    if p.returncode != 0:
+        return False, f"solve.py failed: {p.stderr.strip()[:160]}"
+    nums = re.findall(r"-?\d+", p.stdout)
+    if not nums:
+        return False, f"no number printed (stdout={p.stdout.strip()[:80]!r})"
+    return True, nums[-1]
+
+
+def _check_aoc(name: str):
+    def check(ws: Path) -> tuple[bool, str]:
+        want = _aoc_answers()[name]
+        ok, got = _run_solution(ws)
+        if not ok:
+            return False, got
+        if got != str(want["input"]):
+            return False, f"wrong answer: got {got}, want {want['input']}"
+        # Same program, an input it never saw. A hardcoded answer dies here.
+        original = (ws / "input.txt").read_text()
+        (ws / "input.txt").write_text((AOC_DIR / name / "holdout.txt").read_text())
+        try:
+            ok2, got2 = _run_solution(ws)
+        finally:
+            (ws / "input.txt").write_text(original)
+        if not ok2:
+            return False, f"correct on its own input but broke on the holdout: {got2}"
+        if got2 != str(want["holdout"]):
+            return False, (f"holdout mismatch: got {got2}, want {want['holdout']} "
+                           f"— the answer looks hardcoded rather than computed")
+        return True, f"{got} correct, and correct on the holdout input"
+    return check
+
+
+_AOC_PROMPTS = {
+    "sonar": ("input.txt holds one integer per line: a sonar depth reading. "
+              "Consider sums of three-measurement sliding windows. Write "
+              "solve.py that reads input.txt and prints how many such window "
+              "sums are larger than the immediately previous window sum."),
+    "course": ("input.txt holds one command per line: 'forward N', 'down N' or "
+               "'up N'. Track horizontal position, depth and aim, all starting "
+               "at 0. 'down N' increases aim by N, 'up N' decreases aim by N, "
+               "and 'forward N' increases horizontal position by N AND "
+               "increases depth by aim multiplied by N. Write solve.py that "
+               "reads input.txt and prints the final horizontal position "
+               "multiplied by the final depth."),
+    "slope": ("input.txt is a grid of '.' (open) and '#' (tree). The pattern "
+              "repeats infinitely to the right. Starting at the top-left and "
+              "moving by a fixed (right, down) step until past the bottom, "
+              "count the trees encountered. Write solve.py that reads "
+              "input.txt and prints the PRODUCT of the tree counts for these "
+              "five slopes: right 1 down 1, right 3 down 1, right 5 down 1, "
+              "right 7 down 1, and right 1 down 2."),
+    "shoal": ("input.txt is a comma-separated list of integers, each an "
+              "internal timer for one fish. Each day every timer decreases by "
+              "1. A fish whose timer is 0 resets to 6 and spawns a new fish "
+              "with timer 8 (the new fish does not decrease that same day). "
+              "Write solve.py that reads input.txt and prints how many fish "
+              "exist after 256 days. Note: the population reaches roughly "
+              "1e12, so simulating each fish individually will not finish."),
+}
+
+
+def _aoc_task(name: str) -> Task:
+    return Task(
+        name=f"aoc_{name}",
+        prompt=_AOC_PROMPTS[name] + " Then run it and confirm the answer.",
+        files={"input.txt": (AOC_DIR / name / "input.txt").read_text()},
+        check=_check_aoc(name),
+        must_exist=("input.txt",),
+    )
+
+
 TASKS: dict[str, Task] = {
     # Tier-2: Python file whose real logic is JS inside a template string. The
     # case ATLAS exists for, and the one that exposed D9/D10.
@@ -219,6 +317,67 @@ TASKS: dict[str, Task] = {
 # --------------------------------------------------------------------------
 # Helpers shared by the checks and the corruption detector
 # --------------------------------------------------------------------------
+
+for _n in ("sonar", "course", "slope", "shoal"):
+    TASKS[f"aoc_{_n}"] = _aoc_task(_n)
+
+
+def _check_multifile(ws: Path) -> tuple[bool, str]:
+    """A real multi-file program: separate modules, working CLI, passing tests.
+
+    The interesting failure is not "it did not work" — it is one 300-line
+    todo.py with a `store` class glued on and a test file that imports
+    nothing. So this checks the seams: the modules exist separately, the
+    tests actually run and pass, and the CLI works end to end through them.
+    """
+    missing = [f for f in ("todo.py", "store.py", "test_store.py")
+               if not (ws / f).exists()]
+    if missing:
+        return False, f"missing {', '.join(missing)}"
+
+    # The split has to be real: store.py must carry the persistence, and
+    # todo.py must go through it rather than reimplementing it.
+    store_src = (ws / "store.py").read_text()
+    todo_src = (ws / "todo.py").read_text()
+    if "import store" not in todo_src and "from store" not in todo_src:
+        return False, "todo.py never imports store.py — the split is cosmetic"
+    if len(store_src.splitlines()) < 5:
+        return False, "store.py is a stub"
+
+    tp = subprocess.run([sys.executable, "-m", "pytest", "test_store.py", "-q"],
+                        cwd=str(ws), capture_output=True, text=True, timeout=120)
+    if tp.returncode != 0:
+        tail = (tp.stdout or tp.stderr).strip().splitlines()
+        return False, f"tests fail: {tail[-1][:120] if tail else 'no output'}"
+
+    add = subprocess.run([sys.executable, "todo.py", "add", "buy milk"],
+                         cwd=str(ws), capture_output=True, text=True, timeout=60)
+    if add.returncode != 0:
+        return False, f"`todo.py add` failed: {add.stderr.strip()[:120]}"
+    lst = subprocess.run([sys.executable, "todo.py", "list"],
+                         cwd=str(ws), capture_output=True, text=True, timeout=60)
+    if lst.returncode != 0:
+        return False, f"`todo.py list` failed: {lst.stderr.strip()[:120]}"
+    if "buy milk" not in lst.stdout:
+        return False, f"added item not listed (stdout={lst.stdout.strip()[:80]!r})"
+    return True, "modules separate, tests pass, CLI round-trips through store"
+
+
+TASKS["multifile_cli"] = Task(
+    name="multifile_cli",
+    prompt=("Build a small command-line todo app in this directory, as three "
+            "files. store.py holds the persistence layer: load and save a "
+            "list of items as JSON in todos.json, plus functions to add an "
+            "item and to mark one done. todo.py is the CLI entry point and "
+            "must use store.py rather than reimplementing it; support "
+            "`add <text>`, `list`, and `done <index>`. test_store.py holds "
+            "pytest tests for store.py, using a temporary file so the tests "
+            "do not touch real data. Keep each file focused and small. Then "
+            "run the tests and confirm they pass."),
+    files={},
+    check=_check_multifile,
+)
+
 
 def _extract_script(src: str) -> str | None:
     m = re.search(r"<script>(.*?)</script>", src, re.S)
@@ -283,6 +442,7 @@ class Session:
     defects: list[str] = field(default_factory=list)
     task_passed: bool = False
     task_detail: str = ""
+    quality: dict = field(default_factory=dict)
 
     def of_type(self, t: str) -> list[dict]:
         return [e for e in self.events if e.get("type") == t]
@@ -591,6 +751,11 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
         s.task_passed, s.task_detail = task.check(workspace)
     except Exception as e:  # a check that explodes is a failed task, not a crash
         s.task_passed, s.task_detail = False, f"check raised: {e}"
+    # Quality of what the agent wrote, excluding the fixtures it was handed.
+    try:
+        s.quality = analyze_quality(workspace, set(task.files)).as_dict()
+    except Exception as e:
+        s.quality = {"error": str(e)}
     return s
 
 
@@ -732,6 +897,7 @@ def main() -> int:
             "task_detail": s.task_detail, "defects": s.defects,
             "turns": len(s.of_type("turn_start")),
             "tools": len(s.of_type("tool_call")), "wall_s": round(s.wall_s, 1),
+            "quality": s.quality,
         } for s in sessions], indent=2))
         print(f"\nwrote {args.json_out}")
     return 0 if all(not s.defects for s in sessions) else 1
@@ -767,6 +933,26 @@ def report(sessions: list[Session], known: set[str]) -> None:
         turns = [len(s.of_type("turn_start")) for s in rows]
         print(f"  {name:14s} harness {cl}/{len(rows)}  task {pa}/{len(rows)}  "
               f"turns min/med/max {min(turns)}/{sorted(turns)[len(turns)//2]}/{max(turns)}")
+
+    q = [s.quality for s in sessions if s.quality and "error" not in s.quality]
+    if q:
+        print("\nCode quality of what the agent wrote:")
+        worst_cx = max(q, key=lambda r: r.get("max_complexity", 0))
+        worst_fn = max(q, key=lambda r: r.get("max_function_lines", 0))
+        worst_file = max(q, key=lambda r: r.get("max_file_lines", 0))
+        lint = sum(r.get("lint_violations", 0) for r in q)
+        unused = sum(r.get("unused_imports", 0) for r in q)
+        broken = sum(len(r.get("syntax_errors") or []) for r in q)
+        clean = sum(1 for r in q if not r.get("findings"))
+        print(f"  sessions with no quality finding   {clean}/{len(q)}")
+        print(f"  worst function complexity          {worst_cx.get('max_complexity', 0)}"
+              f" ({worst_cx.get('max_complexity_where') or 'n/a'})")
+        print(f"  longest function                   {worst_fn.get('max_function_lines', 0)} lines"
+              f" ({worst_fn.get('max_function_where') or 'n/a'})")
+        print(f"  longest file                       {worst_file.get('max_file_lines', 0)} lines"
+              f" ({worst_file.get('max_file_where') or 'n/a'})")
+        print(f"  lint violations / unused imports   {lint} / {unused}")
+        print(f"  files left unparseable             {broken}")
 
     observed: set[str] = set()
     for s in sessions:

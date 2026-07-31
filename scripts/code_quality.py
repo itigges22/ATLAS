@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Objective code-quality probes for code an agent wrote.
+
+Correctness is table stakes: any model can produce something that runs. The
+question this answers is whether what it produced is code you would keep —
+best practices followed, complexity kept down, a multi-file program actually
+split into modules rather than one file pretending to be several.
+
+Everything here is measured, not judged. No model scores another model's
+output: each probe is a parse, a count, or a linter's verdict, so the number
+means the same thing on every run and can be compared across builds.
+
+Used by scripts/e2e-reliability.py, and runnable on its own:
+
+    python scripts/code_quality.py <dir> [--baseline f1.py,f2.py]
+
+`--baseline` names files that were fixtures rather than agent output, so the
+report can separate what the agent wrote from what it was given.
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# Thresholds. Deliberately loose — these flag code that is hard to maintain,
+# not code that departs from a style preference. A function at 11 branches is
+# fine; one at 25 is a rewrite waiting to happen.
+MAX_COMPLEXITY = 15
+MAX_FUNCTION_LINES = 80
+MAX_FILE_LINES = 400
+
+
+@dataclass
+class QualityReport:
+    files: int = 0
+    total_lines: int = 0
+    lint_violations: int = 0
+    lint_available: bool = False
+    unused_imports: int = 0
+    max_complexity: int = 0
+    max_complexity_where: str = ""
+    max_function_lines: int = 0
+    max_function_where: str = ""
+    max_file_lines: int = 0
+    max_file_where: str = ""
+    syntax_errors: list[str] = field(default_factory=list)
+    findings: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        return {
+            "files": self.files,
+            "total_lines": self.total_lines,
+            "lint_violations": self.lint_violations,
+            "lint_available": self.lint_available,
+            "unused_imports": self.unused_imports,
+            "max_complexity": self.max_complexity,
+            "max_complexity_where": self.max_complexity_where,
+            "max_function_lines": self.max_function_lines,
+            "max_function_where": self.max_function_where,
+            "max_file_lines": self.max_file_lines,
+            "max_file_where": self.max_file_where,
+            "syntax_errors": self.syntax_errors,
+            "findings": self.findings,
+        }
+
+
+def cyclomatic_complexity(fn: ast.AST) -> int:
+    """Branch count + 1 — the standard McCabe measure.
+
+    Counts the constructs that actually create a path: conditionals, loops,
+    each `except`, each boolean operand beyond the first, comprehension
+    filters, `with`/`assert` guards are not paths and are excluded. Matching a
+    tool exactly matters less than being consistent, since the number is only
+    ever compared against itself across runs.
+    """
+    score = 1
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While,
+                             ast.ExceptHandler, ast.IfExp)):
+            score += 1
+        elif isinstance(node, ast.BoolOp):
+            score += len(node.values) - 1
+        elif isinstance(node, ast.comprehension):
+            score += 1 + len(node.ifs)
+        elif isinstance(node, ast.Match) if hasattr(ast, "Match") else False:
+            score += 1
+    return score
+
+
+def _iter_python(root: Path, skip: set[str]) -> list[Path]:
+    out = []
+    for p in sorted(root.rglob("*.py")):
+        if any(part in ("__pycache__", ".git", ".venv", "node_modules")
+               for part in p.parts):
+            continue
+        if p.name in skip:
+            continue
+        out.append(p)
+    return out
+
+
+def analyze(root: Path, baseline: set[str] | None = None) -> QualityReport:
+    rep = QualityReport()
+    skip = baseline or set()
+    files = _iter_python(root, skip)
+    rep.files = len(files)
+
+    for path in files:
+        try:
+            src = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        lines = src.count("\n") + 1
+        rep.total_lines += lines
+        if lines > rep.max_file_lines:
+            rep.max_file_lines, rep.max_file_where = lines, path.name
+        try:
+            tree = ast.parse(src)
+        except SyntaxError as e:
+            rep.syntax_errors.append(f"{path.name}: {e.msg} (line {e.lineno})")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            cx = cyclomatic_complexity(node)
+            if cx > rep.max_complexity:
+                rep.max_complexity = cx
+                rep.max_complexity_where = f"{path.name}:{node.name}"
+            end = getattr(node, "end_lineno", node.lineno) or node.lineno
+            length = end - node.lineno + 1
+            if length > rep.max_function_lines:
+                rep.max_function_lines = length
+                rep.max_function_where = f"{path.name}:{node.name}"
+
+    ruff = shutil.which("ruff")
+    if ruff and files:
+        rep.lint_available = True
+        proc = subprocess.run(
+            [ruff, "check", "--output-format", "json", "--isolated",
+             "--select", "E,F,W", *[str(p) for p in files]],
+            capture_output=True, text=True, timeout=120)
+        try:
+            issues = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            issues = []
+        rep.lint_violations = len(issues)
+        rep.unused_imports = sum(1 for i in issues
+                                 if str(i.get("code", "")).startswith("F401"))
+
+    if rep.syntax_errors:
+        rep.findings.append(f"{len(rep.syntax_errors)} file(s) do not parse")
+    if rep.max_complexity > MAX_COMPLEXITY:
+        rep.findings.append(
+            f"complexity {rep.max_complexity} in {rep.max_complexity_where} "
+            f"(over {MAX_COMPLEXITY})")
+    if rep.max_function_lines > MAX_FUNCTION_LINES:
+        rep.findings.append(
+            f"{rep.max_function_where} is {rep.max_function_lines} lines "
+            f"(over {MAX_FUNCTION_LINES})")
+    if rep.max_file_lines > MAX_FILE_LINES:
+        rep.findings.append(
+            f"{rep.max_file_where} is {rep.max_file_lines} lines "
+            f"(over {MAX_FILE_LINES})")
+    if rep.unused_imports:
+        rep.findings.append(f"{rep.unused_imports} unused import(s)")
+    if rep.lint_violations:
+        rep.findings.append(f"{rep.lint_violations} lint violation(s)")
+    return rep
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("directory")
+    ap.add_argument("--baseline", default="",
+                    help="comma-separated filenames that were fixtures, not "
+                         "agent output")
+    ap.add_argument("--json", dest="json_out", default="")
+    args = ap.parse_args()
+
+    root = Path(args.directory)
+    if not root.is_dir():
+        print(f"error: {root} is not a directory", file=sys.stderr)
+        return 2
+    baseline = {b.strip() for b in args.baseline.split(",") if b.strip()}
+    rep = analyze(root, baseline)
+
+    print(f"files {rep.files}   lines {rep.total_lines}   "
+          f"max complexity {rep.max_complexity}"
+          + (f" ({rep.max_complexity_where})" if rep.max_complexity_where else ""))
+    if rep.lint_available:
+        print(f"lint violations {rep.lint_violations}   "
+              f"unused imports {rep.unused_imports}")
+    else:
+        print("lint: ruff unavailable — skipped")
+    if rep.findings:
+        print("\nfindings:")
+        for f in rep.findings:
+            print(f"  - {f}")
+    else:
+        print("\nno quality findings")
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(rep.as_dict(), indent=2) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
