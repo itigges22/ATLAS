@@ -802,12 +802,13 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                 return {"success": False, "error": (
                     f"structural_edit: your replacement for `{selector}` changes "
                     f"no code — only comments or formatting differ, so {path} "
-                    f"would behave exactly as it does now and the task is not "
-                    f"done. If the code you need to change is inside a string "
-                    f"literal (an HTML template, a SQL block), no selector "
-                    f"reaches it: use edit_file anchored on one unique line from "
-                    f"inside that string. Otherwise re-emit the node with the "
-                    f"executable change actually in it."
+                    f"would behave exactly as it does now. If the code you need "
+                    f"to change lives inside a string literal (an HTML template, "
+                    f"a SQL block), no selector reaches it: use edit_file "
+                    f"anchored on one unique line from inside that string. If "
+                    f"you did mean to change only comments, use edit_file for "
+                    f"that too. Otherwise re-emit the node with the executable "
+                    f"change actually in it."
                 )}
         except SyntaxError:
             pass
