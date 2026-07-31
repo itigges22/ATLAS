@@ -424,11 +424,66 @@ var fixIntentWords = []string{
 // decide whether `done` requires a real verification step. Pure
 // feature requests ("add a logout button") don't trip the gate —
 // adding code doesn't always need a curl/test to declare done.
+// isExplainOnlyMessage reports an explicit "tell me, do not touch it"
+// instruction: an explain/describe request paired with a no-edit directive.
+//
+// Position-based negation cannot catch this. In "…whether it is actually a
+// bug. Do not change the code." the intent word comes BEFORE the directive,
+// so a backward scan finds nothing — yet the instruction plainly governs the
+// whole message. Measured: that prompt classified T2, ran the V3 pipeline,
+// and wrote to files the user had just asked it to leave alone.
+//
+// Both halves are required. "fix the bug but don't change the public API" has
+// the directive and is still real work; without the explain half it stays
+// action intent.
+func isExplainOnlyMessage(lower string) bool {
+	explain := false
+	for _, w := range []string{"explain", "describe", "walk me through",
+		"what does", "what is", "how does", "why does", "tell me"} {
+		if strings.Contains(lower, w) {
+			explain = true
+			break
+		}
+	}
+	if !explain {
+		return false
+	}
+	for _, d := range []string{
+		"do not change", "don't change", "dont change",
+		"do not edit", "don't edit", "dont edit",
+		"do not modify", "don't modify", "dont modify",
+		"do not write", "don't write",
+		"without changing", "without editing", "without modifying",
+		"no code changes", "just explain", "only explain", "explain only",
+	} {
+		if strings.Contains(lower, d) {
+			return true
+		}
+	}
+	return false
+}
+
 func isFixIntentMessage(msg string) bool {
 	lower := strings.ToLower(msg)
+	if isExplainOnlyMessage(lower) {
+		return false
+	}
 	for _, w := range fixIntentWords {
-		if strings.Contains(lower, w) {
-			return true
+		idx := 0
+		for {
+			i := strings.Index(lower[idx:], w)
+			if i < 0 {
+				break
+			}
+			at := idx + i
+			// Same negation rule as isActionIntentMessage: "explain whether
+			// it is a bug, do not change the code" is a question about a
+			// defect, not a request to repair one, and reading it as repair
+			// intent handed it the write pipeline.
+			if !negatedAt(lower, at) {
+				return true
+			}
+			idx = at + len(w)
 		}
 	}
 	return false
@@ -567,8 +622,52 @@ func logPaths(paths []string) []string {
 // through silently because the fix-intent gate ignores feature work.
 func isActionIntentMessage(msg string) bool {
 	lower := strings.ToLower(msg)
+	if isExplainOnlyMessage(lower) {
+		return false
+	}
 	for _, w := range actionIntentWords {
-		if strings.Contains(lower, w) {
+		idx := 0
+		for {
+			i := strings.Index(lower[idx:], w)
+			if i < 0 {
+				break
+			}
+			at := idx + i
+			if !negatedAt(lower, at) {
+				return true
+			}
+			idx = at + len(w)
+		}
+	}
+	return false
+}
+
+// negatedAt reports whether the action word at `at` is inside a negation —
+// "do not change any code", "without editing", "no need to fix it".
+//
+// A plain substring scan reads "do not change any code" as a request to
+// change code, so a question carrying that clause was classified T2 and got
+// the whole write pipeline. Measured: the identical question scored T0
+// without the clause and T2 with it, and the T2 run edited files the user had
+// explicitly asked it to leave alone. Telling ATLAS not to touch anything
+// made it more likely to.
+//
+// Scans a short window back rather than parsing: the negation always sits
+// within a few words in the phrasings people actually use, and a wider window
+// would start swallowing unrelated clauses ("I fixed the parser, now don't
+// worry about X" must still read as action intent).
+func negatedAt(lower string, at int) bool {
+	const window = 24
+	start := at - window
+	if start < 0 {
+		start = 0
+	}
+	before := lower[start:at]
+	for _, neg := range []string{
+		"do not ", "don't ", "dont ", "never ", "without ",
+		"no need to ", "rather than ", "instead of ", "avoid ",
+	} {
+		if strings.Contains(before, neg) {
 			return true
 		}
 	}

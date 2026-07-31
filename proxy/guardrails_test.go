@@ -1192,3 +1192,57 @@ func TestExitGatesPerGateBudgetIsEnforced(t *testing.T) {
 		t.Errorf("action gate exceeded its budget: got %q, want the exit to pass", gate)
 	}
 }
+
+// The tiers exist so V3 does not run on everything. A question asking for an
+// explanation must not be classified as work — measured live: both
+// conversational probes ran the V3 pipeline AND wrote to files the user had
+// explicitly asked it to leave alone.
+func TestExplainOnlyQuestionsClassifyAsChat(t *testing.T) {
+	for _, msg := range []string{
+		"In orders.py, what does find_duplicates do, and what is its time complexity? Just explain — do not change any code.",
+		"In orders.py, apply_discount(100, 10) returns 90.0 but a colleague says it should return 90. Explain what is going on here and whether it is actually a bug. Do not change the code.",
+		"Explain how the retry logic works, without editing anything.",
+	} {
+		if got := classifyAgentTier(msg); got != Tier0Conversational {
+			t.Errorf("want T0 for a question, got %v: %.60s", got, msg)
+		}
+	}
+}
+
+// The negation must not swallow genuine work. "don't change the API" is a
+// constraint on a real task, not a request to keep hands off the codebase.
+func TestWorkStillClassifiesAsWork(t *testing.T) {
+	for _, msg := range []string{
+		"add a pause toggle to app.py",
+		"fix the login bug",
+		"fix the parser but don't change the public API",
+		"refactor store.py without changing its behaviour",
+	} {
+		if got := classifyAgentTier(msg); got == Tier0Conversational {
+			t.Errorf("want work tier, got T0: %.60s", msg)
+		}
+	}
+}
+
+// A question mark mid-message, with the question qualified afterwards, is how
+// people actually write. A suffix-only check read it as not-a-question.
+func TestQuestionDetectedMidMessage(t *testing.T) {
+	if !isQuestionMessage("what does find_duplicates do? Just explain.") {
+		t.Error("a question with a trailing qualifier must still be a question")
+	}
+	if !isQuestionMessage("In orders.py, what does find_duplicates do") {
+		t.Error("a question starter after a clause boundary must count")
+	}
+	if isQuestionMessage("add a pause toggle to app.py") {
+		t.Error("a plain instruction is not a question")
+	}
+}
+
+func TestNegatedActionWordIsNotActionIntent(t *testing.T) {
+	if isActionIntentMessage("please explain this, do not change any code") {
+		t.Error("a negated action word must not read as action intent")
+	}
+	if !isActionIntentMessage("create a new module for this") {
+		t.Error("a plain action word must still read as action intent")
+	}
+}

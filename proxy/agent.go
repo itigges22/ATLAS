@@ -3515,6 +3515,15 @@ func classifyAgentTier(message string) Tier {
 		return Tier2Medium
 	}
 
+	// An explicit "explain this, do not edit anything" is conversational by
+	// definition, whether or not it is phrased as a question. Without this,
+	// "Explain how the retry logic works, without editing anything." carries
+	// no question mark and no question-word opener, so it fell through to a
+	// work tier and got the write pipeline.
+	if isExplainOnlyMessage(strings.ToLower(trimmed)) {
+		return Tier0Conversational
+	}
+
 	// Greeting or acknowledgement. The floor matches shouldGeneratePlan's
 	// own, so the two agree on what is too short to plan for.
 	if len(trimmed) < 12 {
@@ -3543,12 +3552,23 @@ var questionStarters = []string{
 // openers above for questions written without one.
 func isQuestionMessage(message string) bool {
 	trimmed := strings.TrimSpace(message)
-	if strings.HasSuffix(trimmed, "?") {
+	// A question mark ANYWHERE, not only at the end. People ask and then
+	// qualify — "what does find_duplicates do, and what is its complexity?
+	// Just explain." ends in a period, so a suffix-only check read it as
+	// not-a-question and it was handed the full write pipeline. Safe to
+	// widen: classifyAgentTier checks action and fix intent first, so
+	// "fix the bug in foo.py? or bar.py?" still classifies as work.
+	if strings.Contains(trimmed, "?") {
 		return true
 	}
 	lower := strings.ToLower(trimmed)
 	for _, w := range questionStarters {
 		if strings.HasPrefix(lower, w) {
+			return true
+		}
+		// Or opening a clause: "In orders.py, what does X do" carries no
+		// question mark at all but is plainly a question.
+		if strings.Contains(lower, ", "+w) || strings.Contains(lower, ". "+w) {
 			return true
 		}
 	}
