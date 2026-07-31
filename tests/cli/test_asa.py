@@ -256,7 +256,8 @@ def test_check_rejects_marker_for_another_model(monkeypatch, tmp_path):
 
 
 def test_model_marker_value_strips_loaded_model_path():
-    assert asa._model_marker_value("/models/Example-Model.gguf") == "Example-Model"
+    assert (publishing.model_marker_value("/models/Example-Model.gguf")
+            == "Example-Model")
 
 
 def test_check_needs_build_points_at_published_artifacts(monkeypatch, tmp_path):

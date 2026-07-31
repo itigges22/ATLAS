@@ -63,15 +63,6 @@ from atlas.display import (
 # in atlas.publishing, shared with `atlas asa publish` and
 # `atlas publish`.
 
-def _canonical_model_identity(value: Optional[str]) -> str:
-    """Normalize registry names, GGUF filenames, and model paths."""
-    text = str(value or "").strip().replace("\\", "/")
-    name = text.rsplit("/", 1)[-1]
-    if name.lower().endswith(".gguf"):
-        name = name[:-5]
-    return name.casefold()
-
-
 @dataclass
 class ArtifactInspection:
     """Result of looking at the on-disk Lens artifact."""
@@ -248,8 +239,8 @@ def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
     matched_name = matched.name if matched else None
     requested_model = (matched.name if matched else arg) or ""
     if (requested_model and probe.model_name
-            and _canonical_model_identity(requested_model)
-            != _canonical_model_identity(probe.model_name)):
+            and publishing.canonical_model_identity(requested_model)
+            != publishing.canonical_model_identity(probe.model_name)):
         return CheckVerdict(
             verdict="incompatible",
             reason=(f"Requested model {requested_model!r}, but llama-server "

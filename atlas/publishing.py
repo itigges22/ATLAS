@@ -27,6 +27,26 @@ UPSTREAM_REPO = "itigges22/ATLAS"
 REGISTRY_PATH = "atlas/commands/model_registry.py"
 
 
+def model_marker_value(value: Optional[str]) -> str:
+    """The portable form of a model reference: registry name, GGUF
+    filename, or container/host path in, bare stem out. This is the value
+    written into artifact sidecars (model_identity.json, the ASA vector's
+    model marker), so `/models/Example-Model.gguf` and `Example-Model`
+    record identically."""
+    text = str(value or "").strip().replace("\\", "/")
+    name = text.rsplit("/", 1)[-1]
+    if name.lower().endswith(".gguf"):
+        name = name[:-5]
+    return name
+
+
+def canonical_model_identity(value: Optional[str]) -> str:
+    """model_marker_value() case-folded, for comparing two model
+    references that may differ in path shape, extension, or case."""
+    return model_marker_value(value).casefold()
+
+
+
 def resolve_model_arg(arg: Optional[str]) -> Optional[model_registry.Model]:
     """Best-effort lookup: registry name → Model, or path/None → None.
 

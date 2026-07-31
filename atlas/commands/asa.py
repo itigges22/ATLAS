@@ -129,23 +129,6 @@ def _gguf_block_count(path: str) -> int:
     return 0
 
 
-def _canonical_model_identity(value: Optional[str]) -> str:
-    text = str(value or "").strip().replace("\\", "/")
-    name = text.rsplit("/", 1)[-1]
-    if name.lower().endswith(".gguf"):
-        name = name[:-5]
-    return name.casefold()
-
-
-def _model_marker_value(value: Optional[str]) -> str:
-    """Normalize a loaded-model path into a portable sidecar value."""
-    text = str(value or "").strip().replace("\\", "/")
-    name = text.rsplit("/", 1)[-1]
-    if name.lower().endswith(".gguf"):
-        name = name[:-5]
-    return name
-
-
 # ---------------------------------------------------------------------------
 # GGUF inspection — read the control-vector dim without loading the file
 # ---------------------------------------------------------------------------
@@ -300,8 +283,8 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
                     "`atlas asa build` to create a verified vector and marker."
                     f"{dl_hint}")
         return v
-    if (selected_model and _canonical_model_identity(v.vector_model_marker)
-            != _canonical_model_identity(selected_model)):
+    if (selected_model and publishing.canonical_model_identity(v.vector_model_marker)
+            != publishing.canonical_model_identity(selected_model)):
         v.reason = (f"control vector is marked for {v.vector_model_marker!r}, "
                     f"but llama-server has {selected_model!r} loaded. The "
                     "entrypoint will keep it disabled; run `atlas asa build`."
@@ -478,8 +461,8 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
             return 2
         layer = max(1, round(n_layers * 0.75))
     if (args.model and probe.model_name
-            and _canonical_model_identity(args.model)
-            != _canonical_model_identity(probe.model_name)):
+            and publishing.canonical_model_identity(args.model)
+            != publishing.canonical_model_identity(probe.model_name)):
         _safe_print(f"  {RED if color else ''}requested model "
                     f"{args.model!r}, but llama-server has "
                     f"{probe.model_name!r} loaded. Refusing to train and "
@@ -651,7 +634,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                 pass
             return 1
         _safe_print(f"  saved: {out_path} ({size} bytes)")
-        model_identity = _model_marker_value(args.model or probe.model_name)
+        model_identity = publishing.model_marker_value(args.model or probe.model_name)
         if not model_identity:
             _safe_print(f"  {RED if color else ''}could not identify the "
                         f"loaded model for the ASA safety marker."
@@ -808,8 +791,8 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                     f"{marker_path}. Rebuild with `atlas asa build` before "
                     f"publishing.{RESET if color else ''}")
         return 1
-    if (_canonical_model_identity(marked_model)
-            != _canonical_model_identity(model_label)):
+    if (publishing.canonical_model_identity(marked_model)
+            != publishing.canonical_model_identity(model_label)):
         _safe_print(f"  {RED if color else ''}Vector marker says "
                     f"{marked_model!r}, but publish target is "
                     f"{model_label!r}. Refusing to mislabel the artifact."
