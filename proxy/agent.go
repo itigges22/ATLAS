@@ -85,7 +85,6 @@ func recoverStructuredReasoning(s string) (string, bool) {
 // activeSessions tracks in-flight /v1/agent turns by session_id so
 // /cancel can abort them. Map value is a *sessionCancel wrapping the
 // context.CancelFunc from the per-request context.WithCancel wrapper.
-// PC-062 step 5.
 //
 // The pointer doubles as a per-turn identity token: cleanup uses
 // CompareAndDelete so a finishing turn only removes its own entry. If a
@@ -132,11 +131,11 @@ type runState struct {
 	// as work from one it answered conversationally, without consulting
 	// a vocabulary list. See wantsStateChange.
 	inspectedWorkspace bool
-	// HARNESS-12: files the prompt explicitly asks the model to produce
+	// Files the prompt explicitly asks the model to produce
 	// ("save your solution in X"). Checked against disk before `done` is
 	// allowed — a model can satisfy the generic action gate with a
 	// PARTIAL artifact or by exploring without ever committing the named
-	// output (TB2 2026-07-19). Computed once from the prompt.
+	// output (observed 2026-07-19). Computed once from the prompt.
 	expectedOutputs []string
 	// The expected-output gate fires at most ONCE per session: a named
 	// deliverable might be PRODUCED AT RUNTIME by the model's code (not
@@ -147,8 +146,8 @@ type runState struct {
 	// completed successfully in any turn of this run. One success per
 	// loop is enough — the model can iterate without re-verifying every
 	// turn. Also softens the consecutive-errors exit: post-write
-	// run_command failures are usually verification noise, not "stuck
-	// loop" (PC-025 Sub-finding B).
+	// run_command failures are usually verification noise, not a
+	// genuinely stuck loop.
 	verifiedThisLoop bool
 	// Set when a verification command RAN AND FAILED and none has
 	// succeeded since. Observed session state, not a guess about the
@@ -319,7 +318,7 @@ func fetchPatternContext(ctx *AgentContext, userMessage string) (string, []strin
 
 func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// Emit a stage_start envelope so the TUI's pipeline pane shows
-	// the agent is working. Mirrors the typed-event broker (PC-061).
+	// the agent is working. Mirrors the typed-event broker.
 	loopStart := time.Now()
 	Emit(NewEnvelope(EvtStageStart, "agent", map[string]interface{}{
 		"detail": fmt.Sprintf("tier=%s msg=%q", ctx.Tier,
@@ -444,9 +443,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: userMessage})
 
-	// PC-045: Per-session cache scope. llama.cpp's KV slot persists between
-	// requests by default — that's PC-035's keep-warm behavior. But the slot
-	// also persists *across user sessions*, so context from a previous
+	// Per-session cache scope. llama.cpp's KV slot persists between
+	// requests by default — that's what keepLlamaWarm relies on. But the
+	// slot also persists *across user sessions*, so context from a previous
 	// session's conversation can bias the next session (the
 	// `show_greeting.py` hallucination from the 2026-04-30 snake test was
 	// likely an example). Erase slot 0 at the start of each agent loop call.
@@ -485,17 +484,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// deliverable was never written, steer toward it once instead of
 	// stopping (many hard tasks loop on run_command exploration and
 	// hard-stop without ever reaching the done/text exit where the
-	// expected-output gate lives — TB2 sqlite/merge-diff).
+	// expected-output gate lives — observed on sqlite and merge-diff).
 	outputRescueUsed := false
 
-	// PC-200 — flag whether we've already injected the
-	// approaching-budget hint, so we don't fire it every turn after
-	// crossing the threshold.
+	// Flag whether we've already injected the approaching-budget hint,
+	// so we don't fire it every turn after crossing the threshold.
 	budgetHintFired := false
 
 	for turn := 0; ctx.MaxTurns <= 0 || turn < ctx.MaxTurns; turn++ {
 		st.turn = turn
-		// PC-200 budget hint — only relevant when there IS a turn cap.
+		// Budget hint — only relevant when there IS a turn cap.
 		// May 10 2026: T1/T2/T3 default to uncapped (ctx.MaxTurns == 0),
 		// so the hint is mostly dormant unless an operator explicitly
 		// sets ATLAS_MAX_TURNS. T0 still hits a hint at turn 4 if a
@@ -513,7 +511,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// Bail out fast if the upstream request was cancelled (the client closed the
 		// connection, user hit Ctrl-C, terminal exited). Without this check the
 		// loop would keep grinding LLM calls and tool work for a client that's
-		// already gone, burning GPU. See ISSUES.md PC-036.
+		// already gone, burning GPU.
 		if ctx.Ctx != nil {
 			select {
 			case <-ctx.Ctx.Done():
@@ -533,7 +531,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// Hardcoding ctx.Messages[1] as the user msg used to work, but
 		// PriorHistory makes that index a prior-turn message instead — so
 		// scan backwards for the actual current-turn user role.
-		// Trim by TOKEN BUDGET, not a blind message count (PC-216). The
+		// Trim by TOKEN BUDGET, not a blind message count. The
 		// old `> 12 messages → keep 8` rule dropped a just-read file after
 		// a couple of turns even when the prompt was a fraction of the
 		// context window — the model would then re-read in a loop, saying
@@ -550,7 +548,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// Per-turn streaming visibility: announce the start of the turn,
 		// then the LLM call boundaries. Without these the TUI sees a 10-30s
 		// gap between tool_result and the next tool_call while the model
-		// is generating — looks like a hang. PC-062 follow-up.
+		// is generating — looks like a hang.
 		ctx.Stream("turn_start", map[string]interface{}{
 			"turn":     turn,
 			"messages": len(ctx.Messages),
@@ -662,13 +660,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 		// Log the args truncated — enables diagnosing failures like
 		// "all 3 tool calls returned Success=false" without having to add
-		// breakpoints. See ISSUES.md PC-039 follow-up.
+		// breakpoints.
 		logEvent("info",
 			fmt.Sprintf("[agent] turn=%d type=%s name=%s args=%s",
 				turn, parsed.Type, parsed.Name, truncateStr(string(parsed.Args), 200)),
 			requestIDFromContext(ctx.Ctx), nil)
 
-		// PC-041: when a tool_call still has no args after liftMissingArgs,
+		// When a tool_call still has no args after liftMissingArgs,
 		// log the raw model output so we can see exactly what shape was
 		// emitted — helps catch new alt-shapes the lift logic missed.
 		if parsed.Type == "tool_call" && (len(parsed.Args) == 0 || string(parsed.Args) == "null") {
@@ -698,7 +696,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// text is otherwise an UNGATED exit, and on action-intent
 			// prompts models abandon work through it ("I will now proceed
 			// to sanitize the credentials" — then session over, zero
-			// edits; TB2 round 2). So the same gates as done run here,
+			// edits). So the same gates as done run here,
 			// with the narration as the completion claim. Chat replies
 			// still exit cleanly: wantsStateChange requires action-intent
 			// wording or an opened project, and a chat reply has neither.
@@ -783,7 +781,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// outright. write_file is for *creating* files; edits to an
 			// existing file must use edit_file with old_str/new_str.
 			//
-			// PC-159 Phase 0 originally only blocked near-rewrites
+			// The gate originally only blocked near-rewrites
 			// (>= 70% line overlap) or >100-line writes. That left a
 			// hole: a *complete* rewrite of a 90-line template (low
 			// overlap, under the size cap) would slip through and
@@ -799,8 +797,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					existingPath := resolveAgentPath(ctx, wfInput.Path)
 					if existing, err := os.ReadFile(existingPath); err == nil {
 						existingLines := strings.Count(string(existing), "\n") + 1
-						// PC-201 — exempt corrupted files. If the existing
-						// file looks like it has prose preamble or stray
+						// Exempt corrupted files. If the existing file
+						// looks like it has prose preamble or stray
 						// markdown fences (sanitizeFileContent would change
 						// it), the only way to clean it up is full
 						// replacement. edit_file can't express "remove
@@ -846,7 +844,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							// message on a session-owned overwrite sent a
 							// loop diagnosis down the wrong path (2026-07-18).
 							if corrupted {
-								log.Printf("[agent] PC-201: allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
+								log.Printf("[agent] allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
 							} else {
 								log.Printf("[agent] allowing write_file on session-owned %s (%d lines, self-iteration carveout)", wfInput.Path, existingLines)
 							}
@@ -944,7 +942,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// The old code hard-stopped on the FIRST detection whenever
 				// st.madeProductiveChange was set ("work landed, model spinning
 				// on verification"). That mistook legitimate iteration for a
-				// loop: TB2 2026-07-19 showed models one nudge from finishing
+				// loop: 2026-07-19 showed models one nudge from finishing
 				// — regex-chess repeating a verify command that itself had a
 				// syntax error, polyglot mid-fix — killed with their solution
 				// on disk but unverified. A nudge first is the whole point:
@@ -997,15 +995,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				ctx.LastReasoningSnippet = ""
 			}
 
-			// PC-207 agent-loop integration: score write_file/edit_file
-			// content with the geometric lens BEFORE executing. The score
-			// reflects what the model produced (independent of whether the
-			// tool succeeds). On a quality-crash pattern (N consecutive
+			// Score write_file/edit_file content with the geometric lens
+			// BEFORE executing. The score reflects what the model produced
+			// (independent of whether the tool succeeds). On a quality-crash pattern (N consecutive
 			// low scores) we queue a corrective system message that gets
 			// appended AFTER the tool result so the next LLM call sees:
 			// assistant(tool_call) → tool(result) → system(lens warning).
 			// This is the direct fix for the May 6 templates/resources.html
-			// stub-loop case where PC-195 kept rejecting but the model
+			// stub-loop case where the stub gate kept rejecting but the model
 			// kept retrying the same stub.
 			pendingLensCorrective := ""
 			if scorable, ok := extractScorableContent(parsed.Name, parsed.Args); ok {
@@ -1067,7 +1064,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 			// On failure, log the error so it shows up in `docker compose
 			// logs atlas-proxy` without having to attach a debugger.
-			// PC-039 follow-up.
 			if !result.Success {
 				log.Printf("[agent] turn=%d tool=%q FAIL: %q", turn,
 					truncateStr(parsed.Name, 64), truncateStr(result.Error, 240))
@@ -1154,8 +1150,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						ctx.PlanOffStreak, parsed.Name))
 			}
 
-			// Break error loops: if 3 tool calls fail in a row, stop. PC-025
-			// Sub-finding B: when the agent has already written/edited a file
+			// Break error loops: if 3 tool calls fail in a row, stop.
+			// When the agent has already written/edited a file
 			// and is now failing on `run_command` (verification noise — no
 			// TTY for curses, missing toolchain, etc.), a different exit
 			// message is appropriate so the user isn't told "the file may
@@ -1274,7 +1270,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				ToolName:   parsed.Name,
 			})
 
-			// PC-207 agent-loop intervention: if the lens flagged a
+			// Lens intervention: if the lens flagged a
 			// regression earlier in this iteration, append the corrective
 			// NOW so the next LLM call sees it after the tool result.
 			// Role MUST be "user" — some Jinja chat templates enforce
@@ -1383,7 +1379,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
-			// PC-044: Trust V3-verified edits — strongly nudge toward done.
+			// Trust V3-verified edits — strongly nudge toward done.
 			// When V3 ran the edit through its sandbox/probe pipeline and
 			// the result came back successful (V3Used && PhaseSolved
 			// non-empty), the edit is build-verified. Compact models can otherwise
@@ -1399,7 +1395,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						result.PhaseSolved, result.CandidatesTested, result.WinningScore,
 					),
 				})
-				log.Printf("[agent] PC-044: V3-verified %s on %s — nudging toward done", parsed.Name, truncateStr(string(parsed.Args), 80))
+				log.Printf("[agent] V3-verified %s on %s — nudging toward done", parsed.Name, truncateStr(string(parsed.Args), 80))
 			}
 
 			// Exploration budget: after 4 consecutive read-only calls,
@@ -1459,7 +1455,7 @@ func isContextOverflow(err error) bool {
 // callLLMConstrained calls the LLM with json_schema or grammar constraint.
 // Returns the raw response text and token count.
 //
-// PC-043: When the model emits zero tokens (raw_len=0) — usually after a
+// When the model emits zero tokens (raw_len=0) — usually after a
 // tool result message under a constrained JSON grammar — we retry
 // inline once with a bumped temperature and a transient "continue"
 // nudge appended to the messages. This avoids burning a full agent-loop
@@ -1503,7 +1499,7 @@ func callLLMConstrained(ctx *AgentContext) (string, int, error) {
 	// and a higher temperature. The nudge gives the model an explicit
 	// next-action prompt; the temperature bump escapes the EOS-local
 	// minimum that the json_object grammar can wedge the model into.
-	log.Printf("[agent] empty LLM response (PC-043), retrying with temp=0.7 + continuation nudge")
+	log.Printf("[agent] empty LLM response, retrying with temp=0.7 + continuation nudge")
 	nudged := append(append([]AgentMessage(nil), messages...), AgentMessage{
 		Role:    "user",
 		Content: `Continue. Respond with one JSON object: {"type":"tool_call","name":"<tool>","args":{...}} for the next action, or {"type":"done","summary":"..."} if the task is complete. Do not emit empty content.`,
@@ -1641,7 +1637,7 @@ func stepExclusions(ctx *AgentContext) ([]string, string) {
 }
 
 // eraseLlamaSlot clears llama.cpp's KV slots to give the next chat
-// completion a fresh prefix. See PC-045. Errors are logged and
+// completion a fresh prefix. Errors are logged and
 // swallowed — slot erase is a best-effort isolation step, not a
 // correctness requirement.
 //
@@ -1649,7 +1645,7 @@ func stepExclusions(ctx *AgentContext) ([]string, string) {
 // caching on, llama-server picks a slot per request by prefix match /
 // LRU, so a new session can land on slot 1..N-1. If only slot 0 were
 // cleared, those other slots would still hold a prior session's KV and
-// reuse it — the exact cross-session bleed PC-045 set out to prevent.
+// reuse it — the exact cross-session bleed this prevents.
 func eraseLlamaSlot(ctx *AgentContext) {
 	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
 
@@ -1665,22 +1661,22 @@ func eraseLlamaSlot(ctx *AgentContext) {
 		endpoint := fmt.Sprintf("%s/slots/%d?action=erase", llamaURL, id)
 		req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, nil)
 		if err != nil {
-			log.Printf("[PC-045] erase slot %d: build request failed: %v", id, err)
+			log.Printf("[agent] erase slot %d: build request failed: %v", id, err)
 			continue
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("[PC-045] erase slot %d: request failed: %v (continuing — slot is stale, will re-encode)", id, err)
+			log.Printf("[agent] erase slot %d: request failed: %v (continuing — slot is stale, will re-encode)", id, err)
 			continue
 		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			log.Printf("[PC-045] erase slot %d: status %d (continuing — first turn re-encodes prefix)", id, resp.StatusCode)
+			log.Printf("[agent] erase slot %d: status %d (continuing — first turn re-encodes prefix)", id, resp.StatusCode)
 			continue
 		}
 		erased++
 	}
-	log.Printf("[PC-045] erased %d/%d llama slots — fresh KV cache for this session", erased, slots)
+	log.Printf("[agent] erased %d/%d llama slots — fresh KV cache for this session", erased, slots)
 }
 
 // pollPromptProgress emits llm_prompt_progress events at 100ms cadence
@@ -1984,7 +1980,7 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 	endpoint := llamaURL + "/v1/chat/completions"
 
 	// Carry the agent's request context into the HTTP request so client
-	// disconnects propagate down to llama-server (PC-036).
+	// disconnects propagate down to llama-server.
 	reqCtx := ctx.Ctx
 	if reqCtx == nil {
 		reqCtx = context.Background()
@@ -2054,7 +2050,7 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		// reproducibly on retries with bumped temperature) — when it
 		// does, ALL output streams into delta.reasoning_content. The
 		// previous version threw it away and returned an empty string,
-		// which fired PC-043's empty-response retry uselessly. Now we
+		// which fired the empty-response retry uselessly. Now we
 		// surface the reasoning as content (with <think> tags stripped)
 		// so the agent loop has SOMETHING to parse.
 		reasoningBuf   strings.Builder
@@ -2231,14 +2227,14 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		// response.
 		if reasoningBuf.Len() > 0 {
 			if recovered, ok := recoverStructuredReasoning(reasoningBuf.String()); ok {
-				log.Printf("[agent] PC-043 follow-up: empty content but %d chars of reasoning_content contained a structured agent response — recovering",
+				log.Printf("[agent] empty content but %d chars of reasoning_content contained a structured agent response — recovering",
 					reasoningBuf.Len())
 				return recovered, totalTokens, nil
 			}
 			// Pure prose narration in reasoning_content with no tool
 			// call. Don't return it — let the caller retry. Logged so
 			// the failure mode stays visible.
-			log.Printf("[agent] PC-043 follow-up: %d chars of reasoning_content had no valid agent envelope — discarding so caller can re-prompt",
+			log.Printf("[agent] %d chars of reasoning_content had no valid agent envelope — discarding so caller can re-prompt",
 				reasoningBuf.Len())
 		}
 		// Truly nothing (or only narration). Caller's empty-response
@@ -2359,9 +2355,9 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// the project and surface the runners + install commands so the
 	// model picks the right tool per file edit. Polyglot projects
 	// (React + Django + deploy scripts) get one entry per ecosystem.
-	// Replaces the Python-only venv hint from PC-190 with the
-	// universal pattern from PC-191. Probe-first hints (PC-193) are
-	// added per-toolchain when present.
+	// Covers every toolchain, not just Python's venv. Probe-first
+	// hints — whether the deps are already importable — are added
+	// per-toolchain when the evidence is on disk.
 	if tcs := detectProjectToolchains(ctx.WorkingDir); len(tcs) > 0 {
 		sb.WriteString("## Toolchains\n")
 		for _, tc := range tcs {
@@ -2552,7 +2548,7 @@ func pinnedIndices(msgs []AgentMessage) (pinIdx, filePinIdx int) {
 // them even when they fall outside the tail window, so a budget that
 // ignored them under-counted the real prompt by the size of the pinned
 // read_file — observed live as a llama-server 400 exceed_context_size
-// (32844 > 32768 per-slot) hard-killing a TB2 bench session.
+// (32844 > 32768 per-slot) hard-killing a bench session.
 func budgetedKeepLast(msgs []AgentMessage) int {
 	if len(msgs) == 0 {
 		return 0
@@ -2718,7 +2714,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	ctx.LensURL = lensURL
 	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
 
-	// PC-192: opt-in host execution for run_command. Per-project config
+	// Opt-in host execution for run_command. Per-project config
 	// (.atlas/config.toml: [execution] target = "host") wins over the
 	// global env var so users can flip behaviour without touching the
 	// proxy environment. Either source can downgrade to "sandbox"
@@ -2753,9 +2749,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Carry the upstream cancellation through so disconnects abort the loop
-	// and llama-server's in-flight generation. See ISSUES.md PC-036.
+	// and llama-server's in-flight generation.
 	//
-	// PC-062: also wrap in a cancellable context so POST /cancel can
+	// Also wrap in a cancellable context so POST /cancel can
 	// abort even when the TCP disconnect is buffered upstream.
 	reqCtx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -2808,7 +2804,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// happen until the agent loop emits its first event, which can
 	// take 10-60s for the first LLM round-trip. Clients with a
 	// reasonable ResponseHeaderTimeout (e.g. 30s) would time out
-	// before getting any data. PC-062 follow-up.
+	// before getting any data.
 	fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
 
@@ -2858,7 +2854,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// /cancel — abort an in-flight /v1/agent turn by session_id (PC-062 step 5)
+// /cancel — abort an in-flight /v1/agent turn by session_id
 // ---------------------------------------------------------------------------
 
 // handleCancel POSTs cancel an in-flight agent turn. Body:
@@ -3093,11 +3089,11 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 // liftMissingArgs handles models that emit tool calls in shapes other than
 // the prescribed {"type":"tool_call","name":"X","args":{...}} envelope.
 //
-// Common alternative shapes (PC-041, PC-050):
+// Common alternative shapes:
 //   - OpenAI-style: {"type":"tool_call","name":"X","arguments":{...}}
 //   - Anthropic-style: {"type":"tool_call","name":"X","parameters":{...}}
 //   - Inlined: {"type":"tool_call","name":"X","path":"...","offset":0,...}
-//   - Type-is-tool-name (PC-050): {"type":"read_file","path":"..."} — model
+//   - Type-is-tool-name: {"type":"read_file","path":"..."} — model
 //     put the tool name in the type field instead of using "tool_call".
 //
 // When `args` is missing on a tool_call, re-decode the raw JSON into a
@@ -3106,7 +3102,7 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 // This is purely a recovery path; the system prompt still teaches the
 // canonical shape.
 func liftMissingArgs(resp *ModelResponse, raw string) {
-	// PC-050: if Type is a known tool name, treat it as a tool_call with
+	// If Type is a known tool name, treat it as a tool_call with
 	// that tool. The model emitted {"type":"read_file","path":"..."}
 	// instead of {"type":"tool_call","name":"read_file","args":{...}}.
 	// Without this fix the agent loop's switch hits the `default` arm
@@ -3501,7 +3497,7 @@ func isQuestionMessage(message string) bool {
 // Python, package.json means Node, Cargo.toml means Rust, etc. A
 // polyglot project (React frontend + Django backend + deploy scripts)
 // returns multiple Toolchains so the model can pick the right one
-// per file edit. See PC-191.
+// per file edit.
 type Toolchain struct {
 	Name           string   // canonical key: "python", "node", "rust", "go", "ruby", "java-maven", "java-gradle", "php", "dotnet", "dart"
 	Manifests      []string // manifest files found relative to workingDir (e.g. ["pyproject.toml", "requirements.txt"])
@@ -3664,7 +3660,7 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 // that's safe to run from buildSystemPrompt — meaning: it MUST be
 // purely filesystem-based (no shelling out, no network). The model
 // uses this to decide whether to install deps or skip straight to
-// verification (PC-193).
+// verification.
 //
 // We can't actually invoke `python -c "import flask"` here without
 // running a subprocess in the sandbox, which is too expensive for
@@ -3840,7 +3836,7 @@ func firstMatchingGlob(workingDir string, patterns ...string) string {
 // Caller passes workingDir from ctx.WorkingDir; the returned path is
 // what the model should literally invoke via run_command — e.g.
 // "/workspace/venv/bin/python app.py" — and what gets surfaced in the
-// system prompt's venv hint. See PC-190.
+// system prompt's venv hint.
 func detectProjectVenvPython(workingDir string) string {
 	if workingDir == "" {
 		return ""

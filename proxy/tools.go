@@ -105,7 +105,7 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 		}
 	}
 
-	// PC-040: distinguish "no args field at all" from "malformed args".
+	// Distinguish "no args field at all" from "malformed args".
 	// The model occasionally emits {"type":"tool_call","name":"read_file"}
 	// with no "args" key, which lands here as nil/empty bytes. Calling
 	// json.Unmarshal on that returns "unexpected end of JSON input" — the
@@ -152,7 +152,6 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 
 // missingArgsHint returns a tool-specific message instructing the model
 // what argument shape to send when it omits the args field entirely.
-// See PC-040.
 func missingArgsHint(name string) string {
 	switch name {
 	case "read_file":
@@ -198,7 +197,7 @@ func readFileTool() *ToolDef {
 			// Empty path → resolves to the working dir, which is a
 			// directory, which fails with a confusing error the model
 			// can't recover from. Reject early with a hint at how to
-			// discover the file. See ISSUES.md PC-039.
+			// discover the file.
 			if strings.TrimSpace(input.Path) == "" {
 				return &ToolResult{
 					Success: false,
@@ -215,7 +214,7 @@ func readFileTool() *ToolDef {
 
 			// Binary-file guard: reading a compiled binary / image /
 			// archive as text returns garbage the model can't use, after
-			// which it gives up or loops (observed TB2 2026-07-19,
+			// which it gives up or loops (observed 2026-07-19,
 			// extract-elf: read the ELF as text, never reached for the
 			// analysis tools that were installed). Point it at the right
 			// tools instead of handing back the raw bytes.
@@ -256,9 +255,9 @@ func readFileTool() *ToolDef {
 			}
 
 			content := sb.String()
-			// HARNESS-13: cap the returned BYTES so one huge read can't blow
-			// the model's context window. A model that gunzips a data file
-			// and read_files it (observed TB2 2026-07-19, gcode-to-text: a
+			// Cap the returned BYTES so one huge read can't blow the
+			// model's context window. A model that gunzips a data file
+			// and read_files it (observed 2026-07-19, gcode-to-text: a
 			// decompressed G-code file read with limit:100000 -> 2.26M tokens
 			// -> hard 400 exceed_context_size, which the force-trim retry
 			// can't fix because the single message alone overflows). The cap
@@ -528,7 +527,7 @@ func searchFilesTool() *ToolDef {
 			}
 
 			// Reject empty pattern: same reasoning as find_file. An empty
-			// regex matches every line in every file. See ISSUES.md PC-037.
+			// regex matches every line in every file.
 			if strings.TrimSpace(input.Pattern) == "" {
 				return &ToolResult{
 					Success: false,
@@ -697,7 +696,7 @@ func writeFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			// Reject empty path — same reasoning as read_file (PC-039).
+			// Reject empty path — same reasoning as read_file.
 			if strings.TrimSpace(input.Path) == "" {
 				return &ToolResult{
 					Success: false,
@@ -718,7 +717,7 @@ func writeFileTool() *ToolDef {
 				input.Content = cleaned
 			}
 
-			// PC-194 — pattern-matching reflex. When the model creates a
+			// Pattern-matching reflex. When the model creates a
 			// NEW file in a non-empty directory of similar files (HTML
 			// alongside HTML, route handler alongside route handlers),
 			// nudge it to read a sibling first instead of generating
@@ -730,7 +729,7 @@ func writeFileTool() *ToolDef {
 				return &ToolResult{Success: false, Error: hint}, nil
 			}
 
-			// PC-195 — stub detection. Reject "<h1>X Page</h1>" / "TODO"
+			// Stub detection. Reject "<h1>X Page</h1>" / "TODO"
 			// placeholder writes that pass syntactic gates but ship the
 			// minimum content humanly possible. The model's lazy-completion
 			// failure mode is to write 8-line stubs and call it done; this
@@ -766,12 +765,12 @@ func writeFileTool() *ToolDef {
 			// written this file and just saw it fail a run, the next write is
 			// a targeted fix, and V3's full pipeline (minutes per call, and on
 			// a mid-debug file frequently "completes without result" and falls
-			// back anyway) throttles iteration to a handful of cycles. TB2
-			// 2026-07-19: polyglot got ~5 writes in 25 min, ~4 min of V3 stall
-			// each, when it needed 10-15 fast cycles. Fast-path (direct, still
-			// syntax-gated below) so the model can iterate at run speed. V3
-			// still owns the FIRST write of each file (the baseline generation
-			// where it adds value).
+			// back anyway) throttles iteration to a handful of cycles.
+			// Observed 2026-07-19: a polyglot task got ~5 writes in 25 min,
+			// ~4 min of V3 stall each, when it needed 10-15 fast cycles.
+			// Fast-path (direct, still syntax-gated below) so the model can
+			// iterate at run speed. V3 still owns the FIRST write of each
+			// file (the baseline generation where it adds value).
 			iterating := isActiveDebugIteration(ctx, input.Path)
 			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 && !iterating {
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
@@ -910,12 +909,12 @@ func mentionsFilename(text, base string) bool {
 // Derived from the per-slot context so one read can't overflow it — and
 // sized for the WORST-CASE tokenization of ~1 token/char (dense content:
 // G-code, minified JS, base64), not the chars/4 average. A fixed 120 KB
-// cap was safe for prose but not dense content: TB2 gcode-to-text read a
+// cap was safe for prose but not dense content: a gcode-to-text task read a
 // capped 120 KB G-code page that still tokenized to 120k tokens and 400'd
 // the 32k slot. Half the per-slot context in bytes guarantees even
 // 1-token/char content uses at most half the window, leaving room for the
-// system prompt, tools, and reply; the force-trim retry (HARNESS-6) then
-// handles any residual pressure since no single message is huge. Clamped
+// system prompt, tools, and reply; the force-trim retry then handles
+// any residual pressure since no single message is huge. Clamped
 // to [2 KB, 200 KB]. Tunable via ATLAS_MAX_READ_BYTES.
 func readFileByteCap() int {
 	if v := envOr("ATLAS_MAX_READ_BYTES", ""); v != "" {
@@ -981,7 +980,7 @@ func isBinaryContent(data []byte) bool {
 // the TUI is read-only at the workspace level — so this is where any
 // write_file tool call ultimately lands. Without this the file would
 // vanish into the void ("agent says it wrote the file but it isn't
-// there" bug, fixed alongside PC-062).
+// there" bug).
 func writeFileDirect(path, content string) (*ToolResult, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, fmt.Errorf("cannot create parent dir for %s: %w", path, err)
@@ -1310,7 +1309,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 	}
 
-	// Embedded-script gate (F1): V3 verifies a candidate by RUNNING it — the
+	// Embedded-script gate: V3 verifies a candidate by RUNNING it — the
 	// server starts and the page returns 200 — which is exactly the evidence a
 	// broken <script> block inside the rendered HTML survives. Nothing else on
 	// this path parses that JavaScript. Same healthy->broken rule; and when the
@@ -1343,7 +1342,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// V3-sandbox-verified (only syntax- and structural-checked). Report it
 	// as a plain direct write with no V3 metadata — the same honest
 	// reporting as the V3-unavailable fallback — so the vetoed winner's
-	// score/phase/evidence don't attach to unverified content and PC-044's
+	// score/phase/evidence don't attach to unverified content and the
 	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
 	if fellBack {
 		return writeFileDirect(path, baselineContent)
@@ -1402,7 +1401,7 @@ func editFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			// Reject empty path — same reasoning as read_file (PC-039).
+			// Reject empty path — same reasoning as read_file.
 			if strings.TrimSpace(input.Path) == "" {
 				return &ToolResult{
 					Success: false,
@@ -1984,7 +1983,7 @@ func structuralEditTool() *ToolDef {
 				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
 			}
 
-			// Embedded-script gate (F1): the post-splice check in v3-service
+			// Embedded-script gate: the post-splice check in v3-service
 			// proves the .py/.html parses, not that the JavaScript inside a
 			// <script> block does — and `<script>` is a first-class selector
 			// here, so this tool is the likeliest way to land broken JS.
@@ -2031,7 +2030,7 @@ func structuralEditTool() *ToolDef {
 
 // V3EditMetadata captures what V3 did to an edit_file request, so the
 // edit_file result can carry the same v3_used / candidates_tested fields
-// write_file does. See PC-042.
+// write_file does.
 type V3EditMetadata struct {
 	Used                 bool
 	CandidatesTested     int
@@ -2043,7 +2042,7 @@ type V3EditMetadata struct {
 // improveContentWithV3 sends content through the V3 pipeline and returns
 // V3's chosen code (baseline candidate or a better-scoring alternative).
 // On error, returns "" + zero metadata; the caller should fall back to
-// writing the original content. See PC-042.
+// writing the original content.
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
 	req := V3GenerateRequest{
 		FilePath:     path,
@@ -2361,7 +2360,7 @@ func deleteFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			// Reject empty path — same reasoning as read_file (PC-039).
+			// Reject empty path — same reasoning as read_file.
 			if strings.TrimSpace(input.Path) == "" {
 				return &ToolResult{
 					Success: false,
@@ -2517,7 +2516,7 @@ func moveFileTool() *ToolDef {
 
 // ---------------------------------------------------------------------------
 // find_file — locate files by NAME (vs search_files which greps contents).
-// Added to resolve PC-028: the model would search_files for a filename,
+// Added because the model would search_files for a filename,
 // get zero matches (because contents don't contain the literal filename),
 // and conclude the file didn't exist.
 // ---------------------------------------------------------------------------
@@ -2537,7 +2536,7 @@ func findFileTool() *ToolDef {
 
 			// Reject empty pattern: it matches every filename, returns the
 			// 200-match cap full of unrelated files, and confuses the model
-			// into thinking it found nothing useful. See ISSUES.md PC-037.
+			// into thinking it found nothing useful.
 			if strings.TrimSpace(input.Pattern) == "" {
 				return &ToolResult{
 					Success: false,
@@ -2634,7 +2633,7 @@ func runCommandTool() *ToolDef {
 				cwd = resolveAgentPath(ctx, input.Cwd)
 			}
 
-			// PC-188: route shell execution through the sandbox container.
+			// Route shell execution through the sandbox container.
 			// The proxy is a slim Go binary with no python/pip/node, so
 			// running locally meant every "verify" command failed with
 			// "command not found". The sandbox has the language matrix
@@ -2643,7 +2642,7 @@ func runCommandTool() *ToolDef {
 			// read_file / list_directory still work. validateShellCommand
 			// upstream is the gate; this is the executor.
 			//
-			// PC-192: when ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host
+			// When ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host
 			// or per-project config), we BYPASS the sandbox and execute
 			// on the host directly. This is the right call for working
 			// codebases that depend on host-side state — the user's
@@ -3211,7 +3210,7 @@ func fileContentInContext(ctx *AgentContext, content string) bool {
 }
 
 func resolveAgentPath(ctx *AgentContext, path string) string {
-	// PC-198 — defensive prefix strip. The local model frequently
+	// Defensive prefix strip. The local model frequently
 	// emits `workspace/app.py` (no leading slash) when it means the
 	// project root. Without this, resolvePath joins it onto cwd and
 	// produces `/workspace/workspace/app.py`, which 404s. Strip the
@@ -3285,13 +3284,13 @@ func v3StageToEvent(stage string) string {
 		// "scoring..." spinner, "winner: plan #N" summary, etc.
 		return "v3_plan"
 	case "lens_per_step":
-		// PC-207 wiring: per-token lens scoring of each V3 candidate. TUI
+		// Per-token lens scoring of each V3 candidate. TUI
 		// surfaces first_off_rails_idx + gx_score_min so the user can see
 		// WHERE a candidate's quality cratered. Without this case the
 		// event flattens to v3_progress and the structured payload is lost.
 		return "v3_lens_per_step"
 	case "lens_veto":
-		// PC-207 alignment: V3 hard-rejected a sandbox-passing candidate
+		// V3 hard-rejected a sandbox-passing candidate
 		// because the lens flagged it as a stub (gx_min < severe threshold).
 		// Surfaced as its own event so the user can see "sandbox said pass
 		// but lens vetoed" rather than burying it in v3_progress.
@@ -3324,7 +3323,7 @@ func truncateStr(s string, maxLen int) string {
 }
 
 // ---------------------------------------------------------------------------
-// Background commands (PC-196)
+// Background commands
 // ---------------------------------------------------------------------------
 //
 // Three tools wrap the sandbox /jobs/* endpoints. The pattern the model

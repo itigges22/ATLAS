@@ -58,7 +58,7 @@ func TestIsBinaryContent(t *testing.T) {
 	}
 }
 
-// HARNESS-13: an unbounded read of a huge file is capped so it can't blow
+// An unbounded read of a huge file is capped so it can't blow
 // the context window; an explicit limit is honored as-is.
 func TestReadFileSizeCap(t *testing.T) {
 	// Build content well over the cap.

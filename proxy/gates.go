@@ -52,14 +52,14 @@ import (
 	"time"
 )
 
-// Completion-claim verification (PC-197).
+// Completion-claim verification.
 //
 // Background: the agent's done.summary often makes universal claims
 // ("all routes work", "fixed all bugs", "verified everything") that
 // we can structurally check against the workspace. The May 2026 flask
 // run had the model claim "All routes are functioning properly" while
-// only 3 of 7 needed templates existed. The verification gate (PC-179)
-// only checks "did you run a verification command at all?" — it does
+// only 3 of 7 needed templates existed. The verification gate only
+// checks "did you run a verification command at all?" — it does
 // NOT check whether the claim in the summary matches reality.
 //
 // Two-stage filter:
@@ -79,7 +79,7 @@ import (
 // "fix multiple things." Models bypass claimsUniversal by writing a
 // narrow done summary ("fixed the product route") even when the user
 // clearly asked for the whole app to work. Catching it on the prompt
-// side handles that. PC-199.
+// side handles that.
 var multiIssueWords = []string{
 	"lots of", "ton of", "tons of", "many", "multiple", "several",
 	"all bugs", "all the bugs", "all issues", "all the issues",
@@ -422,7 +422,7 @@ var syntaxGateLanguages = map[string]string{
 // language, then checkEmbeddedScript parses the JavaScript/CSS that lives
 // INSIDE it (a <script> block in an .html file, or in a Python string handed
 // to render_template_string). The sandbox's checker sees the Python or the
-// markup only, so a stray `)` in embedded JavaScript passed it (F1).
+// markup only, so a stray `)` in embedded JavaScript passes it.
 func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool) {
 	if ctx == nil {
 		return "", true
@@ -485,7 +485,7 @@ func checkSandboxSyntax(ctx *AgentContext, path, content string) (string, bool) 
 }
 
 // ---------------------------------------------------------------------------
-// Embedded-script gate (F1)
+// Embedded-script gate
 // ---------------------------------------------------------------------------
 //
 // 2026-08-01 dogfooding: the model edited a Flask app whose whole UI is one
@@ -656,8 +656,8 @@ var reSyntaxLineNo = regexp.MustCompile(`line (\d+)`)
 // when the gate blocks a write. It DISTINGUISHES the two failure shapes,
 // because the old one-size message ("truncated — resend complete content")
 // is actively wrong for a genuine syntax bug in COMPLETE content and made
-// the model reassert the same broken text (TB2 2026-07-20,
-// pytorch-model-recovery: an f-string with nested quotes resent verbatim 5×):
+// the model reassert the same broken text (observed 2026-07-20 on a
+// pytorch-model-recovery task: an f-string with nested quotes resent 5×):
 //   - truncation shape (unterminated string / unexpected EOF / "never
 //     closed") → the content really is cut off; resend it complete.
 //   - a mid-content syntax bug → point at the offending line (quoted from

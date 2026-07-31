@@ -47,11 +47,11 @@ import (
 	"strings"
 )
 
-// Tool-call repetition detector. Catches the structural-loop case the
-// PC-207 lens scoring doesn't see: model calls the SAME (tool, args)
-// pair multiple times in close succession (e.g. read_file('app.py')
-// 4 times in 6 turns, or run_command('curl localhost:5000/...') three
-// times after the server already returned the same error each time).
+// Tool-call repetition detector. Catches the structural loop that lens
+// scoring doesn't see: the model calls the SAME (tool, args) pair
+// multiple times in close succession (e.g. read_file('app.py') 4 times
+// in 6 turns, or run_command('curl localhost:5000/...') three times
+// after the server already returned the same error each time).
 //
 // This is complementary to the lens-as-PRM intervention in agent.go:
 // lens scores GENERATED CONTENT semantically; this detector scores
@@ -170,7 +170,7 @@ func writeFileContentFingerprint(args json.RawMessage) string {
 // content is reassertion (a real loop — observed 2026-07-18: the model
 // reasserted its ~25-line app.py draft five times while V3 wrote the
 // verified expansion). Rewriting the same path with MATERIALLY DIFFERENT
-// content is iteration (observed 2026-07-19 TB2: polyglot rewriting
+// content is iteration (observed 2026-07-19: a polyglot task rewriting
 // main.py.c three times to clear successive compiler errors, killed by
 // the path-only key as if it were a loop). The content fingerprint
 // separates the two: reassertion collides, iteration diverges. Falls back
@@ -424,9 +424,9 @@ func missingModuleSteer(ctx *AgentContext, output string) string {
 // command whose binary isn't in the sandbox image (`git clone ...` →
 // "bash: line 1: git: command not found"), then either re-runs it
 // identically into the repetition breaker or gives up outright (both
-// observed on the TB2 bench, 2026-07-18: git and sqlite3). The sandbox
-// runs non-root on a read-only base fs, so `apt-get install` can NEVER
-// work at runtime — without this steer the model has no way to know
+// observed 2026-07-18: git and sqlite3). The sandbox runs non-root on a
+// read-only base fs, so `apt-get install` can NEVER work at runtime —
+// without this steer the model has no way to know
 // that, and suggesting apt-get would just start a different loop. The
 // steer states the constraint and points at the escape hatches that DO
 // work: pip-installable equivalents (~/.local is writable, `python3 -m X`
@@ -454,8 +454,8 @@ func missingCommandSteer(output string) string {
 // script>"` — a script containing a `def`/`for`/`if`/`class` body that can't
 // live on a single -c line — so the command fails with a SyntaxError in the
 // `-c` argument ITSELF, not in the file being tested. The model then re-runs
-// the same malformed command (observed TB2 2026-07-19, regex-chess: the
-// solution file re.json may be fine; the verify one-liner had `def` inline
+// the same malformed command (observed 2026-07-19 on a regex-chess task:
+// the solution file re.json may be fine; the verify one-liner had `def` inline
 // and never parsed) until the repetition breaker ends the session with the
 // solution unverified. Steer it to move the test into a file. Keyed on a
 // syntax error in code compiled from a string ("<string>") plus an inline
@@ -467,7 +467,7 @@ func brokenInlineScriptSteer(command, output string) string {
 	// error names the file). This is robust to output truncation — the
 	// "<string>" frame is printed BEFORE the "SyntaxError:" line, so a
 	// clipped sandbox result keeps the frame but may drop the keyword
-	// (observed TB2 2026-07-19: the SyntaxError line was truncated away and
+	// (observed 2026-07-19: the SyntaxError line was truncated away and
 	// the keyword-gated check missed the loop).
 	fromString := strings.Contains(output, `File "<string>"`) ||
 		strings.Contains(output, `File "<stdin>"`)

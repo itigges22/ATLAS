@@ -63,7 +63,7 @@ func envOr(key, fallback string) string {
 }
 
 // resolveVerifyTarget returns "host" when run_command should bypass
-// the sandbox and execute on the host, or "sandbox" otherwise. PC-192.
+// the sandbox and execute on the host, or "sandbox" otherwise.
 //
 // Resolution order (later wins):
 //  1. ATLAS_VERIFY_IN env var ("host" or "sandbox")
@@ -165,8 +165,8 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		lensOK = resp.StatusCode == 200
 	}
 	// Geometric-lens /ready is the gate that flips to 503 when scoring is
-	// degraded (lens weights missing, embedding-dim mismatch, etc — see
-	// PC-019). /health stays informational; /ready is the pass/fail.
+	// degraded (lens weights missing, embedding-dim mismatch, etc).
+	// /health stays informational; /ready is the pass/fail.
 	if resp, err := healthClient.Get(lensURL + "/ready"); err == nil {
 		resp.Body.Close()
 		lensReady = resp.StatusCode == 200
@@ -242,12 +242,12 @@ func newProxyMux() *http.ServeMux {
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/ready", handleReady)
 	mux.HandleFunc("/v1/agent", handleAgent)                             // tool-based agent endpoint
-	mux.HandleFunc("/events", handleEvents)                              // PC-061: typed SSE event stream
-	mux.HandleFunc("/cancel", handleCancel)                              // PC-062: TUI abort hook
+	mux.HandleFunc("/events", handleEvents)                              // typed SSE event stream
+	mux.HandleFunc("/cancel", handleCancel)                              // TUI abort hook
 	mux.HandleFunc("/v1/permission", handlePermission)                   // interactive approve/deny for destructive tools
 	mux.HandleFunc("/feedback", handleFeedback)                          // per-file accept/deny + pass thumbs → lens samples
 	mux.HandleFunc("/v1/lens/training-status", handleLensTrainingStatus) // sample counts for the "retrain available" alert
-	// PC-059: TUI calls this on connect to render a Lens/ASA compat badge.
+	// TUI calls this on connect to render a Lens/ASA compat badge.
 	mux.HandleFunc("/v1/calibration/status", handleCalibrationStatus)
 	mux.HandleFunc("/version", handleVersion)
 
@@ -357,7 +357,7 @@ func main() {
 	log.Printf("  Sandbox: %s", sandboxURL)
 	log.Printf("  Pipeline: agent loop (/v1/agent) + V3 candidate pipeline in v3-service for T2/T3 writes")
 
-	// PC-059: probe geometric-lens + ASA calibration so operators see the
+	// Probe geometric-lens + ASA calibration so operators see the
 	// same verdict the TUI's header badge will render. The old "ASA
 	// steering: present at X" banner is folded into logCalibrationStatusAtStartup
 	// below (which also adds the corresponding Lens line) so the proxy
@@ -385,8 +385,8 @@ func main() {
 
 // keepLlamaWarm pings llama-server with a 1-token completion every 45s. Keeps
 // the model loaded in VRAM, the slot's prompt cache live, and the TCP keepalive
-// fresh — avoiding the cold-start path that fires after 1-2 min idle. See
-// ISSUES.md PC-035. Disable with ATLAS_KEEP_LLAMA_WARM=0.
+// fresh — avoiding the cold-start path that fires after 1-2 min idle.
+// Disable with ATLAS_KEEP_LLAMA_WARM=0.
 func keepLlamaWarm() {
 	const interval = 45 * time.Second
 	// Wait for llama-server to come up before starting the loop.

@@ -377,8 +377,8 @@ func TestPromptIsMultiIssueCatchesPlurals(t *testing.T) {
 
 func TestPromptMultiIssueTriggersClaimCheck(t *testing.T) {
 	// Smoke: a multi-issue prompt + narrow done summary +
-	// missing templates → gap fires. Without PC-199, narrow
-	// summary would skip the check.
+	// missing templates → gap fires. Without the prompt-side
+	// multi-issue trigger, a narrow summary would skip the check.
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte(
 		`from flask import render_template
@@ -919,7 +919,7 @@ func TestStructuralCheckExcludesEditedSelf(t *testing.T) {
 
 // A genuine syntax bug in complete content must NOT be blamed on truncation,
 // must quote the offending line, and must forbid an identical resend
-// (TB2 2026-07-20 pytorch-model-recovery: an f-string resent verbatim 5×).
+// (observed 2026-07-20, pytorch-model-recovery: an f-string resent 5×).
 func TestFallbackSyntaxRejectionSyntaxBug(t *testing.T) {
 	content := "import torch\nx = 1\ny = f\"{d[\"k[\"]}\"\n"
 	msg := fallbackSyntaxRejection("a.py", content, "SyntaxError: f-string: unmatched '[' (a.py, line 3)")
@@ -942,7 +942,7 @@ func TestFallbackSyntaxRejectionTruncation(t *testing.T) {
 	}
 }
 
-// --- embedded-script gate (F1) --------------------------------------------
+// --- embedded-script gate -------------------------------------------------
 
 // The keydown handler from the 2026-08-01 dogfooding failure: a Flask app whose
 // UI is one HTML string, with one paren too many at the end of the last line.

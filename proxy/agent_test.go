@@ -403,7 +403,7 @@ func TestEnvFloatOrAndEnvIntOrFallBackOnGarbage(t *testing.T) {
 	}
 }
 
-// Tests for the PC-062 /cancel endpoint.
+// Tests for the /cancel endpoint.
 
 func TestCancelEndpointAbortsSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1750,7 +1750,7 @@ func writeGateCtx(t *testing.T, v3URL, sandboxURL, workDir string) *AgentContext
 // baseline is clean, writeFileWithV3 must write the BASELINE and report it
 // as a plain (non-V3) write — no V3Used/PhaseSolved/score attached to
 // content that never went through V3 sandbox verification. Guards against
-// PC-044 telling the model an unverified baseline was "V3 verified".
+// the done-nudge telling the model an unverified baseline was "V3 verified".
 func TestWriteFileV3WinnerVetoFallsBackToBaseline(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.py")

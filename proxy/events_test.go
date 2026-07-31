@@ -1,4 +1,4 @@
-// Tests for the typed event broker + envelope shape (PC-061).
+// Tests for the typed event broker + envelope shape.
 
 package main
 

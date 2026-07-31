@@ -502,7 +502,7 @@ func TestFilteringWriterOnLogger(t *testing.T) {
 	}
 }
 
-// Owner-D8: every generation request leaving the proxy carries an explicit
+// Every generation request leaving the proxy carries an explicit
 // completion bound, so a client disconnect can't leave an unbounded zombie
 // generation holding a llama slot.
 func TestClampGenerationBody(t *testing.T) {

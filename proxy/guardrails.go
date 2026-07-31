@@ -474,14 +474,14 @@ var reOutputFilenameTok = regexp.MustCompile("[`\"']?((?:[~./]|\\.\\./)?[\\w./-]
 var reOutputWriteVerb = regexp.MustCompile(`(?i)\b(sav|writ|creat|output|generat|stor|produc|recover|dump)`)
 
 // reMustProduce matches the "<file> must exist / must contain" requirement
-// phrasing (TB2 merge-diff: "the file algo.py must exist in the merged
-// result"), which names a deliverable without a write verb. Checked in a
-// window AFTER the filename.
+// phrasing (a merge-diff prompt: "the file algo.py must exist in the
+// merged result"), which names a deliverable without a write verb.
+// Checked in a window AFTER the filename.
 var reMustProduce = regexp.MustCompile(`(?i)^\s*(must (exist|contain|include|be (creat|writt|present|generat)))`)
 
 // expectedOutputPaths extracts the file(s) a task prompt explicitly asks
 // the model to produce: a filename token preceded within ~70 chars by a
-// write/save/create/output verb. Grounded in the task text (many TB2 and
+// write/save/create/output verb. Grounded in the task text (many bench and
 // real prompts say "save your solution in X", "write the output to Y",
 // "create a JSON file Z"), so it can be checked against disk at the end.
 // Bounded to the first 2 to avoid over-steering on a chatty prompt.
@@ -747,7 +747,7 @@ var stubHTMLRe = regexp.MustCompile(
 	`(?is)<h\d>\s*[A-Za-z]+\s+(page|section|title|content|view)\s*</h\d>`)
 
 // looksLikeStub returns a non-empty rejection string when the content
-// looks like a placeholder/stub. PC-195. The model's lazy-completion
+// looks like a placeholder/stub. The model's lazy-completion
 // failure mode is to ship 8-line skeletons that pass syntactic gates
 // but ship the absolute minimum content to claim "done." Catches the
 // most egregious shapes per file type; deliberately conservative —
@@ -808,7 +808,7 @@ func stubRejectionMessage(path, why string) string {
 // patternMatchHint returns a non-empty rejection string when the model
 // is creating a NEW file in a directory that already contains files of
 // the same extension AND it hasn't read any of those siblings in this
-// session. PC-194. Forces the "model from existing patterns" reflex
+// session. Forces the "model from existing patterns" reflex
 // instead of generating from scratch — a NEW route handler should
 // match the project's existing route handlers, a new test should match
 // the existing test conventions, etc.
@@ -867,13 +867,13 @@ func patternMatchHint(resolvedPath string, filesRead map[string]string) string {
 
 // looksCorruptedOnDisk returns true when the file at displayPath has
 // the markdown-fence-with-prose corruption pattern that
-// sanitizeFileContent strips on input. PC-201.
+// sanitizeFileContent strips on input.
 //
 // The corruption shape is what `<model> generated` left behind in
 // May 2026 templates: prose preamble ("Looking at the task, I need
 // to create..."), then a ```html fence, then real HTML, then a
 // closing fence with trailing commentary. Once on disk, this file
-// is unparseable to Jinja/the browser, but PC-159's surgical-edit
+// is unparseable to Jinja/the browser, but the surgical-edit
 // gate blocks write_file from cleaning it up. This helper tells the
 // agent loop "the file is broken, let write_file overwrite it."
 //

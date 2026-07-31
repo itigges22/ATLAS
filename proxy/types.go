@@ -269,7 +269,7 @@ type RunCommandOutput struct {
 	ExitCode int    `json:"exit_code"`
 }
 
-// -- background commands (PC-196) --
+// -- background commands --
 //
 // Three tools wrap the sandbox /jobs/* endpoints so the model can
 // run a server, probe it from another command, and clean up. Used
@@ -415,12 +415,12 @@ type AgentContext struct {
 	// the left side as a bare chat completion.
 	BypassV3 bool
 
-	// DisableFreshSlot skips the PC-045 slot-erase at the start of the
+	// DisableFreshSlot skips the slot-erase at the start of the
 	// agent loop so the demo's pre-warm pass actually survives into the
 	// real run. Without this, the prefix cache the warmup builds is
 	// wiped on the next /v1/agent call and the demo pays the 25-second
 	// cold-start cost twice. Only set this from controlled flows
-	// (`/demo`, tests) — production sessions want PC-045's per-session
+	// (`/demo`, tests) — production sessions want the per-session KV
 	// isolation.
 	DisableFreshSlot bool
 
@@ -473,7 +473,7 @@ type AgentContext struct {
 	// deferred /feedback can find this pass's writes after the loop returns.
 	PassID string
 
-	// PC-207 agent-loop integration: rolling list of gx_score_min values
+	// Rolling list of gx_score_min values
 	// from lens scoring of write_file/edit_file tool calls. When the
 	// recent N values all fall below the selected model's calibrated threshold the loop
 	// injects a corrective system message before the next LLM call.
@@ -530,7 +530,7 @@ type AgentContext struct {
 	PlanRevisions int
 
 	// VerifyOnHost flips run_command from sandbox-routing to local
-	// host execution (PC-192). Set from ATLAS_VERIFY_IN=host or
+	// host execution. Set from ATLAS_VERIFY_IN=host or
 	// per-project .atlas/config.toml. The default (false) is the
 	// safer sandbox path; opt-in is for working codebases that
 	// depend on host services (DBs, env vars, system tools) the

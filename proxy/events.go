@@ -1,4 +1,4 @@
-// PC-061: typed event protocol for atlas-proxy.
+// Typed event protocol for atlas-proxy.
 //
 // Mirrors the schema defined in atlas/cli/events.py so the same Python
 // consumer (atlas/cli/events.py) can read events from both v3-service
@@ -9,7 +9,7 @@
 // connected to /events) get a buffered channel; slow consumers are
 // dropped from individual events rather than blocking producers.
 //
-// SSE-only transport. Cancellation rides POST /cancel (PC-062).
+// SSE-only transport. Cancellation rides POST /cancel.
 
 package main
 
@@ -140,7 +140,7 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 	// HTTP/200 until the first event or the 15s heartbeat fires, and
 	// any consumer using a connect-then-wait timeout shorter than 15s
 	// reads "no response". This was caught by integration test, not
-	// unit test (PC-061 follow-up).
+	// unit test.
 	flusher.Flush()
 	// Send a one-shot SSE comment so the client also gets a body byte
 	// immediately — some HTTP middlewares only consider the response

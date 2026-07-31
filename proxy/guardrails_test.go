@@ -611,7 +611,7 @@ func TestIsActionIntentMessage(t *testing.T) {
 		"redesign templates/index.html for SaaS",
 		// May 10 prompt that motivated this gate:
 		"Rewrite templates/dashboard.html to display a clean SaaS-style metrics dashboard",
-		// TB2 round-2 prompt that motivated gating the text exit: the
+		// The prompt that motivated gating the text exit: the
 		// model narrated "I will now proceed to sanitize..." as a text
 		// response and quit with zero edits. Must classify as action.
 		"Please help sanitize my github repository of all API keys. Please find and remove all such information and replace it with placeholder values",
@@ -874,7 +874,7 @@ func TestResolveVerifyTargetEnvAndConfig(t *testing.T) {
 }
 
 func TestResolveAgentPathStripsWorkspacePrefix(t *testing.T) {
-	// PC-198 — model frequently emits `workspace/X` (no leading slash)
+	// The model frequently emits `workspace/X` (no leading slash)
 	// when it means the project root. resolveAgentPath must strip
 	// the prefix instead of joining it onto cwd, which would
 	// produce `/workspace/workspace/X` and 404.
@@ -897,8 +897,9 @@ func TestResolveAgentPathStripsWorkspacePrefix(t *testing.T) {
 
 func TestLooksCorruptedOnDiskDetectsProsePreamble(t *testing.T) {
 	// The exact corruption pattern from /home/isaac/snake/templates/index.html.
-	// Without PC-201, write_file gets blocked by the >5-line gate and the
-	// model loops forever trying to clean it via edit_file.
+	// Without the corruption exemption, write_file gets blocked by the
+	// >5-line gate and the model loops forever trying to clean it via
+	// edit_file.
 	corrupt := "Looking at the task, I need to create a complete `index.html` file...\n\n```html\n<!DOCTYPE html>\n<html><body>hi</body></html>\n```\n\nThis file:\n1. Renders correctly\n"
 	if !looksCorruptedOnDisk("templates/index.html", corrupt) {
 		t.Error("expected corrupted prose+fence file to be detected")
@@ -916,7 +917,7 @@ func TestLooksCorruptedOnDiskDetectsProsePreamble(t *testing.T) {
 	}
 }
 
-// HARNESS-12: extract the task's named output file(s) from the prompt,
+// Extract the task's named output file(s) from the prompt,
 // and ignore input filenames (no write-verb nearby).
 func TestExpectedOutputPaths(t *testing.T) {
 	cases := map[string][]string{
@@ -962,8 +963,8 @@ func TestExpectedOutputMissingMessage(t *testing.T) {
 	}
 }
 
-// HARNESS-12 refinement: "the file X must exist / must contain" names a
-// deliverable without a write verb (TB2 merge-diff).
+// "the file X must exist / must contain" names a deliverable without a
+// write verb (a merge-diff prompt).
 func TestExpectedOutputMustExistPhrasing(t *testing.T) {
 	got := expectedOutputPaths("the final repository must include repo/algo.py. The file repo/algo.py must exist in the merged result and must contain a function named map")
 	found := false

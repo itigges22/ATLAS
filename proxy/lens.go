@@ -46,7 +46,7 @@ import (
 	"time"
 )
 
-// PC-207 agent-loop integration. Scores write_file / edit_file content
+// Agent-loop lens integration. Scores write_file / edit_file content
 // per-tool-call via geometric-lens /internal/lens/score-per-step. Tracks
 // recent gx_score_min values per session so a "stub loop" pattern (the
 // kind that hit the May 6 templates/resources.html session in production)
@@ -574,12 +574,12 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 // Calibration status endpoint — surfaces lens + ASA compat for the TUI.
 //
-// PC-059 (#101): the geometric-lens /health endpoint already exposes the
+// GH #101: the geometric-lens /health endpoint already exposes the
 // data we need (cost_field_dim, embed_dim, cost_field_loaded). This file
 // forwards that into a verdict-shaped response under /v1/calibration/status
 // that the TUI renders as a header badge.
 //
-// PC-061 (#113) extends the `asa` block from a file-presence check to a
+// GH #113 extends the `asa` block from a file-presence check to a
 // proper dim-vs-model probe; the JSON shape stays the same so TUI
 // rendering doesn't churn.
 
@@ -784,7 +784,7 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 }
 
 // probeASAStatus checks for the configured ASA control-vector file on disk.
-// V3.1.2 (PC-061): the configured path is container-relative (e.g.
+// The configured path is container-relative (e.g.
 // /models/ast_edit_steering.gguf as llama-server sees it). The proxy
 // container doesn't have /models mounted, so we try several candidate
 // host-visible paths before giving up:
