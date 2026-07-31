@@ -77,6 +77,19 @@ def _ast_selector_to_query(selector: str, language: str):
                 f'(class_definition name: (identifier) @_name (#eq? @_name "{name}")) @target',
                 "target", None,
             )
+        if s.startswith("<") and s.endswith(">") and len(s) > 2:
+            # Reaching for an HTML tag on a .py file means the target is markup
+            # inside a template string. That is one string literal to the Python
+            # grammar, not an element, so no selector can address it — say what
+            # does work instead of listing selectors that miss the intent.
+            return None, None, (
+                f"selector '{selector}' is HTML-only and this is a Python file. Markup "
+                f"inside a Python string is a single string literal to the Python "
+                f"grammar, so no selector reaches into it. Either use "
+                f"structural_edit with function:NAME to rewrite the whole function "
+                f"holding the template, or use edit_file with old_str set to a "
+                f"unique line copied byte-for-byte from inside the template."
+            )
         return None, None, (
             f"unknown selector '{selector}' for python. Supported: function:NAME, class:NAME"
         )

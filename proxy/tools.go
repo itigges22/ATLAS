@@ -1492,8 +1492,8 @@ func editFileTool() *ToolDef {
 				if hasEntities && literalsOnDisk {
 					ext := strings.ToLower(filepath.Ext(input.Path))
 					alt := ""
-					if ext == ".html" || ext == ".htm" || ext == ".py" {
-						alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector (e.g. `<body>`, `function:NAME`) and the new content body, no old_str needed."
+					if hint := structuralSelectorHint(ext); hint != "" {
+						alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector (" + hint + ") and the new content body, no old_str needed."
 					}
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
 						alt, truncateStr(input.OldStr, 200))
@@ -1505,10 +1505,10 @@ func editFileTool() *ToolDef {
 				// by name, no old_str to reproduce exactly. Steer there.
 				ext := strings.ToLower(filepath.Ext(input.Path))
 				astAlt := ""
-				if ext == ".py" || ext == ".html" || ext == ".htm" {
+				if hint := structuralSelectorHint(ext); hint != "" {
 					astAlt = " To replace a whole function/class/element without " +
 						"matching exact text, use structural_edit with a selector " +
-						"(e.g. `function:NAME`, `class:NAME`, `<body>`) and the " +
+						"(" + hint + ") and the " +
 						"new content — no old_str needed, so a near-miss can't fail it."
 				}
 				// Ground the retry in the file's REAL content. A small model

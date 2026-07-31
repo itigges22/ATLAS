@@ -51,3 +51,24 @@ def test_bare_element_selector_still_works():
 def test_attribute_selector_rejected_with_guidance():
     q, _, err = main._ast_selector_to_query('<script src="x">', "html")
     assert q is None and err and "bare tag" in err
+
+
+def test_html_tag_on_python_file_names_the_escape_hatch():
+    """An HTML tag selector on a .py file is the Flask-template case.
+
+    A live session editing a Flask app reached for `<script>` on the .py file
+    whose script lives inside a template string, and got a selector list that
+    did not address what it was trying to do. The Python grammar sees one
+    string literal, so no selector can reach inside: the message has to name
+    what does work instead.
+    """
+    q, _, err = main._ast_selector_to_query("<script>", "python")
+    assert q is None and err
+    assert "HTML-only" in err
+    assert "function:NAME" in err and "edit_file" in err
+
+
+def test_non_tag_unknown_python_selector_still_lists_selectors():
+    q, _, err = main._ast_selector_to_query("def:index", "python")
+    assert q is None and err
+    assert "function:NAME, class:NAME" in err

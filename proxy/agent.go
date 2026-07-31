@@ -1553,10 +1553,15 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 		return messages, ""
 	}
 
+	selectors := structuralSelectorHint(ext)
+	if selectors == "" {
+		selectors = "`function:NAME` or `class:NAME`"
+	}
 	note := fmt.Sprintf(
-		"[system note]: For this single decision, %s is unavailable. The previous write_file was rejected because the target is an existing %s file >5 lines. Use structural_edit with a structural selector (function:NAME, class:NAME, or <tag>) to rewrite the named node. structural_edit doesn't need old_str so it doesn't truncate on long content. Emit exactly one JSON object: {\"type\":\"tool_call\",\"name\":\"structural_edit\",\"args\":{\"path\":\"...\",\"selector\":\"...\",\"content\":\"...\"}}.",
+		"[system note]: For this single decision, %s is unavailable. The previous write_file was rejected because the target is an existing %s file >5 lines. Use structural_edit with a structural selector (%s) to rewrite the named node. structural_edit doesn't need old_str so it doesn't truncate on long content. Emit exactly one JSON object: {\"type\":\"tool_call\",\"name\":\"structural_edit\",\"args\":{\"path\":\"...\",\"selector\":\"...\",\"content\":\"...\"}}.",
 		strings.Join(excluded, " and "),
 		strings.TrimPrefix(ext, "."),
+		selectors,
 	)
 	messages := append([]AgentMessage(nil), ctx.Messages...)
 	if planReminder != "" {

@@ -607,6 +607,26 @@ func embeddedScriptGate(ctx *AgentContext, path, original, edited string) string
 	return msg
 }
 
+// structuralSelectorHint names the selectors structural_edit actually accepts
+// for a file's language, or "" when the file has no structural support at all.
+//
+// The callers are all failure nudges, which fire when the model is already
+// stuck and is therefore most likely to follow them literally. Offering a
+// selector the target cannot accept spends the next turn on a second
+// rejection: an E2E session editing a Flask app reached for `<script>` on the
+// .py file (its script lives inside a Python template string, so the Python
+// grammar has no such node) and got "unknown selector '<script>' for python".
+// The system prompt already qualifies `<tag>` as HTML-only; these did not.
+func structuralSelectorHint(ext string) string {
+	switch ext {
+	case ".html", ".htm":
+		return "e.g. `<body>`, `<script>`"
+	case ".py":
+		return "`function:NAME` or `class:NAME`"
+	}
+	return ""
+}
+
 // v3CandidateRegression reports why a V3 candidate is worse than the content
 // it was generated from, or "" when the candidate is safe to adopt. It runs
 // the same healthy->broken checks the write paths enforce, but scored against
