@@ -1139,3 +1139,56 @@ func TestWantsStateChangeHonoursExplicitActionIntent(t *testing.T) {
 		t.Fatal("explicit action intent must arm the gate without needing inspection")
 	}
 }
+
+// One gate must not be able to spend the whole bounce allowance and silence
+// the rest. Reproduces an observed session: the verification gate bounced the
+// exit three times, and with a single shared counter exitGates then returned
+// early forever — so the done-without-action gate never ran and the model
+// exited having changed nothing while claiming the work was already present.
+func TestExitGatesOneGateCannotStarveAnother(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &AgentContext{WorkingDir: dir, Tier: Tier2Medium}
+	// "fix ..." is repair intent, so the verification gate arms; no
+	// verification ran and no productive change landed, so both gates hold.
+	const msg = "fix the pause toggle in app.py so the spacebar works"
+	st := &runState{
+		userWantsVerification: true,
+		inspectedWorkspace:    true,
+	}
+
+	for i := 1; i <= maxGateBounces; i++ {
+		gate, _ := st.exitGates(ctx, msg, "done")
+		if gate != "verification_gate" {
+			t.Fatalf("bounce %d: got gate %q, want verification_gate", i, gate)
+		}
+	}
+	// Verification's budget is now spent. The action gate has said nothing
+	// yet and must still get to.
+	gate, rejection := st.exitGates(ctx, msg, "done")
+	if gate != "action_gate" {
+		t.Fatalf("after verification exhausted its budget, got gate %q, want action_gate", gate)
+	}
+	if rejection == "" {
+		t.Error("action gate bounced with an empty rejection")
+	}
+	if st.gateBounces["verification_gate"] != maxGateBounces {
+		t.Errorf("verification gate overspent: %d", st.gateBounces["verification_gate"])
+	}
+}
+
+// Each gate still stops repeating itself once its own budget is gone.
+func TestExitGatesPerGateBudgetIsEnforced(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &AgentContext{WorkingDir: dir, Tier: Tier2Medium}
+	const msg = "add a pause toggle to app.py"
+	st := &runState{inspectedWorkspace: true}
+
+	for i := 1; i <= maxGateBounces; i++ {
+		if gate, _ := st.exitGates(ctx, msg, "done"); gate != "action_gate" {
+			t.Fatalf("bounce %d: got %q, want action_gate", i, gate)
+		}
+	}
+	if gate, _ := st.exitGates(ctx, msg, "done"); gate != "" {
+		t.Errorf("action gate exceeded its budget: got %q, want the exit to pass", gate)
+	}
+}

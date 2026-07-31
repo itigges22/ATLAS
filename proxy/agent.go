@@ -110,14 +110,15 @@ type sessionCancel struct {
 // runAgentLoop runs the agent loop for a single user request.
 // The model emits tool calls (constrained by grammar), the proxy executes them,
 // and returns results. Continues until the model emits "done" or max turns hit.
-// maxGateBounces caps the shared budget across the verification,
-// done-without-action, expected-output, and claim-check gates. Mirrors
-// the parse-error cap: three bounces of a `done` is a stuck loop, so
-// the fourth done is accepted rather than bounced forever.
+// maxGateBounces caps EACH of the verification, done-without-action,
+// expected-output, and claim-check gates independently. Mirrors the
+// parse-error cap: a gate that has bounced the same `done` three times is
+// in a stuck loop, so its fourth is accepted rather than bounced forever.
+// The other gates keep their own budgets — see runState.gateBounces.
 const maxGateBounces = 3
 
 // runState is the per-run evidence the completion-honesty gates decide
-// on, plus the shared bounce shape. One struct so the gates see the
+// on, plus their bounce budgets. One struct so the gates see the
 // same facts on the done and text exits instead of two hand-copied
 // gate blocks (which is exactly how the text exit shipped ungated once).
 type runState struct {
@@ -160,8 +161,17 @@ type runState struct {
 	// Whether the user prompt is a repair/fix request. Computed once —
 	// the user message doesn't change mid-loop.
 	userWantsVerification bool
-	// Bounces spent across all four gates this run.
-	gateBounces int
+	// Bounces spent per gate this run, keyed by gate name.
+	//
+	// Per-gate rather than one shared counter: the gates are evaluated in
+	// a fixed order, so a single counter let whichever fired first spend
+	// the whole allowance and silence the rest. An observed session put
+	// all three bounces on the verification gate, so the
+	// done-without-action gate never ran and the model exited having
+	// changed nothing while claiming the work was already present. Each
+	// gate reports a DIFFERENT problem, and a gate that has said its
+	// piece three times must stop without muting the others.
+	gateBounces map[string]int
 
 	// correctives queued by the loop-health detectors this turn, drained
 	// after the tool result so the next LLM call sees them in order:
@@ -221,37 +231,45 @@ func (s *runState) bounce(ctx *AgentContext, toolName, rejection string) {
 // "skip completion checks". Bounces stay capped by maxGateBounces, so
 // unattended runs cannot loop on a gate.
 func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (string, string) {
-	if s.gateBounces >= maxGateBounces {
-		return "", ""
-	}
-	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop {
-		s.gateBounces++
+	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
-			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces, maxGateBounces)
+			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
 		return "verification_gate", verificationRejectionMessage(s.sawFailedVerification)
 	}
-	if wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) && !s.madeProductiveChange {
-		s.gateBounces++
+	if wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) && !s.madeProductiveChange && s.chargeBounce("action_gate") {
 		log.Printf("[agent] done-without-action gate: bouncing exit at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
-			s.turn, truncateStr(userMessage, 60), s.gateBounces, maxGateBounces)
+			s.turn, truncateStr(userMessage, 60), s.gateBounces["action_gate"], maxGateBounces)
 		return "action_gate", actionWithoutProductiveChangeMessage(userMessage)
 	}
-	if missing := missingExpectedOutputs(ctx, s.expectedOutputs); len(missing) > 0 && !s.outputGateUsed {
-		s.gateBounces++
-		s.outputGateUsed = true // fire once — see field doc (#147 review #8)
+	if missing := missingExpectedOutputs(ctx, s.expectedOutputs); len(missing) > 0 && !s.outputGateUsed && s.chargeBounce("output_gate") {
+		s.outputGateUsed = true // fire once — see field doc
 		log.Printf("[agent] expected-output gate: bouncing exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
-			s.turn, logPaths(missing), s.gateBounces, maxGateBounces)
+			s.turn, logPaths(missing), s.gateBounces["output_gate"], maxGateBounces)
 		return "output_gate", expectedOutputMissingMessage(missing)
 	}
 	if claimsUniversal(claimText) || promptIsMultiIssue(userMessage) {
-		if gap := verifyCompletionClaims(ctx.WorkingDir); gap != "" {
-			s.gateBounces++
+		if gap := verifyCompletionClaims(ctx.WorkingDir); gap != "" && s.chargeBounce("claim_check") {
 			log.Printf("[agent] claim-check gate: bouncing exit at turn %d (bounce %d/%d) — %q",
-				s.turn, s.gateBounces, maxGateBounces, truncateStr(gap, 200))
+				s.turn, s.gateBounces["claim_check"], maxGateBounces, truncateStr(gap, 200))
 			return "claim_check", gap
 		}
 	}
 	return "", ""
+}
+
+// chargeBounce spends one of gate's bounces and reports whether it had one
+// left. A gate whose budget is gone returns false so exitGates falls through
+// to the next gate rather than returning early: an exhausted gate must stop
+// repeating itself, not mute the gates behind it.
+func (s *runState) chargeBounce(gate string) bool {
+	if s.gateBounces[gate] >= maxGateBounces {
+		return false
+	}
+	if s.gateBounces == nil {
+		s.gateBounces = make(map[string]int, 4)
+	}
+	s.gateBounces[gate]++
+	return true
 }
 
 // fetchPatternContext asks the lens pattern-cache reader
