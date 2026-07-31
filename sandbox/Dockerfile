@@ -1,5 +1,9 @@
-# python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+# python:3.13-slim — digest-pinned for reproducible builds (Dependabot maintains).
+# Kept current deliberately: the sandbox is what executes and syntax-checks
+# agent output, so a Python older than the one models write for turns valid
+# code into a rejection. On 3.11 a model burned a whole session re-emitting
+# f"{d["k"]}" — a SyntaxError there, valid from 3.12 (PEP 701).
+FROM docker.io/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 WORKDIR /app
 
 # Install system dependencies and language runtimes

@@ -71,6 +71,11 @@ class Task:
     # Files the session is expected to leave parseable. Any workspace file is
     # checked for corruption regardless; this is the subset that must exist.
     must_exist: tuple[str, ...] = ()
+    # Fixtures that are INPUT DATA and must come back untouched. Not every
+    # fixture qualifies: add_function is handed stats.py precisely so it can
+    # edit it. Only files the task never asks to change belong here, or the
+    # check fails a session for doing exactly what it was told.
+    immutable: tuple[str, ...] = ()
     # A question, not a job. The tiers exist so V3 does not run on everything:
     # a question should get an answer from the conversational tier, with no
     # writes and no multi-minute pipeline. Both are checked.
@@ -259,6 +264,7 @@ def _aoc_task(name: str) -> Task:
         files={"input.txt": (AOC_DIR / name / "input.txt").read_text()},
         check=_check_aoc(name),
         must_exist=("input.txt",),
+        immutable=("input.txt",),
     )
 
 
@@ -393,6 +399,7 @@ TASKS["ask_explain"] = Task(
                           any_of=(("o(n^2)", "o(n2)", "o(n²)", "quadratic",
                                    "nested loop", "n squared"),)),
     must_exist=("orders.py",),
+    immutable=("orders.py",),
     conversational=True,
 )
 
@@ -406,6 +413,7 @@ TASKS["ask_bug"] = Task(
                           any_of=(("float", "division", "/", "decimal"),
                                   ("90.0", "90"),)),
     must_exist=("orders.py",),
+    immutable=("orders.py",),
     conversational=True,
 )
 
@@ -886,9 +894,9 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     # confusing "wrong answer" — one session overwrote a single-line puzzle
     # input, which write_file allows because the surgical-edit gate only
     # protects existing files over five lines.
-    tampered = [n for n, original in task.files.items()
+    tampered = [n for n in task.immutable
                 if (workspace / n).exists()
-                and (workspace / n).read_text() != original]
+                and (workspace / n).read_text() != task.files.get(n)]
     if tampered:
         s.task_passed = False
         s.task_detail = (f"modified the fixture it was given: "
