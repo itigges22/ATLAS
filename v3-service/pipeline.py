@@ -17,7 +17,10 @@ from stages.plan_search import PlanSearch, PlanSearchConfig
 from stages.div_sampling import DivSampling, DivSamplingConfig
 from stages.failure_analysis import FailingCandidate
 from stages.pr_cot import PRCoT, PRCoTConfig
-from stages.refinement_loop import RefinementLoop, RefinementLoopConfig
+from stages.refinement_loop import (
+    RefinementLoop, RefinementLoopConfig,
+    can_afford_iteration, estimate_iteration_ms,
+)
 from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
 from stages.candidate_selection import CandidateInfo, select_candidate
 
@@ -68,13 +71,32 @@ for _phase, _stages in {
                       "pr_cot_pass", "pr_cot_failed", "pr_cot_error"),
     "repair_refinement": ("refinement", "refinement_pass",
                           "refinement_failed", "refinement_error",
-                          "refinement_verify_failed"),
+                          "refinement_verify_failed", "refinement_skip"),
     "fallback": ("fallback", "fallback_all_vetoed"),
 }.items():
     for _s in _stages:
         _STAGE_PHASE[_s] = _phase
 
 _VETO_STAGES = frozenset(("lens_veto", "structural_veto", "call_graph_veto"))
+
+
+def _remaining_budget_ms(start: float) -> Optional[float]:
+    """Remaining wall-clock (ms) in this run's ATLAS_V3_TIMEOUT budget.
+
+    The proxy's V3 bridge abandons a live pipeline call after
+    ``ATLAS_V3_TIMEOUT`` seconds (default 180; 0 disables the cap).
+    The service reads the same knob so late phases can skip work the
+    bridge would abandon mid-flight anyway. Returns None when the cap
+    is disabled.
+    """
+    raw = os.environ.get("ATLAS_V3_TIMEOUT", "").strip()
+    try:
+        seconds = int(raw) if raw else 180
+    except ValueError:
+        seconds = 180
+    if seconds <= 0:
+        return None
+    return seconds * 1000.0 - (time.time() - start) * 1000.0
 
 
 def _resolve_telemetry_dir() -> Optional[Path]:
@@ -924,8 +946,29 @@ class V3PipelineService:
             except Exception as e:
                 emit("pr_cot_error", str(e)[:200])
 
-        # Strategy 2: Refinement Loop
-        if failing:
+        # Strategy 2: Refinement Loop — entered only when the remaining
+        # wall-clock can afford one iteration. H200 join: 453/487
+        # refinement entries timed out with ZERO completed iterations
+        # while burning ~6 minutes each; one iteration is ~3 sequential
+        # LLM calls, estimated at the per-call latency observed on THIS
+        # run. The budget is the ATLAS_V3_TIMEOUT cap the proxy's V3
+        # bridge enforces — starting work the bridge will abandon only
+        # delays the fallback the user ends up with.
+        run_refinement = bool(failing)
+        if run_refinement:
+            est_ms = estimate_iteration_ms(getattr(llm, "avg_call_ms", 0.0))
+            remaining_ms = _remaining_budget_ms(start)
+            if (remaining_ms is not None
+                    and not can_afford_iteration(remaining_ms, est_ms)):
+                run_refinement = False
+                emit("refinement_skip",
+                     f"remaining budget {remaining_ms / 1000:.0f}s cannot "
+                     f"afford one iteration (~{est_ms / 1000:.0f}s) — "
+                     f"skipping to fallback",
+                     strategy="refinement",
+                     remaining_ms=round(remaining_ms),
+                     estimated_iteration_ms=round(est_ms))
+        if run_refinement:
             check_client()
             emit("refinement", "Starting refinement loop...",
                  strategy="refinement", failing=len(failing))

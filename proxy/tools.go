@@ -3198,7 +3198,7 @@ func v3StageToEvent(stage string) string {
 		return "v3_select"
 	case "phase3", "pr_cot", "pr_cot_pass", "pr_cot_failed", "pr_cot_error",
 		"refinement", "refinement_pass", "refinement_failed", "refinement_error",
-		"fallback", "fallback_all_vetoed":
+		"refinement_skip", "fallback", "fallback_all_vetoed":
 		return "v3_repair"
 	case "probe", "probe_light", "probe_retry", "probe_failed",
 		"probe_scored", "probe_sandbox", "probe_pass", "probe_error":

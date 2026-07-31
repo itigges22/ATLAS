@@ -520,7 +520,7 @@ The pipeline emits stages as it progresses. Not all stages appear in every run �
 | **Probe (Phase 0)** | `probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip` (interactive task — compile smoke-test instead), `self_test_verify`, `smoke_check`, `interactive_lint`, `probe_scored`, `probe_sandbox`, `probe_pass` |
 | **Generation (Phase 1)** | `phase1`, `phase2` (allocation), `phase2_allocated`, `plansearch`, `plansearch_done`, `plansearch_error`, `divsampling`, `divsampling_done`, `divsampling_error` |
 | **Testing / selection (Phase 2)** | `sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`, `lens_per_step`, `lens_veto`, `structural_veto`, `call_graph_veto`, `selected` |
-| **Repair (Phase 3)** | `phase3`, `pr_cot`, `pr_cot_pass`, `pr_cot_failed`, `pr_cot_error`, `refinement`, `refinement_pass`, `refinement_failed`, `refinement_error`, `refinement_verify_failed`, `call_chain_context`, `fallback`, `fallback_all_vetoed` (every candidate was vetoed — no code returned) |
+| **Repair (Phase 3)** | `phase3`, `pr_cot`, `pr_cot_pass`, `pr_cot_failed`, `pr_cot_error`, `refinement`, `refinement_pass`, `refinement_failed`, `refinement_error`, `refinement_verify_failed`, `refinement_skip` (remaining `ATLAS_V3_TIMEOUT` budget cannot afford one iteration — straight to fallback), `call_chain_context`, `fallback`, `fallback_all_vetoed` (every candidate was vetoed — no code returned) |
 | **Verification** | `build_verify_unavailable` (build-command verification skipped — runner unreachable or command not allowed by policy) |
 | **LLM streaming** | `llm_start`, `token`, `llm_end` (one bracketed group per internal LLM call — planner, candidate generation, repair, etc.) |
 

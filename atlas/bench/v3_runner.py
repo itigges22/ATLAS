@@ -68,6 +68,7 @@ from stages.constraint_refinement import (
 from stages.pr_cot import PRCoT, PRCoTConfig
 from stages.refinement_loop import (
     RefinementLoop, RefinementLoopConfig,
+    can_afford_iteration, estimate_iteration_ms,
 )
 from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
 from stages.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
@@ -246,7 +247,16 @@ class LLMAdapter:
             self.timeout = timeout
         self.call_count = 0
         self.total_tokens = 0
+        self.total_time_ms = 0.0
         self.last_logprobs: List[float] = []
+
+    @property
+    def avg_call_ms(self) -> float:
+        """Average observed per-call latency (0.0 before the first call).
+        Feeds the refinement loop's one-iteration cost estimate."""
+        if not self.call_count:
+            return 0.0
+        return self.total_time_ms / self.call_count
 
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
@@ -297,6 +307,7 @@ class LLMAdapter:
         self.last_logprobs = r["logprobs"]
         tokens = r["tokens"]
         self.total_tokens += tokens
+        self.total_time_ms += r["time_ms"]
         return r["content"], tokens, r["time_ms"]
 
 
@@ -949,7 +960,23 @@ class V3Pipeline:
                 result["telemetry"]["pr_cot_error"] = str(e)
 
         # --- Strategy 2: Refinement Loop (3-15 LLM calls) ---
-        if not result["passed"] and failing:
+        # Entered only when one iteration (~3 sequential LLM calls at the
+        # per-call latency observed on this task) fits inside the loop's
+        # own max_time_ms budget — the binding constraint in bench, which
+        # has no outer wall-clock cap. H200 join: 453/487 refinement
+        # entries exhausted the budget with ZERO completed iterations
+        # while burning ~6 minutes each.
+        run_refinement = bool(not result["passed"] and failing)
+        if run_refinement:
+            est_ms = estimate_iteration_ms(llm.avg_call_ms)
+            budget_ms = self.refinement_loop.config.max_time_ms
+            if not can_afford_iteration(budget_ms, est_ms):
+                run_refinement = False
+                result["telemetry"]["refinement_skipped"] = {
+                    "estimated_iteration_ms": round(est_ms),
+                    "budget_ms": round(budget_ms),
+                }
+        if run_refinement:
             phase3_strategies_tried.append("refinement")
             ref_llm = LLMAdapter(self.llama_url, timeout=300)
             try:

@@ -140,8 +140,17 @@ class LLMAdapter:
     def __init__(self, progress_callback=None, thinking: bool = False):
         self.call_count = 0
         self.total_tokens = 0
+        self.total_time_ms = 0.0
         self._progress = progress_callback
         self.thinking = thinking
+
+    @property
+    def avg_call_ms(self) -> float:
+        """Average observed per-call latency (0.0 before the first call).
+        Feeds the refinement loop's one-iteration cost estimate."""
+        if not self.call_count:
+            return 0.0
+        return self.total_time_ms / self.call_count
 
     def _emit(self, stage: str, detail: str = "", **data):
         if self._progress:
@@ -186,6 +195,7 @@ class LLMAdapter:
         # closing marker with totals so the TUI can replace the live
         # row with a compact summary.
         elapsed_ms = (time.time() - start) * 1000
+        self.total_time_ms += elapsed_ms
         completion_tokens = data.get("usage", {}).get("completion_tokens", 0) \
             or data.get("usage", {}).get("total_tokens", 0)
         self._emit("llm_end", f"{completion_tokens} tok · {elapsed_ms:.0f}ms",

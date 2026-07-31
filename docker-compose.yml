@@ -147,6 +147,10 @@ services:
       # Container-side path; set 0/off in .env to disable. Fail-soft:
       # an unwritable dir disables telemetry, never generation.
       - ATLAS_V3_TELEMETRY_DIR=${ATLAS_V3_TELEMETRY_DIR:-/data/telemetry}
+      # Same wall-clock cap the proxy's V3 bridge enforces (seconds,
+      # default 180, 0 disables). The service reads it for the
+      # refinement budget gate, so both sides must see one value.
+      - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     volumes:
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro

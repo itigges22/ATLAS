@@ -64,6 +64,44 @@ class RefinementLoopConfig:
 
 
 # ---------------------------------------------------------------------------
+# Orchestrator-side budget gate
+# ---------------------------------------------------------------------------
+# H200 join: 453/487 refinement entries exhausted their budget with ZERO
+# completed iterations while burning ~6 minutes each — the loop was entered
+# when it could never afford a single iteration at the observed serving
+# speed. Both orchestrators gate on this BEFORE entering the loop and skip
+# straight to their fallback when one iteration cannot fit.
+
+# One iteration is ~3 sequential LLM calls: failure analysis, constraint
+# refinement, code generation (the sandbox run is noise next to them).
+ITERATION_LLM_CALLS = 3
+
+# Conservative floor when no per-call latency has been observed yet. 120s
+# matches RefinementLoopConfig.max_time_ms — a remaining budget below the
+# loop's own per-run allowance cannot complete an iteration.
+MIN_ITERATION_MS = 120_000.0
+
+
+def estimate_iteration_ms(observed_llm_call_ms: float) -> float:
+    """Estimated wall-clock cost of ONE refinement iteration.
+
+    ``observed_llm_call_ms`` is the average per-call latency the caller has
+    measured on this task so far (0 / falsy when nothing was observed —
+    the conservative ``MIN_ITERATION_MS`` floor applies then).
+    """
+    if observed_llm_call_ms and observed_llm_call_ms > 0:
+        return ITERATION_LLM_CALLS * observed_llm_call_ms
+    return MIN_ITERATION_MS
+
+
+def can_afford_iteration(remaining_ms: float,
+                         estimated_iteration_ms: float) -> bool:
+    """Budget gate: enter the loop only when the remaining wall-clock
+    fits at least one full iteration."""
+    return remaining_ms >= estimated_iteration_ms
+
+
+# ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
 

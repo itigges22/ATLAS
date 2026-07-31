@@ -340,7 +340,7 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 - **Failure Analysis**: categorize failures (wrong_algorithm, implementation_bug, edge_case_miss, time_limit, format_error, partial_correct)
 - **PR-CoT**: 4 perspectives (logical_consistency, information_completeness, biases, alternative_solutions) x (analysis + repair) = ~8 LLM calls, up to 3 rounds
-- **Refinement Loop**: Failure Analysis → Constraint Refinement → Code Gen → Test → Learn. 2 iterations, 120s budget, ~5+ LLM calls each. Cosine distance filtering (>= 0.15) prevents hypothesis repetition
+- **Refinement Loop**: Failure Analysis → Constraint Refinement → Code Gen → Test → Learn. 2 iterations, 120s budget, ~5+ LLM calls each. Cosine distance filtering (>= 0.15) prevents hypothesis repetition. Budget-gated: the orchestrator enters the loop only when the remaining wall-clock (the `ATLAS_V3_TIMEOUT` cap live; the loop's own 120s budget in bench) can afford one iteration (~3 sequential LLM calls at the observed per-call latency) — otherwise it emits `refinement_skip` and goes straight to the fallback
 
 ### Module Map
 
