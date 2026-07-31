@@ -77,32 +77,24 @@ confirm() {
 remove_atlas_services() {
     log_info "Removing ATLAS services..."
 
-    # Delete all atlas manifest resources
-    kubectl delete -f "$K8S_DIR/atlas/manifests/" -n "$ATLAS_NAMESPACE" 2>/dev/null || true
+    # Delete everything install.sh applied. generate-manifests.sh renders
+    # templates/*.yaml.tmpl into this directory.
     kubectl delete -f "$K8S_DIR/manifests/" -n "$ATLAS_NAMESPACE" 2>/dev/null || true
 
-    # Delete any remaining resources by label
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=redis 2>/dev/null || true
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=llama-server 2>/dev/null || true
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=geometric-lens 2>/dev/null || true
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=llm-proxy 2>/dev/null || true
-    kubectl delete deployment -n "$ATLAS_NAMESPACE" -l app=sandbox 2>/dev/null || true
-
-    # Delete services
+    # Delete any remaining deployments by label. One entry per app label in
+    # templates/*.yaml.tmpl — keep this list in step with that directory.
+    for app in llama-server geometric-lens atlas-proxy v3-service sandbox; do
+        kubectl delete deployment -n "$ATLAS_NAMESPACE" -l "app=$app" \
+            2>/dev/null || true
+    done
 
     # Delete secrets
     kubectl delete secret -n "$ATLAS_NAMESPACE" atlas-secrets 2>/dev/null || true
-
-    # Delete cronjobs
-    kubectl delete cronjob -n "$ATLAS_NAMESPACE" atlas-nightly-training 2>/dev/null || true
 
     if [[ "$REMOVE_DATA" == true ]]; then
         log_info "Removing persistent volume claims..."
         kubectl delete pvc -n "$ATLAS_NAMESPACE" lens-state 2>/dev/null || true
         kubectl delete pvc -n "$ATLAS_NAMESPACE" lens-projects 2>/dev/null || true
-        # Legacy PVC names from installs that predate the SQLite state store.
-        kubectl delete pvc -n "$ATLAS_NAMESPACE" redis-storage 2>/dev/null || true
-        kubectl delete pvc -n "$ATLAS_NAMESPACE" redis-data 2>/dev/null || true
     fi
 
     # Delete namespace if not default
@@ -151,7 +143,6 @@ remove_models() {
 
     rm -f "$ATLAS_MODELS_DIR"/*.gguf
     rm -f "$ATLAS_MODELS_DIR/default.gguf"
-    rm -rf "$ATLAS_LORA_DIR"
 
     log_info "Models removed"
 }
@@ -160,7 +151,6 @@ remove_data() {
     log_info "Removing data from $ATLAS_DATA_DIR..."
 
     rm -rf "$ATLAS_DATA_DIR"
-    rm -rf "$ATLAS_TRAINING_DIR"
     rm -rf "$ATLAS_PROJECTS_DIR"
 
     log_info "Data removed"
