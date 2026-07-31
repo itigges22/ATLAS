@@ -253,7 +253,13 @@ var (
 // initDebugLog opens path for append. Empty path → no-op (logger
 // stays at io.Discard). Returns the close func or nil.
 func initDebugLog(path string) (func(), error) {
-	if path == "" {
+	// "off" is the documented opt-out (docs/CLI.md, and the Python wrapper
+	// strips ATLAS_TUI_LOG=off before exec'ing this binary). Anyone who runs
+	// the binary directly bypasses that wrapper, and without this the word
+	// was taken as a filename: `ATLAS_TUI_LOG=off atlas-tui` created a file
+	// called "off" in the working directory. Matched case-insensitively, as
+	// the wrapper does.
+	if path == "" || strings.EqualFold(strings.TrimSpace(path), "off") {
 		return nil, nil
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
