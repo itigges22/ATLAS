@@ -100,12 +100,6 @@ class RecordingRefinement:
                                total_iterations=2, winning_code="")
 
 
-class FakeDerivation:
-    def solve(self, problem, failure_context, llm_call, sandbox_run, task_id):
-        return SimpleNamespace(solved=False, total_tokens=0,
-                               final_code="", reason="exhausted")
-
-
 class FakeSelfTestGen:
     def generate(self, problem, llm, task_id):
         raise RuntimeError("self-test generation unavailable in this test")
@@ -133,7 +127,6 @@ def _make_service(monkeypatch, plan_codes, pr_cot):
             SimpleNamespace(candidates=list(plan_codes), total_tokens=0))
     service.pr_cot = pr_cot
     service.refinement_loop = RecordingRefinement()
-    service.derivation_chains = FakeDerivation()
     return service
 
 

@@ -20,7 +20,6 @@ from stages.s_star import SStar, SStarConfig, CandidateScore
 from stages.failure_analysis import FailingCandidate
 from stages.pr_cot import PRCoT, PRCoTConfig
 from stages.refinement_loop import RefinementLoop, RefinementLoopConfig
-from stages.derivation_chains import DerivationChains, DerivationChainsConfig
 from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
 from stages.candidate_selection import CandidateInfo, select_candidate
 
@@ -64,8 +63,6 @@ for _phase, _stages in {
     "repair_refinement": ("refinement", "refinement_pass",
                           "refinement_failed", "refinement_error",
                           "refinement_verify_failed"),
-    "repair_derivation": ("derivation", "derivation_pass",
-                          "derivation_failed", "derivation_error"),
     "fallback": ("fallback", "fallback_all_vetoed"),
 }.items():
     for _s in _stages:
@@ -191,8 +188,6 @@ class V3PipelineService:
         self.pr_cot = PRCoT(PRCoTConfig(enabled=True), telemetry_dir=t)
         self.refinement_loop = RefinementLoop(RefinementLoopConfig(enabled=True),
                                               telemetry_dir=t)
-        self.derivation_chains = DerivationChains(
-            DerivationChainsConfig(enabled=True), telemetry_dir=t)
         self.self_test_gen = SelfTestGen(SelfTestGenConfig(enabled=True),
                                          telemetry_dir=t)
 
@@ -1013,46 +1008,6 @@ class V3PipelineService:
                 emit("refinement_failed", f"Exhausted {ref_result.total_iterations} iterations")
             except Exception as e:
                 emit("refinement_error", str(e)[:200])
-
-        # Strategy 3: Derivation Chains
-        if failing:
-            check_client()
-            emit("derivation", "Attempting derivation chains...",
-                 strategy="derivation", failing=len(failing))
-            failure_context = "; ".join(
-                f"Candidate {c.index}: {c.error_output[:200]}"
-                for c in failing[:3]
-            )
-            # GH #39 point 3: append call-chain context to the failure
-            # context so derivation chains gets the structural hints
-            # alongside the truncated stderrs from each failing candidate.
-            if chain_context_block:
-                failure_context = failure_context + "\n\n" + chain_context_block
-            try:
-                dc_result = self.derivation_chains.solve(
-                    problem=problem,
-                    failure_context=failure_context,
-                    llm_call=llm,
-                    sandbox_run=sandbox,
-                    task_id=task_id,
-                )
-                result["total_tokens"] += dc_result.total_tokens
-                if dc_result.solved:
-                    # Verify with real sandbox
-                    passed, _, _, derivation_evidence = verified_sandbox(dc_result.final_code)
-                    if passed:
-                        emit("derivation_pass", "Derivation chains solved!",
-                             strategy="derivation")
-                        result["passed"] = True
-                        result["code"] = dc_result.final_code
-                        result["phase_solved"] = "derivation"
-                        result["total_time_ms"] = (time.time() - start) * 1000
-                        result["verification_evidence"] = derivation_evidence
-                        result["events"] = events
-                        return result
-                emit("derivation_failed", dc_result.reason)
-            except Exception as e:
-                emit("derivation_error", str(e)[:200])
 
         # ===== FALLBACK: Return best candidate even if none passed =====
         # Vetoed candidates are excluded outright: a veto means "executes

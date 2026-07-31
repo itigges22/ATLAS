@@ -290,10 +290,7 @@ flowchart LR
     AnyPass -->|"0"| FA["Failure Analysis"] --> PRCOT["PR-CoT"]
     PRCOT --> PRPass{"Pass?"}
     PRPass -->|"Yes"| Done
-    PRPass -->|"No"| Refine["Refinement"]
-    Refine --> RefPass{"Pass?"}
-    RefPass -->|"Yes"| Done
-    RefPass -->|"No"| Derive["Derivation"] --> Done
+    PRPass -->|"No"| Refine["Refinement"] --> Done
 
     style Entry fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
@@ -310,7 +307,6 @@ flowchart LR
     style Build fill:#2d5016,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
     style Refine fill:#5c3a1a,color:#fff
-    style Derive fill:#5c3a1a,color:#fff
     style FA fill:#5c3a1a,color:#fff
 ```
 
@@ -343,16 +339,15 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 - **S* Tiebreaking** (2+ passing): generates edge-case inputs, runs both candidates, majority wins
 - **Lens Selection** (1 passing or fallback): sort by C(x) energy, lowest wins
 
-**Phase 3: Repair** (if 0/K pass, or every passer was vetoed) — three strategies, sequential with early exit:
+**Phase 3: Repair** (if 0/K pass, or every passer was vetoed) — two strategies, sequential with early exit:
 
 - **Failure Analysis**: categorize failures (wrong_algorithm, implementation_bug, edge_case_miss, time_limit, format_error, partial_correct)
 - **PR-CoT**: 4 perspectives (logical_consistency, information_completeness, biases, alternative_solutions) x (analysis + repair) = ~8 LLM calls, up to 3 rounds
 - **Refinement Loop**: Failure Analysis → Constraint Refinement → Code Gen → Test → Learn. 2 iterations, 120s budget, ~5+ LLM calls each. Cosine distance filtering (>= 0.15) prevents hypothesis repetition
-- **Derivation Chains**: decompose into up to 5 sub-problems, sandbox-verify each, compose final. ~7+ LLM calls
 
 ### Module Map
 
-The pipeline stages are 17 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 13 of them (12 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
+The pipeline stages are 16 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 12 of them (11 directly; `constraint_refinement` via the refinement loop); `reasc`, `ace_pipeline`, `lens_feedback`, and `embedding_store` run only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR
@@ -365,7 +360,6 @@ graph LR
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
     Main --> PRCOT["PR-CoT 3C"]
-    Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
     Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
@@ -392,7 +386,6 @@ graph LR
     style FA fill:#5c3a1a,color:#fff
     style CR fill:#5c3a1a,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
-    style DC fill:#5c3a1a,color:#fff
     style RL fill:#5c3a1a,color:#fff
     style ACE fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff

@@ -22,7 +22,6 @@ Orchestrates the full V3 pipeline on LiveCodeBench:
       - Full refinement loop:
         - 3A: Failure analysis
         - 3B: Constraint refinement
-        - 3D: Derivation chains (if complex)
         - 3E: Loop orchestration (max 2 iterations)
       - 3G: ACE learning from successes
 
@@ -76,9 +75,6 @@ from stages.constraint_refinement import (
 from stages.pr_cot import PRCoT, PRCoTConfig
 from stages.refinement_loop import (
     RefinementLoop, RefinementLoopConfig,
-)
-from stages.derivation_chains import (
-    DerivationChains, DerivationChainsConfig,
 )
 from stages.ace_pipeline import ACEPipeline, ACEConfig
 from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
@@ -280,7 +276,6 @@ class LLMAdapter:
         #   budget_forcing think tiers   -> "Think step by step"
         #   pr_cot repair                -> "Think carefully about the root cause"
         #   refinement_loop code-gen     -> "Think through the approach"
-        #   derivation_chains code-gen   -> "Think carefully about the approach/how to combine"
         #   nothink / analysis / constraint prompts carry no think-language.
         # Reword those prompts and this marker list together.
         system_text = " ".join(m.get("content", "") for m in messages
@@ -568,10 +563,6 @@ class V3Pipeline:
             constraint_refiner=self.constraint_refiner,
             telemetry_dir=telemetry_dir,
         )
-        self.derivation_chains = DerivationChains(
-            DerivationChainsConfig(enabled=self.enable_phase3),
-            telemetry_dir=telemetry_dir,
-        )
         self.ace = ACEPipeline(
             ACEConfig(enabled=self.enable_phase3),
             telemetry_dir=telemetry_dir,
@@ -597,7 +588,7 @@ class V3Pipeline:
         Returns a dict with:
           - passed: bool
           - code: str (winning code)
-          - phase_solved: str ("phase1", "pr_cot", "refinement", "derivation", "none")
+          - phase_solved: str ("phase1", "pr_cot", "refinement", "none")
           - candidates_generated: int
           - total_tokens: int
           - total_time_ms: float
@@ -1083,11 +1074,9 @@ class V3Pipeline:
             self_verify_sandbox = sandbox
             result["telemetry"]["self_test_fallback"] = True
 
-        # Steps 3a/3b/3c: Run repair strategies SEQUENTIALLY
-        # Priority order: PR-CoT (cheapest, 2-6 calls), Refinement Loop
-        # (3-15 calls), Derivation Chains (most expensive, up to 17 calls).
-        # Stop on first successful fix — saves ~29-33 LLM calls on average
-        # vs parallel execution which wastes calls on losing strategies.
+        # Run repair strategies SEQUENTIALLY: PR-CoT first (cheapest,
+        # 2-6 calls), then the Refinement Loop (3-15 calls). Stop on the
+        # first successful fix so losing strategies burn no calls.
         phase3_extra_tokens = 0
         phase3_strategies_tried = []
 
@@ -1159,33 +1148,6 @@ class V3Pipeline:
                         self._learn_from_success(task, task_id, "refinement")
             except Exception as e:
                 result["telemetry"]["refinement_error"] = str(e)
-
-        # --- Strategy 3: Derivation Chains (up to 17 LLM calls) ---
-        if not result["passed"]:
-            phase3_strategies_tried.append("derivation")
-            dc_llm = LLMAdapter(self.llama_url, timeout=300)
-            try:
-                failure_context = "; ".join(
-                    f"Candidate {c['index']}: {c.get('stderr', 'failed')[:200]}"
-                    for c in candidates if c.get("passed") is False
-                )
-                dc_result = self.derivation_chains.solve(
-                    problem=task.prompt,
-                    failure_context=failure_context,
-                    llm_call=dc_llm,
-                    sandbox_run=sandbox,
-                    task_id=task_id,
-                )
-                phase3_extra_tokens += dc_llm.total_tokens
-                if dc_result.solved and dc_result.final_code:
-                    passed, stdout, stderr = sandbox(dc_result.final_code, "")
-                    if passed:
-                        result["passed"] = True
-                        result["code"] = dc_result.final_code
-                        result["phase_solved"] = "derivation"
-                        self._learn_from_success(task, task_id, "derivation")
-            except Exception as e:
-                result["telemetry"]["derivation_error"] = str(e)
 
         result["telemetry"]["phase3_strategies_tried"] = phase3_strategies_tried
         result["total_tokens"] += phase3_extra_tokens
@@ -1460,7 +1422,7 @@ class V3BenchmarkRunner:
         """Compute breakdown of which phase solved each task."""
         breakdown = {
             "phase1": 0, "pr_cot": 0, "refinement": 0,
-            "derivation": 0, "none": 0, "error": 0,
+            "none": 0, "error": 0,
         }
         for r in results.values():
             phase = r.get("phase_solved", "none")

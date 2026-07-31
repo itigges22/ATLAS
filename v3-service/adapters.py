@@ -72,7 +72,6 @@ _PHASE_RETRY_COUNT = {
     "phase1_sstar": 2,      # S* tiebreak among passing candidates
     "pr_cot": 3,            # required PR-CoT repair
     "refinement": 4,        # required refinement loop
-    "derivation": 5,        # required derivation chains
     "none": 5,              # nothing passed; best-by-energy returned
 }
 
@@ -357,9 +356,9 @@ class SandboxAdapter:
     though it would work on the user's machine.
 
     `test_input` is piped to the run as standard input (the /execute
-    `stdin` field) — the same contract the bench's SStarSandboxAdapter
-    implements. S* distinguishing inputs and derivation-chain step test
-    cases reach the candidate under test through it.
+    `stdin` field) — the same stdin contract the bench sandbox adapters
+    implement, so per-candidate test inputs reach the candidate under
+    test.
     """
 
     def __init__(self, project_files: Optional[Dict[str, str]] = None):

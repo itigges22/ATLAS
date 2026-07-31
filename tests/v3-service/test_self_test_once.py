@@ -90,9 +90,6 @@ def _run_pipeline(monkeypatch, self_test_gen):
     service.refinement_loop = SimpleNamespace(
         run=lambda **kw: SimpleNamespace(solved=False, total_tokens=0,
                                          total_iterations=1, winning_code=""))
-    service.derivation_chains = SimpleNamespace(
-        solve=lambda **kw: SimpleNamespace(solved=False, total_tokens=0,
-                                           final_code="", reason="exhausted"))
     return service.run("sum two ints from stdin", task_id="d2")
 
 

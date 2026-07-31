@@ -1,9 +1,9 @@
 """D4: SandboxAdapter must actually send `test_input` to the sandbox.
 
 The adapter's ``__call__(code, test_input)`` accepted a test input and
-silently dropped it — S* distinguishing inputs and derivation-chain step
-test cases never reached the candidate under test, so per-step
-"verification" only proved the code ran with no input at all.
+silently dropped it — per-candidate test inputs never reached the
+candidate under test, so per-step "verification" only proved the code
+ran with no input at all.
 
 These tests mock the HTTP layer and assert the input lands in the
 ``/execute`` request payload under the field name the sandbox schema
