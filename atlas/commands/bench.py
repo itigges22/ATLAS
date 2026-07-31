@@ -32,7 +32,14 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,
 
     root = _atlas_root()
 
-    # Build runner command
+    # Build runner command.
+    #
+    # --baseline turns the V3 phases off, which is the point of this
+    # command: the corpus `atlas lens build --from-results` reads is one
+    # code/passed pair per task, produced by the model unaided. On that
+    # path the runner generates a single candidate per task, so candidate
+    # selection has nothing to choose between — selection_strategy is
+    # carried through as run metadata only (see main()'s --strategy help).
     run_id = run_id or f"bench_{dataset}_{int(time.time())}"
     cmd = [
         sys.executable, "-m", "atlas.bench.v3_runner",
@@ -169,7 +176,13 @@ def main(argv=None) -> int:
         default=0, help="number of tasks to run (0 = all, default)")
     parser.add_argument("--strategy", "--selection-strategy", dest="strategy",
         default="random", choices=["lens", "random", "logprob", "oracle"],
-        help="candidate selection strategy (default: random)")
+        help="candidate selection strategy, recorded in the run metadata "
+             "(default: random). It picks among several candidates for the "
+             "same task, and this command runs the runner's baseline path — "
+             "one candidate per task — so all four values give the same "
+             "results here. Strategies differ only on multi-candidate runs: "
+             "`python -m atlas.bench.v3_runner --selection-strategy ...` "
+             "without --baseline")
     parser.add_argument("--run-id", default=None,
         help="name for this run (default: bench_livecodebench_<timestamp>); "
              "results land in benchmark/results/<run-id>/")
