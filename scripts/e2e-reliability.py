@@ -71,6 +71,10 @@ class Task:
     # Files the session is expected to leave parseable. Any workspace file is
     # checked for corruption regardless; this is the subset that must exist.
     must_exist: tuple[str, ...] = ()
+    # A question, not a job. The tiers exist so V3 does not run on everything:
+    # a question should get an answer from the conversational tier, with no
+    # writes and no multi-minute pipeline. Both are checked.
+    conversational: bool = False
 
 
 SNAKE_APP = (REPO / "scripts" / "fixtures" / "snake_app.py")
@@ -320,6 +324,90 @@ TASKS: dict[str, Task] = {
 
 for _n in ("sonar", "course", "slope", "shoal"):
     TASKS[f"aoc_{_n}"] = _aoc_task(_n)
+
+
+# --- conversational probes: answer, do not edit, do not run V3 -----------
+#
+# The tier system's whole point is that V3 does not run on everything. A
+# question should come back from the conversational tier: an answer, no
+# writes, and no multi-minute pipeline. A wrong answer is a model limit; V3
+# spinning up for a question is a product defect, and costs minutes.
+
+_QUIRKY_SRC = '''"""Order bookkeeping."""
+
+
+def apply_discount(total, pct):
+    """Reduce total by pct percent."""
+    return total - (total * pct / 100)
+
+
+def find_duplicates(items):
+    """Return values that appear more than once."""
+    dupes = []
+    for i in range(len(items)):
+        for j in range(len(items)):
+            if i != j and items[i] == items[j] and items[i] not in dupes:
+                dupes.append(items[i])
+    return dupes
+'''
+
+
+def _answer_text(s: "Session") -> str:
+    parts = []
+    for ev in s.events:
+        t, d = ev.get("type"), (ev.get("data") or {})
+        if t == "text":
+            parts.append(str(d.get("content") or ""))
+        elif t == "done":
+            parts.append(str(d.get("summary") or ""))
+    return " ".join(parts).lower()
+
+
+def _check_explains(terms: tuple[str, ...], any_of: tuple[tuple[str, ...], ...] = ()):
+    """The answer has to contain the substance, not merely be long.
+
+    Deliberately generous: each clause accepts synonyms, because this measures
+    whether the question was understood, not whether it was phrased the way
+    the check's author would have phrased it.
+    """
+    def check(ws: Path, s: "Session" = None) -> tuple[bool, str]:
+        text = _answer_text(s) if s is not None else ""
+        if len(text.strip()) < 40:
+            return False, "no substantive answer was produced"
+        missing = [t for t in terms if t not in text]
+        if missing:
+            return False, f"answer never mentions {missing}"
+        for group in any_of:
+            if not any(g in text for g in group):
+                return False, f"answer covers none of {list(group)}"
+        return True, "answer covers the substance"
+    return check
+
+
+TASKS["ask_explain"] = Task(
+    name="ask_explain",
+    prompt=("In orders.py, what does find_duplicates do, and what is its time "
+            "complexity? Just explain — do not change any code."),
+    files={"orders.py": _QUIRKY_SRC},
+    check=_check_explains(("duplicat",),
+                          any_of=(("o(n^2)", "o(n2)", "o(n²)", "quadratic",
+                                   "nested loop", "n squared"),)),
+    must_exist=("orders.py",),
+    conversational=True,
+)
+
+TASKS["ask_bug"] = Task(
+    name="ask_bug",
+    prompt=("In orders.py, apply_discount(100, 10) returns 90.0 but a "
+            "colleague says it should return 90. Explain what is going on "
+            "here and whether it is actually a bug. Do not change the code."),
+    files={"orders.py": _QUIRKY_SRC},
+    check=_check_explains((),
+                          any_of=(("float", "division", "/", "decimal"),
+                                  ("90.0", "90"),)),
+    must_exist=("orders.py",),
+    conversational=True,
+)
 
 
 def _check_multifile(ws: Path) -> tuple[bool, str]:
@@ -621,6 +709,32 @@ def h6_service_fault(s: Session) -> list[str]:
     return out
 
 
+def h9_tier_misapplied(s: Session, task: Task) -> list[str]:
+    """V3 ran, or files were edited, in answer to a question.
+
+    The tiers exist so the heavy pipeline does not run on everything. A
+    question should be answered from the conversational tier: a wrong answer
+    is a model limit, but spending a multi-minute V3 pipeline on "what does
+    this function do" is a product defect that costs the user minutes, and
+    editing code nobody asked to have edited is worse than slow.
+    """
+    if not task.conversational:
+        return []
+    out = []
+    v3 = [e for e in s.events
+          if str(e.get("type") or "").startswith("v3_")]
+    if v3:
+        kinds = sorted({str(e.get("type")) for e in v3})[:4]
+        out.append(f"H9 tier: the V3 pipeline ran on a question ({kinds})")
+    wrote = [c for c, r in zip(s.of_type("tool_call"), s.of_type("tool_result"))
+             if (c.get("data") or {}).get("name") in WRITE_TOOLS
+             and (r.get("data") or {}).get("success")]
+    if wrote:
+        names = sorted({(c.get("data") or {}).get("name") for c in wrote})
+        out.append(f"H9 tier: a question caused file writes ({names})")
+    return out
+
+
 def h8_anchored_on_injected_text(s: Session) -> list[str]:
     """The model anchored an edit on text ATLAS injected, not on file content.
 
@@ -785,7 +899,10 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
             s.quality = {"error": str(e)}
         return s
     try:
-        s.task_passed, s.task_detail = task.check(workspace)
+        if task.conversational:
+            s.task_passed, s.task_detail = task.check(workspace, s)
+        else:
+            s.task_passed, s.task_detail = task.check(workspace)
     except Exception as e:  # a check that explodes is a failed task, not a crash
         s.task_passed, s.task_detail = False, f"check raised: {e}"
     # Quality of what the agent wrote, excluding the fixtures it was handed.
@@ -912,6 +1029,7 @@ def main() -> int:
             s.defects += h5_corrupt_write(s, task)
             s.defects += h6_service_fault(s)
             s.defects += h8_anchored_on_injected_text(s)
+            s.defects += h9_tier_misapplied(s, task)
             s.defects += h7_background_leak(args.sandbox_container, s)
             sessions.append(s)
             if args.save_events:

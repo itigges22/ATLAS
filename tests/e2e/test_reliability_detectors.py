@@ -257,3 +257,56 @@ def test_h2_silent_on_a_message_that_blames_the_models_content(rel, tmp_path):
         {"type": "done", "data": {"summary": "x"}},
     ], tmp_path)
     assert rel.h2_false_rejection(s) == []
+
+
+# --- H9 tier appropriateness ---------------------------------------------
+
+def test_h9_flags_v3_running_on_a_question(rel, tmp_path):
+    """The tiers exist so the heavy pipeline does not run on everything.
+
+    A wrong answer is a model limit. Spending a multi-minute V3 pipeline on
+    "what does this function do" is a product defect that costs real minutes.
+    """
+    task = rel.Task(name="ask", prompt="what does f do?", files={},
+                    check=lambda p, s=None: (True, ""), conversational=True)
+    s = _session(rel, [
+        {"type": "v3_probe", "data": {"stage": "probe"}},
+        {"type": "text", "data": {"content": "It counts duplicates."}},
+        {"type": "done", "data": {"summary": ""}},
+    ], tmp_path)
+    found = rel.h9_tier_misapplied(s, task)
+    assert found and "V3 pipeline ran on a question" in found[0]
+
+
+def test_h9_flags_a_question_that_edited_files(rel, tmp_path):
+    task = rel.Task(name="ask", prompt="what does f do?", files={},
+                    check=lambda p, s=None: (True, ""), conversational=True)
+    s = _session(rel, [
+        _call("edit_file", path="orders.py"), _ok(),
+        {"type": "done", "data": {"summary": "done"}},
+    ], tmp_path)
+    found = rel.h9_tier_misapplied(s, task)
+    assert found and "caused file writes" in found[0]
+
+
+def test_h9_silent_on_a_clean_conversational_turn(rel, tmp_path):
+    task = rel.Task(name="ask", prompt="what does f do?", files={},
+                    check=lambda p, s=None: (True, ""), conversational=True)
+    s = _session(rel, [
+        _call("read_file", path="orders.py"), _ok(),
+        {"type": "text", "data": {"content": "It is quadratic."}},
+        {"type": "done", "data": {"summary": ""}},
+    ], tmp_path)
+    assert rel.h9_tier_misapplied(s, task) == []
+
+
+def test_h9_does_not_constrain_a_work_task(rel, tmp_path):
+    """V3 and writes are exactly what a coding task should produce."""
+    task = rel.Task(name="fix", prompt="fix the bug", files={},
+                    check=lambda p: (True, ""))
+    s = _session(rel, [
+        {"type": "v3_probe", "data": {}},
+        _call("edit_file", path="a.py"), _ok(),
+        {"type": "done", "data": {"summary": "fixed"}},
+    ], tmp_path)
+    assert rel.h9_tier_misapplied(s, task) == []
