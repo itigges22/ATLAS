@@ -145,3 +145,27 @@ def test_no_op_gate_fails_open_when_the_original_is_broken():
     res = main.structural_edit("app.py", "def index(:\n    pass\n",
                                "function:index", "def index():\n    pass\n")
     assert "changes no code" not in res.get("error", "")
+
+
+def test_truncated_template_names_edit_file_as_the_route():
+    """Seven consecutive structural_edits failed this way in one session.
+
+    The model re-emitted a large template inside function:index and truncated
+    it every time. function:index is a VALID selector, so it never took the
+    tag-selector path that explains where the markup actually lives.
+    """
+    truncated = ('@app.route(\'/\')\ndef index():\n'
+                 '    return render_template_string("""\n<html>\n<script>\n'
+                 'let paused = false;\n')
+    res = main.structural_edit("app.py", _APP, "function:index", truncated)
+    assert not res.get("success")
+    err = res["error"]
+    assert "template literal" in err
+    assert "edit_file" in err and "one unique line" in err
+
+
+def test_plain_syntax_error_gets_no_template_advice():
+    res = main.structural_edit("app.py", _APP, "function:index",
+                               "@app.route('/')\ndef index():\n    return 'oops\n")
+    assert not res.get("success")
+    assert "template literal" not in res["error"]

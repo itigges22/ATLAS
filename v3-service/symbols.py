@@ -770,6 +770,21 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             entities = [ent for ent in ("&lt;", "&gt;", "&quot;", "&amp;", "&#39;")
                         if ent in content]
             lead = ""
+            # An unterminated string here is the signature of re-emitting a
+            # large template inside the node and truncating it. Observed live:
+            # seven consecutive structural_edits on function:index, each
+            # failing this way, because the JS the model wanted to change lives
+            # in a module-level template the function only renders. The
+            # tag-selector message says this, but the model never sees it —
+            # function:index is a VALID selector, so it never takes that path.
+            _msg = (e.msg or "").lower()
+            if "unterminated" in _msg or "eof while scanning" in _msg:
+                lead = ("An unterminated string usually means you re-emitted a "
+                        "large template literal and it got cut off. If the code "
+                        "you actually need to change lives inside that template, "
+                        "do not rewrite the node at all: use edit_file with "
+                        "old_str set to one unique line copied from inside the "
+                        "template. ")
             if entities:
                 lead = (f"Your replacement contains HTML-escaped characters "
                         f"({', '.join(entities)}) where the file needs literal "
