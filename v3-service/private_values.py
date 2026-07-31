@@ -1,14 +1,15 @@
 """Private-value filtering: masks credential-shaped values before they
 reach a serialized sink (logs, error details, diagnostics).
 
-CANONICAL COPY NOTICE: this file exists byte-identically in three
-places — geometric-lens/geometric_lens/, sandbox/, and v3-service/ —
-because each service ships as a separate container without a shared
-package. tests/contracts/test_private_value_filtering.py enforces that
-the copies stay identical and that each passes the shared fixture
-corpus (tests/fixtures/private_value_fixtures.json), which the Go
-implementation (proxy/private_values.go) also passes. Edit all copies
-together.
+CANONICAL COPY NOTICE: this file exists byte-identically in four
+places — atlas/redact.py, geometric-lens/geometric_lens/, sandbox/,
+and v3-service/ — because each service ships as a separate container
+without a shared package, and the CLI ships as a pip package no
+service image installs. tests/contracts/test_private_value_filtering.py
+enforces that the copies stay identical and that each passes the
+shared fixture corpus (tests/fixtures/private_value_fixtures.json),
+which the Go implementation (proxy/private_values.go) also passes.
+Edit all four copies together.
 
 Patterns are deliberately conservative (assignment/header/key-block
 shapes with secret-ish key names) so ordinary content — "timeout=30",
