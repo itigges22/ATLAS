@@ -1,3 +1,39 @@
+// Stuck-pattern detectors and run-output steers: the two ways the agent loop
+// notices a turn is going nowhere and says something useful about it.
+//
+// Detectors — stateful, one per repetition shape:
+//
+//	recordToolCall  — the same (tool, args) signature repeated in close
+//	                  succession: read_file('app.py') four times in six
+//	                  turns, the same failing curl three times over.
+//	recordReasoning — the same reasoning prefix emitted turn after turn,
+//	                  the prose sibling of the above.
+//
+// Each keeps a rolling window on AgentContext, fires once its window crosses
+// a threshold, and returns a corrective the loop injects before the next LLM
+// call.
+//
+// Steers — stateless, one per recognizable failure in command output:
+//
+//	missingModuleSteer      — ModuleNotFoundError. The sandbox ships no app
+//	                          libraries, so the steer says install it rather
+//	                          than leaving the model to re-run the command.
+//	missingCommandSteer     — "git: command not found" and friends.
+//	brokenInlineScriptSteer — a python -c one-liner the shell mangled.
+//	missingFileSteer        — a path the OS couldn't open that differs from
+//	                          a real workspace file only by case.
+//	tracebackSteer          — a Python traceback, reduced to the deepest
+//	                          in-project file:line:function, with
+//	                          tracebackExclusion and runBlockAfterTraceback
+//	                          keeping the model from re-running the same
+//	                          crash before it edits.
+//
+// The steers are not detectors in the same sense: they hold no state, track
+// no history, and read one tool result rather than a window of them. They sit
+// here because they answer the same loop question from the other side —
+// the detectors see the model about to repeat itself, the steers see what the
+// workspace already said about why.
+
 package main
 
 import (

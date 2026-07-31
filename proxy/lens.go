@@ -1,3 +1,32 @@
+// The proxy's lens surfaces: everything that reads the geometric-lens
+// service, feeds the corpus it trains on, or reports whether it is calibrated
+// for the model currently being served.
+//
+// In file order:
+//
+//	Per-write scoring — every write_file / edit_file payload goes to
+//	  /internal/lens/score-per-step for its C(x) and G(x) numbers. A run of
+//	  low gx_score_min, or one write below the severe cutoff, is the "stub
+//	  loop" signal the agent loop breaks with a corrective. Thresholds come
+//	  from the model's own calibration or the check is skipped — one model's
+//	  cutoffs are meaningless against another's residual stream.
+//	Training-corpus collection — each file the model authored during a pass
+//	  is stashed, then labeled and weighted by the human verdict and
+//	  appended as per-model JSONL. Nothing trains here; `atlas lens retrain`
+//	  consumes the corpus later.
+//	The /feedback handler — where that verdict arrives from the TUI, with
+//	  the pending-pass stash it draws from and the training-status endpoint
+//	  behind the "retrain available" alert.
+//	Calibration probes — /v1/calibration/status, built from the lens
+//	  service's /health plus a local read of the ASA control vector, is the
+//	  seven-dimension table the TUI badge and `atlas doctor` both render.
+//
+// Scoring and collection are one loop seen at two points: the write the lens
+// scores now is the write a human labels later, and that label trains the
+// lens that scores the next one. Keeping both in one file keeps the round
+// trip legible — and keeps the calibration probe next to the code whose
+// behavior it reports on.
+
 package main
 
 import (

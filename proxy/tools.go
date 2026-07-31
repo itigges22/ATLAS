@@ -1,3 +1,39 @@
+// The agent's tool surface: what the model may call, what happens when it
+// does, and how the model is told the tools exist at all.
+//
+// In file order:
+//
+//	Registry and dispatch — a name→ToolDef map populated in init(), and
+//	  executeToolCall, the one entry point the agent loop uses.
+//	Eleven tool definitions: read_file, outline_file, search_files,
+//	  list_directory, write_file, edit_file, structural_edit, delete_file,
+//	  move_file, find_file, run_command. Each is a constructor returning its
+//	  ToolDef — schema, model-facing description, executor — so a tool's
+//	  three faces are edited in one place. The V3 and sandbox calls a tool
+//	  makes (candidate generation for a T2 write, tree-sitter outline,
+//	  pycheck, the run client) sit with the tool that makes them rather than
+//	  in a shared client block.
+//	Tier classification — whether a given write is boilerplate the proxy
+//	  writes straight to disk (T0/T1) or logic worth routing through the V3
+//	  pipeline (T2/T3), refined by cyclomatic complexity from v3-service.
+//	Helpers — path resolution across the three coordinate systems the model,
+//	  host and sandbox each use, the redundant-read short circuit, and the
+//	  V3-stage → SSE-event name map.
+//	Background commands — run_background, tail_background, stop_background:
+//	  the remaining three of the fourteen, kept as a set with their sandbox
+//	  /jobs client because none of them is usable alone.
+//	Output constraint — the JSON Schema and the GBNF grammar that hold the
+//	  model to one tool-call shape, both generated from the registry.
+//	Prompt rendering — the same registry turned into the "## Available
+//	  Tools" section of the system prompt, with a variant that omits named
+//	  tools for the per-decision nudge.
+//
+// One file because there is one source of truth. Add a tool to the registry
+// and its schema, its grammar alternative and its prompt entry all follow
+// from the same ToolDef. Splitting the definitions away from the generators
+// is exactly what would let the model's instructions drift from what the
+// grammar permits and what the executor actually does.
+
 package main
 
 import (

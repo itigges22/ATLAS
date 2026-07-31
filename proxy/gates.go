@@ -1,3 +1,38 @@
+// Gates: the checks the agent loop runs at its decision points — before a
+// write reaches disk, and before a `done` is accepted.
+//
+// In file order:
+//
+//	Completion-claim verification — bounces a `done` whose summary claims
+//	  universal success ("all routes work") while the workspace still shows
+//	  a structural gap. Needs both halves, so a narrow summary or a clean
+//	  workspace passes untouched.
+//	Structural-unresolved gate — asks v3-service whether a write or edit
+//	  leaves an undefined name behind, and rejects only the unresolved names
+//	  that this change introduced.
+//	Syntax gate — routes fallback writes through the sandbox's
+//	  /syntax-check. These are the writes that skipped the V3 pipeline, so
+//	  nothing else in the loop has parsed them.
+//	Embedded-script gate — parses the JS/CSS inside <script>/<style> blocks
+//	  in HTML files and in Python string literals, which every other gate is
+//	  structurally blind to.
+//	Plan adherence — matches each tool call against the pre-flight plan and
+//	  counts the off-plan streak, regenerating the plan once the streak runs
+//	  long. Advisory: it never blocks a call.
+//	Plan-progress reminder — renders the compact step-progress block
+//	  injected ahead of each LLM call so a long multi-file task doesn't
+//	  lose track of what's left.
+//	Asset-graph lint — cross-file coherence for small web projects: a
+//	  template no route renders, an href to a file that isn't there, a fetch
+//	  to a route that doesn't exist. Advisory notes, deduped per session.
+//
+// They share a shape, not a subject. Each one inspects agent output or the
+// workspace at a single point in the loop and returns a string; the blocking
+// four return it as a rejection the model must answer, the advisory three
+// return it as a [system note]. They hold no state in common — this is a
+// policy surface, not a pipeline, and gates can be read and changed one at a
+// time.
+
 package main
 
 import (
