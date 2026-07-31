@@ -758,6 +758,23 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
 
     s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
                 wall_s=wall, stream_ok=stream_ok)
+    # Fixture integrity first. A model that rewrites the input it was given is
+    # not solving the task, and without this the symptom surfaces as a
+    # confusing "wrong answer" — one session overwrote a single-line puzzle
+    # input, which write_file allows because the surgical-edit gate only
+    # protects existing files over five lines.
+    tampered = [n for n, original in task.files.items()
+                if (workspace / n).exists()
+                and (workspace / n).read_text() != original]
+    if tampered:
+        s.task_passed = False
+        s.task_detail = (f"modified the fixture it was given: "
+                         f"{', '.join(sorted(tampered))}")
+        try:
+            s.quality = analyze_quality(workspace, set(task.files)).as_dict()
+        except Exception as e:
+            s.quality = {"error": str(e)}
+        return s
     try:
         s.task_passed, s.task_detail = task.check(workspace)
     except Exception as e:  # a check that explodes is a failed task, not a crash
