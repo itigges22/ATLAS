@@ -224,7 +224,7 @@ Status legend: ✅ done · 🔜 queued · ⏸ owner decision · ❌ rejected (do
 | A29 | **rpg.go quarantine LEAKY**: `planConstraintsForTarget`/`regenerateOnDrift`/`reportRPGDrift` called from tools.go write paths; RPG fields in types.go; 16MB SSE buffer in v3_bridge.go sized for RPG | ⏸ owner (4-file decision) | ⏸ |
 | A30 | `ATLAS_GRAMMAR_MODE=loose` flagged dead by audit | **❌ REJECTED** — Gemma requires loose (done-spam on strict); documented instead | ❌ |
 | A31 | lens.go/gates.go/detectors.go/tools.go header comments understate contents | FIX headers | 🔜 |
-| A32 | dead knobs `ATLAS_MACOS_PREFIX`/`ATLAS_LLAMA_HOST`/`ATLAS_BACKEND` in .env.example, no reader found in Go/py | verify vs scripts, then DELETE | 🔜 (check macOS overlays first) |
+| A32 | `ATLAS_MACOS_PREFIX`/`ATLAS_LLAMA_HOST`/`ATLAS_BACKEND` | **❌ REJECTED 2026-08-01 — NOT dead.** Verified 8 / 3 / 15 referencing files respectively (the macOS hybrid path + entrypoints + compose). The July audit searched Go/py only and missed the shell/compose surface. | ❌ keep |
 
 ### L-B: v3-service + geometric-lens (key items; blast radius in audit report)
 
