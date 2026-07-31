@@ -608,6 +608,14 @@ def evaluate_combined(query: str) -> dict:
             "gx_available": gx_available,
             "enabled": True,
             "latency_ms": round(elapsed_ms, 1),
+            # The G(x) score scale is per-model, so a bare score means
+            # nothing without the boundaries it was calibrated against.
+            # Callers that act on the score (v3's candidate allocator
+            # escalates on gx < severe) must use THIS model's numbers, not
+            # a compiled-in default: the shipped bundles differ by more
+            # than 2x on severe. None when uncalibrated, which callers
+            # read as "do not act on the score".
+            "thresholds": dict(gx_thresholds) if gx_thresholds else None,
         }
 
     except Exception as e:
