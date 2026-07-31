@@ -424,6 +424,38 @@ direction: lens/lint on embedded <script> blocks or a headless page probe.
 disabled with a clear log line (fail-soft verified working); live volume
 chowned + Dockerfile pre-creates the path owned by appuser.
 
+## Detector unification spec (Phase 3c — behavior-identical stage 1)
+
+**The six detectors are not redundant — their PLUMBING is.** Each observes
+genuinely different evidence (arg identity / reasoning text / lens score trend /
+failure paths / read-write ratio / write count), so merging the *signals* would
+lose real coverage. What duplicates is everything around them:
+
+| Today | Count |
+|---|---|
+| State owners (AgentContext fields + loop locals) | 5 + 5 |
+| `pendingXCorrective` vars + near-identical inject blocks | 3 |
+| Hand-rolled ladders (repeat steer-then-kill, path-aware breaker + output-rescue, two-stage read nudge) | 3 |
+| "Caller is responsible for resetting …" contracts (ownership split detector↔loop) | 3 |
+
+**Target: one `loopHealth` struct** owned by `runState` (mirroring the gate
+collapse) holding all stuck-state, one `observe*` method per signal, **owning
+its own resets** (killing the caller-responsibility split), emitting findings
+with a severity:
+- `nudge` — inject a `[system note]`, continue (read budget, first repeat)
+- `steer` — inject + advance the escalation counter (edit-miss → structural_edit)
+- `stop` — end the run with a summary (second repeat, same-path error loop)
+
+One corrective queue drained at ONE site replaces three inject blocks; one
+ladder replaces three, preserving today's observable thresholds: steer-before-
+kill on repeats, path-aware continue on multi-file grinds, output-rescue before
+any stop. **No signal removed, no threshold moved** — plumbing collapse, not
+behavior redesign. Merges only after a dogfood session (Category B item 3).
+Sequencing: implement after the F1 gate work clears `agent.go` (index-collision
+lesson from the 2026-08-05 concurrent-agent incident).
+
+---
+
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
 - `v3-service/graph/` — clean layered DAG, no cycles, each file one concern. Minor: trim
