@@ -303,7 +303,7 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 
 ### ROCm container can't pull `rocm/rocm-terminal`
 
-**Symptom:** `atlas doctor` ROCm check times out at the image pull, or `docker compose -f ... -f docker-compose.rocm.yml pull` fails on the `llama-server` build.
+**Symptom:** `atlas doctor` ROCm check times out at the image pull, or `docker compose -f ... -f docker-compose.rocm.yml build llama-server` stalls fetching its `rocm/dev-ubuntu-*` base. (`docker compose pull` never touches llama-server on this overlay — it is a local build, `pull_policy: build`.)
 
 **What it means:** ROCm images are large (~2 GB) and Docker Hub rate-limits anonymous pulls.
 

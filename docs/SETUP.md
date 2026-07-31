@@ -211,6 +211,7 @@ This is the most heavily exercised deployment method: CI validates the compose f
 - **Docker** alone — ROCm doesn't need a separate container runtime; passthrough via `--device=/dev/kfd --device=/dev/dri` is enough
 - Your user must be in the `video` and `render` groups: `sudo usermod -aG video,render $USER` (then re-login)
 - ~22 GB disk space (ROCm image is ~2 GB larger than the CUDA equivalent)
+- 30-60 min for the first `up`: the ROCm llama-server image is compiled on your machine rather than pulled (see [AMD ROCm — what's different](#amd-rocm--whats-different))
 
 ### Setup
 
@@ -267,7 +268,7 @@ atlas
 
 #### AMD ROCm — what's different
 
-The ROCm path is identical to NVIDIA *except* for these three points:
+The ROCm path is identical to NVIDIA *except* for these four points:
 
 1. **Bring up with both compose files** (or let `atlas init` do it for you):
    ```bash
@@ -275,7 +276,12 @@ The ROCm path is identical to NVIDIA *except* for these three points:
    ```
    The override switches the llama-server image to the ROCm build, swaps the NVIDIA driver request for `/dev/kfd` + `/dev/dri` passthrough, and forces `ATLAS_BACKEND=rocm` so the entrypoint takes the HIP-tuning branch.
 
-2. **No `nvidia-container-toolkit`** — ROCm doesn't need a separate container runtime, just kernel-level device access. Confirm your user is in the right groups:
+2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`: 30-60 min the first time, seconds afterwards from the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
+   ```
+
+3. **No `nvidia-container-toolkit`** — ROCm doesn't need a separate container runtime, just kernel-level device access. Confirm your user is in the right groups:
    ```bash
    id -nG | tr ' ' '\n' | grep -E '^(render|video)$'
    # Should print both. If not:
@@ -283,7 +289,7 @@ The ROCm path is identical to NVIDIA *except* for these three points:
    # Then log out + back in (or: newgrp render)
    ```
 
-3. **GPU compute target.** The default `Dockerfile.rocm` build is a "fat" image covering RDNA3 (7000 series), RDNA2 (6000 series), and CDNA2 (MI200) — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. For a smaller image targeted at your specific GPU, set `ATLAS_GFX_TARGET` before building:
+4. **GPU compute target.** The default `Dockerfile.rocm` build is a "fat" image covering RDNA3 (7000 series), RDNA2 (6000 series), and CDNA2 (MI200) — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. For a smaller image targeted at your specific GPU, set `ATLAS_GFX_TARGET` before building:
    ```bash
    # Example: only build for RX 7900 XT/XTX
    ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server

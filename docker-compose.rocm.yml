@@ -7,6 +7,14 @@
 # service). The geometric-lens, v3-service, sandbox, and atlas-proxy
 # containers are all CPU-only and unchanged.
 #
+# The ROCm llama-server image is built on the host, not pulled: nothing
+# publishes atlas-llama-rocm to GHCR (see .github/workflows/
+# build-images.yml for why AMD stays out of the build matrix). The
+# `pull_policy: build` below is what makes that explicit — `docker
+# compose pull` skips llama-server on this overlay, and `up` compiles
+# it from inference/Dockerfile.rocm. Budget 30-60 min for the first
+# build; later `up` calls reuse the layer cache and start in seconds.
+#
 # Hardware prereqs on the host:
 #   * AMD GPU with ROCm 6.x support, or RDNA4 (gfx1200/gfx1201) with
 #     ROCm 7.x via ATLAS_ROCM_TAG (see Dockerfile.rocm for gfx targets,
@@ -20,8 +28,17 @@
 
 services:
   llama-server:
-    # Pull / build the ROCm-built image, not the CUDA one.
+    # Name for the locally built ROCm image, replacing the CUDA one. The
+    # ghcr.io/<owner>/ prefix is the tag this host builds under, not a
+    # registry the image is fetched from — `atlas upgrade` skips it at
+    # signature verification for that reason, and the bootstrap's ASA
+    # step (`docker run …/atlas-llama-rocm`) finds it in the local image
+    # store after the first `up`.
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-llama-rocm:${ATLAS_IMAGE_TAG:-latest}
+    # Build, never pull: the image name above is not published. Without
+    # this, `docker compose pull` (scripts/atlas-bootstrap.sh runs one
+    # before `up`) fails the whole install with a 404 on the AMD path.
+    pull_policy: build
     build:
       context: ./inference
       dockerfile: Dockerfile.rocm
