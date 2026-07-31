@@ -87,6 +87,21 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_SHELL_SNAPSHOT_MAX_FILE_BYTES": Field("int", min=0),
     "ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED": Field("bool"),
     "ATLAS_CONTROL_VECTOR_LAYER_RANGE": Field("str"),
+    "ATLAS_CONTROL_VECTOR_SCALE": Field("float"),
+    # Embedding pooling the lens contract depends on (docker-compose.yml
+    # forwards it to the llama-server entrypoint, which always passes
+    # --pooling); mean is the convention model_identity.json enforces.
+    "ATLAS_EMBED_POOLING": Field("enum", enum=("none", "mean", "cls", "last", "rank")),
+    "ATLAS_REASONING_BUDGET": Field("int", min=0),
+    "ATLAS_PERMISSION_TIMEOUT_SEC": Field("int", min=0),
+    # GPU-vendor overlay knobs. Read by the rocm/vulkan compose files
+    # rather than the base one, so they are only set on those installs —
+    # but they are still ordinary .env keys and must not be called typos.
+    "ATLAS_GFX_TARGET": Field("str"),
+    "ATLAS_ROCM_TAG": Field("str"),
+    "ATLAS_HSA_OVERRIDE_GFX_VERSION": Field("str"),
+    "ATLAS_UBUNTU_TAG": Field("str"),
+    "ATLAS_VK_DEVICE_SELECT": Field("str"),
     # Opt-in for loading the legacy pickled G(x) artifact (gx_xgboost.pkl);
     # the lens refuses to unpickle by default — see CONFIGURATION.md.
     "ATLAS_ALLOW_PICKLE_GX": Field("bool"),
