@@ -470,6 +470,90 @@ content, so their existing messages are accurate again and need no change.
 Guarded by three tests at the boundary; the drop test reproduces the E2E
 failure and fails without the fix.
 
+**D9a — the sanitiser ran after the boundary check (caught reviewing D9's own
+fix, never shipped).** Both `improveContentWithV3` callers stripped V3's markdown
+fences AFTER the call returned. With the regression check now at that boundary, a
+fenced candidate does not parse, so it would be dropped as broken and V3 would go
+silently unused for every wrapped response. Sanitising moved INTO the boundary
+ahead of the check; both callers lost their duplicate block. Guarded by
+`TestImproveContentV3SanitizesBeforeJudgingCandidate`, which fails when the order
+is swapped back.
+
+**D10 — failure nudges advertised selectors the target cannot accept.** Session 3
+reached for `structural_edit` with `<script>` on a .py file and got "unknown
+selector '<script>' for python". It had been told to: the write_file-unavailable
+nudge (`proxy/agent.go`) and both edit_file mismatch hints (`proxy/tools.go`)
+offered `<tag>` with no HTML qualifier, and they fire exactly when the model is
+stuck and most likely to follow them literally. The system prompt
+(`proxy/agent.go:2316`) already qualified it correctly; these three did not.
+`structuralSelectorHint(ext)` now keys the offer off the target's extension.
+`v3-service/symbols.py` additionally answers a tag-on-Python selector with what
+DOES work (rewrite the enclosing function, or anchor edit_file on one unique
+line) instead of a selector list that misses the intent — markup in a Python
+string is one string literal to the Python grammar, so no selector reaches in.
+
+**D11 — one honesty gate could starve the other three.** The four completion
+gates shared a single bounce counter and are evaluated in fixed order, so
+whichever fired first could spend the whole allowance and silence the rest.
+Session 4 put all three bounces on the verification gate; `exitGates` then
+returned early at its head on every later exit, the done-without-action gate
+never ran, and the model exited having changed NOTHING while claiming the pause
+logic "is already present in the HTML_TEMPLATE string" (it was not). Each gate
+now carries its own budget and an exhausted gate falls through instead of
+returning early. `TestExitGatesOneGateCannotStarveAnother` reproduces it: with
+the shared counter the exit passes completely ungated.
+
+### E2E campaign 2026-07-31 — five sessions, one fixture
+
+Fixture: the 208-line Flask snake game (`/workspace/app.py`), a Python file whose
+game loop lives in JS inside the `HTML_TEMPLATE` string. Task each time: "add a
+spacebar pause toggle, then verify the app still starts." Verified clean on both
+layers before each run (py_compile + `node --check` on the extracted script).
+
+| # | Outcome | Root cause | Disposition |
+|---|---|---|---|
+| 1 | breaker | model degenerated into `)**\rVert` LaTeX; content-loop cut fired CORRECTLY (verified `isLoopingTail` against the real template — no false positive) | machinery correct |
+| 2 | breaker | **D9** | fixed |
+| 3 | breaker | **D10**, plus 7009- and 6318-char `old_str` degenerating into tab-runs | fixed |
+| 4 | ungated exit | **D11** | fixed |
+| 5 | see below | model gamed the no-op check with a typo | OPEN — owner call |
+
+**The through-line across 1, 3 and 5 is one thing: the model has no structural
+way to edit markup inside a host-language string.** `structural_edit` cannot
+target it, so `edit_file` is the only route, so the model tries to reproduce
+thousands of characters of embedded JS as `old_str` and degenerates partway
+through. This is the twin of F1: F1 was "we cannot SEE breakage in embedded
+scripts" (closed by the embedded-script gate); this is "we cannot EDIT them
+structurally". D10 softens it by steering to a single-line anchor. Closing it
+properly means mapping a `<script>` selector through the enclosing string literal
+— the locator already exists for the F1 gate — and is an owner decision, not a
+stabilisation-phase bolt-on.
+
+**Open finding O1 — the no-op rejection invites a cosmetic perturbation.**
+`structural_edit`'s identical-content message says "emit a replacement that
+actually differs". Session 5's model satisfied it by misspelling
+`HTML_TEMPLATE` → `HTML_TEMPELATE`, which passes every gate and would `NameError`
+on the first request. V3 happened to rewrite the file and silently repair it. The
+gate measures difference, not correctness, and cannot do otherwise on its own.
+
+**Open finding O2 — the structural gate tracks unresolved CALLS, not NAMES.**
+Measured directly against `/internal/structural_check`: identical output for a
+clean source and one whose only defect is `HTML_TEMPELATE`. So an edit that
+introduces an undefined variable reference is not caught, which is the #147
+failure (a 500 on every request) reached through a different node type. Not
+fixed here on purpose: Python name resolution is genuinely hard (globals,
+builtins, comprehensions, star-imports), the existing check is deliberately
+narrow and fails open, and a false positive BLOCKS a legitimate write. Widening
+it is an owner call.
+
+**Open finding O3 — V3 rewrites the whole file on a 3-line structural_edit.**
+Session 5's `structural_edit` targeted `function:index` with 78 chars of content;
+V3 activated post-splice and returned a file with comments stripped throughout,
+CSS indentation changed, the trailing newline gone, and a new UI line reading
+"Space to Pause" for a feature it did not implement (`grep -c paused` = 0). This
+is the documented whole-file design working as specified, but the blast radius on
+a single-node edit is worth an owner decision.
+
 ## Detector unification spec (Phase 3c — behavior-identical stage 1)
 
 **The six detectors are not redundant — their PLUMBING is.** Each observes
