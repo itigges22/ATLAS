@@ -478,6 +478,29 @@ without blocking dependents); or gate the probe on
 `GEOMETRIC_LENS_ENABLED`. Decide deliberately — this is a
 first-run-experience change, not a healthcheck tweak.
 
+## F1 validation dogfood (2026-08-01, demo2) — the loop closes
+
+The bug ATLAS introduced in the 2026-08-01 morning session (stray `)` in
+the `<script>` block inside `HTML_TEMPLATE`, which python-compile, a
+running server and every gate structurally could not see) was used as
+the acceptance test for the gate built from it.
+
+- **Pre-flight**: the deployed v3 image flagged the real file — `line 121:
+  unexpected \`)\`` — proving the gate works end to end, not just in tests.
+- **Session**: ATLAS fixed it. Line 121 is correct on disk; the embedded
+  JS now parses clean and so does the Python.
+- **No false positive**: the gate stayed SILENT on the correct fix. That
+  is the property that mattered most — a gate that blocks good writes is
+  worse than the blind spot it replaces.
+- **Honesty held**: verification genuinely failed (a 30s sandbox timeout
+  running a blocking Flask server), and the run ended with *"Wrote your
+  changes to disk; couldn't verify them automatically … Run them yourself
+  to confirm"* — the truth, not a success claim. Compare the morning
+  session, which claimed verification it never achieved.
+- Incidental: 3 `edit_file` old_str misses (the known small-model
+  byte-matching weakness) before the model switched approach; the
+  path-aware breaker ended the run rather than letting it spin.
+
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
 - `v3-service/graph/` — clean layered DAG, no cycles, each file one concern. Minor: trim
