@@ -115,6 +115,23 @@ services:
       llama-server:
         condition: service_healthy
     healthcheck:
+      # Deliberately /health, NOT /ready — do not "fix" this.
+      #
+      # /health is liveness: is the process up and serving? It returns 200
+      # whenever that is true (its own docstring says so). /ready is
+      # readiness: is C(x)/G(x) scoring actually functional? Those are
+      # different questions and Docker wants the first one.
+      #
+      # Pointing this at /ready deadlocks a fresh install: v3-service and
+      # atlas-proxy both `depends_on: geometric-lens: service_healthy`, and
+      # /ready returns 503 until the lens artifacts exist ("run atlas lens
+      # build") — so nothing would ever start on a new machine. Docker also
+      # restarts unhealthy containers, and restarting cannot conjure missing
+      # weights; it would just restart-loop.
+      #
+      # The readiness question IS gated, in the right place: proxy/main.go's
+      # handleReady reads this service's /ready, and lens scoring fail-softs
+      # everywhere else, so a degraded lens costs scoring, not the stack.
       test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
       interval: 15s
       timeout: 5s

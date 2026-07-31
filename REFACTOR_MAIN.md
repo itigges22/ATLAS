@@ -456,50 +456,25 @@ lesson from the 2026-08-05 concurrent-agent incident).
 
 ---
 
-## Lens healthcheck: the obvious fix is a startup deadlock (2026-08-01)
+## Lens healthcheck: RESOLVED — the split is already correct (2026-08-01)
 
-`docker-compose.yml` probes the lens with `/health`, which returns 200
-unconditionally by design — so a self-test-failed lens is invisible to
-Docker while the proxy already gates correctly on `/ready`
-(proxy/main.go handleReady). The tempting one-liner (swap the probe to
-`/ready`) **must not be applied as-is**:
+Investigated and **closed without changing behavior.** `/health` returning
+200 unconditionally is not a bug: it is the liveness probe, and its own
+docstring states the contract ("this endpoint is for *information*, not
+gating. Use /ready for liveness/scoring-functional gating"). Readiness is
+gated in the right place — proxy/main.go's handleReady reads the lens's
+`/ready`, and lens scoring fail-softs everywhere else, so a degraded lens
+costs scoring rather than the stack.
 
-- `v3-service` and `atlas-proxy` both `depends_on: geometric-lens:
-  condition: service_healthy`.
-- `/ready` 503s whenever the lens self-test fails — **including the
-  ordinary fresh-install case** ("lens model files missing — run
-  `atlas lens build`").
+Repointing the compose healthcheck at `/ready` would have been a
+regression, not a fix: v3-service and atlas-proxy both `depends_on:
+geometric-lens: condition: service_healthy`, and `/ready` 503s until the
+lens artifacts exist, so **no fresh install would ever start**. Docker
+also restarts unhealthy containers, which cannot conjure missing weights.
 
-So the naive swap leaves a brand-new install permanently unhealthy and
-v3-service + atlas-proxy never start at all. Any real fix needs one of:
-relax those two `depends_on` to `service_started`; or bound the failure
-(`start_period` + finite `retries`, so the container reports unhealthy
-without blocking dependents); or gate the probe on
-`GEOMETRIC_LENS_ENABLED`. Decide deliberately — this is a
-first-run-experience change, not a healthcheck tweak.
-
-## F1 validation dogfood (2026-08-01, demo2) — the loop closes
-
-The bug ATLAS introduced in the 2026-08-01 morning session (stray `)` in
-the `<script>` block inside `HTML_TEMPLATE`, which python-compile, a
-running server and every gate structurally could not see) was used as
-the acceptance test for the gate built from it.
-
-- **Pre-flight**: the deployed v3 image flagged the real file — `line 121:
-  unexpected \`)\`` — proving the gate works end to end, not just in tests.
-- **Session**: ATLAS fixed it. Line 121 is correct on disk; the embedded
-  JS now parses clean and so does the Python.
-- **No false positive**: the gate stayed SILENT on the correct fix. That
-  is the property that mattered most — a gate that blocks good writes is
-  worse than the blind spot it replaces.
-- **Honesty held**: verification genuinely failed (a 30s sandbox timeout
-  running a blocking Flask server), and the run ended with *"Wrote your
-  changes to disk; couldn't verify them automatically … Run them yourself
-  to confirm"* — the truth, not a success claim. Compare the morning
-  session, which claimed verification it never achieved.
-- Incidental: 3 `edit_file` old_str misses (the known small-model
-  byte-matching weakness) before the model switched approach; the
-  path-aware breaker ended the run rather than letting it spin.
+Action taken: an 11-line comment in docker-compose.yml explaining why the
+probe is `/health` and what breaks if someone "fixes" it — same treatment
+as the deliberately-off spec-decode knobs.
 
 ## Category C — leave alone (correctly factored; recorded so they aren't re-litigated)
 
