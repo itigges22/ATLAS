@@ -54,6 +54,23 @@ export function renderError(error: unknown): RenderedError {
 		return { message: `${label}: ${error.detail || 'request failed'}`, action: 'none', prominent: false };
 	}
 	if (error instanceof Error) {
+		// A connect TIMEOUT against a loopback name is almost always the IPv6
+		// trap: the proxy binds 127.0.0.1 only, and a resolver that returns ::1
+		// first leaves the request hanging on an address nothing listens on
+		// until undici gives up. A refused connection means the proxy is down;
+		// a timeout on localhost usually means it is up and unreachable by that
+		// name, which is a completely different fix.
+		const code = (error as { cause?: { code?: string } }).cause?.code;
+		if (code === 'UND_ERR_CONNECT_TIMEOUT' && /\/\/localhost[:/]/.test(baseUrlOf(error))) {
+			return {
+				message:
+					'Could not reach the ATLAS proxy: the connection to localhost timed out. ' +
+					'The proxy listens on 127.0.0.1 only, so on hosts that resolve localhost to ::1 ' +
+					'first the request hangs. Set atlas.proxyUrl to http://127.0.0.1:8090.',
+				action: 'none',
+				prominent: true,
+			};
+		}
 		return { message: `Could not reach the ATLAS proxy: ${error.message}`, action: 'none', prominent: true };
 	}
 	return { message: `Could not reach the ATLAS proxy: ${String(error)}`, action: 'none', prominent: true };
@@ -88,4 +105,15 @@ export function describeForLog(detail: unknown): string {
 	} catch {
 		return String(detail);
 	}
+}
+
+/** Best-effort URL out of an undici error, for the localhost/IPv6 hint. undici
+ * puts the attempted address in the cause message ("attempted address:
+ * localhost:8090"), which is the only place it survives. */
+function baseUrlOf(error: unknown): string {
+	const cause = (error as { cause?: unknown }).cause;
+	if (cause instanceof Error) {
+		return `//${cause.message.split('attempted address:').pop()?.trim() ?? ''}`;
+	}
+	return '';
 }

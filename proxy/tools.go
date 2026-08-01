@@ -1473,6 +1473,25 @@ func editFileTool() *ToolDef {
 				}, nil
 			}
 
+			// Malformed-args check, BEFORE the read-staleness check. Observed
+			// live: the model sent
+			//   {"path":"app.py","old_str":"","":"new_str","content":"# hello world"}
+			// — an empty old_str, a key literally named "", and write_file's
+			// `content` field instead of new_str. It got "file not read yet",
+			// which was true and said nothing about the four things wrong with
+			// the call, so the next attempt fumbled a different field.
+			if strings.TrimSpace(input.OldStr) == "" {
+				hint := ""
+				if bytes.Contains(rawInput, []byte(`"content"`)) {
+					hint = " You sent `content`, which is write_file's field — edit_file does not take it."
+				}
+				return &ToolResult{Success: false, Error: "edit_file: old_str is required and cannot be empty." + hint +
+					" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, " +
+					"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use " +
+					"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does " +
+					"take `content`."}, nil
+			}
+
 			path := resolveAgentPath(ctx, input.Path)
 
 			// Require file was read first (staleness protection)
@@ -2523,7 +2542,13 @@ func insertAfterTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 			if strings.TrimSpace(in.Path) == "" {
-				return &ToolResult{Success: false, Error: "insert_after: path is required"}, nil
+				// Naming only the missing field sends the model back with a
+				// different field missing. Observed live: it sent
+				// {"line":0,"content":"..."} with no path, right after an
+				// edit_file that had also been malformed.
+				return &ToolResult{Success: false, Error: "insert_after: path is required. The call is " +
+					"insert_after {\"path\":\"app.py\", \"line\":<1-based number from read_file, 0 for top of file>, " +
+					"\"content\":<the new lines>}."}, nil
 			}
 			if in.Content == "" {
 				return &ToolResult{Success: false, Error: "insert_after: content is empty — nothing would be inserted"}, nil

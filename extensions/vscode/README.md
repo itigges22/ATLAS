@@ -23,7 +23,7 @@ The TUI (`tui/`) is the reference client; the extension mirrors its session conv
 
 ## Settings
 
-* `atlas.proxyUrl` — base URL of the ATLAS proxy server (default `http://localhost:8090`)
+* `atlas.proxyUrl` — base URL of the ATLAS proxy server (default `http://127.0.0.1:8090`). IPv4 on purpose: the proxy binds `127.0.0.1` only, so `localhost` hangs on hosts whose resolver returns `::1` first.
 * `atlas.serviceToken` — dev-override bearer token (prefer the `ATLAS: Set Service Token` command, which stores it in SecretStorage instead of plaintext settings)
 * `atlas.permissionMode` — `default` / `accept-edits` / `yolo`
 * `atlas.statusBar.enabled`, `atlas.statusBar.pollIntervalSec` — status bar connectivity polling

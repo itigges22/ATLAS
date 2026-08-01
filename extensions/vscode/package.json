@@ -74,9 +74,9 @@
       "properties": {
         "atlas.proxyUrl": {
           "type": "string",
-          "default": "http://localhost:8090",
+          "default": "http://127.0.0.1:8090",
           "scope": "machine-overridable",
-          "description": "Base URL of the ATLAS proxy server."
+          "description": "Base URL of the ATLAS proxy. Defaults to the IPv4 loopback rather than 'localhost': the proxy binds 127.0.0.1 only, and on hosts whose resolver prefers IPv6 'localhost' resolves to ::1 first, where nothing is listening, so the request hangs until it times out."
         },
         "atlas.serviceToken": {
           "type": "string",

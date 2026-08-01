@@ -163,7 +163,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * status bar poller via extension.ts. */
 	async makeClient(): Promise<AtlasClient> {
 		const config = vscode.workspace.getConfiguration('atlas');
-		const baseUrl = config.get<string>('proxyUrl', 'http://localhost:8090');
+		// 127.0.0.1, not localhost: the proxy binds IPv4 only, and a
+		// resolver that returns ::1 first makes every request hang for the
+		// full connect timeout instead of failing fast. Observed as
+		// UND_ERR_CONNECT_TIMEOUT against localhost:8090 on a healthy proxy.
+		const baseUrl = config.get<string>('proxyUrl', 'http://127.0.0.1:8090');
 		// Plaintext setting is a dev override; SecretStorage is the real home.
 		const token = config.get<string>('serviceToken', '') || (await this.secrets.get(TOKEN_SECRET_KEY)) || '';
 		return new AtlasClient({ baseUrl, token });

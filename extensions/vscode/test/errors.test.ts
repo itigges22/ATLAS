@@ -116,3 +116,38 @@ describe('describeForLog', () => {
 		expect(describeForLog(undefined)).toBeTypeOf('string');
 	});
 });
+
+describe('the localhost/IPv6 connect timeout', () => {
+	/** Shape undici produces: TypeError with a cause carrying code + address. */
+	function connectTimeout(address: string): Error {
+		const e = new TypeError('fetch failed');
+		(e as { cause?: unknown }).cause = Object.assign(
+			new Error(`Connect Timeout Error (attempted address: ${address}, timeout: 10000ms)`),
+			{ code: 'UND_ERR_CONNECT_TIMEOUT' },
+		);
+		return e;
+	}
+
+	it('names the fix instead of repeating "fetch failed"', () => {
+		// The live failure: proxy up and healthy on 127.0.0.1:8090, extension
+		// pointed at localhost:8090, request hung the full 10s.
+		const r = renderError(connectTimeout('localhost:8090'));
+		expect(r.message).toContain('127.0.0.1');
+		expect(r.message).toContain('::1');
+	});
+
+	it('does not blame IPv6 when the address is already IPv4', () => {
+		// A timeout against 127.0.0.1 is a different problem; sending the user
+		// to change a setting they already have right wastes their time.
+		const r = renderError(connectTimeout('127.0.0.1:8090'));
+		expect(r.message).not.toContain('Set atlas.proxyUrl');
+	});
+
+	it('leaves a refused connection alone', () => {
+		// ECONNREFUSED means the proxy is down — a completely different fix.
+		const e = new TypeError('fetch failed');
+		(e as { cause?: unknown }).cause = Object.assign(
+			new Error('connect ECONNREFUSED 127.0.0.1:8090'), { code: 'ECONNREFUSED' });
+		expect(renderError(e).message).not.toContain('Set atlas.proxyUrl');
+	});
+});

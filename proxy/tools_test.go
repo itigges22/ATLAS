@@ -1207,3 +1207,68 @@ func TestAppliedEditsAreTrackedPerSession(t *testing.T) {
 		t.Error("old_str/new_str must not be able to swap without changing the key")
 	}
 }
+
+// The live failure: the model sent
+//
+//	{"path":"app.py","old_str":"","":"new_str","content":"# hello world\n"}
+//
+// and got "file not read yet" — true, and silent about the empty old_str, the
+// key literally named "", and `content` being write_file's field. Its next
+// attempt fumbled a different field (insert_after with no path).
+func TestMalformedEditArgsNameTheShape(t *testing.T) {
+	tool := findTool(t, "edit_file")
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+
+	res, err := tool.Execute(json.RawMessage(
+		`{"path":"app.py","old_str":"","":"new_str","content":"# hello world\n"}`), ctx)
+	if err != nil {
+		t.Fatalf("expected a result, got error: %v", err)
+	}
+	if res.Success {
+		t.Fatal("an empty old_str must not be accepted")
+	}
+	for _, want := range []string{"old_str is required", "write_file's field", "insert_after"} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("error missing %q:\n%s", want, res.Error)
+		}
+	}
+}
+
+func TestEmptyOldStrWithoutContentSkipsTheContentHint(t *testing.T) {
+	// Don't accuse the model of a mistake it didn't make.
+	tool := findTool(t, "edit_file")
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+	res, _ := tool.Execute(json.RawMessage(`{"path":"a.py","old_str":"","new_str":"x"}`), ctx)
+	if res.Success {
+		t.Fatal("empty old_str must be rejected")
+	}
+	if strings.Contains(res.Error, "write_file's field") {
+		t.Errorf("content hint fired without a content field:\n%s", res.Error)
+	}
+}
+
+func TestInsertAfterMissingPathNamesTheWholeCall(t *testing.T) {
+	tool := findTool(t, "insert_after")
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+	res, _ := tool.Execute(json.RawMessage(`{"line":0,"content":"# hello world\n"}`), ctx)
+	if res.Success {
+		t.Fatal("missing path must be rejected")
+	}
+	for _, want := range []string{"path", "line", "content", "0 for top of file"} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("error missing %q:\n%s", want, res.Error)
+		}
+	}
+}
+
+// findTool returns a registered tool by name, failing the test if absent.
+func findTool(t *testing.T, name string) *ToolDef {
+	t.Helper()
+	for _, tool := range allTools() {
+		if tool.Name == name {
+			return tool
+		}
+	}
+	t.Fatalf("tool %q is not registered", name)
+	return nil
+}
