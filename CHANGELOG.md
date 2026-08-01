@@ -4,6 +4,71 @@
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-07-31
+
+### Measured reliability
+
+A day of running ATLAS against itself and fixing what the sessions showed.
+Every fix below was traced to an observed session and carries a test that
+fails without it. `scripts/e2e-reliability.py` reports the two numbers this
+work is judged on — harness integrity (ATLAS's own plumbing, which should be
+100%) and task success (bounded by the model) — plus objective code-quality
+probes from `scripts/code_quality.py`.
+
+**Added**
+
+- `insert_after` — a fifteenth tool that inserts lines after a line number
+  rather than after text the model must reproduce. Both existing edit
+  primitives put a large verbatim-output burden somewhere (`edit_file` an
+  anchor, `structural_edit` a whole node), and that is the step that
+  measurably fails. `read_file` already prints line numbers, so this takes a
+  number the model can cite and only the new text.
+- `scripts/verify-deployed.sh` — refuses to let a measurement describe code
+  that is not running, catching both source-newer-than-image and
+  image-newer-than-container.
+- Live-stack coverage for the TUI (17 of 21 slash commands driven through a
+  pty), the control plane (`/cancel`, `/v1/permission`), and multi-turn
+  conversations, none of which had any.
+
+**Fixed — tier and conversation**
+
+- A question that said "do not change any code" was classified as work, so
+  ATLAS was *more* likely to edit when told not to. Three causes: negation
+  blindness in both intent classifiers, an explain-plus-no-edit directive
+  read positionally, and a question detector that only saw a trailing `?`.
+- Questions about code were answered without opening the file, because one
+  system-prompt bullet lumped them in with greetings.
+- A reply that announced a tool call, or promised an answer, ended the turn
+  without delivering either.
+
+**Fixed — gates and writes**
+
+- V3 candidates that regressed the caller's content were blamed on the model.
+- One honesty gate could spend the shared bounce budget and silence the other
+  three.
+- A semantic no-op (only comments changed) counted as a completed edit.
+- A rejected tool call emitted no `tool_result`, so the call never resolved
+  for the client.
+- `write_file` could clobber a file the session had never read.
+- New files bypassed the syntax gate, because the sandbox's YAML checker
+  wrongly rejected multi-document files and had disabled the gate wholesale.
+
+**Fixed — what ATLAS told the model**
+
+- `read_file`'s line numbers and the call-graph footer read as file content;
+  a correct grid algorithm parsed the display format and printed 0.
+- Steering offered `<tag>` selectors for `.py` files, and named a function
+  "holding the template" when the template is a module-level constant.
+- Cryptic Python errors were passed through unexplained: stray backslashes,
+  entity-encoded content, and f-string quote nesting that is valid from 3.12.
+
+**Changed**
+
+- Sandbox base image moved to Python 3.13 (was 3.11, which rejected valid
+  3.12 syntax and cost a full session).
+- Nine real `.env` keys were reported as typos by `atlas config validate`.
+
+
 ### Simplification campaign (2026-07-29 → 2026-08)
 
 One component-by-component pass over the whole tree — merge the fragments,

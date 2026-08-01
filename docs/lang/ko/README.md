@@ -14,7 +14,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.1.3-blue" alt="버전"/>
+  <img src="https://img.shields.io/badge/version-V3.2.0-blue" alt="버전"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="라이선스"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="모델 독립적"/>
 </p>

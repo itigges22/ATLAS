@@ -394,7 +394,7 @@ Jetson では、両方の build arg を `nvcr.io/nvidia/l4t-jetpack:r36.3.0` に
 **タグの固定。** タグのデフォルトは `latest` です。特定のバージョンに固定するには（本番では推奨）、`.env` で `ATLAS_IMAGE_TAG` を設定してください:
 
 ```env
-ATLAS_IMAGE_TAG=v1.0.0      # semver tag from a git release
+ATLAS_IMAGE_TAG=3.2.0      # semver tag from a git release
 ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```
@@ -545,7 +545,7 @@ pip install -r geometric-lens/requirements.txt
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # 6. Install sandbox dependencies
-pip install fastapi uvicorn pylint pytest pydantic
+pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
 ```
 
 ### サービスの起動
@@ -557,7 +557,8 @@ pip install fastapi uvicorn pylint pytest pydantic
 llama-server \
   --model "models/$ATLAS_MODEL_FILE" \
   --host 0.0.0.0 --port 8080 \
-  --ctx-size 32768 --n-gpu-layers 99 --no-mmap
+  --ctx-size 32768 --n-gpu-layers 99 --no-mmap \
+  --embeddings --pooling mean --flash-attn on --fit off
 
 # Terminal 2: Geometric Lens
 cd geometric-lens
@@ -671,7 +672,7 @@ K3s は設定に `.env` ではなく `atlas.conf` を使用します。HTTP コ�
 | サービス公開 | ホストポート (`8090`, `8080`, `8099`, `8070`, `30820`) | NodePorts (`30080`, `32735`, `31144`, `30070`, `30820`) |
 | プロジェクトワークスペース | バインドマウント (`ATLAS_PROJECT_DIR` → `/workspace`) | `hostPath`（`ATLAS_PROJECTS_DIR` → 必要な各 Pod の `/workspace`） |
 | モデルファイル | バインドマウント (`ATLAS_MODELS_DIR` → `/models:ro`) | GPU ノード上の `hostPath`（`ATLAS_MODELS_DIR`、`Directory`、読み取り専用） |
-| ステートフルストレージ | 名前付きボリューム (`lens-state`, `lens-data`) | PVC（`lens-projects` のサイズは `ATLAS_PVC_PROJECTS_SIZE` で指定） |
+| ステートフルストレージ | 名前付きボリューム (`lens-state`, `v3-telemetry`) | PVC（`lens-projects` のサイズは `ATLAS_PVC_PROJECTS_SIZE` で指定） |
 | GPU 割り当て | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1`（GPU Operator またはデバイスプラグインが必要） |
 | サンドボックスのツールチェーンキャッシュ | 言語ごとの `tmpfs` マウント | 言語ごとの `sizeLimit` 付き `emptyDir`（共通パターン、同一セット） |
 

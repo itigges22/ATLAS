@@ -128,10 +128,10 @@ sudo systemctl restart docker
 コンテナ内から GPU が見えることを確認します:
 ```bash
 # Docker
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 
 # Podman
-podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi
+podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ### `libnvidia-ml.so.1: cannot open shared object file`

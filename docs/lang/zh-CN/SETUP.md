@@ -401,7 +401,7 @@ Jetson 则在两个 build arg 中换成 `nvcr.io/nvidia/l4t-jetpack:r36.3.0`（l
 **标签固定。** 标签默认为 `latest`。要固定到特定版本（生产环境推荐），在 `.env` 中设置 `ATLAS_IMAGE_TAG`：
 
 ```env
-ATLAS_IMAGE_TAG=v1.0.0      # semver tag from a git release
+ATLAS_IMAGE_TAG=3.2.0      # semver tag from a git release
 ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```
@@ -551,7 +551,7 @@ pip install -r geometric-lens/requirements.txt
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # 6. Install sandbox dependencies
-pip install fastapi uvicorn pylint pytest pydantic
+pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
 ```
 
 ### 启动服务
@@ -563,7 +563,8 @@ pip install fastapi uvicorn pylint pytest pydantic
 llama-server \
   --model "models/$ATLAS_MODEL_FILE" \
   --host 0.0.0.0 --port 8080 \
-  --ctx-size 32768 --n-gpu-layers 99 --no-mmap
+  --ctx-size 32768 --n-gpu-layers 99 --no-mmap \
+  --embeddings --pooling mean --flash-attn on --fit off
 
 # Terminal 2: Geometric Lens
 cd geometric-lens

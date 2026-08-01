@@ -2,7 +2,7 @@
 
 # ATLAS Architecture
 
-System architecture for ATLAS V3.1.3. Two-layer design: an outer agent loop handles tool-call orchestration, and an inner V3 pipeline generates diverse code candidates with build verification and energy-based selection.
+System architecture for ATLAS V3.2.0. Two-layer design: an outer agent loop handles tool-call orchestration, and an inner V3 pipeline generates diverse code candidates with build verification and energy-based selection.
 
 ---
 
