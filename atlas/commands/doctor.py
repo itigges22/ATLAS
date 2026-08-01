@@ -1014,6 +1014,56 @@ def check_image_skew(services: List[Dict]) -> CheckResult:
         f"all atlas-* images on tag :{next(iter(tags))}")
 
 
+def check_inference_contract() -> CheckResult:
+    """Does the llama-server behind ATLAS serve what the lens needs?
+
+    Generation working says nothing about the two extras the Geometric Lens
+    depends on: pooled self-embeddings on /embedding, and the PC-202 per-layer
+    hidden-states extension. A bring-your-own llama-server that generates
+    perfectly can be missing both, and the symptom is not an error — it is
+    lens scores that look plausible and are numerically meaningless.
+
+    GH #146 reported exactly this ("issues with embeddings and the PC-202
+    hidden-states patch") after pointing ATLAS at a host-run server. Nothing
+    in `atlas doctor` looked, so the run said 23 passed and the problem
+    surfaced later as bad scores.
+
+    Reuses atlas.client.probe_llama, the same probe `atlas lens check` runs.
+    """
+    try:
+        from atlas.client import probe_llama
+    except Exception as e:  # pragma: no cover - import guard
+        return CheckResult("inference_contract", "skip",
+                           f"probe unavailable: {type(e).__name__}")
+
+    probe = probe_llama()
+    if not probe.reachable:
+        return CheckResult("inference_contract", "skip",
+                           f"llama-server unreachable ({probe.error or 'no detail'})")
+
+    missing = []
+    if probe.embedding_dim <= 0:
+        missing.append("/embedding returns no vector (start with --embeddings)")
+    if not probe.has_hidden_states_patch:
+        missing.append("no per-layer hidden states (PC-202 extension absent)")
+
+    if not missing:
+        return CheckResult("inference_contract", "pass",
+                           f"embeddings {probe.embedding_dim}-dim + per-layer hidden states")
+
+    # Not a hard failure: ATLAS runs without the lens, it just degrades to
+    # sandbox-only verification. Saying so beats a red check the user cannot
+    # act on, and beats silence they cannot diagnose.
+    return CheckResult(
+        "inference_contract", "warn",
+        "llama-server does not serve everything the lens needs: "
+        + "; ".join(missing)
+        + ". C(x)/G(x) scoring degrades to neutral and the V3 pipeline falls "
+          "back to sandbox-only verification. The bundled image provides both; "
+          "a bring-your-own server needs --embeddings --pooling mean and the "
+          "PC-202 build. See docs/SETUP.md 'Bringing your own llama-server'.")
+
+
 def check_e2e_smoke() -> CheckResult:
     """Generate through the public proxy passthrough.
 
@@ -1289,6 +1339,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             "skipped (--quick)"))
     else:
         _add(check_e2e_smoke())
+        # After the smoke test: generation working is the precondition for
+        # asking whether the extras are there.
+        _add(check_inference_contract())
 
     return _emit(results, args, color, already_printed=not args.json)
 
