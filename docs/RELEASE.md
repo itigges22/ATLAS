@@ -41,10 +41,9 @@ marks *audience* rather than maturity and composes with a level:
 | Service surface | Status | Notes |
 |---|---|---|
 | Sandbox health, languages, execute, syntax-check, shell, and background jobs | Internal | Called by proxy and V3; direct host use is a developer workflow |
-| V3 generate, run, plan, and health | Internal | `/v3/generate` is the proxy integration path |
+| V3 generate, plan, and health | Internal | `/v3/generate` is the proxy integration path |
 | V3 structural edit, symbol index, and complexity endpoints | Experimental (Internal) | Tree-sitter availability determines capability |
-| Geometric Lens `/v1/*` endpoints | Supported (requires configured local API keys) | Local authenticated API |
-| Geometric Lens `/internal/*` endpoints | Internal | Intended only for the ATLAS service network |
+| Geometric Lens `/health`, `/ready` and `/internal/*` endpoints | Internal | Every lens route is internal to the stack; the proxy and v3-service are the only callers |
 | llama-server inference, completion, embedding, and health | Internal (upstream llama.cpp contract, qualified against the pinned revision) | — |
 
 A feature is not promoted to Supported until its required verification level is
@@ -63,8 +62,9 @@ Run the default gate from the repository root:
 python scripts/production-readiness.py
 ```
 
-The required checks cover test integrity, Python compilation and unit tests, and
-Go race tests and vet for the proxy and TUI. `min-python` sits alongside
+The required checks cover test integrity, Python compilation and unit tests,
+Go race tests and vet for the proxy and TUI, staticcheck for both, mypy, and a
+Dockerfile-source check — 13 gates in all. `min-python` sits alongside
 `python-compile`: compilation proves the tree parses on whichever interpreter
 is running, while `min-python` compares it against the `requires-python` floor
 in `pyproject.toml`. The distinction matters for syntax that parses on every

@@ -38,8 +38,7 @@ For the per-service health-check curls, see [SETUP.md § Verify Installation](SE
   "lens_ready": true,
   "sandbox": true,
   "port": "8090",
-  "capabilities": ["demo_raw_completion_v1"],
-  "stats": { "requests": 0, "repairs": 0, "sandbox_passes": 0, "sandbox_fails": 0 }
+  "capabilities": ["demo_raw_completion_v1"]
 }
 ```
 
@@ -94,7 +93,7 @@ Exact error strings and symptoms, mapped to their entries.
 | `file not read yet — use read_file first before editing` | [File Not Read Before Editing](#file-not-read-before-editing) |
 | `file modified since last read — read it again before editing` | [File Modified Externally](#file-modified-externally) |
 | `You have full project context in the system prompt. Do not read more files.` | [Exploration Budget Warning](#exploration-budget-warning) |
-| `"lens": false` / "Lens unavailable — verification disabled" | [Lens Not Loaded / Unavailable](#lens-not-loaded--unavailable) |
+| `"lens": false` / "No gx_thresholds.json — Lens scores are uncalibrated" | [Lens Not Loaded / Unavailable](#lens-not-loaded--unavailable) |
 | Every candidate scores `cx_energy: 0.0`, `gx_score: 0.5` | [All Scores Near 0.5](#all-scores-near-05) |
 | Scores plausible but off-scale; `fingerprint_ok: false` / `drifted: true` | [Embedding-convention drift](#scores-look-plausible-but-are-wildly-off-scale-embedding-convention-drift) |
 | "embedding extraction failed" in lens logs | [Embedding Extraction Fails](#embedding-extraction-fails) |
@@ -817,7 +816,7 @@ A message is conversational only when it is under 12 characters (`hi`, `thanks`,
 
 ### Lens Not Loaded / Unavailable
 
-**Symptom:** Proxy health shows `"lens": false`. Or startup shows "Lens unavailable — verification disabled."
+**Symptom:** Proxy health shows `"lens": false`. Or the lens logs `No gx_thresholds.json — Lens scores are uncalibrated; threshold interventions disabled` at startup.
 
 **Impact:** ATLAS still works but without C(x)/G(x) scoring. V3 candidate selection falls back to sandbox-only verification.
 
@@ -941,7 +940,7 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 
 **Symptom:** `atlas bench --tasks 200` reports `LIMITED MODE: running 100
 tasks` (or any count below what you asked for), or a resumed run prints
-`Resuming: N/N tasks already done, 0 remaining` and exits immediately.
+`Resuming: {done}/{total} complete, {n} remaining` and exits immediately.
 
 **Cause:** the LiveCodeBench dataset cache
 (`benchmark/datasets/.cache/livecodebench_v5.jsonl`) holds a partial

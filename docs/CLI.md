@@ -133,7 +133,7 @@ to return to chat mode.
 | Key | Action |
 |---|---|
 | `Enter` | Send message / run bash command / fire slash command |
-| `Shift+Enter` | Insert a newline (multi-line input) |
+| paste | Multi-line input arrives via bracketed paste; there is no newline key binding |
 | `Ctrl+L` | Clear chat history (starts a fresh saved session) |
 | `Ctrl+T` | Cycle permission mode (default → accept-edits → yolo) |
 | `y` / `a` / `n` | At an approval prompt: allow once / allow for session / deny (`Esc` also denies) |

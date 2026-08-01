@@ -590,7 +590,7 @@ cd geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
 GEOMETRIC_LENS_ENABLED=true \
-PROJECT_DATA_DIR=/tmp/atlas-projects \
+# (PROJECT_DATA_DIR is not read by the lens; omitted) \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # Terminal 3: V3 Pipeline
@@ -697,7 +697,7 @@ K3s uses `atlas.conf` (not `.env`) for configuration. The HTTP contracts and pip
 | Service exposure | Host ports (`8090`, `8080`, `8099`, `8070`, `30820`) | NodePorts (`30080`, `32735`, `31144`, `30070`, `30820`) |
 | Project workspace | Bind mount (`ATLAS_PROJECT_DIR` → `/workspace`) | `hostPath` (`ATLAS_PROJECTS_DIR` → `/workspace` on every Pod that needs it) |
 | Model files | Bind mount (`ATLAS_MODELS_DIR` → `/models:ro`) | `hostPath` on the GPU node (`ATLAS_MODELS_DIR`, `Directory`, ro) |
-| Stateful storage | Named volumes (`lens-state`, `lens-data`) | PVCs (`lens-projects` sized by `ATLAS_PVC_PROJECTS_SIZE`) |
+| Stateful storage | Named volumes (`lens-state`, `v3-telemetry`) | PVCs (`lens-projects` sized by `ATLAS_PVC_PROJECTS_SIZE`) |
 | GPU allocation | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1` (requires GPU Operator or device plugin) |
 | Sandbox toolchain caches | `tmpfs` mounts per language | `emptyDir` with `sizeLimit` per language (universal pattern, same set) |
 

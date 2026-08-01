@@ -34,21 +34,21 @@ other path (including the application code) is read-only to it.
 | Service | Writable at runtime | Why |
 |---|---|---|
 | atlas-proxy | *(none in the container fs)* | Reads config from env/mounts; the workspace and secrets are mounts; logs go to stdout/stderr. Bytecode caching is irrelevant (Go binary). |
-| v3-service | `$HOME` (`/home/appuser`) | Library caches only. Telemetry is disabled and the pipeline proxies to llama/lens/sandbox, so it writes nothing else. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
-| geometric-lens | `/data/projects` (the `lens-data` volume), `/data/state` (the `lens-state` volume), `$HOME` (`/home/lens`) | `/data/projects` holds the per-project index the serving path writes; `/data/state` holds the SQLite learned-state store (`geometric_state.db`); `$HOME` holds library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
+| v3-service | `/data/telemetry` (the `v3-telemetry` volume), `$HOME` (`/home/appuser`) | Stage telemetry JSONL (fail-soft when the path is unwritable) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
+| geometric-lens | `/data/state` (the `lens-state` volume), `$HOME` (`/home/lens`) | `/data/state` holds the SQLite learned-state store (`geometric_state.db`); `$HOME` holds library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
 | sandbox | `/workspace` (mount), the per-language tmpfs set (`/home/sandbox/*`, `/tmp`) | Executes untrusted build/test commands; the tmpfs set is where toolchains install per the universal-tmpfs pattern (see docker-compose.yml). |
 
 ### Existing-deployment note (lens volume)
 
-The `lens-data` and `lens-state` volumes are created with the image's
-`/data/projects` / `/data/state` ownership (uid 1001) on first use, so
+The `lens-state` and `v3-telemetry` volumes are created with the image's
+ownership (uid 1001) on first use, so
 fresh installs need nothing. A volume that was **already** created by an
 older root-based image stays root-owned and the non-root `lens` account
 cannot write it after upgrading. Fix it once:
 
 ```bash
 docker compose run --rm --user root geometric-lens \
-    chown -R lens:lens /data/projects /data/state
+    chown -R lens:lens /data/state
 ```
 
 …or recreate the volume if the indexed data is disposable. This is the
@@ -62,7 +62,7 @@ rebuild resolves the same set:
 | File | Scope |
 |---|---|
 | `geometric-lens/requirements.txt` | Lens runtime (all entries pinned) |
-| `v3-service/requirements.txt` | V3 runtime — torch (CPU index) + tree-sitter grammars |
+| `v3-service/requirements.txt` | V3 runtime — tree-sitter grammars only; the file states it carries no torch, since the service parses and orchestrates rather than scoring |
 | `sandbox/requirements-runtime.txt` | Sandbox executor API |
 | `sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) |
 

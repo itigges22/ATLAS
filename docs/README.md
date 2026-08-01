@@ -42,8 +42,8 @@ map of the repository itself, see [MAP.md](MAP.md).
 
 ### Integrate with ATLAS
 
-- [API.md](API.md) — HTTP reference for all four services (proxy,
-  v3-service, geometric-lens, sandbox).
+- [API.md](API.md) — HTTP reference for all five services (proxy,
+  v3-service, geometric-lens, sandbox, llama-server).
 - [PROTOCOL.md](PROTOCOL.md) — the typed SSE event envelope shared by
   proxy, v3-service, and clients.
 - [schemas/](schemas/) — machine-readable contracts:

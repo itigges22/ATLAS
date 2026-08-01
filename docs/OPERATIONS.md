@@ -28,8 +28,8 @@ docker compose logs -f geometric-lens
 docker compose logs --tail 100      # everything recent
 ```
 
-TUI-side debugging: `atlas --log` writes a local TUI event log
-(`ATLAS_TUI_LOG`).
+TUI-side debugging: `atlas tui --log <path>` writes a local TUI event log;
+`ATLAS_TUI_LOG=<path>` does the same and `=off` disables it.
 
 ## Runbooks
 
@@ -86,7 +86,7 @@ signed; `sha-*` tags never move.
   changes bundle requirements surfaces as a doctor warning with the
   exact rebuild command, not a silent break.
 - **Learned state:** the `lens-state` volume (the pattern cache +
-  co-occurrence graph in `geometric_state.db`) and `lens-data` volume
+  co-occurrence graph in `geometric_state.db`) and the `v3-telemetry` volume
   persist across upgrades.
 
 ## Version compatibility
