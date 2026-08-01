@@ -125,6 +125,10 @@ type runState struct {
 	turn     int    // current loop turn, for tool-call IDs and logs
 	response string // raw model output this turn, echoed on a bounce
 
+	// Tool calls executed this run, of any kind. The intent gate uses it to
+	// tell "announced a tool call and stopped" from ordinary narration after
+	// work has already happened.
+	toolsRun int
 	// Set when a write/edit/structural_edit/delete landed in this run.
 	madeProductiveChange bool
 	// Set when a read-only tool succeeds — the model opened the project
@@ -249,6 +253,17 @@ func (s *runState) bounceToolCall(ctx *AgentContext, toolName, rejection string)
 // "skip completion checks". Bounces stay capped by maxGateBounces, so
 // unattended runs cannot loop on a gate.
 func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (string, string) {
+	// Announcing a tool call is not making one. Observed on a question about
+	// code: the model replied "I need to read orders.py — I'll start by
+	// outlining the file to locate the function" and the turn ended there,
+	// because text is a terminal event. It had the right intent and never
+	// acted on it. Only fires before any tool has run, so it cannot interrupt
+	// work already in progress.
+	if s.toolsRun == 0 && announcesImminentToolUse(claimText) && s.chargeBounce("intent_gate") {
+		log.Printf("[agent] intent gate: bouncing a text exit that announced a tool call without making one (bounce %d/%d)",
+			s.gateBounces["intent_gate"], maxGateBounces)
+		return "intent_gate", "You described the tool call you were about to make instead of making it, and a `text` reply ends the turn. Emit the tool_call itself now — read the file, then answer in a single `text` reply once you have its contents."
+	}
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
@@ -747,6 +762,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			return nil
 
 		case "tool_call":
+			st.toolsRun++
 			ctx.Stream("tool_call", map[string]interface{}{
 				"name": parsed.Name,
 				"args": json.RawMessage(parsed.Args),

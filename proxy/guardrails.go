@@ -424,6 +424,44 @@ var fixIntentWords = []string{
 // decide whether `done` requires a real verification step. Pure
 // feature requests ("add a logout button") don't trip the gate —
 // adding code doesn't always need a curl/test to declare done.
+// announcesImminentToolUse reports first-person narration of a tool call the
+// model is about to make — "I need to read X", "let me look at Y", "I'll
+// start by outlining".
+//
+// A `text` reply ends the turn, so a model that announces instead of acting
+// stops with the right intent and no action. Deliberately narrow: it needs a
+// first-person subject AND an action verb aimed at inspecting the workspace,
+// so an ANSWER that merely mentions reading ("this function reads the file")
+// does not match.
+func announcesImminentToolUse(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	subjects := []string{"i need to ", "i'll ", "i will ", "let me ", "i am going to ",
+		"i'm going to ", "i should ", "first, i ", "next, i "}
+	verbs := []string{"read", "look at", "open", "inspect", "examine", "outline",
+		"check", "search", "list", "start by"}
+	for _, sub := range subjects {
+		at := strings.Index(lower, sub)
+		if at < 0 {
+			continue
+		}
+		// Look only just past the subject: "I need to read" matches, while
+		// "I need to explain why the code reads a file" does not.
+		window := lower[at:]
+		if len(window) > 80 {
+			window = window[:80]
+		}
+		for _, v := range verbs {
+			if strings.Contains(window, v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isExplainOnlyMessage reports an explicit "tell me, do not touch it"
 // instruction: an explain/describe request paired with a no-edit directive.
 //

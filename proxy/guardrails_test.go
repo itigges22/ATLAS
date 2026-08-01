@@ -1246,3 +1246,34 @@ func TestNegatedActionWordIsNotActionIntent(t *testing.T) {
 		t.Error("a plain action word must still read as action intent")
 	}
 }
+
+// A `text` reply ends the turn, so a model that announces a tool call instead
+// of making one stops with the right intent and no action. Observed on a
+// question about code: "I need to read orders.py — I'll start by outlining
+// the file to locate the function", then the turn ended.
+func TestAnnouncedToolUseIsDetected(t *testing.T) {
+	for _, s := range []string{
+		"I need to read the `orders.py` file to explain what find_duplicates does.",
+		"I'll start by outlining the file to locate the function.",
+		"Let me look at the implementation first.",
+		"I'm going to check store.py before answering.",
+	} {
+		if !announcesImminentToolUse(s) {
+			t.Errorf("should detect an announced tool call: %q", s)
+		}
+	}
+}
+
+// An ANSWER that happens to mention reading must not be mistaken for one.
+func TestRealAnswersAreNotTreatedAsAnnouncements(t *testing.T) {
+	for _, s := range []string{
+		"find_duplicates is O(n^2): it reads the list inside a nested loop.",
+		"The function opens the file and returns its contents.",
+		"apply_discount returns a float because / is true division in Python 3.",
+		"",
+	} {
+		if announcesImminentToolUse(s) {
+			t.Errorf("real answer misread as an announcement: %q", s)
+		}
+	}
+}
