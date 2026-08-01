@@ -292,6 +292,7 @@ def pytest_collection_modifyitems(config, items):
             "/tests/infrastructure/test_sandbox_ruby_php.py",
             "/tests/infrastructure/test_tui_render.py",
             "/tests/infrastructure/test_tui_commands.py",
+            "/tests/infrastructure/test_control_plane.py",
         ))
         if "/tests/integration/" in path or live_infrastructure:
             item.add_marker(pytest.mark.integration)
