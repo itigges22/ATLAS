@@ -1150,6 +1150,22 @@ func recordPlanAdherence(ctx *AgentContext, toolName string, args json.RawMessag
 // passed in is the ORIGINAL one (the goal hasn't changed); we
 // suffix a short note explaining why we're re-planning so the
 // planner can adjust shape.
+// samePlanSteps reports whether two plans describe the same work. Compares
+// action+target per step, not prose: a planner that rewords a rationale while
+// producing the same steps has still produced the same plan.
+func samePlanSteps(a, b *Plan) bool {
+	if a == nil || b == nil || len(a.Steps) != len(b.Steps) {
+		return false
+	}
+	for i := range a.Steps {
+		if a.Steps[i].Action != b.Steps[i].Action ||
+			a.Steps[i].Target != b.Steps[i].Target {
+			return false
+		}
+	}
+	return true
+}
+
 func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	if ctx.Plan == nil || ctx.PlanRevisions >= planMaxRevisions {
 		return
@@ -1213,6 +1229,26 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 		log.Printf("[agent] plan revision failed: %v — continuing with previous plan", err)
 		return
 	}
+	// A revision that comes back identical is not a revision. Observed live:
+	// the model went off-plan for five calls, the gate re-planned, and the
+	// planner returned the same three steps — so the streak reset and the
+	// same plan kept bouncing it. When re-planning cannot produce anything
+	// different, the plan is not what is wrong: the model cannot execute it.
+	// Dropping it beats gating the rest of the turn on a plan already proven
+	// unfollowable.
+	if samePlanSteps(ctx.Plan, plan) {
+		log.Printf("[agent] plan revision returned the same steps — dropping the plan")
+		ctx.Plan = nil
+		ctx.PlanStepsSatisfied = nil
+		ctx.PlanOffStreak = 0
+		ctx.Stream("plan_revise", map[string]interface{}{
+			"reason":   "revision produced the same steps; continuing without a plan",
+			"revision": ctx.PlanRevisions,
+			"dropped":  true,
+		})
+		return
+	}
+
 	ctx.Plan = plan
 	ctx.PlanStepsSatisfied = make([]bool, len(plan.Steps))
 	ctx.PlanOffStreak = 0

@@ -1168,3 +1168,42 @@ func TestInsertAfterRejectsOutOfRangeAndUnreadFiles(t *testing.T) {
 		t.Errorf("error should name the problem, got %q", res.Error)
 	}
 }
+
+// The live failure: the same edit_file ran twice — old_str
+// "msgElement.innerText = 'PAUSED';", new_str " msgElement.innerText =
+// 'PAUSED';" — at 1m25s and 1m15s, each adding another leading space. The
+// existing no-op guard only catches an edit that leaves the file identical,
+// and the repeat detector needs three occurrences, so two runs of a
+// 75-second edit slipped through as four minutes of wasted turn.
+func TestAppliedEditsAreTrackedPerSession(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+	if ctx.AppliedEdits == nil {
+		t.Fatal("AppliedEdits must be initialised, or the guard silently never fires")
+	}
+
+	key := func(path, oldStr, newStr string) string {
+		return path + "\x00" + oldStr + "\x00" + newStr
+	}
+	k := key("app.py", "x = 1", "x = 2")
+	if ctx.AppliedEdits[k] {
+		t.Error("a fresh context must not report an edit as already applied")
+	}
+	ctx.AppliedEdits[k] = true
+	if !ctx.AppliedEdits[k] {
+		t.Error("recording an applied edit must be observable")
+	}
+
+	// A different new_str for the same anchor is a DIFFERENT edit — the guard
+	// must not block a model that is correcting its previous change.
+	if ctx.AppliedEdits[key("app.py", "x = 1", "x = 3")] {
+		t.Error("a different new_str must not be treated as already applied")
+	}
+	// Same edit text, different file is also different.
+	if ctx.AppliedEdits[key("other.py", "x = 1", "x = 2")] {
+		t.Error("the same edit in another file must not be blocked")
+	}
+	// The whitespace case that motivated this: the shapes must not collide.
+	if key("a.py", "y", " y") == key("a.py", " y", "y") {
+		t.Error("old_str/new_str must not be able to swap without changing the key")
+	}
+}

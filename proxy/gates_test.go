@@ -1363,3 +1363,41 @@ func TestLineNumberPrefixIsDetectedInOldStr(t *testing.T) {
 		})
 	}
 }
+
+// The live failure: the model went off-plan for five consecutive calls, the
+// adherence gate re-planned, and the planner returned the SAME three steps
+// (read_file app.py / structural_edit app.py / run_command python app.py).
+// The off-plan streak reset and the same unfollowable plan kept bouncing it.
+func TestAnIdenticalRevisionDropsThePlan(t *testing.T) {
+	same := func() *Plan {
+		return mkPlan(
+			PlanStep{ID: "s1", Action: "read_file", Target: "app.py"},
+			PlanStep{ID: "s2", Action: "structural_edit", Target: "app.py"},
+		)
+	}
+	if !samePlanSteps(same(), same()) {
+		t.Error("identical step lists must compare equal")
+	}
+
+	// Reworded rationale, same work — still the same plan.
+	a, b := same(), same()
+	a.Rationale, b.Rationale = "fix it", "repair the thing"
+	if !samePlanSteps(a, b) {
+		t.Error("prose differences must not read as a different plan")
+	}
+
+	// A genuinely different plan must not be swallowed.
+	diff := mkPlan(
+		PlanStep{ID: "s1", Action: "edit_file", Target: "app.py"},
+		PlanStep{ID: "s2", Action: "run_command", Target: "pytest"},
+	)
+	if samePlanSteps(same(), diff) {
+		t.Error("different actions must compare unequal")
+	}
+	if samePlanSteps(same(), mkPlan(PlanStep{ID: "s1", Action: "read_file", Target: "app.py"})) {
+		t.Error("different step counts must compare unequal")
+	}
+	if samePlanSteps(nil, same()) || samePlanSteps(same(), nil) {
+		t.Error("a nil plan is not the same as a plan")
+	}
+}

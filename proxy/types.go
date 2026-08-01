@@ -509,6 +509,14 @@ type AgentContext struct {
 	// assigning here. See proxy/detectors.go for the detection logic.
 	RecentToolCalls []string
 
+	// AppliedEdits keys every edit_file that already succeeded, by
+	// (path, old_str, new_str). A model that re-applies an identical edit has
+	// lost track of its own work, and when the edit is whitespace-only the
+	// original old_str still matches afterwards, so it can apply forever.
+	// Observed live: the same `'PAUSED';` -> `' PAUSED';` edit ran twice,
+	// 1m25s and 1m15s, each adding another space.
+	AppliedEdits map[string]bool
+
 	// Reasoning-repetition detector state (May 10 2026, BiasBusters
 	// follow-up #30). Per-turn snapshot of the model's reasoning_content
 	// stream. When the same opening prose ("Now I need to look at the
@@ -585,6 +593,7 @@ func NewAgentContext(workingDir string, tier Tier) *AgentContext {
 		PermissionMode: PermissionDefault,
 		FileReadTimes:  make(map[string]time.Time),
 		FilesRead:      make(map[string]string),
+		AppliedEdits:   make(map[string]bool),
 		SessionWrites:  make(map[string]bool),
 		Ctx:            context.Background(),
 	}

@@ -1688,6 +1688,23 @@ func editFileTool() *ToolDef {
 					"Look at the current code again and emit a new_str that actually differs from the existing code."}, nil
 			}
 
+			// Already-applied guard. The check above only catches an edit that
+			// leaves the file byte-identical; it cannot see an edit that
+			// applied once and is now being applied AGAIN. A whitespace-only
+			// change is the dangerous shape: after " x" replaces "x", the
+			// original old_str still matches as a substring, so the same call
+			// keeps succeeding and keeps adding whitespace. The repeat
+			// detector does not help — it needs three occurrences, and two
+			// runs of a 75-second edit is already two minutes gone.
+			editKey := input.Path + "\x00" + input.OldStr + "\x00" + input.NewStr
+			if ctx.AppliedEdits[editKey] {
+				log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
+				return &ToolResult{Success: false, Error: "edit_file: this exact edit already succeeded earlier in this " +
+					"session, so applying it again would just repeat it — and when the change is whitespace-only, the " +
+					"old_str still matches afterwards, so it can repeat forever. The file already has this change. " +
+					"Read the file to see its current state, then either make a DIFFERENT edit or declare done."}, nil
+			}
+
 			// Syntax gate — the edit_file counterpart of structural_edit's
 			// post-splice compile check. A garbage-quoted new_str (doubled
 			// quotes, stray escapes) otherwise lands on disk and turns a
@@ -1818,6 +1835,10 @@ func editFileTool() *ToolDef {
 			}
 
 			outBytes, _ := json.Marshal(out)
+			// Record it so an identical re-application is refused above.
+			if ctx.AppliedEdits != nil {
+				ctx.AppliedEdits[editKey] = true
+			}
 			result := &ToolResult{Success: true, Data: outBytes}
 			if v3Out.Used {
 				result.V3Used = true
