@@ -197,3 +197,21 @@ def test_small_node_failure_does_not_steer_away():
                                "function:tiny", "def tiny():\n    return 'oops\n")
     assert not res.get("success")
     assert "use edit_file instead" not in res["error"]
+
+
+def test_plain_unterminated_string_is_not_read_as_a_truncated_template():
+    """Python 3.12 words both as "unterminated ... string literal".
+
+    Matching the shorter phrase fired template advice on every quoting slip
+    AND suppressed the large-node message, because that message only renders
+    when no other lead is set. The host runs 3.9 ("EOL while scanning") so it
+    passed locally and failed in CI — hence the explicit both-messages check.
+    """
+    big = "def big():\n" + "".join(f"    x{i} = {i}\n" for i in range(60))
+    src = big + "\ndef other():\n    return 1\n"
+    res = main.structural_edit("m.py", src, "function:big",
+                               "def big():\n    return 'oops\n")
+    assert not res.get("success")
+    err = res["error"]
+    assert "template literal" not in err, "a plain quoting error is not a template truncation"
+    assert "61 lines" in err, "the large-node steer must still render"

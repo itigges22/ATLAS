@@ -777,8 +777,18 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             # in a module-level template the function only renders. The
             # tag-selector message says this, but the model never sees it —
             # function:index is a VALID selector, so it never takes that path.
+            # Must be a TRIPLE-QUOTED string specifically. An ordinary
+            # unterminated string ("return 'oops") is a plain quoting slip and
+            # gets the general advice; only a cut-off triple-quoted literal is
+            # the template case this describes. Python words them differently
+            # ("unterminated string literal" vs "unterminated triple-quoted
+            # string literal"), and matching the shorter one fired template
+            # advice on every quoting error — and, because it set `lead`,
+            # silently suppressed the large-node message below it. Caught in
+            # CI on 3.12; the host's 3.9 says "EOL while scanning" and never
+            # tripped it.
             _msg = (e.msg or "").lower()
-            if "unterminated" in _msg or "eof while scanning" in _msg:
+            if "triple-quoted" in _msg or "eof while scanning triple-quoted" in _msg:
                 lead = ("An unterminated string usually means you re-emitted a "
                         "large template literal and it got cut off. If the code "
                         "you actually need to change lives inside that template, "
