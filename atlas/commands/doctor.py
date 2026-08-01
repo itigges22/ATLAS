@@ -1023,6 +1023,13 @@ def check_e2e_smoke() -> CheckResult:
     macOS hybrid deployment, where the request also crosses the Docker-to-host
     bridge before reaching native Metal inference.
     """
+    # Router-mode llama.cpp (`--models-preset`) rejects a request with no
+    # model: "model name is missing from the request". Single-model servers
+    # ignore the field, so sending it always is strictly more compatible than
+    # omitting it (GH #146, reported against a BYO router-mode backend).
+    model = (os.environ.get("ATLAS_MODEL_NAME")
+             or _ENV.get("ATLAS_MODEL_NAME")
+             or _ENV.get("ATLAS_MODEL_FILE", ""))
     body = {
         "messages": [{"role": "user", "content": "Reply with the single word: ATLAS"}],
         # Reasoning-capable templates may emit internal reasoning before the
@@ -1035,6 +1042,8 @@ def check_e2e_smoke() -> CheckResult:
         # templates use this to keep a smoke test short and deterministic.
         "chat_template_kwargs": {"enable_thinking": False},
     }
+    if model:
+        body["model"] = model
     data = json.dumps(body).encode()
     req = urllib.request.Request(
         f"{PROXY_URL}/v1/chat/completions",

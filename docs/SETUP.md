@@ -874,6 +874,50 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 
 `atlas lens build` trains both lens halves, calibrates the thresholds, and writes a `provenance.json` manifest into the activated bundle. See [CLI.md § atlas lens](CLI.md#atlas-lens).
 
+### Bringing your own llama-server
+
+To run inference yourself — a host-native build, a remote box, or llama.cpp in
+router mode — point the four consuming services at it and stub the bundled
+container. Create `docker-compose.override.yml`:
+
+```yaml
+services:
+  llama-server:                      # stub the bundled one out
+    command: ["sleep", "infinity"]
+    entrypoint: []
+    healthcheck:
+      test: ["CMD", "true"]
+    deploy: {}
+  geometric-lens:
+    environment:
+      LLAMA_URL: http://host.docker.internal:8080
+  v3-service:
+    environment:
+      LLAMA_URL: http://host.docker.internal:8080
+  atlas-proxy:
+    environment:
+      ATLAS_LLAMA_URL: http://host.docker.internal:8080
+```
+
+`host.docker.internal` resolves on Linux as well as macOS: the compose file
+maps it via `extra_hosts: host.docker.internal:host-gateway` on every service
+that needs it. You do not need the docker0 gateway address (`172.17.0.1`)
+directly, though it is what that mapping resolves to.
+
+**Router mode.** `llama-server --models-preset` rejects any request without a
+`model` field (`model name is missing from the request`). Set `ATLAS_MODEL_NAME`
+in `.env` to the served model's name — `atlas doctor`'s smoke test sends it, and
+single-model servers ignore it.
+
+**Before the first `docker compose up`,** make sure the secrets directory
+exists — the bind mount fails without it:
+
+```bash
+mkdir -p secrets     # or set ATLAS_SECRETS_DIR
+```
+
+`atlas init` creates it for you; only a manual compose-first flow needs this.
+
 ### Bringing your own model
 
 If you want to swap in a non-default GGUF, the `atlas lens` subcommand wraps the probe + train pipeline so you don't have to learn the underlying scripts:

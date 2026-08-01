@@ -90,6 +90,14 @@ services:
 
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
+    # host.docker.internal is a Docker Desktop convenience and does NOT
+    # resolve on stock Linux Docker, so the documented "point ATLAS at a
+    # host-native llama-server" recipe silently failed there and users had to
+    # reverse-engineer the docker0 gateway (172.17.0.1). host-gateway makes
+    # the same hostname work on Linux, so one override serves every platform
+    # (GH #146). Harmless when the bundled llama-server is in use.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
@@ -142,6 +150,14 @@ services:
 
   # --- V3 Pipeline Service ---
   v3-service:
+    # host.docker.internal is a Docker Desktop convenience and does NOT
+    # resolve on stock Linux Docker, so the documented "point ATLAS at a
+    # host-native llama-server" recipe silently failed there and users had to
+    # reverse-engineer the docker0 gateway (172.17.0.1). host-gateway makes
+    # the same hostname work on Linux, so one override serves every platform
+    # (GH #146). Harmless when the bundled llama-server is in use.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
@@ -190,6 +206,14 @@ services:
 
   # --- Sandbox (isolated code execution) ---
   sandbox:
+    # host.docker.internal is a Docker Desktop convenience and does NOT
+    # resolve on stock Linux Docker, so the documented "point ATLAS at a
+    # host-native llama-server" recipe silently failed there and users had to
+    # reverse-engineer the docker0 gateway (172.17.0.1). host-gateway makes
+    # the same hostname work on Linux, so one override serves every platform
+    # (GH #146). Harmless when the bundled llama-server is in use.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
@@ -308,6 +332,14 @@ services:
   # (or `ATLAS_PROJECT_DIR=/path/to/proj docker compose up`) BEFORE bringing
   # the stack up — the bind mount is fixed for the container's lifetime.
   atlas-proxy:
+    # host.docker.internal is a Docker Desktop convenience and does NOT
+    # resolve on stock Linux Docker, so the documented "point ATLAS at a
+    # host-native llama-server" recipe silently failed there and users had to
+    # reverse-engineer the docker0 gateway (172.17.0.1). host-gateway makes
+    # the same hostname work on Linux, so one override serves every platform
+    # (GH #146). Harmless when the bundled llama-server is in use.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
