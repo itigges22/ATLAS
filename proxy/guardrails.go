@@ -460,10 +460,7 @@ func promisesMoreContent(text string) bool {
 		// cheap signal for "concrete", and the remaining prose after an
 		// undelivered promise ("...as requested.") has none of them.
 		rest := lower[at+len(phrase):]
-		if strings.ContainsAny(rest, "0123456789`=<>+*/(){}[]") {
-			return false
-		}
-		return true
+		return !strings.ContainsAny(rest, "0123456789`=<>+*/(){}[]")
 	}
 	return false
 }

@@ -1575,7 +1575,7 @@ func editFileTool() *ToolDef {
 						"contains %d stray carriage returns and looks corrupted rather than copied "+
 						"— long blocks tend to come out this way. Re-emit `old_str` as ONE short "+
 						"unique line taken from the file (the single line you are changing), not a "+
-						"multi-line block.", n)
+						"multi-line block", n)
 				}
 				// Mismatch persists — return targeted error.
 				hasEntities := strings.Contains(input.OldStr, "&lt;") ||

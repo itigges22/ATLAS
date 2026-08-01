@@ -73,10 +73,10 @@ probes from `scripts/code_quality.py`.
 
 One component-by-component pass over the whole tree — merge the fragments,
 split the God-files, cut what nothing calls — with the test suites as the
-invariant. [REFACTOR_MAIN.md](REFACTOR_MAIN.md) is the full tracker
-(method, audits, per-item disposition ledgers). Headline numbers, measured
-from the campaign's first commit: **3,047 → 514 tracked files, net
-≈ −56,500 lines including data**.
+invariant. Headline numbers, measured from the campaign's first commit:
+**3,047 → 514 tracked files, net ≈ −56,500 lines including data**. The
+per-component disposition ledgers live in the commit history for that
+range.
 
 - **One chat surface.** The pipe-mode `/solve` REPL is gone; bare `atlas`
   launches the TUI (no-TTY prints a pointer to `atlas doctor` and exits
