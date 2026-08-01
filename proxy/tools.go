@@ -1561,9 +1561,19 @@ func editFileTool() *ToolDef {
 				// is enough to locate an edit, and both the tool description
 				// and the structural_edit steer already say so — repeat it
 				// here, where the failure actually happened.
-				// Checked first because it is the most specific: the text is
-				// otherwise correct and only carries read_file's display
-				// prefix. Saying "not found" here sends the model back to
+				// Checked before everything: one corrupted character is
+				// invisible next to a long old_str, and every other hint here
+				// sends the model to re-copy text it already copied right.
+				if bad := foreignRunes(input.OldStr, content); len(bad) > 0 {
+					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
+						"which appears nowhere in %s. That is a corrupted character, not a mis-copy — most often "+
+						"an operator that decoded wrong (`&&`, `||`, `>=`, `->`). Re-read the line from the file "+
+						"and re-emit `old_str` with plain ASCII operators.\nSearched for: %s",
+						describeForeignRunes(bad), input.Path, truncateStr(input.OldStr, 200))
+				}
+				// Checked next because it is the most specific remaining: the
+				// text is otherwise correct and only carries read_file's
+				// display prefix. Saying "not found" here sends the model back to
 				// re-copy a line it already copied right.
 				if n := lineNumberPrefixedLines(input.OldStr); n > 0 {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` still has "+

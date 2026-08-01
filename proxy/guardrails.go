@@ -1127,3 +1127,41 @@ func findFileArgSwapHint(path string) string {
 			"regex matching the FILENAME. Retry as: find_file {\"pattern\":%q}",
 		p, quoted+"$")
 }
+
+// foreignRunes reports characters in old_str that appear NOWHERE in the file,
+// restricted to non-ASCII. A mismatch caused by one corrupted character is
+// invisible in a diff of two long strings, and every other hint sends the model
+// to re-copy text it already copied correctly.
+//
+// Observed live: the model sent `if(headX === food.x ℘ headY ===food.y)` for a
+// line reading `&&`. U+2118 SCRIPT CAPITAL P is not a typo, it is a decode
+// artefact, and the rejection it got ("your old_str is 9 lines long") was true
+// and useless — the length was not why it failed.
+//
+// ASCII is excluded deliberately: a wrong ASCII character is an ordinary
+// mis-copy the closest-line hint already handles. A non-ASCII rune that the
+// file does not contain anywhere is nearly always corruption.
+func foreignRunes(oldStr, fileContent string) []rune {
+	var out []rune
+	seen := map[rune]bool{}
+	for _, r := range oldStr {
+		if r < 0x80 || seen[r] {
+			continue
+		}
+		seen[r] = true
+		if !strings.ContainsRune(fileContent, r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// describeForeignRunes renders foreignRunes for the model: the character, its
+// codepoint, and where it sits, so the fix is mechanical rather than a re-copy.
+func describeForeignRunes(runes []rune) string {
+	parts := make([]string, 0, len(runes))
+	for _, r := range runes {
+		parts = append(parts, fmt.Sprintf("%q (U+%04X)", r, r))
+	}
+	return strings.Join(parts, ", ")
+}

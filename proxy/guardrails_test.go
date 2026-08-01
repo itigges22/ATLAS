@@ -1402,3 +1402,41 @@ func TestFindFileArgSwapSuggestsAWorkingPattern(t *testing.T) {
 		t.Errorf("suggested pattern %q left the dot unescaped", suggested)
 	}
 }
+
+// The live failure: the model sent
+//
+//	if(headX === food.x ℘ headY ===food.y) {
+//
+// for a line whose operator is `&&`. U+2118 SCRIPT CAPITAL P is a decode
+// artefact, not a typo, and the rejection it got said the old_str was "9 lines
+// long" — true, and not why it failed.
+func TestCorruptedCharacterIsNamed(t *testing.T) {
+	file := "        if(headX === food.x && headY === food.y) {\n            score++;\n"
+
+	bad := foreignRunes("if(headX === food.x ℘ headY ===food.y) {", file)
+	if len(bad) != 1 || bad[0] != '℘' {
+		t.Fatalf("expected the corrupted rune, got %q", string(bad))
+	}
+	desc := describeForeignRunes(bad)
+	if !strings.Contains(desc, "U+2118") {
+		t.Errorf("description must carry the codepoint, got %q", desc)
+	}
+
+	// Must NOT fire on ASCII mis-copies — the closest-line hint owns those.
+	if r := foreignRunes("if(headX == food.x && headY === food.y) {", file); len(r) != 0 {
+		t.Errorf("ASCII mis-copy wrongly flagged as corruption: %q", string(r))
+	}
+	// Must NOT fire on non-ASCII the file genuinely contains.
+	withUnicode := "label = 'café ☕'\n"
+	if r := foreignRunes("label = 'café ☕'", withUnicode); len(r) != 0 {
+		t.Errorf("legitimate non-ASCII flagged: %q", string(r))
+	}
+	// A non-ASCII char absent from the file IS corruption even amid other text.
+	if r := foreignRunes("x = 1 — y", "x = 1 - y\n"); len(r) != 1 || r[0] != '—' {
+		t.Errorf("em-dash substitution not caught: %q", string(r))
+	}
+	// Empty inputs are not corruption.
+	if r := foreignRunes("", file); len(r) != 0 {
+		t.Errorf("empty old_str flagged: %q", string(r))
+	}
+}
