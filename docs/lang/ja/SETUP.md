@@ -394,7 +394,7 @@ Jetson では、両方の build arg を `nvcr.io/nvidia/l4t-jetpack:r36.3.0` に
 **タグの固定。** タグのデフォルトは `latest` です。特定のバージョンに固定するには（本番では推奨）、`.env` で `ATLAS_IMAGE_TAG` を設定してください:
 
 ```env
-ATLAS_IMAGE_TAG=3.2.0      # semver tag from a git release
+ATLAS_IMAGE_TAG=3.1.3      # semver tag from a git release
 ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```

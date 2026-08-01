@@ -402,7 +402,7 @@ Jetson의 경우 두 build arg 모두 `nvcr.io/nvidia/l4t-jetpack:r36.3.0`으로
 **태그 고정.** 태그의 기본값은 `latest`입니다. 특정 버전에 고정하려면(프로덕션 권장) `.env`에서 `ATLAS_IMAGE_TAG`를 설정하세요:
 
 ```env
-ATLAS_IMAGE_TAG=3.2.0      # semver tag from a git release
+ATLAS_IMAGE_TAG=3.1.3      # semver tag from a git release
 ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```

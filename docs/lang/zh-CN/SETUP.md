@@ -401,7 +401,7 @@ Jetson 则在两个 build arg 中换成 `nvcr.io/nvidia/l4t-jetpack:r36.3.0`（l
 **标签固定。** 标签默认为 `latest`。要固定到特定版本（生产环境推荐），在 `.env` 中设置 `ATLAS_IMAGE_TAG`：
 
 ```env
-ATLAS_IMAGE_TAG=3.2.0      # semver tag from a git release
+ATLAS_IMAGE_TAG=3.1.3      # semver tag from a git release
 ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```

@@ -4,8 +4,6 @@
 
 ## [Unreleased]
 
-## [3.2.0] - 2026-07-31
-
 ### Measured reliability
 
 A day of running ATLAS against itself and fixing what the sessions showed.
