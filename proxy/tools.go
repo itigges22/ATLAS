@@ -1565,7 +1565,9 @@ func editFileTool() *ToolDef {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
 						"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
 						"Anchor on ONE short line that appears exactly once in the region you are changing, "+
-						"and put the whole replacement in `new_str`.\nSearched for: %s",
+						"and put the whole replacement in `new_str`. If you are ADDING code rather than "+
+						"replacing it, use insert_after with the line number read_file printed — it needs "+
+						"no old_str at all.\nSearched for: %s",
 						lines, truncateStr(input.OldStr, 200))
 				}
 				if n := strayCarriageReturns(input.OldStr); n >= 3 {

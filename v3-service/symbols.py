@@ -805,7 +805,10 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                         f"re-emitting all {node_lines} lines correctly. If you are "
                         f"changing only part of it, use edit_file instead with "
                         f"old_str set to one unique line from the region you are "
-                        f"changing — that edits in place and cannot truncate. ")
+                        f"changing — that edits in place and cannot truncate. If you "
+                        f"are ADDING code rather than changing it, use insert_after "
+                        f"with the line number read_file printed: there is no anchor "
+                        f"to reproduce at all. ")
             return {"success": False, "error": (
                 f"structural_edit: the replacement makes {path} invalid Python — "
                 f"SyntaxError at line {e.lineno}: {e.msg}"

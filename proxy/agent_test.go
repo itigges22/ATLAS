@@ -2213,6 +2213,12 @@ func TestLongOldStrMismatchAsksForASingleLine(t *testing.T) {
 	if !strings.Contains(err.Error(), "ONE short line") {
 		t.Errorf("must ask for a single line, got %q", err)
 	}
+	// A tool added later has to be named where the model is actually stuck,
+	// not only in the tool list. insert_after shipped and both steers still
+	// pointed only at edit_file and structural_edit.
+	if !strings.Contains(err.Error(), "insert_after") {
+		t.Errorf("must offer insert_after for additions, got %q", err)
+	}
 }
 
 // A short anchor that misses keeps the ordinary mismatch guidance.
