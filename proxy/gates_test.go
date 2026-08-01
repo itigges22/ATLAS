@@ -1285,3 +1285,50 @@ func TestPlainSyntaxErrorGetsNeitherSpecialCase(t *testing.T) {
 		t.Errorf("plain error must keep the general message: %q", msg)
 	}
 }
+
+// planVerifyHint is what the verification gate shows the model when it
+// refuses a `done`. With no plan, or a plan whose verify_step the planner
+// left empty, the gate still has to name something concrete to run — an
+// empty hint would render as "run  to prove it" and tell the model nothing.
+func TestPlanVerifyHintFallsBackWhenThereIsNothingToName(t *testing.T) {
+	generic := planVerifyHint(nil)
+	if generic == "" {
+		t.Fatal("nil plan must still yield a hint, not an empty string")
+	}
+	if got := planVerifyHint(&Plan{VerifyStep: ""}); got != generic {
+		t.Errorf("empty verify_step must fall back to the generic hint, got %q", got)
+	}
+	if got := planVerifyHint(&Plan{VerifyStep: "pytest -q test_app.py"}); got != "pytest -q test_app.py" {
+		t.Errorf("a real verify_step must be returned verbatim, got %q", got)
+	}
+}
+
+// revisePlan's guards run before it ever reaches the planner. Both must
+// return without emitting plan_revise: a nil plan has nothing to revise,
+// and past the cap the loop would re-plan forever. The event matters
+// because the TUI renders it — a stream event with no revision behind it
+// shows the user work that did not happen.
+func TestRevisePlanGuardsEmitNoEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  *AgentContext
+	}{
+		{"nil plan", &AgentContext{Plan: nil}},
+		{"at the revision cap", &AgentContext{
+			Plan:          mkPlan(PlanStep{ID: "s1", Action: "read_file", Target: "a.py"}),
+			PlanRevisions: planMaxRevisions,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []string
+			tc.ctx.StreamFn = func(kind string, _ interface{}) { events = append(events, kind) }
+			revisePlan(tc.ctx, "add a health endpoint", "off-plan thrash")
+			if len(events) != 0 {
+				t.Errorf("guard must return before streaming, got events %v", events)
+			}
+			if tc.ctx.PlanRevisions > planMaxRevisions {
+				t.Errorf("revision counter advanced past the cap: %d", tc.ctx.PlanRevisions)
+			}
+		})
+	}
+}
