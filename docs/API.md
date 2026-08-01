@@ -363,7 +363,7 @@ curl http://localhost:8090/v1/lens/training-status
 
 ### POST /v1/chat/completions (passthrough)
 
-OpenAI-compatible chat completions, kept for SDK compatibility. The proxy passes these requests through to llama-server unchanged — **no agent loop, no tool calls, no V3 pipeline runs on this endpoint**. The response shape and streaming format is whatever llama-server returns natively.
+OpenAI-compatible chat completions, kept for SDK compatibility. The proxy forwards these requests to llama-server otherwise unmodified, but guarantees an explicit completion bound: `max_tokens` (or `n_predict` on `/completion`, `/completions`, `/infill`) is clamped to `ATLAS_MAX_COMPLETION_TOKENS` (default 8192) when missing, non-positive, or above that ceiling. A client that omits `max_tokens` therefore gets 8192, not the server default — **no agent loop, no tool calls, no V3 pipeline runs on this endpoint**. The response shape and streaming format is whatever llama-server returns natively.
 
 **For agent turns and tool calls, use `/v1/agent`.** It carries the full structured event stream (tool calls, V3 progress, permission requests).
 
@@ -380,7 +380,7 @@ OpenAI-compatible chat completions, kept for SDK compatibility. The proxy passes
 }
 ```
 
-**Response:** llama-server's native OpenAI-compatible shape — `chat.completion.chunk` SSE deltas when `stream: true`, a single `chat.completion` object otherwise. The proxy adds nothing to the payload.
+**Response:** llama-server's native OpenAI-compatible shape — `chat.completion.chunk` SSE deltas when `stream: true`, a single `chat.completion` object otherwise. The proxy adds nothing else to the payload.
 
 > **Note:** `/models` (no `/v1/` prefix) is an alias for `/v1/models`. Any unmatched path is proxied directly to llama-server.
 
@@ -402,7 +402,7 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
 | `find_file` | Regex search by file **name** or relative path. Use to check whether a file exists. |
 | `list_directory` | List files and subdirectories at a given path |
-| `run_command` | Execute a shell command via bash inside the **sandbox container**. Sees `/workspace` (your project, bind-mounted rw, same path as the proxy). Has python3 + pip, node + npm, go, rust, gcc/g++, bash, pytest, tsx pre-installed. When the sandbox is unreachable the tool fails with `sandbox unavailable: ...` (exit code 1) — it never falls back to executing on the proxy host. Host execution happens only when the operator explicitly selects it via `ATLAS_VERIFY_IN=host` or `target = "host"` under `[execution]` in `.atlas/config.toml`. The proxy still runs `validateShellCommand` upstream as the destructive-verb gate — this entry just picks the executor. |
+| `run_command` | Execute a shell command via bash inside the **sandbox container**. Sees `/workspace` (your project, bind-mounted rw, same path as the proxy). Has python3 + pip, node + npm, go, rust, gcc/g++, bash, pytest, tsx pre-installed. When the sandbox is unreachable the tool fails with `sandbox unavailable: ...` (exit code 1) — it never falls back to executing on the proxy host. Host execution happens only when the operator explicitly selects it via `ATLAS_VERIFY_IN=host` or `target = "host"` under `[execution]` in `.atlas/config.toml` **and** `ATLAS_TRUST_MODE=fully-trusted`. The default `trusted` silently downgrades a host request back to the sandbox, and `untrusted` refuses `run_command`/`run_background` outright. The proxy still runs `validateShellCommand` upstream as the destructive-verb gate — this entry just picks the executor. |
 | `run_background` | Start a long-running process (e.g. `python app.py`, `npm run dev`) in the sandbox and return immediately with a `job_id`. The proxy detects shell `&` backgrounding through `run_command` and routes it here. |
 | `tail_background` | Fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
 | `stop_background` | Terminate a backgrounded job by `job_id`. |
@@ -1045,7 +1045,7 @@ curl http://localhost:30820/languages
 }
 ```
 
-**Supported languages:** `python` (aliases: `py`, `python3`), `javascript` (`js`, `node`), `typescript` (`ts`), `go` (`golang`), `rust` (`rs`), `c`, `cpp` (`c++`), `bash` (`sh`, `shell`)
+**Supported languages:** `python` (aliases: `py`, `python3`), `javascript` (`js`, `node`), `typescript` (`ts`), `go` (`golang`), `java`, `kotlin` (`kt`, `kts`), `rust` (`rs`), `c`, `cpp` (`c++`), `ruby` (`rb`), `php`, `bash` (`sh`, `shell`)
 
 ### GET /health
 

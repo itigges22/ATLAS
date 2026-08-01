@@ -73,7 +73,7 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 | Service | Port | Language | Purpose |
 |---------|------|----------|---------|
 | **llama-server** | 8080 | C++ (llama.cpp) | LLM inference (CUDA / ROCm / Metal / Vulkan; SYCL on roadmap — see §1.1), grammar-constrained JSON, self-embeddings, per-layer residual hidden states |
-| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` passes through to llama-server unchanged. |
+| **atlas-proxy** | 8090 | Go | Agent loop, tool-call routing, tier classification, `/v1/agent` SSE, `/events` typed SSE, `/cancel`. `/v1/chat/completions` forwards to llama-server with only a `max_tokens` clamp applied (see API.md). |
 | **atlas-tui** | (client) | Go | Bubbletea TUI; consumes `/events` and `/v1/agent` SSE streams. |
 | **v3-service** | 8070 | Python | V3 pipeline HTTP wrapper (PlanSearch, DivSampling, PR-CoT, etc.) |
 | **geometric-lens** | 8099 | Python (FastAPI) | Internal `/internal/*` scoring service: C(x) energy scoring, G(x) XGBoost quality prediction, per-step scoring, plus the pattern cache (read + write); owns the SQLite state store (`SQLITE_DB_PATH` on the `lens-state` volume) backing the pattern cache and co-occurrence graph |

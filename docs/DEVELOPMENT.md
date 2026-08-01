@@ -86,7 +86,8 @@ port to localhost):
 
 ```bash
 cd proxy
-ATLAS_PROXY_PORT=8090 \
+ATLAS_SERVICE_TOKEN_FILE=$(pwd)/../secrets/service-token \
+  ATLAS_PROXY_PORT=8090 \
 ATLAS_INFERENCE_URL=http://localhost:8080 \
 ATLAS_LLAMA_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \

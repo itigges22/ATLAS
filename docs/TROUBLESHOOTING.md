@@ -129,10 +129,10 @@ sudo systemctl restart docker
 Verify GPU is visible inside containers:
 ```bash
 # Docker
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 
 # Podman
-podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0-base nvidia-smi
+podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ### `libnvidia-ml.so.1: cannot open shared object file`
@@ -439,10 +439,11 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 
 **Symptom:** Proxy health shows `"sandbox": false`. V3 build verification fails.
 
-**Fix:** Ensure all services are on the same Docker network. Docker Compose creates the `atlas` network automatically. If running containers manually:
+**Fix:** The sandbox is reached over `sandbox-net`, not `atlas` — it is deliberately the only service NOT on the `atlas` network, so executed code cannot reach the rest of the stack. The proxy, lens and v3-service are dual-homed on both. If running containers manually:
 ```bash
-docker network create atlas
-# Start all containers with --network atlas
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### Port Conflicts

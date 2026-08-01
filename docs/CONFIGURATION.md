@@ -390,8 +390,6 @@ the V3 service.
 | PR-CoT max rounds | 3 | Maximum repair attempts |
 | Refinement max iterations | 2 | Maximum refinement cycles |
 | Refinement time budget | 120s | Maximum time for refinement loop |
-| Derivation max sub-problems | 5 | Maximum problem decomposition depth |
-| Derivation max attempts/step | 3 | Retries per sub-problem |
 | Constraint min cosine distance | 0.15 | Prevents hypothesis repetition |
 
 ---
@@ -562,7 +560,6 @@ table; bootstrap-only knobs (`ATLAS_BOOTSTRAP_*` and friends) in
 | `HF_TOKEN` | (unset) | HuggingFace write token used by `atlas lens publish` / `atlas asa publish` for artifact upload. Get one at https://huggingface.co/settings/tokens (scope: write). `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` are also honored. Full walkthrough: [PUBLISHING.md](PUBLISHING.md). |
 | `ATLAS_BACKEND` | `cuda` (default) / `rocm` / `vulkan` / `metal` | Which llama-server build dispatch path is active. Written by `atlas init` based on GPU vendor (or `--backend vulkan` override). The entrypoint reads this to pick vendor-specific runtime flags. `vulkan` is the universal fallback — ~20–40% slower than tuned native backends but covers AMD/Intel/Snapdragon/Apple-via-MoltenVK/CPU with one image. `metal` is the macOS hybrid (native llama-server + Docker for the rest, [SETUP_MACOS.md](SETUP_MACOS.md)). See [SETUP.md § Vulkan](SETUP.md). |
 | `ATLAS_VK_DEVICE_SELECT` | (unset → first Vulkan ICD enumerated) | Vulkan-only: forwarded to `MESA_VK_DEVICE_SELECT` to pin a specific physical device when multiple ICDs are visible (e.g., dGPU + iGPU, two Intel Arc cards). Format: `"vendorID:deviceID"` (hex) or a device-name substring. Use `GGML_VK_VISIBLE_DEVICES` (numeric index) instead when the Mesa selector isn't granular enough. |
-| `ATLAS_ROOT` | (cwd) | Repo-root override read by `atlas onboard` when the checkout can't be resolved from the working directory. |
 | `ATLAS_GPU_VENDOR` | (auto-detected) | Process-env override read by `atlas init` / `atlas tier` on multi-vendor hosts: `nvidia`, `amd`, `apple`, `intel`. Auto-detect picks the largest-VRAM GPU. Not read from `.env`. |
 | `ATLAS_UPSTREAM_REPO` | `itigges22/ATLAS` | GitHub repo that `atlas lens publish` / `atlas publish` open the registry PR against. Override to target a fork. |
 | `ATLAS_PARALLEL_TASKS` | `4` (worker count) | Benchmark runner: number of tasks `atlas.bench.v3_runner` processes concurrently (default `4`; the runner's per-call timeout scaler reads the same var with default `1`). `atlas bench` pins it to `1` — the safe setting for any model; export a higher value only when driving `atlas.bench.v3_runner` directly on hardware that can take it. |

@@ -406,7 +406,7 @@ Dockerfile) for every service. Compose's default behavior:
 version (recommended for production), set `ATLAS_IMAGE_TAG` in `.env`:
 
 ```env
-ATLAS_IMAGE_TAG=v1.0.0      # semver tag from a git release
+ATLAS_IMAGE_TAG=3.1.3       # semver tag from a git release
 ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```
@@ -570,7 +570,7 @@ pip install -r geometric-lens/requirements.txt
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # 6. Install sandbox dependencies
-pip install fastapi uvicorn pylint pytest pydantic
+pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
 ```
 
 ### Start Services
@@ -582,7 +582,8 @@ Start each service in a separate terminal (or use `&` and redirect to log files)
 llama-server \
   --model "models/$ATLAS_MODEL_FILE" \
   --host 0.0.0.0 --port 8080 \
-  --ctx-size 32768 --n-gpu-layers 99 --no-mmap
+  --ctx-size 32768 --n-gpu-layers 99 --no-mmap \
+  --embeddings --pooling mean --flash-attn on --fit off
 
 # Terminal 2: Geometric Lens
 cd geometric-lens
