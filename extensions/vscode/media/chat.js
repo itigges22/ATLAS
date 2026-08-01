@@ -140,7 +140,7 @@
 		pendingChips.get(name).push(chip);
 	}
 
-	function resolveToolChip(tool, success, elapsed, error, diffId) {
+	function resolveToolChip(tool, success, elapsed, error, diffId, summary) {
 		const queue = pendingChips.get(tool);
 		let chip = queue && queue.length > 0 ? queue.shift() : null;
 		if (!chip) {
@@ -162,6 +162,14 @@
 				detail.className = 'chip-error';
 				detail.textContent = error;
 				chip.appendChild(detail);
+			}
+			// For a read-only ask the tool output IS the answer; a chip that
+			// shows only a checkmark answers nothing.
+			if (success && summary) {
+				const out = document.createElement('div');
+				out.className = 'chip-summary';
+				out.textContent = summary;
+				chip.appendChild(out);
 			}
 		}
 		if (diffId !== undefined && diffId !== null) {
@@ -329,7 +337,7 @@
 				addToolChip(message.name, message.detail);
 				break;
 			case 'toolResult':
-				resolveToolChip(message.tool, message.success, message.elapsed, message.error, message.diffId);
+				resolveToolChip(message.tool, message.success, message.elapsed, message.error, message.diffId, message.summary);
 				break;
 			case 'toolDenied':
 				denyToolChip(message.tool);

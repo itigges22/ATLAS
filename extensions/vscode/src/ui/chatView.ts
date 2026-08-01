@@ -26,6 +26,7 @@ import type {
 	V3StageEventData,
 } from '../client/types';
 import { editTargetPath, predictEdit, type EditPrediction } from '../session/editPreview';
+import { summarizeToolResult } from '../session/toolSummary';
 import {
 	PendingPermission,
 	PermissionFlow,
@@ -50,7 +51,7 @@ type OutboundMessage =
 	| { type: 'assistantDelta'; text: string }
 	| { type: 'reasoningDelta'; text: string }
 	| { type: 'toolCall'; name: string; detail: string }
-	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string; diffId?: number }
+	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string; diffId?: number; summary?: string }
 	| { type: 'toolDenied'; tool: string }
 	| { type: 'doneSummary'; text: string }
 	| { type: 'note'; text: string }
@@ -308,6 +309,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					elapsed: payload.elapsed,
 					error: payload.error,
 					diffId,
+					// The proxy ships the tool's real output here; without it a
+					// read-only ask ("list the files") renders as a green check
+					// and nothing else.
+					summary: payload.success ? summarizeToolResult(payload.tool, payload) : undefined,
 				});
 				// Fire-and-forget: the check sleeps its settle delay before
 				// stat-ing, and the stream must not wait on it.

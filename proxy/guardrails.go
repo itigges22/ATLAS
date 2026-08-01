@@ -828,7 +828,43 @@ func wantsStateChange(userMessage string, tier Tier, inspectedWorkspace bool) bo
 	if isActionIntentMessage(userMessage) {
 		return true
 	}
+	// A request to LOOK is satisfied by looking. inspectedWorkspace turns on
+	// as soon as a read-only tool succeeds, so without this "list the files"
+	// bounced its own `done`: the read that answered the question was the same
+	// read the gate treated as evidence that work had started. Observed live —
+	// the model listed the directory, was refused `done`, and told the user it
+	// was "unable to complete the 'done' state as per the system's
+	// requirements", a rule nothing in the prompt states.
+	if isReadOnlyRequest(userMessage) {
+		return false
+	}
 	return inspectedWorkspace && tier != Tier0Conversational
+}
+
+// isReadOnlyRequest matches asks that are ANSWERED by reading: list, show,
+// find, print. Deliberately narrow — it only decides whether a completed read
+// is allowed to end the turn, so a false positive lets a real edit request
+// finish without editing.
+//
+// Callers check isActionIntentMessage first, which covers "add a list to the
+// page". The fix-intent exclusion below covers the other overlap: "find and
+// fix the bug" opens with a read verb but is not read-only work.
+func isReadOnlyRequest(msg string) bool {
+	lower := strings.ToLower(msg)
+	if isFixIntentMessage(msg) || isActionIntentMessage(msg) {
+		return false
+	}
+	for _, w := range []string{
+		"list the file", "list files", "list all", "list the director",
+		"show me", "show the", "what files", "which files", "what's in",
+		"whats in", "what is in", "find the file", "where is", "where are",
+		"print the", "display the", "read the",
+	} {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // gateTrigger names why the verification gate fired, for the log line. A

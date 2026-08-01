@@ -1308,3 +1308,39 @@ func TestCompleteAnswersAreNotBounced(t *testing.T) {
 		}
 	}
 }
+
+// The live failure: "Please list the files in the directory you are in."
+// list_directory succeeded, which set inspectedWorkspace, which made the
+// action gate demand a productive change before `done`. The model was refused
+// its own completion and told the user it was "unable to complete the 'done'
+// state as per the system's requirements" — a rule nothing states.
+func TestAReadOnlyRequestDoesNotDemandAWrite(t *testing.T) {
+	readOnly := []string{
+		"Please list the files in the directory you are in.",
+		"list files",
+		"show me the config",
+		"what files are in src/",
+		"where is the router defined",
+		"print the contents of app.py",
+	}
+	for _, m := range readOnly {
+		// inspectedWorkspace=true is the point: the read that answered the
+		// question is the same read the gate used as evidence of work.
+		if wantsStateChange(m, Tier1Simple, true) {
+			t.Errorf("read-only request still demands a write: %q", m)
+		}
+	}
+
+	mustStillDemandWork := []string{
+		"add a list of files to the README",   // action verb wins
+		"find and fix the bug in the parser",  // fix intent wins
+		"show me the bug and repair it",       // fix intent wins
+		"the file list is broken",             // fix intent wins
+		"refactor the directory listing code", // action verb wins
+	}
+	for _, m := range mustStillDemandWork {
+		if !wantsStateChange(m, Tier1Simple, true) {
+			t.Errorf("work request was wrongly exempted: %q", m)
+		}
+	}
+}

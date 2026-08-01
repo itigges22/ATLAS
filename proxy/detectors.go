@@ -123,6 +123,19 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 	resetToolRepeatWindow(ctx)
 	obs := repeatObservation{Count: count}
 
+	if toolName == "structural_edit" {
+		if path, sel := structuralEditTarget(args); path != "" && sel != "" {
+			return fmt.Sprintf(
+				"⚠ `structural_edit` on `%s` with selector `%s` has failed %d times. The body was different each "+
+					"time, so the body is not what is wrong — the SELECTOR is. That node either does not contain the "+
+					"code you are changing, or is mostly a string literal you cannot re-emit byte-for-byte. No "+
+					"selector reaches INSIDE a string: an HTML/JS template held in a Python string is one literal to "+
+					"the grammar, however many lines it spans. Switch tools now: `edit_file` with old_str set to ONE "+
+					"unique line copied out of the region you are changing, or `insert_after` with the line number "+
+					"read_file printed. Do not send this selector again.",
+				path, sel, count), obs, true
+		}
+	}
 	if toolName == "write_file" {
 		if p := writeFilePath(args); p != "" {
 			return fmt.Sprintf(
@@ -210,7 +223,35 @@ func writeFileContentFingerprint(args json.RawMessage) string {
 // to path-only when there's no content to fingerprint.
 // edit_file/structural_edit keep full-args signatures: distinct surgical
 // edits to one file in close succession are legitimate iteration.
+// structuralEditTarget pulls (path, selector) out of a structural_edit call.
+// Both empty when the args are not that shape.
+func structuralEditTarget(args json.RawMessage) (string, string) {
+	var in struct {
+		Path     string `json:"path"`
+		Selector string `json:"selector"`
+	}
+	if err := json.Unmarshal(args, &in); err != nil {
+		return "", ""
+	}
+	return in.Path, in.Selector
+}
+
 func toolCallSignature(toolName string, args json.RawMessage) string {
+	// structural_edit is keyed on (path, selector) and deliberately ignores
+	// `content`. When a selector cannot carry the change the model is
+	// describing, it re-emits a DIFFERENT body against the SAME selector every
+	// time, so a whole-args signature reads three doomed attempts as three
+	// distinct calls and the repeat detector never fires. Observed live: three
+	// structural_edit calls on `function:index` in a Flask app whose template
+	// is a module-level constant — the node is two lines and holds none of the
+	// JavaScript being fixed. Each got the same rejection, and the turn died on
+	// the failure cap with the model never told the selector was the problem.
+	if toolName == "structural_edit" {
+		if p, sel := structuralEditTarget(args); p != "" && sel != "" {
+			h := sha1.Sum([]byte(toolName + "|path:" + p + "|sel:" + sel))
+			return hex.EncodeToString(h[:])
+		}
+	}
 	if toolName == "write_file" {
 		if p := writeFilePath(args); p != "" {
 			key := toolName + "|path:" + p

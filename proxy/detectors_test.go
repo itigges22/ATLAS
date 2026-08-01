@@ -560,3 +560,58 @@ func TestBrokenInlineScriptSteerSkipsExec(t *testing.T) {
 		t.Errorf("must not fire when -c execs external code: %q", s)
 	}
 }
+
+// The live failure: three structural_edit calls on function:index in a Flask
+// app whose HTML/JS template is a module-level constant. index() is two lines
+// and holds none of the JavaScript being fixed, so every attempt was doomed —
+// but each carried a different body, so a whole-args signature saw three
+// distinct calls and the repeat detector stayed silent until the failure cap
+// killed the turn.
+func TestStructuralEditRepeatsKeyOnSelectorNotContent(t *testing.T) {
+	ctx := &AgentContext{}
+	args := func(content string) json.RawMessage {
+		return json.RawMessage(`{"path":"app.py","selector":"function:index","content":` +
+			mustJSONString(content) + `}`)
+	}
+
+	var msg string
+	var fired bool
+	for i, body := range []string{"first attempt", "second, rewritten", "third, different again"} {
+		msg, _, fired = recordToolCall(ctx, "structural_edit", args(body))
+		if fired {
+			if i == 0 {
+				t.Fatal("fired on the first call — that is not a repeat")
+			}
+			break
+		}
+	}
+	if !fired {
+		t.Fatal("three attempts at the same selector never registered as repetition")
+	}
+	// The message has to name the selector as the cause, or the model reads it
+	// as "try again differently" and rewrites the body a fourth time.
+	for _, want := range []string{"function:index", "SELECTOR", "edit_file", "insert_after"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("escalation missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+// A different selector is a different attempt and must not be conflated.
+func TestStructuralEditDifferentSelectorsAreNotRepeats(t *testing.T) {
+	ctx := &AgentContext{}
+	for _, sel := range []string{"function:a", "function:b", "function:c", "class:D"} {
+		args := json.RawMessage(`{"path":"app.py","selector":"` + sel + `","content":"x"}`)
+		if _, _, fired := recordToolCall(ctx, "structural_edit", args); fired {
+			t.Fatalf("distinct selector %q was treated as a repeat", sel)
+		}
+	}
+}
+
+func mustJSONString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
