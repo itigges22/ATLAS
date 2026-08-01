@@ -4132,7 +4132,15 @@ func shouldGeneratePlan(ctx *AgentContext, message string) bool {
 	// — already-running plan is still relevant; a fresh one would just
 	// re-derive it.
 	trimmed := strings.ToLower(strings.TrimSpace(message))
-	return len(trimmed) >= 12
+	if len(trimmed) < 12 {
+		return false
+	}
+	// A request to LOOK needs no plan, and a wrong one actively steers.
+	// Observed live: "Yes, please list the files" produced a three-step plan
+	// (read_file app.py -> structural_edit app.py -> run_command python
+	// app.py). The model listed the directory as asked, then followed the plan
+	// into editing a snake game it had merely been asked to enumerate.
+	return !isReadOnlyRequest(message)
 }
 
 // generatePlan hits /v3/plan with a sampled project context and the

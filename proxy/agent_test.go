@@ -2241,3 +2241,31 @@ func TestShortOldStrMismatchKeepsNormalAdvice(t *testing.T) {
 		t.Errorf("short anchor must not get the long-anchor advice: %q", err)
 	}
 }
+
+// The live failure: "Yes, please list the files" produced a plan of
+// read_file app.py -> structural_edit app.py -> run_command python app.py.
+// The model listed the directory as asked, then followed the plan into
+// editing the file it found. A wrong plan is worse than no plan.
+func TestReadOnlyRequestsGetNoPlan(t *testing.T) {
+	ctx := &AgentContext{Tier: Tier1Simple}
+	for _, m := range []string{
+		"Yes, please list the files",
+		"please list the files in this directory",
+		"show me the config file",
+		"what files are in the project",
+	} {
+		if shouldGeneratePlan(ctx, m) {
+			t.Errorf("read-only request should not be planned: %q", m)
+		}
+	}
+	// Work still gets a plan.
+	for _, m := range []string{
+		"add a pause feature to the snake game",
+		"find and fix the collision bug",
+		"refactor the game loop into smaller functions",
+	} {
+		if !shouldGeneratePlan(ctx, m) {
+			t.Errorf("work request lost its plan: %q", m)
+		}
+	}
+}
