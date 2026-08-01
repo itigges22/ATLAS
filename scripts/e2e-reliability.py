@@ -620,6 +620,59 @@ TASKS["multiturn_stats"] = Task(
 )
 
 
+def _check_go_bugfix(ws: Path) -> tuple[bool, str]:
+    """A Go fix, verified by running it — not by reading it.
+
+    Every fixture so far has been Python or JavaScript, while the sandbox
+    supports twelve languages. A different language exercises a different
+    syntax checker, a different runner, and a different set of gate paths.
+    """
+    src = ws / "chunk.go"
+    if not src.exists():
+        return False, "chunk.go is missing"
+    go = shutil.which("go")
+    if not go:
+        return True, "go toolchain unavailable on the host — skipped"
+    proc = subprocess.run([go, "run", "chunk.go"], cwd=str(ws),
+                          capture_output=True, text=True, timeout=180)
+    if proc.returncode != 0:
+        return False, f"go run failed: {(proc.stderr or proc.stdout).strip()[:160]}"
+    got = proc.stdout.strip()
+    want = "[[1 2] [3 4] [5]]"
+    if got != want:
+        return False, f"wrong output: got {got!r}, want {want!r}"
+    return True, "chunks() fixed and verified by running it"
+
+
+TASKS["go_offbyone"] = Task(
+    name="go_offbyone",
+    prompt=("chunk.go has a bug: Chunks([]int{1,2,3,4,5}, 2) drops the last "
+            "element instead of returning it as a short final chunk. The "
+            "program should print [[1 2] [3 4] [5]]. Fix it and verify by "
+            "running it."),
+    files={"chunk.go": (
+        "package main\n"
+        "\n"
+        "import \"fmt\"\n"
+        "\n"
+        "// Chunks splits a slice into fixed-size chunks.\n"
+        "func Chunks(values []int, size int) [][]int {\n"
+        "\tout := [][]int{}\n"
+        "\tfor i := 0; i+size <= len(values); i += size {\n"
+        "\t\tout = append(out, values[i:i+size])\n"
+        "\t}\n"
+        "\treturn out\n"
+        "}\n"
+        "\n"
+        "func main() {\n"
+        "\tfmt.Println(Chunks([]int{1, 2, 3, 4, 5}, 2))\n"
+        "}\n"
+    )},
+    check=_check_go_bugfix,
+    must_exist=("chunk.go",),
+)
+
+
 def _check_multifile(ws: Path) -> tuple[bool, str]:
     """A real multi-file program: separate modules, working CLI, passing tests.
 
