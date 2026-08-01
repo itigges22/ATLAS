@@ -523,16 +523,27 @@ def _check_bugfind(ws: Path, s: "Session" = None) -> tuple[bool, str]:
     answer = _answer_text(s) if s is not None else ""
     if len(answer.strip()) < 30:
         return False, "no substantive answer"
-    named_file = "planning.py" in answer
-    # Accept any of: the function, the variables, the line, or the comparison.
-    located = any(t in answer for t in (
-        "best_steps", "n_steps", "tie", "tie-break", "tiebreak",
-        "_select", "select_plan", "314", "shorter", "fewer step"))
-    if not named_file:
+    if "planning.py" not in answer:
         return False, f"did not name planning.py (answer: {answer[:90]!r})"
-    if not located:
-        return False, "named the file but not the tie-break comparison"
-    return True, "located the seeded tie-break bug in planning.py"
+
+    # Must name the actual mechanism, not merely the word "tie". An earlier
+    # version accepted an answer that said the cause was "how min() is used
+    # with a custom key" — there is no min() there, and the function it named
+    # was the scorer, not the selection loop. It had the file and the symptom
+    # right and the mechanism invented, which is exactly the answer a loose
+    # check should not pass.
+    mechanism = any(t in answer for t in (
+        "best_steps", "n_steps", "> best", "< best", "314",
+        "greater than", "less than", "comparison operator"))
+    if not mechanism:
+        return False, ("named planning.py and the symptom, but not the actual "
+                       f"comparison (answer: {answer[:110]!r})")
+
+    # And it must not assert a mechanism that is not in the file.
+    for invented in ("min(", "max(", "sorted(", "sort("):
+        if invented in answer:
+            return False, f"named a mechanism the file does not use: {invented!r}"
+    return True, "located the seeded tie-break comparison in planning.py"
 
 
 TASKS["bugfind_tiebreak"] = Task(

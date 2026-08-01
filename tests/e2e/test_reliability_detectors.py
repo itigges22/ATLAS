@@ -335,3 +335,33 @@ def test_h4_still_fires_on_a_work_task(rel, tmp_path):
     s = _session(rel, [_call("read_file", path="a.py"), _ok(),
                        {"type": "done", "data": {"summary": ""}}], tmp_path)
     assert rel.h4_gate_escape(s, task) != []
+
+
+# --- bug-find check must not accept an invented mechanism ----------------
+
+def test_bugfind_rejects_the_right_file_with_a_wrong_mechanism(rel, tmp_path):
+    """The real cycle-6 answer, which an earlier version of the check passed.
+
+    It named planning.py and the symptom correctly, then attributed the cause
+    to "how min() is used with a custom key" — there is no min() there, and
+    the function it named was the scorer, not the selection loop. Right file,
+    invented mechanism, and a loose check called it a pass.
+    """
+    task = rel.TASKS["bugfind_tiebreak"]
+    s = _session(rel, [{"type": "text", "data": {"content":
+        "The issue is in `planning.py` within the `_score_plan` function. When two "
+        "plans have the same score, the code selects the one with the maximum number "
+        "of steps because of how the `min()` function is being used with a custom key."}},
+        {"type": "done", "data": {"summary": ""}}], tmp_path)
+    passed, _ = task.check(tmp_path, s)
+    assert not passed
+
+
+def test_bugfind_accepts_the_actual_comparison(rel, tmp_path):
+    task = rel.TASKS["bugfind_tiebreak"]
+    s = _session(rel, [{"type": "text", "data": {"content":
+        "planning.py: the selection loop breaks ties with n_steps > best_steps, "
+        "so a tie keeps the longer plan. It should be <."}},
+        {"type": "done", "data": {"summary": ""}}], tmp_path)
+    passed, _ = task.check(tmp_path, s)
+    assert passed
