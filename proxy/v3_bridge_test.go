@@ -312,3 +312,83 @@ func TestCallV3GenerateStreamingCancelAborts(t *testing.T) {
 		t.Errorf("cancel took %v to unblock", elapsed)
 	}
 }
+
+// generatePlan is the agent loop's entry into V3 planning. The transport
+// under it is covered above; what is only here is the progress callback it
+// installs, and that callback exists to drop token-level events. The
+// planner asks for 3 candidates and the LLM emits ~150 token deltas each,
+// so forwarding them verbatim puts ~450 v3_plan rows into the TUI's
+// pipeline pane for one plan — the same flood that had to be fixed once
+// already for V3 generation. Only the structural stages belong on the
+// stream.
+func TestGeneratePlanDropsTokenNoiseFromTheStream(t *testing.T) {
+	var sse []string
+	add := func(line string) { sse = append(sse, line, "") }
+	add(`data: {"stage":"plan_start","detail":"generating 3 candidates"}`)
+	add(`data: {"stage":"llm_start","detail":"candidate 0"}`)
+	for i := 0; i < 40; i++ { // stand-in for the ~450 real deltas
+		add(`data: {"stage":"token","detail":"tok"}`)
+	}
+	add(`data: {"stage":"llm_end","detail":"candidate 0"}`)
+	add(`data: {"stage":"plan_candidate_scored","detail":"candidate 1 score=0.80","data":{"index":0,"score":0.8}}`)
+	add(`data: {"stage":"plan_selected","detail":"plan 1 won","data":{"index":0,"score":0.8}}`)
+	sse = append(sse,
+		`event: result`,
+		`data: {"steps":[{"id":"s1","action":"edit_file","target":"app.py","why":"add route"}],"verify_step":"s1","rationale":"r","candidates_tested":3,"winning_score":0.8,"winning_index":0}`,
+		``,
+		`data: [DONE]`,
+		``)
+	srv := fakePlanServer(t, strings.Join(sse, "\n"))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var stages []string
+	ctx := &AgentContext{
+		Ctx:        context.Background(),
+		V3URL:      srv.URL,
+		WorkingDir: t.TempDir(),
+	}
+	ctx.StreamFn = func(kind string, data interface{}) {
+		if kind != "v3_plan" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if m, ok := data.(map[string]interface{}); ok {
+			stages = append(stages, fmt.Sprint(m["stage"]))
+		}
+	}
+
+	plan := generatePlan(ctx, "add a hello endpoint")
+	if plan == nil {
+		t.Fatal("generatePlan returned nil on a well-formed plan stream")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, s := range stages {
+		if s == "token" || s == "llm_start" || s == "llm_end" {
+			t.Errorf("token-level stage %q reached the TUI stream", s)
+		}
+	}
+	// The structural stages are the whole point of streaming at all.
+	want := map[string]bool{"plan_start": false, "plan_candidate_scored": false, "plan_selected": false}
+	for _, s := range stages {
+		if _, ok := want[s]; ok {
+			want[s] = true
+		}
+	}
+	for s, seen := range want {
+		if !seen {
+			t.Errorf("structural stage %q never reached the stream (got %v)", s, stages)
+		}
+	}
+}
+
+// No v3-service configured means no planner. Returning nil here is what
+// makes plan mode degrade to a plain agent loop instead of erroring.
+func TestGeneratePlanWithoutV3URLIsNil(t *testing.T) {
+	if p := generatePlan(&AgentContext{Ctx: context.Background()}, "do a thing"); p != nil {
+		t.Errorf("expected nil plan with no V3URL, got %+v", p)
+	}
+}
