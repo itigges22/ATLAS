@@ -490,6 +490,67 @@ TASKS["smallrung_toml"] = Task(
 )
 
 
+# --- medium rung: find a seeded bug across several real files -----------
+#
+# The deliverable is IDENTIFYING the defect, not editing it. That is
+# deliberate: the model's transcription ceiling is already measured and would
+# dominate any fix-it task at this size, hiding what this actually tests —
+# can it navigate ~1.3k lines across three unfamiliar files, understand a
+# selection algorithm, and locate a one-character bug from a symptom alone.
+
+_BUGFIND_SRCS = ("planning.py", "scoring.py", "adapters.py")
+
+
+def _bugfind_files() -> dict:
+    out = {}
+    for name in _BUGFIND_SRCS:
+        text = (REPO / "v3-service" / name).read_text()
+        if name == "planning.py":
+            # The tie-break: highest score wins, ties go to the SHORTER plan.
+            # Flipped so ties go to the longer one — one character, and the
+            # symptom is entirely behavioural.
+            orig = "if score > best_score or (score == best_score and n_steps < best_steps):"
+            assert orig in text, "seed anchor moved in planning.py"
+            text = text.replace(
+                orig,
+                "if score > best_score or (score == best_score and n_steps > best_steps):",
+                1)
+        out[name] = text
+    return out
+
+
+def _check_bugfind(ws: Path, s: "Session" = None) -> tuple[bool, str]:
+    answer = _answer_text(s) if s is not None else ""
+    if len(answer.strip()) < 30:
+        return False, "no substantive answer"
+    named_file = "planning.py" in answer
+    # Accept any of: the function, the variables, the line, or the comparison.
+    located = any(t in answer for t in (
+        "best_steps", "n_steps", "tie", "tie-break", "tiebreak",
+        "_select", "select_plan", "314", "shorter", "fewer step"))
+    if not named_file:
+        return False, f"did not name planning.py (answer: {answer[:90]!r})"
+    if not located:
+        return False, "named the file but not the tie-break comparison"
+    return True, "located the seeded tie-break bug in planning.py"
+
+
+TASKS["bugfind_tiebreak"] = Task(
+    name="bugfind_tiebreak",
+    prompt=("This directory holds three modules from a code-generation "
+            "pipeline. Several candidate plans are scored, and the best one "
+            "is selected. Symptom: when two plans tie on score, the pipeline "
+            "consistently picks the one with MORE steps, though it should "
+            "prefer the shorter plan. Find the cause. Tell me which file and "
+            "which comparison is wrong — do not change any code."),
+    files=_bugfind_files(),
+    check=_check_bugfind,
+    must_exist=_BUGFIND_SRCS,
+    immutable=_BUGFIND_SRCS,
+    conversational=True,
+)
+
+
 def _check_multifile(ws: Path) -> tuple[bool, str]:
     """A real multi-file program: separate modules, working CLI, passing tests.
 
