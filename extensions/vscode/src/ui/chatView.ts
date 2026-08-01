@@ -33,7 +33,7 @@ import {
 	type PermissionChoice,
 } from '../session/permissionFlow';
 import { TurnManager } from '../session/turnManager';
-import { renderError } from '../util/errors';
+import { describeForLog, renderError } from '../util/errors';
 import { MismatchDetector } from '../workspace/mismatch';
 import { DiffProvider } from './diffProvider';
 import type { StatusBar } from './statusBar';
@@ -513,6 +513,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private handleTurnFailure(error: unknown): void {
+		// Log before rendering: renderError collapses every non-API failure
+		// to "Could not reach the ATLAS proxy", which is the same sentence
+		// for a refused connection, a DNS miss and a bug in this extension.
+		this.log('turn failed', error);
 		if (error instanceof Error && error.name === 'AbortError') {
 			this.post({ type: 'note', text: 'Turn cancelled.' });
 			return;
@@ -686,14 +690,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		this.postTransient({ type: 'busy', value: this.turns.busy });
 	}
 
+	/** Append to the ATLAS output channel. Errors are unpacked by hand:
+	 * JSON.stringify(new Error('fetch failed')) is '{}', so serializing one
+	 * throws away the only part worth reading. undici hangs the real reason
+	 * (ECONNREFUSED, ENOTFOUND, a TLS failure) off `cause`, which is what
+	 * turns "fetch failed" into something actionable. */
 	private log(context: string, detail: unknown): void {
-		let rendered: string;
-		try {
-			rendered = JSON.stringify(detail);
-		} catch {
-			rendered = String(detail);
-		}
-		this.output.appendLine(`${context}: ${rendered}`);
+		this.output.appendLine(`[${new Date().toISOString()}] ${context}: ${describeForLog(detail)}`);
 	}
 
 	private renderHtml(webview: vscode.Webview): string {

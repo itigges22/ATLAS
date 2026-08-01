@@ -58,3 +58,34 @@ export function renderError(error: unknown): RenderedError {
 	}
 	return { message: `Could not reach the ATLAS proxy: ${String(error)}`, action: 'none', prominent: true };
 }
+
+/** Flatten anything throwable into one readable line for the output channel.
+ *
+ * Errors do not serialize: JSON.stringify(new Error('fetch failed')) is '{}'.
+ * And "fetch failed" on its own says nothing — undici puts the reason on
+ * `cause`, so a refused connection reads as `fetch failed (ECONNREFUSED)`
+ * and a bad hostname as `fetch failed (ENOTFOUND)`. Without this the user
+ * gets a message that cannot distinguish "proxy is down" from "wrong URL"
+ * from "TLS rejected".
+ */
+export function describeForLog(detail: unknown): string {
+	if (detail instanceof Error) {
+		const parts = [`${detail.name}: ${detail.message}`];
+		const cause = (detail as { cause?: unknown }).cause;
+		if (cause instanceof Error) {
+			const code = (cause as { code?: string }).code;
+			parts.push(`cause=${code ?? cause.name}: ${cause.message}`);
+		} else if (cause !== undefined) {
+			parts.push(`cause=${String(cause)}`);
+		}
+		return parts.join(' | ');
+	}
+	if (typeof detail === 'string') {
+		return detail;
+	}
+	try {
+		return JSON.stringify(detail) ?? String(detail);
+	} catch {
+		return String(detail);
+	}
+}

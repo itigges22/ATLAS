@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { AtlasApiError } from '../src/client/atlasClient';
-import { renderError } from '../src/util/errors';
+import { describeForLog, renderError } from '../src/util/errors';
 
 function apiError(code: string, detail: string, status = 400): AtlasApiError {
 	return new AtlasApiError(status, { error: code, detail }, detail);
@@ -76,5 +76,43 @@ describe('renderError', () => {
 	it('stringifies non-Error throwables', () => {
 		const rendered = renderError('boom');
 		expect(rendered.message).toContain('boom');
+	});
+});
+
+describe('describeForLog', () => {
+	it('keeps an Error readable where JSON.stringify would not', () => {
+		// This is the whole reason it exists.
+		expect(JSON.stringify(new Error('fetch failed'))).toBe('{}');
+		expect(describeForLog(new Error('fetch failed'))).toContain('fetch failed');
+	});
+
+	it('surfaces the undici cause code, which is the actionable part', () => {
+		// "fetch failed" cannot distinguish a dead proxy from a wrong URL.
+		// The cause can.
+		const refused = new TypeError('fetch failed');
+		(refused as { cause?: unknown }).cause = Object.assign(
+			new Error('connect ECONNREFUSED 127.0.0.1:8090'), { code: 'ECONNREFUSED' });
+		const line = describeForLog(refused);
+		expect(line).toContain('fetch failed');
+		expect(line).toContain('ECONNREFUSED');
+
+		const dns = new TypeError('fetch failed');
+		(dns as { cause?: unknown }).cause = Object.assign(
+			new Error('getaddrinfo ENOTFOUND nope'), { code: 'ENOTFOUND' });
+		expect(describeForLog(dns)).toContain('ENOTFOUND');
+	});
+
+	it('handles a cause that is not an Error', () => {
+		const e = new Error('boom');
+		(e as { cause?: unknown }).cause = 'plain string cause';
+		expect(describeForLog(e)).toContain('plain string cause');
+	});
+
+	it('passes strings through and survives unserializable input', () => {
+		expect(describeForLog('already a string')).toBe('already a string');
+		const cyclic: Record<string, unknown> = {};
+		cyclic.self = cyclic;
+		expect(() => describeForLog(cyclic)).not.toThrow();
+		expect(describeForLog(undefined)).toBeTypeOf('string');
 	});
 });
