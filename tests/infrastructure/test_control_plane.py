@@ -36,6 +36,7 @@ def _post(path: str, body: dict, method: str = "POST"):
             return e.code, {"raw": raw}
     except urllib.error.URLError as e:
         pytest.skip(f"proxy not reachable at {PROXY}: {e}")
+        raise  # unreachable: skip() raises Skipped. Keeps every path explicit.
 
 
 def test_cancel_unknown_session_is_404_not_an_error():

@@ -53,7 +53,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Optional
 
 
 # ---------------------------------------------------------------------------

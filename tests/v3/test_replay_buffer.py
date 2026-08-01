@@ -14,7 +14,6 @@ import random
 import sys
 import tempfile
 
-import pytest
 
 # geometric-lens is a separate service; add it to path for direct imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "geometric-lens"))

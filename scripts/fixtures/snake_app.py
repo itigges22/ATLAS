@@ -191,5 +191,10 @@ def index():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # debug=False on purpose. This file is handed to the model as the
+    # flask_pause fixture, so whatever it says here is a pattern the model
+    # copies into its own output. It also keeps the process count honest:
+    # debug=True starts the Werkzeug reloader, which forks a second process
+    # the harness then reports as a leaked background job.
+    app.run(host='127.0.0.1', port=5001, debug=False)
 

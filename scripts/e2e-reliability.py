@@ -731,7 +731,11 @@ TASKS["multifile_cli"] = Task(
 
 
 def _extract_script(src: str) -> str | None:
-    m = re.search(r"<script>(.*?)</script>", src, re.S)
+    # `<script>` bare is the minority spelling. A model writing
+    # `<script type="text/javascript">` or `<SCRIPT>` used to fall straight
+    # through here, and the JS half of the quality score silently scored
+    # nothing — the file read as "no JS" rather than "JS not analysed".
+    m = re.search(r"<script\b[^>]*>(.*?)</script\s*>", src, re.S | re.I)
     return m.group(1) if m else None
 
 
@@ -1097,6 +1101,10 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                 elif leftover.is_dir():
                     leftover.rmdir()
             except OSError:
+                # Best-effort teardown. A leftover the harness cannot remove
+                # (busy, permission, vanished under us) must not abort the
+                # run — mkdir below recreates the workspace either way, and a
+                # survivor shows up as a fixture mismatch in the task check.
                 pass
     workspace.mkdir(parents=True, exist_ok=True)
     for name, content in task.files.items():
@@ -1146,7 +1154,6 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                     events.append({"type": "__unparseable__", "raw": payload[:200]})
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         events.append({"type": "error", "data": {"error": f"stream failed: {e}"}})
-    wall = time.time() - t0
 
     # Follow-ups: same session, prior exchange replayed as history. The
     # assistant turn is reconstructed from what it actually emitted.

@@ -855,6 +855,10 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                     f"change actually in it."
                 )}
         except SyntaxError:
+            # This gate only exists to catch a semantic no-op, and it needs
+            # BOTH sides to parse to compare their ASTs. If either fails, the
+            # edit is not a no-op question at all — it is a syntax problem,
+            # and the caller below reports that with a far better message.
             pass
 
     return {
@@ -922,7 +926,6 @@ _JS_SCRIPT_TYPES = frozenset({
 # block still carrying one after masking is undecidable and gets no finding.
 _TEMPLATE_MARKERS = (b"{{", b"{%", b"<%")
 _JINJA_EXPR_RE = re.compile(rb"\{\{[^\n{}]*\}\}")
-_JINJA_COMMENT_RE = re.compile(rb"\{#[^\n]*#\}")
 
 # Closing delimiters, for the "you left a stray X" hint.
 _CLOSERS = {")": "(", "}": "{", "]": "["}
@@ -932,18 +935,50 @@ def _embedded_available() -> bool:
     return bool(_STRUCTURAL_EDIT_AVAILABLE and _EMBEDDED_SCRIPT_AVAILABLE)
 
 
+def _blank_jinja_comments(block: bytes, blank: int = 0x20) -> bytes:
+    """Overwrite `{# ... #}` comments with `blank`, preserving length and CR/LF.
+
+    This was a regex (`\\{#[^\\n]*#\\}`) and cannot go back to being one. With
+    many `{#` and no closer, every opener rescans to end-of-line, which is
+    quadratic on bytes the model chose: 18ms at 1.6k openers, 15.9s at 25k.
+    Scanning with `find` is linear, because a line with no `#}` after its first
+    `{#` has none after any later one either, so that line is finished.
+
+    It also drops an over-match the regex had: `[^\\n]*` is greedy, so
+    `{# a #} tail {# b #}` matched as ONE comment and ` tail ` got blanked with
+    it. Jinja closes a comment at the FIRST `#}` and renders that input as
+    ` tail `, so the greedy read was masking live template text.
+    """
+    if b"{#" not in block:
+        return block
+    out = bytearray(block)
+    base = 0
+    for line in block.split(b"\n"):
+        i = 0
+        while True:
+            s = line.find(b"{#", i)
+            if s < 0:
+                break
+            e = line.find(b"#}", s + 2)
+            if e < 0:
+                break  # nothing closes on this line; later openers can't either
+            for p in range(base + s, base + e + 2):
+                if out[p] not in (0x0A, 0x0D):
+                    out[p] = blank
+            i = e + 2
+        base += len(line) + 1  # +1 for the '\n' that split() removed
+    return bytes(out)
+
+
 def _mask_placeholders(block: bytes) -> bytes:
     """Replace Jinja/Django expression placeholders and comments with
     equal-LENGTH filler so the JS parse sees an identifier where the template
     interpolates a value. Length- and newline-preserving: every byte offset in
     the masked block still points at the same byte of the real file."""
-    def _blank(m):
-        return bytes(c if c in (0x0A, 0x0D) else 0x20 for c in m.group(0))
-
     def _ident(m):
         return b"J" + b"x" * (m.end() - m.start() - 1)
 
-    return _JINJA_EXPR_RE.sub(_ident, _JINJA_COMMENT_RE.sub(_blank, block))
+    return _JINJA_EXPR_RE.sub(_ident, _blank_jinja_comments(block))
 
 
 def _has_template_marker(block: bytes) -> bool:

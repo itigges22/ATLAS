@@ -26,7 +26,6 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 sys.stdout.reconfigure(line_buffering=True)
 
 import adapters
-from adapters import ClientDisconnected, _post_pattern_outcome
 from pipeline import V3PipelineService, _build_problem_from_request
 from planning import generate_plan
 from symbols import (structural_edit, structural_score, build_project_symbols,
@@ -34,11 +33,26 @@ from symbols import (structural_edit, structural_score, build_project_symbols,
                      _symbol_index_for_python_source, _STRUCTURAL_EDIT_AVAILABLE,
                      _EMBEDDED_SCRIPT_AVAILABLE)
 # The handler does not call these; tests exercise them through `import main`.
+# __all__ below states that so linters stop reading them as dead imports —
+# deleting any of them breaks the suite, which is the failure this guards.
 from pipeline import _candidate_by_index, _make_self_test
 from planning import _score_plan
 from scoring import (verify_build_command, smoke_compile_check,
                      score_candidate_per_step, _project_relative_path)
 from symbols import _ast_selector_to_query
+
+__all__ = [
+    # Re-exported for tests that reach them via `import main`.
+    "_candidate_by_index", "_make_self_test", "_score_plan",
+    "verify_build_command", "smoke_compile_check", "score_candidate_per_step",
+    "_project_relative_path", "_ast_selector_to_query",
+    "_symbol_index_for_python_source", "_STRUCTURAL_EDIT_AVAILABLE",
+    "_EMBEDDED_SCRIPT_AVAILABLE",
+    # The service surface itself.
+    "structural_edit", "structural_score", "build_project_symbols",
+    "symbol_index", "cyclomatic_complexity", "embedded_script_check",
+    "generate_plan", "V3PipelineService", "_build_problem_from_request",
+]
 
 PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
 
@@ -195,7 +209,7 @@ class V3Handler(BaseHTTPRequestHandler):
                 build_command=build_command,
                 working_dir=working_dir or "/workspace",
             )
-        except ClientDisconnected as e:
+        except adapters.ClientDisconnected as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
 
@@ -208,7 +222,7 @@ class V3Handler(BaseHTTPRequestHandler):
         # After baseline substitution, not before — the pattern cache must
         # see the solution that is actually returned (it saw solution=""
         # on baseline-only results when this fired earlier).
-        _post_pattern_outcome(problem, result)
+        adapters._post_pattern_outcome(problem, result)
 
         # Send final result
         response = {

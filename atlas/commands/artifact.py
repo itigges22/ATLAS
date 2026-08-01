@@ -15,7 +15,6 @@ import sys
 from typing import List, Optional
 
 from atlas import artifact_manifest as am
-from atlas import compose as compose_config
 from atlas import env as cli_env
 
 SNAPSHOT_DIR = ".previous-bundle"

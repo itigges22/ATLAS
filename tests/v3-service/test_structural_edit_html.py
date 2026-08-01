@@ -215,3 +215,51 @@ def test_plain_unterminated_string_is_not_read_as_a_truncated_template():
     err = res["error"]
     assert "template literal" not in err, "a plain quoting error is not a template truncation"
     assert "61 lines" in err, "the large-node steer must still render"
+
+
+class TestJinjaCommentBlanking:
+    """`_blank_jinja_comments` masks {# #} before the JS parse runs.
+
+    It replaced a regex, `\\{#[^\\n]*#\\}`, for two reasons kept here as
+    tests: the regex was quadratic on input the model chooses, and its
+    greedy `[^\\n]*` masked live template text between two comments.
+    """
+
+    @staticmethod
+    def _f():
+        import symbols
+        return symbols._blank_jinja_comments
+
+    def test_masking_preserves_length_and_newlines(self):
+        """The caller documents that every byte offset in the masked block
+        still points at the same byte of the real file. Any length change
+        silently misplaces every finding after it."""
+        src = b"a{# c #}b\n{# d #}e\r\n{# no close\n{##}"
+        out = self._f()(src)
+        assert len(out) == len(src)
+        nl = lambda b: [i for i, c in enumerate(b) if c in (0x0A, 0x0D)]
+        assert nl(out) == nl(src)
+
+    def test_a_comment_ends_at_the_first_terminator(self):
+        """Jinja renders '{# a #} tail {# b #}' as ' tail '. The greedy regex
+        matched it as one comment and blanked ' tail ' with it."""
+        out = self._f()(b"{# ONE #} tail {# TWO #}")
+        assert b"tail" in out, "text between two comments must survive masking"
+        assert b"ONE" not in out and b"TWO" not in out, "comment bodies must be masked"
+
+    def test_an_unterminated_comment_is_left_alone(self):
+        assert self._f()(b"{# no close") == b"{# no close"
+        # ...and does not leak across the newline into the next line's text
+        assert self._f()(b"{# open\nkeep me") == b"{# open\nkeep me"
+
+    def test_many_openers_without_a_terminator_stay_linear(self):
+        """The ReDoS guard. The old regex rescanned to end-of-line from every
+        opener: 15.9s at 25k openers, minutes at 100k. A generous bound still
+        fails loudly if a regex ever comes back."""
+        import time
+        src = b"{#" * 100_000 + b"a" * 100_000
+        t0 = time.perf_counter()
+        out = self._f()(src)
+        elapsed = time.perf_counter() - t0
+        assert out == src, "no terminator anywhere means nothing is masked"
+        assert elapsed < 5.0, f"masking went superlinear: {elapsed:.1f}s"

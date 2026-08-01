@@ -10,7 +10,6 @@ import os
 import sys
 from typing import List, Optional
 
-from atlas import compose as compose_config
 from atlas import env as cli_env
 from atlas import upgrade_engine as eng
 from atlas.commands.upgrade import _default_steps
