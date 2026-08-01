@@ -20,6 +20,7 @@ import re
 import select
 import struct
 import subprocess
+import tempfile
 import termios
 import time
 from pathlib import Path
@@ -41,6 +42,18 @@ STEPS = [
     ("pgup", "\x1b[5~", r"."),
     ("pgdown", "\x1b[6~", r"."),
     ("/clear", "/clear\r", r"."),
+    # Second wave. Excluded deliberately: /commit runs git, /demo spawns a
+    # session, /quit exits, and /undo /redo /accept /deny mutate state — none
+    # of which belong in an automated pass.
+    ("/diff", "/diff\r", r"."),
+    ("/copy", "/copy\r", r"."),
+    ("/compact", "/compact\r", r"."),
+    ("/mouse", "/mouse\r", r"."),
+    ("/drop", "/drop\r", r"."),
+    ("/review", "/review\r", r"."),
+    ("/add", "/add\r", r"."),          # bare: should explain it needs a path
+    ("/run", "/run\r", r"."),          # bare: should explain it needs a command
+    ("/nonsense", "/nonsense\r", r"."),  # unknown command must not wedge it
 ]
 
 
@@ -54,9 +67,12 @@ def driven():
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 160, 0, 0))
     env = dict(os.environ, TERM="xterm-256color", ATLAS_PROXY_URL=PROXY,
                ATLAS_TUI_MOUSE="off", ATLAS_TUI_LOG="off")
+    # Temp cwd: /diff and /add read the working directory, and an automated
+    # pass must not be able to act on the repo it is testing.
+    workdir = tempfile.mkdtemp(prefix="atlas-tui-test-")
     proc = subprocess.Popen([str(BINARY), "-proxy", PROXY, "-mouse", "off"],
                             stdin=slave, stdout=slave, stderr=slave,
-                            env=env, close_fds=True)
+                            env=env, close_fds=True, cwd=workdir)
     os.close(slave)
 
     def pump(seconds):
