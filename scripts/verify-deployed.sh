@@ -76,6 +76,23 @@ done
 if [ ${#stale[@]} -gt 0 ]; then
     echo
     echo "Stale: ${stale[*]}"
+    # Recreating a service mid-session kills the in-flight request: the stream
+    # dies without a done event and the run records harness defects that are
+    # the restart's fault, not ATLAS's. That happened — a proxy recreate
+    # during a live task produced two phantom protocol defects and a wrong
+    # answer. Warn before handing over the fix command.
+    if pgrep -f "[e]2e-reliability.py" >/dev/null 2>&1; then
+        echo
+        echo "  !! A reliability run is IN FLIGHT. Recreating now will kill its"
+        echo "     current session and record protocol defects caused by you,"
+        echo "     not by ATLAS. Wait for it to finish, then recreate."
+    fi
+    busy=$(curl -s --max-time 5 http://localhost:8080/slots 2>/dev/null \
+           | grep -o '"is_processing":true' | wc -l)
+    if [ "${busy:-0}" -gt 0 ]; then
+        echo "  !! llama-server has ${busy} slot(s) processing — something is mid-turn."
+    fi
+    echo
     echo "Fix:   docker compose up -d --force-recreate ${stale[*]} --no-deps"
     exit 1
 fi
