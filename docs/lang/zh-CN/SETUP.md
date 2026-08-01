@@ -1,8 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: fe64417 -->
-> ⚠️ **本翻译已冻结。** 自 2026-08 代码库精简以来，翻译不再更新，内容可能落后于英文 `docs/`（甚至可能描述已移除的功能）。请以英文文档为准。翻译计划在 1.0 版本发布时恢复更新。
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/SETUP.md synced-through: 4f1be83 -->
 > **[English](../../SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
 
 > ℹ️ **译者注：** ATLAS 没有固定的默认模型 —— 请通过 `atlas init` 选择注册表模型，或自带兼容的 GGUF。若本译文与英文原版 ([SETUP.md](../../SETUP.md)) 有出入，以英文原版为准。
@@ -138,7 +134,7 @@ bash atlas-bootstrap.sh
 | 标志 | 效果 |
 |---|---|
 | `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | 不安装 Docker（已由别处管理） |
-| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | 跳过 GPU 运行时安装（NVIDIA toolkit 或 ROCm）。`ATLAS_BOOTSTRAP_SKIP_NVIDIA=1` 作为别名同样接受。 |
+| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | 跳过 GPU 运行时安装（NVIDIA toolkit 或 ROCm）。 |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | 不下载模型权重 |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | 不运行 `docker compose up` |
 | `ATLAS_BOOTSTRAP_SKIP_ASA=1` | 跳过 ASA 操控向量构建（默认：服务启动约 5 分钟后构建；无 GPU 可用时自动跳过） |
@@ -456,13 +452,13 @@ curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Functional test
-echo "Create hello.py that prints hello world" | atlas
+# 功能测试：完整安装诊断（服务、工件、e2e 冒烟测试）
+atlas doctor
 ```
 
 所有健康检查端点应返回 `{"status": "ok"}` 或 `{"status": "healthy"}`。
 
-> **注意：** 在交互式终端中直接运行 `atlas` 会启动 Bubbletea TUI，运行完整的 agent 循环（工具调用、V3 pipeline、文件读写）。管道模式（如上面 `echo | atlas` 的形式）走内置的 `/solve` 流程，用于脚本化/一次性使用。
+> **注意：** 在交互式终端中直接运行 `atlas` 会启动 Bubbletea TUI，运行完整的 agent 循环（工具调用、V3 pipeline、文件读写）。TUI 需要真实终端 —— 当 stdin/stdout 被管道重定向时，它会打印指向 `atlas doctor` 的提示并退出。
 
 ### 停止服务
 
@@ -829,11 +825,14 @@ ATLAS 在没有 Geometric Lens 权重的情况下也能正常工作 —— 服�
 
 将权重文件放在 `geometric-lens/geometric_lens/models/` 目录中（或通过 Docker Compose 中的 `ATLAS_LENS_MODELS` 挂载）。服务启动时会自动加载。
 
-如果你希望使用自己的基准测试数据进行训练，`scripts/` 目录中提供了训练脚本：
-- `scripts/retrain_cx_phase0.py` —— 从收集的嵌入向量进行初始 C(x) 训练
-- `scripts/retrain_cx.py` —— 带类别权重的生产 C(x) 重训练
-- `scripts/collect_lens_training_data.py` —— 从基准测试运行中收集通过/失败的嵌入向量
-- `scripts/prepare_lens_training.py` —— 准备和验证训练数据格式
+如果你希望使用自己的基准测试数据进行训练，整个流程都由 CLI 驱动：
+
+```bash
+atlas bench --run-id mymodel_lens --tasks 200    # 生成候选并自标注
+atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
+```
+
+`atlas lens build` 会训练 lens 的两个部分、校准阈值，并在激活的 bundle 中写入 `provenance.json` 清单。参见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
 
 ### 自带模型
 

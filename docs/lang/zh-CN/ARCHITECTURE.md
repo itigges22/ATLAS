@@ -1,8 +1,4 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: fe64417 -->
-> ⚠️ **本翻译已冻结。** 自 2026-08 代码库精简以来，翻译不再更新，内容可能落后于英文 `docs/`（甚至可能描述已移除的功能）。请以英文文档为准。翻译计划在 1.0 版本发布时恢复更新。
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/ARCHITECTURE.md synced-through: 4f1be83 -->
 > **[English](../../ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS 架构
@@ -89,6 +85,23 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 ## 3. atlas-proxy（外层）
 
 代理是聊天前端的入口点。它在 `/v1/agent` 上接收用户消息（类型化事件流 —— TUI 使用的就是它），并运行一个内部 agent 循环：调用 llama-server、解析工具调用、执行它们，然后把事件流式回传。`/v1/chat/completions` 端点是对 llama-server 的透明透传；保留它是为了 SDK 兼容性，它并不运行 agent 循环。完整的事件类型目录见 [API.md](../../API.md)。
+
+代理由 12 个 Go 文件组成，每个文件只负责一件事：
+
+| 文件 | 职责 |
+|---|---|
+| `main.go` | HTTP 服务器、路由、鉴权、透传、错误信封、私密值日志过滤 |
+| `agent.go` | agent 循环：轮次状态、LLM 调用、计划生成、模式上下文注入、卡死循环断路器 |
+| `tools.go` | 14 个工具定义与执行器、层级分类、工具调用语法 |
+| `gates.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
+| `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
+| `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
+| `permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
+| `lens.go` | lens 打分调用、lens 样本入库（`/feedback`）、校准状态 |
+| `guardrails.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
+| `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
+| `v3_bridge.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端 |
+| `types.go` | 共享类型、层级、轮次上限 |
 
 ```mermaid
 graph LR
@@ -177,7 +190,7 @@ flowchart LR
    警告不要用于整文件/整函数；structural_edit 的描述
    声明对 >10 行 / 整节点替换是必需的；write_file 的描述
    声明仅用于新文件。
-2. **条件式 GBNF 语法**（`proxy/grammar.go`，
+2. **条件式 GBNF 语法**（`proxy/tools.go`，
    `proxy/agent.go:stepExclusions`）。当一个 write_file 对
    一个 >5 行的已有 .py/.html/.htm 文件被拒绝时，下一次 LLM 调用会
    被一个 GBNF 语法约束，该语法从工具名产生式中禁掉
@@ -312,6 +325,12 @@ flowchart LR
 
 **Phase 0: Probe** 以渐进式预算重试（light → standard → nothink）生成单个基线候选。它用所选模型的 C(x)/G(x) 工件打分，并在 sandbox 中测试。如果通过，pipeline 立即退出。
 
+**候选分配：CxGx 闸门**（以 `phase2` / `phase2_allocated` 发出）决定失败的探测能获得多少个候选。探测的 C(x)+G(x) 组合分数（一次嵌入提取，两个模型都用）驱动一条两步规则：校准后的 C(x) 归一化能量在 Budget Forcing 所用的同一阶梯上选出基础 tier，而 G(x) 质量分数在低于该模型校准的 severe 边界时把这个 tier 抬高 +1，在远低于它（0.75 倍）时抬高 +2 —— 也就是探测在 C(x) 看来便宜、在 G(x) 看来却是错的那种情况。tier 决定 k（`nothink` 1、`standard` 3、`hard` 5、`extreme` 8），并受一条硬性的 **k >= 3 下限**约束，因此闸门只能在原先固定的 k=3 之上增加候选，不能减少；它的最坏情况就是旧行为。两个信号都需要该模型的校准文件（`cx_normalization.json`、`gx_thresholds.json`）：lens 缺失、不可达或未校准时，一律在 `standard` 下分配恰好 k=3，于是未校准的 bundle 会运行它此前运行的那条 pipeline，而不是按一把对它毫无意义的尺子来路由。
+
+这条下限正是它与此前被移除的纯 C(x) 分配器的区别：那一版没有下限，会把 k=1 交给探测*刚刚失败*的任务，实测为 +0.0 pp。每臂 n=175 的四臂三角验证：带闸门 66.9%，固定 k=3 为 64.6%，把同样的 tier 组合在任务间打乱为 61.7%，全部 k=8 则以多出约 27% 的 token 达到 67.4%。在同等开销下比打乱臂高出 5.1 pp，这才说明 lens 信号本身携带信息，而不只是算力在起作用。
+
+线上路径的差异：代理的 V3 桥接会在 `ATLAS_V3_TIMEOUT`（默认 180s）后放弃一次 pipeline 调用，这是 bench 从未有过的上限；因此无限制地升级到 k=8 会把预算全花在生成上，最终返回超时兜底，而不是时钟本可以产出的 k=3 答案。为此线上编排器会把剩余的实际时间以及在该任务上观测到的单次调用延迟一并传入，闸门则把 tier 降到预算真正能生成的水平 —— 同时保留一次精化迭代，使升级不会饿死 Phase 3 —— 但绝不会低于下限。bench 运行器不传预算，严格按测得的结果分配。实现位于 `v3-service/stages/cxgx_gate.py`，由两个编排器共享。
+
 **Phase 1: 约束驱动的生成**
 
 - **PlanSearch** 通过提取不同的约束集合，生成 3 个结构上不同的实现计划
@@ -330,9 +349,9 @@ Wait 注入会追加 "Wait, let me reconsider.\n" 以请求更长的一轮推理
 
 **Phase 2: 验证与选择**
 
-- **构建验证**：Python（`py_compile`）、TypeScript（`tsc --noEmit`）、JavaScript（`node --check`）、Go（`go build`）、Rust（sandbox 的 `/execute` 路径上用 `rustc`；检测到 `Cargo.toml` 的项目用 `cargo build`，`cargo check` 只经由构建命令白名单被接受）、C/C++（`/execute` 上做带 `-Wall` 的完整 `gcc`/`g++` 编译；`-fsyntax-only` 只适用于 `/syntax-check` 路由）、Shell（`bash -n`）。针对 Next.js、React、Flask、Django、Express 有框架级覆盖。
-- **S* 决胜**（2 个以上通过）：生成边界情形输入，运行两个候选，多数获胜
-- **Lens 选择**（1 个通过或回退）：按 C(x) 能量排序，最低者获胜
+- **构建验证**：Python（`py_compile`）、TypeScript（`tsc --noEmit`）、JavaScript（`node --check`）、Go（`go build`）、Java（`javac`）、Kotlin（`kotlinc`）、Rust（在 sandbox 的 `/execute` 路径上用 `rustc`；含 `Cargo.toml` 的项目会被识别并使用 `cargo build`，`cargo check` 仅通过构建命令白名单接受）、C/C++（`/execute` 上执行带 `-Wall` 的完整 `gcc`/`g++` 编译；`-fsyntax-only` 只适用于 `/syntax-check` 路由）、Ruby（`ruby -c`，解释型语言，无编译步骤）、PHP（`php -l`，同上）、Shell（`bash -n`）。Next.js、React、Flask、Django、Express 有框架级覆盖。
+- **否决（Veto）**：即使候选通过了 sandbox，仍有三项检查可以否决它 —— lens 否决（逐步的 `gx_min` 低于该模型校准后的 severe 阈值：代码能跑，但生成模式已经塌陷成存根）、结构否决（tree-sitter 发现某个直接标识符调用无法解析到任何本地定义、import、内建或项目符号 —— 一个等待发生的 `NameError`），以及由开关控制的调用图否决（`ATLAS_CALL_GRAPH`：跨文件调用且作用域内没有定义）。被否决的候选会被标记为失败（`passed=false`、`vetoed_by`，否决理由作为其错误输出），并像其他失败候选一样进入 Phase 3 的修复池；最终的能量兜底永远不会返回它。如果所有候选都被否决且修复失败，pipeline 不返回代码，由调用方用自己的基线替代
+- **Lens 选择**（≥1 个通过）：按 C(x) 能量排序，最低者胜出
 
 **Phase 3: 修复**（若 0/K 通过）—— 三种策略，顺序执行并带提前退出：
 
@@ -344,58 +363,47 @@ Wait 注入会追加 "Wait, let me reconsider.\n" 以请求更长的一轮推理
 
 ### 模块图
 
-`benchmark/v3/` 中的 18 个 Python 模块。`v3-service/pipeline.py` 编排其中的 13 个；`reasc`、`ace_pipeline`、`lens_feedback` 和 `embedding_store` 只在离线 bench 运行器（`benchmark/v3_runner.py`）下运行，而 `ablation_analysis` 是一个独立的分析脚本（未在图中显示）：
+pipeline 阶段是 `v3-service/stages/` 中的 13 个 Python 模块。`v3-service/pipeline.py` 编排其中 11 个（10 个直接调用，`constraint_refinement` 通过精化循环）；`lens_feedback` 和 `embedding_store` 只在离线 bench 运行器（`atlas/bench/v3_runner.py`）下运行，该运行器会把 checkout 中的 `v3-service/` 加入自身路径，因此两个调用方共享同一份阶段实现：
 
 ```mermaid
 graph LR
-    Main["main.py"] --> PS["PlanSearch 1A"]
+    Main["pipeline.py"] --> CG["CxGx Gate"]
+    Main --> PS["PlanSearch 1A"]
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
-    Main --> BASC["BlendASC 2A"]
-    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
-    Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
-    Main --> CR["ConstraintRefiner 3B"]
     Main --> PRCOT["PR-CoT 3C"]
-    Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
-    Main --> MC["Metacognitive 3F"]
-    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
-    Bench --> LF["LensFeedback"]
+    Main --> LLM["LLMClient"]
+    Bench["v3_runner.py\n(bench only)"] --> LF["LensFeedback"]
     Bench --> ES["EmbeddingStore"]
 
     RL --> FA
-    RL --> CR
-    RL --> DC
-    BASC --> BF
-    REASC --> BF
-    LF --> BASC
+    RL --> CR["ConstraintRefiner 3B"]
+    CG -->|"tier table"| BF
+    CG -->|"budget helpers"| RL
     LF --> BF
 
     style Main fill:#333,color:#fff
     style Bench fill:#333,color:#fff
+    style CG fill:#1a3a5c,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
-    style BASC fill:#2d5016,color:#fff
-    style REASC fill:#2d5016,color:#fff
-    style SSTAR fill:#2d5016,color:#fff
     style CS fill:#2d5016,color:#fff
     style FA fill:#5c3a1a,color:#fff
     style CR fill:#5c3a1a,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
-    style DC fill:#5c3a1a,color:#fff
     style RL fill:#5c3a1a,color:#fff
-    style MC fill:#5c3a1a,color:#fff
-    style ACE fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff
+    style LLM fill:#333,color:#fff
     style LF fill:#333,color:#fff
     style ES fill:#333,color:#fff
 ```
 
-图例：蓝色 = Phase 1（生成），绿色 = Phase 2（选择），棕色 = Phase 3（修复），灰色 = 工具。由 `v3_runner.py` 供给的模块仅用于 bench 运行器；服务不会调用它们。
+图例：蓝色 = Phase 1（生成），绿色 = Phase 2（选择），棕色 = Phase 3（修复），灰色 = 工具。由 `v3_runner.py` 供给的模块仅用于 bench 运行器；服务不会调用它们。服务本身是 `main.py`（HTTP 处理器）→ `pipeline.py`（编排器）→ `planning.py` / `scoring.py` / `symbols.py` / `adapters.py` 这样的扁平同级模块。
 
 ---
 

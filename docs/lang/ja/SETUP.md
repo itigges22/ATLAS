@@ -1,8 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: fe64417 -->
-> ⚠️ **この翻訳は凍結されています。** 2026-08 のコードベース簡素化以降、翻訳の更新は停止しており、内容は英語版 `docs/` より古い場合があります（削除済みの機能に触れていることもあります）。最新の正確な情報は英語版を参照してください。翻訳は 1.0 リリース時に更新を再開する予定です。
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/SETUP.md synced-through: 4f1be83 -->
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
 
 # ATLAS セットアップガイド
@@ -131,7 +127,7 @@ bash atlas-bootstrap.sh
 | フラグ | 効果 |
 |---|---|
 | `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | Docker をインストールしない（すでに管理済みの場合） |
-| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | GPU ランタイムのインストール（NVIDIA toolkit または ROCm セットアップ）をスキップ。`ATLAS_BOOTSTRAP_SKIP_NVIDIA=1` もエイリアスとして受け付けます。 |
+| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | GPU ランタイムのインストール（NVIDIA toolkit または ROCm セットアップ）をスキップ。 |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | モデル重みをダウンロードしない |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | `docker compose up` を実行しない |
 | `ATLAS_BOOTSTRAP_SKIP_ASA=1` | ASA ステアリングベクトルのビルドをスキップ（デフォルト: サービス起動の約 5 分後にビルド。GPU がない場合は自動的にスキップ） |
@@ -450,13 +446,13 @@ curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Functional test
-echo "Create hello.py that prints hello world" | atlas
+# 機能テスト: インストール全体の診断（サービス、アーティファクト、e2e スモーク）
+atlas doctor
 ```
 
 すべてのヘルスエンドポイントが `{"status": "ok"}` または `{"status": "healthy"}` を返すはずです。
 
-> **注意:** 対話端末での素の `atlas` は、完全なエージェントループ（ツールコール、V3 パイプライン、ファイル読み書き）のための Bubbletea TUI を起動します。パイプモード（上記の `echo | atlas` の形）は、スクリプト/ワンショット利用のために組み込みの `/solve` フローを経由します。
+> **注意:** 対話端末での素の `atlas` は、完全なエージェントループ（ツールコール、V3 パイプライン、ファイル読み書き）のための Bubbletea TUI を起動します。TUI には実際の端末が必要です — stdin/stdout がパイプされている場合は `atlas doctor` への案内を表示して終了します。
 
 ### 停止
 
@@ -823,11 +819,14 @@ C(x)/G(x) スコアリングを有効にするには、トレーニング済み�
 
 ウェイトファイルを `geometric-lens/geometric_lens/models/` に配置してください（または Docker Compose で `ATLAS_LENS_MODELS` 経由でマウント）。サービスは起動時に自動的にロードします。
 
-独自のベンチマークデータでトレーニングしたい場合は、`scripts/` にトレーニングスクリプトが用意されています:
-- `scripts/retrain_cx_phase0.py` — 収集したエンベディングからの初期 C(x) トレーニング
-- `scripts/retrain_cx.py` — クラスウェイト付き本番 C(x) リトレーニング
-- `scripts/collect_lens_training_data.py` — ベンチマーク実行から合格/不合格エンベディングを収集
-- `scripts/prepare_lens_training.py` — トレーニングデータフォーマットの準備と検証
+独自のベンチマークデータでトレーニングしたい場合、ループ全体が CLI で完結します:
+
+```bash
+atlas bench --run-id mymodel_lens --tasks 200    # 候補の生成とセルフラベリング
+atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
+```
+
+`atlas lens build` はレンズの両半分をトレーニングし、しきい値をキャリブレーションして、有効化されたバンドルに `provenance.json` マニフェストを書き出します。[CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。
 
 ### モデルの持ち込み
 

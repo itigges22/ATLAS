@@ -1,8 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: fe64417 -->
-> ⚠️ **이 번역은 동결되었습니다.** 2026-08 코드베이스 단순화 이후 번역 업데이트가 중단되어, 내용이 영어 `docs/` 보다 오래되었을 수 있습니다(이미 제거된 기능을 설명할 수도 있습니다). 최신 정보는 영어 문서를 참고하세요. 번역은 1.0 릴리스에 맞춰 갱신될 예정입니다.
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/SETUP.md synced-through: 4f1be83 -->
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
 
 > ℹ️ 영어 원본([SETUP.md](../../SETUP.md))의 번역본입니다. ATLAS에는 고정 기본 모델이 없습니다 — `atlas init`으로 레지스트리 모델을 선택하거나 호환 GGUF를 지정하십시오. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
@@ -139,7 +135,7 @@ bash atlas-bootstrap.sh
 | 플래그 | 효과 |
 |---|---|
 | `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` | Docker를 설치하지 않음(이미 별도로 관리 중일 때) |
-| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | GPU 런타임 설치(NVIDIA 툴킷 또는 ROCm 설정)를 건너뜀. `ATLAS_BOOTSTRAP_SKIP_NVIDIA=1`도 별칭으로 허용됩니다. |
+| `ATLAS_BOOTSTRAP_SKIP_GPU=1` | GPU 런타임 설치(NVIDIA 툴킷 또는 ROCm 설정)를 건너뜀. |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | 모델 가중치를 다운로드하지 않음 |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | `docker compose up`을 실행하지 않음 |
 | `ATLAS_BOOTSTRAP_SKIP_ASA=1` | ASA 스티어링 벡터 빌드를 건너뜀(기본: 서비스 기동 후 ~5분 내 빌드; GPU가 없으면 자동으로 건너뜀) |
@@ -457,13 +453,13 @@ curl -s http://localhost:8070/health | python3 -m json.tool   # v3-service
 curl -s http://localhost:30820/health | python3 -m json.tool  # sandbox
 curl -s http://localhost:8090/health | python3 -m json.tool   # atlas-proxy
 
-# Functional test
-echo "Create hello.py that prints hello world" | atlas
+# 기능 테스트: 설치 전체 진단(서비스, 아티팩트, e2e 스모크)
+atlas doctor
 ```
 
 모든 헬스 엔드포인트는 `{"status": "ok"}` 또는 `{"status": "healthy"}`를 반환해야 합니다.
 
-> **참고:** 대화형 터미널에서 그냥 `atlas`를 실행하면 전체 에이전트 루프(도구 호출, V3 파이프라인, 파일 읽기/쓰기)를 위한 Bubbletea TUI가 실행됩니다. 파이프 모드(예: 위의 `echo | atlas` 형태)는 스크립트/원샷 사용을 위해 내장 `/solve` 흐름을 탑니다.
+> **참고:** 대화형 터미널에서 그냥 `atlas`를 실행하면 전체 에이전트 루프(도구 호출, V3 파이프라인, 파일 읽기/쓰기)를 위한 Bubbletea TUI가 실행됩니다. TUI에는 실제 터미널이 필요합니다 — stdin/stdout이 파이프된 경우에는 `atlas doctor` 안내를 출력하고 종료합니다.
 
 ### 중지
 
@@ -830,11 +826,14 @@ C(x)/G(x) 스코어링을 활성화하려면 학습된 모델 가중치가 필�
 
 가중치 파일을 `geometric-lens/geometric_lens/models/`에 배치하거나 Docker Compose에서 `ATLAS_LENS_MODELS`를 통해 마운트하세요. 서비스가 시작 시 자동으로 로드합니다.
 
-자체 벤치마크 데이터로 학습하려는 경우 `scripts/`에 학습 스크립트가 제공됩니다:
-- `scripts/retrain_cx_phase0.py` — 수집된 임베딩에서 초기 C(x) 학습
-- `scripts/retrain_cx.py` — 클래스 가중치를 적용한 프로덕션 C(x) 재학습
-- `scripts/collect_lens_training_data.py` — 벤치마크 실행에서 통과/실패 임베딩 수집
-- `scripts/prepare_lens_training.py` — 학습 데이터 형식 준비 및 검증
+자체 벤치마크 데이터로 학습하려는 경우, 전체 루프가 CLI로 완결됩니다:
+
+```bash
+atlas bench --run-id mymodel_lens --tasks 200    # 후보 생성 및 셀프 라벨링
+atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
+```
+
+`atlas lens build`는 렌즈의 두 절반을 모두 학습시키고 임계값을 보정한 뒤, 활성화된 번들에 `provenance.json` 매니페스트를 기록합니다. [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참조하세요.
 
 ### 자체 모델 반입하기
 

@@ -1,8 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2 -->
-> ⚠️ **本翻译已冻结。** 自 2026-08 代码库精简以来，翻译不再更新，内容可能落后于英文 `docs/`（甚至可能描述已移除的功能）。请以英文文档为准。翻译计划在 1.0 版本发布时恢复更新。
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 4f1be83 -->
 > **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) 有出入，以英文原版为准。
@@ -388,6 +384,43 @@ fatal: fetch-pack: invalid index-pack output
 
 重建加载了模型之后，Geometric Lens 仍需为新模型重新训练 —— 见 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)。
 
+### 代理无法写入工作区（`.atlas.tmp: permission denied`）
+
+**症状：** 所有 `write_file`/`edit_file` 都以 `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` 失败（随后 agent 会四处寻找"可写的子目录"）。lens 训练样本也不再入库（代理日志中 `/data/lens_training` 写入失败）。
+
+**原因：** atlas-proxy 镜像以内置的非 root 用户（uid 1001，`atlas`）运行，但绑定挂载到 `/workspace`（`ATLAS_PROJECT_DIR`）和 `/data/lens_training` 的宿主目录归操作者的 uid 所有。读取可以（模式 755），写入全部被拒绝。`.env` 早于 `ATLAS_PROXY_UID` 的安装在拉取加固后的代理镜像后会遇到这个问题。
+
+**解决：** 像 sandbox 已经做的那样，让代理以调用者身份运行：
+
+```bash
+# 把你的 id 加入 .env（atlas init --reconfigure 现在也会写入这些）
+echo "ATLAS_PROXY_UID=$(id -u)" >> .env
+echo "ATLAS_PROXY_GID=$(id -g)" >> .env
+docker compose up -d --no-deps --force-recreate atlas-proxy
+```
+
+验证：`docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` 应当成功（验证后请删除该文件）。K3s 部署会通过 `scripts/generate-manifests.sh` 把相同的 id 渲染进代理 Pod 的 `securityContext`。
+
+### Agent 说文件不存在，但它就在那里（工作区挂载分裂）
+
+**症状：** 文件明明就在项目目录里，agent 会话却坚称它"不存在" —— `read_file` 失败而 `run_command`（`ls`、`cat`）能正常看到文件，或者反过来。会话很早就放弃（"文件 X 似乎不存在"），写入从未落到项目里，而所有 `/health` 端点都是绿的。
+
+**原因：** 代理和 sandbox 把**不同的宿主目录**绑定挂载为 `/workspace`。文件工具（`read_file`/`write_file`/`edit_file`）由代理针对*它自己的*挂载提供服务；`run_command` 则在 *sandbox 的*挂载中执行。Compose 会从 `ATLAS_PROJECT_DIR`（默认：compose 的工作目录）**在创建时逐容器**解析挂载源 —— 因此从不同目录、或用不同的 `.env` 重建其中一个容器，就会悄悄让两者分裂。启动时不会有任何失败，只是 agent 在"裂脑"状态下工作。
+
+**诊断：** `atlas doctor` —— `workspace_mounts` 检查会比较两个挂载，不一致时会带着两个宿主路径失败。手动检查：
+
+```bash
+docker inspect atlas-atlas-proxy-1 --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+docker inspect atlas-sandbox-1     --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+```
+
+**解决：** 在 `.env` 中把 `ATLAS_PROJECT_DIR` 固定为你的项目目录，然后把两个容器一起重建：
+
+```bash
+echo "ATLAS_PROJECT_DIR=/path/to/your/project" >> .env
+docker compose up -d --force-recreate atlas-proxy sandbox
+```
+
 ### SELinux 阻止容器访问（Fedora/RHEL）
 
 **现象：** 容器无法读取挂载的卷，模型文件权限被拒绝。
@@ -581,7 +614,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **原因：** 你访问的是错误的端点。agent 循环仅在 `POST /v1/agent` 上运行。`POST /v1/chat/completions`（以及 `/v1/` 下的其他路径）是到 llama-server 的透明透传 —— 没有工具、没有 V3、没有流式聊天事件。
 
-**解决方法：** 把客户端指向 `POST http://localhost:8090/v1/agent`。Bubbletea TUI（`atlas` / `atlas tui`）和内置的 `/solve` REPL 都会自动这样做。如果你在编写第三方客户端，`/v1/agent` 的 SSE 事件协议见 [docs/API.md](../../API.md)。`ATLAS_AGENT_LOOP` 环境变量开关已不存在 —— 区分基于端点，而非配置。
+**解决方法：** 把客户端指向 `POST http://localhost:8090/v1/agent`。Bubbletea TUI（`atlas` / `atlas tui`）会自动这样做。如果你在编写第三方客户端，`/v1/agent` 的 SSE 事件协议见 [docs/API.md](../../API.md)。`ATLAS_AGENT_LOOP` 环境变量开关已不存在 —— 区分基于端点，而非配置。
 
 ### V3 Pipeline 未对功能文件触发
 
@@ -701,7 +734,9 @@ except curses.error:
 
 **现象：** 第一个请求创建了文件且 V3 运行了。像 "ok" 或 "yes" 这样简短的跟进只得到一句对话式回复 —— 没有工具调用、没有 V3 事件。
 
-**发生了什么：** agent 循环的 tier 分类器把 T2 作为任何非琐碎消息的下限 —— "still doesn't work, try again" 会被分为 T2 并进入 pipeline。只有 5 个字符以下的消息，或与一个小的琐碎聊天列表（`hi`、`thanks`、`ok`、`yes` 等）完全匹配的消息才停在 T0：对话式，无 pipeline。
+**发生了什么：** agent 循环的 tier 分类器（`proxy/agent.go:classifyAgentTier`）只回答一个问题：这是对话，还是工作？默认是工作，T0 需要正面证据，因为两类错误的代价相差很大。把对话读成工作，只是为一条模型一轮就能收尾的消息浪费一次 planner 调用；把工作读成对话，则会把该轮次上限压到 5 并跳过 planning，直接让请求失败。
+
+只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 以 `?` 结尾，或以疑问词（`why`、`what`、`how`、`is`、`can` 等）开头。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
 
 **怎么做：** 把你想要的说出来，哪怕很简短 —— "yes, fix it" 就能越过 T0 门控。如果一个跟进跑了 agent 循环但 V3 保持沉默，那么门控不在请求 tier —— 而在文件自身的 tier。见 [V3 Pipeline 未对功能文件触发](#v3-pipeline-未对功能文件触发)，并检查 `docker compose logs atlas-proxy | grep -E "write_file|edit_file"` 中的文件 tier 行（例如 `[write_file] app.py → T1:simple (8 lines)`）。
 
@@ -763,6 +798,28 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 ```
 
 如果返回 `enabled: false` 或 `cx_energy: 0.0`，则模型未加载。对于全新安装来说这是预期行为 —— 模型权重不包含在仓库中，需要训练或从 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 下载。
+
+### 分数看着合理但量级严重偏离（嵌入约定漂移）
+
+**现象：** 一切都报告健康 —— Pod `Ready`、`/health` 返回 200、`gx-score` 返回看起来在区间内的 `gx_score` 和 `likely_correct` 判定 —— 但 `cx_energy` 与其校准区间相差若干数量级（例如模型的通过/失败均值在 20–30 时却出现 ~600）。在这种状态下启动的门控基准测试会产出一份完整、合理、却完全无效的结果。
+
+**原因：** 嵌入服务器提供的 `/embedding` 约定，与 Geometric Lens 的 `C(x)`/`G(x)` 工件训练时所用的不一致 —— 通常是逐 token 而非池化，或未归一化而非 L2 归一化（‖v‖≈60 而不是 ~1）。维度相同、分布不同；cost-field MLP 会外推出一个巨大的能量，`cx_normalized` 随之饱和。这通常发生在没有 `--pooling mean` 就重建服务栈之后（llama-server 没有 `--embd-normalize` 这个服务端标志；lens 通过 `/embedding` 请求体中的 `embd_normalize` 逐次请求 L2 归一化）。
+
+**验证：** lens 会在启动时以及每次重载/重训练时，对存储的指纹重新打分。检查 `/ready` 和 `/health`：
+```bash
+curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
+```
+出现 `fingerprint_ok: false` 以及指出期望值与观测值能量的 `fingerprint_error`，就是漂移信号 —— `/ready` 返回 503，打分响应会带上 `"drifted": true` 且所有 `calibrated` 标志被强制为 false，因此下游不会把它们误当作可信结果。
+
+**解决：**
+1. 确认嵌入服务器的约定。池化 + 归一化的服务器会返回 ‖v‖≈1 的扁平向量：
+   ```bash
+   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+   ```
+   如果是 `shape per_token`，或 `norm` 远离 1.0，说明服务器配置有误。
+2. 设置 `ATLAS_EMBED_POOLING=mean`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。
+3. 服务器提供正确约定后，启动自检的指纹校验会通过，`/ready` 返回 200。如果工件早于指纹机制，一次重训练（`atlas lens retrain`）会写入指纹，并把 `embedding_contract` 刻进 `model_identity.json`。
 
 ### 嵌入向量提取失败
 

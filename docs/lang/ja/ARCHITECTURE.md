@@ -1,8 +1,4 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: fe64417 -->
-> ⚠️ **この翻訳は凍結されています。** 2026-08 のコードベース簡素化以降、翻訳の更新は停止しており、内容は英語版 `docs/` より古い場合があります（削除済みの機能に触れていることもあります）。最新の正確な情報は英語版を参照してください。翻訳は 1.0 リリース時に更新を再開する予定です。
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/ARCHITECTURE.md synced-through: 4f1be83 -->
 > **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS アーキテクチャ
@@ -90,6 +86,23 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 
 プロキシはチャットフロントエンドのエントリーポイントです。`/v1/agent`（型付きイベントストリーム — TUI が使うもの）でユーザーメッセージを受け取り、llama-server を呼び出し、ツールコールをパースし、それらを実行し、イベントをストリームバックする内部エージェントループを実行します。`/v1/chat/completions` エンドポイントは llama-server への透過パススルーです。SDK 互換性のために残してあり、エージェントループは実行しません。イベントタイプの完全なカタログは [API.md](../../API.md) を参照してください。
 
+プロキシは 12 個の Go ファイルで構成され、それぞれが 1 つの関心事を担います:
+
+| ファイル | 担当 |
+|---|---|
+| `main.go` | HTTP サーバー、ルーティング、認証、パススルー、エラーエンベロープ、秘匿値のログフィルタ |
+| `agent.go` | エージェントループ: ターン状態、LLM 呼び出し、プラン生成、パターンコンテキストの注入、スタックループのブレーカー |
+| `tools.go` | 14 個のツール定義と実行系、ティア分類、ツールコール文法 |
+| `gates.go` | 誠実性 / プランゲート: クレームチェック、構造、構文、埋め込みスクリプト、プラン遵守、プランリマインダ、アセットリント |
+| `detectors.go` | スタックパターン検出: ツールの繰り返し、推論の繰り返し、トレースバックの局所化 |
+| `context.go` | コンテキストの拡充: シンボルインデックス、プロジェクトスキャン、ワークスペース封じ込め、セッションファイルマニフェスト |
+| `permissions.go` | パーミッションゲート（`/v1/permission`）、トラストモード、ハードブロックされたパターン |
+| `lens.go` | レンズのスコアリング呼び出し、レンズサンプルのバンキング（`/feedback`）、キャリブレーション状態 |
+| `guardrails.go` | ツールごとのステアリングガード（縮約、コマンド/モジュール欠落のステア、doctype 除去） |
+| `events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
+| `v3_bridge.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント |
+| `types.go` | 共有型、ティア、ターン上限 |
+
 ```mermaid
 graph LR
     subgraph core["Core Loop"]
@@ -174,7 +187,7 @@ flowchart LR
 計測を行ったリファレンスデプロイでは、`structural_edit` が正しい場合でも `structural_edit` より `edit_file` を優先するバイアスが観測されました（BiasBusters arxiv 2510.00307 — 近接するツール名の埋め込みが競合する; 名前よりも説明文の方が重要）。プロキシでは、モデルに依存しない4つの防御策を組み合わせます:
 
 1. **説明文の書き換え**（`proxy/tools.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
-2. **条件付き GBNF 文法**（`proxy/grammar.go`、`proxy/agent.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
+2. **条件付き GBNF 文法**（`proxy/tools.go`、`proxy/agent.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
 3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
 4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
@@ -289,6 +302,12 @@ flowchart LR
 
 **フェーズ0: Probe** は段階的な予算リトライ（light → standard → nothink）で単一のベースライン候補を生成します。選択中のモデルの C(x)/G(x) アーティファクトでスコア化され、サンドボックスでテストされます。合格すれば、パイプラインは即座に離脱します。
 
+**候補割り当て: CxGx ゲート**（`phase2` / `phase2_allocated` として送出）が、失敗したプローブに何個の候補を与えるかを決めます。プローブの C(x)+G(x) 合成スコア（埋め込み抽出1回、両モデルを使用）が2段階のルールを駆動します: キャリブレーション済みの C(x) 正規化エネルギーが、Budget Forcing と同じ梯子の上でベースティアを選び、G(x) の品質スコアがモデルのキャリブレーション済み severe 境界を下回るときにそのティアを +1、大きく下回る（その 0.75 倍）ときに +2 だけ引き上げます — プローブが C(x) には安く見えるのに G(x) には誤りに見えるケースです。ティアが k を決め（`nothink` 1、`standard` 3、`hard` 5、`extreme` 8）、そこに **k >= 3 のハードなフロア**が掛かります。したがってゲートは、以前ピン留めされていた k=3 に候補を追加することしかできず、減らすことはできません。最悪ケースが従来の挙動になります。どちらの信号もこのモデルのキャリブレーションファイル（`cx_normalization.json`、`gx_thresholds.json`）を必要とします: レンズが欠落・到達不能・未キャリブレーションの場合は `standard` でちょうど k=3 を割り当てるため、未キャリブレーションのバンドルは、そのモデルにとって意味を持たない尺度でルーティングされるのではなく、従来どおりのパイプラインを走らせます。
+
+このフロアが、以前に削除された C(x) のみのアロケータとの違いです: あちらにはフロアがなく、プローブが*ちょうど失敗した*タスクに k=1 を渡してしまい、測定値は +0.0 pp でした。n=175/アームでの4アーム三角測量: ゲートあり 66.9%、固定 k=3 が 64.6%、同じティア構成をタスク間でシャッフルしたものが 61.7%、すべて k=8 が約27%多いトークンで 67.4%。同じ支出でシャッフルアームを 5.1 pp 上回ったことが、計算量だけでなくレンズの信号が情報を担っていると言える根拠です。
+
+ライブパスとの違い: プロキシの V3 ブリッジは `ATLAS_V3_TIMEOUT`（デフォルト 180s）でパイプライン呼び出しを打ち切ります。これはベンチには存在しなかった上限で、k=8 への無制限なエスカレーションは予算を生成に使い切り、時間内に出せたはずの k=3 の答えではなくタイムアウトのフォールバックを返すことになります。そのためライブのオーケストレータは、残りの実時間とそのタスクで観測された呼び出しごとのレイテンシを渡し、ゲートは予算内で実際に生成できる水準までティアを下げます — エスカレーションがフェーズ3を枯渇させないようリファインメント1回分を確保しつつ、フロアを下回ることはありません。ベンチランナーは予算を渡さず、測定されたとおりに割り当てます。実装は `v3-service/stages/cxgx_gate.py` で、両方のオーケストレータが共有します。
+
 **フェーズ1: 制約駆動の生成**
 
 - **PlanSearch** は異なる制約セットを抽出することで、構造的に異なる3つの実装プランを生成します
@@ -307,9 +326,9 @@ Wait 注入は、より長い推論パスを要求するために「Wait, let me
 
 **フェーズ2: 検証と選択**
 
-- **ビルド検証**: Python（`py_compile`）、TypeScript（`tsc --noEmit`）、JavaScript（`node --check`）、Go（`go build`）、Rust（サンドボックスの `/execute` パスでは `rustc`。`Cargo.toml` のあるプロジェクトは検出されて `cargo build`、`cargo check` はビルドコマンドの許可リスト経由でのみ受理される）、C/C++（`/execute` では `-Wall` 付きの完全な `gcc`/`g++` コンパイル。`-fsyntax-only` が適用されるのは `/syntax-check` ルートのみ）、Shell（`bash -n`）。Next.js、React、Flask、Django、Express 向けのフレームワークオーバーライド。
-- **S\* タイブレーク**（2件以上の合格）: エッジケース入力を生成し、両候補を実行し、多数決で勝者を決める
-- **Lens 選択**（1件合格またはフォールバック）: C(x) エネルギーでソートし、最低が勝つ
+- **ビルド検証**: Python（`py_compile`）、TypeScript（`tsc --noEmit`）、JavaScript（`node --check`）、Go（`go build`）、Java（`javac`）、Kotlin（`kotlinc`）、Rust（サンドボックスの `/execute` パスでは `rustc`。`Cargo.toml` のあるプロジェクトは検出されて `cargo build`、`cargo check` はビルドコマンドの許可リスト経由でのみ受理される）、C/C++（`/execute` では `-Wall` 付きの完全な `gcc`/`g++` コンパイル。`-fsyntax-only` が適用されるのは `/syntax-check` ルートのみ）、Ruby（`ruby -c`、インタプリタ言語のためコンパイル段階なし）、PHP（`php -l`、同上）、Shell（`bash -n`）。Next.js、React、Flask、Django、Express にはフレームワーク別のオーバーライドあり。
+- **拒否権（Veto）**: サンドボックスを通過した候補でも、3つのチェックが却下し得ます — レンズ拒否権（ステップごとの `gx_min` がモデルのキャリブレーション済み severe しきい値を下回る場合: コードは実行できるが、生成パターンがスタブへ崩れている）、構造拒否権（tree-sitter が、ローカル定義・import・組み込み・プロジェクトシンボルのいずれにも解決しない直接識別子の呼び出しを検出した場合 — 発生待ちの `NameError`）、そしてフラッグで制御される呼び出しグラフ拒否権（`ATLAS_CALL_GRAPH`: スコープ内に定義のないファイル横断の呼び出し）。拒否された候補は失敗として記録され（`passed=false`、`vetoed_by`、拒否理由をエラー出力として持つ）、他の失敗候補と同様にフェーズ3の修復プールに入ります。最終的なエネルギーのフォールバックがそれを返すことはありません。すべての候補が拒否され修復も失敗した場合、パイプラインはコードを返さず、呼び出し元が自身のベースラインで代替します
+- **Lens 選択**（1件以上が合格）: C(x) エネルギーでソートし、最低が勝つ
 
 **フェーズ3: 修復**（0/K 合格の場合） — 3つの戦略を早期離脱付きで順次実行:
 
@@ -321,58 +340,47 @@ Wait 注入は、より長い推論パスを要求するために「Wait, let me
 
 ### モジュールマップ
 
-`benchmark/v3/` 内の18個の Python モジュール。そのうち13個を `v3-service/pipeline.py` がオーケストレーションします; `reasc`、`ace_pipeline`、`lens_feedback`、`embedding_store` はオフラインのベンチランナー（`benchmark/v3_runner.py`）の下でのみ動作し、`ablation_analysis` はスタンドアロンの分析スクリプトです（図には含まれません）:
+`v3-service/stages/` 内の13個の Python モジュールがパイプラインステージです。`v3-service/pipeline.py` はそのうち11個をオーケストレーションします（10個は直接、`constraint_refinement` はリファインメントループ経由）; `lens_feedback` と `embedding_store` はオフラインのベンチランナー（`atlas/bench/v3_runner.py`）の下でのみ動作します。ベンチランナーはチェックアウトの `v3-service/` を自身のパスに載せるため、両方の呼び出し元が単一のステージ実装を共有します:
 
 ```mermaid
 graph LR
-    Main["main.py"] --> PS["PlanSearch 1A"]
+    Main["pipeline.py"] --> CG["CxGx Gate"]
+    Main --> PS["PlanSearch 1A"]
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
-    Main --> BASC["BlendASC 2A"]
-    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
-    Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
-    Main --> CR["ConstraintRefiner 3B"]
     Main --> PRCOT["PR-CoT 3C"]
-    Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
-    Main --> MC["Metacognitive 3F"]
-    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
-    Bench --> LF["LensFeedback"]
+    Main --> LLM["LLMClient"]
+    Bench["v3_runner.py\n(bench only)"] --> LF["LensFeedback"]
     Bench --> ES["EmbeddingStore"]
 
     RL --> FA
-    RL --> CR
-    RL --> DC
-    BASC --> BF
-    REASC --> BF
-    LF --> BASC
+    RL --> CR["ConstraintRefiner 3B"]
+    CG -->|"tier table"| BF
+    CG -->|"budget helpers"| RL
     LF --> BF
 
     style Main fill:#333,color:#fff
     style Bench fill:#333,color:#fff
+    style CG fill:#1a3a5c,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
-    style BASC fill:#2d5016,color:#fff
-    style REASC fill:#2d5016,color:#fff
-    style SSTAR fill:#2d5016,color:#fff
     style CS fill:#2d5016,color:#fff
     style FA fill:#5c3a1a,color:#fff
     style CR fill:#5c3a1a,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
-    style DC fill:#5c3a1a,color:#fff
     style RL fill:#5c3a1a,color:#fff
-    style MC fill:#5c3a1a,color:#fff
-    style ACE fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff
+    style LLM fill:#333,color:#fff
     style LF fill:#333,color:#fff
     style ES fill:#333,color:#fff
 ```
 
-凡例: 青 = フェーズ1（生成）、緑 = フェーズ2（選択）、茶 = フェーズ3（修復）、グレー = ユーティリティ。`v3_runner.py` から供給されるモジュールはベンチランナー専用で、サービスはそれらを呼び出しません。
+凡例: 青 = フェーズ1（生成）、緑 = フェーズ2（選択）、茶 = フェーズ3（修復）、グレー = ユーティリティ。`v3_runner.py` から供給されるモジュールはベンチランナー専用で、サービスはそれらを呼び出しません。サービス自体は `main.py`（HTTP ハンドラ）→ `pipeline.py`（オーケストレータ）→ `planning.py` / `scoring.py` / `symbols.py` / `adapters.py` というフラットな兄弟モジュール構成です。
 
 ---
 

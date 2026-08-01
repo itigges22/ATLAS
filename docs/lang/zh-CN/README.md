@@ -1,8 +1,4 @@
-<!-- source: README.md synced-through: 53daf3b -->
-> ⚠️ **本翻译已冻结。** 自 2026-08 代码库精简以来，翻译不再更新，内容可能落后于英文 `docs/`（甚至可能描述已移除的功能）。请以英文文档为准。翻译计划在 1.0 版本发布时恢复更新。
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: README.md synced-through: 4f1be83 -->
 > **[English](../../../README.md)** | **简体中文** | **[日本語](../ja/README.md)** | **[한국어](../ko/README.md)**
 
 <p align="center">

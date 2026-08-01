@@ -1,8 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2 -->
-> ⚠️ **이 번역은 동결되었습니다.** 2026-08 코드베이스 단순화 이후 번역 업데이트가 중단되어, 내용이 영어 `docs/` 보다 오래되었을 수 있습니다(이미 제거된 기능을 설명할 수도 있습니다). 최신 정보는 영어 문서를 참고하세요. 번역은 1.0 릴리스에 맞춰 갱신될 예정입니다.
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 4f1be83 -->
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
 
 > ℹ️ 영어 원본([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
@@ -388,6 +384,43 @@ fatal: fetch-pack: invalid index-pack output
 
 재빌드로 모델이 로드된 뒤에도 Geometric Lens는 새 모델을 위한 재학습이 필요합니다 — [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)을 참고하세요.
 
+### 프록시가 워크스페이스에 쓰지 못함 (`.atlas.tmp: permission denied`)
+
+**증상:** 모든 `write_file`/`edit_file`이 `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied`로 실패합니다(이후 에이전트는 "쓰기 가능한 하위 디렉터리"를 찾아 헤맵니다). 렌즈 학습 샘플 뱅킹도 중단됩니다(프록시 로그에서 `/data/lens_training` 쓰기 실패).
+
+**원인:** atlas-proxy 이미지는 이미지에 구워진 비루트 사용자(uid 1001, `atlas`)로 실행되지만, `/workspace`(`ATLAS_PROJECT_DIR`)와 `/data/lens_training`에 바인드 마운트된 호스트 디렉터리는 운영자의 uid가 소유합니다. 읽기는 되지만(모드 755) 쓰기는 모두 거부됩니다. `.env`가 `ATLAS_PROXY_UID`보다 오래된 설치는 하드닝된 프록시 이미지를 받은 뒤 이 문제를 겪습니다.
+
+**해결:** 샌드박스가 이미 하는 것과 동일하게, 프록시를 호출한 사용자로 실행하세요:
+
+```bash
+# 자신의 id를 .env에 추가(atlas init --reconfigure도 이제 이 값들을 씁니다)
+echo "ATLAS_PROXY_UID=$(id -u)" >> .env
+echo "ATLAS_PROXY_GID=$(id -g)" >> .env
+docker compose up -d --no-deps --force-recreate atlas-proxy
+```
+
+확인: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test`가 성공해야 합니다(확인 후 파일은 삭제하세요). K3s 배포에서는 `scripts/generate-manifests.sh`가 동일한 id를 프록시 Pod의 `securityContext`에 렌더링합니다.
+
+### 바로 거기 있는 파일을 에이전트가 "없다"고 말함 (워크스페이스 마운트 분리)
+
+**증상:** 프로젝트 디렉터리에 분명히 있는데도 에이전트 세션이 파일이 "존재하지 않는다"고 주장합니다 — `read_file`은 실패하는데 `run_command`(`ls`, `cat`)는 파일을 잘 보거나, 그 반대입니다. 세션은 일찍 포기하고("파일 X가 존재하지 않는 것 같습니다"), 쓰기는 프로젝트에 반영되지 않으며, 그런데도 모든 `/health` 엔드포인트는 초록색입니다.
+
+**원인:** 프록시와 샌드박스가 **서로 다른 호스트 디렉터리**를 `/workspace`로 바인드 마운트하고 있습니다. 파일 도구(`read_file`/`write_file`/`edit_file`)는 프록시가 *자신의* 마운트에 대해 처리하고, `run_command`는 *샌드박스의* 마운트에서 실행됩니다. Compose는 마운트 소스를 `ATLAS_PROJECT_DIR`(기본값: compose 작업 디렉터리)에서 **컨테이너별로 생성 시점에** 결정합니다 — 따라서 한쪽 컨테이너를 다른 디렉터리에서, 또는 다른 `.env`로 재생성하면 둘은 조용히 갈라집니다. 시작 시에는 아무것도 실패하지 않고, 에이전트만 분리된 상태로 동작합니다.
+
+**진단:** `atlas doctor` — `workspace_mounts` 체크가 두 마운트를 비교해 다르면 두 호스트 경로를 보여주며 실패합니다. 수동으로 하려면:
+
+```bash
+docker inspect atlas-atlas-proxy-1 --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+docker inspect atlas-sandbox-1     --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'
+```
+
+**해결:** `.env`의 `ATLAS_PROJECT_DIR`를 프로젝트 디렉터리로 고정한 뒤, 두 컨테이너를 함께 재생성하세요:
+
+```bash
+echo "ATLAS_PROJECT_DIR=/path/to/your/project" >> .env
+docker compose up -d --force-recreate atlas-proxy sandbox
+```
+
 ### SELinux가 컨테이너 접근을 차단함 (Fedora/RHEL)
 
 **증상:** 컨테이너가 마운트된 볼륨을 읽을 수 없고, 모델 파일에 대해 권한 거부가 발생합니다.
@@ -601,7 +634,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **원인:** 잘못된 엔드포인트를 호출하고 있습니다. 에이전트 루프는 `POST /v1/agent`에서만 실행됩니다. `POST /v1/chat/completions`(및 `/v1/` 하위의 다른 모든 경로)는 llama-server로의 투명한 패스스루입니다 — 도구도, V3도, 스트리밍 채팅 이벤트도 없습니다.
 
-**해결:** 클라이언트가 `POST http://localhost:8090/v1/agent`를 가리키게 하세요. Bubbletea TUI(`atlas` / `atlas tui`)와 내장 `/solve` REPL은 이를 자동으로 수행합니다. 서드파티 클라이언트를 작성하는 경우 `/v1/agent` SSE 이벤트 프로토콜은 [docs/API.md](../../API.md)를 참고하세요. `ATLAS_AGENT_LOOP` 환경 변수 토글은 더 이상 없습니다 — 분기는 설정이 아니라 엔드포인트 기반입니다.
+**해결:** 클라이언트가 `POST http://localhost:8090/v1/agent`를 가리키게 하세요. Bubbletea TUI(`atlas` / `atlas tui`)는 이를 자동으로 수행합니다. 서드파티 클라이언트를 작성하는 경우 `/v1/agent` SSE 이벤트 프로토콜은 [docs/API.md](../../API.md)를 참고하세요. `ATLAS_AGENT_LOOP` 환경 변수 토글은 더 이상 없습니다 — 분기는 설정이 아니라 엔드포인트 기반입니다.
 
 ### V3 파이프라인이 기능 파일에서 실행되지 않음
 
@@ -721,7 +754,9 @@ except curses.error:
 
 **증상:** 첫 요청은 파일을 생성하고 V3가 실행됩니다. "ok"나 "yes" 같은 짧은 후속 요청은 대화형 응답만 받습니다 — 도구 호출도 V3 이벤트도 없습니다.
 
-**무슨 일인가:** 에이전트 루프의 등급 분류기는 사소하지 않은 모든 메시지에 대해 T2를 바닥으로 취급합니다 — "still doesn't work, try again"은 T2로 분류되어 파이프라인을 받습니다. 5자 미만의 메시지 또는 소규모 사소한 채팅 목록(`hi`, `thanks`, `ok`, `yes`, …)과의 정확한 일치만 T0(대화형, 파이프라인 없음)에 머뭅니다.
+**무슨 일인가:** 에이전트 루프의 등급 분류기(`proxy/agent.go:classifyAgentTier`)는 하나의 질문에 답합니다: 이것은 대화인가, 작업인가? 기본값은 작업이며 T0에는 적극적인 근거가 필요합니다. 두 종류의 실수가 치르는 대가가 매우 다르기 때문입니다. 대화를 작업으로 잘못 읽으면 모델이 한 턴에 끝낼 메시지에 플래너 호출 한 번을 낭비하는 데 그치지만, 작업을 대화로 잘못 읽으면 턴이 5로 제한되고 플래닝도 건너뛰어 요청 자체가 실패합니다.
+
+메시지가 대화형으로 판정되는 경우는 12자 미만(`hi`, `thanks`, `ok`)이거나 질문 형태일 때뿐입니다 — `?`로 끝나거나 의문사(`why`, `what`, `how`, `is`, `can`, …)로 시작하는 경우. 다만 작업을 뜻하는 표현이 둘 모두를 앞서므로, `can you fix the login bug?`는 물음표가 있어도 작업입니다. 그 외에는 전부 작업입니다: `still doesn't work, try again`과 `the snake is moving way too fast, slow it down`은 파일명을 대지도, 작업 동사 목록에 맞지도 않지만 둘 다 파이프라인을 받습니다.
 
 **할 일:** 짧게라도 원하는 것을 말하세요 — "yes, fix it"은 T0 게이트를 통과합니다. 후속 요청이 에이전트 루프는 돌리는데 V3가 조용하다면 요청 등급이 게이트가 아닙니다 — 파일 자체의 등급이 게이트입니다. [V3 파이프라인이 기능 파일에서 실행되지 않음](#v3-파이프라인이-기능-파일에서-실행되지-않음)을 참고하고, `docker compose logs atlas-proxy | grep -E "write_file|edit_file"`에서 파일 등급 줄(예: `[write_file] app.py → T1:simple (8 lines)`)을 확인하세요.
 
@@ -783,6 +818,28 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 ```
 
 `enabled: false` 또는 `cx_energy: 0.0`이면 모델이 로드되지 않은 것입니다. 새로 설치한 경우 예상된 동작입니다 — 모델 가중치는 저장소에 포함되어 있지 않으며 직접 학습하거나 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)에서 다운로드해야 합니다.
+
+### 점수는 그럴듯한데 스케일이 크게 어긋남 (임베딩 규약 드리프트)
+
+**증상:** 모든 것이 정상으로 보고됩니다 — 파드는 `Ready`, `/health`는 200, `gx-score`는 범위 안으로 보이는 `gx_score`와 `likely_correct` 판정을 반환합니다 — 그런데 `cx_energy`가 보정된 범위에서 자릿수 단위로 벗어나 있습니다(모델의 통과/실패 평균이 20~30인데 ~600 같은 값). 이 상태에서 시작한 게이트 벤치마크는 완전하고 그럴듯하지만 전적으로 무효한 결과를 만들어냅니다.
+
+**원인:** 임베딩 서버가 Geometric Lens의 `C(x)`/`G(x)` 아티팩트가 학습된 것과 다른 `/embedding` 규약으로 응답하고 있습니다 — 보통 풀링 대신 토큰별, 또는 L2 정규화 대신 비정규화(‖v‖가 ~1이 아니라 ≈60). 차원은 같고 분포가 다르므로, 코스트 필드 MLP가 거대한 에너지로 외삽하고 `cx_normalized`가 포화됩니다. `--pooling mean` 없이 서빙 스택을 재빌드한 뒤에 발생합니다(llama-server에는 `--embd-normalize` 서버 플래그가 없습니다. 렌즈는 `/embedding` 본문의 `embd_normalize`로 호출마다 L2 정규화를 요청합니다).
+
+**확인:** 렌즈는 부팅 시, 그리고 리로드/재학습 때마다 저장된 지문을 다시 채점합니다. `/ready`와 `/health`를 확인하세요:
+```bash
+curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
+```
+`fingerprint_ok: false`와 함께 기대값 대 관측값 에너지를 알려주는 `fingerprint_error`가 나오면 드리프트 신호입니다 — `/ready`는 503을 반환하고, 채점된 응답에는 `"drifted": true`가 실리며 `calibrated` 플래그가 모두 false로 강제되므로 하류에서 이를 신뢰할 수 있는 값으로 오인할 수 없습니다.
+
+**해결:**
+1. 임베딩 서버의 규약을 확인하세요. 풀링 + 정규화된 서버는 ‖v‖≈1인 평탄한 벡터를 반환합니다:
+   ```bash
+   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+   ```
+   `shape per_token`이거나 `norm`이 1.0에서 크게 벗어나 있으면 서버 설정이 잘못된 것입니다.
+2. `ATLAS_EMBED_POOLING=mean`(기본값. [CONFIGURATION.md](../../CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요.
+3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트의 지문 검사가 통과하고 `/ready`가 200을 반환합니다. 아티팩트가 지문보다 오래되었다면 재학습(`atlas lens retrain`)이 지문을 쓰고 `embedding_contract`를 `model_identity.json`에 새깁니다.
 
 ### 임베딩 추출 실패
 

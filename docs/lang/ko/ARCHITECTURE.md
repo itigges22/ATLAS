@@ -1,8 +1,4 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: fe64417 -->
-> ⚠️ **이 번역은 동결되었습니다.** 2026-08 코드베이스 단순화 이후 번역 업데이트가 중단되어, 내용이 영어 `docs/` 보다 오래되었을 수 있습니다(이미 제거된 기능을 설명할 수도 있습니다). 최신 정보는 영어 문서를 참고하세요. 번역은 1.0 릴리스에 맞춰 갱신될 예정입니다.
->
-> ⚠️ **This translation is frozen.** It is no longer updated and may lag the English `docs/` (including descriptions of removed features) until the 1.0 release. The English documentation is authoritative.
-
+<!-- source: docs/ARCHITECTURE.md synced-through: 4f1be83 -->
 > **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **[日本語](../ja/ARCHITECTURE.md)** | **한국어**
 
 # ATLAS 아키텍처
@@ -89,6 +85,23 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 ## 3. atlas-proxy (바깥 계층)
 
 프록시는 채팅 프론트엔드의 진입점입니다. `/v1/agent`(타입 이벤트 스트림 — TUI가 사용하는 것)에서 사용자 메시지를 받아들이고, llama-server를 호출하고 도구 호출을 파싱·실행해 이벤트를 다시 스트리밍하는 내부 에이전트 루프를 실행합니다. `/v1/chat/completions` 엔드포인트는 llama-server로의 투명한 패스스루입니다. SDK 호환성을 위해 유지되며 에이전트 루프를 실행하지 않습니다. 전체 이벤트 타입 카탈로그는 [API.md](../../API.md)를 참고하세요.
+
+프록시는 12개의 Go 파일로 구성되며, 각 파일이 하나의 관심사를 담당합니다:
+
+| 파일 | 담당 |
+|---|---|
+| `main.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
+| `agent.go` | 에이전트 루프: 턴 상태, LLM 호출, 플랜 생성, 패턴 컨텍스트 주입, 스턱 루프 차단기 |
+| `tools.go` | 14개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
+| `gates.go` | 정직성/플랜 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 플랜 준수, 플랜 리마인더, 에셋 린트 |
+| `detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백 지역화 |
+| `context.go` | 컨텍스트 보강: 심볼 인덱스, 프로젝트 스캔, 워크스페이스 봉쇄, 세션 파일 매니페스트 |
+| `permissions.go` | 권한 게이트(`/v1/permission`), 트러스트 모드, 하드 차단 패턴 |
+| `lens.go` | 렌즈 스코어링 호출, 렌즈 샘플 뱅킹(`/feedback`), 캘리브레이션 상태 |
+| `guardrails.go` | 도구별 스티어링 가드(축소, 누락된 명령/모듈 스티어, doctype 제거) |
+| `events.go` | 타입 엔벨로프 브로커(`/events`)와 SSE 배관 |
+| `v3_bridge.go` | v3-service의 `/v3/generate` + `/v3/plan`용 SSE 클라이언트 |
+| `types.go` | 공유 타입, 티어, 턴 상한 |
 
 ```mermaid
 graph LR
@@ -180,7 +193,7 @@ flowchart LR
    전체 용도에 대해 경고하고, structural_edit의 설명은 >10줄 / 노드 전체 교체에
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
-2. **조건부 GBNF 문법**(`proxy/grammar.go`,
+2. **조건부 GBNF 문법**(`proxy/tools.go`,
    `proxy/agent.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
    파일에 대한 write_file가 거부되면, 다음 LLM 호출은 도구 이름 생성
    규칙에서 edit_file와 write_file를 금지하는 GBNF 문법으로 제약됩니다.
@@ -316,6 +329,12 @@ flowchart LR
 
 **Phase 0: Probe**는 점진적 예산 재시도(light → standard → nothink)로 단일 기준 후보를 생성합니다. 선택된 모델의 C(x)/G(x) 아티팩트로 채점하고 샌드박스에서 테스트합니다. 통과하면 파이프라인은 즉시 종료합니다.
 
+**후보 할당: CxGx 게이트**(`phase2` / `phase2_allocated`로 방출)가 실패한 프로브에 후보를 몇 개 줄지 결정합니다. 프로브의 C(x)+G(x) 결합 점수(임베딩 추출 1회, 두 모델 모두 사용)가 2단계 규칙을 구동합니다: 보정된 C(x) 정규화 에너지가 Budget Forcing이 쓰는 것과 같은 사다리에서 기본 티어를 고르고, G(x) 품질 점수가 모델의 보정된 severe 경계 아래로 떨어지면 그 티어를 +1, 한참 아래(그 0.75배)로 떨어지면 +2 올립니다 — 프로브가 C(x)에는 싸 보이지만 G(x)에는 틀려 보이는 경우입니다. 티어가 k를 정하고(`nothink` 1, `standard` 3, `hard` 5, `extreme` 8) 여기에 **k >= 3의 하드 플로어**가 걸립니다. 따라서 게이트는 기존에 고정돼 있던 k=3에 후보를 더할 수만 있고 뺄 수는 없으며, 최악의 경우가 곧 예전 동작입니다. 두 신호 모두 이 모델의 보정 파일(`cx_normalization.json`, `gx_thresholds.json`)을 필요로 합니다: 렌즈가 없거나 도달 불가하거나 보정되지 않았다면 `standard`에서 정확히 k=3을 할당하므로, 보정되지 않은 번들은 자기에게 아무 의미도 없는 척도로 라우팅되는 대신 예전에 돌리던 파이프라인을 그대로 돌립니다.
+
+이 플로어가 앞서 제거된 C(x) 전용 할당기와의 차이입니다: 그쪽은 플로어가 없어서 *방금 실패한* 프로브의 태스크에 k=1을 건네주었고, 측정값은 +0.0 pp였습니다. 암당 n=175의 4-암 삼각측량: 게이트 적용 66.9%, 고정 k=3 64.6%, 같은 티어 구성을 태스크 간에 섞은 것 61.7%, 전부 k=8이 약 27% 더 많은 토큰으로 67.4%. 동일한 지출에서 셔플 암을 5.1 pp 앞선 것이, 연산량만이 아니라 렌즈 신호가 정보를 담고 있음을 말해 줍니다.
+
+라이브 경로와의 차이: 프록시의 V3 브리지는 `ATLAS_V3_TIMEOUT`(기본 180s) 이후 파이프라인 호출을 포기합니다. 벤치에는 없던 상한이라, k=8로의 무제한 에스컬레이션은 예산을 생성에 다 써 버리고 시간 안에 낼 수 있었던 k=3 답 대신 타임아웃 폴백을 반환하게 됩니다. 그래서 라이브 오케스트레이터는 남은 실시간과 해당 태스크에서 관측된 호출당 지연을 함께 넘기고, 게이트는 예산이 실제로 생성할 수 있는 수준까지 티어를 낮춥니다 — 에스컬레이션이 Phase 3를 굶기지 않도록 리파인먼트 1회분을 남겨 두되, 플로어 아래로는 결코 내려가지 않습니다. 벤치 러너는 예산을 넘기지 않고 측정된 그대로 할당합니다. 구현은 `v3-service/stages/cxgx_gate.py`이며 두 오케스트레이터가 공유합니다.
+
 **Phase 1: 제약 기반 생성(Constraint-Driven Generation)**
 
 - **PlanSearch**는 서로 다른 제약 집합을 추출하여 구조적으로 다른 3개의 구현 계획을 생성합니다
@@ -334,9 +353,9 @@ Wait 주입은 더 긴 추론 패스를 요청하기 위해 "Wait, let me recons
 
 **Phase 2: 검증 및 선택**
 
-- **빌드 검증**: Python(`py_compile`), TypeScript(`tsc --noEmit`), JavaScript(`node --check`), Go(`go build`), Rust(샌드박스 `/execute` 경로에서는 `rustc`; `Cargo.toml` 프로젝트는 `cargo build`로 감지되며, `cargo check`는 빌드 명령 허용 목록을 통해서만 수락), C/C++(`/execute`에서는 `-Wall`을 동반한 완전한 `gcc`/`g++` 컴파일; `-fsyntax-only`는 `/syntax-check` 경로에만 적용), Shell(`bash -n`). Next.js, React, Flask, Django, Express에 대한 프레임워크 재정의.
-- **S* 타이브레이킹**(2개 이상 통과): 엣지 케이스 입력을 생성해 두 후보를 모두 실행하고, 다수결로 승자 결정
-- **Lens 선택**(1개 통과 또는 폴백): C(x) 에너지로 정렬, 가장 낮은 것이 이김
+- **빌드 검증**: Python(`py_compile`), TypeScript(`tsc --noEmit`), JavaScript(`node --check`), Go(`go build`), Java(`javac`), Kotlin(`kotlinc`), Rust(샌드박스 `/execute` 경로에서는 `rustc`. `Cargo.toml` 프로젝트는 감지되어 `cargo build`를 쓰고, `cargo check`는 빌드 커맨드 허용목록을 통해서만 허용), C/C++(`/execute`에서는 `-Wall`을 붙인 완전한 `gcc`/`g++` 컴파일. `-fsyntax-only`는 `/syntax-check` 경로에만 적용), Ruby(`ruby -c`, 인터프리터 언어라 컴파일 단계 없음), PHP(`php -l`, 동일), Shell(`bash -n`). Next.js, React, Flask, Django, Express에는 프레임워크별 오버라이드가 있습니다.
+- **거부권(Veto)**: 샌드박스를 통과한 후보라도 세 가지 검사가 이를 기각할 수 있습니다 — 렌즈 거부권(스텝별 `gx_min`이 모델의 보정된 severe 임계값 아래인 경우: 코드는 실행되지만 생성 패턴이 스텁 쪽으로 무너진 것), 구조 거부권(tree-sitter가 로컬 정의·import·빌트인·프로젝트 심볼 어디에도 해석되지 않는 직접 식별자 호출을 찾은 경우 — 예약된 `NameError`), 그리고 플래그로 게이트되는 호출 그래프 거부권(`ATLAS_CALL_GRAPH`: 스코프 안에 정의가 없는 파일 간 호출). 거부된 후보는 실패로 표시되고(`passed=false`, `vetoed_by`, 거부 사유가 오류 출력으로), 다른 실패 후보와 마찬가지로 Phase 3 복구 풀에 합류합니다. 최종 에너지 폴백이 이를 반환하는 일은 없습니다. 모든 후보가 거부되고 복구도 실패하면 파이프라인은 코드를 반환하지 않으며, 호출자가 자신의 베이스라인으로 대체합니다
+- **Lens 선택**(1개 이상 통과): C(x) 에너지로 정렬해 가장 낮은 것이 승리
 
 **Phase 3: 수리**(0/K 통과 시) — 세 가지 전략, 조기 종료를 동반한 순차 실행:
 
@@ -348,58 +367,47 @@ Wait 주입은 더 긴 추론 패스를 요청하기 위해 "Wait, let me recons
 
 ### 모듈 맵
 
-`benchmark/v3/`의 18개 Python 모듈. `v3-service/pipeline.py`가 그중 13개를 오케스트레이션하며, `reasc`, `ace_pipeline`, `lens_feedback`, `embedding_store`는 오프라인 벤치 러너(`benchmark/v3_runner.py`)에서만 실행되고, `ablation_analysis`는 독립 실행형 분석 스크립트입니다(다이어그램에는 없음):
+파이프라인 스테이지는 `v3-service/stages/`에 있는 13개의 Python 모듈입니다. `v3-service/pipeline.py`가 그중 11개를 오케스트레이션합니다(10개는 직접, `constraint_refinement`는 리파인먼트 루프를 통해). `lens_feedback`과 `embedding_store`는 오프라인 벤치 러너(`atlas/bench/v3_runner.py`)에서만 실행되며, 이 러너는 체크아웃의 `v3-service/`를 자신의 경로에 올리므로 두 호출자가 하나의 스테이지 구현을 공유합니다:
 
 ```mermaid
 graph LR
-    Main["main.py"] --> PS["PlanSearch 1A"]
+    Main["pipeline.py"] --> CG["CxGx Gate"]
+    Main --> PS["PlanSearch 1A"]
     Main --> DS["DivSampling 1B"]
     Main --> BF["BudgetForcing 1C"]
-    Main --> BASC["BlendASC 2A"]
-    Bench["v3_runner.py\n(bench only)"] --> REASC["ReASC 2B"]
-    Main --> SSTAR["S* 2C"]
     Main --> CS["CandidateSelection"]
     Main --> FA["FailureAnalysis 3A"]
-    Main --> CR["ConstraintRefiner 3B"]
     Main --> PRCOT["PR-CoT 3C"]
-    Main --> DC["DerivationChains 3D"]
     Main --> RL["RefinementLoop 3E"]
-    Main --> MC["Metacognitive 3F"]
-    Bench --> ACE["ACE 3G"]
     Main --> STG["SelfTestGen"]
-    Bench --> LF["LensFeedback"]
+    Main --> LLM["LLMClient"]
+    Bench["v3_runner.py\n(bench only)"] --> LF["LensFeedback"]
     Bench --> ES["EmbeddingStore"]
 
     RL --> FA
-    RL --> CR
-    RL --> DC
-    BASC --> BF
-    REASC --> BF
-    LF --> BASC
+    RL --> CR["ConstraintRefiner 3B"]
+    CG -->|"tier table"| BF
+    CG -->|"budget helpers"| RL
     LF --> BF
 
     style Main fill:#333,color:#fff
     style Bench fill:#333,color:#fff
+    style CG fill:#1a3a5c,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
-    style BASC fill:#2d5016,color:#fff
-    style REASC fill:#2d5016,color:#fff
-    style SSTAR fill:#2d5016,color:#fff
     style CS fill:#2d5016,color:#fff
     style FA fill:#5c3a1a,color:#fff
     style CR fill:#5c3a1a,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
-    style DC fill:#5c3a1a,color:#fff
     style RL fill:#5c3a1a,color:#fff
-    style MC fill:#5c3a1a,color:#fff
-    style ACE fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff
+    style LLM fill:#333,color:#fff
     style LF fill:#333,color:#fff
     style ES fill:#333,color:#fff
 ```
 
-범례: 파랑 = Phase 1(생성), 초록 = Phase 2(선택), 갈색 = Phase 3(수리), 회색 = 유틸리티. `v3_runner.py`가 공급하는 모듈은 벤치 러너 전용이며, 서비스는 이를 호출하지 않습니다.
+범례: 파랑 = Phase 1(생성), 초록 = Phase 2(선택), 갈색 = Phase 3(수리), 회색 = 유틸리티. `v3_runner.py`가 공급하는 모듈은 벤치 러너 전용이며, 서비스는 이를 호출하지 않습니다. 서비스 자체는 `main.py`(HTTP 핸들러) → `pipeline.py`(오케스트레이터) → `planning.py` / `scoring.py` / `symbols.py` / `adapters.py` 라는 평면적 형제 모듈 구성입니다.
 
 ---
 
