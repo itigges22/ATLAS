@@ -208,6 +208,17 @@ and the sampling and honesty-gate work were kept and remain accurate as written.
   of being vendored; verified byte-identical first. Tracked files: 3,045 to
   605.
 
+
+### VS Code extension
+
+- New `extensions/vscode/`: a zero-runtime-dependency VS Code client for the
+  proxy HTTP API (#35) — chat sidebar with streamed turns, tool chips, and
+  plan checklists; interactive permission flow (allow once / allow for
+  session / deny, with pre-decision diff previews for `write_file`,
+  `edit_file`, `structural_edit` and `insert_after`); native diff review of
+  applied changes; status bar from `/ready`; workspace-mismatch warning;
+  service token in SecretStorage. Contributed by @Anuj-72.
+
 ### CPU-torch images actually CPU-only again (2026-07-20)
 - The lens and v3-service Dockerfiles pre-install torch from the CPU-only
   index, but their pin (2.12.1) had drifted behind requirements.txt
