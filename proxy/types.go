@@ -191,6 +191,17 @@ type EditFileInput struct {
 	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
+// InsertAfterInput places new lines after a line the model NAMES rather than
+// reproduces. read_file already returns "N<tab>content", so the model cites a
+// number it can see instead of transcribing an anchor byte-for-byte — the step
+// that measurably fails on long spans.
+type InsertAfterInput struct {
+	Path string `json:"path"`
+	// 0 inserts at the top of the file; N inserts after line N (1-based).
+	Line    int    `json:"line"`
+	Content string `json:"content"`
+}
+
 type EditFileOutput struct {
 	OK           bool   `json:"ok"`
 	DiffPreview  string `json:"diff_preview,omitempty"`

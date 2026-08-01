@@ -1736,14 +1736,14 @@ func fakeSyntaxSandbox(t *testing.T, brokenMarker string) *httptest.Server {
 
 func writeGateCtx(t *testing.T, v3URL, sandboxURL, workDir string) *AgentContext {
 	t.Helper()
-	return &AgentContext{
-		V3URL:         v3URL,
-		SandboxURL:    sandboxURL,
-		WorkingDir:    workDir,
-		Tier:          Tier2Medium,
-		Ctx:           context.Background(),
-		SessionWrites: map[string]bool{},
-	}
+	// NewAgentContext, not a bare literal: the struct has several maps
+	// (FilesRead, ManifestAnnounced, ...) that only the constructor
+	// initialises, and a test touching one of them panicked on a nil map.
+	ctx := NewAgentContext(workDir, Tier2Medium)
+	ctx.V3URL = v3URL
+	ctx.SandboxURL = sandboxURL
+	ctx.Ctx = context.Background()
+	return ctx
 }
 
 // When the V3 winner introduces an unresolved call but the model's own

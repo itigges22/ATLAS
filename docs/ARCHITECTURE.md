@@ -139,7 +139,7 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 
 ### Tools
 
-14 tools registered in `proxy/tools.go`:
+15 tools registered in `proxy/tools.go`:
 
 | Tool | Purpose | Read-only |
 |------|---------|-----------|
@@ -147,6 +147,7 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 | `outline_file` | List a file's top-level functions/classes with line ranges, no bodies (tree-sitter for `.py`, best-effort scan otherwise). The surgical-read entry point: outline first, then `read_file` with offset/limit | Yes |
 | `write_file` | Create a NEW file (rejected for existing files >5 lines — see safety limits) | No |
 | `edit_file` | Surgical inline string replacement (old_str/new_str) for ≤10-line changes | No |
+| `insert_after` | Insert new lines after a given line number — the line numbers `read_file` prints. For ADDING code (a branch, function, import) where nothing existing changes: there is no `old_str` to reproduce, which is the step that fails on long spans | No |
 | `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
 | `delete_file` | Delete file or empty directory (forces loop exit after) | No |
 | `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. The supported path for "reorganize the files" since shell `mv`/`cp` are refused | No |

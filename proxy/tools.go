@@ -68,6 +68,7 @@ func init() {
 	registerTool(writeFileTool())
 	registerTool(editFileTool())
 	registerTool(structuralEditTool())
+	registerTool(insertAfterTool())
 	registerTool(deleteFileTool())
 	registerTool(moveFileTool())
 	registerTool(runCommandTool())
@@ -2447,6 +2448,96 @@ func buildDiffPreview(oldContent, newContent, oldStr, newStr string) string {
 // ---------------------------------------------------------------------------
 // delete_file
 // ---------------------------------------------------------------------------
+
+// insert_after adds lines at a location the model NAMES instead of one it
+// reproduces.
+//
+// edit_file needs an anchor copied byte-for-byte; structural_edit needs the
+// whole node re-emitted. Both put a large verbatim-output burden on the model,
+// and that is the step that measurably fails: asked to reproduce a ten-line
+// anchor it produced "safe_load_aller" for "safe_load_all". read_file already
+// returns "N<tab>content", so a line number is something the model can cite
+// rather than transcribe, and only the NEW text has to be generated.
+//
+// Same gates as every other write: workspace boundary, syntax (healthy->broken
+// so a file already failing is not blocked), and the structural check for
+// newly unresolved calls.
+func insertAfterTool() *ToolDef {
+	return &ToolDef{
+		Name: "insert_after",
+		Description: "Insert new lines into a file AFTER a given line number, without touching anything else. " +
+			"Use this to ADD code — a new branch, function, import, or case — when you are not changing existing lines. " +
+			"`line` is the 1-based number shown by read_file (0 inserts at the top of the file); `content` is only the new text. " +
+			"Prefer this over edit_file when adding rather than replacing: there is no old_str to reproduce, so a long or awkward anchor cannot go wrong. " +
+			"To CHANGE an existing line use edit_file; to replace a whole function use structural_edit.",
+		InputSchema: InsertAfterInput{},
+		Destructive: false,
+		Execute: func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var in InsertAfterInput
+			if err := json.Unmarshal(input, &in); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(in.Path) == "" {
+				return &ToolResult{Success: false, Error: "insert_after: path is required"}, nil
+			}
+			if in.Content == "" {
+				return &ToolResult{Success: false, Error: "insert_after: content is empty — nothing would be inserted"}, nil
+			}
+			path := resolveAgentPath(ctx, in.Path)
+			if !ctx.WasFileRead(path) {
+				return nil, fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return &ToolResult{Success: false, Error: fmt.Sprintf("cannot read %s: %v", in.Path, err)}, nil
+			}
+			original := string(data)
+			lines := strings.Split(original, "\n")
+			// A trailing newline yields a final empty element; inserting after
+			// it would append past the end, so treat it as the boundary.
+			limit := len(lines)
+			if limit > 0 && lines[limit-1] == "" {
+				limit--
+			}
+			if in.Line < 0 || in.Line > limit {
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
+					in.Line, in.Path, limit)}, nil
+			}
+			insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+			merged := append([]string{}, lines[:in.Line]...)
+			merged = append(merged, insert...)
+			merged = append(merged, lines[in.Line:]...)
+			updated := strings.Join(merged, "\n")
+
+			// Healthy->broken only: a file already failing the checker stays
+			// editable, which is what makes repair-in-progress possible.
+			if synErr, ok := checkFallbackSyntax(ctx, in.Path, updated); !ok {
+				if _, wasHealthy := checkFallbackSyntax(ctx, in.Path, original); wasHealthy {
+					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(in.Path, updated, synErr)}, nil
+				}
+			}
+			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
+				return &ToolResult{Success: false, Error: structuralRejection(in.Path, introduced)}, nil
+			}
+			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
+
+			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+				return nil, fmt.Errorf("cannot write %s: %w", in.Path, err)
+			}
+			ctx.SessionWrites[in.Path] = true
+			ctx.RecordFileRead(path, updated)
+			log.Printf("[insert_after] %s +%d lines after line %d", logPath(in.Path), len(insert), in.Line)
+			out, _ := json.Marshal(EditFileOutput{
+				OK:          true,
+				DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
+			})
+			return &ToolResult{Success: true, Data: out}, nil
+		},
+	}
+}
 
 func deleteFileTool() *ToolDef {
 	return &ToolDef{

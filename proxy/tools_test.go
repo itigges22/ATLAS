@@ -1070,3 +1070,101 @@ func TestReadFileDisclaimsItsLineNumbering(t *testing.T) {
 		t.Errorf("numbered content missing: %q", out.Content)
 	}
 }
+
+// insert_after exists because both other edit primitives make the model
+// reproduce text verbatim — edit_file an anchor, structural_edit a whole node
+// — and that is the step that measurably fails ("safe_load_aller" for
+// "safe_load_all"). A line number is something read_file already showed it.
+func TestInsertAfterPlacesLinesAtTheNamedLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.py")
+	orig := "def a():\n    return 1\n\ndef c():\n    return 3\n"
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.Ctx = context.Background()
+	ctx.RecordFileRead(path, orig)
+
+	args, _ := json.Marshal(InsertAfterInput{
+		Path: "m.py", Line: 2, Content: "\ndef b():\n    return 2\n"})
+	res, err := insertAfterTool().Execute(json.RawMessage(args), ctx)
+	if err != nil || res == nil || !res.Success {
+		t.Fatalf("insert_after failed: %v %+v", err, res)
+	}
+	got, _ := os.ReadFile(path)
+	want := "def a():\n    return 1\n\ndef b():\n    return 2\n\ndef c():\n    return 3\n"
+	if string(got) != want {
+		t.Errorf("wrong result:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestInsertAfterZeroInsertsAtTheTop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.py")
+	if err := os.WriteFile(path, []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.Ctx = context.Background()
+	ctx.RecordFileRead(path, "x = 1\n")
+
+	args, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 0, Content: "import os\n"})
+	if _, err := insertAfterTool().Execute(json.RawMessage(args), ctx); err != nil {
+		t.Fatalf("insert_after: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "import os\nx = 1\n" {
+		t.Errorf("line 0 must insert at the top, got %q", got)
+	}
+}
+
+// The same gates as every other write. An insert that breaks a healthy file
+// must be refused, and nothing may land on disk.
+func TestInsertAfterIsSyntaxGated(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.py")
+	orig := "x = 1\n"
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sb := fakeSyntaxSandbox(t, "BROKEN")
+	defer sb.Close()
+	ctx := writeGateCtx(t, "", sb.URL, dir)
+	ctx.RecordFileRead(path, orig)
+
+	args, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 1, Content: "BROKEN(\n"})
+	res, _ := insertAfterTool().Execute(json.RawMessage(args), ctx)
+	if res == nil || res.Success {
+		t.Fatalf("an insert that breaks the file must be refused, got %+v", res)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != orig {
+		t.Errorf("file must be untouched after a refusal, got %q", after)
+	}
+}
+
+func TestInsertAfterRejectsOutOfRangeAndUnreadFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.py")
+	if err := os.WriteFile(path, []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.Ctx = context.Background()
+
+	// Not read yet — same rule edit_file and structural_edit enforce.
+	args, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 1, Content: "y = 2\n"})
+	if _, err := insertAfterTool().Execute(json.RawMessage(args), ctx); err == nil {
+		t.Error("must require read_file first")
+	}
+
+	ctx.RecordFileRead(path, "x = 1\n")
+	args2, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 99, Content: "y = 2\n"})
+	res, _ := insertAfterTool().Execute(json.RawMessage(args2), ctx)
+	if res == nil || res.Success {
+		t.Error("an out-of-range line must be refused")
+	} else if !strings.Contains(res.Error, "out of range") {
+		t.Errorf("error should name the problem, got %q", res.Error)
+	}
+}
