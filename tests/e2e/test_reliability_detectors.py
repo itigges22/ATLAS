@@ -310,3 +310,28 @@ def test_h9_does_not_constrain_a_work_task(rel, tmp_path):
         {"type": "done", "data": {"summary": "fixed"}},
     ], tmp_path)
     assert rel.h9_tier_misapplied(s, task) == []
+
+
+def test_h4_silent_on_a_conversational_task(rel, tmp_path):
+    """A question SHOULD exit without writing.
+
+    Scoring that as a gate escape reported a harness defect on both
+    conversational probes for behaving exactly as asked — the inverse of the
+    H9 tier check.
+    """
+    task = rel.Task(name="ask", prompt="what does f do?", files={},
+                    check=lambda p, s=None: (True, ""), conversational=True)
+    s = _session(rel, [
+        _call("read_file", path="orders.py"), _ok(),
+        {"type": "text", "data": {"content": "It is quadratic."}},
+        {"type": "done", "data": {"summary": ""}},
+    ], tmp_path)
+    assert rel.h4_gate_escape(s, task) == []
+
+
+def test_h4_still_fires_on_a_work_task(rel, tmp_path):
+    task = rel.Task(name="fix", prompt="fix the bug", files={},
+                    check=lambda p: (True, ""))
+    s = _session(rel, [_call("read_file", path="a.py"), _ok(),
+                       {"type": "done", "data": {"summary": ""}}], tmp_path)
+    assert rel.h4_gate_escape(s, task) != []

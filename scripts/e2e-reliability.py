@@ -731,12 +731,17 @@ def _selector_forms(text: str) -> set[str]:
     return forms
 
 
-def h4_gate_escape(s: Session) -> list[str]:
+def h4_gate_escape(s: Session, task: Task = None) -> list[str]:
     """An action-intent session that exited having changed nothing, ungated.
 
     The D11 class: one gate spent the shared bounce budget, so the
     done-without-action gate never ran.
     """
+    # A question SHOULD exit without writing. Scoring that as a gate escape
+    # reported a defect on both conversational probes for behaving exactly as
+    # asked — the inverse of the H9 check sitting right below.
+    if task is not None and task.conversational:
+        return []
     productive = any((e.get("data") or {}).get("success")
                      and (c.get("data") or {}).get("name") in WRITE_TOOLS
                      for c, e in zip(s.of_type("tool_call"),
@@ -1105,7 +1110,7 @@ def main() -> int:
             s.defects += h1_protocol(s, known)
             s.defects += h2_false_rejection(s)
             s.defects += h3_dead_end_steering(s)
-            s.defects += h4_gate_escape(s)
+            s.defects += h4_gate_escape(s, task)
             s.defects += h5_corrupt_write(s, task)
             s.defects += h6_service_fault(s)
             s.defects += h8_anchored_on_injected_text(s)

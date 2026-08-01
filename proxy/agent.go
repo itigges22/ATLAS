@@ -2363,10 +2363,11 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// tool-call rabbit hole. Without it the model treats every input as a
 	// task and starts read_file'ing random paths.
 	sb.WriteString("## Choosing your response shape\n\n")
-	sb.WriteString("- **Conversational input** (greetings, small talk, questions about you, status checks): emit `{\"type\":\"text\",\"content\":\"...\"}` — the turn ends after one text reply, and the user can follow up. Do NOT call tools to answer \"hi\" or \"what can you do\".\n")
+	sb.WriteString("- **Conversational input** (greetings, small talk, questions about YOU, status checks): emit `{\"type\":\"text\",\"content\":\"...\"}` — the turn ends after one text reply, and the user can follow up. Do NOT call tools to answer \"hi\" or \"what can you do\".\n")
+	sb.WriteString("- **Questions about the CODE** (\"what does X do\", \"why is this slow\", \"is this a bug\") are NOT that case: read the file first, then answer in one `text` reply. You have read_file and outline_file — use them. Never ask the user to paste a file that is already in the workspace, and never answer from a guess about code you have not opened. Reading to answer a question is not \"starting work\": make no edits unless the user asked for one.\n")
 	sb.WriteString("- **Coding tasks** (\"fix the bug\", \"add a feature\", \"refactor X\"): emit `{\"type\":\"tool_call\",...}` to make progress, repeat as needed, then emit `{\"type\":\"done\",\"summary\":\"...\"}` when finished.\n")
 	sb.WriteString("- **Don't use `text` mid-task.** Roll narration into the done.summary at the end, or skip it entirely. Mid-task `text` ends the turn early.\n")
-	sb.WriteString("- **When unsure** whether the user wants chat or work: ask in a single `text` reply. Don't speculatively start tool-calling.\n\n")
+	sb.WriteString("- **When unsure** whether the user wants chat or work: ask in a single `text` reply. Don't speculatively start tool-calling — but reading a file the user named is never speculative.\n\n")
 
 	// Tool descriptions.
 	sb.WriteString(buildToolDescriptionsExcluding(nil))
