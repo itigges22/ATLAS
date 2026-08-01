@@ -1554,6 +1554,19 @@ func editFileTool() *ToolDef {
 				// useless advice for that, and the model re-sent an equally
 				// corrupted block each time. Name it, and ask for the short
 				// anchor that is far less likely to degenerate.
+				// A long multi-line anchor is a transcription burden, and this
+				// model corrupts under it: asked to reproduce a ten-line block
+				// it emitted "safe_load_aller" for "safe_load_all". One line
+				// is enough to locate an edit, and both the tool description
+				// and the structural_edit steer already say so — repeat it
+				// here, where the failure actually happened.
+				if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
+					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
+						"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
+						"Anchor on ONE short line that appears exactly once in the region you are changing, "+
+						"and put the whole replacement in `new_str`.\nSearched for: %s",
+						lines, truncateStr(input.OldStr, 200))
+				}
 				if n := strayCarriageReturns(input.OldStr); n >= 3 {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` "+
 						"contains %d stray carriage returns and looks corrupted rather than copied "+

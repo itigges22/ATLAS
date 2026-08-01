@@ -2186,3 +2186,52 @@ func TestDirectWriteAllowsACleanNewFile(t *testing.T) {
 		t.Fatalf("a clean new file must write, got %+v", res)
 	}
 }
+
+// A long multi-line anchor is a transcription burden this model does not
+// survive: asked to reproduce a ten-line block it emitted "safe_load_aller"
+// for "safe_load_all". The mismatch should say so, not just "not found".
+func TestLongOldStrMismatchAsksForASingleLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.py")
+	if err := os.WriteFile(path, []byte("x = 1\ny = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.Ctx = context.Background()
+	ctx.RecordFileRead(path, "x = 1\ny = 2\n")
+
+	long := "a\nb\nc\nd\ne\nf"
+	args, _ := json.Marshal(map[string]string{
+		"path": "m.py", "old_str": long, "new_str": "z"})
+	_, err := editFileTool().Execute(json.RawMessage(args), ctx)
+	if err == nil {
+		t.Fatal("expected a mismatch error")
+	}
+	if !strings.Contains(err.Error(), "6 lines") {
+		t.Errorf("must name the anchor length, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "ONE short line") {
+		t.Errorf("must ask for a single line, got %q", err)
+	}
+}
+
+// A short anchor that misses keeps the ordinary mismatch guidance.
+func TestShortOldStrMismatchKeepsNormalAdvice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.py")
+	if err := os.WriteFile(path, []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.Ctx = context.Background()
+	ctx.RecordFileRead(path, "x = 1\n")
+	args, _ := json.Marshal(map[string]string{
+		"path": "m.py", "old_str": "nope = 9", "new_str": "z"})
+	_, err := editFileTool().Execute(json.RawMessage(args), ctx)
+	if err == nil {
+		t.Fatal("expected a mismatch error")
+	}
+	if strings.Contains(err.Error(), "ONE short line") {
+		t.Errorf("short anchor must not get the long-anchor advice: %q", err)
+	}
+}
