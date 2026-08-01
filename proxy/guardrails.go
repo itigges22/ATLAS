@@ -424,6 +424,50 @@ var fixIntentWords = []string{
 // decide whether `done` requires a real verification step. Pure
 // feature requests ("add a logout button") don't trip the gate —
 // adding code doesn't always need a curl/test to declare done.
+// promisesMoreContent reports an answer that ends by promising content it
+// never delivers — "I will now provide the specific location", "let me give
+// you the exact comparison".
+//
+// Distinct from announcesImminentToolUse: that one catches announcing a TOOL
+// call before any work has happened. This catches a reply that has done the
+// work, then signs off promising the actual answer. Observed on a bug-find
+// task: the model named the file, described the symptom, and ended with "I
+// will now provide the specific location and the incorrect comparison as
+// requested" — and the turn ended there, leaving the user a half-answer.
+//
+// Requires the promise to be at the END, because "I'll explain why below"
+// followed by the explanation is fine.
+func promisesMoreContent(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, phrase := range []string{
+		"i will now provide", "i'll now provide", "i will now give",
+		"i'll now give", "i will provide the", "i'll provide the",
+		"let me provide the", "let me give you the", "i will now show",
+		"i'll now show", "here is what i will", "i will now list",
+	} {
+		at := strings.LastIndex(lower, phrase)
+		if at < 0 {
+			continue
+		}
+		// A promise that is FOLLOWED by the thing promised is fine —
+		// "I'll provide the details: line 314 uses > where it should use <"
+		// delivers in the same breath. What is broken is a promise with
+		// nothing concrete after it. Digits, operators and backticks are the
+		// cheap signal for "concrete", and the remaining prose after an
+		// undelivered promise ("...as requested.") has none of them.
+		rest := lower[at+len(phrase):]
+		if strings.ContainsAny(rest, "0123456789`=<>+*/(){}[]") {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
 // announcesImminentToolUse reports first-person narration of a tool call the
 // model is about to make — "I need to read X", "let me look at Y", "I'll
 // start by outlining".

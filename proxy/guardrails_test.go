@@ -1277,3 +1277,34 @@ func TestRealAnswersAreNotTreatedAsAnnouncements(t *testing.T) {
 		}
 	}
 }
+
+// A reply that signs off promising the actual answer leaves the user with half
+// of one. Observed on a bug-find task: the model named the file, described the
+// symptom, then ended "I will now provide the specific location and the
+// incorrect comparison as requested" — and the turn ended there.
+func TestPromisedContentIsDetected(t *testing.T) {
+	for _, s := range []string{
+		"The bug is in planning.py. I will now provide the specific location and the incorrect comparison as requested.",
+		"I've analysed the file. Let me give you the exact line.",
+		"Here's the summary so far. I'll now show the failing comparison.",
+	} {
+		if !promisesMoreContent(s) {
+			t.Errorf("should detect an undelivered promise: %q", s)
+		}
+	}
+}
+
+// A complete answer must not be bounced, including one that mentions
+// providing something earlier in the reply and then does.
+func TestCompleteAnswersAreNotBounced(t *testing.T) {
+	for _, s := range []string{
+		"planning.py breaks ties with n_steps > best_steps, so a tie keeps the longer plan.",
+		"I'll provide the details: the comparison on line 314 uses > where it should use <.",
+		"find_duplicates is O(n^2) because of the nested loop.",
+		"",
+	} {
+		if promisesMoreContent(s) {
+			t.Errorf("complete answer wrongly flagged: %q", s)
+		}
+	}
+}

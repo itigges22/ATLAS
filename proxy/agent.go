@@ -259,6 +259,14 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	// because text is a terminal event. It had the right intent and never
 	// acted on it. Only fires before any tool has run, so it cannot interrupt
 	// work already in progress.
+	// A reply that signs off promising the actual answer leaves the user with
+	// half of one, whether or not tools ran. Checked before the zero-tools
+	// case below, since this one applies after the work is done.
+	if promisesMoreContent(claimText) && s.chargeBounce("intent_gate") {
+		log.Printf("[agent] intent gate: bouncing a reply that promised content it did not deliver (bounce %d/%d)",
+			s.gateBounces["intent_gate"], maxGateBounces)
+		return "intent_gate", "You ended by saying you would provide the answer, but the reply stops there and the turn ends with it — the user sees only the promise. Give the actual content now, in full, in a single `text` reply."
+	}
 	if s.toolsRun == 0 && announcesImminentToolUse(claimText) && s.chargeBounce("intent_gate") {
 		log.Printf("[agent] intent gate: bouncing a text exit that announced a tool call without making one (bounce %d/%d)",
 			s.gateBounces["intent_gate"], maxGateBounces)
