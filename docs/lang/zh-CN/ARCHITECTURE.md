@@ -77,7 +77,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | **atlas-proxy** | 8090 | Go | agent 循环、工具调用路由、tier 分类、`/v1/agent` SSE、`/events` 类型化 SSE、`/cancel`。`/v1/chat/completions` 原样透传给 llama-server。 |
 | **atlas-tui** | （客户端） | Go | Bubbletea TUI；消费 `/events` 和 `/v1/agent` SSE 流。 |
 | **v3-service** | 8070 | Python | V3 pipeline 的 HTTP 封装（PlanSearch、DivSampling、PR-CoT 等） |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) 能量打分、G(x) XGBoost 质量预测、RAG/项目索引；拥有 SQLite 状态存储（`lens-state` 卷上的 `SQLITE_DB_PATH`），支撑模式缓存、共现图、任务队列和路由器状态 |
+| **geometric-lens** | 8099 | Python (FastAPI) | 内部 `/internal/*` 打分服务：C(x) 能量打分、G(x) XGBoost 质量预测、逐步打分，以及模式缓存（读 + 写）；拥有 SQLite 状态存储（`lens-state` 卷上的 `SQLITE_DB_PATH`），支撑模式缓存、共现图和任务队列 |
 | **sandbox** | 30820（主机）/ 8020（容器） | Python (FastAPI) | 隔离的代码执行、编译、检查、测试运行 |
 
 ---
@@ -409,7 +409,7 @@ graph LR
 
 ## 5. Geometric Lens
 
-一个神经打分系统，通过分析模型嵌入的几何结构，在不执行代码的情况下评估代码质量。完全运行在 CPU 上。同时也作为项目索引、检索、置信度路由和模式缓存的 RAG API。
+一个神经打分系统，通过分析模型嵌入的几何结构，在不执行代码的情况下评估代码质量。完全运行在 CPU 上。服务表面仅对内（`/internal/*`）：C(x)/G(x) 打分（单次与逐步），以及把此前会话中的经验回灌进 agent 循环的[模式缓存](#模式缓存)。
 
 #### 为什么叫 "Geometric Lens"？
 
@@ -464,61 +464,35 @@ C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型�
 
 > **注意：** 模型权重（.pt、.pkl 文件）未提交到仓库 —— 它们在训练期间构建，并烘焙进容器镜像或在运行时挂载。当模型文件缺失时，服务会优雅降级：C(x) 返回中性能量，G(x) 返回 `gx_score: 0.5` 和 `verdict: "unavailable"`。训练数据与权重可在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 获取。
 
-### RAG / PageIndex V2
+### 模式缓存
+
+跨会话记忆：成功运行后写入的模式，会作为上下文回灌给后续的 agent 循环。
 
 ```mermaid
 graph LR
-    subgraph indexing["Indexing Pipeline"]
-        AST["AST Parser\ntree-sitter Python"] --> TB["Tree Builder\nhierarchical index"]
-        TB --> BM25I["BM25 Index\ninverted index, k1=1.5"]
-        TB --> SUM["Summarizer\nLLM-generated summaries"]
-        BM25I --> PERS["Persistence\nJSON to disk"]
-        SUM --> PERS
+    subgraph write["Write path (v3-service, post-run)"]
+        PE["Pattern Extractor"] --> PS["Pattern Store\nSQLite"]
+        PS --> COO["Co-occurrence Graph\nHebbian edge weights"]
     end
 
-    subgraph retrieval["Retrieval"]
-        BM25S["BM25 Searcher\nmin_score=0.1, top_k=20"]
-        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6, max_calls=40"]
-        HYB["Hybrid Retriever\nroutes: bm25_first / tree_only / both"]
-        BM25S --> HYB
-        TreeS --> HYB
+    subgraph read["Read path (/internal/patterns/context)"]
+        CLS["Task-type classifier\n(heuristic, on the task text)"] --> PSC["Pattern Scorer\ntype match × Ebbinghaus decay × success"]
+        PSC --> EXP["1-hop expansion\nco_occurrence.get_linked_patterns"]
+        EXP --> OUT["top-k patterns\n→ proxy [system note] injection"]
     end
 
-    style indexing fill:#1a3a5c,color:#fff
-    style retrieval fill:#2d5016,color:#fff
+    PS --> PSC
+    COO --> EXP
+
+    style write fill:#1a3a5c,color:#fff
+    style read fill:#2d5016,color:#fff
 ```
 
-### 置信度路由器与模式缓存
+模块：`geometric-lens/cache/{pattern_store, pattern_extractor, pattern_scorer, co_occurrence, seed_patterns}.py`。匹配依据是模式类型 + 新近度 + 成功率 —— 不存在检索索引；store 会在首次启动时用 `seed_patterns` 自我播种，每次服务都会更新该模式的访问统计。消费方是代理的模式上下文注入（§3）。
 
-```mermaid
-graph LR
-    subgraph router["Confidence Router"]
-        SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
-        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
-        TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
-        FB["Feedback Recorder\nSQLite-backed"]
-        FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
-        SIG --> DIFF --> TS --> FC
-        FB --> TS
-    end
+<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
 
-    subgraph cache["Pattern Cache"]
-        PS["Pattern Store\nSQLite: STM (100) / LTM / PERSISTENT"]
-        PM["Pattern Matcher\nBM25 over summaries"]
-        PE["Pattern Extractor\nLLM-driven"]
-        PSC["Pattern Scorer\nEbbinghaus decay"]
-        COO["Co-occurrence Graph\nlinked pattern retrieval"]
-        PE --> PS
-        PS --> PM
-        PM --> PSC
-        PS --> COO
-    end
-
-    style router fill:#5c3a1a,color:#fff
-    style cache fill:#5c3a1a,color:#fff
-```
-
-4 条路由采用代价加权的 Thompson Sampling：CACHE_HIT (cost=1, k=0) → FAST_PATH (cost=50, k=1) → STANDARD (cost=300, k=5) → HARD_PATH (cost=1500, k=20)。
+> **已移除的子系统。** 早期版本在 lens 内部附带了 RAG/PageIndex 项目索引器、BM25 模式匹配器，以及基于 Thompson 采样的置信度路由器。它们只能通过产品中无人调用的 lens 端点触达，已在 2026-08 的简化行动中移除（见 CHANGELOG）。上面的模式缓存是那套栈残留下来的部分，并围绕单一常驻读取器做了重建。
 
 ---
 
@@ -533,8 +507,12 @@ graph LR
         JS["JavaScript\nNode.js 20"]
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
+        Java["Java 21\njavac + java -cp"]
+        Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
         C["C / C++\ngcc/g++ -Wall"]
+        Ruby["Ruby\nruby -c + run"]
+        PHP["PHP\nphp -l + run"]
         Bash["Bash\nbash -n + run"]
     end
 
@@ -548,7 +526,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-接受的语言别名：`py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`rs`（Rust）、`c++`（C++）、`sh`/`shell`（Bash）。最大执行时间：Docker 部署中为 300s（compose 设置 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` 以匹配代理 5 分钟的 `run_command` 上限；裸代码默认值为 60s）。内存、CPU 和进程数上限是容器级的：compose 设置 `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`、`cpus ${ATLAS_SANDBOX_CPUS:-2}` 和 `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`；`atlas init` 会把与主机相称的取值（约为 RAM 和核心数的 75%）写入 `.env`。两个工作区路径：**`/execute`**（V3 候选测试路径）使用 `/tmp/sandbox`（tmpfs）下的一个临时草稿目录；**`/shell`**（agent 的 `run_command` 路由，外加用于后台进程的 `/jobs/*`）针对 `/workspace` 运行 —— 即来自 `ATLAS_PROJECT_DIR`（Docker）或 hostPath `${ATLAS_PROJECTS_DIR}`（K3s）绑定挂载的项目根，与代理看到的是同一路径。
+接受的语言别名：`py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`java`（Java）、`kt`/`kts`（Kotlin）、`rs`（Rust）、`c++`（C++）、`rb`（Ruby）、`php`（PHP）、`sh`/`shell`（Bash）。常用 CLI 工具已内置在镜像中（`git`、`sqlite3`、`jq`、`patch`、`zip`/`unzip`、`xz`、`curl`），另外还有二进制检查工具（来自 binutils 的 `strings`、`objdump`、`readelf`、`nm`，以及 `file`、`xxd`）—— 容器以非 root 身份运行在只读基础镜像上，因此任务要 shell 调用的一切都必须预装，运行时无法用 apt 安装。对二进制文件调用 `read_file` 会返回指向这些工具的提示，而不是原始字节。最大执行时间：Docker 部署中为 300s（compose 设置 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` 以匹配代理 5 分钟的 `run_command` 上限；裸代码默认值为 60s）。内存、CPU 和进程数上限是容器级的：compose 设置 `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`、`cpus ${ATLAS_SANDBOX_CPUS:-2}` 和 `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`；`atlas init` 会把与主机相称的取值（约为 RAM 和核心数的 75%）写入 `.env`。两个工作区路径：**`/execute`**（V3 候选测试路径）使用 `/tmp/sandbox`（tmpfs）下的一个临时草稿目录；**`/shell`**（agent 的 `run_command` 路由，外加用于后台进程的 `/jobs/*`）针对 `/workspace` 运行 —— 即来自 `ATLAS_PROJECT_DIR`（Docker）或 hostPath `${ATLAS_PROJECTS_DIR}`（K3s）绑定挂载的项目根，与代理看到的是同一路径。
 
 ---
 

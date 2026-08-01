@@ -77,7 +77,7 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | **atlas-proxy** | 8090 | Go | 에이전트 루프, 도구 호출 라우팅, 등급 분류, `/v1/agent` SSE, `/events` 타입 SSE, `/cancel`. `/v1/chat/completions`는 변경 없이 llama-server로 패스스루. |
 | **atlas-tui** | (클라이언트) | Go | Bubbletea TUI; `/events`와 `/v1/agent` SSE 스트림을 소비. |
 | **v3-service** | 8070 | Python | V3 파이프라인 HTTP 래퍼(PlanSearch, DivSampling, PR-CoT 등) |
-| **geometric-lens** | 8099 | Python (FastAPI) | C(x) 에너지 스코어링, G(x) XGBoost 품질 예측, RAG/프로젝트 인덱싱; 패턴 캐시·동시 발생 그래프·태스크 큐·라우터 상태를 지탱하는 SQLite 상태 저장소(`lens-state` 볼륨의 `SQLITE_DB_PATH`)를 소유 |
+| **geometric-lens** | 8099 | Python (FastAPI) | 내부 `/internal/*` 스코어링 서비스: C(x) 에너지 스코어링, G(x) XGBoost 품질 예측, 스텝별 스코어링, 그리고 패턴 캐시(읽기 + 쓰기). 패턴 캐시·동시 발생 그래프·태스크 큐를 지탱하는 SQLite 상태 저장소(`lens-state` 볼륨의 `SQLITE_DB_PATH`)를 소유 |
 | **sandbox** | 30820 (호스트) / 8020 (컨테이너) | Python (FastAPI) | 격리된 코드 실행, 컴파일, 린팅, 테스트 실행 |
 
 ---
@@ -413,7 +413,7 @@ graph LR
 
 ## 5. Geometric Lens
 
-모델 임베딩의 기하 구조를 분석하여 코드를 실행하지 않고도 코드 품질을 평가하는 신경 스코어링 시스템입니다. 전적으로 CPU에서 돌아갑니다. 또한 프로젝트 인덱싱, 검색, 신뢰도 라우팅, 패턴 캐싱을 위한 RAG API 역할도 합니다.
+모델 임베딩의 기하 구조를 분석하여 코드를 실행하지 않고도 코드 품질을 평가하는 신경 스코어링 시스템입니다. 전적으로 CPU에서 돌아갑니다. 서비스 표면은 내부 전용(`/internal/*`)입니다: C(x)/G(x) 스코어링(단발 및 스텝별)과, 이전 세션의 교훈을 에이전트 루프로 되돌려 주는 [패턴 캐시](#패턴-캐시).
 
 #### 왜 "Geometric Lens"인가?
 
@@ -468,61 +468,35 @@ C(x) 정규화는 `sigmoid(steepness × (energy - midpoint))`입니다. 선택�
 
 > **참고:** 모델 가중치(.pt, .pkl 파일)는 저장소에 커밋되지 않습니다 — 학습 중에 빌드되어 컨테이너 이미지에 구워지거나 런타임에 마운트됩니다. 모델 파일이 없으면 서비스는 우아하게 성능 저하됩니다: C(x)는 중립 에너지를 반환하고, G(x)는 `gx_score: 0.5`와 `verdict: "unavailable"`을 반환합니다. 학습 데이터와 가중치는 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)에서 제공됩니다.
 
-### RAG / PageIndex V2
+### 패턴 캐시
+
+세션을 넘나드는 기억: 성공한 실행 뒤에 기록된 패턴이 이후 에이전트 루프에 컨텍스트로 제공됩니다.
 
 ```mermaid
 graph LR
-    subgraph indexing["Indexing Pipeline"]
-        AST["AST Parser\ntree-sitter Python"] --> TB["Tree Builder\nhierarchical index"]
-        TB --> BM25I["BM25 Index\ninverted index, k1=1.5"]
-        TB --> SUM["Summarizer\nLLM-generated summaries"]
-        BM25I --> PERS["Persistence\nJSON to disk"]
-        SUM --> PERS
+    subgraph write["Write path (v3-service, post-run)"]
+        PE["Pattern Extractor"] --> PS["Pattern Store\nSQLite"]
+        PS --> COO["Co-occurrence Graph\nHebbian edge weights"]
     end
 
-    subgraph retrieval["Retrieval"]
-        BM25S["BM25 Searcher\nmin_score=0.1, top_k=20"]
-        TreeS["Tree Searcher\nLLM-guided traversal\nmax_depth=6, max_calls=40"]
-        HYB["Hybrid Retriever\nroutes: bm25_first / tree_only / both"]
-        BM25S --> HYB
-        TreeS --> HYB
+    subgraph read["Read path (/internal/patterns/context)"]
+        CLS["Task-type classifier\n(heuristic, on the task text)"] --> PSC["Pattern Scorer\ntype match × Ebbinghaus decay × success"]
+        PSC --> EXP["1-hop expansion\nco_occurrence.get_linked_patterns"]
+        EXP --> OUT["top-k patterns\n→ proxy [system note] injection"]
     end
 
-    style indexing fill:#1a3a5c,color:#fff
-    style retrieval fill:#2d5016,color:#fff
+    PS --> PSC
+    COO --> EXP
+
+    style write fill:#1a3a5c,color:#fff
+    style read fill:#2d5016,color:#fff
 ```
 
-### 신뢰도 라우터 & 패턴 캐시
+모듈: `geometric-lens/cache/{pattern_store, pattern_extractor, pattern_scorer, co_occurrence, seed_patterns}.py`. 매칭은 패턴 종류 + 최신성 + 성공률로 이뤄지며 검색 인덱스는 없습니다. 스토어는 첫 부팅 때 `seed_patterns`로 스스로를 시드하고, 서빙할 때마다 해당 패턴의 접근 통계를 갱신합니다. 소비 측은 프록시의 패턴 컨텍스트 주입입니다(§3).
 
-```mermaid
-graph LR
-    subgraph router["Confidence Router"]
-        SIG["Signal Collector\npattern_cache, retrieval_confidence\nquery_complexity, geometric_energy"]
-        DIFF["Difficulty Estimator\nweighted fusion → D(x)"]
-        TS["Thompson Sampling\nBeta(α,β) posteriors\nper-route cost weighting"]
-        FB["Feedback Recorder\nSQLite-backed"]
-        FC["Fallback Chain\nCACHE_HIT → FAST_PATH\n→ STANDARD → HARD_PATH"]
-        SIG --> DIFF --> TS --> FC
-        FB --> TS
-    end
+<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
 
-    subgraph cache["Pattern Cache"]
-        PS["Pattern Store\nSQLite: STM (100) / LTM / PERSISTENT"]
-        PM["Pattern Matcher\nBM25 over summaries"]
-        PE["Pattern Extractor\nLLM-driven"]
-        PSC["Pattern Scorer\nEbbinghaus decay"]
-        COO["Co-occurrence Graph\nlinked pattern retrieval"]
-        PE --> PS
-        PS --> PM
-        PM --> PSC
-        PS --> COO
-    end
-
-    style router fill:#5c3a1a,color:#fff
-    style cache fill:#5c3a1a,color:#fff
-```
-
-비용 가중 Thompson Sampling을 사용하는 4개 라우트: CACHE_HIT (cost=1, k=0) → FAST_PATH (cost=50, k=1) → STANDARD (cost=300, k=5) → HARD_PATH (cost=1500, k=20).
+> **제거된 서브시스템.** 이전 릴리스에는 RAG/PageIndex 프로젝트 인덱서, BM25 패턴 매처, 그리고 Thompson 샘플링 기반 신뢰도 라우터가 렌즈 안에 들어 있었습니다. 이들은 제품에서 아무도 호출하지 않는 렌즈 엔드포인트를 통해서만 접근할 수 있었고, 2026-08 단순화 캠페인에서 제거되었습니다(CHANGELOG 참고). 위의 패턴 캐시가 그 스택에서 남은 부분이며, 항상 켜져 있는 단일 리더를 중심으로 다시 만들어졌습니다.
 
 ---
 
@@ -537,8 +511,12 @@ graph LR
         JS["JavaScript\nNode.js 20"]
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
+        Java["Java 21\njavac + java -cp"]
+        Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
         C["C / C++\ngcc/g++ -Wall"]
+        Ruby["Ruby\nruby -c + run"]
+        PHP["PHP\nphp -l + run"]
         Bash["Bash\nbash -n + run"]
     end
 
@@ -552,7 +530,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-허용되는 언어 별칭: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). 최대 실행 시간: Docker 배포에서는 300초(compose가 프록시의 5분 `run_command` 상한에 맞춰 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}`를 설정; 순수 코드 기본값은 60초). 메모리, CPU, 프로세스 상한은 컨테이너 수준입니다: compose가 `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`를 설정하며, `atlas init`이 호스트에 맞는 값(RAM과 코어의 ~75%)을 `.env`에 기록합니다. 두 개의 워크스페이스 경로: **`/execute`**(V3 후보 테스트 경로)는 `/tmp/sandbox`(tmpfs) 아래의 일시적 스크래치 디렉토리를 사용; **`/shell`**(에이전트의 `run_command` 경로, 그리고 백그라운드 프로세스용 `/jobs/*`)은 `/workspace`에 대해 실행됩니다 — `ATLAS_PROJECT_DIR`(Docker)에서 바인드 마운트된 프로젝트 루트 또는 hostPath `${ATLAS_PROJECTS_DIR}`(K3s)로, 프록시가 보는 것과 동일한 경로입니다.
+허용되는 언어 별칭: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `kt`/`kts` (Kotlin), `rs` (Rust), `c++` (C++), `rb` (Ruby), `php` (PHP), `sh`/`shell` (Bash). 흔히 쓰는 CLI 도구는 이미지에 구워져 있고(`git`, `sqlite3`, `jq`, `patch`, `zip`/`unzip`, `xz`, `curl`), 바이너리 검사 도구(binutils의 `strings`, `objdump`, `readelf`, `nm`, 그리고 `file`, `xxd`)도 함께 들어 있습니다 — 컨테이너는 읽기 전용 베이스 위에서 비루트로 돌아가므로, 태스크가 셸로 호출하는 것은 전부 미리 설치돼 있어야 하며 런타임에 apt로 설치할 수 없습니다. 바이너리에 대한 `read_file`은 원시 바이트 대신 이 도구들을 가리키는 안내를 반환합니다. 최대 실행 시간: Docker 배포에서는 300초(compose가 프록시의 5분 `run_command` 상한에 맞춰 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}`를 설정; 순수 코드 기본값은 60초). 메모리, CPU, 프로세스 상한은 컨테이너 수준입니다: compose가 `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`를 설정하며, `atlas init`이 호스트에 맞는 값(RAM과 코어의 ~75%)을 `.env`에 기록합니다. 두 개의 워크스페이스 경로: **`/execute`**(V3 후보 테스트 경로)는 `/tmp/sandbox`(tmpfs) 아래의 일시적 스크래치 디렉토리를 사용; **`/shell`**(에이전트의 `run_command` 경로, 그리고 백그라운드 프로세스용 `/jobs/*`)은 `/workspace`에 대해 실행됩니다 — `ATLAS_PROJECT_DIR`(Docker)에서 바인드 마운트된 프로젝트 루트 또는 hostPath `${ATLAS_PROJECTS_DIR}`(K3s)로, 프록시가 보는 것과 동일한 경로입니다.
 
 ---
 
