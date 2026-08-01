@@ -735,7 +735,7 @@ def _extract_script(src: str) -> str | None:
     # `<script type="text/javascript">` or `<SCRIPT>` used to fall straight
     # through here, and the JS half of the quality score silently scored
     # nothing — the file read as "no JS" rather than "JS not analysed".
-    m = re.search(r"<script\b[^>]*>(.*?)</script\s*>", src, re.S | re.I)
+    m = re.search(r"<script\b[^>]*>(.*?)</script\b[^>]*>", src, re.S | re.I)
     return m.group(1) if m else None
 
 
