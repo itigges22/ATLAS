@@ -263,3 +263,66 @@ class TestJinjaCommentBlanking:
         elapsed = time.perf_counter() - t0
         assert out == src, "no terminator anywhere means nothing is masked"
         assert elapsed < 5.0, f"masking went superlinear: {elapsed:.1f}s"
+
+
+class TestWrongNodeSteer:
+    """A SMALL node with a HUGE replacement means the model picked a node that
+    cannot hold the change — usually markup/JS living in a module-level string.
+
+    Observed live three sessions running: `function:index` in a Flask app is
+    two lines (`return render_template_string(HTML_TEMPLATE)`) and the model
+    kept inlining the whole ~190-line template into it. Every rejection talked
+    about quoting, because the content really was malformed, so nothing ever
+    said the selector could not work.
+    """
+
+    FIXTURE = (
+        'from flask import Flask, render_template_string\n\n'
+        'app = Flask(__name__)\n\n'
+        'HTML_TEMPLATE = """\n' + "\n".join(f"<div>{i}</div>" for i in range(60)) + '\n"""\n\n'
+        "@app.route('/')\n"
+        'def index():\n'
+        '    return render_template_string(HTML_TEMPLATE)\n'
+    )
+
+    def _huge_replacement(self, terminated: bool) -> str:
+        body = "\n".join(f"  <div>line {i}</div>" for i in range(120))
+        tail = '\n""")' if terminated else "\n}} {\n"
+        return ("@app.route('/')\ndef index():\n"
+                '    return render_template_string("""\n' + body + tail)
+
+    def test_it_names_the_node_size_and_the_real_location(self):
+        res = main.structural_edit("app.py", self.FIXTURE, "function:index",
+                                   self._huge_replacement(terminated=False))
+        assert not res.get("success")
+        err = res["error"]
+        assert "only 3 line(s)" in err or "only 2 line(s)" in err
+        assert "HTML_TEMPLATE" in err, "must name where the code actually lives"
+        assert "edit_file" in err
+
+    def test_it_outranks_the_quoting_advice(self):
+        """Quoting broke BECAUSE the wrong node was re-emitted. Leading with
+        'check your quotes' sends the model back to reproduce the same lines."""
+        err = main.structural_edit("app.py", self.FIXTURE, "function:index",
+                                   self._huge_replacement(terminated=False))["error"]
+        assert "does not live here" in err
+        # ...and must not then contradict itself by demanding a re-emit.
+        assert "re-emit the full node" not in err
+
+    def test_the_offending_line_stays_one_line(self):
+        """e.text for a multi-line literal is the WHOLE literal — this used to
+        paste ~190 lines into the error as the 'offending line'."""
+        err = main.structural_edit("app.py", self.FIXTURE, "function:index",
+                                   self._huge_replacement(terminated=False))["error"]
+        marker = "offending line: "
+        if marker in err:
+            shown = err.split(marker, 1)[1].split(")", 1)[0]
+            assert "\n" not in shown
+            assert len(shown) < 200
+
+    def test_a_proportionate_replacement_is_left_alone(self):
+        """The steer must not fire on an ordinary whole-node rewrite."""
+        ok = ("@app.route('/')\ndef index():\n"
+              "    x = 1\n    return render_template_string(HTML_TEMPLATE)\n")
+        res = main.structural_edit("app.py", self.FIXTURE, "function:index", ok)
+        assert res.get("success"), res.get("error")

@@ -759,7 +759,14 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
         try:
             compile(new_content, path, "exec")
         except SyntaxError as e:
-            snippet = (e.text or "").strip()
+            # e.text for a multi-line literal is the WHOLE literal, so this
+            # was pasting an entire ~190-line template into the error as the
+            # "offending line" — flooding the context the model needs to
+            # recover with the very thing it just failed to reproduce.
+            _raw = (e.text or "").strip()
+            snippet = _raw.split("\n", 1)[0][:160]
+            if snippet != _raw:
+                snippet += " ..."
             # When the content really is entity-encoded, say so FIRST. The
             # generic checklist below already mentions entities, but a
             # SyntaxError from `&lt;head&gt;` points at a line far from the
@@ -787,8 +794,38 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             # silently suppressed the large-node message below it. Caught in
             # CI on 3.12; the host's 3.9 says "EOL while scanning" and never
             # tripped it.
+            node_lines = source_text[target.start_byte:target.end_byte].count("\n") + 1
+            # The inverse case, and the more confusing one: a SMALL node with a
+            # huge replacement. The model wants to change markup or JS that
+            # lives in a module-level string constant, cannot select into a
+            # string, and settles for the nearest function — then inlines the
+            # whole template into it. Observed live: `function:index` in a Flask
+            # app is 2 lines (`return render_template_string(HTML_TEMPLATE)`)
+            # and the replacement was ~190, three attempts running. Every
+            # rejection talked about quoting, because the content really was
+            # malformed, so nothing ever said the selector could not hold this.
+            new_lines = new_content.count("\n") + 1
+            if not lead and new_lines >= node_lines * 5 and new_lines - node_lines >= 30:
+                where = _large_string_constants(source_text)
+                lead = (f"`{selector}` is only {node_lines} line(s) but your "
+                        f"replacement is {new_lines} — you are moving code INTO "
+                        f"this node that does not live here. ")
+                if where:
+                    lead += (f"The bulk of this file is in {where}, a module-level "
+                             f"string. No selector reaches inside a string literal: "
+                             f"a template is ONE literal to the grammar however many "
+                             f"lines it spans. ")
+                lead += ("Use edit_file with old_str set to one unique line copied "
+                         "from the region you are changing, or insert_after with the "
+                         "line number read_file printed. ")
+
+
             _msg = (e.msg or "").lower()
-            if "triple-quoted" in _msg or "eof while scanning triple-quoted" in _msg:
+            # `and not lead` matters: the wrong-node steer above is the more
+            # specific diagnosis. Quoting broke as a CONSEQUENCE of re-emitting
+            # a node that cannot hold the change, so telling the model to fix
+            # its quotes sends it back to reproduce the same 190 lines again.
+            if ("triple-quoted" in _msg or "eof while scanning triple-quoted" in _msg) and not lead:
                 lead = ("An unterminated string usually means you re-emitted a "
                         "large template literal and it got cut off. If the code "
                         "you actually need to change lives inside that template, "
@@ -809,6 +846,7 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             # still the right tool for a whole-node rewrite that the model can
             # actually produce.
             node_lines = source_text[target.start_byte:target.end_byte].count("\n") + 1
+
             if node_lines >= 40 and not lead:
                 lead = (f"`{selector}` is {node_lines} lines, and structural_edit "
                         f"replaces the WHOLE node, so a small change means "
@@ -824,7 +862,11 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                 f"SyntaxError at line {e.lineno}: {e.msg}"
                 + (f" (offending line: {snippet})" if snippet else "")
                 + f". The file was NOT modified. {lead}"
-                + ('Check your quoting (no doubled '
+                # The checklist ends in "re-emit the full node", which
+                # contradicts a lead that just said to use a different tool.
+                # Only append it when the advice is still "try this node again".
+                + ('' if "edit_file" in lead else
+                   'Check your quoting (no doubled '
                    'quotes like ["id""], no escaped \\" inside the content, no '
                    'HTML entities like &quot;) and re-emit the full node.')
             )}
@@ -933,6 +975,34 @@ _CLOSERS = {")": "(", "}": "{", "]": "["}
 
 def _embedded_available() -> bool:
     return bool(_STRUCTURAL_EDIT_AVAILABLE and _EMBEDDED_SCRIPT_AVAILABLE)
+
+
+def _large_string_constants(source_text: bytes) -> str:
+    """Name module-level string constants big enough to be the real target.
+
+    When a selector cannot reach the code the model is editing, the code is
+    usually sitting in one of these. Naming it turns "your quoting is wrong"
+    into "you are editing the wrong thing".
+    """
+    import ast as _ast
+    try:
+        tree = _ast.parse(source_text)
+    except SyntaxError:
+        return ""
+    found = []
+    for node in tree.body:
+        if not isinstance(node, _ast.Assign):
+            continue
+        value = node.value
+        if not (isinstance(value, _ast.Constant) and isinstance(value.value, str)):
+            continue
+        span = (value.end_lineno or 0) - value.lineno + 1
+        if span < 20:
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, _ast.Name):
+                found.append(f"`{tgt.id}` (lines {value.lineno}-{value.end_lineno})")
+    return ", ".join(found[:2])
 
 
 def _blank_jinja_comments(block: bytes, blank: int = 0x20) -> bytes:
