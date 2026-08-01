@@ -1561,6 +1561,18 @@ func editFileTool() *ToolDef {
 				// is enough to locate an edit, and both the tool description
 				// and the structural_edit steer already say so — repeat it
 				// here, where the failure actually happened.
+				// Checked first because it is the most specific: the text is
+				// otherwise correct and only carries read_file's display
+				// prefix. Saying "not found" here sends the model back to
+				// re-copy a line it already copied right.
+				if n := lineNumberPrefixedLines(input.OldStr); n > 0 {
+					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` still has "+
+						"read_file's line-number prefix on %d line(s) — the \"12<tab>\" at the start is "+
+						"added for reference and is NOT in the file. Send the line text only, starting at "+
+						"the first real character. If you are ADDING lines rather than changing one, "+
+						"insert_after takes that number directly and needs no old_str at all.\nSearched for: %s",
+						n, truncateStr(input.OldStr, 200))
+				}
 				if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
 						"long — reproducing that much text byte-for-byte is where these edits go wrong. "+

@@ -37,6 +37,29 @@ export function activate(context: vscode.ExtensionContext) {
 			void statusBar.refresh();
 		}),
 
+		// Moves the proxy + sandbox binds onto the open folder. It shells out
+		// to `atlas workspace align` rather than driving docker from here:
+		// that command wraps runtime._align_workspace, the same path `atlas
+		// tui` takes on launch, which recreates BOTH containers together.
+		// Recreating one alone splits the binds and the agent goes
+		// split-brained with every health check still green.
+		vscode.commands.registerCommand('atlas.useThisFolder', async () => {
+			const folder = vscode.workspace.workspaceFolders?.[0];
+			if (!folder) {
+				void vscode.window.showWarningMessage('ATLAS: open a folder first.');
+				return;
+			}
+			const terminal = vscode.window.createTerminal({
+				name: 'ATLAS: align workspace',
+				cwd: folder.uri.fsPath,
+			});
+			// Visible on purpose: it restarts containers and can take a few
+			// seconds, so the user should see it happen rather than wonder
+			// whether the editor froze.
+			terminal.show();
+			terminal.sendText('atlas workspace align');
+		}),
+
 		vscode.commands.registerCommand('atlas.setToken', async () => {
 			const token = await vscode.window.showInputBox({
 				title: 'ATLAS: Set Service Token',

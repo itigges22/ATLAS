@@ -26,6 +26,7 @@ _SUBCOMMAND_HELP = [
     ("diagnostics", "collect a filtered diagnostic bundle"),
     ("artifact", "verify / snapshot / roll back artifact bundles"),
     ("config",  "validate / migrate the .env configuration"),
+    ("workspace", "show or move the directory ATLAS operates on"),
     ("tui",     "launch the terminal UI"),
 ]
 

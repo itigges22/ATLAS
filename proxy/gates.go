@@ -703,6 +703,24 @@ func strayCarriageReturns(s string) int {
 	return n
 }
 
+// reLineNumberPrefix matches read_file's display prefix: "N<tab>".
+var reLineNumberPrefix = regexp.MustCompile(`(?m)^[ \t]*\d+\t`)
+
+// lineNumberPrefixedLines counts lines in s that still carry read_file's
+// "N<tab>" prefix.
+//
+// read_file already says the numbers are presentation and not in the file, but
+// that notice is at read time and the mistake happens at edit time, often many
+// turns later. Observed live: a model read a file, then sent
+// old_str="76\t const ctx = canvas.getContext('2d');" — the real line with the
+// prefix still attached. Nothing matched, and the generic "not found" plus a
+// closest-line hint showed it the correct text without ever naming what it had
+// actually done wrong, so its next attempt kept the prefix and corrupted the
+// rest of the line.
+func lineNumberPrefixedLines(s string) int {
+	return len(reLineNumberPrefix.FindAllString(s, -1))
+}
+
 // structuralSelectorHint names the selectors structural_edit actually accepts
 // for a file's language, or "" when the file has no structural support at all.
 //

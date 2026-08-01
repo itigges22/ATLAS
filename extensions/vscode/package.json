@@ -1,7 +1,7 @@
 {
   "name": "atlas-vscode",
   "displayName": "ATLAS",
-  "description": "VS Code client for the ATLAS agent proxy — chat, tool calls, permission gating, and diff review over the proxy HTTP API.",
+  "description": "VS Code client for the ATLAS agent proxy \u2014 chat, tool calls, permission gating, and diff review over the proxy HTTP API.",
   "version": "0.0.1",
   "publisher": "atlas",
   "license": "AGPL-3.0-only",
@@ -29,6 +29,10 @@
       {
         "command": "atlas.cancelTurn",
         "title": "ATLAS: Cancel Current Turn"
+      },
+      {
+        "command": "atlas.useThisFolder",
+        "title": "ATLAS: Use This Folder"
       },
       {
         "command": "atlas.setToken",
@@ -78,7 +82,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Dev-override bearer token for the ATLAS proxy. Prefer the 'ATLAS: Set Service Token' command (stores in SecretStorage) — this field is plaintext in settings.json."
+          "description": "Dev-override bearer token for the ATLAS proxy. Prefer the 'ATLAS: Set Service Token' command (stores in SecretStorage) \u2014 this field is plaintext in settings.json."
         },
         "atlas.permissionMode": {
           "type": "string",

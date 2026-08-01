@@ -405,6 +405,36 @@ If you write code from one shell and `atlas tui` is running in another
 that's pointing at a different directory, restart the TUI in the right
 cwd to re-align.
 
+### `atlas workspace`
+
+The same alignment, as a command, for when you are not starting a TUI —
+another client (the VS Code extension), a script, or just checking where
+ATLAS is pointed.
+
+```bash
+atlas workspace              # report the binds vs this directory
+atlas workspace align        # move them here (recreates the containers)
+atlas workspace align --dir /path/to/project
+```
+
+`show` prints the proxy and sandbox binds and says whether this directory
+is covered. A directory *inside* the bind counts as aligned, so one broad
+mount can serve many projects without a recreate.
+
+`align` delegates to the same `runtime` code path `atlas tui` uses, which
+recreates **both** `atlas-proxy` and `sandbox` together. They must share a
+host path: the agent reads files through the proxy and runs commands
+through the sandbox, so if the two binds drift it can read `app.py` while
+`python app.py` reports it missing, with every health check still green.
+`atlas doctor`'s `workspace_mounts` check reports that split; this command
+fixes it.
+
+Aligning restarts containers, so it drops an in-flight turn. It is a no-op
+when the directory is already covered, and when the proxy is running
+locally rather than in Docker (there is no bind to move).
+
+In VS Code, **ATLAS: Use This Folder** runs this for the open folder.
+
 ---
 
 ## Environment variables

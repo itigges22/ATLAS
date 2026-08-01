@@ -664,13 +664,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		}
 		const message =
 			'ATLAS applied a file change, but this workspace does not reflect it. ' +
-			'The proxy is likely mounted on a different directory — restart ATLAS from this folder (see README).';
+			'The proxy is mounted on a different directory, so edits are landing outside this folder.';
 		this.post({ type: 'note', text: message });
-		void vscode.window.showWarningMessage(message, "Don't Show Again").then((choice) => {
-			if (choice === "Don't Show Again") {
-				void this.workspaceState.update(MISMATCH_DISMISSED_KEY, true);
-			}
-		});
+		void vscode.window
+			.showWarningMessage(message, 'Use This Folder', "Don't Show Again")
+			.then((choice) => {
+				if (choice === 'Use This Folder') {
+					void vscode.commands.executeCommand('atlas.useThisFolder');
+				} else if (choice === "Don't Show Again") {
+					void this.workspaceState.update(MISMATCH_DISMISSED_KEY, true);
+				}
+			});
 	}
 
 	private post(message: OutboundMessage): void {

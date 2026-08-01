@@ -1332,3 +1332,34 @@ func TestRevisePlanGuardsEmitNoEvent(t *testing.T) {
 		})
 	}
 }
+
+// The failure this came from: a model read snake_app.py, then sent
+// old_str="76\t const ctx = canvas.getContext('2d');" — the correct line with
+// read_file's display prefix still attached. It got a generic "not found",
+// tried again with the prefix still on, and gave up after three failures.
+func TestLineNumberPrefixIsDetectedInOldStr(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"the observed failure", "\n76\t const ctx = canvas.getContext('2d');", 1},
+		{"bare prefix at start", "12\tfoo()", 1},
+		{"several numbered lines", "10\ta\n11\tb\n12\tc", 3},
+		{"indented before the number", "  7\tx = 1", 1},
+
+		// Must NOT fire: these are legitimate file content.
+		{"clean single line", "const ctx = canvas.getContext('2d');", 0},
+		{"tab-indented code", "\tif (x) {", 0},
+		{"a number with no tab", "76 const ctx", 0},
+		{"digits mid-line", "const x = 76;\tconst y = 2;", 0},
+		{"number after real text", "foo 12\tbar", 0},
+		{"empty", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := lineNumberPrefixedLines(tc.in); got != tc.want {
+				t.Errorf("lineNumberPrefixedLines(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
