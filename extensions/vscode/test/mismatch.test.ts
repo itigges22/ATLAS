@@ -17,7 +17,7 @@ describe('fileOpPaths', () => {
 	it('extracts path for path-shaped tools', () => {
 		expect(fileOpPaths('write_file', { path: 'a.py', content: 'x' })).toEqual({ primary: 'a.py' });
 		expect(fileOpPaths('edit_file', { path: 'b.py' })).toEqual({ primary: 'b.py' });
-		expect(fileOpPaths('ast_edit', { path: 'c.py' })).toEqual({ primary: 'c.py' });
+		expect(fileOpPaths('structural_edit', { path: 'c.py' })).toEqual({ primary: 'c.py' });
 		expect(fileOpPaths('delete_file', { path: 'd.py' })).toEqual({ primary: 'd.py' });
 	});
 

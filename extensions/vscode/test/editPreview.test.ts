@@ -1,6 +1,6 @@
 // Unit tests for the permission-time edit predictions: write_file (new and
 // existing file), edit_file (old_str found / not found / replace_all /
-// literal-$ splice), and the ast_edit best-effort splices (python function
+// literal-$ splice), and the structural_edit best-effort splices (python function
 // incl. decorators and async, class, html tag incl. nesting and the <html>
 // doctype quirk, no-match fallback).
 
@@ -35,7 +35,7 @@ describe('editTargetPath', () => {
 	it('returns the path for the three file-edit tools only', () => {
 		expect(editTargetPath('write_file', { path: 'a.py', content: 'x' })).toBe('a.py');
 		expect(editTargetPath('edit_file', { path: 'a.py' })).toBe('a.py');
-		expect(editTargetPath('ast_edit', { path: 'a.py' })).toBe('a.py');
+		expect(editTargetPath('structural_edit', { path: 'a.py' })).toBe('a.py');
 		expect(editTargetPath('run_command', { command: 'ls' })).toBeUndefined();
 		expect(editTargetPath('move_file', { source: 'a', destination: 'b' })).toBeUndefined();
 		expect(editTargetPath('delete_file', { path: 'a.py' })).toBeUndefined();
@@ -102,10 +102,10 @@ describe('predictEdit: edit_file', () => {
 	});
 });
 
-describe('predictEdit: ast_edit python', () => {
+describe('predictEdit: structural_edit python', () => {
 	it('function: replaces the def block including its decorators', () => {
 		const content = "@app.route('/dash')\ndef dashboard():\n    return quick()";
-		const p = predictEdit('ast_edit', { path: 'app.py', selector: 'function:dashboard', content }, PY)!;
+		const p = predictEdit('structural_edit', { path: 'app.py', selector: 'function:dashboard', content }, PY)!;
 		expect(p.kind).toBe('file');
 		expect(p.approximate).toBe(true);
 		expect(p.right).toContain('return quick()');
@@ -118,18 +118,18 @@ describe('predictEdit: ast_edit python', () => {
 
 	it('function: matches async def', () => {
 		const source = 'async def fetch():\n    return await go()\n\nprint(1)';
-		const p = predictEdit('ast_edit', { path: 'a.py', selector: 'function:fetch', content: 'async def fetch():\n    return 2' }, source)!;
+		const p = predictEdit('structural_edit', { path: 'a.py', selector: 'function:fetch', content: 'async def fetch():\n    return 2' }, source)!;
 		expect(p.right).toBe('async def fetch():\n    return 2\n\nprint(1)');
 	});
 
 	it('class: replaces the class body, keeps surroundings', () => {
 		const source = 'class A:\n    def m(self):\n        pass\n\nclass B(Base):\n    x = 1\n\ntail = 2';
-		const p = predictEdit('ast_edit', { path: 'a.py', selector: 'class:B', content: 'class B(Base):\n    x = 9' }, source)!;
+		const p = predictEdit('structural_edit', { path: 'a.py', selector: 'class:B', content: 'class B(Base):\n    x = 9' }, source)!;
 		expect(p.right).toBe('class A:\n    def m(self):\n        pass\n\nclass B(Base):\n    x = 9\n\ntail = 2');
 	});
 
 	it('no match: whole file vs content, labeled approximate', () => {
-		const p = predictEdit('ast_edit', { path: 'app.py', selector: 'function:missing', content: 'def missing():\n    pass' }, PY)!;
+		const p = predictEdit('structural_edit', { path: 'app.py', selector: 'function:missing', content: 'def missing():\n    pass' }, PY)!;
 		expect(p).toMatchObject({ kind: 'file', left: PY, approximate: true });
 		expect(p.right).toBe('def missing():\n    pass');
 		expect(p.note).toContain('not matched locally');
@@ -137,36 +137,90 @@ describe('predictEdit: ast_edit python', () => {
 
 	it('duplicate names: first one replaced, note says so', () => {
 		const source = 'def f():\n    pass\n\ndef f():\n    return 1';
-		const p = predictEdit('ast_edit', { path: 'a.py', selector: 'function:f', content: 'def f():\n    return 9' }, source)!;
+		const p = predictEdit('structural_edit', { path: 'a.py', selector: 'function:f', content: 'def f():\n    return 9' }, source)!;
 		expect(p.right).toBe('def f():\n    return 9\n\ndef f():\n    return 1');
 		expect(p.note).toContain('2 definitions');
 	});
 });
 
-describe('predictEdit: ast_edit html', () => {
+describe('predictEdit: structural_edit html', () => {
 	it('<body>: nesting-aware replace of the whole element', () => {
-		const p = predictEdit('ast_edit', { path: 'i.html', selector: '<body>', content: '<body><p>new</p></body>' }, HTML)!;
+		const p = predictEdit('structural_edit', { path: 'i.html', selector: '<body>', content: '<body><p>new</p></body>' }, HTML)!;
 		expect(p.right).toContain('<body><p>new</p></body>');
 		expect(p.right).not.toContain('outer');
 		expect(p.right).toContain('<head><title>t</title></head>');
 	});
 
 	it('<div>: matching close found past the nested same-tag', () => {
-		const p = predictEdit('ast_edit', { path: 'i.html', selector: '<div>', content: '<div>x</div>' }, HTML)!;
+		const p = predictEdit('structural_edit', { path: 'i.html', selector: '<div>', content: '<div>x</div>' }, HTML)!;
 		expect(p.right).toContain('  <div>x</div>\n</body>');
 		expect(p.right).not.toContain('inner');
 	});
 
 	it('<html>: strips the leading doctype from content (proxy quirk)', () => {
 		const content = '<!DOCTYPE html>\n<html><body>n</body></html>';
-		const p = predictEdit('ast_edit', { path: 'i.html', selector: '<html>', content }, HTML)!;
+		const p = predictEdit('structural_edit', { path: 'i.html', selector: '<html>', content }, HTML)!;
 		// Original doctype stays, content's duplicate is dropped.
 		expect(p.right).toBe('<!DOCTYPE html>\n<html><body>n</body></html>');
 	});
 
 	it('tag absent: whole-file approximate fallback', () => {
-		const p = predictEdit('ast_edit', { path: 'i.html', selector: '<table>', content: '<table></table>' }, HTML)!;
+		const p = predictEdit('structural_edit', { path: 'i.html', selector: '<table>', content: '<table></table>' }, HTML)!;
 		expect(p.left).toBe(HTML);
 		expect(p.note).toContain('not matched locally');
+	});
+});
+
+describe('predictEdit: insert_after', () => {
+	const SRC = 'a\nb\nc\n';
+
+	it('inserts after a 1-based line number', () => {
+		const p = predictEdit('insert_after', { path: 'f.py', line: 2, content: 'X' }, SRC)!;
+		expect(p.right).toBe('a\nb\nX\nc\n');
+		// Exact, unlike structural_edit: the model named a line, it did not
+		// reproduce one, so there is nothing to match approximately.
+		expect(p.approximate).toBe(false);
+		expect(p.kind).toBe('file');
+	});
+
+	it('treats line 0 as the top of the file', () => {
+		const p = predictEdit('insert_after', { path: 'f.py', line: 0, content: 'X' }, SRC)!;
+		expect(p.right).toBe('X\na\nb\nc\n');
+	});
+
+	it('appends when the line is past the end', () => {
+		const p = predictEdit('insert_after', { path: 'f.py', line: 99, content: 'X' }, SRC)!;
+		expect(p.right).toBe('a\nb\nc\nX\n');
+	});
+
+	it('preserves a missing trailing newline', () => {
+		const p = predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X' }, 'a\nb')!;
+		expect(p.right).toBe('a\nX\nb');
+	});
+
+	it('does not double a newline when content carries one', () => {
+		const p = predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X\n' }, SRC)!;
+		expect(p.right).toBe('a\nX\nb\nc\n');
+	});
+
+	it('handles multi-line content', () => {
+		const p = predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X\nY' }, SRC)!;
+		expect(p.right).toBe('a\nX\nY\nb\nc\n');
+	});
+
+	it('returns undefined on a missing or non-integer line', () => {
+		expect(predictEdit('insert_after', { path: 'f.py', content: 'X' }, SRC)).toBeUndefined();
+		expect(predictEdit('insert_after', { path: 'f.py', line: '2', content: 'X' }, SRC)).toBeUndefined();
+		expect(predictEdit('insert_after', { path: 'f.py', line: 1.5, content: 'X' }, SRC)).toBeUndefined();
+		expect(predictEdit('insert_after', { path: 'f.py', line: -1, content: 'X' }, SRC)).toBeUndefined();
+	});
+
+	it('returns undefined when the file is not readable locally', () => {
+		// Unlike write_file, there is no sensible prediction without a base.
+		expect(predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X' }, undefined)).toBeUndefined();
+	});
+
+	it('is recognised as a file-edit tool', () => {
+		expect(editTargetPath('insert_after', { path: 'f.py' })).toBe('f.py');
 	});
 });

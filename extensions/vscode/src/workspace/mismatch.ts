@@ -7,7 +7,7 @@
 //
 //   write_file  -> the file must exist (an overwrite with an unchanged
 //                  mtime is inconclusive, not proof of a wrong mount)
-//   edit_file / ast_edit -> the file must exist; unchanged mtime is
+//   edit_file / structural_edit -> the file must exist; unchanged mtime is
 //                  inconclusive (coarse-mtime filesystems)
 //   delete_file -> the file must be absent
 //   move_file   -> destination present, source absent
@@ -24,7 +24,8 @@
 const FILE_OP_KINDS: Record<string, FileOpKind> = {
 	write_file: 'write',
 	edit_file: 'edit',
-	ast_edit: 'edit',
+	structural_edit: 'edit',
+	insert_after: 'edit',
 	delete_file: 'delete',
 	move_file: 'move',
 };

@@ -105,13 +105,13 @@ describe('PermissionFlow', () => {
 		const allowed = new Set<string>();
 		const flow = new PermissionFlow(allowed, ui);
 
-		flow.handleRequest(poster, 'sess-2', request('ast_edit'));
+		flow.handleRequest(poster, 'sess-2', request('structural_edit'));
 		ui.events[0].pending!.settle('allow-session');
 		await settle();
 
-		expect(allowed.has('ast_edit')).toBe(true);
+		expect(allowed.has('structural_edit')).toBe(true);
 		expect(poster.decisions).toEqual([
-			{ session_id: 'sess-2', tool_call_id: 'call-ast_edit', decision: 'allow', scope: 'session' },
+			{ session_id: 'sess-2', tool_call_id: 'call-structural_edit', decision: 'allow', scope: 'session' },
 		]);
 	});
 

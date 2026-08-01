@@ -317,7 +317,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'permission_request': {
 				const payload = data as PermissionRequestEventData;
 				// Predict the edit from the CURRENT local file so the prompt
-				// can offer "View Diff" before the user decides. ast_edit has
+				// can offer "View Diff" before the user decides. structural_edit has
 				// no post-content in its result, so this is the only pre-view.
 				const target = editTargetPath(payload.tool_name, payload.args);
 				const current = target === undefined ? undefined : await this.readLocalFile(target);

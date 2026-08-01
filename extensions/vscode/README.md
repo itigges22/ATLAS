@@ -6,8 +6,8 @@ A VS Code client for the [ATLAS](https://github.com/itigges22/ATLAS) agent proxy
 
 ## Diff review
 
-* Permission prompts for `write_file` / `edit_file` / `ast_edit` offer **View Diff** — a side-by-side preview predicted client-side from the local file (`ast_edit` results carry no content, so its predictions use a best-effort selector splice and are labeled approximate).
-* After a successful edit, the tool chip offers **View change** — the exact applied diff (pre-call snapshot vs on-disk), which also compensates for approximate `ast_edit` predictions. Falls back to `edit_file`'s server-computed `diff_preview` when the file is not readable in this workspace.
+* Permission prompts for `write_file` / `edit_file` / `structural_edit` / `insert_after` offer **View Diff** — a side-by-side preview predicted client-side from the local file (`structural_edit` results carry no content, so its predictions use a best-effort selector splice and are labeled approximate; `insert_after` names a line number rather than text to match, so its preview is exact).
+* After a successful edit, the tool chip offers **View change** — the exact applied diff (pre-call snapshot vs on-disk), which also compensates for approximate `structural_edit` predictions. Falls back to `edit_file`'s server-computed `diff_preview` when the file is not readable in this workspace.
 * `move_file` / `delete_file` / `run_command` prompt without a diff.
 
 ## How it works

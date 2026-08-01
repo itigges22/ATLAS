@@ -1,7 +1,7 @@
 // Client-side prediction of what a file-writing tool call will do, computed
 // at permission time from the CURRENT local file. Needed because the diff has
-// to be shown BEFORE the user allows the call — and for ast_edit even the
-// result carries no new content (proxy/types.go AstEditOutput is ok/selector/
+// to be shown BEFORE the user allows the call — and for structural_edit even the
+// result carries no new content (proxy/types.go StructuralEditOutput is ok/selector/
 // language/byte counts only), so the post-state can only be predicted here.
 //
 // Accuracy contract per tool:
@@ -9,18 +9,20 @@
 //   - edit_file: exact when old_str occurs (first occurrence, or all with
 //     replace_all); otherwise a snippet diff of old_str vs new_str plus a
 //     note — the proxy will likely reject that call anyway.
-//   - ast_edit: best-effort regex/indent splice for python function:NAME /
+//   - structural_edit: best-effort regex/indent splice for python function:NAME /
 //     class:NAME (decorator-aware) and a naive top-level <tag> scan for HTML.
 //     Tree-sitter is the server-side authority (v3-service), so every
-//     ast_edit prediction is labeled approximate. The exact view comes later:
+//     structural_edit prediction is labeled approximate. The exact view comes later:
 //     chatView snapshots the file at tool_call time and diffs snapshot vs
 //     on-disk after the tool_result.
 //
 // Deliberately vscode-free so it runs under plain vitest.
 
-/** The three tools whose permission prompts and tool chips get diffs.
+/** The tools whose permission prompts and tool chips get diffs.
  * move_file / delete_file / run_command are notification-only. */
-export const FILE_EDIT_TOOLS = new Set(['write_file', 'edit_file', 'ast_edit']);
+export const FILE_EDIT_TOOLS = new Set([
+	'write_file', 'edit_file', 'structural_edit', 'insert_after',
+]);
 
 export interface EditPrediction {
 	/** Target path exactly as the model sent it (proxy-workspace-relative). */
@@ -31,7 +33,7 @@ export interface EditPrediction {
 	left: string;
 	right: string;
 	/** True when the prediction is a best-effort guess rather than the exact
-	 * post-state (all ast_edit predictions, and edit_file snippet mode). */
+	 * post-state (all structural_edit predictions, and edit_file snippet mode). */
 	approximate: boolean;
 	note?: string;
 }
@@ -84,17 +86,65 @@ export function predictEdit(tool: string, args: unknown, current: string | undef
 			}
 			return predictEditFile(path, current, oldStr, newStr, isReplaceAll(args));
 		}
-		case 'ast_edit': {
+		case 'structural_edit': {
 			const selector = stringField(args, 'selector');
 			const content = stringField(args, 'content');
 			if (selector === undefined || content === undefined) {
 				return undefined;
 			}
-			return predictAstEdit(path, current, selector, content);
+			return predictStructuralEdit(path, current, selector, content);
+		}
+		case 'insert_after': {
+			// The only edit tool whose prediction is exact. It names a line
+			// number rather than text to reproduce, so there is nothing to
+			// match and nothing to guess: splice after that line.
+			const content = stringField(args, 'content');
+			const line = numberField(args, 'line');
+			if (content === undefined || line === undefined || current === undefined) {
+				return undefined;
+			}
+			return predictInsertAfter(path, current, line, content);
 		}
 		default:
 			return undefined;
 	}
+}
+
+function numberField(args: unknown, key: string): number | undefined {
+	if (typeof args !== 'object' || args === null) {
+		return undefined;
+	}
+	const value = (args as Record<string, unknown>)[key];
+	return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+/** Splice `content` in after 1-based `line`; 0 puts it at the top of the file.
+ * A line past the end appends, which is what the proxy does. */
+function predictInsertAfter(
+	path: string, current: string, line: number, content: string,
+): EditPrediction | undefined {
+	if (line < 0) {
+		return undefined;
+	}
+	const hadTrailingNewline = current.endsWith('\n');
+	const lines = current.split('\n');
+	if (hadTrailingNewline) {
+		lines.pop(); // split() leaves a trailing '' — not a real line
+	}
+	const at = Math.min(line, lines.length);
+	const inserted = content.split('\n');
+	if (content.endsWith('\n')) {
+		inserted.pop();
+	}
+	const next = [...lines.slice(0, at), ...inserted, ...lines.slice(at)];
+	return {
+		path,
+		kind: 'file',
+		left: current,
+		right: next.join('\n') + (hadTrailingNewline ? '\n' : ''),
+		approximate: false,
+		note: line === 0 ? 'inserted at top of file' : `inserted after line ${line}`,
+	};
 }
 
 function isReplaceAll(args: unknown): boolean {
@@ -155,7 +205,7 @@ function predictEditFile(
 	return { path, kind: 'file', left: current, right, approximate: false };
 }
 
-function predictAstEdit(path: string, current: string | undefined, selector: string, content: string): EditPrediction {
+function predictStructuralEdit(path: string, current: string | undefined, selector: string, content: string): EditPrediction {
 	if (current === undefined) {
 		return {
 			path,
