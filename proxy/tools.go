@@ -2744,6 +2744,15 @@ func findFileTool() *ToolDef {
 			// 200-match cap full of unrelated files, and confuses the model
 			// into thinking it found nothing useful.
 			if strings.TrimSpace(input.Pattern) == "" {
+				// Observed live: the model put the filename in `path` and left
+				// `pattern` empty, twice in a row. The generic "pattern cannot
+				// be empty" is correct and did not land, because it never
+				// mentioned the argument the model actually filled in. When
+				// `path` looks like a filename rather than a directory, hand
+				// back the exact call.
+				if hint := findFileArgSwapHint(input.Path); hint != "" {
+					return &ToolResult{Success: false, Error: hint}, nil
+				}
 				return &ToolResult{
 					Success: false,
 					Error:   "find_file: pattern cannot be empty. Provide a regex matching the filename you want to locate (e.g. \"snake_game\\.py\" or \"^main\\.\").",

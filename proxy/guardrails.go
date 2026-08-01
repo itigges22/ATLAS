@@ -1101,3 +1101,29 @@ func looksCorruptedOnDisk(displayPath, existing string) bool {
 	cleaned, sanitized := sanitizeFileContent(displayPath, existing)
 	return sanitized && cleaned != existing
 }
+
+// findFileArgSwapHint catches find_file called with the filename in `path`
+// and `pattern` empty, and returns the corrected call.
+//
+// Observed live: the model sent {"path":"app.py"}, got "pattern cannot be
+// empty", and sent {"path":".*app\\.py.*"} — moving the regex into `path`
+// rather than into `pattern`, because the error named the field it had left
+// blank and not the one it had filled. A `path` that carries an extension and
+// no separator is a filename, so say which argument it belongs in.
+func findFileArgSwapHint(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" || strings.ContainsAny(p, `/\`) {
+		return "" // a real directory, or nothing to go on
+	}
+	ext := filepath.Ext(p)
+	if ext == "" || len(ext) > 6 {
+		return ""
+	}
+	// Escape it into the regex the caller meant.
+	quoted := regexp.QuoteMeta(p)
+	return fmt.Sprintf(
+		"find_file: `pattern` is empty and `path` is %q, which is a filename, not a directory. "+
+			"`path` is WHERE to search (a directory, default the project root) and `pattern` is a "+
+			"regex matching the FILENAME. Retry as: find_file {\"pattern\":%q}",
+		p, quoted+"$")
+}

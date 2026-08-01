@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -1342,5 +1344,61 @@ func TestAReadOnlyRequestDoesNotDemandAWrite(t *testing.T) {
 		if !wantsStateChange(m, Tier1Simple, true) {
 			t.Errorf("work request was wrongly exempted: %q", m)
 		}
+	}
+}
+
+// The live failure: the model wanted app.py, sent find_file {"path":"app.py"}
+// with no pattern, got "pattern cannot be empty", and immediately sent
+// {"path":".*app\\.py.*"} — moving the regex into `path` rather than into
+// `pattern`, because the message named the field it had left blank and never
+// the one it had filled.
+func TestFindFileArgSwapIsNamed(t *testing.T) {
+	hint := findFileArgSwapHint("app.py")
+	if hint == "" {
+		t.Fatal("a filename in `path` must be recognised as the swapped argument")
+	}
+	// Doubled backslash on purpose: the hint is what the model pastes into
+	// JSON, where \\ is how a literal backslash is written.
+	for _, want := range []string{"app.py", "pattern", "path", `app\\.py$`} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint missing %q:\n%s", want, hint)
+		}
+	}
+
+	// Real directories must fall through to the generic message.
+	for _, dir := range []string{"", "src", "./", "scripts/fixtures", "/workspace", "a/b.py"} {
+		if h := findFileArgSwapHint(dir); h != "" {
+			t.Errorf("path %q is a directory or unclear, must not claim an arg swap: %s", dir, h)
+		}
+	}
+}
+
+// The suggested pattern has to be a valid regex that matches the file, or the
+// retry fails too.
+func TestFindFileArgSwapSuggestsAWorkingPattern(t *testing.T) {
+	hint := findFileArgSwapHint("snake_app.py")
+	start := strings.Index(hint, `{"pattern":"`)
+	if start < 0 {
+		t.Fatalf("no concrete retry in hint: %s", hint)
+	}
+	// The hint renders the pattern with %q, so it carries JSON/Go escaping —
+	// which is exactly what the model must paste into its tool args. Unquote
+	// it to get the regex the proxy will actually receive.
+	raw := hint[start+len(`{"pattern":`):]
+	raw = raw[:strings.LastIndex(raw, `}`)]
+	suggested, err := strconv.Unquote(raw)
+	if err != nil {
+		t.Fatalf("suggested pattern %q is not a valid quoted string: %v", raw, err)
+	}
+	re, err := regexp.Compile(suggested)
+	if err != nil {
+		t.Fatalf("suggested pattern %q does not compile: %v", suggested, err)
+	}
+	if !re.MatchString("snake_app.py") {
+		t.Errorf("suggested pattern %q does not match the filename it came from", suggested)
+	}
+	// The dot must be escaped, or it matches unintended names.
+	if re.MatchString("snakeXapp.py") {
+		t.Errorf("suggested pattern %q left the dot unescaped", suggested)
 	}
 }
