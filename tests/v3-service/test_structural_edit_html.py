@@ -169,3 +169,31 @@ def test_plain_syntax_error_gets_no_template_advice():
                                "@app.route('/')\ndef index():\n    return 'oops\n")
     assert not res.get("success")
     assert "template literal" not in res["error"]
+
+
+# --- large-node steer ----------------------------------------------------
+
+def test_large_node_failure_steers_to_edit_file():
+    """Re-emitting a big node is where compact models fall over.
+
+    Observed on a 1,702-line file: the model navigated correctly to the right
+    ~200-line function, then failed three times trying to re-emit it in order
+    to add six lines — a different syntax error each attempt.
+    """
+    big = "def big():\n" + "".join(f"    x{i} = {i}\n" for i in range(60))
+    src = big + "\ndef other():\n    return 1\n"
+    res = main.structural_edit("m.py", src, "function:big",
+                               "def big():\n    return 'oops\n")
+    assert not res.get("success")
+    err = res["error"]
+    assert "61 lines" in err
+    assert "use edit_file instead" in err
+    assert "one unique line" in err
+
+
+def test_small_node_failure_does_not_steer_away():
+    """structural_edit is still the right tool for a node the model can emit."""
+    res = main.structural_edit("m.py", "def tiny():\n    return 1\n",
+                               "function:tiny", "def tiny():\n    return 'oops\n")
+    assert not res.get("success")
+    assert "use edit_file instead" not in res["error"]

@@ -790,6 +790,22 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                         f"({', '.join(entities)}) where the file needs literal "
                         f"ones. Re-emit it with literal < > \" & — a JSON string "
                         f"carries those directly and must not entity-encode them. ")
+            # A big node is the wrong unit of work for a small change, and
+            # re-emitting it is where compact models fall over. Observed on a
+            # 1,702-line file: the model navigated correctly to the right
+            # ~200-line function, then failed three times trying to re-emit it
+            # to add six lines, each attempt a different syntax error. Say so
+            # once the syntax check has already failed — structural_edit is
+            # still the right tool for a whole-node rewrite that the model can
+            # actually produce.
+            node_lines = source_text[target.start_byte:target.end_byte].count("\n") + 1
+            if node_lines >= 40 and not lead:
+                lead = (f"`{selector}` is {node_lines} lines, and structural_edit "
+                        f"replaces the WHOLE node, so a small change means "
+                        f"re-emitting all {node_lines} lines correctly. If you are "
+                        f"changing only part of it, use edit_file instead with "
+                        f"old_str set to one unique line from the region you are "
+                        f"changing — that edits in place and cannot truncate. ")
             return {"success": False, "error": (
                 f"structural_edit: the replacement makes {path} invalid Python — "
                 f"SyntaxError at line {e.lineno}: {e.msg}"
