@@ -76,6 +76,11 @@ class Task:
     # edit it. Only files the task never asks to change belong here, or the
     # check fails a session for doing exactly what it was told.
     immutable: tuple[str, ...] = ()
+    # Follow-up messages sent after the first, each carrying the prior
+    # exchange as history. Every task before this was a single message, which
+    # left the way people actually use the tool — correct me, now do this too
+    # — completely unexercised.
+    followups: tuple[str, ...] = ()
     # A question, not a job. The tiers exist so V3 does not run on everything:
     # a question should get an answer from the conversational tier, with no
     # writes and no multi-minute pipeline. Both are checked.
@@ -562,6 +567,59 @@ TASKS["bugfind_tiebreak"] = Task(
 )
 
 
+def _check_multiturn(ws: Path) -> tuple[bool, str]:
+    """Both turns' work must survive.
+
+    The multi-turn risk is not that the second request fails — it is that it
+    lands and takes the first one with it, by rewriting the file from a stale
+    idea of its contents. So this checks BOTH functions exist and BOTH still
+    behave, not just the newest one.
+    """
+    src = (ws / "stats.py").read_text()
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        return False, f"stats.py does not parse after the follow-up: {e}"
+    names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    for want in ("mean", "median", "mode"):
+        if want not in names:
+            return False, f"{want}() missing after both turns (have {sorted(names)})"
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0,%r); import stats;"
+         "print(stats.median([3,1,2]), stats.mode([1,2,2,3]))" % str(ws)],
+        capture_output=True, text=True, timeout=30)
+    if proc.returncode != 0:
+        return False, f"a function raised: {proc.stderr.strip()[:150]}"
+    got = proc.stdout.split()
+    if got != ["2", "2"]:
+        return False, f"wrong results: got {got}, want ['2', '2']"
+    return True, "both turns' functions present and correct"
+
+
+TASKS["multiturn_stats"] = Task(
+    name="multiturn_stats",
+    prompt=("In stats.py, add a median(values) function next to the existing "
+            "mean(). Odd-length lists return the middle value; even-length "
+            "lists return the average of the two middle values."),
+    followups=(
+        "Good. Now also add a mode(values) function that returns the most "
+        "common value. Keep median() exactly as it is.",
+    ),
+    files={"stats.py": (
+        '"""Small statistics helpers."""\n'
+        "\n"
+        "\n"
+        "def mean(values):\n"
+        "    if not values:\n"
+        "        raise ValueError('mean() of empty sequence')\n"
+        "    return sum(values) / len(values)\n"
+    )},
+    check=_check_multiturn,
+    must_exist=("stats.py",),
+)
+
+
 def _check_multifile(ws: Path) -> tuple[bool, str]:
     """A real multi-file program: separate modules, working CLI, passing tests.
 
@@ -1010,6 +1068,7 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     events: list[dict] = []
     stream_ok = False
     t0 = time.time()
+    history: list[dict] = [{"role": "user", "content": task.prompt}]
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             for raw in resp:
@@ -1034,6 +1093,40 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                     events.append({"type": "__unparseable__", "raw": payload[:200]})
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         events.append({"type": "error", "data": {"error": f"stream failed: {e}"}})
+    wall = time.time() - t0
+
+    # Follow-ups: same session, prior exchange replayed as history. The
+    # assistant turn is reconstructed from what it actually emitted.
+    for follow in task.followups:
+        reply = " ".join(
+            str((e.get("data") or {}).get("summary") or (e.get("data") or {}).get("content") or "")
+            for e in events if e.get("type") in ("done", "text"))
+        history.append({"role": "assistant", "content": reply[:2000] or "(done)"})
+        history.append({"role": "user", "content": follow})
+        fbody = json.dumps({
+            "message": follow, "mode": "yolo", "sandbox_subdir": subdir,
+            "session_id": f"reliability-{task.name}-{rep}",
+            "history": history[:-1],
+        }).encode()
+        freq = urllib.request.Request(f"{url}/v1/agent", data=fbody,
+                                      headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(freq, timeout=timeout) as resp:
+                for raw in resp:
+                    if time.time() - t0 > timeout:
+                        break
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        events.append(json.loads(payload))
+                    except json.JSONDecodeError:
+                        events.append({"type": "__unparseable__", "raw": payload[:200]})
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            events.append({"type": "error", "data": {"error": f"followup failed: {e}"}})
     wall = time.time() - t0
 
     s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
