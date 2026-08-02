@@ -1220,6 +1220,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				log.Printf("[agent] turn=%d tool=%q FAIL: %q", turn,
 					truncateStr(parsed.Name, 64), truncateStr(result.Error, 240))
 				recordFailedToolCall(ctx, parsed.Name, parsed.Args, result.Error)
+				// Every refusal of authored content is a deterministic
+				// negative for the lens corpus. One site rather than 60-odd
+				// rejection points, and it cannot miss a gate added later.
+				if authored := authoredContent(parsed.Args); authored != "" {
+					recordGateRejection(modelName, parsed.Name,
+						rejectedPath(parsed.Args), authored, result.Error)
+				}
 			} else {
 				// A call can fail and later succeed — an edit rejected for a
 				// stale range works after a re-read. Drop the memory with the
@@ -1287,6 +1294,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if json.Unmarshal(parsed.Args, &rc) == nil && isVerificationCommand(rc.Command) {
 					if result.Success {
 						st.verifiedThisLoop = true
+						ctx.VerifiedThisRun = true
 						st.sawFailedVerification = false
 						log.Printf("[agent] verification recorded: turn=%d cmd=%q",
 							turn, truncateStr(rc.Command, 60))
@@ -3134,6 +3142,17 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// data). Keyed by session id; a later thumbs / per-file verdict turns them
 	// into weighted samples. No-op when the pass wrote nothing or has no id.
 	stashPendingPass(req.SessionID, modelName, ctx.PassWrites)
+
+	// Label them mechanically too, when the run itself produced evidence.
+	// Waiting for a human meant collecting nothing at all from unattended
+	// runs — the corpus was empty after twelve of them. A human verdict
+	// arriving later carries more weight and refines these rather than
+	// competing with them.
+	if ctx.VerifiedThisRun && len(ctx.PassWrites) > 0 {
+		if n := recordVerifiedPass(modelName, ctx.PassWrites); n > 0 {
+			log.Printf("[lens] recorded %d verified-run sample(s) for %s", n, modelName)
+		}
+	}
 
 	// Send final done event
 	fmt.Fprintf(w, "data: [DONE]\n\n")

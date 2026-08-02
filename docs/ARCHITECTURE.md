@@ -96,7 +96,7 @@ The proxy is 12 Go files, one concern each:
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
 | `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
 | `permissions.go` | Permission gate (`/v1/permission`), trust mode, hard-blocked patterns |
-| `lens.go` | Lens scoring calls, lens-sample banking (`/feedback`), calibration status |
+| `lens.go` | Lens scoring calls, lens-sample banking (`/feedback` for human verdicts, plus mechanical labelling: gate rejections as full-weight negatives, verified-run writes as weight-0.5 positives), calibration status |
 | `guardrails.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip) |
 | `events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
 | `v3_bridge.go` | SSE client for v3-service `/v3/generate` + `/v3/plan` |

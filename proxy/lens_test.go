@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -354,5 +355,90 @@ func TestDimMismatchSurfaced(t *testing.T) {
 	dims := buildDimensions(lens, ASAStatus{Verdict: "missing"})
 	if d := dimByName(dims, "lens_identity"); d.Status != "dim-mismatch" {
 		t.Fatalf("identity = %q, want dim-mismatch", d.Status)
+	}
+}
+
+// The lens corpus had exactly one writer: POST /feedback, a human thumbs or
+// per-file verdict. LensSample.Source advertised "v3" and "run" alongside and
+// nothing ever wrote either, so twelve instrumented runs — which produced
+// dozens of deterministic gate rejections and several passing verification
+// commands — recorded nothing at all. The directory was empty.
+func TestGateRejectionsAndVerifiedRunsReachTheCorpus(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ATLAS_LENS_DATA_DIR", dir)
+	const model = "test-model"
+
+	recordGateRejection(model, "replace_lines", "app.py",
+		"setTimeout(draw, delay);", "stops a render loop")
+	if n := recordVerifiedPass(model, []PassWrite{
+		{Tool: "edit_file", Path: "app.py", Content: "let delay = 100;"},
+		{Tool: "edit_file", Path: "b.py", Content: ""}, // nothing authored
+	}); n != 1 {
+		t.Fatalf("expected 1 verified sample recorded, got %d", n)
+	}
+
+	good, bad := lensSampleCounts(model)
+	if bad != 1 {
+		t.Errorf("gate rejection not recorded as a negative: bad=%d", bad)
+	}
+	if good != 1 {
+		t.Errorf("verified run not recorded as a positive: good=%d", good)
+	}
+}
+
+// A gate is deterministic; "curl exited clean" is not. An observed run had
+// curl return 200 over a page whose game loop was dead, and another over a
+// Flask app with no routes left in it.
+func TestAGateNegativeOutweighsAVerifiedPositive(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ATLAS_LENS_DATA_DIR", dir)
+	const model = "weights"
+
+	recordGateRejection(model, "edit_file", "a.py", "broken", "syntax error")
+	recordVerifiedPass(model, []PassWrite{{Tool: "edit_file", Path: "a.py", Content: "ok"}})
+
+	raw, err := os.ReadFile(filepath.Join(dir, model, "samples.jsonl"))
+	if err != nil {
+		t.Fatalf("corpus not written: %v", err)
+	}
+	var negWeight, posWeight float64
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var s LensSample
+		if json.Unmarshal([]byte(line), &s) != nil {
+			continue
+		}
+		if s.Label == 0 {
+			negWeight = s.Weight
+			if s.Source != "gate" {
+				t.Errorf("gate negative recorded with source %q", s.Source)
+			}
+		} else {
+			posWeight = s.Weight
+			if s.Source != "run" {
+				t.Errorf("verified positive recorded with source %q", s.Source)
+			}
+		}
+	}
+	if !(negWeight > posWeight) {
+		t.Errorf("a deterministic gate rejection (%.2f) must outweigh a passing probe (%.2f)",
+			negWeight, posWeight)
+	}
+}
+
+// Content the model never authored must not enter the corpus — an input
+// validation error says nothing about generation quality.
+func TestOnlyAuthoredContentIsSampled(t *testing.T) {
+	for _, tc := range []struct{ name, args, want string }{
+		{"write content", `{"path":"a.py","content":"x = 1"}`, "x = 1"},
+		{"edit new_str", `{"path":"a.py","old_str":"a","new_str":"b"}`, "b"},
+		{"read has none", `{"path":"a.py"}`, ""},
+		{"command has none", `{"command":"pytest"}`, ""},
+		{"malformed", `{`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authoredContent(json.RawMessage(tc.args)); got != tc.want {
+				t.Errorf("authoredContent = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

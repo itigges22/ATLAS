@@ -571,6 +571,12 @@ type AgentContext struct {
 	// DIFFERENT rejections is a model converging, not one looping.
 	LastRejectionClass string
 
+	// VerifiedThisRun mirrors runState.verifiedThisLoop onto the context, so
+	// the mechanical lens labelling at the end of the pass can tell a run
+	// that verified green from one that never did. Only the former's writes
+	// are worth recording as positives.
+	VerifiedThisRun bool
+
 	// Reasoning-repetition detector state (May 10 2026, BiasBusters
 	// follow-up #30). Per-turn snapshot of the model's reasoning_content
 	// stream. When the same opening prose ("Now I need to look at the

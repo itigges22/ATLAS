@@ -197,6 +197,31 @@ than adding another retry around it.
 
 **Fixed**
 
+- `insert_after` and `replace_lines` now go through the V3 pipeline. They were
+  added as harness-level tools and never wired to tier classification or
+  candidate generation, so their edits got a single greedy sample — no
+  candidates, no lens scoring — whatever the file's tier, while the tool
+  guidance and the selector rejection were both changed to steer toward them.
+  The net effect was to migrate the model off the quality pipeline onto the
+  two tools that lacked it. The V3 entry inlined in `edit_file` is now
+  `runEditPipeline`, shared by all three, so adding an edit tool cannot mean
+  re-deciding whether the pipeline applies to it;
+  `tests/contracts/test_write_gate_coverage.py` asserts every write path
+  reaches it.
+- The lens training corpus is fed by the harness, not only by a human.
+  `appendLensSample` had exactly one caller — `POST /feedback`, a thumbs
+  up/down or per-file accept/deny — while `LensSample.Source` had always
+  advertised `v3` and `run` alongside them and nothing wrote either. Twelve
+  instrumented runs produced dozens of deterministic gate rejections and
+  several passing verification commands, and the corpus directory was empty,
+  because nobody clicked. Gate rejections are now recorded as negatives at
+  full weight (a gate does not have opinions); the writes of a run whose
+  verification passed are recorded as positives at weight 0.5, deliberately
+  below a human sample, because "curl exited clean" is weaker than it sounds —
+  one observed run returned 200 over a page whose game loop was dead, another
+  over a Flask app with no routes left. Negatives are recorded at the single
+  point where a failed tool result is handled, so a gate added later cannot
+  miss it, and only content the model actually authored is sampled.
 - Every write path now runs the same gates. `edit_file` — the most used edit
   tool — ran the syntax and unresolved-call checks but never
   `embeddedScriptGate`, so the two comparative findings (a render loop that

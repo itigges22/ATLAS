@@ -895,3 +895,90 @@ func logCalibrationStatusAtStartup() {
 	log.Printf("  Lens: %s — %s", lens.Verdict, lens.Hint)
 	log.Printf("  ASA:  %s — %s", asa.Verdict, asa.Hint)
 }
+
+// ---------------------------------------------------------------------------
+// Mechanical labelling
+// ---------------------------------------------------------------------------
+//
+// The lens corpus was fed by exactly one thing: POST /feedback, a human
+// thumbs-up/down or per-file accept/deny. LensSample.Source has always
+// advertised "v3" and "run" alongside them, and nothing ever wrote either.
+//
+// Meanwhile the harness produces ground truth on every turn and threw it
+// away. A gate rejection is a deterministic negative — the content provably
+// breaks syntax, breaks the embedded script, orphans a call, stops a render
+// loop, duplicates a binding. Twelve instrumented runs generated dozens of
+// those and recorded nothing, because nobody clicked. The corpus directory
+// was empty.
+//
+// These are the labels the retrain loop (`atlas bench` ->
+// retrain_lens_from_results.py -> `atlas asa build`) exists to consume, and
+// they cost nothing to collect.
+
+// recordGateRejection labels content a write gate refused. Deterministic
+// ground truth, so it carries full weight — a gate does not have opinions.
+func recordGateRejection(model, tool, path, content, reason string) {
+	if content == "" || model == "" {
+		return
+	}
+	if err := appendLensSample(model, LensSample{
+		Content: content, Label: 0, Weight: 1.0, Source: "gate",
+		Tool: tool, Path: path,
+	}); err != nil {
+		log.Printf("[lens] could not record gate rejection for %s: %v", logPath(path), err)
+	}
+}
+
+// recordVerifiedPass labels a run's writes after a verification command
+// passed and no gate refused them.
+//
+// Weight 0.5, deliberately below an accepted-and-thumbed-up human sample.
+// "A verification command exited clean" is a weaker claim than it sounds: an
+// observed run had `curl` return 200 over a page whose game loop was dead,
+// and another over a Flask app with no routes left in it. It is real evidence
+// and it is not proof, so it should not outvote a human who looked.
+func recordVerifiedPass(model string, writes []PassWrite) int {
+	recorded := 0
+	for _, w := range writes {
+		if w.Content == "" {
+			continue
+		}
+		if err := appendLensSample(model, LensSample{
+			Content: w.Content, Label: 1, Weight: 0.5, Source: "run",
+			Tool: w.Tool, Path: w.Path,
+		}); err == nil {
+			recorded++
+		}
+	}
+	return recorded
+}
+
+// authoredContent pulls the text the MODEL wrote out of a tool call's
+// arguments — `content` for the write/insert/replace tools, `new_str` for
+// edit_file. Empty for tools that author nothing (reads, run_command) and for
+// calls that failed input validation before any content existed, which is
+// what keeps those out of the corpus.
+func authoredContent(args json.RawMessage) string {
+	var a struct {
+		Content string `json:"content"`
+		NewStr  string `json:"new_str"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return ""
+	}
+	if a.Content != "" {
+		return a.Content
+	}
+	return a.NewStr
+}
+
+// rejectedPath pulls the target path for the sample's provenance.
+func rejectedPath(args json.RawMessage) string {
+	var a struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return ""
+	}
+	return a.Path
+}
