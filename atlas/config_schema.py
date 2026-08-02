@@ -65,6 +65,11 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_DRY_PENALTY_LAST_N": Field("int", min=-1, max=2_000_000),
     "ATLAS_REPEAT_PENALTY": Field("float", min=0.5, max=2),
     "ATLAS_REPEAT_LAST_N": Field("int", min=0, max=100_000),
+    # Greedy decoding for agent turns, and restating the last-read file at
+    # the generation point. Both exist because an agent turn is transcription
+    # of text already in context, not free generation.
+    "ATLAS_TRANSCRIPTION_SAMPLER": Field("bool"),
+    "ATLAS_RESTATE_LAST_READ": Field("bool"),
     "ATLAS_MAX_TURNS": Field("int", min=0, max=1000),
     "ATLAS_LENS_RETRAIN_MIN": Field("int", min=0, max=10_000_000),
     "ATLAS_SANDBOX_PIDS": Field("int", min=1, max=1_000_000),

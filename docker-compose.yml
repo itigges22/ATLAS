@@ -378,6 +378,11 @@ services:
       - ATLAS_DRY_PENALTY_LAST_N=${ATLAS_DRY_PENALTY_LAST_N:-}
       - ATLAS_REPEAT_PENALTY=${ATLAS_REPEAT_PENALTY:-}
       - ATLAS_REPEAT_LAST_N=${ATLAS_REPEAT_LAST_N:-}
+      # Greedy decoding for the agent loop, and restating the last-read file
+      # at the generation point. Both target verbatim reproduction; set to 0
+      # to fall back to the server's sampler chain / drop the restatement.
+      - ATLAS_TRANSCRIPTION_SAMPLER=${ATLAS_TRANSCRIPTION_SAMPLER:-}
+      - ATLAS_RESTATE_LAST_READ=${ATLAS_RESTATE_LAST_READ:-}
       # Context budget for conversation trimming (PC-216). Same
       # values the llama-server gets; the proxy trims history to a
       # token budget derived from per-slot context instead of a

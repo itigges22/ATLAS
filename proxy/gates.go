@@ -1689,3 +1689,45 @@ func assetLintNote(ctx *AgentContext) string {
 	return "Project structure check: " + strings.Join(fresh, " ") +
 		" This is advisory — fix it if these files are meant to work together."
 }
+
+// v3RewroteBeyondTheEdit reports whether a V3 candidate changed text the
+// caller's own edit had left alone.
+//
+// V3 improves a whole FILE: the edit tools splice their change, then hand the
+// composed file to v3-service, which regenerates it. On a small file that is
+// a retype of everything the edit never touched, and a 4-bit model retyping
+// 7 KB drifts — an observed session came back with `#e94562` written as
+// `#e94162` and `<h1 id="msg">` as `<h1 id=" msg">`, the second of which
+// makes getElementById('msg') return null at runtime. Neither is a syntax
+// error, so the parse and embedded-script checks pass them.
+//
+// The rule: a line the edit did not remove must survive V3 intact. Compares
+// line multisets so a moved or duplicated line is not mistaken for a rewrite,
+// and returns the first casualty for the log. Fail-soft — an empty candidate
+// or an unchanged edit reports nothing, leaving the existing behaviour.
+func v3RewroteBeyondTheEdit(original, edited, improved string) string {
+	if improved == "" || original == edited {
+		return ""
+	}
+	editedCount := lineCounts(edited)
+	improvedCount := lineCounts(improved)
+	for _, line := range strings.Split(original, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// Lines the edit kept: present in both the pre-edit file and the
+		// spliced result. Anything V3 drops from that set is out-of-scope.
+		if editedCount[line] > 0 && improvedCount[line] == 0 {
+			return fmt.Sprintf("it rewrote a line the edit never touched: %q", truncateStr(strings.TrimSpace(line), 60))
+		}
+	}
+	return ""
+}
+
+func lineCounts(s string) map[string]int {
+	counts := make(map[string]int)
+	for _, line := range strings.Split(s, "\n") {
+		counts[line]++
+	}
+	return counts
+}

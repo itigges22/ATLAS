@@ -192,7 +192,11 @@ func extractScorableContent(toolName string, args json.RawMessage) (string, bool
 // from firing on tool-mix sequences.
 func extractFailurePath(toolName string, args json.RawMessage) string {
 	switch toolName {
-	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file":
+	// insert_after and replace_lines were missing here, so a failing loop on
+	// either returned "" and the path-aware 3-strike breaker read three
+	// identical failures as three different paths and never fired.
+	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file",
+		"insert_after", "replace_lines":
 		var p struct {
 			Path string `json:"path"`
 		}

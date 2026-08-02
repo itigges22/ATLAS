@@ -1401,3 +1401,47 @@ func TestAnIdenticalRevisionDropsThePlan(t *testing.T) {
 		t.Error("a nil plan is not the same as a plan")
 	}
 }
+
+// The observed corruption: V3 regenerated the whole file after a
+// structural_edit and, while retyping the parts the edit never touched,
+// wrote `id="msg"` as `id=" msg"`. getElementById('msg') then returns null
+// at runtime, and no syntax check can see it — a space inside an attribute
+// value is valid HTML.
+func TestV3CandidateThatRetypesUntouchedLinesIsRejected(t *testing.T) {
+	original := "<h1 id=\"msg\">GAME OVER</h1>\nlet speed = 100;\n"
+	edited := "<h1 id=\"msg\">GAME OVER</h1>\nlet speed = 120;\n"
+	improved := "<h1 id=\" msg\">GAME OVER</h1>\nlet speed = 120;\n"
+
+	drift := v3RewroteBeyondTheEdit(original, edited, improved)
+	if drift == "" {
+		t.Fatal("V3 rewrote a line outside the edit and it was accepted")
+	}
+	if !strings.Contains(drift, "id=") {
+		t.Errorf("drift message should name the casualty, got %q", drift)
+	}
+}
+
+func TestV3CandidateThatOnlyTouchesTheEditIsKept(t *testing.T) {
+	original := "<h1 id=\"msg\">GAME OVER</h1>\nlet speed = 100;\n"
+	edited := "<h1 id=\"msg\">GAME OVER</h1>\nlet speed = 120;\n"
+	// V3 improving the edited line itself is the whole point of the pipeline.
+	improved := "<h1 id=\"msg\">GAME OVER</h1>\nconst speed = 120;\n"
+
+	if drift := v3RewroteBeyondTheEdit(original, edited, improved); drift != "" {
+		t.Errorf("in-scope improvement rejected: %s", drift)
+	}
+}
+
+func TestV3DriftGateFailsSoft(t *testing.T) {
+	same := "a\nb\n"
+	if v3RewroteBeyondTheEdit(same, same, "totally different\n") != "" {
+		t.Error("a no-op edit should not engage the gate")
+	}
+	if v3RewroteBeyondTheEdit(same, "a\nc\n", "") != "" {
+		t.Error("an empty candidate should not engage the gate")
+	}
+	// Blank lines carry no content; reflowing them is not a rewrite.
+	if drift := v3RewroteBeyondTheEdit("a\n\nb\n", "a\n\nc\n", "a\nc\n"); drift != "" {
+		t.Errorf("blank-line reflow flagged as drift: %s", drift)
+	}
+}

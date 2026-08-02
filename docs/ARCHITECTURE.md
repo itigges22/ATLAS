@@ -139,7 +139,7 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 
 ### Tools
 
-15 tools registered in `proxy/tools.go`:
+16 tools registered in `proxy/tools.go`:
 
 | Tool | Purpose | Read-only |
 |------|---------|-----------|
@@ -148,6 +148,7 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 | `write_file` | Create a NEW file (rejected for existing files >5 lines — see safety limits) | No |
 | `edit_file` | Surgical inline string replacement (old_str/new_str) for ≤10-line changes | No |
 | `insert_after` | Insert new lines after a given line number — the line numbers `read_file` prints. For ADDING code (a branch, function, import) where nothing existing changes: there is no `old_str` to reproduce, which is the step that fails on long spans | No |
+| `replace_lines` | Replace a line range (`start_line`..`end_line`, as `read_file` prints them) with new content. For CHANGING code without reproducing it: the anchor is two asserted lines (first and last of the range, whitespace-insensitive) rather than the whole span, so the verbatim burden is 2 lines instead of N. Capped at 20 lines per call | No |
 | `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
 | `delete_file` | Delete file or empty directory (forces loop exit after) | No |
 | `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. The supported path for "reorganize the files" since shell `mv`/`cp` are refused | No |
@@ -262,6 +263,7 @@ Operator-facing limits and the knobs that tune them. Internal steering guards (t
 | write_file for existing files | Reject if file > 5 lines; on .py/.html/.htm the per-step grammar gate steers to `structural_edit` | Force surgical (`edit_file`) or whole-node (`structural_edit`) edits |
 | Suspicious-shrinkage guard | Reject `structural_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
 | structural_edit runaway-content guard | Reject when `content` > 8 KB AND > 4× the file size | Catch reasoning-leak blobs emitted as the replacement node |
+| V3 out-of-scope-rewrite guard | Discard a V3 candidate that drops a line the caller's edit had left alone, keeping the caller's content (`proxy/gates.go::v3RewroteBeyondTheEdit`) | V3 improves a whole *file*, so on a small file it retypes everything the edit never touched; a live session came back with `#e94562` as `#e94162` and `id="msg"` as `id=" msg"`, neither of which is a syntax error |
 | Error loop breaker | 3 consecutive failures | Stop runaway failure cycles |
 | Exploration budget | Nudge at 4 consecutive read-only calls; escalated nudge at 5+. Reads always execute — the nudge steers the *next* turn toward a write | Push the model to write instead of exploring indefinitely |
 | Command output truncation | stdout 8,000 chars, stderr 4,000 chars | Prevent context flooding |

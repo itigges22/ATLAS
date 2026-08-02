@@ -707,13 +707,19 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 		"write_file":      {"path"},
 		"edit_file":       {"path"},
 		"structural_edit": {"path"},
-		"delete_file":     {"path"},
-		"move_file":       {"source", "destination"},
-		"search_files":    {"path"},
-		"find_file":       {"path"},
-		"list_directory":  {"path"},
-		"run_command":     {"cwd"},
-		"run_background":  {"cwd"},
+		// Both were absent, so the workspace-containment pre-check never ran on
+		// them even though their doc comments claim "same gates as every other
+		// write". Mitigated transitively by the read-first requirement, but the
+		// explicit gate belongs here.
+		"insert_after":   {"path"},
+		"replace_lines":  {"path"},
+		"delete_file":    {"path"},
+		"move_file":      {"source", "destination"},
+		"search_files":   {"path"},
+		"find_file":      {"path"},
+		"list_directory": {"path"},
+		"run_command":    {"cwd"},
+		"run_background": {"cwd"},
 	}
 	for _, key := range keys[name] {
 		raw, ok := fields[key]

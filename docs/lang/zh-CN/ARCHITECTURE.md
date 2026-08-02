@@ -92,7 +92,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 |---|---|
 | `main.go` | HTTP 服务器、路由、鉴权、透传、错误信封、私密值日志过滤 |
 | `agent.go` | agent 循环：轮次状态、LLM 调用、计划生成、模式上下文注入、卡死循环断路器 |
-| `tools.go` | 14 个工具定义与执行器、层级分类、工具调用语法 |
+| `tools.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
 | `gates.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
 | `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
@@ -163,7 +163,7 @@ flowchart LR
 
 ### 工具
 
-`proxy/tools.go` 中注册了 14 个工具：
+`proxy/tools.go` 中注册了 16 个工具：
 
 | 工具 | 用途 | 只读 |
 |------|---------|-----------|
@@ -171,6 +171,8 @@ flowchart LR
 | `outline_file` | 列出文件的顶层函数/类及其行号范围，不含函数体（`.py` 使用 tree-sitter，其余为尽力而为的扫描）。外科式读取的入口点：先 outline，再用带 offset/limit 的 `read_file` | 是 |
 | `write_file` | 创建一个新文件（对超过 5 行的已有文件会被拒绝 —— 见安全限制） | 否 |
 | `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
+| `insert_after` | 在给定行号（`read_file` 打印的行号）之后插入新行。适用于**新增**代码（分支、函数、import）且不改动任何已有内容的场景：没有需要复现的 `old_str`，而这正是长跨度下失败的那一步 | 否 |
+| `replace_lines` | 用新内容替换一个行范围（`start_line`..`end_line`，即 `read_file` 打印的行号）。适用于**修改**代码而无需复现它：锚点是断言的两行（范围的首行与末行，忽略空白），而不是整个跨度，因此逐字复现的负担是 2 行而非 N 行。每次调用上限 20 行 | 否 |
 | `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。GH #39，v1 中仅支持 .py/.html/.htm | 否 |
 | `delete_file` | 删除文件或空目录（之后强制退出循环） | 否 |
 | `move_file` | 在工作区内移动或重命名文件（例如 `index.html` → `templates/`）。纯粹的重定位 —— 绕过 V3/外科式编辑门控，拒绝覆盖已存在的目标。由于 shell `mv`/`cp` 会被拒绝，这是"重新组织文件"的受支持路径 | 否 |

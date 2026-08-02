@@ -1272,3 +1272,150 @@ func findTool(t *testing.T, name string) *ToolDef {
 	t.Fatalf("tool %q is not registered", name)
 	return nil
 }
+
+// replace_lines exists because this model cannot reproduce a 9-13 line anchor
+// verbatim — observed corruptions food.y -> hood.y, scoreElement ->
+// scorerElement, unshift(( . Citing two line numbers removes that burden. The
+// content assertion is what keeps the address honest: a wrong anchor simply
+// fails to match, but a wrong line number splices cleanly and corrupts.
+func TestReplaceLinesReplacesByNumber(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := "one\ntwo\nthree\nfour\nfive\n"
+	if err := os.WriteFile(file, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+	tool := findTool(t, "replace_lines")
+
+	res, err := tool.Execute(json.RawMessage(`{"path":"a.py","start_line":2,"end_line":4,
+		"expected_first_line":"two","expected_last_line":"four","content":"TWO\nTHREE"}`), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success, got: %s", res.Error)
+	}
+	got, _ := os.ReadFile(file)
+	if string(got) != "one\nTWO\nTHREE\nfive\n" {
+		t.Errorf("wrong result:\n%q", string(got))
+	}
+}
+
+func TestReplaceLinesRefusesAWrongRange(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := "one\ntwo\nthree\nfour\nfive\n"
+	os.WriteFile(file, []byte(src), 0644)
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+	tool := findTool(t, "replace_lines")
+
+	// Off by one: claims line 2 is "one". Without the assertion this applies
+	// cleanly and silently corrupts.
+	res, _ := tool.Execute(json.RawMessage(`{"path":"a.py","start_line":2,"end_line":3,
+		"expected_first_line":"one","expected_last_line":"three","content":"X"}`), ctx)
+	if res.Success {
+		t.Fatal("an off-by-one range must be refused, not applied")
+	}
+	for _, want := range []string{"line 2", "you said", "actually"} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("error missing %q:\n%s", want, res.Error)
+		}
+	}
+	if got, _ := os.ReadFile(file); string(got) != src {
+		t.Error("file was modified despite the refusal")
+	}
+}
+
+func TestReplaceLinesIgnoresIndentationInTheAssertion(t *testing.T) {
+	// The model reproduces the TEXT of one line reliably and its indentation
+	// unreliably. The assertion exists to catch a wrong NUMBER, not whitespace.
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := "def f():\n    return 1\n"
+	os.WriteFile(file, []byte(src), 0644)
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+
+	res, _ := findTool(t, "replace_lines").Execute(json.RawMessage(
+		`{"path":"a.py","start_line":2,"end_line":2,"expected_first_line":"return 1",
+		  "expected_last_line":"return 1","content":"    return 2"}`), ctx)
+	if !res.Success {
+		t.Fatalf("indentation-only difference must not fail the assertion: %s", res.Error)
+	}
+}
+
+func TestReplaceLinesGuardsRangeAndSize(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := strings.Repeat("x\n", 40)
+	os.WriteFile(file, []byte(src), 0644)
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+	tool := findTool(t, "replace_lines")
+
+	for _, tc := range []struct{ name, args, want string }{
+		{"past end of file", `{"path":"a.py","start_line":39,"end_line":99,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
+		{"inverted range", `{"path":"a.py","start_line":9,"end_line":2,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
+		{"zero start", `{"path":"a.py","start_line":0,"end_line":2,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
+		{"span too large", `{"path":"a.py","start_line":1,"end_line":30,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "too large"},
+		{"missing path", `{"start_line":1,"end_line":2,"content":"y"}`, "path is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := tool.Execute(json.RawMessage(tc.args), ctx)
+			if err != nil {
+				return // read-staleness path returns an error, also a refusal
+			}
+			if res.Success {
+				t.Fatalf("expected refusal, got success")
+			}
+			if !strings.Contains(res.Error, tc.want) {
+				t.Errorf("error missing %q:\n%s", tc.want, res.Error)
+			}
+		})
+	}
+}
+
+// The tool the model most needs to reach for got the only empty example.
+// Commit 7f931a4's own message records it reaching for edit_file on a pure-ADD
+// task because nothing pointed at insert_after.
+func TestLineAddressedToolsHaveWorkedExamples(t *testing.T) {
+	for _, name := range []string{"insert_after", "replace_lines"} {
+		ex := generateInputExample(name)
+		if ex == "{}" || ex == "" {
+			t.Errorf("%s renders an empty example in the system prompt", name)
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(ex), &parsed); err != nil {
+			t.Errorf("%s example is not valid JSON: %v\n%s", name, err, ex)
+			continue
+		}
+		if _, ok := parsed["path"]; !ok {
+			t.Errorf("%s example omits path, which is the field it was seen forgetting", name)
+		}
+	}
+	// replace_lines' example must demonstrate the assertion, or the model
+	// learns the address and skips the safety belt.
+	var rl map[string]interface{}
+	json.Unmarshal([]byte(generateInputExample("replace_lines")), &rl)
+	for _, k := range []string{"start_line", "end_line", "expected_first_line", "expected_last_line"} {
+		if _, ok := rl[k]; !ok {
+			t.Errorf("replace_lines example omits %q", k)
+		}
+	}
+}
+
+// A failing insert_after/replace_lines loop must be able to trip the 3-strike
+// path-aware breaker. It could not: extractFailurePath returned "" for both, so
+// three identical failures read as three different paths.
+func TestFailurePathIsExtractedForLineAddressedTools(t *testing.T) {
+	for _, name := range []string{"insert_after", "replace_lines"} {
+		got := extractFailurePath(name, json.RawMessage(`{"path":"app.py","line":3}`))
+		if got != "app.py" {
+			t.Errorf("extractFailurePath(%s) = %q, want \"app.py\" — the breaker needs a non-empty path", name, got)
+		}
+	}
+}

@@ -69,6 +69,7 @@ func init() {
 	registerTool(editFileTool())
 	registerTool(structuralEditTool())
 	registerTool(insertAfterTool())
+	registerTool(replaceLinesTool())
 	registerTool(deleteFileTool())
 	registerTool(moveFileTool())
 	registerTool(runCommandTool())
@@ -1784,6 +1785,8 @@ func editFileTool() *ToolDef {
 						}, nil
 					}
 					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
+				} else if drift := v3RewroteBeyondTheEdit(content, newContent, improved); drift != "" {
+					log.Printf("[edit_file] discarding V3 candidate for %s — %s; keeping the caller's content", logPath(input.Path), drift)
 				} else if improved != "" {
 					newContent = improved
 					v3Out = meta
@@ -2107,6 +2110,8 @@ func structuralEditTool() *ToolDef {
 						}, nil
 					}
 					log.Printf("[structural_edit] V3 failed: %v — falling back to structurally edited content", err)
+				} else if drift := v3RewroteBeyondTheEdit(source, finalContent, improved); drift != "" {
+					log.Printf("[structural_edit] discarding V3 candidate for %s — %s; keeping the caller's content", logPath(input.Path), drift)
 				} else if improved != "" {
 					finalContent = improved
 					v3Out = meta
@@ -2603,6 +2608,160 @@ func insertAfterTool() *ToolDef {
 			out, _ := json.Marshal(EditFileOutput{
 				OK:          true,
 				DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
+			})
+			return &ToolResult{Success: true, Data: out}, nil
+		},
+	}
+}
+
+// replaceLinesMaxSpan bounds a single replace_lines call. Above this the model
+// is re-authoring rather than editing, and a whole-node rewrite is both more
+// reliable and easier to verify. The cliff is not gradual: a 14B model applies
+// ~0.87 of its edit blocks on 100-500 line files and 0.00 above 500.
+const replaceLinesMaxSpan = 20
+
+// lineAssertionMismatch compares an expected line against what is actually
+// there, whitespace-insensitively, and renders the correction when they differ.
+//
+// Whitespace-insensitive on purpose: the model reliably reproduces the TEXT of
+// one line and unreliably reproduces its indentation, and indentation is not
+// what the assertion is for. It exists to catch a wrong line NUMBER.
+//
+// The error carries a numbered window around the range, because the model's
+// numbers are stale exactly when this fires and the fix is to re-read them.
+func lineAssertionMismatch(expected, actual string, lineNum int, path string, fileLines []string) string {
+	if strings.TrimSpace(expected) == strings.TrimSpace(actual) {
+		return ""
+	}
+	if strings.TrimSpace(expected) == "" {
+		return fmt.Sprintf("replace_lines: expected text for line %d is empty. Send the text of that line "+
+			"(without the \"N<tab>\" prefix) so an off-by-one cannot apply silently.", lineNum)
+	}
+	var window strings.Builder
+	lo, hi := lineNum-3, lineNum+3
+	if lo < 1 {
+		lo = 1
+	}
+	if hi > len(fileLines) {
+		hi = len(fileLines)
+	}
+	for i := lo; i <= hi; i++ {
+		marker := " "
+		if i == lineNum {
+			marker = ">"
+		}
+		window.WriteString(fmt.Sprintf("%s %d\t%s\n", marker, i, fileLines[i-1]))
+	}
+	return fmt.Sprintf("replace_lines: line %d of %s is not what you expected, so the range is wrong and was NOT applied.\n"+
+		"  you said: %s\n  actually: %s\nThe numbers you used are stale. Current lines around %d:\n%s"+
+		"Re-read the file if you need more context, then send the range that matches.",
+		lineNum, path, truncateStr(strings.TrimSpace(expected), 120), truncateStr(strings.TrimSpace(actual), 120),
+		lineNum, window.String())
+}
+
+// replaceLinesTool is insert_after's rationale extended to REPLACEMENT.
+//
+// edit_file addresses a region by reproducing its text; on a 9-13 line span
+// this model corrupts one token somewhere in it essentially every time
+// (food.y -> hood.y, scoreElement -> scorerElement, unshift(( ). read_file
+// already prints the line numbers, so the address can be cited instead.
+//
+// The expected first/last line assertion is not optional. A line range fails
+// differently from an anchor: a wrong anchor simply does not match, while a
+// wrong line number still splices cleanly and produces plausible corruption.
+// One line each is the length regime this model is reliable in.
+func replaceLinesTool() *ToolDef {
+	return &ToolDef{
+		Name: "replace_lines",
+		Description: "Replace a RANGE OF LINES with new content, addressed by the line numbers read_file printed. " +
+			"Use this to CHANGE existing code spanning more than a line or two: cite `start_line` and `end_line` instead of " +
+			"reproducing the old text, so a long span cannot go wrong in transcription. Both are 1-based and INCLUSIVE. " +
+			"`expected_first_line` / `expected_last_line` are the text of those two lines WITHOUT the \"N<tab>\" prefix; they are " +
+			"compared whitespace-insensitively so an off-by-one is caught instead of silently applied. `content` is only the new text. " +
+			"Use edit_file for a one-line change, insert_after to ADD without replacing, structural_edit for a whole function or class.",
+		InputSchema: ReplaceLinesInput{},
+		ReadOnly:    false,
+		Destructive: false,
+		Execute: func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
+			var in ReplaceLinesInput
+			if err := json.Unmarshal(input, &in); err != nil {
+				return nil, fmt.Errorf("invalid input: %w", err)
+			}
+			if strings.TrimSpace(in.Path) == "" {
+				return &ToolResult{Success: false, Error: "replace_lines: path is required. The call is " +
+					"replace_lines {\"path\":\"app.py\", \"start_line\":N, \"end_line\":M, " +
+					"\"expected_first_line\":<text of line N>, \"expected_last_line\":<text of line M>, " +
+					"\"content\":<the new lines>}."}, nil
+			}
+			path := resolveAgentPath(ctx, in.Path)
+			if !ctx.WasFileRead(path) {
+				return nil, fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return &ToolResult{Success: false, Error: fmt.Sprintf("cannot read %s: %v", in.Path, err)}, nil
+			}
+			original := string(data)
+			fileLines := strings.Split(original, "\n")
+			limit := len(fileLines)
+			if limit > 0 && fileLines[limit-1] == "" {
+				limit--
+			}
+			if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
+						"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
+					in.StartLine, in.EndLine, in.Path, limit)}, nil
+			}
+			if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
+				return &ToolResult{Success: false, Error: fmt.Sprintf(
+					"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
+						"than an edit. Use structural_edit with function:NAME or class:NAME to replace a whole node, or "+
+						"write_file for the whole file.",
+					span, replaceLinesMaxSpan)}, nil
+			}
+			if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines); msg != "" {
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
+			if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines); msg != "" {
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
+
+			replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+			merged := append([]string{}, fileLines[:in.StartLine-1]...)
+			merged = append(merged, replacement...)
+			merged = append(merged, fileLines[in.EndLine:]...)
+			updated := strings.Join(merged, "\n")
+
+			if updated == original {
+				return &ToolResult{Success: false, Error: "replace_lines: the replacement is identical to what is already on " +
+					"those lines — nothing changed and the bug is still there."}, nil
+			}
+
+			// Same gate chain as insert_after and edit_file, healthy->broken
+			// only so a file mid-repair stays editable.
+			if synErr, ok := checkFallbackSyntax(ctx, in.Path, updated); !ok {
+				if _, wasHealthy := checkFallbackSyntax(ctx, in.Path, original); wasHealthy {
+					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(in.Path, updated, synErr)}, nil
+				}
+			}
+			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
+				return &ToolResult{Success: false, Error: structuralRejection(in.Path, introduced)}, nil
+			}
+			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
+
+			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+				return nil, fmt.Errorf("cannot write %s: %w", in.Path, err)
+			}
+			ctx.SessionWrites[in.Path] = true
+			ctx.RecordFileRead(path, updated)
+			replaced := in.EndLine - in.StartLine + 1
+			log.Printf("[replace_lines] %s lines %d-%d: %d -> %d lines", logPath(in.Path), in.StartLine, in.EndLine, replaced, len(replacement))
+			out, _ := json.Marshal(EditFileOutput{
+				OK:          true,
+				DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
 			})
 			return &ToolResult{Success: true, Data: out}, nil
 		},
@@ -4085,6 +4244,13 @@ func generateInputExample(toolName string) string {
 		return `{"path": "src/main.py"}`
 	case "write_file":
 		return `{"path": "src/main.py", "content": "#!/usr/bin/env python3\n..."}`
+	// Both fell through to "{}" — the system prompt rendered the description
+	// and an empty example for exactly the two tools that exist to be reached
+	// for instead of edit_file.
+	case "insert_after":
+		return `{"path": "app.py", "line": 42, "content": "    log.info('added')"}`
+	case "replace_lines":
+		return `{"path": "app.py", "start_line": 42, "end_line": 47, "expected_first_line": "def handle(req):", "expected_last_line": "    return None", "content": "def handle(req):\n    ..."}`
 	case "edit_file":
 		// Real fix-style snippet — adding a None check, the most common
 		// kind of small targeted edit. Models cargo-cult the example

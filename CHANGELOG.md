@@ -4,6 +4,78 @@
 
 ## [Unreleased]
 
+### Verbatim reproduction
+
+Every edit failure observed on the 12B traced to one thing: the model cannot
+reproduce multi-line text exactly. A 1-line anchor lands; a 9-13 line anchor
+comes back with `food.y` written as `hood.y`, `scoreElement` as
+`scorerElement`, a stray `)`, or `℘` where `&&` belongs. The tool call is
+then rejected for a mismatch that has nothing to do with the model's
+understanding of the task. These changes attack the copying itself rather
+than adding another retry around it.
+
+**Changed**
+
+- DRY sampling now defaults **off** (`ATLAS_DRY_MULTIPLIER=0`, was `0.8`).
+  DRY penalizes repeated sequences, and copying a file into an `old_str` *is*
+  a repeated sequence: the penalty is `multiplier × base^(matched −
+  allowed_length)`, so at the previous defaults a 12-token verbatim run
+  carried a −23.0 logit penalty on the correct next token. The previous
+  `ATLAS_DRY_PENALTY_LAST_N` comment claimed the 2048-token window bounded
+  this to the model's own output; it does not. llama-server's
+  `init_sampler()` seeds the DRY ring buffer with the prompt tokens, so the
+  file being copied from is itself inside the repetition window. The knob
+  still works for any model that needs it.
+- Agent-loop requests now decode greedily by default: `samplers: ["top_k"]`,
+  `top_k: 1` (`ATLAS_TRANSCRIPTION_SAMPLER=0` restores the server chain).
+  An agent turn is transcription — the tool call names a path and repeats a
+  span of the file — and there is one correct token at each step. Sent as a
+  one-element sampler chain rather than `temperature: 0` because temperature
+  is applied *last* in llama.cpp's chain, which would pick greedily from an
+  already penalty-distorted distribution instead of the raw one.
+- The most recently read file is restated, line-numbered, as a final message
+  immediately before the generation point (`ATLAS_RESTATE_LAST_READ=0`
+  disables). The `read_file` result the model copies from sits thousands of
+  tokens back behind the system prompt and every tool description, while the
+  model's own drifting copy sits adjacent to the cursor. Skipped when the
+  content is already the last message, when nothing has been read, and above
+  24 KB.
+
+**Added**
+
+- `replace_lines` — a sixteenth tool that changes an existing line range
+  without reproducing it. `insert_after` removed the verbatim burden for
+  *adding* code; this does the same for *changing* it. The model supplies
+  `start_line`/`end_line` plus `expected_first_line` and
+  `expected_last_line`, so the staleness check costs two lines of copying
+  instead of N. Assertions compare ignoring leading/trailing whitespace
+  (indentation is the most common drift and is not evidence of a stale
+  range); a mismatch returns the actual line and a ±3-line numbered window.
+  Capped at 20 lines and one hunk per call, requires a prior read, and runs
+  the same fallback-syntax, unresolved-call and embedded-script gates as
+  `edit_file`.
+
+**Fixed**
+
+- A V3 candidate that rewrites text the caller's edit never touched is now
+  discarded, keeping the caller's content (the same fallback the parse check
+  already used). `edit_file` and `structural_edit` splice their change and
+  hand the composed *file* to v3-service, which regenerates it — on a small
+  file that is a retype of everything the edit left alone, and the same
+  verbatim drift applies. Caught in a live session: V3's accepted candidate
+  wrote `#e94562` as `#e94162` and `<h1 id="msg">` as `<h1 id=" msg">`,
+  which makes `getElementById('msg')` return `null` at runtime. Neither is a
+  syntax error, so the parse and embedded-script gates passed them. The rule
+  is that a line the edit did not remove must survive V3 intact; V3 remains
+  free to improve the lines the edit actually changed.
+- `insert_after` was missing from four `switch` statements that every other
+  edit tool appears in: the lens breaker's failure-path extraction (so three
+  consecutive failures on the same file did not trip the path-aware
+  breaker), the worked-example generator (so its schema shipped without a
+  filled-in example), the productive-change counter (so successful inserts
+  did not count as progress), and workspace-path containment validation.
+  `replace_lines` is registered in all four.
+
 ### Measured reliability
 
 A day of running ATLAS against itself and fixing what the sessions showed.

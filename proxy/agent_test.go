@@ -344,26 +344,43 @@ func TestIsContextOverflow(t *testing.T) {
 
 // --- repetition sampling ---------------------------------------------------
 
-func TestApplyRepetitionSamplingDefaultsEnableDry(t *testing.T) {
+func TestApplyRepetitionSamplingDefaultsOffBecauseItPenalisesCopying(t *testing.T) {
+	// Flipped from on-by-default. DRY penalises "extending a sequence that
+	// already occurred in the input", which is the definition of copying an
+	// anchor out of a file the model just read.
+	//
+	// The old default was 0.8 with dry_penalty_last_n=2048, believed to bound
+	// the scan to the current generation. It does not: llama-server's
+	// init_sampler() accepts every PROMPT token into the same ring buffer, so
+	// the read_file result is inside it. Penalty is
+	// multiplier * base^(matched-allowed_length), so a 12-token match costs
+	// -23.0 logits and the correct continuation loses to the runner-up.
+	// Observed as scoreElement -> scorerElement.
 	body := map[string]interface{}{}
 	applyRepetitionSampling(body)
 
-	if body["dry_multiplier"] != 0.8 {
-		t.Fatalf("dry_multiplier = %v, want 0.8 (DRY must be on by default — "+
-			"llama-server ships every repetition control disabled)", body["dry_multiplier"])
-	}
-	// Above llama.cpp's default of 2: 3-token runs are ordinary in source.
-	if body["dry_allowed_length"] != 6 {
-		t.Fatalf("dry_allowed_length = %v, want 6", body["dry_allowed_length"])
-	}
-	if body["dry_penalty_last_n"] != 2048 {
-		t.Fatalf("dry_penalty_last_n = %v, want 2048 (bounded lookback, not -1)",
-			body["dry_penalty_last_n"])
+	for _, k := range []string{"dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("%s must not be set by default, got %v", k, body[k])
+		}
 	}
 	// repeat_penalty scores individual tokens and mangles code indentation;
 	// it must stay off unless explicitly opted into.
 	if _, ok := body["repeat_penalty"]; ok {
-		t.Fatalf("repeat_penalty must not be set by default, got %v", body["repeat_penalty"])
+		t.Errorf("repeat_penalty must not be set by default, got %v", body["repeat_penalty"])
+	}
+}
+
+func TestDryStillConfigurableBackOn(t *testing.T) {
+	// The escape hatch has to work, or the change is irreversible in the field.
+	t.Setenv("ATLAS_DRY_MULTIPLIER", "0.8")
+	body := map[string]interface{}{}
+	applyRepetitionSampling(body)
+	if body["dry_multiplier"] != 0.8 {
+		t.Fatalf("dry_multiplier = %v, want 0.8 when explicitly set", body["dry_multiplier"])
+	}
+	if body["dry_allowed_length"] != 6 {
+		t.Fatalf("dry_allowed_length = %v, want 6", body["dry_allowed_length"])
 	}
 }
 
@@ -2267,5 +2284,64 @@ func TestReadOnlyRequestsGetNoPlan(t *testing.T) {
 		if !shouldGeneratePlan(ctx, m) {
 			t.Errorf("work request lost its plan: %q", m)
 		}
+	}
+}
+
+// The read_file result the model copies from sits thousands of tokens back,
+// behind the system prompt and every tool description, while its own emitted
+// copy sits at the very end. Restating the file at the generation point makes
+// the source reachable at the same distance as the model's own output.
+func TestLastReadIsRestatedAtTheGenerationPoint(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(filepath.Join(dir, "app.py"), "alpha\nbravo\n")
+
+	wire := []map[string]string{{"role": "user", "content": "fix the bug"}}
+	got := appendLastReadRestatement(ctx, wire)
+	if len(got) != 2 {
+		t.Fatalf("expected a restatement appended, got %d messages", len(got))
+	}
+	last := got[len(got)-1]["content"]
+	for _, want := range []string{"app.py", "1\talpha", "2\tbravo", "NOT in the file"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("restatement missing %q:\n%s", want, last)
+		}
+	}
+}
+
+func TestRestatementSkipsWhenItWouldDuplicate(t *testing.T) {
+	// Immediately after read_file the content is already the last message.
+	// Restating there costs prompt-processing on every turn and buys nothing.
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
+
+	wire := []map[string]string{{"role": "user", "content": "here it is: alpha\n"}}
+	if got := appendLastReadRestatement(ctx, wire); len(got) != 1 {
+		t.Errorf("must not duplicate content already at the end, got %d messages", len(got))
+	}
+}
+
+func TestRestatementSkipsBigFilesAndEmptyState(t *testing.T) {
+	dir := t.TempDir()
+	wire := []map[string]string{{"role": "user", "content": "x"}}
+
+	// Nothing read yet.
+	fresh := NewAgentContext(dir, Tier1Simple)
+	if got := appendLastReadRestatement(fresh, wire); len(got) != 1 {
+		t.Error("restated with no file read")
+	}
+	// Too big to be worth pasting every turn.
+	big := NewAgentContext(dir, Tier1Simple)
+	big.RecordFileRead(filepath.Join(dir, "big.py"), strings.Repeat("x", restatementMaxBytes+1))
+	if got := appendLastReadRestatement(big, wire); len(got) != 1 {
+		t.Error("restated a file over the size cap")
+	}
+	// Escape hatch works.
+	t.Setenv("ATLAS_RESTATE_LAST_READ", "0")
+	off := NewAgentContext(dir, Tier1Simple)
+	off.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
+	if got := appendLastReadRestatement(off, wire); len(got) != 1 {
+		t.Error("ATLAS_RESTATE_LAST_READ=0 did not disable it")
 	}
 }

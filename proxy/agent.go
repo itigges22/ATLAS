@@ -1196,8 +1196,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// edit on disk. structural_edit was missing from this list pre-May-10,
 			// which let a structural_edit-only success path slip past the
 			// productive-change tracking too.
+			// insert_after and replace_lines were absent, so a turn whose only
+			// work was a successful insert did not count as productive and the
+			// action gate could bounce it for having "done nothing".
 			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" ||
-				parsed.Name == "structural_edit" || parsed.Name == "delete_file") {
+				parsed.Name == "structural_edit" || parsed.Name == "delete_file" ||
+				parsed.Name == "insert_after" || parsed.Name == "replace_lines") {
 				st.madeProductiveChange = true
 			}
 
@@ -1984,13 +1988,28 @@ func toWireMessages(messages []AgentMessage) []map[string]string {
 // dry_allowed_length is raised above llama.cpp's default of 2 for the same
 // reason — 3-token runs are ordinary in source.
 //
-// The defaults here reduce how often the tail loop is entered; they have not
-// been A/B'd against a benchmark run. ATLAS_DRY_MULTIPLIER=0 disables DRY
-// outright. ATLAS_REPEAT_PENALTY is available for the pure-repeated-newline
-// degeneration that DRY's newline sequence-breaker cannot see, and defaults
-// off precisely because of the code-repetition cost above.
+// DRY now defaults OFF, because it penalises the one thing an edit tool needs
+// most: copying an anchor out of a file the model just read.
+//
+// The old comment below the multiplier claimed dry_penalty_last_n bounded the
+// scan to the current generation. That is false. llama-server's
+// ServerSlot::init_sampler() calls common_sampler_accept() for every PROMPT
+// token, and in common/sampling.cpp the is_generated flag gates only the
+// grammar and reasoning-budget samplers — llama_sampler_accept(gsmpl->chain,
+// token) is unconditional. So the ring buffer is filled with the tail of the
+// prompt, which is exactly the read_file result the model is copying from.
+//
+// The penalty is multiplier * base^(matched - allowed_length), subtracted from
+// the logit: -2.45 at 8 matched tokens, -7.51 at 10, -23.0 at 12, -123 at 15.
+// Copying is by definition "extending a sequence that already occurred in the
+// input", so around token 10-12 of an anchor the correct continuation is pushed
+// below the runner-up, the model takes the branch that BREAKS the match, the
+// match length resets and the penalty collapses. Observed as
+// scoreElement -> scorerElement, food.y -> hood.y, unshift(( .
+//
+// Set ATLAS_DRY_MULTIPLIER=0.8 to restore the old behaviour.
 func applyRepetitionSampling(reqBody map[string]interface{}) {
-	dryMultiplier := envFloatOr("ATLAS_DRY_MULTIPLIER", 0.8)
+	dryMultiplier := envFloatOr("ATLAS_DRY_MULTIPLIER", 0)
 	if dryMultiplier > 0 {
 		reqBody["dry_multiplier"] = dryMultiplier
 		reqBody["dry_base"] = envFloatOr("ATLAS_DRY_BASE", 1.75)
@@ -2028,8 +2047,62 @@ func envIntOr(key string, def int) int {
 	return def
 }
 
+// restatementMaxBytes caps the restated file. Past this the copy is not the
+// bottleneck anyway, and a big paste costs prompt-processing time on every turn.
+const restatementMaxBytes = 24000
+
+// appendLastReadRestatement puts the most recently read file back at the END of
+// the message list, immediately before the generation point.
+//
+// Why this helps: the read_file result the model must copy from sits behind the
+// system prompt, every tool description, and every prior turn — thousands of
+// tokens back. The model's own partially-emitted copy sits at the very end. So
+// the two candidate sources for "what comes next" are not equally reachable,
+// and the near one wins more often as the copy lengthens. That asymmetry is the
+// most plausible account of the corruptions seen in practice
+// (food.y -> hood.y, scoreElement -> scorerElement, unshift(( ).
+//
+// This does not depend on which mechanism is responsible — shortening the
+// distance between the source span and the generation point helps under any
+// account of long-range retrieval degradation, and it is free.
+//
+// Skipped when nothing has been read, when the file is large, and when the same
+// content is already the last message (which is the common case immediately
+// after a read_file, where restating would only duplicate it).
+// ATLAS_RESTATE_LAST_READ=0 disables.
+func appendLastReadRestatement(ctx *AgentContext, wire []map[string]string) []map[string]string {
+	if ctx == nil || envOr("ATLAS_RESTATE_LAST_READ", "1") == "0" {
+		return wire
+	}
+	path, content := ctx.LastRead()
+	if path == "" || content == "" || len(content) > restatementMaxBytes {
+		return wire
+	}
+	// Already fresh in the window — don't pay for it twice.
+	if n := len(wire); n > 0 {
+		if strings.Contains(wire[n-1]["content"], content) {
+			return wire
+		}
+	}
+	rel := path
+	if ctx.WorkingDir != "" {
+		if r, err := filepath.Rel(ctx.WorkingDir, path); err == nil && !strings.HasPrefix(r, "..") {
+			rel = r
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString("Current contents of ")
+	sb.WriteString(rel)
+	sb.WriteString(" (line numbers are for reference and are NOT in the file):\n")
+	for i, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+		fmt.Fprintf(&sb, "%d\t%s\n", i+1, line)
+	}
+	return append(wire, map[string]string{"role": "user", "content": sb.String()})
+}
+
 func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperature float64, grammar string) (string, int, error) {
 	wireMessages := toWireMessages(messages)
+	wireMessages = appendLastReadRestatement(ctx, wireMessages)
 
 	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
 
@@ -2058,6 +2131,25 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		"chat_template_kwargs": map[string]bool{"enable_thinking": false},
 	}
 	applyRepetitionSampling(reqBody)
+
+	// Transcription profile. An agent turn emits a tool call whose arguments
+	// are largely COPIED from a file the model just read, and every sampler in
+	// the default chain is tuned for open-ended prose: top_k 40 / top_p 0.95 /
+	// min_p 0.05 all leave a live tail for a wrong-but-plausible token to be
+	// drawn from, and that is what a near-miss identifier is.
+	//
+	// "samplers": ["top_k"] with top_k 1 builds a chain of exactly
+	// logit_bias -> top_k(1) -> dist, so the penalty samplers are never
+	// instantiated at all. Not temperature 0: since llama.cpp PR #9897 temp<=0
+	// is handled inside the temperature sampler, which sits LAST, so it returns
+	// the argmax of an already-penalised distribution.
+	//
+	// ATLAS_TRANSCRIPTION_SAMPLER=0 restores the server defaults.
+	if envOr("ATLAS_TRANSCRIPTION_SAMPLER", "1") != "0" {
+		reqBody["samplers"] = []string{"top_k"}
+		reqBody["top_k"] = 1
+	}
+
 	if grammar != "" {
 		// Token-level restriction wins over response_format. llama-server
 		// rejects requests that pass both response_format=json_object and

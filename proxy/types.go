@@ -202,6 +202,30 @@ type InsertAfterInput struct {
 	Content string `json:"content"`
 }
 
+// ReplaceLinesInput is insert_after's rationale extended to REPLACEMENT, which
+// is where the verbatim burden actually bites. edit_file needs the old text
+// reproduced byte-for-byte; on a 9-13 line span this model corrupts one token
+// somewhere in it essentially every time. Here the address is a pair of numbers
+// read_file already printed.
+//
+// ExpectedFirstLine/ExpectedLastLine are the safety belt, and they are not
+// optional. A line range degrades catastrophically and SILENTLY: an off-by-one
+// still applies cleanly and produces plausible corruption, where a bad anchor
+// merely fails to match. Every surveyed implementation that ships a line-range
+// replace carries some form of this assertion. One line each is the length
+// regime this model is reliable in.
+type ReplaceLinesInput struct {
+	Path string `json:"path"`
+	// 1-based, inclusive on both ends — the convention read_file prints.
+	StartLine int `json:"start_line"`
+	EndLine   int `json:"end_line"`
+	// Verbatim text of the first and last line being replaced, without the
+	// "N<tab>" display prefix. Whitespace-trimmed before comparison.
+	ExpectedFirstLine string `json:"expected_first_line"`
+	ExpectedLastLine  string `json:"expected_last_line"`
+	Content           string `json:"content"`
+}
+
 type EditFileOutput struct {
 	OK           bool   `json:"ok"`
 	DiffPreview  string `json:"diff_preview,omitempty"`
@@ -509,6 +533,10 @@ type AgentContext struct {
 	// assigning here. See proxy/detectors.go for the detection logic.
 	RecentToolCalls []string
 
+	// LastReadPath is the file most recently returned by read_file, restated
+	// near the generation point so the model copies from close range.
+	LastReadPath string
+
 	// AppliedEdits keys every edit_file that already succeeded, by
 	// (path, old_str, new_str). A model that re-applies an identical edit has
 	// lost track of its own work, and when the edit is whitespace-only the
@@ -612,6 +640,15 @@ func (c *AgentContext) RecordFileRead(path string, content string) {
 	defer c.mu.Unlock()
 	c.FileReadTimes[path] = time.Now()
 	c.FilesRead[path] = content
+	c.LastReadPath = path
+}
+
+// LastRead returns the most recently read file and its content, for restating
+// just before the generation point. Empty when nothing has been read.
+func (c *AgentContext) LastRead() (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.LastReadPath, c.FilesRead[c.LastReadPath]
 }
 
 // RecordPassWrite appends a model-authored write to this pass's collection
