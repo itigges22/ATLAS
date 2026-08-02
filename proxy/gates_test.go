@@ -1500,3 +1500,30 @@ func TestEmbeddedScriptGateBlocksAStoppedRenderLoop(t *testing.T) {
 		t.Errorf("stopped-loop finding described as a syntax error:\n%s", msg)
 	}
 }
+
+// A repeated let/const parses fine and then refuses to run, so the rejection
+// must not read like a syntax error the model can hunt for with a parser.
+func TestRedeclarationRejectionSaysTheWholeScriptIsDead(t *testing.T) {
+	msg := formatEmbeddedScriptRejection("app.py", embeddedScriptFinding{
+		Line: 207, Column: 4, Kind: "javascript", Defect: "redeclaration",
+		Where:   "the <script> block inside the Python string HTML_TEMPLATE",
+		Message: "`score` is declared twice in the same scope",
+		Hint:    "Drop this declaration and use the existing `score`, or rename one of them.",
+		Text:    "let score = 0;",
+	})
+	for _, want := range []string{
+		"declares the same name twice",
+		"line 207",
+		"`score`",
+		"it was NOT written",
+		"refuses the script", // why nothing on the page works
+		"still returns 200",  // why the server check missed it
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection missing %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "syntax error") {
+		t.Errorf("redeclaration described as a syntax error:\n%s", msg)
+	}
+}

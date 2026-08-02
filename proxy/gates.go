@@ -794,6 +794,26 @@ func formatEmbeddedScriptRejection(path string, f embeddedScriptFinding) string 
 		host = "Python"
 	}
 	var sb strings.Builder
+	if f.Defect == "redeclaration" {
+		// Parses, but never runs: a repeated let/const is an early
+		// SyntaxError, so the engine throws out the whole script before
+		// executing a line of it. Every handler on the page is dead, which
+		// is worse than the stray-paren case and looks identical from the
+		// server side.
+		fmt.Fprintf(&sb, "%s declares the same name twice in %s — it was NOT written.\n", path, f.Where)
+		fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)
+		if f.Text != "" {
+			fmt.Fprintf(&sb, "  %d | %s\n", f.Line, f.Text)
+		}
+		if f.Hint != "" {
+			fmt.Fprintf(&sb, "%s\n", f.Hint)
+		}
+		sb.WriteString("Running the file will NOT surface this: the Python compiles, the server " +
+			"still starts and the page still returns 200 — the browser refuses the script " +
+			"outright, so nothing on the page responds. Re-send the edit without the second " +
+			"declaration.")
+		return sb.String()
+	}
 	if f.Defect == "stopped_loop" {
 		// Not a syntax error: the JavaScript parses. The edit left a render
 		// loop scheduled exactly once, so the page draws one frame and

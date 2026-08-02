@@ -1116,6 +1116,67 @@ def _js_error(block: bytes):
             "Rewrite that statement so it parses as JavaScript.")
 
 
+# Nodes that open a fresh lexical scope. A `let` may shadow an outer binding
+# freely; only a repeat within ONE of these is the early error.
+_JS_SCOPE_NODES = frozenset({
+    "program", "statement_block", "class_body", "switch_body",
+    "for_statement", "for_in_statement",
+})
+
+
+def _js_redeclaration(block: bytes):
+    """(offset, message, hint) for the first `let`/`const` redeclared in the
+    same scope, or None.
+
+    A duplicate lexical binding is an early SyntaxError — the engine refuses
+    the whole script before running a line of it, so one stray `let score = 0`
+    appended to a page kills every handler on it. tree-sitter parses it
+    happily, which is why the syntax check cannot see it.
+
+    Only `let`/`const` are considered, and only within a single scope: those
+    are unconditionally errors per spec, so there is no judgment call and no
+    false positive. `var`, function declarations and shadowing across scopes
+    are all legal and left alone.
+    """
+    parser = _ts.Parser(_JS_LANG)
+    tree = parser.parse(block)
+    if tree.root_node.has_error or _has_template_marker(block):
+        return None
+
+    def declared_names(decl):
+        """(name, node) for each plain identifier a lexical declaration binds.
+        Destructuring patterns are skipped — conservative on purpose."""
+        for child in decl.named_children:
+            if child.type != "variable_declarator":
+                continue
+            ident = child.child_by_field_name("name")
+            if ident is not None and ident.type == "identifier":
+                yield ident.text.decode("utf-8", "replace"), ident
+
+    def walk(node, scope):
+        if node.type == "lexical_declaration":
+            for name, ident in declared_names(node):
+                if name in scope:
+                    return (ident.start_byte, name)
+                scope[name] = ident.start_byte
+        for child in node.children:
+            inner = {} if child.type in _JS_SCOPE_NODES else scope
+            hit = walk(child, inner)
+            if hit is not None:
+                return hit
+        return None
+
+    hit = walk(tree.root_node, {})
+    if hit is None:
+        return None
+    offset, name = hit
+    return (offset,
+            f"`{name}` is declared twice in the same scope",
+            f"A repeated `let`/`const` is a SyntaxError before anything runs, so "
+            f"the whole script is dead, not just this line. Drop this declaration "
+            f"and use the existing `{name}`, or rename one of them.")
+
+
 # Timers that re-invoke their callback on their own. requestAnimationFrame is
 # NOT one: it fires once, and a render loop built on it re-arms from inside the
 # callback — which is exactly the shape checked for below.
@@ -1411,8 +1472,19 @@ def embedded_script_check(path: str, source_text: str, previous_text: str = "") 
 
     findings = []
     for kind, offset, body, where in blocks:
+        defect = ""
         try:
-            hit = _js_error(body) if kind == "javascript" else _css_error(body)
+            if kind == "javascript":
+                hit = _js_error(body)
+                if hit is None:
+                    # Parses, but a repeated lexical binding still refuses to
+                    # run — checked second because a broken parse makes the
+                    # scope walk meaningless.
+                    hit = _js_redeclaration(body)
+                    if hit is not None:
+                        defect = "redeclaration"
+            else:
+                hit = _css_error(body)
         except Exception as e:
             return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
         if hit is None:
@@ -1423,6 +1495,7 @@ def embedded_script_check(path: str, source_text: str, previous_text: str = "") 
             "line": line,
             "column": column,
             "kind": kind,
+            "defect": defect,
             "where": where,
             "message": message,
             "hint": hint,

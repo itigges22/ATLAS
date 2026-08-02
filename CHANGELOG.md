@@ -16,6 +16,15 @@ than adding another retry around it.
 
 **Changed**
 
+- The tool-choice guidance in the system prompt now names the line-addressed
+  edit tools. It listed `edit_file` / `write_file` / `structural_edit` and
+  repeated those three, so a model changing a multi-line region could only
+  pick from tools that need it reproduced — `replace_lines` and `insert_after`
+  were reachable only from the raw tool list. The `old_str`-not-found steers
+  had the same gap: they pointed at `insert_after`, which *adds*, and named
+  nothing for *changing*. Observed live as two failed 15-line `old_str`
+  attempts in a row followed by the model abandoning the edit; on the next run
+  with the guidance fixed it reached for `replace_lines` directly.
 - DRY sampling now defaults **off** (`ATLAS_DRY_MULTIPLIER=0`, was `0.8`).
   DRY penalizes repeated sequences, and copying a file into an `old_str` *is*
   a repeated sequence: the penalty is `multiplier × base^(matched −
@@ -55,6 +64,15 @@ than adding another retry around it.
   the same fallback-syntax, unresolved-call and embedded-script gates as
   `edit_file`.
 
+- A repeated `let`/`const` in one scope is now refused at the write gate. An
+  edit appended a second `let score = 0` to a `<script>` that already had one;
+  tree-sitter parses that, so the syntax check passed and it landed. A
+  duplicate lexical binding is an *early* SyntaxError, so the browser throws
+  out the whole script before running a line of it and every handler on the
+  page dies — while the Python compiles, the server starts and the page
+  returns 200. Only `let`/`const` within a single scope are reported, which
+  the spec makes unconditionally an error; `var`, function declarations and
+  shadowing across scopes are all legal and left alone.
 - A stopped render loop is now refused at the write gate. Asked to make the
   snake speed up with the score, the model replaced `setInterval(draw, 100)`
   with `setTimeout(draw, delay)` at the same top-level spot and never re-armed

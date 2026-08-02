@@ -1606,18 +1606,20 @@ func editFileTool() *ToolDef {
 				if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
 						"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
-						"Anchor on ONE short line that appears exactly once in the region you are changing, "+
-						"and put the whole replacement in `new_str`. If you are ADDING code rather than "+
-						"replacing it, use insert_after with the line number read_file printed — it needs "+
-						"no old_str at all.\nSearched for: %s",
+						"Use `replace_lines` instead: give the start and end line numbers read_file "+
+						"printed and assert only the FIRST and LAST line of that range, so there is no "+
+						"multi-line block to reproduce. Or anchor edit_file on ONE short line that "+
+						"appears exactly once and put the whole replacement in `new_str`. If you are "+
+						"ADDING code rather than replacing it, use insert_after with the line number "+
+						"read_file printed — it needs no old_str at all.\nSearched for: %s",
 						lines, truncateStr(input.OldStr, 200))
 				}
 				if n := strayCarriageReturns(input.OldStr); n >= 3 {
 					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` "+
 						"contains %d stray carriage returns and looks corrupted rather than copied "+
-						"— long blocks tend to come out this way. Re-emit `old_str` as ONE short "+
-						"unique line taken from the file (the single line you are changing), not a "+
-						"multi-line block", n)
+						"— long blocks tend to come out this way. Use `replace_lines` on the line "+
+						"range instead, or re-emit `old_str` as ONE short unique line taken from the "+
+						"file (the single line you are changing), not a multi-line block", n)
 				}
 				// Mismatch persists — return targeted error.
 				hasEntities := strings.Contains(input.OldStr, "&lt;") ||

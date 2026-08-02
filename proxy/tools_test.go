@@ -1419,3 +1419,40 @@ func TestFailurePathIsExtractedForLineAddressedTools(t *testing.T) {
 		}
 	}
 }
+
+// The steer a model actually reads when a long anchor misses. It used to
+// name only insert_after, which handles ADDING — so a model changing a
+// multi-line region was told "anchor on ONE short line" with no pointer to
+// the tool built for exactly that case. Observed live: two failed 15-line
+// old_str attempts in a row, then the model abandoned the edit.
+func TestLongAnchorFailureNamesTheLineAddressedTool(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	if err := os.WriteFile(path, []byte("a\nb\nc\nd\ne\nf\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(path, "a\nb\nc\nd\ne\nf\n")
+
+	tool := findTool(t, "edit_file")
+	_, err := tool.Execute(json.RawMessage(
+		`{"path":"app.py","old_str":"nope1\nnope2\nnope3\nnope4\nnope5\nnope6","new_str":"x"}`), ctx)
+	if err == nil {
+		t.Fatal("a six-line anchor that matches nothing must fail")
+	}
+	if !strings.Contains(err.Error(), "replace_lines") {
+		t.Errorf("steer never names replace_lines:\n%s", err)
+	}
+}
+
+// Guidance the model reads before it picks anything. Every tool that edits
+// without an old_str has to be reachable from it, or the model falls back to
+// the two tools the prose repeats.
+func TestToolGuidanceNamesEveryOldStrFreeEditTool(t *testing.T) {
+	guidance := buildSystemPrompt(NewAgentContext(t.TempDir(), Tier2Medium))
+	for _, name := range []string{"replace_lines", "insert_after", "structural_edit"} {
+		if !strings.Contains(guidance, name) {
+			t.Errorf("system prompt never mentions %s — the model cannot choose it", name)
+		}
+	}
+}
