@@ -3,6 +3,7 @@
 // also appended to a transcript so a re-created webview (sidebar closed and
 // reopened, window reload of the view) can be replayed from scratch.
 
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
@@ -743,10 +744,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 }
 
 function getNonce(): string {
-	let text = '';
-	const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-	for (let i = 0; i < 32; i++) {
-		text += possible.charAt(Math.floor(Math.random() * possible.length));
-	}
-	return text;
+	// A CSP nonce is a security token: it must be unguessable, so it comes
+	// from the CSPRNG rather than Math.random(). 16 bytes of hex keeps the
+	// 32-character shape and stays inside the CSP base64-value grammar.
+	return randomBytes(16).toString('hex');
 }
