@@ -177,6 +177,25 @@ than adding another retry around it.
 
 **Fixed**
 
+- Every write path now runs the same gates. `edit_file` — the most used edit
+  tool — ran the syntax and unresolved-call checks but never
+  `embeddedScriptGate`, so the two comparative findings (a render loop that
+  stopped repeating, a lexical binding declared twice) were never evaluated on
+  it; `edit_file` and `write_file` also skipped the duplicate-entrypoint
+  guard. Caught by A/B: the same one-shot `setTimeout(draw, delay)` the gate
+  refuses under `replace_lines` landed through `edit_file` on the next run,
+  and the page returned 200 with a dead game. A gate wired into four of five
+  write paths reads as covered and is not, so
+  `tests/contracts/test_write_gate_coverage.py` now asserts the wiring
+  directly — nothing else can, since each tool builds its own chain and the
+  compiler cannot see a missing call.
+- A selector that names embedded code is told where it lives instead of that
+  it does not exist. `structural_edit selector="function:draw"` against a
+  Flask app whose game loop is in `HTML_TEMPLATE` returned "that symbol does
+  not exist in this file" — plainly contradicted by the file the model had
+  just read, which is why three runs re-sent it. It now reports that `draw`
+  exists as JavaScript at specific lines inside a named string literal, that
+  no selector reaches it, and which tools do.
 - A V3 candidate that rewrites text the caller's edit never touched is now
   discarded, keeping the caller's content (the same fallback the parse check
   already used). `edit_file` and `structural_edit` splice their change and

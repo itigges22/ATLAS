@@ -149,3 +149,34 @@ _FLASK_WITH_SCRIPT = (
     'def index():\n'
     '    return render_template_string(HTML_TEMPLATE)\n'
 )
+
+
+def test_a_selector_naming_embedded_code_is_told_where_it_lives():
+    """The selector-not-found error is where the model actually looks — it
+    does not call outline_file first. Three runs opened with `function:draw`
+    against a template-held game loop, were told the symbol did not exist,
+    and re-sent it: from the file they had just read, that was plainly false.
+    """
+    err = structural_edit(path="app.py", source_text=_FLASK_WITH_SCRIPT,
+                          selector="function:draw", content="x")["error"]
+    assert "does not exist" not in err, "must not contradict the file the model just read"
+    assert "`draw` exists" in err
+    assert "NOT as a node any selector can reach" in err
+    assert "replace_lines" in err
+
+
+def test_a_selector_naming_nothing_still_lists_the_embedded_regions():
+    err = structural_edit(path="app.py", source_text=_FLASK_WITH_SCRIPT,
+                          selector="function:nope", content="x")["error"]
+    assert "does not exist in this file" in err     # it genuinely does not
+    assert "function:index" in err                  # what IS selectable
+    assert "no selector reaches" in err             # and what is not
+    assert "draw" in err
+
+
+def test_a_file_without_embedded_code_keeps_the_plain_message():
+    plain = "def a():\n    return 1\n"
+    err = structural_edit(path="a.py", source_text=plain,
+                          selector="function:nope", content="x")["error"]
+    assert "does not exist in this file" in err
+    assert "embedded" not in err

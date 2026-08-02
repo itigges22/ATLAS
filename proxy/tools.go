@@ -1421,6 +1421,16 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 	}
 
+	// Same entrypoint check every edit path runs. write_file on an existing
+	// file is a whole-file replacement, which is exactly how a second
+	// `if __name__` block gets appended.
+	if original, origOK := readOriginalForGate(path); origOK {
+		if msg := duplicateMainGuard(path, original, code); msg != "" {
+			log.Printf("[write_file] write duplicates the module entrypoint in %s — rejecting", logPath(path))
+			return &ToolResult{Success: false, Error: msg}, nil
+		}
+	}
+
 	// The structural gate made HTTP calls; a user cancel during that window
 	// must not land content on disk, mirroring the main call's abort path above.
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
@@ -1855,6 +1865,21 @@ func editFileTool() *ToolDef {
 			if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
 				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
 				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+			}
+			// edit_file ran checkFallbackSyntax, which parses the embedded
+			// script but has no pre-edit file to compare against, so the
+			// comparative findings — a render loop that stopped repeating, a
+			// lexical binding declared twice — were never checked here. Every
+			// other edit path had them. Observed: the same one-shot
+			// setTimeout the gate refuses under replace_lines landed through
+			// edit_file, and the page returned 200 with a dead game.
+			if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
+				log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
+			if msg := duplicateMainGuard(path, content, newContent); msg != "" {
+				log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
+				return &ToolResult{Success: false, Error: msg}, nil
 			}
 
 			// Atomic write

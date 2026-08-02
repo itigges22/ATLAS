@@ -724,9 +724,21 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                     available = " This file defines: " + ", ".join(names[:30]) + ". Use one of these exact selectors, or read the file to confirm."
             except Exception:
                 available = ""
+        # The name the model asked for often DOES exist — as JavaScript inside
+        # a template string, which no selector reaches. Saying only "that
+        # symbol does not exist" is then flatly contradicted by the file the
+        # model just read, and it tries the same selector again. Observed on
+        # three runs, all opening with `function:draw` against a Flask app
+        # whose game loop lives in HTML_TEMPLATE.
+        if found := _embedded_symbol_note(path, source_text, selector):
+            # The name exists, just not where a selector can go. Leading with
+            # "does not exist" here is contradicted by the file the model just
+            # read, which is why it re-sent the same selector.
+            return {"success": False, "error": found}
         return {"success": False, "error": (
             f"selector '{selector}' matched 0 nodes in {path} — that symbol does not exist in this file."
             + (available or " Read the file first to see what's defined.")
+            + _embedded_regions_note(path, source_text)
         )}
     if len(targets) > 1:
         return {"success": False, "error": (
@@ -977,6 +989,52 @@ _CLOSERS = {")": "(", "}": "{", "]": "["}
 
 def _embedded_available() -> bool:
     return bool(_STRUCTURAL_EDIT_AVAILABLE and _EMBEDDED_SCRIPT_AVAILABLE)
+
+
+def _embedded_symbol_note(path: str, source_text: str, selector: str) -> str:
+    """The whole error message when the selector's name exists as embedded
+    code, or "" when it does not.
+
+    A selector-not-found error is where the model actually looks — it does not
+    call outline_file first. Observed on three runs, all opening with
+    `function:draw` against a Flask app whose game loop lives in
+    HTML_TEMPLATE, and re-sending it after being told the symbol did not
+    exist: which, from the file it had just read, was plainly false.
+    """
+    wanted = selector.split(":", 1)[1].strip() if ":" in selector else ""
+    if not wanted:
+        return ""
+    try:
+        regions = embedded_region_outline(path, source_text)
+    except Exception:
+        return ""
+    for r in regions:
+        if wanted in r["symbols"]:
+            return (f"`{wanted}` exists in {path}, but NOT as a node any selector can reach: "
+                    f"it is {r['kind']} at lines {r['start_line']}-{r['end_line']}, inside "
+                    f"{r['where']}. To the host grammar that whole block is one string "
+                    f"literal, so `structural_edit` cannot address anything in it however "
+                    f"many lines it spans. Change it with replace_lines on lines "
+                    f"{r['start_line']}-{r['end_line']}, edit_file with old_str set to one "
+                    f"unique line copied from it, or insert_after.")
+    return ""
+
+
+def _embedded_regions_note(path: str, source_text: str) -> str:
+    """A trailing note naming embedded regions, for when the missing selector
+    is not one of their symbols either."""
+    try:
+        regions = embedded_region_outline(path, source_text)
+    except Exception:
+        return ""
+    if not regions:
+        return ""
+    described = "; ".join(
+        f"{r['kind']} at lines {r['start_line']}-{r['end_line']}"
+        + (f" defining {', '.join(r['symbols'])}" if r["symbols"] else "")
+        for r in regions)
+    return (f" This file also holds embedded code no selector reaches ({described}). "
+            f"For anything in there use replace_lines, edit_file or insert_after.")
 
 
 def embedded_region_outline(path: str, source_text: str) -> list:
