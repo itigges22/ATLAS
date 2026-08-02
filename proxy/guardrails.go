@@ -1241,3 +1241,48 @@ func unverifiedSummary(wrote bool, claim string) string {
 	}
 	return sb.String()
 }
+
+// planIncompleteMessage names the plan steps that never got a matching tool
+// call, or "" to let `done` through.
+//
+// The plan is generated up front, PlanStepsSatisfied tracks which steps have
+// been hit, and buildPlanReminder shows the model its progress every turn —
+// but nothing checked it at the exit. Run 4 built the variable-delay loop it
+// was asked for, never added the per-food decrement, and emitted `done`: two
+// required edits, one delivered. The reminder is an instruction and was
+// ignored; this is the same fact used as a gate.
+//
+// Gated on plan quality, because a bad plan blocking a finished task is worse
+// than no plan at all. A low-scoring plan, or one whose steps the matcher
+// could not track, is not evidence of anything and is skipped.
+func planIncompleteMessage(ctx *AgentContext) string {
+	if ctx == nil || ctx.Plan == nil || len(ctx.Plan.Steps) < 2 {
+		return ""
+	}
+	if ctx.Plan.WinningScore < planGateMinScore {
+		return ""
+	}
+	if len(ctx.PlanStepsSatisfied) != len(ctx.Plan.Steps) {
+		return ""
+	}
+	// Nothing matched at all means the matcher is not tracking this task, not
+	// that the model did nothing.
+	if countTrue(ctx.PlanStepsSatisfied) == 0 {
+		return ""
+	}
+	var missing []string
+	for i, step := range ctx.Plan.Steps {
+		if !ctx.PlanStepsSatisfied[i] {
+			missing = append(missing, fmt.Sprintf("  %s: %s", step.ID, step.Action))
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Cannot declare `done` yet — %d of %d planned steps have landed, and these have not:\n%s\n"+
+			"Each one needs its own tool call. Do the next one now. If a step is genuinely "+
+			"unnecessary or already satisfied by an edit you made under a different step, say "+
+			"which in your next `done` summary rather than leaving it silent.",
+		countTrue(ctx.PlanStepsSatisfied), len(ctx.Plan.Steps), strings.Join(missing, "\n"))
+}

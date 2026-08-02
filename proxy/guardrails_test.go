@@ -1484,3 +1484,95 @@ func TestVerificationDemandedAndUnmetIsIndependentOfTheBounceBudget(t *testing.T
 		t.Error("a green verification still reported unmet")
 	}
 }
+
+// Run 11 was refused three times — selector-unreachable, span-too-large,
+// stale-range — each attempt responding to the previous error, and the
+// error-loop breaker killed it with the file untouched while it was closing
+// in. Three DIFFERENT rejections is a model converging, not one looping.
+func TestRejectionClassSeparatesConvergingFromLooping(t *testing.T) {
+	selector := rejectionClass("`draw` exists in app.py, but NOT as a node any selector can reach: it is javascript at lines 77-202")
+	tooLarge := rejectionClass("replace_lines: 126 lines is too large a range (limit 60).")
+	stale := rejectionClass("replace_lines: line 202 of app.py is not what you expected, so the range is wrong")
+
+	for _, pair := range [][2]string{{selector, tooLarge}, {tooLarge, stale}, {selector, stale}} {
+		if pair[0] == pair[1] {
+			t.Errorf("distinct rejections collapsed into one class:\n%q\n%q", pair[0], pair[1])
+		}
+	}
+
+	// The same failure on different lines of different files IS one class —
+	// that is the loop the breaker exists for.
+	a := rejectionClass("replace_lines: line 202 of app.py is not what you expected, so the range is wrong")
+	b := rejectionClass("replace_lines: line 87 of main.py is not what you expected, so the range is wrong")
+	if a != b {
+		t.Errorf("the same failure was split by its variable parts:\n%q\n%q", a, b)
+	}
+	if rejectionClass("") != "" {
+		t.Error("an empty error must not produce a class")
+	}
+}
+
+// Run 4 built the variable-delay loop it was asked for, never added the
+// per-food decrement, and emitted `done`. The plan named both; the reminder
+// showing progress every turn was ignored; nothing checked it at the exit.
+func TestDoneIsRefusedWhilePlanStepsRemain(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.Plan = &Plan{
+		WinningScore: 0.8,
+		Steps: []PlanStep{
+			{ID: "s1", Action: "replace setInterval with a variable-delay loop"},
+			{ID: "s2", Action: "decrement the delay by 3ms per food eaten"},
+		},
+	}
+	ctx.PlanStepsSatisfied = []bool{true, false}
+
+	msg := planIncompleteMessage(ctx)
+	if msg == "" {
+		t.Fatal("done must be refused while a planned step has never landed")
+	}
+	if !strings.Contains(msg, "s2") || !strings.Contains(msg, "decrement the delay") {
+		t.Errorf("the unsatisfied step is not named:\n%s", msg)
+	}
+	if !strings.Contains(msg, "1 of 2") {
+		t.Errorf("progress not stated:\n%s", msg)
+	}
+
+	ctx.PlanStepsSatisfied = []bool{true, true}
+	if planIncompleteMessage(ctx) != "" {
+		t.Error("a fully satisfied plan still blocked done")
+	}
+}
+
+// A bad plan blocking a finished task is worse than no gate.
+func TestThePlanGateStandsDownWhenThePlanIsNotEvidence(t *testing.T) {
+	base := func() *AgentContext {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		ctx.Plan = &Plan{WinningScore: 0.8, Steps: []PlanStep{
+			{ID: "s1", Action: "a"}, {ID: "s2", Action: "b"}}}
+		ctx.PlanStepsSatisfied = []bool{true, false}
+		return ctx
+	}
+	low := base()
+	low.Plan.WinningScore = 0.2
+	if planIncompleteMessage(low) != "" {
+		t.Error("gated on a plan the planner itself rates as weak")
+	}
+	// Nothing matched: the matcher is not tracking this task, which is not
+	// evidence the model did nothing.
+	untracked := base()
+	untracked.PlanStepsSatisfied = []bool{false, false}
+	if planIncompleteMessage(untracked) != "" {
+		t.Error("gated when no step matched at all")
+	}
+	single := base()
+	single.Plan.Steps = single.Plan.Steps[:1]
+	single.PlanStepsSatisfied = []bool{false}
+	if planIncompleteMessage(single) != "" {
+		t.Error("gated on a one-step plan, which carries no multi-part signal")
+	}
+	none := base()
+	none.Plan = nil
+	if planIncompleteMessage(none) != "" {
+		t.Error("gated with no plan at all")
+	}
+}

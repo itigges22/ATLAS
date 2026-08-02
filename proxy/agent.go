@@ -110,6 +110,20 @@ type sessionCancel struct {
 // runAgentLoop runs the agent loop for a single user request.
 // The model emits tool calls (constrained by grammar), the proxy executes them,
 // and returns results. Continues until the model emits "done" or max turns hit.
+// planGateMinScore is the plan-quality floor below which the plan-completion
+// gate does not fire. The planner reports WinningScore per plan; a weak plan
+// blocking a finished task is worse than no gate, and 0.6 keeps the gate on
+// the plans the planner itself rates as sound (observed live plans score
+// 0.80).
+const planGateMinScore = 0.6
+
+// maxTotalFailures bounds a whole run's failed tool calls, independent of the
+// consecutive-error breaker. That breaker now resets when the rejection
+// changes kind (a converging model must not be killed for iterating), so this
+// is what stops a run cycling through failure modes forever. Set well above
+// what a legitimate multi-edit task needs: run 11 used 3 and was still short.
+const maxTotalFailures = 12
+
 // maxGateBounces caps EACH of the verification, done-without-action,
 // expected-output, and claim-check gates independently. Mirrors the
 // parse-error cap: a gate that has bounced the same `done` three times is
@@ -290,6 +304,15 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
 		return "verification_gate", verificationRejection(
 			s.sawFailedVerification, s.serverStartBlocked, anyBackgroundJobID(ctx))
+	}
+	// Steps the plan named and no tool call ever satisfied. Same shape as the
+	// verification gate: a fact the run already holds, used at the exit
+	// instead of only being shown mid-run.
+	if msg := planIncompleteMessage(ctx); msg != "" && s.chargeBounce("plan_gate") {
+		log.Printf("[agent] plan gate: bouncing exit at turn %d — %d/%d steps satisfied (bounce %d/%d)",
+			s.turn, countTrue(ctx.PlanStepsSatisfied), len(ctx.Plan.Steps),
+			s.gateBounces["plan_gate"], maxGateBounces)
+		return "plan_gate", msg
 	}
 	if wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) && !s.madeProductiveChange && s.chargeBounce("action_gate") {
 		log.Printf("[agent] done-without-action gate: bouncing exit at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
@@ -529,8 +552,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		eraseLlamaSlot(ctx)
 	}
 
-	consecutiveReads := 0  // Track consecutive read-only calls
-	consecutiveErrors := 0 // Track consecutive tool failures to break error loops
+	consecutiveReads := 0 // Track consecutive read-only calls
+	consecutiveErrors := 0
+	totalFailures := 0 // Track consecutive tool failures to break error loops
 	// edit_file old_str-mismatch failures per path. A successful read_file
 	// between attempts resets consecutiveErrors/RecentFailurePaths, which
 	// masks the classic read→edit-miss→read loop (smaller models can't
@@ -1323,7 +1347,37 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			}
 
 			if !result.Success {
+				// A failure that differs in KIND from the last one means the
+				// model acted on the previous rejection. Reset the streak:
+				// the breaker exists to stop a loop, and three distinct
+				// rejections in a row is the opposite of one.
+				if class := rejectionClass(result.Error); class != "" && class != ctx.LastRejectionClass {
+					if consecutiveErrors > 0 {
+						log.Printf("[agent] rejection changed kind at turn %d — resetting the error streak (was %d)", turn, consecutiveErrors)
+					}
+					consecutiveErrors = 0
+					ctx.RecentFailurePaths = nil
+					ctx.LastRejectionClass = class
+				}
 				consecutiveErrors++
+				totalFailures++
+				// Ceiling. Resetting the streak on a changed rejection kind
+				// is what lets a converging model keep going; without an
+				// absolute bound it also lets one cycle through failure modes
+				// indefinitely. Generous, because the whole point is that
+				// legitimate iteration costs several attempts per edit.
+				if totalFailures >= maxTotalFailures {
+					log.Printf("[agent] breaking: %d failed tool calls this run (ceiling %d) at turn %d (productive=%v)",
+						totalFailures, maxTotalFailures, turn, st.madeProductiveChange)
+					if st.madeProductiveChange {
+						ctx.Stream("done", map[string]string{"summary": unverifiedSummary(true,
+							"The run hit its failed-call ceiling before finishing.")})
+					} else {
+						ctx.Stream("done", map[string]string{"summary": fmt.Sprintf(
+							"Stopped after %d failed tool calls with nothing landing on disk. The per-turn errors above say what was refused each time; the last one is the one to act on.", totalFailures)})
+					}
+					return nil
+				}
 				// May 10 2026: path-aware breaker. Track which file each
 				// failure was on; only escalate when 3 consecutive failures
 				// share the same path (= truly stuck on one file). 3 fails

@@ -566,6 +566,11 @@ type AgentContext struct {
 	// is refused before it executes rather than nudged afterwards.
 	FailedToolCalls map[string]string
 
+	// LastRejectionClass is the skeleton of the previous failure's message.
+	// The error-loop breaker resets when a new failure differs from it: three
+	// DIFFERENT rejections is a model converging, not one looping.
+	LastRejectionClass string
+
 	// Reasoning-repetition detector state (May 10 2026, BiasBusters
 	// follow-up #30). Per-turn snapshot of the model's reasoning_content
 	// stream. When the same opening prose ("Now I need to look at the

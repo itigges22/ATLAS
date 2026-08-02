@@ -859,3 +859,33 @@ func clearFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessag
 	}
 	delete(ctx.FailedToolCalls, toolCallSignature(toolName, args))
 }
+
+// rejectionClass reduces a rejection to its skeleton, so two failures can be
+// compared for whether they are the SAME failure or different ones.
+//
+// The error-loop breaker counts consecutive failures and stops at three. That
+// conflates a model looping with a model converging: run 11 was refused three
+// times — selector-unreachable, then span-too-large, then stale-range — each
+// attempt responding to the previous error, and the run was killed with the
+// file untouched while it was visibly closing in. The path-aware breaker
+// already carries the same insight on a different axis ("3 fails across
+// DIFFERENT files = grinding through multi-file work, keep going"); a
+// different REASON on one file is progress for the same reason.
+//
+// Skeleton = the message with the parts that vary between two instances of
+// the same failure removed: digits, quoted spans, and paths. Two
+// "line N of X is not what you expected" rejections collapse together; a
+// size-cap and a stale-range do not.
+func rejectionClass(errMsg string) string {
+	if errMsg == "" {
+		return ""
+	}
+	skeleton := reRejectionVariable.ReplaceAllString(errMsg, "")
+	skeleton = strings.Join(strings.Fields(skeleton), " ")
+	return truncateStr(skeleton, 160)
+}
+
+// Digits, backtick/quote-delimited spans, and path-like tokens — the parts
+// that differ between two occurrences of one failure.
+var reRejectionVariable = regexp.MustCompile(
+	"`[^`]*`" + `|"[^"]*"|'[^']*'|[0-9]+|[\w./-]+\.(?:py|js|ts|html|htm|css|json|md|go|txt)`)

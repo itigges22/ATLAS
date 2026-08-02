@@ -175,6 +175,26 @@ than adding another retry around it.
   schema-GBNF, and Gemma-family models require the loose grammar. See
   [ADR 0008](docs/adr/0008-harness-mechanisms-over-model-instructions.md).
 
+- The error-loop breaker no longer kills a converging run. It counted three
+  consecutive failures on one path and stopped, which conflates a model
+  looping with a model closing in: an observed run was refused
+  selector-unreachable, then span-too-large, then stale-range — each attempt
+  answering the previous error — and died with the file untouched. Failures
+  are now compared by *kind* (the message with its digits, quoted spans and
+  paths removed), and a rejection that differs from the last one resets the
+  streak. Repeating one failure still breaks at three. A new
+  `maxTotalFailures` ceiling of 12 bounds the run, since resetting the streak
+  is what would otherwise let it cycle through failure modes indefinitely.
+- `done` is refused while planned steps have never landed. The plan is
+  generated up front, `PlanStepsSatisfied` tracks which steps a tool call has
+  matched, and a progress note is injected every turn — but nothing checked it
+  at the exit. An observed run built the variable-delay loop it was asked for,
+  never added the per-food decrement, and declared done: two required edits,
+  one delivered. The per-turn note is an instruction and was ignored; the gate
+  is the same fact used as evidence. Stands down when the plan is not evidence
+  — a planner score below 0.6, a single-step plan, or no step matched at all,
+  since a bad plan blocking finished work is worse than no gate.
+
 **Fixed**
 
 - Every write path now runs the same gates. `edit_file` — the most used edit
