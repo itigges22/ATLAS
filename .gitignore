@@ -198,6 +198,8 @@ docs/reports/ablation/condition_[a-d]*/summary.json
 .loop-prompt.md
 .loop-progress.md
 
-# Local agent-tool state (per-machine, not project content)
+# Personal Claude Code / aider-desk plugins and the lockfile pinning them.
+# Not ATLAS toolchain — nothing in the build, test, or deploy path reads
+# these, so a contributor never needs the same set resolved.
 .aider-desk/
 skills-lock.json
