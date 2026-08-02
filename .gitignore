@@ -200,3 +200,4 @@ docs/reports/ablation/condition_[a-d]*/summary.json
 
 # Local agent-tool state (per-machine, not project content)
 .aider-desk/
+skills-lock.json
