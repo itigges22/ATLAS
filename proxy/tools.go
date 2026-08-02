@@ -2627,7 +2627,16 @@ func insertAfterTool() *ToolDef {
 // is re-authoring rather than editing, and a whole-node rewrite is both more
 // reliable and easier to verify. The cliff is not gradual: a 14B model applies
 // ~0.87 of its edit blocks on 100-500 line files and 0.00 above 500.
-const replaceLinesMaxSpan = 20
+//
+// 60, not the 20 this shipped with. The unit of work that kept hitting the
+// cap is a whole function, and a JavaScript function inside a Flask template
+// runs 40-50 lines. At 20 the refusal sent the model to structural_edit,
+// which cannot reach into a Python string literal, and its refusal sent it
+// back here — an observed session burned all three of its strikes on that
+// loop with the file untouched. The size guard is also not what makes this
+// tool safe: expected_first_line / expected_last_line already fail a stale
+// range, and they cost the same two lines whether the span is 5 or 50.
+const replaceLinesMaxSpan = 60
 
 // lineAssertionMismatch compares an expected line against what is actually
 // there, whitespace-insensitively, and renders the correction when they differ.
@@ -2725,9 +2734,13 @@ func replaceLinesTool() *ToolDef {
 			if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
 				return &ToolResult{Success: false, Error: fmt.Sprintf(
 					"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
-						"than an edit. Use structural_edit with function:NAME or class:NAME to replace a whole node, or "+
-						"write_file for the whole file.",
-					span, replaceLinesMaxSpan)}, nil
+						"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
+						"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole Python "+
+						"function or class, structural_edit with function:NAME / class:NAME replaces the node in one "+
+						"call — but only for real Python nodes: code inside a string literal (a <script> block in an "+
+						"HTML template, say) is one string to the Python grammar and no selector reaches into it, so "+
+						"there the split is the way.",
+					span, replaceLinesMaxSpan, replaceLinesMaxSpan)}, nil
 			}
 			if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines); msg != "" {
 				return &ToolResult{Success: false, Error: msg}, nil

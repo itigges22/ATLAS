@@ -748,6 +748,20 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     except UnicodeDecodeError as e:
         return {"success": False, "error": f"replacement produced invalid utf-8: {e}"}
 
+    # Node-size precondition. A replacement many times the size of the node is
+    # not an edit of that node — it is the whole file wearing a selector.
+    #
+    # This check used to live inside the post-splice `except SyntaxError`
+    # handler below, so it only ever fired when the blob ALSO failed to
+    # compile. Observed live: `function:index` (3 lines) was replaced by a
+    # 194-line `HTML_TEMPLATE = """..."""` assignment, which is perfectly
+    # valid Python. compile() passed, every gate passed, and the app lost its
+    # only @app.route — the file still parsed, the model reported success.
+    # Whether the blob happens to be syntactically valid says nothing about
+    # whether it belongs in this node, so the check belongs here.
+    if too_big := _replacement_dwarfs_node(source_text, target, content, selector):
+        return {"success": False, "error": too_big}
+
     # Post-splice syntax gate (Python). Tree-sitter is error-tolerant: it
     # happily locates the node and splices in replacement content that is
     # not valid Python — observed live: a model emitted `item["id""]` and
@@ -804,21 +818,9 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             # and the replacement was ~190, three attempts running. Every
             # rejection talked about quoting, because the content really was
             # malformed, so nothing ever said the selector could not hold this.
-            new_lines = new_content.count("\n") + 1
-            if not lead and new_lines >= node_lines * 5 and new_lines - node_lines >= 30:
-                where = _large_string_constants(source_text)
-                lead = (f"`{selector}` is only {node_lines} line(s) but your "
-                        f"replacement is {new_lines} — you are moving code INTO "
-                        f"this node that does not live here. ")
-                if where:
-                    lead += (f"The bulk of this file is in {where}, a module-level "
-                             f"string. No selector reaches inside a string literal: "
-                             f"a template is ONE literal to the grammar however many "
-                             f"lines it spans. ")
-                lead += ("Use edit_file with old_str set to one unique line copied "
-                         "from the region you are changing, or insert_after with the "
-                         "line number read_file printed. ")
-
+            # The small-node/huge-replacement case is refused before the
+            # splice now (see _replacement_dwarfs_node), so it cannot reach
+            # here.
 
             _msg = (e.msg or "").lower()
             # `and not lead` matters: the wrong-node steer above is the more
@@ -975,6 +977,64 @@ _CLOSERS = {")": "(", "}": "{", "]": "["}
 
 def _embedded_available() -> bool:
     return bool(_STRUCTURAL_EDIT_AVAILABLE and _EMBEDDED_SCRIPT_AVAILABLE)
+
+
+def _replacement_dwarfs_node(source_text: str, target, content: str, selector: str) -> str:
+    """A refusal when `content` is many times the size of the node it replaces,
+    or "" when the replacement is node-sized.
+
+    The model wants to change markup or JavaScript that lives in a module-level
+    string constant, cannot select into a string, and settles for the nearest
+    function — then inlines the whole template into it. Observed live:
+    `function:index` in a Flask app is 3 lines (`return
+    render_template_string(HTML_TEMPLATE)`), the replacement was 194, and the
+    result was a file with no `@app.route` left in it.
+
+    Size alone is not the test. Writing a real implementation over a `pass`
+    stub is also many times the node, and refusing that would block ordinary
+    work. What separates the two is that the blob is a MOVE: most of what it
+    contains already exists in the file, outside the node being replaced. A
+    genuine implementation is new text.
+    """
+    node_lines = source_text[target.start_byte:target.end_byte].count("\n") + 1
+    new_lines = content.count("\n") + 1
+    if new_lines < node_lines * 5 or new_lines - node_lines < 30:
+        return ""
+    # Suspicious by size. Refuse only with a second signal, so that writing a
+    # real body over a stub stays allowed. Either one is enough:
+    #
+    #   (a) the replacement is a MOVE — most of it already exists in the file
+    #       outside this node (the 258-line HTML_TEMPLATE case);
+    #   (b) the file HAS a module-level string constant big enough to be the
+    #       real target, so a small node swelling by 30+ lines is the model
+    #       reaching for markup it cannot select into — whether it pastes the
+    #       existing template or writes a fresh one inline.
+    #
+    # A plain stub file has neither, which is why an implementation of any
+    # length passes.
+    where = _large_string_constants(source_text)
+    if not where:
+        outside = source_text[:target.start_byte] + source_text[target.end_byte:]
+        # Short lines (`}`, `else:`, blank) collide across unrelated code, so
+        # only lines with real content vote.
+        elsewhere = {ln.strip() for ln in outside.splitlines() if len(ln.strip()) > 20}
+        body = [ln.strip() for ln in content.splitlines() if len(ln.strip()) > 20]
+        reused = sum(1 for ln in body if ln in elsewhere)
+        if not body or reused < 30 or reused * 2 < len(body):
+            return ""
+    msg = (f"structural_edit: `{selector}` is only {node_lines} line(s) but your "
+           f"replacement is {new_lines} — you are moving code INTO this node that "
+           f"does not live here, which would delete whatever the node actually "
+           f"held. The file was NOT modified. ")
+    if where:
+        msg += (f"The bulk of this file is in {where}, a module-level string. No "
+                f"selector reaches inside a string literal: a template is ONE "
+                f"literal to the grammar however many lines it spans. ")
+    msg += ("To change code inside that string, use replace_lines with the line "
+            "numbers read_file printed (up to 60 lines per call, split into "
+            "consecutive calls from the bottom up for more), edit_file with "
+            "old_str set to one unique line, or insert_after to add at a line.")
+    return msg
 
 
 def _large_string_constants(source_text: bytes) -> str:

@@ -172,7 +172,7 @@ flowchart LR
 | `write_file` | 创建一个新文件（对超过 5 行的已有文件会被拒绝 —— 见安全限制） | 否 |
 | `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
 | `insert_after` | 在给定行号（`read_file` 打印的行号）之后插入新行。适用于**新增**代码（分支、函数、import）且不改动任何已有内容的场景：没有需要复现的 `old_str`，而这正是长跨度下失败的那一步 | 否 |
-| `replace_lines` | 用新内容替换一个行范围（`start_line`..`end_line`，即 `read_file` 打印的行号）。适用于**修改**代码而无需复现它：锚点是断言的两行（范围的首行与末行，忽略空白），而不是整个跨度，因此逐字复现的负担是 2 行而非 N 行。每次调用上限 20 行 | 否 |
+| `replace_lines` | 用新内容替换一个行范围（`start_line`..`end_line`，即 `read_file` 打印的行号）。适用于**修改**代码而无需复现它：锚点是断言的两行（范围的首行与末行，忽略空白），而不是整个跨度，因此逐字复现的负担是 2 行而非 N 行。每次调用上限 60 行 | 否 |
 | `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。GH #39，v1 中仅支持 .py/.html/.htm | 否 |
 | `delete_file` | 删除文件或空目录（之后强制退出循环） | 否 |
 | `move_file` | 在工作区内移动或重命名文件（例如 `index.html` → `templates/`）。纯粹的重定位 —— 绕过 V3/外科式编辑门控，拒绝覆盖已存在的目标。由于 shell `mv`/`cp` 会被拒绝，这是"重新组织文件"的受支持路径 | 否 |

@@ -68,10 +68,36 @@ than adding another retry around it.
   instead of N. Assertions compare ignoring leading/trailing whitespace
   (indentation is the most common drift and is not evidence of a stale
   range); a mismatch returns the actual line and a ±3-line numbered window.
-  Capped at 20 lines and one hunk per call, requires a prior read, and runs
+  Capped at 60 lines and one hunk per call, requires a prior read, and runs
   the same fallback-syntax, unresolved-call and embedded-script gates as
   `edit_file`.
 
+- `structural_edit` refuses a replacement that dwarfs the node it replaces,
+  before the splice rather than only when the blob also fails to compile. The
+  check existed but lived inside the post-splice `except SyntaxError` handler,
+  so a blob that happened to be valid Python sailed past it: an observed
+  session replaced `function:index` (3 lines, `return
+  render_template_string(HTML_TEMPLATE)`) with a 258-line `HTML_TEMPLATE =`
+  assignment, which parses fine. The app came out of it with zero
+  `@app.route` decorators — its only route deleted — the file still parsing
+  and the agent reporting success. Whether a blob is syntactically valid says
+  nothing about whether it belongs in that node. Size alone does not refuse
+  either, since writing a real body over a `pass` stub is also many times the
+  node; it takes a second signal, either the replacement duplicating content
+  that already exists elsewhere in the file, or the file holding a
+  template-sized module-level string the model is evidently reaching for.
+- `replace_lines`' size cap is 60 lines, up from the 20 it shipped with, and
+  the over-limit refusal no longer dead-ends. The unit of work that kept
+  hitting the cap is a whole function, and a JavaScript function inside a
+  Flask template runs 40-50 lines. At 20 the refusal said "use structural_edit
+  with function:NAME" — which cannot reach into a Python string literal, so
+  its own refusal pointed straight back, and an observed session spent all
+  three of its strikes on that loop with the file untouched. The refusal now
+  names the split (consecutive calls, bottom of the file upward so earlier
+  line numbers stay valid) and says plainly that no selector reaches code
+  inside a string. The cap was never what makes the tool safe either:
+  `expected_first_line` / `expected_last_line` already fail a stale range, at
+  the same two-line cost whether the span is 5 lines or 50.
 - A missing `}` in embedded JavaScript now names the block that was left
   open. tree-sitter reports the absence where the parser gave up, which is
   past the end of the construct that needs it: an observed session was told

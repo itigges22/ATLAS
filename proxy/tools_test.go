@@ -1350,17 +1350,19 @@ func TestReplaceLinesIgnoresIndentationInTheAssertion(t *testing.T) {
 func TestReplaceLinesGuardsRangeAndSize(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "a.py")
-	src := strings.Repeat("x\n", 40)
+	src := strings.Repeat("x\n", 100)
 	os.WriteFile(file, []byte(src), 0644)
 	ctx := NewAgentContext(dir, Tier1Simple)
 	ctx.RecordFileRead(file, src)
 	tool := findTool(t, "replace_lines")
 
 	for _, tc := range []struct{ name, args, want string }{
-		{"past end of file", `{"path":"a.py","start_line":39,"end_line":99,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
+		{"past end of file", `{"path":"a.py","start_line":99,"end_line":140,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
 		{"inverted range", `{"path":"a.py","start_line":9,"end_line":2,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
 		{"zero start", `{"path":"a.py","start_line":0,"end_line":2,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
-		{"span too large", `{"path":"a.py","start_line":1,"end_line":30,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "too large"},
+		// A whole JavaScript function inside a template runs 40-50 lines and
+		// has to fit; the cap is there for a rewrite pretending to be an edit.
+		{"span too large", `{"path":"a.py","start_line":1,"end_line":80,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "too large"},
 		{"missing path", `{"start_line":1,"end_line":2,"content":"y"}`, "path is required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1454,5 +1456,61 @@ func TestToolGuidanceNamesEveryOldStrFreeEditTool(t *testing.T) {
 		if !strings.Contains(guidance, name) {
 			t.Errorf("system prompt never mentions %s — the model cannot choose it", name)
 		}
+	}
+}
+
+// The over-limit refusal used to say "use structural_edit with function:NAME".
+// For a JavaScript function inside a Flask template that is a dead end — the
+// markup is one string literal to the Python grammar, so no selector reaches
+// it, and structural_edit's own refusal points back here. An observed session
+// burned all three strikes bouncing between the two with the file untouched.
+func TestOverLimitAdviceDoesNotDeadEndOnEmbeddedCode(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := strings.Repeat("x\n", 200)
+	if err := os.WriteFile(file, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+
+	res, err := findTool(t, "replace_lines").Execute(json.RawMessage(
+		`{"path":"a.py","start_line":1,"end_line":150,"expected_first_line":"x","expected_last_line":"x","content":"y"}`), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Success {
+		t.Fatal("a 150-line span must still be refused")
+	}
+	for _, want := range []string{
+		"consecutive replace_lines", // the way out that always works
+		"BOTTOM of the file upward", // why the split doesn't invalidate itself
+		"no selector reaches into it",
+	} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("advice missing %q:\n%s", want, res.Error)
+		}
+	}
+}
+
+// A whole JS function inside a template is the unit of work that kept hitting
+// the old cap of 20.
+func TestAWholeEmbeddedFunctionFitsInOneCall(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := strings.Repeat("x\n", 100)
+	if err := os.WriteFile(file, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+
+	res, err := findTool(t, "replace_lines").Execute(json.RawMessage(
+		`{"path":"a.py","start_line":25,"end_line":70,"expected_first_line":"x","expected_last_line":"x","content":"y"}`), ctx)
+	if err != nil {
+		t.Fatalf("a 46-line replacement must be allowed: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("a 46-line replacement must be allowed: %s", res.Error)
 	}
 }
