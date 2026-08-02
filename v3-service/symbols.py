@@ -979,6 +979,80 @@ def _embedded_available() -> bool:
     return bool(_STRUCTURAL_EDIT_AVAILABLE and _EMBEDDED_SCRIPT_AVAILABLE)
 
 
+def embedded_region_outline(path: str, source_text: str) -> list:
+    """Regions of `source_text` that hold code in ANOTHER language.
+
+    Returns [{where, start_line, end_line, kind, symbols}] — the <script> and
+    <style> blocks of an HTML file, and the ones inside Python string literals
+    (the render_template_string shape).
+
+    outline_file otherwise reports only what the host grammar sees. For a
+    Flask app whose whole UI is one module-level string, that is
+    `function:index` and nothing else, so a model asked to change the game
+    loop reaches for `structural_edit selector="function:draw"` — a symbol the
+    outline never mentioned and no selector can reach, because the template is
+    one string literal to the Python grammar however many lines it spans.
+    Observed on two consecutive runs, both opening with exactly that call.
+
+    Naming the regions makes the view true. It does not ask the model to
+    reason better about nesting; it stops hiding the nesting.
+    """
+    if not _embedded_available():
+        return []
+    try:
+        blocks = embedded_script_blocks_for(path, source_text)
+    except Exception:
+        return []
+    if not blocks:
+        return []
+    source = source_text.encode("utf-8")
+    out = []
+    for kind, offset, body, where in blocks:
+        start = source[:offset].count(b"\n") + 1
+        out.append({
+            "where": where,
+            "kind": kind,
+            "start_line": start,
+            "end_line": start + body.count(b"\n"),
+            "symbols": _js_function_names(body) if kind == "javascript" else [],
+        })
+    return out
+
+
+def _js_function_names(block: bytes) -> list:
+    """Names of the functions declared in a JavaScript block, in source order.
+
+    These are the names a model will try to select by, so the outline has to
+    show them alongside the note that no selector reaches them.
+    """
+    parser = _ts.Parser(_JS_LANG)
+    tree = parser.parse(block)
+    names, seen = [], set()
+
+    def walk(node):
+        if node.type in ("function_declaration", "generator_function_declaration"):
+            ident = node.child_by_field_name("name")
+            if ident is not None:
+                name = ident.text.decode("utf-8", "replace")
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        elif node.type == "variable_declarator":
+            value = node.child_by_field_name("value")
+            ident = node.child_by_field_name("name")
+            if (ident is not None and value is not None
+                    and value.type in ("function_expression", "arrow_function")):
+                name = ident.text.decode("utf-8", "replace")
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root_node)
+    return names
+
+
 def _replacement_dwarfs_node(source_text: str, target, content: str, selector: str) -> str:
     """A refusal when `content` is many times the size of the node it replaces,
     or "" when the replacement is node-sized.

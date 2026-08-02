@@ -1204,3 +1204,40 @@ func describeForeignRunes(runes []rune) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// unverifiedSummary replaces a completion claim the run's own evidence cannot
+// support.
+//
+// The verification gate bounces a `done` three times and then, out of
+// bounces, lets it through — so the model's summary reaches the user
+// unchanged. Observed 2026-08-02 across three runs: "I updated the snake game
+// logic... I also verified that the page loads", over a file whose only
+// @app.route had been deleted. The gate had done its job and the claim
+// shipped anyway.
+//
+// Rewriting the summary is mechanical and needs nothing from the model, which
+// is why it is done here rather than by asking the model to be more careful.
+// Making `done` ungrammatical would be stronger, but that needs strict
+// schema-GBNF and Gemma-family models require the loose grammar (a strict
+// schema makes them emit `done` instead of calling tools at all).
+//
+// The model's own words are kept, labelled, because they usually do describe
+// the intended change accurately — it is the verification claim inside them
+// that is unsupported.
+func unverifiedSummary(wrote bool, claim string) string {
+	var sb strings.Builder
+	if wrote {
+		sb.WriteString("Changes were written to disk, but NOTHING in this run verified them — " +
+			"no build, test, or probe command completed successfully. Run it yourself before " +
+			"relying on it.")
+	} else {
+		sb.WriteString("Nothing was written to disk in this run, and no verification command " +
+			"completed successfully.")
+	}
+	if c := strings.TrimSpace(claim); c != "" {
+		sb.WriteString("\n\nThe agent's own account, which is UNVERIFIED and may describe work " +
+			"that did not land:\n")
+		sb.WriteString(truncateStr(c, 1200))
+	}
+	return sb.String()
+}

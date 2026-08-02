@@ -248,6 +248,14 @@ func (s *runState) bounceToolCall(ctx *AgentContext, toolName, rejection string)
 	})
 }
 
+// verificationDemandedAndUnmet reports whether this run needed a passing
+// verification command and never got one. Independent of the bounce budget:
+// exhausting the bounces means the gate stopped blocking, not that the work
+// was verified.
+func (s *runState) verificationDemandedAndUnmet() bool {
+	return (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop
+}
+
 // exitGates runs the completion-honesty gates a done or text exit must
 // clear, in order: verification, done-without-action, expected-output,
 // claim-check. claimText is the completion claim to check structurally
@@ -746,8 +754,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				st.bounce(ctx, gate, rejection)
 				continue
 			}
+			// Past the gates, but the verification gate can be past because
+			// it ran out of bounces rather than because anything verified.
+			// A claim the run cannot support does not reach the user as the
+			// model wrote it.
+			summary := parsed.Summary
+			if st.verificationDemandedAndUnmet() {
+				log.Printf("[agent] done at turn %d with no passing verification — replacing the summary", turn)
+				summary = unverifiedSummary(st.madeProductiveChange, parsed.Summary)
+			}
 			ctx.Stream("done", map[string]string{
-				"summary": parsed.Summary + liveBackgroundJobNote(ctx),
+				"summary": summary + liveBackgroundJobNote(ctx),
 			})
 			return nil
 
@@ -1010,6 +1027,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					}
 				}
 			}
+			// Refuse an exact re-send of an already-rejected call before it
+			// executes. Checked ahead of the repetition detector because that
+			// one needs three occurrences and only steers the NEXT turn,
+			// which a two-turn identical pair never reaches.
+			if refusal := identicalRetryRefusal(ctx, parsed.Name, parsed.Args); refusal != "" {
+				log.Printf("[agent] turn=%d refusing an identical re-send of a rejected %s", turn, parsed.Name)
+				st.bounceToolCall(ctx, parsed.Name, refusal)
+				continue
+			}
 			if msg, _, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
 				if runawayWrite && !repeating {
 					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/structural_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
@@ -1158,6 +1184,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if !result.Success {
 				log.Printf("[agent] turn=%d tool=%q FAIL: %q", turn,
 					truncateStr(parsed.Name, 64), truncateStr(result.Error, 240))
+				recordFailedToolCall(ctx, parsed.Name, parsed.Args, result.Error)
+			} else {
+				// A call can fail and later succeed — an edit rejected for a
+				// stale range works after a re-read. Drop the memory with the
+				// condition that caused it.
+				clearFailedToolCall(ctx, parsed.Name, parsed.Args)
 			}
 
 			// Force-stop after destructive operations that shouldn't have

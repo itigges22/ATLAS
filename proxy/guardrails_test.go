@@ -1440,3 +1440,47 @@ func TestCorruptedCharacterIsNamed(t *testing.T) {
 		t.Errorf("empty old_str flagged: %q", string(r))
 	}
 }
+
+// The verification gate bounces `done` three times and then, out of bounces,
+// lets the model's summary through unchanged. Three runs on 2026-08-02 ended
+// with a confident "I verified..." over a broken file — once over a Flask app
+// whose only @app.route had been deleted.
+func TestAnUnverifiedRunDoesNotShipTheModelsClaim(t *testing.T) {
+	claim := "I updated the snake game logic and verified that the page loads."
+
+	wrote := unverifiedSummary(true, claim)
+	for _, want := range []string{"NOTHING in this run verified", "Run it yourself", "UNVERIFIED"} {
+		if !strings.Contains(wrote, want) {
+			t.Errorf("summary missing %q:\n%s", want, wrote)
+		}
+	}
+	// The model's account is kept — it usually describes the intended change
+	// correctly; it is the verification claim inside it that is unsupported.
+	if !strings.Contains(wrote, claim) {
+		t.Errorf("dropped the agent's account entirely:\n%s", wrote)
+	}
+
+	nothing := unverifiedSummary(false, claim)
+	if !strings.Contains(nothing, "Nothing was written to disk") {
+		t.Errorf("a run that wrote nothing must say so:\n%s", nothing)
+	}
+}
+
+func TestVerificationDemandedAndUnmetIsIndependentOfTheBounceBudget(t *testing.T) {
+	s := &runState{sawFailedVerification: true, gateBounces: map[string]int{}}
+	if !s.verificationDemandedAndUnmet() {
+		t.Fatal("a red verification with nothing green must report unmet")
+	}
+	// Exhausting the bounces means the gate stopped blocking, not that
+	// anything got verified.
+	for i := 0; i < maxGateBounces+2; i++ {
+		s.chargeBounce("verification_gate")
+	}
+	if !s.verificationDemandedAndUnmet() {
+		t.Error("running out of bounces was mistaken for a passing verification")
+	}
+	s.verifiedThisLoop = true
+	if s.verificationDemandedAndUnmet() {
+		t.Error("a green verification still reported unmet")
+	}
+}

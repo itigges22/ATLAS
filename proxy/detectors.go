@@ -798,3 +798,64 @@ func tracebackSteer(ctx *AgentContext, output string) string {
 	}
 	return sb.String()
 }
+
+// identicalRetryRefusal returns the refusal text when this exact call has
+// already been rejected in this session, or "" to let it run.
+//
+// The harness is deterministic: the same (tool, args) against the same file
+// produces the same rejection. Re-sending it cannot succeed, so it is refused
+// before execution rather than executed and nudged afterwards.
+//
+// This is the one intervention in this class that needs no per-model tuning.
+// Everything about WHY a model repeats itself is model-specific; that a
+// byte-identical call against a deterministic harness will fail again is not.
+// Observed 2026-08-02: run 9 emitted the same `replace_lines` call on turns 2
+// and 3 against a rejection that named the file, the line, the cause and two
+// concrete fixes. The existing repetition detector needs three occurrences in
+// its window and emits a corrective for the NEXT turn, so a two-turn identical
+// pair never reached it, and the run died on the three-strike breaker with the
+// file untouched.
+//
+// Scoped to calls that FAILED. Re-reading a file after editing it is
+// byte-identical and correct, and this must never touch it.
+func identicalRetryRefusal(ctx *AgentContext, toolName string, args json.RawMessage) string {
+	if ctx == nil || len(ctx.FailedToolCalls) == 0 {
+		return ""
+	}
+	prev, seen := ctx.FailedToolCalls[toolCallSignature(toolName, args)]
+	if !seen {
+		return ""
+	}
+	return fmt.Sprintf(
+		"This is the same `%s` call, byte for byte, that was already rejected. Nothing about "+
+			"the workspace has changed since, so it fails for the same reason and re-sending it "+
+			"again will not help:\n\n%s\n\nChange the call. If the rejection named a line or a "+
+			"block, go read it with read_file before editing. If it named a different tool, use "+
+			"that one. If you cannot see what to change, use read_file or outline_file to look "+
+			"at the file again rather than re-sending this.",
+		toolName, truncateStr(prev, 600))
+}
+
+// recordFailedToolCall remembers a rejected call so an identical re-send is
+// refused. Keyed on the same signature the repetition window uses, so the two
+// agree on what "the same call" means.
+func recordFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessage, errMsg string) {
+	if ctx == nil || errMsg == "" {
+		return
+	}
+	if ctx.FailedToolCalls == nil {
+		ctx.FailedToolCalls = make(map[string]string)
+	}
+	ctx.FailedToolCalls[toolCallSignature(toolName, args)] = errMsg
+}
+
+// clearFailedToolCall drops a remembered rejection once the same call
+// succeeds. A call can legitimately fail and later succeed — an edit rejected
+// for a stale line range works after a re-read — and the memory must not
+// outlive the condition that caused it.
+func clearFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessage) {
+	if ctx == nil || len(ctx.FailedToolCalls) == 0 {
+		return
+	}
+	delete(ctx.FailedToolCalls, toolCallSignature(toolName, args))
+}

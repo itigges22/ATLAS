@@ -687,6 +687,16 @@ Top-level function/class listing for a file — the backend of the proxy's `outl
 
 When `ATLAS_CALL_GRAPH` is enabled, each symbol additionally carries its intra-file call-graph neighborhood (`calls` / `called_by` string arrays).
 
+An `embedded_regions` array is added when the file holds code in another language — `<script>` / `<style>` blocks in HTML, and the same inside Python string literals (the `render_template_string` shape). The host grammar cannot see into a string literal, so without it the outline of a Flask app whose whole UI is one template reports `function:index` and nothing else, and a model looking for the game loop reaches for `structural_edit selector="function:draw"` — a symbol no selector can reach. Each entry carries `where`, `kind`, `start_line`, `end_line`, and for JavaScript the `symbols` declared inside it.
+
+```json
+{"embedded_regions": [
+  {"where": "the <script> block inside the Python string HTML_TEMPLATE",
+   "kind": "javascript", "start_line": 77, "end_line": 202,
+   "symbols": ["draw", "spawnFood", "collision", "gameOver"]}
+]}
+```
+
 ### POST /internal/pycheck
 
 Parse-check Python source without executing it (pure `compile()`). Used by the proxy's `edit_file` path to refuse writing a `.py` file the edit would break — the same gate `structural_edit` applies post-splice.

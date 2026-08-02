@@ -30,6 +30,7 @@ from pipeline import V3PipelineService, _build_problem_from_request
 from planning import generate_plan
 from symbols import (structural_edit, structural_score, build_project_symbols,
                      symbol_index, cyclomatic_complexity, embedded_script_check,
+                     embedded_region_outline,
                      _symbol_index_for_python_source, _STRUCTURAL_EDIT_AVAILABLE,
                      _EMBEDDED_SCRIPT_AVAILABLE)
 # The handler does not call these; tests exercise them through `import main`.
@@ -51,6 +52,7 @@ __all__ = [
     # The service surface itself.
     "structural_edit", "structural_score", "build_project_symbols",
     "symbol_index", "cyclomatic_complexity", "embedded_script_check",
+    "embedded_region_outline",
     "generate_plan", "V3PipelineService", "_build_problem_from_request",
 ]
 
@@ -600,6 +602,12 @@ class V3Handler(BaseHTTPRequestHandler):
                     "end_line": src[:eb].count(b"\n") + 1,
                 })
 
+        # Regions holding another language. The host grammar cannot see into a
+        # string literal, so without this the outline of a Flask app whose UI
+        # is one template reports `function:index` and nothing else — and the
+        # model goes looking for `function:draw`.
+        embedded = embedded_region_outline(path, source)
+
         # Call-graph neighborhood (issue #39, flag-gated). Build the single-file
         # graph once and attach callers/callees to each symbol the model can see.
         if symbols:
@@ -617,7 +625,10 @@ class V3Handler(BaseHTTPRequestHandler):
             except Exception as cge:  # pragma: no cover - import/extract guard
                 print(f"  [outline] call-graph neighborhood skipped: {cge}", flush=True)
 
-        self._json_response(200, {"symbols": symbols, "supported": supported})
+        out = {"symbols": symbols, "supported": supported}
+        if embedded:
+            out["embedded_regions"] = embedded
+        self._json_response(200, out)
 
     def _handle_cyclomatic_complexity(self):
         """POST /internal/cyclomatic_complexity — McCabe CC for tier classification.

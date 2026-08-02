@@ -99,3 +99,53 @@ def test_a_node_sized_replacement_is_untouched():
     res = structural_edit(path="app.py", source_text=_FLASK, selector="function:index",
                           content="@app.route('/')\ndef index():\n    return 'hi'\n")
     assert res["success"] is True, res.get("error")
+
+
+# --- embedded-region outline --------------------------------------------------
+#
+# outline_file reports only what the host grammar sees. For a Flask app whose
+# whole UI is one module-level string, that is `function:index` and nothing
+# else — so a model asked to change the game loop reaches for
+# `structural_edit selector="function:draw"`, a symbol the outline never
+# mentioned and no selector can reach. Runs 7 and 9 both opened with exactly
+# that call.
+
+def test_embedded_regions_name_the_javascript_the_outline_hides():
+    regions = main.embedded_region_outline("app.py", _FLASK_WITH_SCRIPT)
+    js = [r for r in regions if r["kind"] == "javascript"]
+    assert len(js) == 1, regions
+    assert "draw" in js[0]["symbols"]
+    assert "gameOver" in js[0]["symbols"]
+    assert js[0]["start_line"] < js[0]["end_line"]
+    assert "HTML_TEMPLATE" in js[0]["where"]
+
+
+def test_a_file_with_no_embedded_code_reports_none():
+    assert main.embedded_region_outline("a.py", "def f():\n    return 1\n") == []
+
+
+def test_an_unsupported_carrier_reports_none():
+    assert main.embedded_region_outline("a.txt", _FLASK_WITH_SCRIPT) == []
+
+
+_FLASK_WITH_SCRIPT = (
+    'from flask import Flask, render_template_string\n'
+    'app = Flask(__name__)\n'
+    'HTML_TEMPLATE = """\n'
+    '<html><body><canvas id="c"></canvas>\n'
+    '<script>\n'
+    '        let score = 0;\n'
+    '        function draw() {\n'
+    '            score += 1;\n'
+    '        }\n'
+    '        function gameOver() {\n'
+    '            score = 0;\n'
+    '        }\n'
+    '        setInterval(draw, 100);\n'
+    '</script>\n'
+    '</body></html>\n'
+    '"""\n\n\n'
+    "@app.route('/')\n"
+    'def index():\n'
+    '    return render_template_string(HTML_TEMPLATE)\n'
+)

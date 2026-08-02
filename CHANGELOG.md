@@ -52,6 +52,15 @@ than adding another retry around it.
 
 **Added**
 
+- `outline_file` reports embedded-language regions. The host grammar cannot
+  see into a string literal, so the outline of a Flask app whose whole UI is
+  one module-level template named `function:index` and nothing else — and a
+  model asked to change the game loop reached for `structural_edit
+  selector="function:draw"`, a symbol the outline never mentioned and no
+  selector can reach. Two consecutive runs opened with exactly that call. The
+  outline now names the `<script>`/`<style>` region, its line range, the
+  functions declared inside it, and the fact that they are not selectable,
+  reusing the block extraction the embedded-script gate already performs.
 - `GET /jobs` on the sandbox, listing every background job it holds. The
   registry is process-wide with no session concept, so a server an earlier
   session left running keeps its port while `/jobs/{id}` needs an id the new
@@ -145,6 +154,26 @@ than adding another retry around it.
   loop that re-arms from inside its own body are all left alone — the finding
   needs both versions, because one alone cannot tell a dead loop from an
   intentional one.
+
+- A byte-identical re-send of an already-rejected tool call is refused before
+  it executes. The harness is deterministic, so the same call against the same
+  workspace fails for the same reason. Observed: a run emitted the same
+  `replace_lines` call on two consecutive turns against a rejection that named
+  the file, the line, the cause and two concrete fixes, then died on the
+  three-strike breaker with the file untouched — the existing repetition
+  detector needs three occurrences in its window and steers only the following
+  turn, so an identical pair never reached it. Scoped to calls that failed
+  (re-reading a file after editing it is byte-identical and correct) and
+  cleared when the same call later succeeds.
+- A completion claim the run cannot support no longer reaches the user as the
+  model wrote it. The verification gate bounces `done` three times and then,
+  out of bounces, lets it through: three runs ended with a confident "I
+  verified..." over a broken file, once over a Flask app whose only
+  `@app.route` had been deleted. The harness now states what was written and
+  that nothing verified it, keeping the model's account labelled as
+  unverified. Making `done` ungrammatical would be stronger but needs strict
+  schema-GBNF, and Gemma-family models require the loose grammar. See
+  [ADR 0008](docs/adr/0008-harness-mechanisms-over-model-instructions.md).
 
 **Fixed**
 

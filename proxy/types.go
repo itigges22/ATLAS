@@ -164,6 +164,20 @@ type OutlineOutput struct {
 	// lines, call edges). The model reads this; Symbols carries the same
 	// data structurally.
 	Outline string `json:"outline,omitempty"`
+	// Regions holding code in ANOTHER language — <script>/<style> blocks,
+	// including inside Python string literals. The host grammar cannot see
+	// into a string, so these are exactly the symbols a selector CANNOT
+	// reach, and naming them is what stops the model reaching for them.
+	EmbeddedRegions []EmbeddedRegion `json:"embedded_regions"`
+}
+
+// EmbeddedRegion is one foreign-language block inside a file.
+type EmbeddedRegion struct {
+	Where     string   `json:"where"`
+	Kind      string   `json:"kind"`
+	StartLine int      `json:"start_line"`
+	EndLine   int      `json:"end_line"`
+	Symbols   []string `json:"symbols"`
 }
 
 // -- write_file --
@@ -545,6 +559,13 @@ type AgentContext struct {
 	// 1m25s and 1m15s, each adding another space.
 	AppliedEdits map[string]bool
 
+	// FailedToolCalls keys every tool call that has already been REJECTED,
+	// by the same (name, args) signature the repetition detector uses.
+	// Re-sending a byte-identical call whose last run failed cannot produce
+	// a different result — the harness is deterministic — so the second one
+	// is refused before it executes rather than nudged afterwards.
+	FailedToolCalls map[string]string
+
 	// Reasoning-repetition detector state (May 10 2026, BiasBusters
 	// follow-up #30). Per-turn snapshot of the model's reasoning_content
 	// stream. When the same opening prose ("Now I need to look at the
@@ -615,15 +636,16 @@ type AgentContext struct {
 // NewAgentContext creates a new agent context with defaults.
 func NewAgentContext(workingDir string, tier Tier) *AgentContext {
 	return &AgentContext{
-		Tier:           tier,
-		MaxTurns:       TierMaxTurns(tier),
-		WorkingDir:     workingDir,
-		PermissionMode: PermissionDefault,
-		FileReadTimes:  make(map[string]time.Time),
-		FilesRead:      make(map[string]string),
-		AppliedEdits:   make(map[string]bool),
-		SessionWrites:  make(map[string]bool),
-		Ctx:            context.Background(),
+		Tier:            tier,
+		MaxTurns:        TierMaxTurns(tier),
+		WorkingDir:      workingDir,
+		PermissionMode:  PermissionDefault,
+		FileReadTimes:   make(map[string]time.Time),
+		FilesRead:       make(map[string]string),
+		AppliedEdits:    make(map[string]bool),
+		FailedToolCalls: make(map[string]string),
+		SessionWrites:   make(map[string]bool),
+		Ctx:             context.Background(),
 	}
 }
 

@@ -374,9 +374,10 @@ func outlineFileTool() *ToolDef {
 			// structural_edit selectors). Fall back to a language-agnostic regex
 			// scan for everything else and whenever v3 is unavailable.
 			var syms []OutlineSymbol
+			var regions []EmbeddedRegion
 			if strings.HasSuffix(input.Path, ".py") {
-				if v3, ok := outlineViaV3(ctx, input.Path, src); ok {
-					syms = v3
+				if v3, ok, emb := outlineViaV3(ctx, input.Path, src); ok {
+					syms, regions = v3, emb
 				}
 			}
 			engine := "tree-sitter"
@@ -411,7 +412,9 @@ func outlineFileTool() *ToolDef {
 				// function it calls, not from the function itself.
 				sb.WriteString("\nNote: if a function returns a wrong value, the bug may be in a function it `calls`, not in the function itself — follow the call edges to the root cause before editing.\n")
 			}
-			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0, Outline: sb.String()}
+			sb.WriteString(embeddedRegionNote(regions))
+			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0,
+				EmbeddedRegions: regions, Outline: sb.String()}
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
@@ -431,7 +434,7 @@ func callGraphEnabled() bool {
 // when ATLAS_CALL_GRAPH is on). Returns "" when there are no edges, so a file
 // with no internal calls doesn't get a noisy empty section.
 func callGraphFooter(ctx *AgentContext, path, source string) string {
-	syms, ok := outlineViaV3(ctx, path, source)
+	syms, ok, _ := outlineViaV3(ctx, path, source)
 	if !ok {
 		return ""
 	}
@@ -471,30 +474,55 @@ func callGraphFooter(ctx *AgentContext, path, source string) string {
 
 // outlineViaV3 asks v3-service for a tree-sitter outline. Returns (nil,false)
 // on any failure so the caller can fall back to the regex scan.
-func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool) {
+func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool, []EmbeddedRegion) {
 	if ctx.V3URL == "" {
-		return nil, false
+		return nil, false, nil
 	}
 	body, _ := json.Marshal(map[string]string{"path": path, "source": source})
 	req, err := http.NewRequestWithContext(ctx.Ctx, "POST",
 		ctx.V3URL+"/internal/outline", bytes.NewReader(body))
 	if err != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, false
+		return nil, false, nil
 	}
 	var out OutlineOutput
 	if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.Supported {
-		return nil, false
+		return nil, false, nil
 	}
-	return out.Symbols, true
+	return out.Symbols, true, out.EmbeddedRegions
+}
+
+// embeddedRegionNote renders the foreign-language regions of a file for the
+// outline the model reads.
+//
+// It names the symbols AND says they are unreachable by selector, because
+// naming them alone would invite exactly the call it is meant to prevent.
+func embeddedRegionNote(regions []EmbeddedRegion) string {
+	if len(regions) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\nEmbedded code (a different language, inside this file):\n")
+	for _, r := range regions {
+		fmt.Fprintf(&sb, "L%d-%d\t%s in %s\n", r.StartLine, r.EndLine, r.Kind, r.Where)
+		if len(r.Symbols) > 0 {
+			fmt.Fprintf(&sb, "\tdefines: %s\n", strings.Join(r.Symbols, ", "))
+		}
+	}
+	sb.WriteString("These are NOT selectable. To the host grammar the whole block is one " +
+		"string literal or one raw text node, so `structural_edit` cannot address anything " +
+		"listed above — `function:NAME` will report that the symbol does not exist. Change " +
+		"this code with replace_lines (the line numbers above), edit_file on one unique line, " +
+		"or insert_after.\n")
+	return sb.String()
 }
 
 // outlineByRegex is the language-agnostic fallback: any line starting (at

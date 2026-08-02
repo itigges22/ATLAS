@@ -615,3 +615,60 @@ func mustJSONString(s string) string {
 	}
 	return string(b)
 }
+
+// Run 9 (2026-08-02) emitted the same replace_lines call on turns 2 and 3
+// against a rejection that named the file, the line, the cause and two
+// concrete fixes. The repetition detector needs three occurrences in its
+// window and only steers the NEXT turn, so an identical pair never reached
+// it and the run died on the three-strike breaker with the file untouched.
+func TestAnIdenticalResendOfARejectedCallIsRefused(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	args := json.RawMessage(`{"path":"app.py","start_line":201,"end_line":201,"content":"x"}`)
+
+	if refusal := identicalRetryRefusal(ctx, "replace_lines", args); refusal != "" {
+		t.Fatalf("a first attempt must run: %s", refusal)
+	}
+	recordFailedToolCall(ctx, "replace_lines", args, "stops a render loop: `draw` now runs once")
+
+	refusal := identicalRetryRefusal(ctx, "replace_lines", args)
+	if refusal == "" {
+		t.Fatal("the identical re-send must be refused before it executes")
+	}
+	// The original rejection has to come back with it — the model needs the
+	// reason, not just the fact that it repeated itself.
+	if !strings.Contains(refusal, "stops a render loop") {
+		t.Errorf("refusal drops the original reason:\n%s", refusal)
+	}
+	if !strings.Contains(refusal, "read_file") {
+		t.Errorf("refusal gives no way forward:\n%s", refusal)
+	}
+}
+
+func TestTheRefusalIsScopedToCallsThatFailed(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	read := json.RawMessage(`{"path":"app.py"}`)
+
+	// Re-reading a file after editing it is byte-identical and correct.
+	if refusal := identicalRetryRefusal(ctx, "read_file", read); refusal != "" {
+		t.Errorf("a repeated successful call was refused: %s", refusal)
+	}
+	// A different call to the same tool is not the same call.
+	args := json.RawMessage(`{"path":"a.py","start_line":1,"end_line":1,"content":"x"}`)
+	recordFailedToolCall(ctx, "replace_lines", args, "boom")
+	other := json.RawMessage(`{"path":"a.py","start_line":2,"end_line":2,"content":"x"}`)
+	if refusal := identicalRetryRefusal(ctx, "replace_lines", other); refusal != "" {
+		t.Errorf("a different call was refused: %s", refusal)
+	}
+}
+
+func TestASucceedingCallClearsItsOwnRejection(t *testing.T) {
+	// An edit rejected for a stale range works after a re-read. The memory
+	// must not outlive the condition that caused it.
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	args := json.RawMessage(`{"path":"a.py","start_line":1,"end_line":1,"content":"x"}`)
+	recordFailedToolCall(ctx, "replace_lines", args, "stale range")
+	clearFailedToolCall(ctx, "replace_lines", args)
+	if refusal := identicalRetryRefusal(ctx, "replace_lines", args); refusal != "" {
+		t.Errorf("rejection outlived the failure: %s", refusal)
+	}
+}
