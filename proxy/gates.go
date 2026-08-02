@@ -430,7 +430,7 @@ func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool)
 	if msg, ok := checkSandboxSyntax(ctx, path, content); !ok {
 		return msg, false
 	}
-	return checkEmbeddedScript(ctx, path, content)
+	return checkEmbeddedScript(ctx, path, content, "")
 }
 
 // checkSandboxSyntax is the whole-file half of checkFallbackSyntax: the
@@ -529,6 +529,7 @@ type embeddedScriptFinding struct {
 	Column  int    `json:"column"`
 	Kind    string `json:"kind"`    // "javascript" | "css"
 	Where   string `json:"where"`   // "the <script> block inside the Python string HTML_TEMPLATE"
+	Defect  string `json:"defect"`  // "" (syntax) | "stopped_loop"
 	Message string `json:"message"` // "unexpected `)`"
 	Hint    string `json:"hint"`    // how to fix it
 	Text    string `json:"text"`    // the offending source line
@@ -537,7 +538,13 @@ type embeddedScriptFinding struct {
 // checkEmbeddedScript returns ("", true) when `content` has no broken embedded
 // script, or when the check could not run. Returns (prefixed rejection, false)
 // when v3-service confirms the embedded JavaScript/CSS does not parse.
-func checkEmbeddedScript(ctx *AgentContext, path, content string) (string, bool) {
+//
+// `previous` is the pre-edit file, or "" when there isn't one. With it the
+// service also reports a render loop the edit stopped driving — a function a
+// repeating timer used to call that now fires once and never re-arms. That
+// comparison is why it lives on the far side rather than here: the service
+// already has the JavaScript parsed.
+func checkEmbeddedScript(ctx *AgentContext, path, content, previous string) (string, bool) {
 	if ctx == nil || ctx.V3URL == "" {
 		return "", true
 	}
@@ -550,7 +557,8 @@ func checkEmbeddedScript(ctx *AgentContext, path, content string) (string, bool)
 	if !strings.Contains(low, "<script") && !strings.Contains(low, "<style") {
 		return "", true
 	}
-	body, err := json.Marshal(map[string]string{"path": path, "source": content})
+	body, err := json.Marshal(map[string]string{
+		"path": path, "source": content, "previous": previous})
 	if err != nil {
 		return "", true
 	}
@@ -596,11 +604,11 @@ func checkEmbeddedScript(ctx *AgentContext, path, content string) (string, bool)
 // and is left alone; only a change that newly breaks it is blocked. Fail-soft:
 // "" whenever the check couldn't run.
 func embeddedScriptGate(ctx *AgentContext, path, original, edited string) string {
-	synErr, ok := checkEmbeddedScript(ctx, path, edited)
+	synErr, ok := checkEmbeddedScript(ctx, path, edited, original)
 	if ok {
 		return ""
 	}
-	if _, wasHealthy := checkEmbeddedScript(ctx, path, original); !wasHealthy {
+	if _, wasHealthy := checkEmbeddedScript(ctx, path, original, ""); !wasHealthy {
 		return ""
 	}
 	msg, _ := embeddedScriptRejectionFor(synErr)
@@ -786,6 +794,24 @@ func formatEmbeddedScriptRejection(path string, f embeddedScriptFinding) string 
 		host = "Python"
 	}
 	var sb strings.Builder
+	if f.Defect == "stopped_loop" {
+		// Not a syntax error: the JavaScript parses. The edit left a render
+		// loop scheduled exactly once, so the page draws one frame and
+		// freezes. Nothing downstream can see it — the file compiles, the
+		// server starts, the page returns 200.
+		fmt.Fprintf(&sb, "%s stops a render loop in %s — it was NOT written.\n", path, f.Where)
+		fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)
+		if f.Text != "" {
+			fmt.Fprintf(&sb, "  %d | %s\n", f.Line, f.Text)
+		}
+		if f.Hint != "" {
+			fmt.Fprintf(&sb, "%s\n", f.Hint)
+		}
+		sb.WriteString("Running the file will NOT surface this: the JavaScript is valid, " +
+			"the server still starts and the page still returns 200 — it just freezes " +
+			"after one frame. Re-send the edit with the loop rescheduling itself.")
+		return sb.String()
+	}
 	fmt.Fprintf(&sb, "%s has a %s syntax error in %s — it was NOT written.\n",
 		path, lang, f.Where)
 	fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)

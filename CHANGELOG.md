@@ -55,6 +55,19 @@ than adding another retry around it.
   the same fallback-syntax, unresolved-call and embedded-script gates as
   `edit_file`.
 
+- A stopped render loop is now refused at the write gate. Asked to make the
+  snake speed up with the score, the model replaced `setInterval(draw, 100)`
+  with `setTimeout(draw, delay)` at the same top-level spot and never re-armed
+  it inside `draw()`. The JavaScript parses, `python app.py` starts the
+  server, and the agent reported the change verified — while the game drew
+  exactly one frame. `embedded_script_check` now takes the pre-edit file and
+  reports a function a repeating timer used to drive that fires once and never
+  re-arms; the existing embedded-script gate refuses the write and names the
+  call site. Deleting a loop outright, adding a fresh delayed one-shot, and a
+  loop that re-arms from inside its own body are all left alone — the finding
+  needs both versions, because one alone cannot tell a dead loop from an
+  intentional one.
+
 **Fixed**
 
 - A V3 candidate that rewrites text the caller's edit never touched is now

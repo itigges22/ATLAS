@@ -518,7 +518,8 @@ class V3Handler(BaseHTTPRequestHandler):
         """POST /internal/embedded_script_check — does the JavaScript/CSS
         EMBEDDED in this file parse?
 
-        Request:  {"path": "app.py", "source": "<file text>"}
+        Request:  {"path": "app.py", "source": "<file text>",
+                   "previous": "<pre-edit file text, optional>"}
         Response: {"ok": bool, "findings": [{line, column, kind, where,
                                             message, hint, text}]}
 
@@ -528,6 +529,10 @@ class V3Handler(BaseHTTPRequestHandler):
         render_template_string. A stray `)` in that JavaScript leaves the
         Python compiling, the server starting and `curl /` returning 200 while
         the page is dead in the browser.
+
+        With `previous` it also reports a render loop the edit stopped driving
+        — a function a repeating timer used to call that now fires once and
+        never re-arms. Same blind spot, one level up: that code parses.
 
         `ok: false` means the check couldn't run (tree-sitter-javascript
         missing, non-UTF-8 source) and the caller fails open. An unsupported
@@ -543,7 +548,8 @@ class V3Handler(BaseHTTPRequestHandler):
             return
         path = body.get("path", "") or ""
         source = body.get("source", "") or ""
-        result = embedded_script_check(path, source)
+        previous = body.get("previous", "") or ""
+        result = embedded_script_check(path, source, previous)
         if result.get("findings"):
             first = result["findings"][0]
             print(f"  [embedded_script] {path} line {first['line']}: "

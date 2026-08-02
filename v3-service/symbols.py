@@ -1116,6 +1116,84 @@ def _js_error(block: bytes):
             "Rewrite that statement so it parses as JavaScript.")
 
 
+# Timers that re-invoke their callback on their own. requestAnimationFrame is
+# NOT one: it fires once, and a render loop built on it re-arms from inside the
+# callback — which is exactly the shape checked for below.
+_RECURRING_TIMERS = frozenset({"setInterval"})
+_ONE_SHOT_TIMERS = frozenset({"setTimeout", "requestAnimationFrame"})
+
+
+def _js_looping_functions(block: bytes):
+    """(looping, one_shot) for this JavaScript block.
+
+    `looping` is the set of function names the code keeps calling; `one_shot`
+    maps a function name to the byte offset of the timer that fires it exactly
+    once, so a caller can point at the call site.
+
+    A function loops when `setInterval` drives it, or when its own body arms
+    any timer — the `setTimeout(draw, delay)` inside `draw()` that schedules
+    the next frame. A one-shot `setTimeout(showBanner, 3000)` at top level is
+    not a loop, and neither is a `draw` whose body no longer re-arms.
+
+    Names only, no scope analysis: this feeds a healthy->broken comparison, so
+    a name that resolves differently in the two versions is the same name in
+    both and cancels out. Returns an empty set when the block does not parse.
+    """
+    parser = _ts.Parser(_JS_LANG)
+    tree = parser.parse(block)
+    if tree.root_node.has_error:
+        return set(), {}
+
+    looping = set()
+    one_shot = {}
+
+    def call_target(node):
+        """(timer_name, callback_identifier) for a timer call, else None."""
+        if node.type != "call_expression":
+            return None
+        fn = node.child_by_field_name("function")
+        args = node.child_by_field_name("arguments")
+        if fn is None or args is None or fn.type != "identifier":
+            return None
+        name = fn.text.decode("utf-8", "replace")
+        if name not in _RECURRING_TIMERS and name not in _ONE_SHOT_TIMERS:
+            return None
+        for arg in args.named_children:
+            return name, (arg.text.decode("utf-8", "replace")
+                          if arg.type == "identifier" else "")
+        return name, ""
+
+    def walk(node, enclosing):
+        hit = call_target(node)
+        if hit is not None:
+            timer, callback = hit
+            if timer in _RECURRING_TIMERS and callback:
+                looping.add(callback)
+            elif timer in _ONE_SHOT_TIMERS and callback:
+                one_shot.setdefault(callback, node.start_byte)
+            # Any timer armed from inside a function body re-arms that body's
+            # own loop — `setTimeout(draw, delay)` written inside draw(), and
+            # the `requestAnimationFrame(loop)` idiom alike.
+            if enclosing:
+                looping.add(enclosing)
+        name = enclosing
+        if node.type in ("function_declaration", "method_definition"):
+            ident = node.child_by_field_name("name")
+            if ident is not None:
+                name = ident.text.decode("utf-8", "replace")
+        elif node.type == "variable_declarator":
+            value = node.child_by_field_name("value")
+            ident = node.child_by_field_name("name")
+            if (ident is not None and value is not None
+                    and value.type in ("function_expression", "arrow_function")):
+                name = ident.text.decode("utf-8", "replace")
+        for child in node.children:
+            walk(child, name)
+
+    walk(tree.root_node, "")
+    return looping, one_shot
+
+
 def _css_error(block: bytes):
     """(offset_in_block, message, hint) for the first unbalanced brace in a CSS
     body, or None.
@@ -1293,13 +1371,18 @@ def _line_at(source: bytes, offset: int):
     return line_no, offset - line_start + 1, text
 
 
-def embedded_script_check(path: str, source_text: str) -> dict:
+def embedded_script_check(path: str, source_text: str, previous_text: str = "") -> dict:
     """Syntax-check the JavaScript / CSS embedded in `source_text`.
 
     Handles two carriers:
       (a) .html / .htm / .jinja / .jinja2 — <script> and <style> blocks;
       (b) .py — HTML held in a string literal (the render_template_string
           pattern), which is the shape that shipped a broken snake game.
+
+    With `previous_text` (the pre-edit file) it also reports a render loop the
+    edit stopped: a function a recurring timer used to drive that now fires
+    once and never re-arms. That code parses, the server still starts and
+    `curl /` still returns 200 — the page just freezes after one frame.
 
     Returns:
         ok:       False when the check COULDN'T RUN (grammar missing, non-UTF-8
@@ -1319,15 +1402,10 @@ def embedded_script_check(path: str, source_text: str) -> dict:
     if len(source) > _EMBEDDED_MAX_BYTES:
         return {"ok": True, "findings": [], "skipped": "source larger than the embedded-check cap"}
 
+    if not (p.endswith(_EMBEDDED_HTML_EXTS) or p.endswith(".py")):
+        return {"ok": True, "findings": []}
     try:
-        if p.endswith(_EMBEDDED_HTML_EXTS):
-            blocks = _embedded_blocks(source, 0, "", no_escapes=False)
-        elif p.endswith(".py"):
-            blocks = []
-            for offset, content, label in _python_html_strings(source):
-                blocks.extend(_embedded_blocks(content, offset, label, no_escapes=True))
-        else:
-            return {"ok": True, "findings": []}
+        blocks = embedded_script_blocks_for(path, source_text)
     except Exception as e:
         return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
 
@@ -1352,5 +1430,75 @@ def embedded_script_check(path: str, source_text: str) -> dict:
         })
         if len(findings) >= _EMBEDDED_MAX_FINDINGS:
             break
+    if previous_text and len(findings) < _EMBEDDED_MAX_FINDINGS:
+        findings.extend(_stopped_loop_findings(path, source, previous_text, blocks))
     findings.sort(key=lambda f: f["line"])
-    return {"ok": True, "findings": findings}
+    return {"ok": True, "findings": findings[:_EMBEDDED_MAX_FINDINGS]}
+
+
+def _stopped_loop_findings(path, source: bytes, previous_text: str, blocks) -> list:
+    """Findings for render loops the edit stopped driving.
+
+    Compares the whole file's looping functions before and after, rather than
+    block by block: an edit is free to move a loop between <script> blocks, and
+    only the names that stop looping everywhere are dead. A name the edit also
+    deleted is not reported — removing a loop outright is a decision, leaving
+    one scheduled once is a mistake.
+    """
+    try:
+        before = embedded_script_blocks_for(path, previous_text)
+    except Exception:
+        return []
+    if not before:
+        return []
+
+    was_looping = set()
+    for kind, _offset, body, _where in before:
+        if kind == "javascript":
+            was_looping |= _js_looping_functions(body)[0]
+    if not was_looping:
+        return []
+
+    still_looping, one_shot, where_by_name = set(), {}, {}
+    for kind, offset, body, where in blocks:
+        if kind != "javascript":
+            continue
+        looping, shots = _js_looping_functions(body)
+        still_looping |= looping
+        for name, block_offset in shots.items():
+            one_shot.setdefault(name, offset + block_offset)
+            where_by_name.setdefault(name, where)
+
+    findings = []
+    for name in sorted(was_looping - still_looping):
+        if name not in one_shot:
+            continue  # the function is gone entirely, or nothing calls it now
+        line, column, text = _line_at(source, one_shot[name])
+        findings.append({
+            "line": line,
+            "column": column,
+            "kind": "javascript",
+            "where": where_by_name.get(name, ""),
+            "defect": "stopped_loop",
+            "message": f"`{name}` used to run on a repeating timer and now runs once",
+            "hint": (f"Nothing schedules the next call, so the loop stops after one "
+                     f"frame. Either put the timer back inside `{name}` so each call "
+                     f"arms the next one, or restore setInterval."),
+            "text": text,
+        })
+    return findings
+
+
+def embedded_script_blocks_for(path: str, source_text: str):
+    """The embedded <script>/<style> blocks of a file, as
+    (kind, offset, body, where). Empty when the carrier is unsupported."""
+    source = source_text.encode("utf-8")
+    p = (path or "").lower()
+    if p.endswith(_EMBEDDED_HTML_EXTS):
+        return _embedded_blocks(source, 0, "", no_escapes=False)
+    if p.endswith(".py"):
+        blocks = []
+        for offset, content, label in _python_html_strings(source):
+            blocks.extend(_embedded_blocks(content, offset, label, no_escapes=True))
+        return blocks
+    return []

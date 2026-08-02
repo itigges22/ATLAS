@@ -1087,17 +1087,17 @@ func TestEmbeddedScriptSkipsWithoutScriptTag(t *testing.T) {
 	defer srv.Close()
 	ctx := structCtx(srv.URL)
 
-	if _, ok := checkEmbeddedScript(ctx, "notes.md", flaskWithScript(strayParenLine)); !ok {
+	if _, ok := checkEmbeddedScript(ctx, "notes.md", flaskWithScript(strayParenLine), ""); !ok {
 		t.Error("an extension that cannot carry a script must pass")
 	}
-	if _, ok := checkEmbeddedScript(ctx, "app.py", "def f():\n    return 1\n"); !ok {
+	if _, ok := checkEmbeddedScript(ctx, "app.py", "def f():\n    return 1\n", ""); !ok {
 		t.Error("python with no markup must pass")
 	}
 	if calls != 0 {
 		t.Errorf("expected no network calls for unscripted content, got %d", calls)
 	}
 	// ...and the real thing still does call.
-	if _, ok := checkEmbeddedScript(ctx, "app.py", flaskWithScript(strayParenLine)); ok {
+	if _, ok := checkEmbeddedScript(ctx, "app.py", flaskWithScript(strayParenLine), ""); ok {
 		t.Error("a broken embedded script must be reported")
 	}
 	if calls != 1 {
@@ -1135,7 +1135,7 @@ func TestFallbackSyntaxRejectionPassesEmbeddedFindingThrough(t *testing.T) {
 	v3 := fakeV3Embedded(t, "'DOWN');", nil)
 	defer v3.Close()
 	ctx := structCtx(v3.URL)
-	synErr, _ := checkEmbeddedScript(ctx, "app.py", flaskWithScript(strayParenLine))
+	synErr, _ := checkEmbeddedScript(ctx, "app.py", flaskWithScript(strayParenLine), "")
 
 	msg := fallbackSyntaxRejection("app.py", flaskWithScript(strayParenLine), synErr)
 	if strings.Contains(msg, "COMPLETE file content") || strings.Contains(msg, "cut off") {
@@ -1443,5 +1443,60 @@ func TestV3DriftGateFailsSoft(t *testing.T) {
 	// Blank lines carry no content; reflowing them is not a rewrite.
 	if drift := v3RewroteBeyondTheEdit("a\n\nb\n", "a\n\nc\n", "a\nc\n"); drift != "" {
 		t.Errorf("blank-line reflow flagged as drift: %s", drift)
+	}
+}
+
+// The gate's second job: a render loop the edit stopped driving. Not a syntax
+// error — the JavaScript parses, the server starts, the page returns 200, and
+// the game draws exactly one frame. The finding only exists when the service
+// gets the pre-edit file to compare against, so the gate must send it.
+func TestEmbeddedScriptGateBlocksAStoppedRenderLoop(t *testing.T) {
+	var sawPrevious string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body struct{ Source, Previous string }
+		_ = json.Unmarshal(raw, &body)
+		out := map[string]interface{}{"ok": true, "findings": []interface{}{}}
+		if body.Previous != "" && strings.Contains(body.Source, "setTimeout(draw") {
+			sawPrevious = body.Previous
+			out["findings"] = []map[string]interface{}{{
+				"line": 42, "column": 8, "kind": "javascript", "defect": "stopped_loop",
+				"where":   "the <script> block inside the Python string HTML_TEMPLATE",
+				"message": "`draw` used to run on a repeating timer and now runs once",
+				"hint":    "Nothing schedules the next call, so the loop stops after one frame.",
+				"text":    "setTimeout(draw, delay);",
+			}}
+		}
+		b, _ := json.Marshal(out)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(b)
+	}))
+	defer srv.Close()
+	ctx := structCtx(srv.URL)
+	original := flaskWithScript("            setInterval(draw, 100);")
+	edited := flaskWithScript("            setTimeout(draw, delay);")
+
+	msg := embeddedScriptGate(ctx, "app.py", original, edited)
+	if msg == "" {
+		t.Fatal("gate must block an edit that leaves a render loop scheduled once")
+	}
+	if sawPrevious == "" {
+		t.Error("the pre-edit file was never sent — the comparison cannot run")
+	}
+	for _, want := range []string{
+		"stops a render loop", // named as what it is, not a syntax error
+		"line 42",             // where
+		"`draw`",              // which function
+		"it was NOT written",  // nothing landed
+		"still returns 200",   // why the server check missed it
+		"freezes after one frame",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection missing %q:\n%s", want, msg)
+		}
+	}
+	// The syntax wording must not leak into it.
+	if strings.Contains(msg, "syntax error") {
+		t.Errorf("stopped-loop finding described as a syntax error:\n%s", msg)
 	}
 }

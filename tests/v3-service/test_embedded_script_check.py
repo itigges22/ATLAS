@@ -347,3 +347,74 @@ def test_empty_and_malformed_inputs_do_not_raise():
         res = check(path, source)
         assert res["ok"] is True, (path, res)
         assert res["findings"] == [], (path, res)
+
+
+# --- stopped render loop -----------------------------------------------------
+#
+# 2026-08-02 dogfooding: asked to make the snake speed up with the score, the
+# model replaced `setInterval(draw, 100)` with `setTimeout(draw, delay)` at the
+# same top-level spot and never re-armed it inside draw(). The JavaScript
+# parses, `python app.py` starts the server, and the agent reported the change
+# verified — while the game drew exactly one frame.
+
+def _flask_page(script: str) -> str:
+    return (
+        'from flask import Flask, render_template_string\n'
+        'app = Flask(__name__)\n'
+        'HTML_TEMPLATE = """\n'
+        '<html><body><canvas id="c"></canvas>\n'
+        '<script>\n'
+        '        let score = 0;\n'
+        '        function draw() {\n'
+        '            score += 1;\n'
+        '        }\n'
+        f'{script}\n'
+        '</script>\n'
+        '</body></html>\n'
+        '"""\n'
+    )
+
+
+RECURRING = _flask_page('        setInterval(draw, 100);')
+ONE_SHOT = _flask_page('        let delay = Math.max(50, 100 - score * 3);\n'
+                       '        setTimeout(draw, delay);')
+
+
+def test_a_loop_downgraded_to_a_single_shot_is_reported():
+    findings = main.embedded_script_check("app.py", ONE_SHOT, RECURRING)["findings"]
+    assert len(findings) == 1, findings
+    f = findings[0]
+    assert f["defect"] == "stopped_loop"
+    assert "`draw`" in f["message"]
+    assert "setTimeout(draw, delay)" in f["text"]
+
+
+def test_the_same_content_without_the_pre_edit_file_reports_nothing():
+    """The comparison IS the check — one version alone cannot tell a dead loop
+    from a deliberate one-shot."""
+    assert main.embedded_script_check("app.py", ONE_SHOT)["findings"] == []
+
+
+def test_a_loop_that_rearms_itself_is_not_reported():
+    rearmed = _flask_page('        setTimeout(draw, 100);').replace(
+        "            score += 1;",
+        "            score += 1;\n            setTimeout(draw, 100 - score);")
+    assert main.embedded_script_check("app.py", rearmed, RECURRING)["findings"] == []
+
+
+def test_a_new_delayed_one_shot_is_not_reported():
+    added = _flask_page('        setInterval(draw, 100);\n'
+                        '        function banner() { score = 0; }\n'
+                        '        setTimeout(banner, 3000);')
+    assert main.embedded_script_check("app.py", added, RECURRING)["findings"] == []
+
+
+def test_removing_the_loop_outright_is_not_reported():
+    """Deleting a loop is a decision; leaving one scheduled once is a slip."""
+    removed = _flask_page('        // no loop here')
+    assert main.embedded_script_check("app.py", removed, RECURRING)["findings"] == []
+
+
+def test_a_file_that_never_looped_reports_nothing():
+    plain = _flask_page('        setTimeout(draw, 100);')
+    assert main.embedded_script_check("app.py", plain, _flask_page('        draw();'))["findings"] == []
