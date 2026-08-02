@@ -54,6 +54,23 @@ def test_the_write_tools_this_contract_names_all_exist(bodies):
     assert not missing, f"tools.go has no constructor for {missing}; found {sorted(bodies)}"
 
 
+# ATLAS is a pipeline with a harness around it, not a harness. A content edit
+# that skips tier classification and V3 produces a single greedy sample with no
+# candidate generation and no lens scoring — which is exactly what the tier
+# system exists to prevent. `insert_after` and `replace_lines` shipped without
+# it while the tool guidance was being changed to steer toward them, so the
+# model was migrated off the quality pipeline onto the tools that lacked it.
+PIPELINE_ENTRYPOINTS = ("runEditPipeline", "writeFileWithV3", "improveContentWithV3")
+
+
+@pytest.mark.parametrize("tool", WRITE_TOOLS)
+def test_every_write_path_goes_through_the_pipeline(bodies, tool):
+    assert any(e in bodies[tool] for e in PIPELINE_ENTRYPOINTS), (
+        f"{tool}Tool never enters the V3 pipeline. Its edits get one greedy "
+        f"sample, no candidates and no lens scoring, regardless of file tier."
+    )
+
+
 @pytest.mark.parametrize("tool", WRITE_TOOLS)
 @pytest.mark.parametrize("gate,consequence", sorted(REQUIRED.items()))
 def test_every_write_path_runs_every_gate(bodies, tool, gate, consequence):

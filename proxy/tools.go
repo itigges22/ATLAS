@@ -1783,55 +1783,13 @@ func editFileTool() *ToolDef {
 			// Route through V3 pipeline when the file warrants it. The
 			// gate now mirrors write_file (file-tier only, no request-tier
 			// AND-gate) — having two separate tier checks meant V3 only
-			// fired when both classifiers happened to agree, which was
-			// rare in practice. V3 takes the post-edit content as
-			// baseline candidate #0; if its diverse alternatives
-			// build-verify better, V3 wins; otherwise the baseline (=our
-			// edit) wins. Either way the answer is build-verified.
-			//
-			// May 10 2026: classify on max(oldTier, newTier) so a
-			// destructive edit that shrinks a T2+ file into a T1 stub
-			// still triggers V3. Without max-tier, the very edits that
-			// most need quality-checking were silently bypassing the
-			// pipeline because their output was too small to qualify.
-			oldTier := classifyFileTier(input.Path, content)
-			newTier := classifyFileTier(input.Path, newContent)
-			fileTier := oldTier
-			if newTier > fileTier {
-				fileTier = newTier
+			// Same pipeline entry every content edit uses; see
+			// runEditPipeline for why it is shared rather than inlined.
+			piped, v3Out, cancelled := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
+			if cancelled != nil {
+				return cancelled, nil
 			}
-			// GH #39 point 2: CC enrichment — same as write_file's path.
-			cc, ccOK := cyclomaticComplexity(ctx, input.Path, newContent)
-			if ccOK {
-				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
-					log.Printf("[edit_file] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
-					fileTier = refined
-				} else {
-					log.Printf("[edit_file] %s cc=%d (tier %s unchanged, oldTier=%d newTier=%d)", input.Path, cc, fileTier, oldTier, newTier)
-				}
-			}
-			v3Out := V3EditMetadata{}
-			if fileTier >= Tier2Medium && editWarrantsV3(newContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 {
-				log.Printf("[edit_file] V3 pipeline activating for %s (file_tier=%d, req_tier=%d)", input.Path, fileTier, ctx.Tier)
-				improved, meta, err := improveContentWithV3(path, newContent, ctx)
-				if err != nil {
-					// User cancellation is not a fallback case — the turn
-					// was aborted, so nothing should land on disk.
-					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
-						log.Printf("[edit_file] V3 aborted by cancellation — not writing %s", input.Path)
-						return &ToolResult{
-							Success: false,
-							Error:   "edit_file cancelled — no content was written",
-						}, nil
-					}
-					log.Printf("[edit_file] V3 failed: %v — falling back to direct write", err)
-				} else if drift := v3RewroteBeyondTheEdit(content, newContent, improved); drift != "" {
-					log.Printf("[edit_file] discarding V3 candidate for %s — %s; keeping the caller's content", logPath(input.Path), drift)
-				} else if improved != "" {
-					newContent = improved
-					v3Out = meta
-				}
-			}
+			newContent = piped
 
 			// Syntax gate on the composed result. A truncated new_str (or a
 			// string-level edit that broke the file) must not land when V3
@@ -2646,6 +2604,16 @@ func insertAfterTool() *ToolDef {
 
 			// Healthy->broken only: a file already failing the checker stays
 			// editable, which is what makes repair-in-progress possible.
+			// Every content edit goes through the pipeline — these two were
+			// producing one greedy sample with no candidate generation and no
+			// lens scoring, which is exactly what the tier system exists to
+			// prevent.
+			piped, v3Out, cancelled := runEditPipeline(ctx, "insert_after", path, in.Path, original, updated)
+			if cancelled != nil {
+				return cancelled, nil
+			}
+			updated = piped
+
 			if synErr, ok := checkFallbackSyntax(ctx, in.Path, updated); !ok {
 				if _, wasHealthy := checkFallbackSyntax(ctx, in.Path, original); wasHealthy {
 					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(in.Path, updated, synErr)}, nil
@@ -2671,7 +2639,7 @@ func insertAfterTool() *ToolDef {
 				OK:          true,
 				DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
 			})
-			return &ToolResult{Success: true, Data: out}, nil
+			return attachV3(&ToolResult{Success: true, Data: out}, v3Out), nil
 		},
 	}
 }
@@ -2815,6 +2783,16 @@ func replaceLinesTool() *ToolDef {
 
 			// Same gate chain as insert_after and edit_file, healthy->broken
 			// only so a file mid-repair stays editable.
+			// Every content edit goes through the pipeline — these two were
+			// producing one greedy sample with no candidate generation and no
+			// lens scoring, which is exactly what the tier system exists to
+			// prevent.
+			piped, v3Out, cancelled := runEditPipeline(ctx, "replace_lines", path, in.Path, original, updated)
+			if cancelled != nil {
+				return cancelled, nil
+			}
+			updated = piped
+
 			if synErr, ok := checkFallbackSyntax(ctx, in.Path, updated); !ok {
 				if _, wasHealthy := checkFallbackSyntax(ctx, in.Path, original); wasHealthy {
 					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(in.Path, updated, synErr)}, nil
@@ -2841,7 +2819,7 @@ func replaceLinesTool() *ToolDef {
 				OK:          true,
 				DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
 			})
-			return &ToolResult{Success: true, Data: out}, nil
+			return attachV3(&ToolResult{Success: true, Data: out}, v3Out), nil
 		},
 	}
 }
@@ -4353,4 +4331,72 @@ func generateInputExample(toolName string) string {
 	default:
 		return `{}`
 	}
+}
+
+// runEditPipeline is the V3 entry every content edit goes through: classify
+// the file, and when the tier warrants it hand the composed result to the
+// candidate pipeline, keeping the caller's version if the winner drifts
+// outside the edit.
+//
+// It exists because it was inlined in edit_file and simply absent from
+// insert_after and replace_lines, so the two line-addressed tools produced a
+// single greedy sample with no candidate generation and no lens scoring — and
+// those are the tools the guidance now steers toward. Adding an edit tool
+// must not mean re-deciding whether the pipeline applies to it.
+//
+// Returns the content to write, the V3 metadata to report, and a non-nil
+// ToolResult only when the turn was cancelled mid-pipeline (nothing may land
+// on disk in that case).
+func runEditPipeline(ctx *AgentContext, tool, path, relPath, original, edited string) (string, V3EditMetadata, *ToolResult) {
+	var meta V3EditMetadata
+	// Classify on max(old, new): a destructive edit that shrinks a T2+ file
+	// into a T1 stub is exactly the edit that most needs checking, and
+	// classifying on the result alone let it bypass the pipeline.
+	fileTier := classifyFileTier(relPath, original)
+	if newTier := classifyFileTier(relPath, edited); newTier > fileTier {
+		fileTier = newTier
+	}
+	cc, ccOK := cyclomaticComplexity(ctx, relPath, edited)
+	if ccOK {
+		if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
+			log.Printf("[%s] %s tier %s→%s via cc=%d", tool, relPath, fileTier, refined, cc)
+			fileTier = refined
+		}
+	}
+	if fileTier < Tier2Medium || !editWarrantsV3(edited, cc, ccOK) || ctx.V3URL == "" || ctx.BypassV3 {
+		return edited, meta, nil
+	}
+
+	log.Printf("[%s] V3 pipeline activating for %s (file_tier=%d, req_tier=%d)", tool, relPath, fileTier, ctx.Tier)
+	improved, m, err := improveContentWithV3(path, edited, ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+			log.Printf("[%s] V3 aborted by cancellation — not writing %s", tool, relPath)
+			return "", meta, &ToolResult{Success: false,
+				Error: tool + " cancelled — no content was written"}
+		}
+		log.Printf("[%s] V3 failed: %v — falling back to the caller's content", tool, err)
+		return edited, meta, nil
+	}
+	if drift := v3RewroteBeyondTheEdit(original, edited, improved); drift != "" {
+		log.Printf("[%s] discarding V3 candidate for %s — %s; keeping the caller's content", tool, logPath(relPath), drift)
+		return edited, meta, nil
+	}
+	if improved == "" {
+		return edited, meta, nil
+	}
+	return improved, m, nil
+}
+
+// attachV3 copies pipeline metadata onto a successful tool result, so a
+// candidate-verified edit reports as one wherever it came from.
+func attachV3(result *ToolResult, meta V3EditMetadata) *ToolResult {
+	if meta.Used {
+		result.V3Used = true
+		result.CandidatesTested = meta.CandidatesTested
+		result.WinningScore = meta.WinningScore
+		result.PhaseSolved = meta.PhaseSolved
+		result.VerificationEvidence = meta.VerificationEvidence
+	}
+	return result
 }

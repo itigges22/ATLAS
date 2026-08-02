@@ -232,6 +232,10 @@ Classifier in `proxy/tools.go` (`classifyFileTier`); logic-pattern matcher in th
 
 The exact config-file list and extension sets live in `proxy/tools.go:classifyFileTier`.
 
+Every content-edit tool enters the pipeline through `runEditPipeline` (`proxy/tools.go`) — `edit_file`, `insert_after`, `replace_lines`, and `structural_edit` and `write_file` via their own V3 paths. Tier classification uses `max(oldTier, newTier)` so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. A tool that skips this produces one greedy sample with no candidates and no lens scoring regardless of tier, which is what the tier system exists to prevent; `tests/contracts/test_write_gate_coverage.py` asserts every write path reaches it.
+
+Every content-edit tool enters the pipeline through `runEditPipeline` (`proxy/tools.go`) — `edit_file`, `insert_after` and `replace_lines` directly, `structural_edit` and `write_file` via their own V3 paths. Tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. A tool that skips this produces one greedy sample with no candidate generation and no lens scoring regardless of tier, which is the thing the tier system exists to prevent; `tests/contracts/test_write_gate_coverage.py` asserts every write path reaches it.
+
 **T2 (V3 pipeline)** — file qualifies if it's ≥10 lines AND either:
 - `hasLogicIndicators(content)` returns true — **2+ matches** across pattern families covering function/method definitions, control flow, error handling, Flask/FastAPI/Django routing, Express/Node API, React state/data, validation, database calls, JSX/React component patterns, and imports (the literal token list is in `proxy/tools.go:hasLogicIndicators`)
 - OR the file has a recognized source-code / markup extension (`.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.html`, `.htm`, …) and no logic indicators fired — gets the benefit of the doubt at T2 (covers minimal-but-real files like a 12-line component shell)
