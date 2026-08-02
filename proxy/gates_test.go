@@ -1527,3 +1527,127 @@ func TestRedeclarationRejectionSaysTheWholeScriptIsDead(t *testing.T) {
 		t.Errorf("redeclaration described as a syntax error:\n%s", msg)
 	}
 }
+
+// structural_edit on a 3-line index() was handed content carrying the
+// module's `if __name__` block, so the splice appended a second one and the
+// file went 209 -> 388 lines. Parses, runs, and the second block is dead code
+// under a blocking app.run() — the signature of a whole-file blob smuggled
+// through a node selector.
+func TestDuplicateEntrypointIsRefused(t *testing.T) {
+	original := "import flask\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+	edited := original + "\n\nif __name__ == \"__main__\":\n    app.run(port=5001)\n"
+
+	msg := duplicateMainGuard("app.py", original, edited)
+	if msg == "" {
+		t.Fatal("a second module entrypoint must be refused")
+	}
+	for _, want := range []string{"app.py", "2 `if __name__", "it was NOT written", "Only the first one ever runs"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestDuplicateEntrypointGuardLeavesEverythingElseAlone(t *testing.T) {
+	one := "if __name__ == '__main__':\n    main()\n"
+	two := one + "if __name__ == '__main__':\n    main()\n"
+
+	if duplicateMainGuard("app.py", "x = 1\n", one) != "" {
+		t.Error("adding the first entrypoint was refused")
+	}
+	if duplicateMainGuard("app.py", two, two+"print(1)\n") != "" {
+		t.Error("a file that already had two was refused — not healthy->broken")
+	}
+	if duplicateMainGuard("app.js", "x\n", two) != "" {
+		t.Error("fired on a non-Python file")
+	}
+	// Indented: a guard inside a function is not a module entrypoint.
+	nested := "def go():\n    if __name__ == '__main__':\n        main()\n"
+	if duplicateMainGuard("app.py", one, one+nested) != "" {
+		t.Error("counted an indented guard as a second module entrypoint")
+	}
+}
+
+// The gate must not tell a model to re-run a server in the foreground: it
+// never exits, so "confirm it exits clean" can never be satisfied. An
+// observed session burned all three bounces re-sending `done` against that
+// advice after correctly starting the server with run_background.
+func TestBlockedServerStartGetsProbeAdviceNotFixAdvice(t *testing.T) {
+	for _, out := range []string{
+		"Execution timed out after 30s",
+		"Address already in use\nPort 5001 is in use by another program.",
+	} {
+		if !blockedServerStart(out) {
+			t.Errorf("not recognised as a blocked server start: %q", out)
+		}
+	}
+	if blockedServerStart("AssertionError: expected 3, got 4") {
+		t.Error("a genuinely red test was mistaken for a server start")
+	}
+
+	msg := verificationRejection(true, true, "")
+	for _, want := range []string{"run_background", "curl", "servers do not exit"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("advice missing %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "re-run the same command") {
+		t.Errorf("still telling the model to re-run a blocking command:\n%s", msg)
+	}
+
+	// Already started in the background: point at the job, don't start another.
+	withJob := verificationRejection(true, true, "abc123")
+	if !strings.Contains(withJob, "abc123") || !strings.Contains(withJob, "do not start another copy") {
+		t.Errorf("did not name the running job:\n%s", withJob)
+	}
+
+	// A real red test keeps the fix-it advice.
+	red := verificationRejection(true, false, "")
+	if !strings.Contains(red, "FAILED") || strings.Contains(red, "servers do not exit") {
+		t.Errorf("red-test advice changed:\n%s", red)
+	}
+}
+
+// tree-sitter reports a missing `}` where the parser gave up, which is past
+// the end of the block that needs it. Observed live: "line 202: a `}` is
+// missing" against `setInterval(draw, 100);` — a line the edit never touched.
+// The model tried to fix that line, twice, and the breaker stopped the run.
+func TestMissingCloserPointsAtTheBlockNotTheParserStop(t *testing.T) {
+	msg := formatEmbeddedScriptRejection("app.py", embeddedScriptFinding{
+		Line: 202, Kind: "javascript",
+		Where:      "the <script> block inside the Python string HTML_TEMPLATE",
+		Message:    "a `}` is missing",
+		Text:       "setInterval(draw, 100); // Slightly faster speed for better playability",
+		OpenedLine: 143,
+		OpenedText: "function draw() {",
+	})
+	for _, want := range []string{
+		"143 | function draw() {",
+		"this block is never closed",
+		"the parser gave up here",
+		"belongs at the end of the block that opens on line 143",
+		"not where it goes",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+// Without an opener the old single-line rendering stands — a stray `)` is
+// reported exactly where it is.
+func TestSyntaxRejectionWithoutAnOpenerIsUnchanged(t *testing.T) {
+	msg := formatEmbeddedScriptRejection("app.py", embeddedScriptFinding{
+		Line: 7, Kind: "javascript",
+		Where:   "the <script> block inside the Python string HTML_TEMPLATE",
+		Message: "unexpected `)`",
+		Hint:    "Nothing opened a `(` for it to close — delete the stray `)`.",
+		Text:    "nextDirection = 'DOWN');",
+	})
+	if !strings.Contains(msg, "delete the stray `)`") {
+		t.Errorf("hint dropped:\n%s", msg)
+	}
+	if strings.Contains(msg, "never closed") {
+		t.Errorf("opener wording leaked into an unrelated finding:\n%s", msg)
+	}
+}

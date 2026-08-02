@@ -529,8 +529,13 @@ type embeddedScriptFinding struct {
 	Column  int    `json:"column"`
 	Kind    string `json:"kind"`    // "javascript" | "css"
 	Where   string `json:"where"`   // "the <script> block inside the Python string HTML_TEMPLATE"
-	Defect  string `json:"defect"`  // "" (syntax) | "stopped_loop"
+	Defect  string `json:"defect"`  // "" (syntax) | "stopped_loop" | "redeclaration"
 	Message string `json:"message"` // "unexpected `)`"
+	// For a missing closer: the line where the unclosed block STARTS. The
+	// parser reports the absence at the point it gave up, which is usually a
+	// line the edit never touched.
+	OpenedLine int    `json:"opened_line"`
+	OpenedText string `json:"opened_text"`
 	Hint    string `json:"hint"`    // how to fix it
 	Text    string `json:"text"`    // the offending source line
 }
@@ -653,12 +658,18 @@ func liveBackgroundJobNote(ctx *AgentContext) string {
 // turns on that conflict. Returns "" when nothing is running or the failure is
 // unrelated, so the common case is unchanged.
 func ownBackgroundJobHint(ctx *AgentContext, errMsg string) string {
-	if ctx == nil || len(ctx.BackgroundJobs) == 0 {
+	if ctx == nil {
 		return ""
 	}
 	if !strings.Contains(strings.ToLower(errMsg), "address already in use") &&
 		!strings.Contains(strings.ToLower(errMsg), "port is already allocated") {
 		return ""
+	}
+	if len(ctx.BackgroundJobs) == 0 {
+		// Nothing this session started explains it, and the registry is
+		// process-wide: a server an EARLIER session left running holds the
+		// port under an id this session never saw. Ask the sandbox.
+		return foreignBackgroundJobHint(ctx)
 	}
 	ids := make([]string, 0, len(ctx.BackgroundJobs))
 	for id := range ctx.BackgroundJobs {
@@ -673,6 +684,65 @@ func ownBackgroundJobHint(ctx *AgentContext, errMsg string) string {
 	sb.WriteString("\nStop it with stop_background before re-running, or probe the " +
 		"already-running service instead of starting a second copy.")
 	return sb.String()
+}
+
+// foreignBackgroundJobHint names the sandbox jobs THIS session did not start,
+// so the model can stop the one holding the port.
+//
+// "Either identify and stop that program" is the sandbox's own advice on a
+// bind failure, and until now it was unfollowable: /jobs/{id} needs an id, and
+// a job from a previous session was never announced to this one. GET /jobs
+// lists the registry whole. Fail-soft — an unreachable sandbox or an empty
+// list adds nothing, leaving the bare bind error the model already had.
+func foreignBackgroundJobHint(ctx *AgentContext) string {
+	if ctx.SandboxURL == "" {
+		return ""
+	}
+	base := ctx.Ctx
+	if base == nil {
+		base = context.Background()
+	}
+	reqCtx, cancel := context.WithTimeout(base, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "GET", ctx.SandboxURL+"/jobs", nil)
+	if err != nil {
+		return ""
+	}
+	if serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var out struct {
+		Jobs []struct {
+			JobID   string `json:"job_id"`
+			Command string `json:"command"`
+			Running bool   `json:"running"`
+		} `json:"jobs"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, j := range out.Jobs {
+		if !j.Running {
+			continue
+		}
+		fmt.Fprintf(&sb, "\n  job %s: %s", j.JobID, truncateStr(j.Command, 80))
+	}
+	if sb.Len() == 0 {
+		return ""
+	}
+	return "\n\nThat port is held by a background job left running in this sandbox by an " +
+		"earlier session:" + sb.String() +
+		"\nStop it with stop_background and re-run, or probe the already-running service " +
+		"instead of starting a second copy."
 }
 
 // isUnreadOverwrite reports whether a write_file would replace an existing
@@ -835,11 +905,22 @@ func formatEmbeddedScriptRejection(path string, f embeddedScriptFinding) string 
 	fmt.Fprintf(&sb, "%s has a %s syntax error in %s — it was NOT written.\n",
 		path, lang, f.Where)
 	fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)
-	if f.Text != "" {
-		fmt.Fprintf(&sb, "  %d | %s\n", f.Line, f.Text)
-	}
-	if f.Hint != "" {
-		fmt.Fprintf(&sb, "%s\n", f.Hint)
+	if f.OpenedLine > 0 {
+		// Point at the block, not at the line the parser stopped on. Given
+		// only the latter, an observed session tried to "add a `}`" to an
+		// untouched `setInterval(...)` line, twice, and never converged.
+		fmt.Fprintf(&sb, "  %d | %s   <- this block is never closed\n", f.OpenedLine, f.OpenedText)
+		fmt.Fprintf(&sb, "  %d | %s   <- the parser gave up here\n", f.Line, f.Text)
+		fmt.Fprintf(&sb, "The `}` belongs at the end of the block that opens on line %d. "+
+			"Line %d is where the missing brace was noticed, not where it goes — "+
+			"re-check the block you just rewrote, not that line.\n", f.OpenedLine, f.Line)
+	} else {
+		if f.Text != "" {
+			fmt.Fprintf(&sb, "  %d | %s\n", f.Line, f.Text)
+		}
+		if f.Hint != "" {
+			fmt.Fprintf(&sb, "%s\n", f.Hint)
+		}
 	}
 	fmt.Fprintf(&sb,
 		"Running the file will NOT surface this: the %s syntax is valid, the server "+
@@ -1776,4 +1857,54 @@ func lineCounts(s string) map[string]int {
 		counts[line]++
 	}
 	return counts
+}
+
+// anyBackgroundJobID returns one job id this session has running, so the
+// verification gate can point at the server the model already started
+// instead of telling it to start another.
+func anyBackgroundJobID(ctx *AgentContext) string {
+	if ctx == nil || len(ctx.BackgroundJobs) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(ctx.BackgroundJobs))
+	for id := range ctx.BackgroundJobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids[0]
+}
+
+// reMainGuard matches a top-level `if __name__ == "__main__":` (either quote
+// style, any spacing). Anchored at column 0 so a nested one inside a function
+// is not counted.
+var reMainGuard = regexp.MustCompile(`(?m)^if\s+__name__\s*==\s*['"]__main__['"]\s*:`)
+
+// duplicateMainGuard reports whether an edit left a .py file with more than
+// one module entrypoint when it had at most one before.
+//
+// Observed live: structural_edit on a 3-line `index()` was handed content
+// that carried an `if __name__ == "__main__": app.run(...)` block along with
+// it, so the splice appended a second one and the file went from 209 lines to
+// 388. Nothing caught it — the file still parses and still runs, because the
+// first app.run() blocks and the second is simply dead code sitting under it.
+// It is the signature of a whole-file blob smuggled through a node selector.
+//
+// Healthy->broken like the other write gates: a file that already had two is
+// left alone. Returns "" for anything that is not Python.
+func duplicateMainGuard(path, original, edited string) string {
+	if strings.ToLower(filepath.Ext(path)) != ".py" {
+		return ""
+	}
+	after := len(reMainGuard.FindAllString(edited, -1))
+	if after < 2 || after <= len(reMainGuard.FindAllString(original, -1)) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%s would end up with %d `if __name__ == \"__main__\":` blocks — it was NOT written.\n"+
+			"Your replacement carried the module's entrypoint along with it, so splicing it in "+
+			"added a second copy. Only the first one ever runs; the rest is dead code.\n"+
+			"Send ONLY the node you are replacing — the function or class body itself, with no "+
+			"surrounding module-level code. If you meant to change the entrypoint, edit that "+
+			"block directly with replace_lines or edit_file.",
+		path, after)
 }

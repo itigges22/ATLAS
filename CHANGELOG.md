@@ -52,6 +52,14 @@ than adding another retry around it.
 
 **Added**
 
+- `GET /jobs` on the sandbox, listing every background job it holds. The
+  registry is process-wide with no session concept, so a server an earlier
+  session left running keeps its port while `/jobs/{id}` needs an id the new
+  session never saw — the bind failure's own advice, "identify and stop that
+  program", was unfollowable. Observed live: "Address already in use" on port
+  5001 against a server started 50 minutes earlier by a different run. The
+  proxy's port-conflict hint now falls back to this list and names the
+  offending job so the model can `stop_background` it.
 - `replace_lines` — a sixteenth tool that changes an existing line range
   without reproducing it. `insert_after` removed the verbatim burden for
   *adding* code; this does the same for *changing* it. The model supplies
@@ -64,6 +72,32 @@ than adding another retry around it.
   the same fallback-syntax, unresolved-call and embedded-script gates as
   `edit_file`.
 
+- A missing `}` in embedded JavaScript now names the block that was left
+  open. tree-sitter reports the absence where the parser gave up, which is
+  past the end of the construct that needs it: an observed session was told
+  "line 202: a `}` is missing" against `setInterval(draw, 100);`, a line the
+  edit had never touched. It tried to fix that line twice and the three-strike
+  breaker ended the run with the file unchanged. The rejection now shows both
+  lines — the opener marked as the unclosed block, the stop as where the
+  brace was noticed — and says which one to go look at.
+- The verification gate no longer tells a model to re-run a server. A
+  `run_command` that fails because the process never exited (sandbox timeout)
+  or because the port is already bound is not evidence the code is broken, but
+  the gate treated it as a red test and said "re-run the same command and
+  confirm it exits clean" — which a blocking server start can never do. An
+  observed session started the server correctly with `run_background`, got
+  that advice, and spent all three of its bounces re-sending `done` because
+  nothing it could do satisfied the gate. It now names the actual next step
+  (`curl` the port), and points at the already-running job by id rather than
+  suggesting a second copy. A genuinely red test keeps the fix-it wording.
+- A `structural_edit` that leaves a second `if __name__ == "__main__":` block
+  is refused. Handed content that carried the module entrypoint along with the
+  node body, the splice appended a duplicate and a 209-line file became 388.
+  It parses and it runs — the first `app.run()` blocks and the rest is dead
+  code underneath — so nothing caught it. It is the signature of a whole-file
+  blob smuggled through a node selector. Healthy→broken: a file that already
+  had two is left alone, and an indented guard inside a function is not
+  counted.
 - A repeated `let`/`const` in one scope is now refused at the write gate. An
   edit appended a second `let score = 0` to a `<script>` that already had one;
   tree-sitter parses that, so the syntax check passed and it landed. A

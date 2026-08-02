@@ -1071,10 +1071,23 @@ def _first_error_node(root):
     return best
 
 
+# Closing tokens whose absence is reported at the point the parser gave up,
+# which is generally NOT where the unclosed block began.
+_JS_CLOSERS_MISSING = frozenset({"}", ")", "]"})
+
+
 def _js_error(block: bytes):
-    """(offset_in_block, message, hint) for the first JavaScript syntax error
-    in `block`, or None when it parses (or when template syntax makes the
-    answer undecidable).
+    """(offset_in_block, message, hint, opener_offset) for the first JavaScript
+    syntax error in `block`, or None when it parses (or when template syntax
+    makes the answer undecidable).
+
+    `opener_offset` is set only for a missing closing token, and points at the
+    block that was left open. tree-sitter reports a missing `}` at the position
+    where it expected one — the end of the enclosing construct, which is often
+    a line the edit never touched. An observed session was told "line 202: a
+    `}` is missing" against `setInterval(draw, 100);`, a line it had not
+    changed, and re-sent the same broken content twice before the breaker
+    stopped it. The line that needs looking at is where the block opened.
 
     Masking only ever REMOVES findings: the raw block is parsed first, so
     legitimate JavaScript that happens to contain `{{` (a block inside a
@@ -1099,21 +1112,38 @@ def _js_error(block: bytes):
 
     if node.is_missing:
         token = node.type
+        if token in _JS_CLOSERS_MISSING:
+            # The nearest ancestor that actually STARTS on an earlier line.
+            # The immediate parent is often a node the recovery invented on
+            # the stopping line itself (an expression_statement wrapping the
+            # phantom token), which is no more useful than the stop position.
+            opener, p = None, node.parent
+            while p is not None:
+                if p.start_point[0] < node.start_point[0]:
+                    opener = p.start_byte
+                    break
+                p = p.parent
+            if opener is not None:
+                return (node.start_byte,
+                        f"a `{token}` is missing",
+                        f"Add the `{token}` that closes it.",
+                        opener)
         return (node.start_byte,
                 f"a `{token}` is missing",
-                f"Add the missing `{token}`.")
+                f"Add the missing `{token}`.",
+                None)
     snippet = text[node.start_byte:node.end_byte].decode("utf-8", "replace").strip()
     if snippet in _CLOSERS:
         opener = _CLOSERS[snippet]
         return (node.start_byte,
                 f"unexpected `{snippet}`",
                 f"Nothing opened a `{opener}` for it to close — delete the stray "
-                f"`{snippet}`, or add the `{opener}` it was meant to close.")
+                f"`{snippet}`, or add the `{opener}` it was meant to close.", None)
     if snippet and "\n" not in snippet and len(snippet) <= 24:
         return (node.start_byte, f"unexpected `{snippet}`",
-                "Rewrite that statement so it parses as JavaScript.")
+                "Rewrite that statement so it parses as JavaScript.", None)
     return (node.start_byte, "invalid JavaScript starts here",
-            "Rewrite that statement so it parses as JavaScript.")
+            "Rewrite that statement so it parses as JavaScript.", None)
 
 
 # Nodes that open a fresh lexical scope. A `let` may shadow an outer binding
@@ -1489,9 +1519,10 @@ def embedded_script_check(path: str, source_text: str, previous_text: str = "") 
             return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
         if hit is None:
             continue
-        block_offset, message, hint = hit
+        block_offset, message, hint = hit[0], hit[1], hit[2]
+        opener_offset = hit[3] if len(hit) > 3 else None
         line, column, text = _line_at(source, offset + block_offset)
-        findings.append({
+        finding = {
             "line": line,
             "column": column,
             "kind": kind,
@@ -1500,7 +1531,16 @@ def embedded_script_check(path: str, source_text: str, previous_text: str = "") 
             "message": message,
             "hint": hint,
             "text": text,
-        })
+        }
+        if opener_offset is not None:
+            oline, _ocol, otext = _line_at(source, offset + opener_offset)
+            if oline != line:
+                # The line the model has to look at. Reporting only the
+                # parser's stopping point sends it to fix a line it never
+                # touched.
+                finding["opened_line"] = oline
+                finding["opened_text"] = otext
+        findings.append(finding)
         if len(findings) >= _EMBEDDED_MAX_FINDINGS:
             break
     if previous_text and len(findings) < _EMBEDDED_MAX_FINDINGS:

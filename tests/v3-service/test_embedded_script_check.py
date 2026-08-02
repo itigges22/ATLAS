@@ -418,3 +418,80 @@ def test_removing_the_loop_outright_is_not_reported():
 def test_a_file_that_never_looped_reports_nothing():
     plain = _flask_page('        setTimeout(draw, 100);')
     assert main.embedded_script_check("app.py", plain, _flask_page('        draw();'))["findings"] == []
+
+
+# --- duplicate lexical binding ------------------------------------------------
+#
+# 2026-08-02 dogfooding: a replace_lines edit appended a second `let score = 0`
+# to a <script> that already had one. tree-sitter parses it, so the syntax
+# check passed and the edit landed — but a repeated let/const is an early
+# SyntaxError, so the browser threw out the whole script and every handler on
+# the page died. node --check on the extracted block: "SyntaxError: Identifier
+# 'score' has already been declared".
+
+def test_a_repeated_let_in_one_scope_is_reported():
+    dup = _flask_page('        let score = 0;\n        setInterval(draw, 100);')
+    findings = main.embedded_script_check("app.py", dup)["findings"]
+    assert len(findings) == 1, findings
+    assert findings[0]["defect"] == "redeclaration"
+    assert "`score`" in findings[0]["message"]
+
+
+def test_shadowing_in_an_inner_scope_is_legal():
+    shadowed = _flask_page(
+        '        function reset() {\n'
+        '            let score = 0;\n'
+        '            return score;\n'
+        '        }\n'
+        '        setInterval(draw, 100);')
+    assert main.embedded_script_check("app.py", shadowed)["findings"] == []
+
+
+def test_var_and_function_redeclaration_are_left_alone():
+    """Legal JavaScript, however untidy — the check only reports what the
+    engine actually refuses."""
+    loose = _flask_page(
+        '        var score = 1;\n'
+        '        var score = 2;\n'
+        '        function draw() {}\n'
+        '        setInterval(draw, 100);')
+    assert main.embedded_script_check("app.py", loose)["findings"] == []
+
+
+def test_the_same_name_in_two_sibling_blocks_is_legal():
+    siblings = _flask_page(
+        '        if (true) { let n = 1; }\n'
+        '        if (true) { let n = 2; }\n'
+        '        setInterval(draw, 100);')
+    assert main.embedded_script_check("app.py", siblings)["findings"] == []
+
+
+def test_a_missing_brace_names_the_block_that_was_left_open():
+    """tree-sitter reports the absence where the parser gave up — past the end
+    of the construct. Observed live: "line 202: a `}` is missing" against an
+    untouched `setInterval(draw, 100);`, which the model then tried to fix
+    twice before the breaker stopped the run."""
+    src = _flask_page(
+        '        function draw() {\n'
+        '            if (x) {\n'
+        '                go();\n'
+        '        }\n'
+        '\n'
+        '        setInterval(draw, 100);')
+    findings = main.embedded_script_check("app.py", src)["findings"]
+    assert len(findings) == 1, findings
+    f = findings[0]
+    assert f["message"] == "a `}` is missing"
+    assert "function draw() {" in f["opened_text"]
+    # The parser's stopping point is a line the edit never touched.
+    assert "setInterval" in f["text"]
+    assert f["opened_line"] < f["line"], f
+
+
+def test_a_stray_closer_carries_no_opener():
+    """It is reported exactly where it sits, so there is no second line to
+    point at."""
+    src = _flask_page("        if (a && b) go());")
+    findings = main.embedded_script_check("app.py", src)["findings"]
+    assert len(findings) == 1, findings
+    assert "opened_line" not in findings[0], findings[0]

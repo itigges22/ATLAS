@@ -891,7 +891,46 @@ func gateTrigger(userWantsVerification, sawFailedVerification bool) string {
 // concrete evidence of breakage, so the message says that rather than
 // describing the request — the model has already seen the failure and needs
 // to act on it, not be told what verification is.
+// blockedServerStart reports whether a failed verification command failed
+// because it is a long-running process rather than because the code is
+// broken: it never exited (the sandbox timeout fired) or it could not bind
+// because something is already serving that port.
+//
+// The distinction decides what the verification gate says next. Treating it
+// as a red test tells the model to fix its code and re-run the command, and
+// re-running a blocking server start can never exit clean — an observed
+// session started the server correctly with run_background, was told to
+// "re-run the same command and confirm it exits clean", and spent its three
+// remaining bounces re-sending `done` because nothing it could do satisfied
+// that.
+func blockedServerStart(output string) bool {
+	low := strings.ToLower(output)
+	return strings.Contains(low, "execution timed out") ||
+		strings.Contains(low, "address already in use") ||
+		strings.Contains(low, "is in use by another program")
+}
+
 func verificationRejectionMessage(sawFailedVerification bool) string {
+	return verificationRejection(sawFailedVerification, false, "")
+}
+
+// verificationRejection is verificationRejectionMessage with the two facts
+// that change the advice: whether the red command was a blocking server
+// start, and the job id if one is already running in the background.
+func verificationRejection(sawFailedVerification, serverBlocked bool, bgJobID string) string {
+	if serverBlocked {
+		probe := "Start it with `run_background` (it returns a job_id), then probe it with " +
+			"`run_command(\"curl http://localhost:<port>/\")`."
+		if bgJobID != "" {
+			probe = "It is ALREADY running as background job " + bgJobID +
+				" — do not start another copy. Probe it now with " +
+				"`run_command(\"curl http://localhost:<port>/\")`, which is the command that verifies it."
+		}
+		return "Cannot declare `done` yet — nothing has verified this change. The command that " +
+			"failed is a long-running server: it did not exit because servers do not exit, so " +
+			"re-running it in the foreground can never succeed and its failure says nothing about " +
+			"your code. " + probe + " A clean curl is the verification this gate wants."
+	}
 	if sawFailedVerification {
 		return "Cannot declare `done` — a test or build command you ran in this session FAILED and nothing has passed since. You have already seen the failure output. Apply the fix with `edit_file`, `structural_edit`, or `write_file`, then re-run the same command and confirm it exits clean. Describing the fix is not applying it: if you know what the problem is, make the edit now. Declaring done over a red test reports a broken result as a working one."
 	}

@@ -2141,6 +2141,10 @@ func structuralEditTool() *ToolDef {
 				log.Printf("[structural_edit] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
 				return &ToolResult{Success: false, Error: msg}, nil
 			}
+			if msg := duplicateMainGuard(path, source, finalContent); msg != "" {
+				log.Printf("[structural_edit] edit duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
 
 			// Atomic write — same pattern as edit_file/write_file.
 			tmpPath := path + ".atlas.tmp"
@@ -2600,6 +2604,9 @@ func insertAfterTool() *ToolDef {
 			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
 				return &ToolResult{Success: false, Error: msg}, nil
 			}
+			if msg := duplicateMainGuard(path, original, updated); msg != "" {
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
 
 			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
 				return nil, fmt.Errorf("cannot write %s: %w", in.Path, err)
@@ -2751,6 +2758,9 @@ func replaceLinesTool() *ToolDef {
 				return &ToolResult{Success: false, Error: structuralRejection(in.Path, introduced)}, nil
 			}
 			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
+				return &ToolResult{Success: false, Error: msg}, nil
+			}
+			if msg := duplicateMainGuard(path, original, updated); msg != "" {
 				return &ToolResult{Success: false, Error: msg}, nil
 			}
 

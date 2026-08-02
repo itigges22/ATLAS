@@ -162,6 +162,11 @@ type runState struct {
 	// the model watched pytest fail 5/5 three times, diagnosed the fix
 	// in prose, and exited through a bare text narration).
 	sawFailedVerification bool
+	// The red verification command was a long-running server rather than a
+	// broken build — it never exited, or the port was already bound. Changes
+	// what the verification gate tells the model to do next, because
+	// re-running a server in the foreground can never exit clean.
+	serverStartBlocked bool
 	// Whether the user prompt is a repair/fix request. Computed once —
 	// the user message doesn't change mid-loop.
 	userWantsVerification bool
@@ -275,7 +280,8 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
-		return "verification_gate", verificationRejectionMessage(s.sawFailedVerification)
+		return "verification_gate", verificationRejection(
+			s.sawFailedVerification, s.serverStartBlocked, anyBackgroundJobID(ctx))
 	}
 	if wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) && !s.madeProductiveChange && s.chargeBounce("action_gate") {
 		log.Printf("[agent] done-without-action gate: bouncing exit at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
@@ -1221,8 +1227,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// Red test/build. Latches the verification gate on
 						// for this loop until something verifies green.
 						st.sawFailedVerification = true
-						log.Printf("[agent] verification FAILED: turn=%d cmd=%q — done is gated until it passes",
-							turn, truncateStr(rc.Command, 60))
+						st.serverStartBlocked = blockedServerStart(result.Error + string(result.Data))
+						log.Printf("[agent] verification FAILED: turn=%d cmd=%q server_blocked=%v — done is gated until it passes",
+							turn, truncateStr(rc.Command, 60), st.serverStartBlocked)
 					}
 				}
 			}

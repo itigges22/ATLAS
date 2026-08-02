@@ -630,6 +630,17 @@ class BackgroundOutputResponse(BaseModel):
     command: str
 
 
+class BackgroundJobSummary(BaseModel):
+    job_id: str
+    command: str
+    started_at: float
+    running: bool
+
+
+class BackgroundJobListResponse(BaseModel):
+    jobs: List[BackgroundJobSummary]
+
+
 class BackgroundStopResponse(BaseModel):
     job_id: str
     killed: bool
@@ -699,6 +710,30 @@ def background_start(request: BackgroundStartRequest):
     threading.Thread(target=_bg_drain_stream, args=(job_id, "stdout", proc.stdout), daemon=True).start()
     threading.Thread(target=_bg_drain_stream, args=(job_id, "stderr", proc.stderr), daemon=True).start()
     return BackgroundStartResponse(job_id=job_id, pid=proc.pid, started_at=job["started_at"])
+
+
+@app.get("/jobs", response_model=BackgroundJobListResponse)
+def background_list():
+    """Every job this sandbox is holding, whoever started it.
+
+    The registry is process-wide and has no session concept, so a server left
+    running by an earlier session keeps its port and the next session cannot
+    name it: `/jobs/{id}` needs an id it never saw. Without this the agent
+    gets "Address already in use" and the advice to "identify and stop that
+    program" with no way to do either.
+    """
+    with _bg_lock:
+        items = [
+            BackgroundJobSummary(
+                job_id=job_id,
+                command=job["command"],
+                started_at=job["started_at"],
+                running=job["proc"].poll() is None,
+            )
+            for job_id, job in _bg_jobs.items()
+        ]
+    items.sort(key=lambda j: j.started_at)
+    return BackgroundJobListResponse(jobs=items)
 
 
 @app.get("/jobs/{job_id}/output", response_model=BackgroundOutputResponse)

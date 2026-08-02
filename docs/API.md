@@ -727,7 +727,7 @@ Resolve every direct-identifier call in a Python source against its local defs, 
 
 Syntax-check the JavaScript (and brace-balance the CSS) *embedded* in a file — what `/internal/pycheck` and the sandbox's `/syntax-check` are both blind to, because they see the host language only. Two carriers are handled: `<script>`/`<style>` blocks in `.html`/`.htm`/`.jinja`/`.jinja2` files, and HTML held in a **Python string literal** (the `render_template_string` shape). Backs the proxy's embedded-script gate on `edit_file`, `insert_after`, `replace_lines`, `structural_edit` and the `write_file` branches.
 
-Given the optional `previous` (the pre-edit file) it also reports a **stopped render loop**: a function a repeating timer used to drive that the edit left scheduled exactly once, never re-arming. That finding carries `"defect": "stopped_loop"` and needs both versions, because one version alone cannot tell a dead loop from a deliberate delayed one-shot. A `let`/`const` declaring the same name twice in one scope is reported from the edited file alone as `"defect": "redeclaration"` — the spec makes that an unconditional early error, so the browser refuses the whole script. Same blind spot as the syntax check, one level up — the JavaScript parses, the server starts and the page returns 200, and the page freezes after one frame.
+Given the optional `previous` (the pre-edit file) it also reports a **stopped render loop**: a function a repeating timer used to drive that the edit left scheduled exactly once, never re-arming. That finding carries `"defect": "stopped_loop"` and needs both versions, because one version alone cannot tell a dead loop from a deliberate delayed one-shot. A finding for a missing closing token also carries `opened_line` / `opened_text`, the block that was left unclosed: tree-sitter reports the absence at the point the parser gave up, which is generally a line the edit never touched. A `let`/`const` declaring the same name twice in one scope is reported from the edited file alone as `"defect": "redeclaration"` — the spec makes that an unconditional early error, so the browser refuses the whole script. Same blind spot as the syntax check, one level up — the JavaScript parses, the server starts and the page returns 200, and the page freezes after one frame.
 
 **Request:**
 ```json
@@ -887,6 +887,17 @@ Spawn a background process and return a `job_id` immediately. Used by the proxy'
 ```
 
 **Errors:** 400 on empty command; 429 when active-job count exceeds `BG_MAX_JOBS`.
+
+### GET /jobs
+
+Every job the sandbox is holding, whoever started it. The registry is process-wide and has no session concept, so a server left running by an earlier session keeps its port while `/jobs/{job_id}` needs an id the new session never saw — the bind failure's own advice ("identify and stop that program") was unfollowable without this. The proxy's port-conflict hint falls back to this list and names the offending job so the model can `stop_background` it.
+
+**Response:**
+```json
+{"jobs": [{"job_id": "a1b2c3d4e5f6", "command": "python app.py", "started_at": 1714617823.4, "running": true}]}
+```
+
+Ordered oldest first. Exited jobs stay listed with `"running": false` until the reaper clears them, so a just-finished job is distinguishable from one still holding a port.
 
 ### GET /jobs/{job_id}/output
 
