@@ -197,3 +197,6 @@ docs/reports/ablation/condition_[a-d]*/summary.json
 .docs-audit-findings.md
 .loop-prompt.md
 .loop-progress.md
+
+# Local agent-tool state (per-machine, not project content)
+.aider-desk/
