@@ -1034,6 +1034,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if refusal := identicalRetryRefusal(ctx, parsed.Name, parsed.Args); refusal != "" {
 				log.Printf("[agent] turn=%d refusing an identical re-send of a rejected %s", turn, parsed.Name)
 				st.bounceToolCall(ctx, parsed.Name, refusal)
+				// A refusal is a failure and has to count as one. Skipping
+				// the counters would leave a model that spams one rejected
+				// call running to the turn cap with nothing to stop it — the
+				// refusal returns before both the repetition window and the
+				// error counter, so neither breaker would ever see it.
+				consecutiveErrors++
+				failPath := extractFailurePath(parsed.Name, parsed.Args)
+				ctx.RecentFailurePaths = append(ctx.RecentFailurePaths, failPath)
+				if len(ctx.RecentFailurePaths) > 3 {
+					ctx.RecentFailurePaths = ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-3:]
+				}
 				continue
 			}
 			if msg, _, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
