@@ -1051,6 +1051,12 @@ def h6_service_fault(s: Session) -> list[str]:
         # synthesises. Reading only one of them reported every real error as
         # the string "None".
         detail = d.get("error") or d.get("message") or json.dumps(d)[:120]
+        # The cap event is this runner's own, appended when it stops reading
+        # at --timeout. Counting it as a service fault charges our deadline
+        # to the proxy a second time — h1_protocol already reports it as the
+        # timeout it is.
+        if "harness cap:" in str(detail):
+            continue
         out.append(f"H6 service fault: error event {str(detail)[:160]!r}")
     for ev in s.of_type("tool_result"):
         err = str((ev.get("data") or {}).get("error") or "")

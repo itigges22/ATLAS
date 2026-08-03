@@ -399,3 +399,23 @@ def test_bugfind_accepts_the_actual_comparison(rel, tmp_path):
         {"type": "done", "data": {"summary": ""}}], tmp_path)
     passed, _ = task.check(tmp_path, s)
     assert passed
+
+
+# --- H6 service fault ------------------------------------------------------
+
+def test_h6_does_not_charge_the_runner_cap_to_the_proxy(rel, tmp_path):
+    """The cap event is this runner's own, appended when it stops reading at
+    --timeout. h1_protocol already reports it as the timeout it is; counting
+    it again here charged one deadline as two separate proxy defects."""
+    cap = {"type": "error",
+           "data": {"error": "harness cap: session exceeded 900s"}}
+    s = _session(rel, [_call("read_file", path="a.py"), _ok(), cap],
+                 tmp_path, stream_ok=False)
+    assert rel.h6_service_fault(s) == []
+
+
+def test_h6_still_reports_a_real_service_fault(rel, tmp_path):
+    boom = {"type": "error", "data": {"error": "v3 service: connection refused"}}
+    s = _session(rel, [boom], tmp_path, stream_ok=False)
+    found = rel.h6_service_fault(s)
+    assert any("connection refused" in d for d in found)
