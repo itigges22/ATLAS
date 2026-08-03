@@ -2085,8 +2085,14 @@ func verifyWorkspaceAlignment(ctx *AgentContext) string {
 // /workspace. (contents, true) when the call completed, ("", false) when the
 // check itself could not run.
 func sandboxReadProbe(ctx *AgentContext) (string, bool) {
+	// Read the probe at the path the PROXY wrote it to. Both containers mount
+	// the same host directory at /workspace, so the container path is
+	// identical on both sides — but only if the subdirectory is carried
+	// across. Hardcoding /workspace made every session with a sandbox_subdir
+	// look split, which refused 28 of 28 benchmark sessions before they ran.
+	probe := filepath.Join(ctx.WorkingDir, ".atlas-mount-probe")
 	body, err := json.Marshal(map[string]interface{}{
-		"code":     "print(open('/workspace/.atlas-mount-probe').read())",
+		"code":     fmt.Sprintf("print(open(%q).read())", probe),
 		"language": "python",
 		"timeout":  10,
 	})

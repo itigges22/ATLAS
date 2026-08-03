@@ -1728,3 +1728,45 @@ func TestWorkspaceAlignmentProbeIsFunctionalNotConfigural(t *testing.T) {
 		t.Error("probe file left in the user's workspace")
 	}
 }
+
+// The probe must be read at the path the proxy WROTE it to. Hardcoding
+// /workspace made every session running in a sandbox_subdir look split:
+// the proxy wrote /workspace/e2e/.atlas-mount-probe and the sandbox looked in
+// the root. It refused 28 of 28 benchmark sessions before any of them ran.
+func TestAlignmentProbeCarriesTheSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "e2e")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	var askedFor string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Code string }
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		askedFor = req.Code
+		// Only the true location has the token; a read of the wrong path
+		// returns nothing, which is what a real split looks like.
+		out := map[string]string{"stdout": ""}
+		if strings.Contains(req.Code, filepath.Join(sub, ".atlas-mount-probe")) {
+			data, _ := os.ReadFile(filepath.Join(sub, ".atlas-mount-probe"))
+			out["stdout"] = string(data)
+		}
+		enc, _ := json.Marshal(out)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(enc)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(sub, Tier2Medium)
+	ctx.SandboxURL = srv.URL
+	resetWorkspaceAlignmentCache()
+
+	if problem := verifyWorkspaceAlignment(ctx); problem != "" {
+		t.Errorf("aligned mounts under a subdirectory reported as split: %s", problem)
+	}
+	if !strings.Contains(askedFor, sub) {
+		t.Errorf("sandbox was asked for the wrong path: %s", askedFor)
+	}
+}
