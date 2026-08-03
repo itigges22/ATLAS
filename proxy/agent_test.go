@@ -2127,8 +2127,16 @@ func TestBounceToolCallEmitsAMatchingResult(t *testing.T) {
 	ctx := &AgentContext{
 		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
 	}
-	st := &runState{turn: 3, response: "{}"}
+	st := &runState{turn: 3, response: "{}", pendingToolCall: "write_file"}
 	st.bounceToolCall(ctx, "write_file", "write_file is for creating files")
+
+	// The bounce answers the call, so the outstanding-call marker has to
+	// clear with it. Left set, a later exit answers the same call a second
+	// time through endStream and the counts disagree the other way.
+	if st.pendingToolCall != "" {
+		t.Errorf("bounce answered the call but left it marked outstanding (%q)",
+			st.pendingToolCall)
+	}
 
 	var results int
 	for _, e := range events {

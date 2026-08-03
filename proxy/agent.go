@@ -145,6 +145,12 @@ type runState struct {
 	// tell "announced a tool call and stopped" from ordinary narration after
 	// work has already happened.
 	toolsRun int
+	// Name of a tool_call that has been streamed but not yet answered by a
+	// tool_result. The call is announced before permission and execution,
+	// so any exit in between has to answer it or the consumer is left with
+	// a call that never resolves. Cleared by whichever path emits the
+	// result — the normal one, or bounceToolCall on a refusal.
+	pendingToolCall string
 	// Set when a write/edit/structural_edit/delete landed in this run.
 	madeProductiveChange bool
 	// Set when a read-only tool succeeds — the model opened the project
@@ -257,6 +263,7 @@ func (s *runState) bounce(ctx *AgentContext, toolName, rejection string) {
 // and tool_result counts disagreed by one.
 func (s *runState) bounceToolCall(ctx *AgentContext, toolName, rejection string) {
 	s.bounce(ctx, toolName, rejection)
+	s.pendingToolCall = ""
 	ctx.Stream("tool_result", map[string]interface{}{
 		"tool":    toolName,
 		"success": false,
@@ -621,17 +628,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// endStream answers the outstanding call before the summary, so the
 	// invariant holds at every exit rather than at each one that
 	// remembered to.
-	pendingToolCall := ""
 	endStream := func(summary string) {
-		if pendingToolCall != "" {
+		if st.pendingToolCall != "" {
 			ctx.Stream("tool_result", map[string]interface{}{
-				"tool":    pendingToolCall,
+				"tool":    st.pendingToolCall,
 				"success": false,
 				"data":    json.RawMessage("null"),
 				"error":   "not run — the session stopped before this call executed",
 				"elapsed": "0s",
 			})
-			pendingToolCall = ""
+			st.pendingToolCall = ""
 		}
 		ctx.Stream("done", map[string]string{"summary": summary})
 	}
@@ -903,7 +909,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 		case "tool_call":
 			st.toolsRun++
-			pendingToolCall = parsed.Name
+			st.pendingToolCall = parsed.Name
 			ctx.Stream("tool_call", map[string]interface{}{
 				"name": parsed.Name,
 				"args": json.RawMessage(parsed.Args),
@@ -1356,7 +1362,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				result.Error = ""
 			}
 
-			pendingToolCall = ""
+			st.pendingToolCall = ""
 			ctx.Stream("tool_result", map[string]interface{}{
 				"tool":    parsed.Name,
 				"success": result.Success,
