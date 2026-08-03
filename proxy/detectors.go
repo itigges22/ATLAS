@@ -822,14 +822,23 @@ func identicalRetryRefusal(ctx *AgentContext, toolName string, args json.RawMess
 	if ctx == nil || len(ctx.FailedToolCalls) == 0 {
 		return ""
 	}
-	// Commands observe the world; they do not describe an edit. Re-running
-	// `pytest` after fixing the code is the verify-fix-verify loop, not a
-	// repeat — and refusing it broke exactly that. Observed on multifile_cli:
-	// the model fixed a decorator, re-ran the same pytest invocation, and was
-	// told "nothing about the workspace has changed since", which was false.
-	if toolName == "run_command" || toolName == "run_background" ||
-		toolName == "tail_background" || toolName == "read_file" ||
-		toolName == "outline_file" || toolName == "list_directory" {
+	// Polling a background job is the one call that is meant to repeat
+	// byte-for-byte: the output it reads changes while nothing in this
+	// session succeeds.
+	//
+	// Nothing else needs an exemption. The verify-fix-verify loop is
+	// already protected one layer down — clearFailedToolCall drops every
+	// remembered rejection on any success, so fixing the code and
+	// re-running the same `pytest` finds an empty map. A signature that
+	// is still here proves nothing has succeeded since it was recorded,
+	// which is exactly what the refusal claims.
+	//
+	// Exempting commands wholesale cost more than it saved. Observed
+	// 2026-08-03 on multiturn_stats: the model sent one `python3 -c`
+	// with mismatched quotes, bash rejected it with a syntax error, and
+	// it re-sent the identical command seven times across six turns
+	// before the turn cap ended the request.
+	if toolName == "tail_background" {
 		return ""
 	}
 	prev, seen := ctx.FailedToolCalls[toolCallSignature(toolName, args)]

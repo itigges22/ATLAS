@@ -711,17 +711,39 @@ func TestRepeatedRefusalTellsTheUserRetryingWontHelp(t *testing.T) {
 func TestTheRetryRefusalDoesNotBlockLegitimateRetries(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 
-	// 1. Re-running a verification command after fixing the code IS the loop.
+	// 1. Re-running a verification command after fixing the code IS the
+	// loop. The fix succeeds, which drops every remembered rejection.
 	cmd := json.RawMessage(`{"command":"pytest test_store.py","timeout":30}`)
 	recordFailedToolCall(ctx, "run_command", cmd, "1 error in 0.12s")
+	clearFailedToolCall(ctx, "edit_file", json.RawMessage(`{"path":"store.py"}`))
 	if r := identicalRetryRefusal(ctx, "run_command", cmd); r != "" {
 		t.Errorf("re-running a test after a fix was refused:\n%s", r)
 	}
-	// Reads are observations too — re-reading after an edit is correct.
+	// Re-reading after an edit is correct for the same reason.
 	rd := json.RawMessage(`{"path":"a.py"}`)
 	recordFailedToolCall(ctx, "read_file", rd, "nope")
+	clearFailedToolCall(ctx, "edit_file", json.RawMessage(`{"path":"a.py"}`))
 	if r := identicalRetryRefusal(ctx, "read_file", rd); r != "" {
 		t.Errorf("re-reading was refused:\n%s", r)
+	}
+
+	// But a command that failed and changed nothing must not be re-sent.
+	// Measured on multiturn_stats: one `python3 -c` with mismatched
+	// quotes, re-sent seven times across six turns.
+	ctxCmd := NewAgentContext(t.TempDir(), Tier2Medium)
+	broken := json.RawMessage(`{"command":"python3 -c \"print(f'x: {x}\")\"","timeout":30}`)
+	recordFailedToolCall(ctxCmd, "run_command", broken,
+		"bash: -c: line 1: syntax error near unexpected token `)'")
+	if identicalRetryRefusal(ctxCmd, "run_command", broken) == "" {
+		t.Error("an identical failing command with nothing in between was allowed")
+	}
+
+	// Polling a background job is meant to repeat byte-for-byte.
+	ctxPoll := NewAgentContext(t.TempDir(), Tier2Medium)
+	poll := json.RawMessage(`{"id":"job-1"}`)
+	recordFailedToolCall(ctxPoll, "tail_background", poll, "no output yet")
+	if r := identicalRetryRefusal(ctxPoll, "tail_background", poll); r != "" {
+		t.Errorf("polling a background job was refused:\n%s", r)
 	}
 
 	// 2. A precondition failure resolved by another call must not linger.

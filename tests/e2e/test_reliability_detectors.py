@@ -64,6 +64,36 @@ def test_h1_flags_event_the_tui_cannot_render(rel, tmp_path):
     assert any("cannot render" in d and "brand_new_event" in d for d in found)
 
 
+def test_h1_does_not_charge_the_runner_cap_to_the_proxy(rel, tmp_path):
+    """This runner stops reading at --timeout and appends its own error
+    event. The proxy never got to send `done` and the socket closed
+    mid-stream, so counting those as two protocol violations scores our
+    deadline as its defect."""
+    cap = {"type": "error",
+           "data": {"error": "harness cap: session exceeded 900s"}}
+    s = _session(rel, [_call("read_file", path="a.py"), _ok(), cap],
+                 tmp_path, stream_ok=False)
+    found = rel.h1_protocol(s, {"tool_call", "tool_result", "done", "error"})
+    assert not any("protocol" in d for d in found)
+    assert any("timeout" in d and "cap" in d for d in found)
+
+
+def test_h1_capped_session_tolerates_only_the_in_flight_call(rel, tmp_path):
+    cap = {"type": "error",
+           "data": {"error": "harness cap: session exceeded 900s"}}
+    known = {"tool_call", "tool_result", "done", "error"}
+
+    one = _session(rel, [_call("read_file", path="a.py"), _ok(),
+                         _call("edit_file", path="a.py"), cap],
+                   tmp_path, stream_ok=False)
+    assert not any("orphaned" in d for d in rel.h1_protocol(one, known))
+
+    two = _session(rel, [_call("read_file", path="a.py"),
+                         _call("edit_file", path="a.py"), cap],
+                   tmp_path, stream_ok=False)
+    assert any("orphaned" in d for d in rel.h1_protocol(two, known))
+
+
 def test_h1_clean_stream_is_clean(rel, tmp_path):
     s = _session(rel, [_call("read_file", path="a.py"), _ok(),
                        {"type": "done", "data": {"summary": "x"}}], tmp_path)

@@ -852,19 +852,41 @@ class Session:
     def of_type(self, t: str) -> list[dict]:
         return [e for e in self.events if e.get("type") == t]
 
+    @property
+    def capped(self) -> bool:
+        """True when this runner stopped reading at --timeout.
+
+        The stream was cut from this side, so the absence of a `done`
+        event says nothing about the proxy's behaviour.
+        """
+        return any("harness cap:" in str(e.get("data", {}).get("error", ""))
+                   for e in self.of_type("error"))
+
 
 def h1_protocol(s: Session, known_types: set[str]) -> list[str]:
     """Every tool_call answered, stream terminated, every event type known."""
     out = []
     calls = len(s.of_type("tool_call"))
     results = len(s.of_type("tool_result"))
-    if calls != results:
+    # A capped session is cut at an arbitrary point, so the call that was
+    # in flight when we stopped reading has no result yet. More than one
+    # unanswered call is still a real mismatch.
+    allowed_orphans = 1 if s.capped else 0
+    if calls - results > allowed_orphans or results > calls:
         out.append(f"H1 protocol: {calls} tool_call vs {results} tool_result "
                    f"(orphaned call)")
-    if not s.of_type("done"):
-        out.append("H1 protocol: stream ended without a done event")
-    if not s.stream_ok:
-        out.append("H1 protocol: stream terminated abnormally")
+    if s.capped:
+        # This runner stopped reading at --timeout, so there was no
+        # opportunity to send `done` and the socket closed mid-stream.
+        # Charging that to the proxy as two protocol violations counts
+        # our own deadline as its defect. Report the deadline instead.
+        out.append(f"H1 timeout: runner cap cut the session at "
+                   f"{s.wall_s:.0f}s before it finished")
+    else:
+        if not s.of_type("done"):
+            out.append("H1 protocol: stream ended without a done event")
+        if not s.stream_ok:
+            out.append("H1 protocol: stream terminated abnormally")
     seen = {e.get("type") for e in s.events}
     unknown = sorted(t for t in seen if t and t not in known_types)
     if unknown:

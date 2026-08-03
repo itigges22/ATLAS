@@ -610,6 +610,32 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// so we don't fire it every turn after crossing the threshold.
 	budgetHintFired := false
 
+	// A tool_call is streamed the moment it parses, before permission and
+	// execution, so every early exit between that point and the
+	// tool_result leaves the client holding a call that never resolves —
+	// a spinner with nothing coming. Observed 2026-08-03 on
+	// multiturn_stats: the repetition breaker stopped the session one
+	// line after announcing a call, and the stream carried 12 tool_call
+	// events against 11 tool_result.
+	//
+	// endStream answers the outstanding call before the summary, so the
+	// invariant holds at every exit rather than at each one that
+	// remembered to.
+	pendingToolCall := ""
+	endStream := func(summary string) {
+		if pendingToolCall != "" {
+			ctx.Stream("tool_result", map[string]interface{}{
+				"tool":    pendingToolCall,
+				"success": false,
+				"data":    json.RawMessage("null"),
+				"error":   "not run — the session stopped before this call executed",
+				"elapsed": "0s",
+			})
+			pendingToolCall = ""
+		}
+		ctx.Stream("done", map[string]string{"summary": summary})
+	}
+
 	for turn := 0; ctx.MaxTurns <= 0 || turn < ctx.MaxTurns; turn++ {
 		st.turn = turn
 		// Budget hint — only relevant when there IS a turn cap.
@@ -877,6 +903,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 		case "tool_call":
 			st.toolsRun++
+			pendingToolCall = parsed.Name
 			ctx.Stream("tool_call", map[string]interface{}{
 				"name": parsed.Name,
 				"args": json.RawMessage(parsed.Args),
@@ -930,7 +957,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					st.bounceToolCall(ctx, parsed.Name, "Your output was truncated — the content is too long for a single tool call. For existing files, use edit_file with small targeted changes (replace specific functions or sections). For new files, keep them under 100 lines per write_file call.")
 					consecutiveErrors++
 					if consecutiveErrors >= 3 {
-						ctx.Stream("done", map[string]string{"summary": "Stopped: content too large for tool calls. Try requesting smaller, targeted changes."})
+						endStream("Stopped: content too large for tool calls. Try requesting smaller, targeted changes.")
 						return nil
 					}
 					continue
@@ -1153,9 +1180,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if totalFailures >= maxTotalFailures || (consecutiveErrors >= 3 && stuckOnOnePath(ctx.RecentFailurePaths)) {
 					log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 						turn, totalFailures, consecutiveErrors, ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-1])
-					ctx.Stream("done", map[string]string{
-						"summary": repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange) + liveBackgroundJobNote(ctx),
-					})
+					endStream(repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange) + liveBackgroundJobNote(ctx))
 					return nil
 				}
 				continue
@@ -1205,10 +1230,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					} else {
 						if st.madeProductiveChange {
 							log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
-							ctx.Stream("done", map[string]string{"summary": "Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm."})
+							endStream("Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm.")
 						} else {
 							log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
-							ctx.Stream("done", map[string]string{"summary": "Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change)."})
+							endStream("Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change).")
 						}
 						return nil
 					}
@@ -1331,6 +1356,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				result.Error = ""
 			}
 
+			pendingToolCall = ""
 			ctx.Stream("tool_result", map[string]interface{}{
 				"tool":    parsed.Name,
 				"success": result.Success,
