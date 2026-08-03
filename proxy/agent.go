@@ -1993,26 +1993,66 @@ func eraseLlamaSlot(ctx *AgentContext) {
 
 	erased := 0
 	slots := parallelSlots()
+	var stale []int
 	for id := 0; id < slots; id++ {
-		endpoint := fmt.Sprintf("%s/slots/%d?action=erase", llamaURL, id)
+		// llama-server handles the erase on its main loop, so a slot that
+		// is mid-decode answers only once it frees up. A single 5s attempt
+		// lost one slot in half the sessions of the 2026-08-03 run (13 of
+		// 26 cleared 3 of 4), and the one it lost is precisely the one
+		// still holding the previous session's KV.
+		if eraseOneSlot(reqCtx, client, llamaURL, id) {
+			erased++
+		} else {
+			stale = append(stale, id)
+		}
+	}
+	if len(stale) > 0 {
+		// Claiming a fresh cache here would describe the intent rather
+		// than the result: an un-erased slot can be picked by prefix match
+		// and reuse a prior session's KV, which is the bleed this exists
+		// to prevent.
+		log.Printf("[agent] erased %d/%d llama slots — slot(s) %v still hold prior KV "+
+			"and may be reused by prefix match", erased, slots, stale)
+		return
+	}
+	log.Printf("[agent] erased %d/%d llama slots — fresh KV cache for this session", erased, slots)
+}
+
+// eraseOneSlot clears a single KV slot, retrying while it is busy. Reports
+// whether the slot ended up clear.
+func eraseOneSlot(reqCtx context.Context, client *http.Client, llamaURL string, id int) bool {
+	endpoint := fmt.Sprintf("%s/slots/%d?action=erase", llamaURL, id)
+	const attempts = 3
+	for attempt := 1; attempt <= attempts; attempt++ {
 		req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, nil)
 		if err != nil {
 			log.Printf("[agent] erase slot %d: build request failed: %v", id, err)
-			continue
+			return false
 		}
 		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[agent] erase slot %d: request failed: %v (continuing — slot is stale, will re-encode)", id, err)
-			continue
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return true
+			}
+			log.Printf("[agent] erase slot %d: status %d (attempt %d/%d)",
+				id, resp.StatusCode, attempt, attempts)
+		} else {
+			log.Printf("[agent] erase slot %d: request failed: %v (attempt %d/%d)",
+				id, err, attempt, attempts)
 		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("[agent] erase slot %d: status %d (continuing — first turn re-encodes prefix)", id, resp.StatusCode)
-			continue
+		if reqCtx.Err() != nil {
+			return false
 		}
-		erased++
+		if attempt < attempts {
+			select {
+			case <-reqCtx.Done():
+				return false
+			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			}
+		}
 	}
-	log.Printf("[agent] erased %d/%d llama slots — fresh KV cache for this session", erased, slots)
+	return false
 }
 
 // pollPromptProgress emits llm_prompt_progress events at 100ms cadence
