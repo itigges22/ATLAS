@@ -197,6 +197,13 @@ than adding another retry around it.
 
 **Fixed**
 
+- Write-gate rejections blame the submission, not the file. The gate refuses
+  the content, so the file on disk is untouched — but the message read
+  "app.py has a JavaScript syntax error", which sends the model hunting a bug
+  in a file that is fine. Measured as an H2 false rejection on `flask_pause`:
+  the refusal was correct and the wording was not. All three embedded-script
+  headlines (syntax, stopped loop, duplicate binding) now open with "Your
+  content for X ..." and say explicitly that X on disk is unchanged.
 - The planner is told which files already exist, by name, in the prompt. The
   scorer penalty alone could not fix this: all three `aoc_sonar` candidates
   opened with `write_file input.txt` and scored 1.00 apiece, so there was

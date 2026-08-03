@@ -1842,3 +1842,25 @@ func TestAStreamCutIsDiagnosedFromTheCutNotTheWreckage(t *testing.T) {
 		t.Errorf("category = %q, want truncated_tool when the model stopped on its own", cat)
 	}
 }
+
+// The gate refuses the submission, so the file on disk is unchanged — and a
+// message saying "app.py has a JavaScript syntax error" sends the model
+// hunting a bug in a file that is fine. Measured as an H2 false rejection on
+// flask_pause rep 2: the refusal was correct, the wording was not.
+func TestRejectionsBlameTheSubmissionNotTheFile(t *testing.T) {
+	for _, f := range []embeddedScriptFinding{
+		{Line: 104, Kind: "javascript", Where: "the <script> block", Message: "unexpected `else`", Text: "else if(x) {}"},
+		{Line: 42, Kind: "javascript", Defect: "stopped_loop", Where: "the <script> block",
+			Message: "`draw` used to run on a repeating timer and now runs once"},
+		{Line: 7, Kind: "javascript", Defect: "redeclaration", Where: "the <script> block",
+			Message: "`score` is declared twice in the same scope"},
+	} {
+		msg := formatEmbeddedScriptRejection("app.py", f)
+		if !strings.HasPrefix(msg, "Your content for app.py") {
+			t.Errorf("defect=%q blames the file rather than the submission:\n%s", f.Defect, msg)
+		}
+		if !strings.Contains(msg, "on disk is unchanged") {
+			t.Errorf("defect=%q does not say the file is untouched:\n%s", f.Defect, msg)
+		}
+	}
+}

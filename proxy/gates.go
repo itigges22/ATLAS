@@ -871,7 +871,7 @@ func formatEmbeddedScriptRejection(path string, f embeddedScriptFinding) string 
 		// executing a line of it. Every handler on the page is dead, which
 		// is worse than the stray-paren case and looks identical from the
 		// server side.
-		fmt.Fprintf(&sb, "%s declares the same name twice in %s — it was NOT written.\n", path, f.Where)
+		fmt.Fprintf(&sb, "Your content for %s declares the same name twice in %s — it was NOT written, and %s on disk is unchanged.\n", path, f.Where, path)
 		fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)
 		if f.Text != "" {
 			fmt.Fprintf(&sb, "  %d | %s\n", f.Line, f.Text)
@@ -890,7 +890,7 @@ func formatEmbeddedScriptRejection(path string, f embeddedScriptFinding) string 
 		// loop scheduled exactly once, so the page draws one frame and
 		// freezes. Nothing downstream can see it — the file compiles, the
 		// server starts, the page returns 200.
-		fmt.Fprintf(&sb, "%s stops a render loop in %s — it was NOT written.\n", path, f.Where)
+		fmt.Fprintf(&sb, "Your content for %s stops a render loop in %s — it was NOT written, and %s on disk is unchanged.\n", path, f.Where, path)
 		fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)
 		if f.Text != "" {
 			fmt.Fprintf(&sb, "  %d | %s\n", f.Line, f.Text)
@@ -903,8 +903,12 @@ func formatEmbeddedScriptRejection(path string, f embeddedScriptFinding) string 
 			"after one frame. Re-send the edit with the loop rescheduling itself.")
 		return sb.String()
 	}
-	fmt.Fprintf(&sb, "%s has a %s syntax error in %s — it was NOT written.\n",
-		path, lang, f.Where)
+	// Blame the SUBMISSION, not the file. The write was refused, so the file
+	// on disk is clean — and "app.py has a JavaScript syntax error" sends the
+	// model hunting a bug in app.py that is not there. Measured as an H2
+	// false rejection on flask_pause: the gate was right, the wording was not.
+	fmt.Fprintf(&sb, "Your content for %s has a %s syntax error in %s — it was NOT written, "+
+		"and %s on disk is unchanged.\n", path, lang, f.Where, path)
 	fmt.Fprintf(&sb, "line %d: %s\n", f.Line, f.Message)
 	if f.OpenedLine > 0 {
 		// Point at the block, not at the line the parser stopped on. Given
