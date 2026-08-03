@@ -672,3 +672,36 @@ func TestASucceedingCallClearsItsOwnRejection(t *testing.T) {
 		t.Errorf("rejection outlived the failure: %s", refusal)
 	}
 }
+
+// The refusal path incremented consecutiveErrors and appended the failure
+// path, then returned — while both stopping rules that read those live inside
+// the post-execution failure branch it skips. Observed: four consecutive
+// refusals of the same structural_edit in one run, no breaker, no ceiling; the
+// model was refused cheaply and forever.
+func TestStuckOnOnePathIsTheSharedBreakerCondition(t *testing.T) {
+	if !stuckOnOnePath([]string{"todo.py", "todo.py", "todo.py"}) {
+		t.Error("three failures on one file must count as stuck")
+	}
+	for _, paths := range [][]string{
+		{"a.py", "b.py", "c.py"}, // grinding through multi-file work
+		{"a.py", "a.py"},         // not yet three
+		{"", "", ""},             // unnamed target proves nothing
+		{"a.py", "a.py", "b.py"},
+	} {
+		if stuckOnOnePath(paths) {
+			t.Errorf("wrongly reported stuck: %v", paths)
+		}
+	}
+}
+
+func TestRepeatedRefusalTellsTheUserRetryingWontHelp(t *testing.T) {
+	msg := repeatedRefusalSummary("structural_edit", "todo.py", false)
+	for _, want := range []string{"re-sent after being refused", "todo.py", "Nothing was written", "same wall"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("summary missing %q:\n%s", want, msg)
+		}
+	}
+	if wrote := repeatedRefusalSummary("edit_file", "", true); !strings.Contains(wrote, "did land on disk") {
+		t.Errorf("a run that wrote must say so:\n%s", wrote)
+	}
+}

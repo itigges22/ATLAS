@@ -180,3 +180,18 @@ def test_a_file_without_embedded_code_keeps_the_plain_message():
                           selector="function:nope", content="x")["error"]
     assert "does not exist in this file" in err
     assert "embedded" not in err
+
+
+def test_a_selector_for_a_node_being_added_says_to_use_insert_after():
+    """structural_edit replaces an existing node; it cannot create one. A model
+    adding a feature reaches for the name it is about to write — observed on
+    "add a done command that marks a task complete": turn 1 was
+    `function:done_task` against a file with no such function. Listing the
+    existing selectors is the right information and the wrong advice, because
+    the model does not want any of them."""
+    src = "def a():\n    return 1\n\n\ndef b():\n    return 2\n"
+    err = structural_edit(path="t.py", source_text=src,
+                          selector="function:c", content="def c():\n    return 3\n")["error"]
+    assert "ADDING" in err
+    assert "insert_after" in err
+    assert "function:a" in err   # still says what IS selectable

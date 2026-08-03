@@ -735,8 +735,17 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             # "does not exist" here is contradicted by the file the model just
             # read, which is why it re-sent the same selector.
             return {"success": False, "error": found}
+        # structural_edit REPLACES an existing node; it cannot bring one into
+        # existence. A model adding a feature reaches for the name it is about
+        # to create — observed on "add a done command": turn 1 was
+        # `function:done_task` against a file that does not have one yet. The
+        # list of existing selectors is the right information and the wrong
+        # advice, because the model does not want any of them.
         return {"success": False, "error": (
             f"selector '{selector}' matched 0 nodes in {path} — that symbol does not exist in this file."
+            + " If you are ADDING it, structural_edit is the wrong tool: it replaces a node that"
+            + " is already there. Use insert_after with the line number read_file printed to put"
+            + " the new code in, or edit_file anchored on one unique nearby line."
             + (available or " Read the file first to see what's defined.")
             + _embedded_regions_note(path, source_text)
         )}

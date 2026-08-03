@@ -889,3 +889,18 @@ func rejectionClass(errMsg string) string {
 // that differ between two occurrences of one failure.
 var reRejectionVariable = regexp.MustCompile(
 	"`[^`]*`" + `|"[^"]*"|'[^']*'|[0-9]+|[\w./-]+\.(?:py|js|ts|html|htm|css|json|md|go|txt)`)
+
+// stuckOnOnePath reports the path-aware breaker's condition: three
+// consecutive failures, all on the same named target. Three failures spread
+// across different files is a model grinding through multi-file work; three
+// on one file is a model stuck.
+//
+// Shared so the pre-execution refusal path applies the same rule as the
+// post-execution one. It did not, and the counters it incremented had no
+// reader: a model that re-sent the same rejected call was refused every time,
+// cheaply, forever — four refusals in one observed run with no breaker and no
+// ceiling, because both live inside the branch the refusal skips.
+func stuckOnOnePath(paths []string) bool {
+	return len(paths) == 3 && paths[0] != "" &&
+		paths[0] == paths[1] && paths[1] == paths[2]
+}

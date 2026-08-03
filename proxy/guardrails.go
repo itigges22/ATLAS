@@ -1371,3 +1371,26 @@ func outOfTurnsSummary(ctx *AgentContext, wrote bool) string {
 		"about — a narrower request finishes inside the budget.")
 	return sb.String()
 }
+
+// repeatedRefusalSummary ends a run that kept re-sending one rejected call.
+//
+// The user needs to know the tool call was refused rather than attempted, and
+// that re-running the same prompt will do the same thing — otherwise the
+// obvious response is to try again verbatim.
+func repeatedRefusalSummary(tool, path string, wrote bool) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Stopped: the same `%s` call was re-sent after being refused, and kept being "+
+		"re-sent without changing.", tool)
+	if path != "" {
+		fmt.Fprintf(&sb, " Target: %s.", path)
+	}
+	if wrote {
+		sb.WriteString(" Earlier changes in this run did land on disk — check them.")
+	} else {
+		sb.WriteString(" Nothing was written to disk.")
+	}
+	sb.WriteString("\n\nThe refusal reason is in the per-turn errors above. Re-running this " +
+		"prompt unchanged will hit the same wall; say specifically what to change and where, " +
+		"or point at a different file.")
+	return sb.String()
+}

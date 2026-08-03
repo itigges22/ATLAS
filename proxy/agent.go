@@ -1081,10 +1081,23 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// refusal returns before both the repetition window and the
 				// error counter, so neither breaker would ever see it.
 				consecutiveErrors++
+				totalFailures++
 				failPath := extractFailurePath(parsed.Name, parsed.Args)
 				ctx.RecentFailurePaths = append(ctx.RecentFailurePaths, failPath)
 				if len(ctx.RecentFailurePaths) > 3 {
 					ctx.RecentFailurePaths = ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-3:]
+				}
+				// ...and the same stopping rules have to apply here. Both the
+				// ceiling and the path-aware breaker live inside the
+				// post-execution failure branch, which this path skips, so
+				// incrementing alone left the counters with no reader.
+				if totalFailures >= maxTotalFailures || (consecutiveErrors >= 3 && stuckOnOnePath(ctx.RecentFailurePaths)) {
+					log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
+						turn, totalFailures, consecutiveErrors, ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-1])
+					ctx.Stream("done", map[string]string{
+						"summary": repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange) + liveBackgroundJobNote(ctx),
+					})
+					return nil
 				}
 				continue
 			}
@@ -1414,10 +1427,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					ctx.RecentFailurePaths = ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-3:]
 				}
 				if consecutiveErrors >= 3 {
-					samePath := len(ctx.RecentFailurePaths) == 3 &&
-						ctx.RecentFailurePaths[0] != "" &&
-						ctx.RecentFailurePaths[0] == ctx.RecentFailurePaths[1] &&
-						ctx.RecentFailurePaths[1] == ctx.RecentFailurePaths[2]
+					samePath := stuckOnOnePath(ctx.RecentFailurePaths)
 					if !samePath {
 						log.Printf("[agent] path-aware breaker: %d consecutive failures across different paths (%v) — continuing, not a stuck loop", consecutiveErrors, ctx.RecentFailurePaths)
 						// Reset consecutiveErrors so the multi-file grind

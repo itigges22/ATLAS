@@ -197,6 +197,22 @@ than adding another retry around it.
 
 **Fixed**
 
+- The identical-retry refusal now obeys the same stopping rules as any other
+  failure. It incremented `consecutiveErrors` and recorded the failure path,
+  then returned — while the path-aware breaker and the `maxTotalFailures`
+  ceiling both live inside the post-execution failure branch that return
+  skips, so the counters had no reader. Observed on an ordinary feature
+  request: four consecutive refusals of the same `structural_edit`, refused
+  cheaply and forever, with no breaker and no ceiling. The condition is now
+  shared (`stuckOnOnePath`) and the run ends with a summary saying the call
+  was refused rather than attempted, and that re-running the prompt unchanged
+  will hit the same wall.
+- `structural_edit` says plainly that it cannot create a node. A model adding
+  a feature reaches for the name it is about to write — observed on "add a
+  done command that marks a task complete": turn 1 was `function:done_task`
+  against a file with no such function. Listing the existing selectors was the
+  right information and the wrong advice, because the model wanted none of
+  them; the rejection now names `insert_after` first.
 - A turn that hits its cap no longer answers with nothing. That path streamed
   an `error` event and returned, so a user whose request ran long got an empty
   reply — no answer, no partial, no explanation. Observed on a fresh
