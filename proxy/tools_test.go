@@ -1514,3 +1514,68 @@ func TestAWholeEmbeddedFunctionFitsInOneCall(t *testing.T) {
 		t.Fatalf("a 46-line replacement must be allowed: %s", res.Error)
 	}
 }
+
+// read_file prints "12<tab>" before each line and the model pastes back what
+// it was shown. The rejection for this names the mistake and the alternative
+// tool exactly, and was still ignored: watched on executor_server.py
+// (2026-08-03) the model got it on turn 2 and re-sent the same prefixed block
+// on turn 6. The prefix is this harness's own addition, so it comes off here.
+func TestStripLineNumberPrefixes(t *testing.T) {
+	t.Run("strips read_file's prefix", func(t *testing.T) {
+		got := stripLineNumberPrefixes("12\tconst ctx = canvas.getContext('2d');\n13\treturn ctx;")
+		want := "const ctx = canvas.getContext('2d');\nreturn ctx;"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("leaves unprefixed text alone", func(t *testing.T) {
+		src := "const ctx = canvas.getContext('2d');"
+		if got := stripLineNumberPrefixes(src); got != src {
+			t.Errorf("got %q, want it unchanged", got)
+		}
+	})
+
+	t.Run("a number that is not a prefix survives", func(t *testing.T) {
+		// Tab-separated data, not read_file output: the digits are content.
+		src := "value\t42\n"
+		if got := stripLineNumberPrefixes(src); got != src {
+			t.Errorf("got %q, want it unchanged", got)
+		}
+	})
+}
+
+func TestAllLinesLineNumbered(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"wholesale paste of read_file output", "1\tdef f():\n2\t    return 1\n", true},
+		{"blank lines do not disqualify", "1\tdef f():\n\n3\t    return 1\n", true},
+		{"a block that merely contains one numbered line", "def f():\n2\t    return 1\n", false},
+		{"ordinary replacement text", "def f():\n    return 1\n", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := allLinesLineNumbered(tc.src); got != tc.want {
+				t.Errorf("allLinesLineNumbered(%q) = %v, want %v", tc.src, got, tc.want)
+			}
+		})
+	}
+}
+
+// The strip is only safe because it is self-validating: the stripped form has
+// to match the file. A stripped old_str that matches nothing must fall through
+// to the existing rejection rather than edit somewhere else.
+func TestStrippedOldStrOnlyCountsWhenItMatchesTheFile(t *testing.T) {
+	file := "func main() {\n\tx := 1\n}\n"
+
+	if got := findActualString(file, stripLineNumberPrefixes("2\t\tx := 1")); got == "" {
+		t.Error("a prefixed copy of a real line should match once stripped")
+	}
+	if got := findActualString(file, stripLineNumberPrefixes("2\t\ty := 2")); got != "" {
+		t.Errorf("a stripped line absent from the file matched %q", got)
+	}
+}

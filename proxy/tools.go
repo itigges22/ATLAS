@@ -1603,6 +1603,33 @@ func editFileTool() *ToolDef {
 				}
 			}
 			if actualOldStr == "" {
+				// read_file prints "12<tab>" before each line for reference
+				// and the model pastes back what it was shown. The prefix is
+				// ours, so it can come off here. Only a stripped form that
+				// then matches the file is accepted, which makes a wrong
+				// strip impossible.
+				//
+				// The rejection below states this exactly and names the
+				// alternative tool. Watched on executor_server.py
+				// (2026-08-03): the model got that rejection on turn 2 and
+				// sent the same prefixed block again on turn 6. Instructions
+				// do not transfer; mechanisms do (ADR 0008).
+				if stripped := stripLineNumberPrefixes(input.OldStr); stripped != input.OldStr {
+					if maybeMatch := findActualString(content, stripped); maybeMatch != "" {
+						log.Printf("[edit_file] old_str carried read_file's line-number prefix on %s — stripped and matched (saved a stuck-loop turn)", input.Path)
+						input.OldStr = stripped
+						// The same paste habit puts the prefix on new_str, and
+						// writing that would put "12<tab>" into the file. Only
+						// strip when every non-blank line carries one, so a
+						// partially-prefixed replacement is left alone.
+						if allLinesLineNumbered(input.NewStr) {
+							input.NewStr = stripLineNumberPrefixes(input.NewStr)
+						}
+						actualOldStr = maybeMatch
+					}
+				}
+			}
+			if actualOldStr == "" {
 				// Last resort before failing: whitespace-tolerant line match.
 				// Small models can't reproduce a code block byte-for-byte —
 				// indentation width, tabs-vs-spaces, and trailing spaces drift

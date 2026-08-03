@@ -800,6 +800,34 @@ func lineNumberPrefixedLines(s string) int {
 	return len(reLineNumberPrefix.FindAllString(s, -1))
 }
 
+// stripLineNumberPrefixes removes read_file's "N<tab>" display prefix.
+//
+// The prefix is this harness's own addition, so taking it back off is a
+// mechanical undo rather than a guess about intent. Callers accept the result
+// only when it then matches the file, so a strip that was not wanted cannot
+// change an edit.
+func stripLineNumberPrefixes(s string) string {
+	return reLineNumberPrefix.ReplaceAllString(s, "")
+}
+
+// allLinesLineNumbered reports whether every non-blank line of s carries the
+// prefix — the signature of a wholesale paste of read_file output, as opposed
+// to a block that happens to contain a numbered line.
+func allLinesLineNumbered(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !reLineNumberPrefix.MatchString(line) {
+			return false
+		}
+	}
+	return true
+}
+
 // structuralSelectorHint names the selectors structural_edit actually accepts
 // for a file's language, or "" when the file has no structural support at all.
 //
