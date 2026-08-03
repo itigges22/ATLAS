@@ -46,7 +46,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
@@ -753,6 +753,40 @@ def _js_parses(js: str) -> tuple[bool, str]:
         tmp.unlink(missing_ok=True)
 
 
+# Set once from --sandbox-container. The sandbox's interpreter is the one that
+# will run the agent's code, and it is not necessarily this script's.
+_SANDBOX_CONTAINER = ""
+
+
+def _sandbox_python_parses(text: str) -> tuple[Optional[bool], str]:
+    """Parse `text` with the sandbox's Python, the one that will run it.
+
+    Returns (None, "") when the sandbox cannot be reached, so the caller falls
+    back to the local verdict rather than silently passing everything.
+    """
+    container = _SANDBOX_CONTAINER
+    if not container:
+        return None, ""
+    try:
+        proc = subprocess.run(
+            ["docker", "exec", "-i", container, "python3", "-c",
+             "import ast,sys\n"
+             "try:\n"
+             "    ast.parse(sys.stdin.read())\n"
+             "    print('OK')\n"
+             "except SyntaxError as e:\n"
+             "    print('ERR', e)\n"],
+            input=text, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    out = (proc.stdout or "").strip()
+    if out.startswith("OK"):
+        return True, ""
+    if out.startswith("ERR"):
+        return False, out[4:].strip()
+    return None, ""
+
+
 def _file_parses(path: Path) -> tuple[bool, str]:
     """Whole-file parse plus the embedded-script layer, mirroring the gates."""
     try:
@@ -763,7 +797,17 @@ def _file_parses(path: Path) -> tuple[bool, str]:
         try:
             ast.parse(text)
         except SyntaxError as e:
-            return False, f"python: {e}"
+            # This script's own interpreter is not the one the code runs
+            # under. The host here is 3.9 and the sandbox is 3.13, and PEP 701
+            # (3.12+) allows nested same-type quotes inside f-strings —
+            # `f"{items[i]["title"]}"` parses in the sandbox and raises
+            # `f-string: unmatched '['` here. That reported a perfectly good
+            # file as a corrupt write. Ask the runtime that will execute it.
+            ok, why = _sandbox_python_parses(text)
+            if ok is None:
+                return False, f"python ({sys.version_info.major}.{sys.version_info.minor}): {e}"
+            if not ok:
+                return False, f"python: {why}"
     js = _extract_script(text) if path.suffix in (".py", ".html", ".htm") else None
     if js:
         ok, err = _js_parses(js)
@@ -1321,6 +1365,8 @@ def main() -> int:
         print(f"error: no known tasks in {args.tasks!r}", file=sys.stderr)
         return 2
 
+    global _SANDBOX_CONTAINER
+    _SANDBOX_CONTAINER = args.sandbox_container or ""
     if problems := preflight(args.sandbox_container, args.subdir):
         for line in problems:
             print(f"error: {line}", file=sys.stderr)

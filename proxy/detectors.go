@@ -822,6 +822,16 @@ func identicalRetryRefusal(ctx *AgentContext, toolName string, args json.RawMess
 	if ctx == nil || len(ctx.FailedToolCalls) == 0 {
 		return ""
 	}
+	// Commands observe the world; they do not describe an edit. Re-running
+	// `pytest` after fixing the code is the verify-fix-verify loop, not a
+	// repeat — and refusing it broke exactly that. Observed on multifile_cli:
+	// the model fixed a decorator, re-ran the same pytest invocation, and was
+	// told "nothing about the workspace has changed since", which was false.
+	if toolName == "run_command" || toolName == "run_background" ||
+		toolName == "tail_background" || toolName == "read_file" ||
+		toolName == "outline_file" || toolName == "list_directory" {
+		return ""
+	}
 	prev, seen := ctx.FailedToolCalls[toolCallSignature(toolName, args)]
 	if !seen {
 		return ""
@@ -849,15 +859,25 @@ func recordFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessa
 	ctx.FailedToolCalls[toolCallSignature(toolName, args)] = errMsg
 }
 
-// clearFailedToolCall drops a remembered rejection once the same call
-// succeeds. A call can legitimately fail and later succeed — an edit rejected
-// for a stale line range works after a re-read — and the memory must not
-// outlive the condition that caused it.
+// clearFailedToolCall forgets remembered rejections once ANY tool call
+// succeeds.
+//
+// The refusal rests on "nothing has changed since", and a successful call
+// falsifies that outright. Observed on multifile_cli: an edit was refused for
+// "file not read yet", the model read the file — exactly the right response —
+// and the retry was then refused as an identical re-send, because only the
+// edit's own signature was being cleared. The precondition had been met and
+// the call was valid.
+//
+// Forgetting everything is the honest reading: after a successful read, edit
+// or command, the harness can no longer claim any earlier failure still
+// holds. A call that is genuinely still wrong fails again and is remembered
+// again, at the cost of one turn.
 func clearFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessage) {
 	if ctx == nil || len(ctx.FailedToolCalls) == 0 {
 		return
 	}
-	delete(ctx.FailedToolCalls, toolCallSignature(toolName, args))
+	ctx.FailedToolCalls = make(map[string]string)
 }
 
 // rejectionClass reduces a rejection to its skeleton, so two failures can be

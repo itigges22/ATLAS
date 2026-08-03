@@ -761,6 +761,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// old_str 5 times in a row. The response was being truncated
 			// at the llama-server token cap; the model couldn't see that
 			// and kept emitting the same too-big payload.
+			// A text answer we cut mid-string is still an answer. Deliver what
+			// was written rather than nothing — the alternative is a user who
+			// asked a question and received silence.
+			if ctx.LastStreamCut == "content_loop" {
+				if salvaged, ok := recoverTruncatedText(response); ok {
+					log.Printf("[agent] salvaged %d chars of a cut text answer at turn %d", len(salvaged), turn)
+					ctx.Stream("text", map[string]string{"content": salvaged})
+					ctx.Stream("done", map[string]string{
+						"summary": salvaged + "\n\n(The reply was cut short — it had begun " +
+							"repeating itself. Ask again if something is missing.)" +
+							liveBackgroundJobNote(ctx),
+					})
+					return nil
+				}
+			}
 			category, feedback := classifyParseFailure(response, ctx.LastStreamCut)
 			log.Printf("[agent] parse error: %v | category=%s raw_len=%d | raw: %q",
 				parseErr, category, len(response), truncateStr(response, 500))
@@ -4637,4 +4652,67 @@ func listWorkspaceFiles(workingDir string, max int) []string {
 	})
 	sort.Strings(out)
 	return out
+}
+
+// recoverTruncatedText salvages the answer from a `text` response whose JSON
+// was cut off mid-string.
+//
+// The tool-call path already has recoverTruncatedToolCall; a text answer had
+// no equivalent, so a cut threw the whole thing away. Observed on
+// bugfind_tiebreak: the model had written 5,897 characters answering a
+// question, began repeating itself, the loop detector cut the stream, and the
+// user received nothing at all — because the closing quote and brace were
+// missing.
+//
+// Only for a stream WE cut. A response the model ended on its own is not
+// truncated, and guessing at one would invent content.
+func recoverTruncatedText(raw string) (string, bool) {
+	const marker = `"content":`
+	i := strings.Index(raw, marker)
+	if i < 0 {
+		if i = strings.Index(raw, `"content" :`); i < 0 {
+			return "", false
+		}
+	}
+	rest := strings.TrimSpace(raw[i+len(marker):])
+	if !strings.HasPrefix(rest, `"`) {
+		return "", false
+	}
+	rest = rest[1:]
+
+	// Walk the JSON string body by hand: it has no closing quote, so the
+	// decoder cannot help. Stop at an unescaped quote if one somehow exists.
+	var sb strings.Builder
+	for j := 0; j < len(rest); j++ {
+		c := rest[j]
+		if c == '\\' && j+1 < len(rest) {
+			switch rest[j+1] {
+			case 'n':
+				sb.WriteByte('\n')
+			case 't':
+				sb.WriteByte('\t')
+			case 'r':
+				sb.WriteByte('\r')
+			case '"':
+				sb.WriteByte('"')
+			case '\\':
+				sb.WriteByte('\\')
+			default:
+				sb.WriteByte(rest[j+1])
+			}
+			j++
+			continue
+		}
+		if c == '"' {
+			break
+		}
+		sb.WriteByte(c)
+	}
+	out := strings.TrimSpace(sb.String())
+	// Too little to be worth showing, and a short fragment is more likely to
+	// mislead than help.
+	if len(out) < 200 {
+		return "", false
+	}
+	return out, true
 }

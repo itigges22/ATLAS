@@ -705,3 +705,42 @@ func TestRepeatedRefusalTellsTheUserRetryingWontHelp(t *testing.T) {
 		t.Errorf("a run that wrote must say so:\n%s", wrote)
 	}
 }
+
+// Measured on multifile_cli rep 2. Two ways the refusal blocked correct work,
+// both because "nothing about the workspace has changed since" was false.
+func TestTheRetryRefusalDoesNotBlockLegitimateRetries(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+
+	// 1. Re-running a verification command after fixing the code IS the loop.
+	cmd := json.RawMessage(`{"command":"pytest test_store.py","timeout":30}`)
+	recordFailedToolCall(ctx, "run_command", cmd, "1 error in 0.12s")
+	if r := identicalRetryRefusal(ctx, "run_command", cmd); r != "" {
+		t.Errorf("re-running a test after a fix was refused:\n%s", r)
+	}
+	// Reads are observations too — re-reading after an edit is correct.
+	rd := json.RawMessage(`{"path":"a.py"}`)
+	recordFailedToolCall(ctx, "read_file", rd, "nope")
+	if r := identicalRetryRefusal(ctx, "read_file", rd); r != "" {
+		t.Errorf("re-reading was refused:\n%s", r)
+	}
+
+	// 2. A precondition failure resolved by another call must not linger.
+	ctx2 := NewAgentContext(t.TempDir(), Tier2Medium)
+	edit := json.RawMessage(`{"path":"t.py","old_str":"@Pytest.fixture","new_str":"@pytest.fixture"}`)
+	recordFailedToolCall(ctx2, "edit_file", edit, "file not read yet — use read_file first")
+	if identicalRetryRefusal(ctx2, "edit_file", edit) == "" {
+		t.Fatal("the immediate re-send should still be refused")
+	}
+	// The model reads the file — the right response — which satisfies it.
+	clearFailedToolCall(ctx2, "read_file", json.RawMessage(`{"path":"t.py"}`))
+	if r := identicalRetryRefusal(ctx2, "edit_file", edit); r != "" {
+		t.Errorf("the edit was still refused after its precondition was met:\n%s", r)
+	}
+
+	// A genuinely repeated edit with nothing in between is still refused.
+	ctx3 := NewAgentContext(t.TempDir(), Tier2Medium)
+	recordFailedToolCall(ctx3, "edit_file", edit, "old_str not found")
+	if identicalRetryRefusal(ctx3, "edit_file", edit) == "" {
+		t.Error("an identical re-send with no intervening success was allowed")
+	}
+}

@@ -197,6 +197,29 @@ than adding another retry around it.
 
 **Fixed**
 
+- The retry refusal no longer blocks legitimate retries. It rested on
+  "nothing about the workspace has changed since", and two measured cases
+  falsified that. Re-running `pytest` after fixing the code was refused as a
+  repeat — the verify-fix-verify loop, blocked. And an `edit_file` refused for
+  "file not read yet" was still refused after the model read the file, because
+  only that call's own signature was cleared. Commands and reads are now
+  exempt outright (they observe the world rather than describe an edit), and
+  any successful call clears the memory, since success falsifies the premise.
+  A genuinely repeated call with nothing in between is still refused.
+- A `text` answer cut mid-string is salvaged instead of discarded. The
+  tool-call path has `recoverTruncatedToolCall`; a text answer had no
+  equivalent, so when the loop detector cut a 5,897-character reply the user
+  received nothing at all — the closing quote and brace were missing, so
+  nothing parsed. What was written is now delivered, with a note that it was
+  cut short. Only for a stream the proxy itself cut, and only above 200
+  characters, since a short fragment misleads more than it helps.
+- `scripts/e2e-reliability.py` parses Python with the runtime that will run it.
+  It used this script's interpreter — 3.9 on this host — while the sandbox is
+  3.13, and PEP 701 (3.12+) allows nested same-type quotes inside f-strings.
+  `f"{items[i]["title"]}"` parses in the sandbox and raises `f-string:
+  unmatched '['` here, which reported a perfectly good file as an H5 corrupt
+  write. It now asks the sandbox and falls back to the local verdict only when
+  the container is unreachable.
 - Write-gate rejections blame the submission, not the file. The gate refuses
   the content, so the file on disk is untouched — but the message read
   "app.py has a JavaScript syntax error", which sends the model hunting a bug

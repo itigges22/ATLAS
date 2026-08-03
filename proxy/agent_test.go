@@ -2349,3 +2349,47 @@ func TestRestatementSkipsBigFilesAndEmptyState(t *testing.T) {
 		t.Error("ATLAS_RESTATE_LAST_READ=0 did not disable it")
 	}
 }
+
+// The model had written 5,897 characters answering a question, began
+// repeating itself, the loop detector cut the stream, and the user received
+// nothing — the closing quote and brace were missing so nothing parsed. The
+// tool-call path had recoverTruncatedToolCall; a text answer had no
+// equivalent.
+func TestACutTextAnswerIsSalvagedRatherThanDiscarded(t *testing.T) {
+	body := "The issue is in `scoring.py` within the `score_candidate` function " +
+		"(lines 122-130). Line 129 returns the raw value instead of the normalised " +
+		"one, so every candidate scores identically and the tie-break never runs. " +
+		"The fix is to divide by the max before returning, which is what the " +
+		"docstring already describes and what the caller assumes."
+	raw := `{"type":"text","content":"` + strings.ReplaceAll(body, `"`, `\"`)
+
+	got, ok := recoverTruncatedText(raw)
+	if !ok {
+		t.Fatal("a cut text answer was discarded")
+	}
+	if !strings.Contains(got, "scoring.py") || !strings.Contains(got, "tie-break never runs") {
+		t.Errorf("salvaged content lost the answer:\n%s", got)
+	}
+
+	// Escapes have to survive the hand-rolled walk.
+	esc := `{"type":"text","content":"line one\nline two\ta \"quoted\" bit, and a \\ backslash. ` +
+		strings.Repeat("padding to clear the length floor. ", 8)
+	out, ok := recoverTruncatedText(esc)
+	if !ok {
+		t.Fatal("escaped content was discarded")
+	}
+	for _, want := range []string{"line one\nline two\ta", `"quoted"`, `\ backslash`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("escape handling lost %q:\n%s", want, out)
+		}
+	}
+
+	// A fragment too short to be useful is more likely to mislead than help.
+	if _, ok := recoverTruncatedText(`{"type":"text","content":"the issue is`); ok {
+		t.Error("salvaged a fragment too short to be worth showing")
+	}
+	// A tool call is not a text answer.
+	if _, ok := recoverTruncatedText(`{"type":"tool_call","name":"write_file","args":{"path":"a.py"`); ok {
+		t.Error("mistook a truncated tool call for a text answer")
+	}
+}
