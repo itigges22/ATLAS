@@ -778,6 +778,20 @@ func writeFileTool() *ToolDef {
 				return &ToolResult{Success: false, Error: hint}, nil
 			}
 
+			// Echoed write: the content is the file that is already there.
+			// Reproducing data the session already has is never the task,
+			// and it is where the worst measured failure starts — the model
+			// retyping a 2000-line fixture from memory, degenerating into
+			// repetition, and getting its stream cut mid-JSON.
+			if existing, err := os.ReadFile(path); err == nil {
+				if echoesExistingFile(string(existing), input.Content) {
+					log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
+						logPath(input.Path), len(existing), len(input.Content))
+					return &ToolResult{Success: false,
+						Error: echoedWriteRejection(input.Path)}, nil
+				}
+			}
+
 			// Stub detection. Reject "<h1>X Page</h1>" / "TODO"
 			// placeholder writes that pass syntactic gates but ship the
 			// minimum content humanly possible. The model's lazy-completion

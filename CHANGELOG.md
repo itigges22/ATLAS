@@ -197,6 +197,26 @@ than adding another retry around it.
 
 **Fixed**
 
+- "Failed to parse model response" is diagnosed from the cut, not the
+  wreckage. The proxy's own content-loop detector ends a generation when the
+  model starts repeating itself; the cut lands mid-JSON, so the response then
+  fails to parse — and `classifyParseFailure` inferred a cause from the
+  fragment, reporting `truncated_tool: your response hit the token cap, make
+  the call smaller`. Wrong diagnosis, wrong instruction, so the model re-sent
+  the same call until the three-strike breaker ended the run. The reason for
+  the cut is now carried on the context and reported first, because it is the
+  only fact in that function that is known rather than guessed. Measured
+  across four sessions: `content loop detected (601 chars)` immediately
+  followed by `parse error ... category=truncated_tool raw_len=601`.
+- A `write_file` whose content is the file already on disk is refused. This is
+  where the above chain starts: asked to solve an Advent of Code puzzle, the
+  model called `write_file` on `input.txt` — the fixture — and tried to retype
+  2000 lines of numbers from memory. It degenerated into repeating one line
+  ~50 times (`941` × 50, with `92e`, `93e` and a stray `bsp` corrupted along
+  the way), the stream was cut, and the run died. A sibling session got
+  further and corrupted the fixture outright. Prefix-matched rather than
+  exact, because the collapse truncates; floored at 200 bytes so a short file
+  legitimately rewritten with the same content is not affected.
 - A session refuses to start when the proxy and the sandbox are bound to
   different host directories. Both containers see the split as `/workspace`,
   so no value either holds can reveal it — the only detection from inside is

@@ -759,7 +759,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// old_str 5 times in a row. The response was being truncated
 			// at the llama-server token cap; the model couldn't see that
 			// and kept emitting the same too-big payload.
-			category, feedback := classifyParseFailure(response)
+			category, feedback := classifyParseFailure(response, ctx.LastStreamCut)
 			log.Printf("[agent] parse error: %v | category=%s raw_len=%d | raw: %q",
 				parseErr, category, len(response), truncateStr(response, 500))
 			ctx.Stream("error", map[string]string{
@@ -2301,6 +2301,9 @@ func appendLastReadRestatement(ctx *AgentContext, wire []map[string]string) []ma
 }
 
 func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperature float64, grammar string) (string, int, error) {
+	// Stale from the previous turn otherwise, which would blame a clean
+	// parse failure on a cut that happened earlier.
+	ctx.LastStreamCut = ""
 	wireMessages := toWireMessages(messages)
 	wireMessages = appendLastReadRestatement(ctx, wireMessages)
 
@@ -2561,11 +2564,13 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 			ctx.Stream("reasoning_budget_cut", map[string]interface{}{
 				"reasoning_chars": reasoningBuf.Len(),
 			})
+			ctx.LastStreamCut = "reasoning_budget"
 			break
 		}
 		if contentLoopCut {
 			log.Printf("[agent] content loop detected (%d chars) — model repeating itself; cutting the stream", contentBuf.Len())
 			ctx.Stream("content_loop_cut", map[string]interface{}{"chars": contentBuf.Len()})
+			ctx.LastStreamCut = "content_loop"
 			break
 		}
 	}
@@ -3337,7 +3342,35 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 // mid-string, parse failed, we didn't tell the model why, it retried
 // identically. classifyParseFailure breaks the cycle by naming the
 // failure mode.
-func classifyParseFailure(raw string) (category, feedback string) {
+// classifyParseFailure names the shape of an unparseable response and returns
+// the corrective to send back.
+//
+// `streamCut` is why the PROXY ended the generation, or "" when the model
+// stopped on its own. It comes first because it is the only fact here that is
+// known rather than inferred: everything below reads the wreckage and guesses.
+// Observed across four sessions — the model began reproducing a 2000-line data
+// fixture, degenerated into repeating one line ~50 times, the loop detector
+// cut the stream at 601 chars mid-JSON, and the classifier reported
+// "truncated_tool: your response hit the token cap, make the call smaller".
+// That is the wrong diagnosis and the wrong instruction, so the model retried
+// the same thing until the run died.
+func classifyParseFailure(raw, streamCut string) (category, feedback string) {
+	switch streamCut {
+	case "content_loop":
+		return "loop_cut", "Your response was cut off because it had started repeating " +
+			"itself — the same line over and over — so what arrived was an unfinished " +
+			"tool call. The response was NOT too long for the token cap, and re-sending " +
+			"a smaller version of the same call will not help.\n\nThis happens when you " +
+			"try to reproduce a large block of data you already have. You do not need to " +
+			"copy a file's contents to work with it: read_file already showed you the " +
+			"file, and input or fixture data should be read at runtime by the code you " +
+			"write, never retyped into a tool call. Write the CODE that processes the " +
+			"data, not the data."
+	case "reasoning_budget":
+		return "reasoning_cut", "Your response was cut off: it spent the whole per-turn " +
+			"budget on reasoning without emitting a tool call. Skip the deliberation and " +
+			"respond with the single JSON action you want to take next."
+	}
 	stripped := strings.TrimSpace(raw)
 	if stripped == "" {
 		return "empty", "Your response was empty. Respond with ONLY a single JSON object — {\"type\":\"tool_call\",...} or {\"type\":\"text\",\"content\":\"...\"} or {\"type\":\"done\",\"summary\":\"...\"}."

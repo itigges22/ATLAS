@@ -585,6 +585,12 @@ type AgentContext struct {
 	// are worth recording as positives.
 	VerifiedThisRun bool
 
+	// LastStreamCut records why the proxy itself ended the generation, when
+	// it did. A cut lands mid-JSON, so the parse then fails — and the
+	// classifier was inferring a cause from the wreckage instead of using
+	// the one already known one line earlier.
+	LastStreamCut string
+
 	// OriginalContent is each touched file as the run FIRST saw it. FilesRead
 	// is overwritten on every edit, so it cannot answer "what did this run
 	// change".

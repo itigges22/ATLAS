@@ -2138,3 +2138,50 @@ func resetWorkspaceAlignmentCache() {
 	defer wsAlignMu.Unlock()
 	wsAlignChecked, wsAlignProblem = time.Time{}, ""
 }
+
+// echoesExistingFile reports a write whose content is the file that is
+// already on disk, or a truncated prefix of it.
+//
+// Reproducing data the session already has is never the task, and it is how
+// the worst failure in the measured runs starts: asked to solve an Advent of
+// Code puzzle, the model called write_file on input.txt — the fixture — and
+// tried to retype 2000 lines of numbers from memory. It degenerated into
+// repeating one line ~50 times, the content-loop detector cut the stream
+// mid-JSON at 601 chars, the parse failed, and three identical retries ended
+// the run. A sibling session got further and corrupted the fixture outright.
+//
+// Refusing the echo removes the whole chain, and it is cheap to recognise:
+// the model has no reason to send back bytes it just read.
+//
+// Prefix rather than equality because the collapse truncates: by the time it
+// is cut, the content is a partial copy. A short prefix proves nothing, so
+// there is a floor.
+func echoesExistingFile(existing, incoming string) bool {
+	const minEcho = 200
+	if len(existing) < minEcho || len(incoming) < minEcho {
+		return false
+	}
+	a, b := strings.TrimSpace(existing), strings.TrimSpace(incoming)
+	if a == b {
+		return true
+	}
+	// A truncated retype: everything that arrived matches the head of the
+	// file, and it is a real portion of it rather than a couple of lines.
+	if len(b) < len(a) && strings.HasPrefix(a, b) {
+		return true
+	}
+	return false
+}
+
+// echoedWriteRejection tells the model why copying a file back is refused.
+func echoedWriteRejection(path string) string {
+	return fmt.Sprintf(
+		"write_file on %s would rewrite it with the contents it already has. You do not "+
+			"need to reproduce a file to work with it — read_file has already shown it to "+
+			"you, and code you write can read it at runtime.\n\n"+
+			"If this is input or fixture data, leave it alone and write the program that "+
+			"processes it. If you meant to change part of it, use replace_lines or "+
+			"edit_file on the lines that differ. Retyping a large file from memory does "+
+			"not work: the response degenerates into repetition and gets cut off.",
+		path)
+}

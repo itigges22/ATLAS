@@ -1770,3 +1770,75 @@ func TestAlignmentProbeCarriesTheSubdirectory(t *testing.T) {
 		t.Errorf("sandbox was asked for the wrong path: %s", askedFor)
 	}
 }
+
+// The measured chain: the model called write_file on a 2000-line input
+// fixture, retyping it from memory; it degenerated into repeating one line
+// ~50 times; the content-loop detector cut the stream mid-JSON at 601 chars;
+// the parse failed; three identical retries ended the run. A sibling session
+// got further and corrupted the fixture outright.
+func TestEchoedWritesAreRefused(t *testing.T) {
+	fixture := strings.Repeat("199\n202\n201\n203\n", 200) // ~3 KB of data
+
+	if !echoesExistingFile(fixture, fixture) {
+		t.Error("an exact rewrite of the file on disk was allowed")
+	}
+	// The collapse truncates, so by the time the stream is cut the content is
+	// a partial copy — still an echo.
+	if !echoesExistingFile(fixture, fixture[:1200]) {
+		t.Error("a truncated retype was allowed")
+	}
+	// Genuine edits and unrelated content must pass.
+	edited := fixture + "\n# a real change\n"
+	if echoesExistingFile(fixture, edited) {
+		t.Error("an append was mistaken for an echo")
+	}
+	if echoesExistingFile(fixture, strings.Repeat("def solve():\n    pass\n", 40)) {
+		t.Error("unrelated content was mistaken for an echo")
+	}
+	// Short files prove nothing either way — a two-line config legitimately
+	// gets rewritten with the same content.
+	if echoesExistingFile("a = 1\n", "a = 1\n") {
+		t.Error("fired on a file too short to be evidence")
+	}
+	// A short prefix of a long file is not evidence of a retype.
+	if echoesExistingFile(fixture, fixture[:80]) {
+		t.Error("fired on a prefix too short to be evidence")
+	}
+
+	msg := echoedWriteRejection("input.txt")
+	for _, want := range []string{"input.txt", "already has", "read it at runtime", "replace_lines"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+// "Failed to parse model response" was a symptom of the proxy cutting its own
+// stream. The classifier inferred "truncated_tool — you hit the token cap,
+// make the call smaller", which is the wrong diagnosis and the wrong
+// instruction, so the model retried the same thing until the run died.
+func TestAStreamCutIsDiagnosedFromTheCutNotTheWreckage(t *testing.T) {
+	truncated := `{"type":"tool_call","name":"write_file","args":{"path":"input.txt","content":"199\n202\n201`
+
+	cat, feedback := classifyParseFailure(truncated, "content_loop")
+	if cat != "loop_cut" {
+		t.Errorf("category = %q, want loop_cut", cat)
+	}
+	for _, want := range []string{"repeating itself", "NOT too long", "not the data"} {
+		if !strings.Contains(feedback, want) {
+			t.Errorf("feedback missing %q:\n%s", want, feedback)
+		}
+	}
+	if strings.Contains(feedback, "token cap") && !strings.Contains(feedback, "NOT too long") {
+		t.Errorf("still blaming the token cap:\n%s", feedback)
+	}
+
+	// Reasoning-budget cuts get their own diagnosis.
+	if cat, _ := classifyParseFailure(truncated, "reasoning_budget"); cat != "reasoning_cut" {
+		t.Errorf("category = %q, want reasoning_cut", cat)
+	}
+	// With no cut, the shape-based classification still applies.
+	if cat, _ := classifyParseFailure(truncated, ""); cat != "truncated_tool" {
+		t.Errorf("category = %q, want truncated_tool when the model stopped on its own", cat)
+	}
+}
