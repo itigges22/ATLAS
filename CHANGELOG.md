@@ -197,6 +197,33 @@ than adding another retry around it.
 
 **Fixed**
 
+- The last-read restatement is bounded by the context window it spends
+  against. It is appended to the wire *after* `trimMessages` has spent the
+  history budget, so nothing counted it — on a 2000-line fixture the
+  line-numbered copy runs ~4700 tokens per turn, and the file was already in
+  the window because `trimMessages` pins the most recent file-content result.
+  Measured: `aoc_sonar` failed both reps at turn 3 with `request (33012
+  tokens) exceeds the available context size (32768 tokens)`. The restatement
+  now skips content already anywhere in the wire (not just the last message)
+  and yields when the slot has no headroom — it is an optimisation, and
+  overflowing the slot ends the run.
+- Every exit from the agent loop emits an outcome. Two did not: an inference
+  failure streamed an `error` and returned, and the post-destructive-op path
+  returned bare. `aoc_sonar` hit the first in both reps and the user got a
+  tool call, an error, and silence — nothing rendering the event stream could
+  tell a failed run from a dropped connection. Context-size failures are
+  named explicitly in the summary, since that one is actionable.
+- `scripts/e2e-reliability.py` was scoring ATLAS against a stale definition of
+  a write: `WRITE_TOOLS` omitted `insert_after` and `replace_lines`, so a
+  session whose only successful write used either was reported as "exited with
+  no successful write" — the fifth place today a tool-name list went stale.
+  H4 also matched only "stopped after" when deciding whether a run said it had
+  stopped, missing the breaker's own "Stopped:" wording, and both H4 and H9
+  paired tool calls to results positionally, so one unanswered call shifted
+  every pair after it. Re-scoring the same 28 saved sessions: harness
+  integrity 15/28 (54%) as originally reported, 22/28 (78%) corrected, and
+  24/28 (86%) excluding two sessions killed by the harness's own 900s client
+  timeout.
 - The identical-retry refusal now obeys the same stopping rules as any other
   failure. It incremented `consecutiveErrors` and recorded the failure path,
   then returned — while the path-aware breaker and the `maxTotalFailures`

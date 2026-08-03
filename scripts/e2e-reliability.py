@@ -782,8 +782,14 @@ def _file_parses(path: Path) -> tuple[bool, str]:
 # integrity only in the sense that undetected classes exist — never inflated by
 # a false positive.
 
+# insert_after and replace_lines were missing, so a session whose only
+# successful write used one of them scored as "no successful write" — H4 fired
+# on go_offbyone and multifile_cli, both of which had written correctly. The
+# same omission has now been found in the lens breaker, the worked-example
+# generator, the productive-change counter, the write-gate chain, and here:
+# a set of tool names that nobody updates when a tool is added.
 WRITE_TOOLS = {"write_file", "edit_file", "structural_edit", "delete_file",
-               "move_file"}
+               "move_file", "insert_after", "replace_lines"}
 
 
 @dataclass
@@ -929,10 +935,12 @@ def h4_gate_escape(s: Session, task: Task = None) -> list[str]:
     # asked — the inverse of the H9 check sitting right below.
     if task is not None and task.conversational:
         return []
+    # Read the tool name off the RESULT rather than pairing positionally with
+    # the calls: one unanswered call (a client timeout mid-stream) shifted
+    # every pair after it and silently mis-scored the rest of the session.
     productive = any((e.get("data") or {}).get("success")
-                     and (c.get("data") or {}).get("name") in WRITE_TOOLS
-                     for c, e in zip(s.of_type("tool_call"),
-                                     s.of_type("tool_result")))
+                     and (e.get("data") or {}).get("tool") in WRITE_TOOLS
+                     for e in s.of_type("tool_result"))
     if productive:
         return []
     if not s.of_type("done"):
@@ -942,8 +950,13 @@ def h4_gate_escape(s: Session, task: Task = None) -> list[str]:
                        for e in s.of_type("done"))
     texts = " ".join(str((e.get("data") or {}).get("content") or "")
                      for e in s.of_type("text"))
-    if re.search(r"stopped after|could not|unable to|failed to", summary + texts,
-                 re.I):
+    # "Stopped:" is how the repeated-refusal breaker opens its summary, and
+    # "ran out of turns" is how the turn-cap exit does. Matching only
+    # "stopped after" scored both of those as escaping silently while they
+    # were saying exactly what happened.
+    if re.search(r"\bstopped\b|could not|unable to|failed to|ran out of turns|"
+                 r"nothing was written|no changes were made",
+                 summary + texts, re.I):
         return []
     return ["H4 gate escape: exited with no successful write on an "
             "action-intent prompt, without saying it had stopped"]
@@ -998,11 +1011,12 @@ def h9_tier_misapplied(s: Session, task: Task) -> list[str]:
     if v3:
         kinds = sorted({str(e.get("type")) for e in v3})[:4]
         out.append(f"H9 tier: the V3 pipeline ran on a question ({kinds})")
-    wrote = [c for c, r in zip(s.of_type("tool_call"), s.of_type("tool_result"))
-             if (c.get("data") or {}).get("name") in WRITE_TOOLS
+    # Same positional-pairing hazard as H4 — read the tool off the result.
+    wrote = [r for r in s.of_type("tool_result")
+             if (r.get("data") or {}).get("tool") in WRITE_TOOLS
              and (r.get("data") or {}).get("success")]
     if wrote:
-        names = sorted({(c.get("data") or {}).get("name") for c in wrote})
+        names = sorted({(r.get("data") or {}).get("tool") for r in wrote})
         out.append(f"H9 tier: a question caused file writes ({names})")
     return out
 

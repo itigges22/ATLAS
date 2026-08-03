@@ -308,6 +308,14 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	// Steps the plan named and no tool call ever satisfied. Same shape as the
 	// verification gate: a fact the run already holds, used at the exit
 	// instead of only being shown mid-run.
+	// Code the run added that nothing calls. Checked at the exit rather than
+	// at the write, because wiring it up on a later turn is normal — only
+	// finishing with it unwired is the defect.
+	if orphans := orphanedAdditions(ctx); len(orphans) > 0 && s.chargeBounce("orphan_gate") {
+		log.Printf("[agent] orphan gate: bouncing exit at turn %d — added-but-uncalled in %d file(s) (bounce %d/%d)",
+			s.turn, len(orphans), s.gateBounces["orphan_gate"], maxGateBounces)
+		return "orphan_gate", orphanedAdditionsMessage(orphans)
+	}
 	if msg := planIncompleteMessage(ctx); msg != "" && s.chargeBounce("plan_gate") {
 		log.Printf("[agent] plan gate: bouncing exit at turn %d — %d/%d steps satisfied (bounce %d/%d)",
 			s.turn, countTrue(ctx.PlanStepsSatisfied), len(ctx.Plan.Steps),
@@ -692,6 +700,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			Emit(NewEnvelope(EvtError, "llm",
 				map[string]interface{}{"message": err.Error()}))
 			ctx.Stream("error", map[string]string{"error": err.Error()})
+			// An `error` event is not an outcome. This exit streamed one and
+			// returned, so the client saw a tool call, an error, and then
+			// nothing — aoc_sonar died here in BOTH reps on a context-size
+			// 400 and the user got silence. Every other exit in this loop
+			// authors a `done`; this one has to as well, or the failure is
+			// invisible to anything rendering the stream.
+			ctx.Stream("done", map[string]string{
+				"summary": inferenceFailureSummary(err, st.madeProductiveChange) + liveBackgroundJobNote(ctx),
+			})
 			return fmt.Errorf("LLM call failed on turn %d: %w", turn, err)
 		}
 		ctx.TotalTokens += tokens
@@ -1293,9 +1310,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			})
 
 			if forceDone {
-				// Don't stream a follow-up message — the file deletion already
-				// happened on disk and any trailing text would just be noise
-				// for the TUI to render after a destructive op.
+				// The destructive op already happened on disk. Say so rather
+				// than ending the stream on a bare tool_result: a client has
+				// no way to tell a completed deletion from a dropped
+				// connection.
+				ctx.Stream("done", map[string]string{
+					"summary": "Done — the file operation completed. Nothing further was run." +
+						liveBackgroundJobNote(ctx),
+				})
 				return nil
 			}
 
@@ -2224,11 +2246,31 @@ func appendLastReadRestatement(ctx *AgentContext, wire []map[string]string) []ma
 	if path == "" || content == "" || len(content) > restatementMaxBytes {
 		return wire
 	}
-	// Already fresh in the window — don't pay for it twice.
-	if n := len(wire); n > 0 {
-		if strings.Contains(wire[n-1]["content"], content) {
+	// Already in the window — don't pay for it twice. trimMessages PINS the
+	// most recent file-content tool result so the active file survives
+	// trimming, so for the file being edited this is the normal case, and
+	// restating it appended a second full copy of something already present.
+	for _, m := range wire {
+		if strings.Contains(m["content"], content) {
 			return wire
 		}
+	}
+	// Fit it in what the slot actually has left. The budget is computed over
+	// ctx.Messages and applied by trimMessages; this block is appended to the
+	// WIRE afterwards, so nothing counted it. On a 2000-line fixture the
+	// line-numbered copy runs ~4700 tokens, and aoc_sonar died at turn 3 in
+	// both reps with `request (33012 tokens) exceeds the available context
+	// size (32768)` — a 400 that ends the stream. Restating is an
+	// optimisation; overflowing the slot is fatal, so it yields.
+	used := 0
+	for _, m := range wire {
+		used += estTokens(m["content"])
+	}
+	headroom := perSlotContext() - agentMaxTokens() - used
+	if headroom < estTokens(content)+numberedLineOverhead(content) {
+		log.Printf("[agent] skipping the last-read restatement of %s — no headroom (%d tokens left)",
+			logPath(path), headroom)
+		return wire
 	}
 	rel := path
 	if ctx.WorkingDir != "" {
@@ -2762,14 +2804,28 @@ func estTokens(content string) int {
 // per-slot context (ATLAS_CTX_SIZE / ATLAS_PARALLEL_SLOTS), reserving ~35%
 // for the response. Model-agnostic: keys off the context the deploy gives,
 // not the model identity. Falls back to a safe default when env is absent.
-func conversationTokenBudget() int {
+// perSlotContext is the token window one llama.cpp slot actually has:
+// the server's context divided by the parallel slots it was started with.
+// Shared so the history budget and the restatement agree on the limit they
+// are both spending against.
+func perSlotContext() int {
 	ctxSize := 131072
 	if v := envOr("ATLAS_CTX_SIZE", ""); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
 			ctxSize = n
 		}
 	}
-	perSlot := ctxSize / parallelSlots()
+	return ctxSize / parallelSlots()
+}
+
+// numberedLineOverhead is the cost of the "%d\t" prefix the restatement adds
+// to every line — on a 2000-line file that is most of its size.
+func numberedLineOverhead(content string) int {
+	return estTokens(strings.Repeat("0000\t", strings.Count(content, "\n")+1))
+}
+
+func conversationTokenBudget() int {
+	perSlot := perSlotContext()
 	// Sliding window sized to the actual slot: reserve room for the model's
 	// reply (max_tokens) plus a margin for system-prompt growth and tokenizer
 	// slack, and give the REST of the slot to the conversation. The previous

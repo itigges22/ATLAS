@@ -30,7 +30,7 @@ from pipeline import V3PipelineService, _build_problem_from_request
 from planning import generate_plan
 from symbols import (structural_edit, structural_score, build_project_symbols,
                      symbol_index, cyclomatic_complexity, embedded_script_check,
-                     embedded_region_outline,
+                     embedded_region_outline, orphaned_new_symbols,
                      _symbol_index_for_python_source, _STRUCTURAL_EDIT_AVAILABLE,
                      _EMBEDDED_SCRIPT_AVAILABLE)
 # The handler does not call these; tests exercise them through `import main`.
@@ -52,7 +52,7 @@ __all__ = [
     # The service surface itself.
     "structural_edit", "structural_score", "build_project_symbols",
     "symbol_index", "cyclomatic_complexity", "embedded_script_check",
-    "embedded_region_outline",
+    "embedded_region_outline", "orphaned_new_symbols",
     "generate_plan", "V3PipelineService", "_build_problem_from_request",
 ]
 
@@ -105,6 +105,8 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_structural_check()
         elif self.path == "/internal/embedded_script_check":
             self._handle_embedded_script_check()
+        elif self.path == "/internal/orphaned_symbols":
+            self._handle_orphaned_symbols()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -557,6 +559,41 @@ class V3Handler(BaseHTTPRequestHandler):
             print(f"  [embedded_script] {path} line {first['line']}: "
                   f"{first['kind']} {first['message']}", flush=True)
         self._json_response(200, result)
+
+    def _handle_orphaned_symbols(self):
+        """POST /internal/orphaned_symbols — top-level functions this edit
+        ADDED that nothing in the file references.
+
+        Request:  {"path": "todo.py", "previous": "<pre-run>", "source": "<now>"}
+        Response: {"orphans": [{"name": "done_task", "line": 38}]}
+
+        The mirror of /internal/structural_check: that reports a call with no
+        definition, this reports a definition with no callers. Adding a
+        function and never wiring it up is how "add a feature" fails —
+        observed on "add a done command": the function was written correctly,
+        the argv dispatcher was never touched, and `todo.py done 1` exited 0
+        while doing nothing.
+
+        `.py` only. Private (`_`-prefixed) and `test_`-prefixed names are
+        skipped, and any mention of the name outside its own `def` line counts
+        as a reference, so the check errs toward silence.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"orphans": [], "error": f"invalid JSON body: {e}"})
+            return
+        path = body.get("path", "") or ""
+        if not path.endswith(".py"):
+            self._json_response(200, {"orphans": []})
+            return
+        orphans = orphaned_new_symbols(body.get("previous", "") or "",
+                                       body.get("source", "") or "")
+        if orphans:
+            print(f"  [orphaned_symbols] {path}: "
+                  f"{', '.join(o['name'] for o in orphans)}", flush=True)
+        self._json_response(200, {"orphans": orphans})
 
     def _handle_outline(self):
         """POST /internal/outline — list a file's top-level functions/classes.

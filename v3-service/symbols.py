@@ -1120,6 +1120,56 @@ def _js_function_names(block: bytes) -> list:
     return names
 
 
+def orphaned_new_symbols(previous_text: str, source_text: str) -> list:
+    """Top-level Python functions the edit ADDED that nothing references.
+
+    The mirror of the unresolved-call check: that one catches a call with no
+    definition, this catches a definition with no callers. Adding a function
+    and forgetting to wire it up is what "add a feature" fails as — observed
+    on "add a done command that marks a task complete": `done_task` was
+    written correctly and the argv dispatcher was never touched, so the
+    command silently did nothing and `python todo.py done 1` still exited 0.
+
+    Only NEWLY added names are considered, so a codebase full of
+    externally-called helpers reports nothing. A name is referenced if it
+    appears anywhere outside its own `def` line — a call, a decorator, a
+    dispatch table, an __all__ entry, a string in an argv comparison.
+    Deliberately loose: the cost of missing one is a warning not shown, and
+    the cost of a false one is a user told their working code is broken.
+
+    Returns [{"name", "line"}], empty when nothing qualifies or the file does
+    not parse.
+    """
+    if not _STRUCTURAL_EDIT_AVAILABLE:
+        return []
+    try:
+        before = {n for n, kind, _s, _e in
+                  _symbol_index_for_python_source(previous_text.encode("utf-8"))
+                  if kind == "function"}
+        after = list(_symbol_index_for_python_source(source_text.encode("utf-8")))
+    except Exception:
+        return []
+
+    lines = source_text.splitlines()
+    orphans = []
+    for name, kind, start_byte, _end in after:
+        if kind != "function" or name in before:
+            continue
+        if name.startswith("_") or name.startswith("test_"):
+            continue  # private helpers and pytest-collected tests
+        def_line = source_text[:start_byte].count("\n")
+        referenced = False
+        for i, line in enumerate(lines):
+            if i == def_line:
+                continue
+            if name in line:
+                referenced = True
+                break
+        if not referenced:
+            orphans.append({"name": name, "line": def_line + 1})
+    return orphans
+
+
 def _replacement_dwarfs_node(source_text: str, target, content: str, selector: str) -> str:
     """A refusal when `content` is many times the size of the node it replaces,
     or "" when the replacement is node-sized.

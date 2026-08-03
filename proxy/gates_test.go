@@ -1651,3 +1651,22 @@ func TestSyntaxRejectionWithoutAnOpenerIsUnchanged(t *testing.T) {
 		t.Errorf("opener wording leaked into an unrelated finding:\n%s", msg)
 	}
 }
+
+// The message has to explain WHY an uncalled function is a defect, because
+// the model's own evidence said otherwise: it ran the new command, got exit
+// 0, and concluded the feature worked.
+func TestOrphanedAdditionsMessageExplainsWhyExitZeroLied(t *testing.T) {
+	msg := orphanedAdditionsMessage(map[string][]orphanedSymbol{
+		"todo.py": {{Name: "done_task", Line: 38}},
+	})
+	for _, want := range []string{
+		"todo.py:38", "done_task",
+		"A function nothing references cannot run",
+		"still exits 0",
+		"dispatch",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message missing %q:\n%s", want, msg)
+		}
+	}
+}

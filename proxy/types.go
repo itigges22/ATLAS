@@ -585,6 +585,11 @@ type AgentContext struct {
 	// are worth recording as positives.
 	VerifiedThisRun bool
 
+	// OriginalContent is each touched file as the run FIRST saw it. FilesRead
+	// is overwritten on every edit, so it cannot answer "what did this run
+	// change".
+	OriginalContent map[string]string
+
 	// Reasoning-repetition detector state (May 10 2026, BiasBusters
 	// follow-up #30). Per-turn snapshot of the model's reasoning_content
 	// stream. When the same opening prose ("Now I need to look at the
@@ -680,8 +685,26 @@ func (c *AgentContext) RecordFileRead(path string, content string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.FileReadTimes[path] = time.Now()
+	// First sighting wins: FilesRead is overwritten after every edit, so it
+	// tracks current state. Comparing what the RUN changed needs the state it
+	// started from, which is only available the first time a path is seen.
+	if c.OriginalContent == nil {
+		c.OriginalContent = make(map[string]string)
+	}
+	if _, seen := c.OriginalContent[path]; !seen {
+		c.OriginalContent[path] = content
+	}
 	c.FilesRead[path] = content
 	c.LastReadPath = path
+}
+
+// OriginalOf returns a file's content as the run first saw it, and whether the
+// run has seen it at all.
+func (c *AgentContext) OriginalOf(path string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.OriginalContent[path]
+	return v, ok
 }
 
 // LastRead returns the most recently read file and its content, for restating

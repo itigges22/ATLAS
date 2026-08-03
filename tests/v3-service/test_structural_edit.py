@@ -195,3 +195,65 @@ def test_a_selector_for_a_node_being_added_says_to_use_insert_after():
     assert "ADDING" in err
     assert "insert_after" in err
     assert "function:a" in err   # still says what IS selectable
+
+
+# --- orphaned additions -------------------------------------------------------
+#
+# The mirror of the unresolved-call check: that one catches a call with no
+# definition, this catches a definition with no callers. Observed on "add a
+# done command that marks a task complete": `done_task` was written correctly
+# and the argv dispatcher was never touched, so the feature was unreachable
+# and `python todo.py done 1` still exited 0 — which the agent read as proof
+# it worked.
+
+_CLI_BEFORE = (
+    "import sys\n\n"
+    "def add_task(t):\n    print('added', t)\n\n"
+    "def list_tasks():\n    print('listing')\n\n"
+    'if __name__ == "__main__":\n'
+    '    if sys.argv[1] == "add":\n        add_task(sys.argv[2])\n'
+    '    elif sys.argv[1] == "list":\n        list_tasks()\n'
+)
+
+
+def test_a_function_added_and_never_wired_up_is_reported():
+    after = _CLI_BEFORE.replace(
+        "def list_tasks():",
+        "def done_task(n):\n    print('done', n)\n\n\ndef list_tasks():")
+    orphans = main.orphaned_new_symbols(_CLI_BEFORE, after)
+    assert [o["name"] for o in orphans] == ["done_task"], orphans
+    assert orphans[0]["line"] > 0
+
+
+def test_the_same_function_wired_into_the_dispatcher_is_not_reported():
+    after = _CLI_BEFORE.replace(
+        "def list_tasks():",
+        "def done_task(n):\n    print('done', n)\n\n\ndef list_tasks():"
+    ).replace(
+        '    elif sys.argv[1] == "list":',
+        '    elif sys.argv[1] == "done":\n        done_task(int(sys.argv[2]))\n'
+        '    elif sys.argv[1] == "list":')
+    assert main.orphaned_new_symbols(_CLI_BEFORE, after) == []
+
+
+def test_pre_existing_uncalled_functions_are_not_reported():
+    """Only what this edit ADDED. A codebase full of externally-called helpers
+    must stay silent."""
+    before = "def exported_helper():\n    return 1\n"
+    after = before + "\n\ndef another():\n    return 2\n"
+    assert [o["name"] for o in main.orphaned_new_symbols(before, after)] == ["another"]
+    assert main.orphaned_new_symbols(before, before) == []
+
+
+def test_private_and_test_helpers_are_skipped():
+    after = _CLI_BEFORE + "\n\ndef _helper():\n    pass\n\n\ndef test_thing():\n    pass\n"
+    assert main.orphaned_new_symbols(_CLI_BEFORE, after) == []
+
+
+def test_a_mention_anywhere_counts_as_a_reference():
+    """Errs toward silence: a dispatch table entry, an __all__ export or a
+    decorator all count, so a working wiring pattern is never flagged."""
+    after = _CLI_BEFORE.replace(
+        "def list_tasks():",
+        "def done_task(n):\n    pass\n\n\ndef list_tasks():") + "\nHANDLERS = {'done': done_task}\n"
+    assert main.orphaned_new_symbols(_CLI_BEFORE, after) == []

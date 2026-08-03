@@ -1394,3 +1394,34 @@ func repeatedRefusalSummary(tool, path string, wrote bool) string {
 		"or point at a different file.")
 	return sb.String()
 }
+
+// inferenceFailureSummary is what the user reads when the model call itself
+// fails — the stream cannot continue, so this is the last thing they get.
+//
+// The context-size 400 is called out by name because it is actionable and
+// because it was the deterministic killer: `aoc_sonar` hit it in both reps at
+// turn 3, and the run ended with an `error` event and no outcome at all.
+func inferenceFailureSummary(err error, wrote bool) string {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	var sb strings.Builder
+	if strings.Contains(msg, "exceed_context_size") || strings.Contains(msg, "exceeds the available context size") {
+		sb.WriteString("Stopped: the conversation outgrew the model's context window, so the " +
+			"request was refused before it ran. This usually means a large file was read " +
+			"into the session. Start a fresh request naming just the file and change you " +
+			"want, or raise the server's context size.")
+	} else {
+		sb.WriteString("Stopped: the model call failed, so the run could not continue.")
+		if msg != "" {
+			fmt.Fprintf(&sb, "\n\n%s", truncateStr(msg, 300))
+		}
+	}
+	if wrote {
+		sb.WriteString("\n\nChanges made earlier in this run are on disk — check them before re-running.")
+	} else {
+		sb.WriteString("\n\nNothing was written to disk.")
+	}
+	return sb.String()
+}

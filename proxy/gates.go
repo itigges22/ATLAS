@@ -536,8 +536,8 @@ type embeddedScriptFinding struct {
 	// line the edit never touched.
 	OpenedLine int    `json:"opened_line"`
 	OpenedText string `json:"opened_text"`
-	Hint    string `json:"hint"`    // how to fix it
-	Text    string `json:"text"`    // the offending source line
+	Hint       string `json:"hint"` // how to fix it
+	Text       string `json:"text"` // the offending source line
 }
 
 // checkEmbeddedScript returns ("", true) when `content` has no broken embedded
@@ -1907,4 +1907,114 @@ func duplicateMainGuard(path, original, edited string) string {
 			"surrounding module-level code. If you meant to change the entrypoint, edit that "+
 			"block directly with replace_lines or edit_file.",
 		path, after)
+}
+
+// orphanedSymbol is one function the run added that nothing references.
+type orphanedSymbol struct {
+	Name string `json:"name"`
+	Line int    `json:"line"`
+}
+
+// orphanedAdditions returns the functions this run ADDED to files it touched
+// that nothing in those files references.
+//
+// The mirror of editIntroducesUnresolved: that blocks a call with no
+// definition, this reports a definition with no callers. It runs at the exit
+// rather than at the write, because adding a function and wiring it up on the
+// next turn is normal — only finishing with it unwired is the defect.
+//
+// Observed on "add a done command that marks a task complete": `done_task` was
+// written correctly and the argv dispatcher was never touched, so the feature
+// was unreachable, `todo.py done 1` exited 0 doing nothing, and the agent
+// reported it verified.
+//
+// Fail-soft: an unreachable service, an unparsed file, or a path the run never
+// read yields nothing.
+func orphanedAdditions(ctx *AgentContext) map[string][]orphanedSymbol {
+	if ctx == nil || ctx.V3URL == "" || len(ctx.SessionWrites) == 0 {
+		return nil
+	}
+	out := map[string][]orphanedSymbol{}
+	for rel := range ctx.SessionWrites {
+		path := resolveAgentPath(ctx, rel)
+		if strings.ToLower(filepath.Ext(path)) != ".py" {
+			continue
+		}
+		previous, seen := ctx.OriginalOf(path)
+		if !seen {
+			continue
+		}
+		current, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if orphans := postOrphanCheck(ctx, rel, previous, string(current)); len(orphans) > 0 {
+			out[rel] = orphans
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func postOrphanCheck(ctx *AgentContext, rel, previous, current string) []orphanedSymbol {
+	body, err := json.Marshal(map[string]string{
+		"path": rel, "previous": previous, "source": current})
+	if err != nil {
+		return nil
+	}
+	base := ctx.Ctx
+	if base == nil {
+		base = context.Background()
+	}
+	reqCtx, cancel := context.WithTimeout(base, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "POST",
+		ctx.V3URL+"/internal/orphaned_symbols", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var out struct {
+		Orphans []orphanedSymbol `json:"orphans"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return nil
+	}
+	return out.Orphans
+}
+
+// orphanedAdditionsMessage names what was added and never wired up.
+func orphanedAdditionsMessage(byFile map[string][]orphanedSymbol) string {
+	files := make([]string, 0, len(byFile))
+	for f := range byFile {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	var sb strings.Builder
+	sb.WriteString("Cannot declare `done` yet — this run added code that nothing calls:\n")
+	for _, f := range files {
+		for _, o := range byFile[f] {
+			fmt.Fprintf(&sb, "  %s:%d  %s\n", f, o.Line, o.Name)
+		}
+	}
+	sb.WriteString("A function nothing references cannot run, so the feature it implements " +
+		"is unreachable however correct the function itself is — and a command that does " +
+		"nothing still exits 0, so running it proves nothing. Wire each one in where the " +
+		"caller belongs (the argument dispatch, the route table, the caller you were asked " +
+		"to change), then verify by observing the behaviour actually change. If one is " +
+		"deliberately unused, say so in your `done` summary.")
+	return sb.String()
 }

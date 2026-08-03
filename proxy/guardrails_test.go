@@ -1674,3 +1674,73 @@ func TestAnnouncementDetectorCoversTheWaysModelsStall(t *testing.T) {
 		}
 	}
 }
+
+// `aoc_sonar` died in BOTH reps at turn 3 with a context-size 400, and the
+// stream ended on an `error` event with no outcome — the user got silence.
+// The 2000-line fixture was being restated, line-numbered, on every turn,
+// outside the token budget that trimMessages spends against.
+func TestInferenceFailureAlwaysProducesAnOutcome(t *testing.T) {
+	ctxErr := fmt.Errorf(`LLM returned 400: {"code":400,"message":"request (33012 tokens) ` +
+		`exceeds the available context size (32768 tokens)","type":"exceed_context_size_error"}`)
+	msg := inferenceFailureSummary(ctxErr, false)
+	for _, want := range []string{"outgrew the model's context window", "large file was read", "Nothing was written"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("context-overflow summary missing %q:\n%s", want, msg)
+		}
+	}
+	// Any other inference failure still has to say something.
+	other := inferenceFailureSummary(fmt.Errorf("connection refused"), true)
+	if !strings.Contains(other, "model call failed") || !strings.Contains(other, "connection refused") {
+		t.Errorf("generic failure summary is unhelpful:\n%s", other)
+	}
+	if !strings.Contains(other, "are on disk") {
+		t.Errorf("a run that wrote must say so:\n%s", other)
+	}
+	if inferenceFailureSummary(nil, false) == "" {
+		t.Error("a nil error must still produce an outcome")
+	}
+}
+
+// The restatement is appended to the wire AFTER trimMessages has spent the
+// budget, so nothing counted it. It has to yield rather than overflow: a
+// missing restatement costs the model some convenience, a 400 ends the run.
+func TestRestatementYieldsWhenTheSlotIsFull(t *testing.T) {
+	dir := t.TempDir()
+	// The real aoc_sonar fixture: 2000 short lines, ~8.7 KB — under the
+	// restatementMaxBytes cap, so the size guard does not fire and headroom
+	// is what decides.
+	big := strings.Repeat("159\n", 2000)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(filepath.Join(dir, "input.txt"), big)
+
+	// A wire already close to the slot limit leaves no room.
+	full := []map[string]string{{"role": "user", "content": strings.Repeat("x", perSlotContext()*4)}}
+	if got := appendLastReadRestatement(ctx, full); len(got) != len(full) {
+		t.Error("restated into a full context window — this is the 400")
+	}
+
+	// With room, it still restates.
+	small := []map[string]string{{"role": "user", "content": "fix the bug"}}
+	if got := appendLastReadRestatement(ctx, small); len(got) != len(small)+1 {
+		t.Error("refused to restate despite plenty of headroom")
+	}
+}
+
+// The file trimMessages pins is already in the window; restating it appended a
+// second full copy of the same bytes.
+func TestRestatementSkipsContentAlreadyAnywhereInTheWire(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\nbravo\n")
+
+	// Pinned earlier in the conversation, not just in the last message.
+	wire := []map[string]string{
+		{"role": "user", "content": "here is the file: alpha\nbravo\n"},
+		{"role": "assistant", "content": "ok"},
+		{"role": "user", "content": "now fix it"},
+	}
+	if got := appendLastReadRestatement(ctx, wire); len(got) != len(wire) {
+		t.Error("appended a second copy of content already in the window")
+	}
+}

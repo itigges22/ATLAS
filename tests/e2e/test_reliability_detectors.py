@@ -36,12 +36,16 @@ def _call(name, **args):
     return {"type": "tool_call", "data": {"name": name, "args": args}}
 
 
-def _ok():
-    return {"type": "tool_result", "data": {"success": True, "error": ""}}
+def _ok(tool="read_file"):
+    # Real tool_result events carry the tool name (data keys: data, elapsed,
+    # error, success, tool). The detectors read it from the RESULT rather than
+    # pairing positionally with the calls, because one unanswered call — a
+    # client timeout mid-stream — shifted every pair after it.
+    return {"type": "tool_result", "data": {"tool": tool, "success": True, "error": ""}}
 
 
-def _fail(error):
-    return {"type": "tool_result", "data": {"success": False, "error": error}}
+def _fail(error, tool="read_file"):
+    return {"type": "tool_result", "data": {"tool": tool, "success": False, "error": error}}
 
 
 # --- H1 protocol ----------------------------------------------------------
@@ -146,7 +150,7 @@ def test_h4_silent_when_the_breaker_ended_honestly(rel, tmp_path):
 
 
 def test_h4_silent_when_a_write_landed(rel, tmp_path):
-    s = _session(rel, [_call("edit_file", path="app.py"), _ok(),
+    s = _session(rel, [_call("edit_file", path="app.py"), _ok("edit_file"),
                        {"type": "done", "data": {"summary": "Added the toggle."}}],
                  tmp_path)
     assert rel.h4_gate_escape(s) == []
@@ -282,7 +286,7 @@ def test_h9_flags_a_question_that_edited_files(rel, tmp_path):
     task = rel.Task(name="ask", prompt="what does f do?", files={},
                     check=lambda p, s=None: (True, ""), conversational=True)
     s = _session(rel, [
-        _call("edit_file", path="orders.py"), _ok(),
+        _call("edit_file", path="orders.py"), _ok("edit_file"),
         {"type": "done", "data": {"summary": "done"}},
     ], tmp_path)
     found = rel.h9_tier_misapplied(s, task)
