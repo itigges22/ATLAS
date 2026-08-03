@@ -97,6 +97,7 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20) // 1MB buffer
 
 	var result *V3GenerateResponse
+	var resultErr error
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -109,8 +110,12 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 				if strings.HasPrefix(dataLine, "data: ") {
 					data := strings.TrimPrefix(dataLine, "data: ")
 					var r V3GenerateResponse
-					if json.Unmarshal([]byte(data), &r) == nil {
+					if err := json.Unmarshal([]byte(data), &r); err != nil {
+						resultErr = fmt.Errorf("V3 sent a result this proxy could not decode "+
+							"(%d bytes): %w", len(data), err)
+					} else {
 						result = &r
+						resultErr = nil
 					}
 				}
 			}
@@ -137,7 +142,24 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 	}
 
 	if result == nil {
-		return nil, fmt.Errorf("V3 service completed without result")
+		// "completed without result" was the message for every one of
+		// these, including the case where this side hung up: the context
+		// deadline cancels the request, Scan returns false, and V3 is
+		// blamed for finishing empty while it was still working. Report
+		// which of them actually happened.
+		switch {
+		case resultErr != nil:
+			return nil, resultErr
+		case reqCtx.Err() != nil:
+			limit := v3CallTimeout()
+			return nil, fmt.Errorf("V3 was still working when this proxy hung up at the "+
+				"%s cap (ATLAS_V3_TIMEOUT); its work is discarded and the write falls back "+
+				"to the model's own output: %w", limit, reqCtx.Err())
+		case scanner.Err() != nil:
+			return nil, fmt.Errorf("V3 stream ended early: %w", scanner.Err())
+		default:
+			return nil, fmt.Errorf("V3 stream closed without sending a result event")
+		}
 	}
 
 	return result, nil

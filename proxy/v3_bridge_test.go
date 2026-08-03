@@ -245,8 +245,24 @@ func TestCallV3GenerateStreamingMissingResultIsAnError(t *testing.T) {
 
 	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
 		V3GenerateRequest{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "without result") {
-		t.Errorf("err = %v, want completed-without-result", err)
+	if err == nil || !strings.Contains(err.Error(), "without sending a result event") {
+		t.Errorf("err = %v, want a stream that really ended empty", err)
+	}
+}
+
+func TestCallV3GenerateStreamingUndecodableResultNamesTheDecodeFailure(t *testing.T) {
+	// An unmarshal failure used to be discarded, leaving result nil and
+	// reporting the same message as a stream that sent nothing at all.
+	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseLines(w, `event: result`, `data: {not json`, ``, `data: [DONE]`, ``)
+	})
+	defer srv.Close()
+
+	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
+		V3GenerateRequest{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "could not decode") {
+		t.Errorf("err = %v, want the decode failure named", err)
 	}
 }
 
@@ -277,6 +293,16 @@ func TestCallV3GenerateStreamingTimeoutFires(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Errorf("timeout took %v with a 1s cap", elapsed)
+	}
+	// The cap firing and V3 finishing empty are different events with
+	// different fixes, and both reported the same sentence. Measured
+	// 2026-08-03: five caps in one run read as V3 producing nothing,
+	// while it was still working and its output was being discarded.
+	if strings.Contains(err.Error(), "without sending a result event") {
+		t.Errorf("the cap firing is reported as V3 finishing empty:\n%s", err)
+	}
+	if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
+		t.Errorf("the error should name the cap that fired:\n%s", err)
 	}
 }
 
