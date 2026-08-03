@@ -1670,3 +1670,61 @@ func TestOrphanedAdditionsMessageExplainsWhyExitZeroLied(t *testing.T) {
 		}
 	}
 }
+
+// Both containers see the split as `/workspace`, so no value either holds can
+// reveal it — the divergence is in the host bind. The only detection from
+// inside is to write on one side and read from the other.
+func TestWorkspaceAlignmentProbeIsFunctionalNotConfigural(t *testing.T) {
+	dir := t.TempDir()
+
+	// Sandbox reads back exactly what the proxy wrote: aligned.
+	aligned := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		// The probe writes a token file; echo whatever is on disk.
+		data, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+		_ = body
+		w.Header().Set("Content-Type", "application/json")
+		out, _ := json.Marshal(map[string]string{"stdout": string(data)})
+		_, _ = w.Write(out)
+	}))
+	defer aligned.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.SandboxURL = aligned.URL
+	resetWorkspaceAlignmentCache()
+	if problem := verifyWorkspaceAlignment(ctx); problem != "" {
+		t.Errorf("aligned mounts reported as split: %s", problem)
+	}
+
+	// Sandbox sees a different filesystem: split.
+	split := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"stdout":""}`))
+	}))
+	defer split.Close()
+	ctx2 := NewAgentContext(dir, Tier2Medium)
+	ctx2.SandboxURL = split.URL
+	resetWorkspaceAlignmentCache()
+	problem := verifyWorkspaceAlignment(ctx2)
+	if problem == "" {
+		t.Fatal("a split workspace was not detected")
+	}
+	for _, want := range []string{"different directories", "atlas workspace align"} {
+		if !strings.Contains(problem, want) {
+			t.Errorf("message missing %q:\n%s", want, problem)
+		}
+	}
+
+	// An unreachable sandbox is not evidence of a split — fail soft.
+	ctx3 := NewAgentContext(dir, Tier2Medium)
+	ctx3.SandboxURL = "http://127.0.0.1:1"
+	resetWorkspaceAlignmentCache()
+	if problem := verifyWorkspaceAlignment(ctx3); problem != "" {
+		t.Errorf("an unreachable sandbox was reported as a split: %s", problem)
+	}
+
+	// The probe file must not be left behind.
+	if _, err := os.Stat(filepath.Join(dir, ".atlas-mount-probe")); !os.IsNotExist(err) {
+		t.Error("probe file left in the user's workspace")
+	}
+}

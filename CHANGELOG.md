@@ -197,6 +197,25 @@ than adding another retry around it.
 
 **Fixed**
 
+- A session refuses to start when the proxy and the sandbox are bound to
+  different host directories. Both containers see the split as `/workspace`,
+  so no value either holds can reveal it — the only detection from inside is
+  to write a token on one side and read it from the other, which the proxy now
+  does once per session (cached, 5-minute TTL, fail-soft when the sandbox is
+  unreachable). Until now nothing caught it live: every `/health` passes, the
+  proxy writes files the sandbox cannot see, `run_command` reports them
+  missing, and the agent spends its turns concluding its own work does not
+  exist. `atlas doctor` has flagged it since 2026-07-18; it recurred on
+  2026-08-03 when a power cut recreated one container from `.env` while the
+  other kept an overridden `ATLAS_PROJECT_DIR`, which is precisely when nobody
+  runs doctor.
+- The geometric lens no longer latches a boot-order race. Its self-test calls
+  llama-server, and llama loads several GB before it answers, so on a cold
+  start the test can 503 — after which `/ready` returned 503 for the life of
+  the container even though the artifacts had loaded and llama came up healthy
+  seconds later. Connectivity failures are now marked retryable and `/ready`
+  re-runs the test once llama is reachable. A real fault (dim mismatch,
+  missing artifacts, fingerprint drift) still fails fast and is not retried.
 - The last-read restatement is bounded by the context window it spends
   against. It is appended to the wire *after* `trimMessages` has spent the
   history budget, so nothing counted it — on a 2000-line fixture the

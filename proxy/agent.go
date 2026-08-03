@@ -483,6 +483,18 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// calls/results, no system spam) on the TUI side. Without this,
 	// every user message starts a fresh agent loop and the model can't
 	// answer follow-ups like "what did you just delete?".
+	// Refuse to start on a split workspace. The proxy writing to one host
+	// directory while the sandbox that runs commands is bound to another is
+	// invisible to every /health, and the session that follows is worse than
+	// useless: files land, `run_command` reports them missing, and the model
+	// spends its turns concluding its own work does not exist. Cached with a
+	// TTL, so this is one probe per session at most.
+	if problem := verifyWorkspaceAlignment(ctx); problem != "" {
+		log.Printf("[agent] refusing to start — proxy and sandbox workspaces are not aligned")
+		ctx.Stream("done", map[string]string{"summary": problem})
+		return nil
+	}
+
 	ctx.Messages = make([]AgentMessage, 0, 3+len(ctx.PriorHistory))
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "system", Content: systemPrompt})
 	ctx.Messages = append(ctx.Messages, ctx.PriorHistory...)

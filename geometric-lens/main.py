@@ -94,6 +94,10 @@ _BOOT_STATE_DEFAULTS: Dict[str, Any] = {
     "embed_dim": None,
     "self_test_pass": False,
     "self_test_error": None,
+    # True when the self-test failed for a reason that can resolve on its own
+    # (llama-server not up yet). /ready re-runs the test in that case instead
+    # of reporting 503 for the life of the container.
+    "self_test_retryable": False,
     # Drift fingerprint (drift_fingerprint.json next to the artifacts):
     # present=False → nothing to enforce; ok=None until checked.
     "fingerprint_present": False,
@@ -210,6 +214,17 @@ def _run_lens_self_test() -> None:
         _BOOT_STATE["self_test_error"] = (
             f"{type(e).__name__}: {_safe_detail(e, 'lens self-test')}"
         )
+        # Reaching llama-server is a race at boot, not a verdict about this
+        # service. llama loads several GB before it answers, so on a cold
+        # start — or a power cut, which is how this was found — the self-test
+        # runs first, 503s, and /ready stayed 503 forever even though the
+        # artifacts had loaded fine and llama came up healthy seconds later.
+        # Mark connectivity failures retryable so /ready can settle itself.
+        _BOOT_STATE["self_test_retryable"] = isinstance(
+            e, (OSError, TimeoutError)) or type(e).__name__ in {
+            "HTTPError", "URLError", "ConnectionError", "ReadTimeout",
+            "ConnectTimeout", "RemoteDisconnected",
+        }
 
 
 def _db_state() -> Dict[str, Any]:
@@ -378,6 +393,16 @@ def ready():
     db_st = _db_state()
     llama_st = _llama_state()
     lens_required = _BOOT_STATE["lens_enabled"]
+    # Settle a boot-order race rather than latching it. Only retried when the
+    # failure was connectivity-shaped AND llama is reachable now, so a real
+    # fault (dim mismatch, missing artifacts, fingerprint drift) still fails
+    # fast and does not re-embed on every poll.
+    if (lens_required and not _BOOT_STATE["self_test_pass"]
+            and _BOOT_STATE.get("self_test_retryable")
+            and llama_st["reachable"]):
+        logger.info("llama-server is reachable now — re-running the lens self-test")
+        _run_lens_self_test()
+
     lens_ok = (not lens_required) or _BOOT_STATE["self_test_pass"]
 
     ok = db_st["connected"] and llama_st["reachable"] and lens_ok
