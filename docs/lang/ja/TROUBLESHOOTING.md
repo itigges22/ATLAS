@@ -814,8 +814,8 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   `shape per_token` であるか、`norm` が 1.0 から大きく外れていれば、サーバーの設定が誤っています。
-2. `ATLAS_EMBED_POOLING=mean`（デフォルト。[CONFIGURATION.md](../../CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。
+   プールされた `norm` は数百の範囲になります（同梱の Gemma アーティファクトでおよそ 100-150）。`norm` がちょうど `1.0` の場合、`embd_normalize: -1` を指定したにもかかわらずサーバーがベクトルを正規化しており、C(x) はどの入力に対しても約 0.8 という平坦な値を返します。健全に見えて何も区別しないスコアです。
+2. `ATLAS_EMBED_POOLING=none`（デフォルト。[CONFIGURATION.md](../../CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。`--pooling` は llama.cpp ではサーバー全体の設定であり、全文パスと per-step パスの両方を満たせるのは `none` だけです。プーリングとスケールはクライアント側で処理します。
 3. サーバーが正しい規約で応答するようになれば、起動時セルフテストのフィンガープリントチェックが通り、`/ready` は 200 を返します。アーティファクトがフィンガープリントより古い場合は、リトレーニング（`atlas lens retrain`）がフィンガープリントを書き出し、`embedding_contract` を `model_identity.json` に刻みます。
 
 ### エンベディング抽出の失敗

@@ -39,6 +39,18 @@ def score_candidate_per_step(code: str) -> dict:
         if not data.get("enabled"):
             return {}
         agg = data.get("aggregate", {}) or {}
+        if not int(data.get("n_tokens", 0)):
+            # The endpoint answers 200 with an empty aggregate when it
+            # could not score, so the defaults below would hand back
+            # gx=0.500 for every candidate — a tie that reads exactly
+            # like a real verdict. Report it as no signal instead.
+            print(
+                f"  [lens] per-step scoring returned no tokens "
+                f"({data.get('error') or 'no error reported'}) "
+                f"— degrading to no per-step signal",
+                flush=True,
+            )
+            return {}
         thresholds = data.get("thresholds")
         if not (
             isinstance(thresholds, dict)

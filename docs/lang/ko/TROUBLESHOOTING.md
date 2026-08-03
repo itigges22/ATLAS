@@ -837,8 +837,8 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   `shape per_token`이거나 `norm`이 1.0에서 크게 벗어나 있으면 서버 설정이 잘못된 것입니다.
-2. `ATLAS_EMBED_POOLING=mean`(기본값. [CONFIGURATION.md](../../CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요.
+   풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다.
+2. `ATLAS_EMBED_POOLING=none`(기본값. [CONFIGURATION.md](../../CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요. `--pooling`은 llama.cpp에서 서버 전역 설정이며, 전체 텍스트 경로와 per-step 경로를 모두 지원하는 값은 `none`뿐입니다. 풀링과 스케일은 클라이언트 측에서 처리됩니다.
 3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트의 지문 검사가 통과하고 `/ready`가 200을 반환합니다. 아티팩트가 지문보다 오래되었다면 재학습(`atlas lens retrain`)이 지문을 쓰고 `embedding_contract`를 `model_identity.json`에 새깁니다.
 
 ### 임베딩 추출 실패

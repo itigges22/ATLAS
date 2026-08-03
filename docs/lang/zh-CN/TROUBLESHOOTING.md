@@ -817,8 +817,8 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   如果是 `shape per_token`，或 `norm` 远离 1.0，说明服务器配置有误。
-2. 设置 `ATLAS_EMBED_POOLING=mean`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。
+   池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。
+2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
 3. 服务器提供正确约定后，启动自检的指纹校验会通过，`/ready` 返回 200。如果工件早于指纹机制，一次重训练（`atlas lens retrain`）会写入指纹，并把 `embedding_contract` 刻进 `model_identity.json`。
 
 ### 嵌入向量提取失败

@@ -861,10 +861,15 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 1. Confirm the embed server's convention. A pooled+normalized server returns a flat vector with ‖v‖≈1:
    ```bash
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
-     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+     -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   `shape per_token` or `norm` far from 1.0 means the server is misconfigured.
-2. Set `ATLAS_EMBED_POOLING=mean` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags.
+   The pooled norm should land in the low hundreds (~100-150 for the
+   shipped Gemma artifacts). A norm of exactly `1.0` means the server
+   normalized the vector despite `embd_normalize: -1`, and C(x) will read
+   a flat ~0.8 for every input — scores that look healthy but separate
+   nothing. Compare against `pass_energy_mean` in `cx_normalization.json`:
+   served energies should span that band, not sit on one value.
+2. Set `ATLAS_EMBED_POOLING=none` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags. `--pooling` is server-global, and only `none` serves both the whole-text and per-step paths; pooling and scale are handled client-side.
 3. After the server serves the correct convention, the boot self-test's fingerprint check passes and `/ready` returns 200. If the artifacts predate the fingerprint, a retrain (`atlas lens retrain`) writes one and stamps the `embedding_contract` into `model_identity.json`.
 
 ### Embedding Extraction Fails

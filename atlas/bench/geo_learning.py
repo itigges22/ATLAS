@@ -26,7 +26,12 @@ def extract_embedding_urllib(text: str, llama_url: str) -> Optional[List[float]]
     Returns:
         List of floats, or None on failure.
     """
-    body = json.dumps({"content": text}).encode("utf-8")
+    # Ask for raw vectors and pool below. `--pooling` is server-global in
+    # llama.cpp and the lens per-step path needs `none`, so this has to
+    # produce the same vector under either mode. Scale carries signal —
+    # the cost field is fitted on unnormalized pooled vectors — so the
+    # request pins normalization off rather than taking the server default.
+    body = json.dumps({"content": text, "embd_normalize": -1}).encode("utf-8")
     endpoint = f"{llama_url}/embedding"
 
     req = urllib.request.Request(
