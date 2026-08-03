@@ -197,6 +197,15 @@ than adding another retry around it.
 
 **Fixed**
 
+- The planner is told which files already exist, by name, in the prompt. The
+  scorer penalty alone could not fix this: all three `aoc_sonar` candidates
+  opened with `write_file input.txt` and scored 1.00 apiece, so there was
+  nothing better to prefer. Naming the files stops the step being proposed —
+  and the proxy has to send the listing, because v3-service mounts only
+  `/run/atlas-secrets` and `/data/telemetry`, so walking `working_dir` there
+  finds nothing and `project_context` carries only a handful of priority files
+  by content. The first version of this check was unrunnable in the deployed
+  topology for exactly that reason.
 - The planner no longer opens by recreating files that already exist. This was
   the origin of the worst failure in the measured runs, three layers above
   where it surfaced: `aoc_sonar`'s winning plan had `write_file input.txt` as

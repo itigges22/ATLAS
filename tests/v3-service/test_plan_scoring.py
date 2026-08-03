@@ -100,3 +100,23 @@ def test_the_existing_file_set_reads_the_workspace(tmp_path):
     assert "input.txt" in found
     assert "sub/mod.py" in found
     assert "ctx_only.py" in found      # what the proxy shipped counts too
+
+
+def test_the_prompt_names_existing_files_so_no_candidate_proposes_creating_them():
+    """Scoring a bad plan down only helps if some candidate is better. All
+    three aoc_sonar candidates opened with `write_file input.txt` and scored
+    1.00 apiece, so the penalty had nothing to prefer. Naming the files in the
+    prompt stops them being proposed."""
+    import planning
+    prompt = planning._build_plan_prompt(
+        "solve the sonar puzzle", "/workspace", {}, ["input.txt", "README.md"])
+    assert "input.txt" in prompt
+    assert "ALREADY EXIST" in prompt
+    assert "Do not plan to create any of these" in prompt
+    assert "READ it at runtime" in prompt
+
+
+def test_the_prompt_is_unchanged_when_the_workspace_is_empty():
+    import planning
+    prompt = planning._build_plan_prompt("build me a site", "/workspace", {}, [])
+    assert "ALREADY EXIST" not in prompt

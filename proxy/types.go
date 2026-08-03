@@ -876,7 +876,14 @@ type V3PlanRequest struct {
 	UserMessage    string            `json:"user_message"`
 	WorkingDir     string            `json:"working_dir,omitempty"`
 	ProjectContext map[string]string `json:"project_context,omitempty"`
-	NCandidates    int               `json:"n_candidates,omitempty"` // 0 → server default (3)
+	// ExistingFiles is every path already in the workspace, relative. The
+	// planner runs in v3-service, which has no /workspace mount, so it cannot
+	// look for itself — and project_context only carries a handful of
+	// priority files by content. Without this the planner cheerfully opens
+	// with "write_file input.txt — create the necessary input data" against a
+	// fixture already on disk.
+	ExistingFiles []string `json:"existing_files,omitempty"`
+	NCandidates   int      `json:"n_candidates,omitempty"` // 0 → server default (3)
 }
 
 // PlanStep is a single step in a Plan. Mirrors v3-service/planning.py's

@@ -262,6 +262,11 @@ class V3Handler(BaseHTTPRequestHandler):
             user_message: str       — the prompt the user typed
             working_dir: str        — proxy's container working dir
             project_context: dict   — files the agent has read so far
+            existing_files: list    — every path already in the workspace.
+                                      This service has no /workspace mount, so
+                                      it cannot look; without the list the
+                                      planner proposes creating files that are
+                                      already there.
             tier: int               — 2 or 3
             n_candidates: int       — optional; default 3
 
@@ -318,6 +323,7 @@ class V3Handler(BaseHTTPRequestHandler):
                 user_message=user_message,
                 working_dir=working_dir,
                 project_context=project_context,
+                existing_files=body.get("existing_files") or [],
                 n_candidates=n_candidates,
                 progress_callback=emit_progress,
             )

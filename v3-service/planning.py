@@ -64,8 +64,15 @@ JSON plan:"""
 
 
 def _build_plan_prompt(user_message: str, working_dir: str,
-                       project_context: Dict[str, str]) -> str:
-    """Render the planning prompt with project files inlined (truncated)."""
+                       project_context: Dict[str, str],
+                       existing_files: Optional[List[str]] = None) -> str:
+    """Render the planning prompt with project files inlined (truncated).
+
+    `existing_files` is listed by NAME so the planner can see what is already
+    there without paying for the content. Scoring a bad plan down only helps
+    if some candidate is better; naming the files stops all three proposing
+    the same "create the input data" opening step.
+    """
     if project_context:
         ctx_lines = ["Files in project:"]
         for path, content in project_context.items():
@@ -76,6 +83,18 @@ def _build_plan_prompt(user_message: str, working_dir: str,
         ctx_str = "\n".join(ctx_lines)
     else:
         ctx_str = "(no project files inspected yet)"
+
+    if existing_files:
+        shown = sorted(existing_files)[:60]
+        more = "" if len(existing_files) <= 60 else f" (+{len(existing_files)-60} more)"
+        ctx_str += (
+            "\n\nFiles that ALREADY EXIST in the workspace" + more + ":\n  "
+            + "\n  ".join(shown)
+            + "\n\nDo not plan to create any of these. They are already there — a step "
+              "that writes one would overwrite it. If the task needs data from one, the "
+              "code you plan should READ it at runtime. To change one, plan an edit, not "
+              "a write."
+        )
     return PLAN_PROMPT_TEMPLATE.format(
         user_message=user_message,
         working_dir=working_dir,
@@ -278,6 +297,7 @@ def generate_plan(
     user_message: str,
     working_dir: str,
     project_context: Dict[str, str],
+    existing_files: Optional[List[str]] = None,
     n_candidates: int = 3,
     progress_callback=None,
 ) -> dict:
@@ -319,11 +339,16 @@ def generate_plan(
     plan_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
     plan_max_tokens = 8192 if plan_thinking else 2048
     llm = adapters.LLMAdapter(progress_callback=progress_callback, thinking=plan_thinking)
-    prompt = _build_plan_prompt(user_message, working_dir, project_context)
+    # What is already on disk. The proxy sends the listing because this
+    # service has no /workspace mount — walking working_dir here finds
+    # nothing, which is why the first version of this check never fired.
+    # Needed before the prompt: naming the files stops all three candidates
+    # proposing the same "create the input data" opening step, which scoring
+    # alone cannot fix when every candidate shares the flaw.
+    existing = _existing_workspace_files(working_dir, project_context)
+    existing.update(f.lstrip("./") for f in (existing_files or []))
 
-    # What is already on disk, so a plan that opens by recreating it can be
-    # scored down rather than executed.
-    existing_files = _existing_workspace_files(working_dir, project_context)
+    prompt = _build_plan_prompt(user_message, working_dir, project_context, sorted(existing))
 
     candidates: List[Tuple[Optional[dict], float, List[str]]] = []
     # Diverse sampling via temperature spread. Cheap version of V3's
@@ -351,7 +376,7 @@ def generate_plan(
                  index=i)
             candidates.append((None, 0.0, ["unparseable"]))
             continue
-        score, reasons = _score_plan(plan, user_message, existing_files)
+        score, reasons = _score_plan(plan, user_message, existing)
         emit("plan_candidate_scored", f"candidate {i+1} score={score:.2f}",
              index=i, score=score, reasons=reasons)
         candidates.append((plan, score, reasons))

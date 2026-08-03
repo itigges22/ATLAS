@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -4520,6 +4522,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		UserMessage:    userMessage,
 		WorkingDir:     ctx.WorkingDir,
 		ProjectContext: pctx,
+		ExistingFiles:  listWorkspaceFiles(ctx.WorkingDir, 400),
 		NCandidates:    3,
 	}
 
@@ -4598,4 +4601,40 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 	Emit(NewEnvelope(EvtMetric, "v3:plan:loaded", planPayload))
 
 	return plan
+}
+
+// listWorkspaceFiles returns every file in the workspace, relative, for the
+// planner. v3-service has no /workspace mount, so this is the only way it can
+// know what already exists — and a plan that opens by recreating existing
+// input is the failure this prevents.
+//
+// Capped: a plan does not need ten thousand paths, and the request has to stay
+// small. Names only, no content.
+func listWorkspaceFiles(workingDir string, max int) []string {
+	if workingDir == "" {
+		return nil
+	}
+	var out []string
+	skip := map[string]bool{".git": true, "node_modules": true,
+		"__pycache__": true, ".venv": true, "venv": true, "dist": true}
+	_ = filepath.WalkDir(workingDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if skip[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if len(out) >= max {
+			return fs.SkipAll
+		}
+		if rel, err := filepath.Rel(workingDir, path); err == nil {
+			out = append(out, rel)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
 }
