@@ -1240,14 +1240,18 @@ func TestHasUserPackagesIgnoresPipOnly(t *testing.T) {
 }
 
 // May 10 2026: T1/T2/T3 default to uncapped (returns 0); the 8
-// stuck-pattern detectors are the real safety net. T0 keeps a small
-// cap as a SHAPE constraint (conversational input shouldn't loop).
+// stuck-pattern detectors are the real safety net. T0 keeps a cap as a SHAPE
+// constraint (conversational input shouldn't loop) — 12 since 2026-08-02,
+// because a question ABOUT the code is conversational and still has to read
+// it. At 5, "how does the contact form work?" spent turn 0 on a bounced text
+// exit and turns 1-3 on searches with the wrong glob, reached the right file
+// on turn 4, and hit the cap with no answer for the user.
 // The agent loop treats MaxTurns == 0 as "no limit"; cancellation
 // via ctx.Ctx is the upper bound.
 func TestTierMaxTurnsUncappedDefaults(t *testing.T) {
 	t.Setenv("ATLAS_MAX_TURNS", "")
-	if got := TierMaxTurns(Tier0Conversational); got != 5 {
-		t.Errorf("T0 = %d, want 5 (shape constraint)", got)
+	if got := TierMaxTurns(Tier0Conversational); got != 12 {
+		t.Errorf("T0 = %d, want 12 (shape constraint with room to read)", got)
 	}
 	if got := TierMaxTurns(Tier1Simple); got != 0 {
 		t.Errorf("T1 = %d, want 0 (uncapped)", got)
@@ -1283,8 +1287,8 @@ func TestTierMaxTurnsZeroEnvFallsThrough(t *testing.T) {
 	if got := TierMaxTurns(Tier2Medium); got != 0 {
 		t.Errorf("env=0, T2 = %d, want 0 (uncapped default)", got)
 	}
-	if got := TierMaxTurns(Tier0Conversational); got != 5 {
-		t.Errorf("env=0, T0 = %d, want 5 (shape cap preserved)", got)
+	if got := TierMaxTurns(Tier0Conversational); got != 12 {
+		t.Errorf("env=0, T0 = %d, want 12 (shape cap preserved)", got)
 	}
 }
 

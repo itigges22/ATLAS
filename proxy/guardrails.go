@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -349,6 +350,9 @@ func validateRunCommand(cmd, workingDir string) string {
 	if r := validateShellCommand(cmd); r != "" {
 		return r
 	}
+	if r := foregroundServerRejection(cmd); r != "" {
+		return r
+	}
 	if r := validateWorkingDirReference(cmd, workingDir); r != "" {
 		return r
 	}
@@ -481,8 +485,15 @@ func announcesImminentToolUse(text string) bool {
 	}
 	subjects := []string{"i need to ", "i'll ", "i will ", "let me ", "i am going to ",
 		"i'm going to ", "i should ", "first, i ", "next, i "}
-	verbs := []string{"read", "look at", "open", "inspect", "examine", "outline",
-		"check", "search", "list", "start by"}
+	// "look into" was missing and "look at" was not enough: observed on a
+	// fresh workspace, "How does the contact form work?" was answered with
+	// "I'll look into the contact form's implementation..." and nothing else.
+	// `text` is a terminal exit, so an announcement that slips this check ends
+	// the turn and the user gets a promise instead of an answer.
+	verbs := []string{"read", "look at", "look into", "look through", "look over",
+		"open", "inspect", "examine", "outline", "check", "search", "list",
+		"start by", "investigate", "dig into", "trace through", "review the",
+		"take a look"}
 	for _, sub := range subjects {
 		at := strings.Index(lower, sub)
 		if at < 0 {
@@ -1285,4 +1296,78 @@ func planIncompleteMessage(ctx *AgentContext) string {
 			"unnecessary or already satisfied by an edit you made under a different step, say "+
 			"which in your next `done` summary rather than leaving it silent.",
 		countTrue(ctx.PlanStepsSatisfied), len(ctx.Plan.Steps), strings.Join(missing, "\n"))
+}
+
+// reForegroundServer matches commands that serve until killed. Deliberately
+// narrow: only forms that cannot be anything else. `python app.py` is
+// excluded because it is just as likely to be a script that exits, and
+// refusing it would block a legitimate verification.
+var reForegroundServer = regexp.MustCompile(`(?i)(^|\s|&&|;)\s*(` +
+	`python3?\s+-m\s+http\.server` +
+	`|php\s+-S\b` +
+	`|(python3?\s+-m\s+)?(uvicorn|gunicorn|waitress-serve)\b` +
+	`|flask\s+run\b` +
+	`|(npm|yarn|pnpm)\s+(start|run\s+(dev|serve|start|preview))\b` +
+	`|(npx\s+)?(vite|next\s+dev|http-server|serve)\b` +
+	`|rails\s+s(erver)?\b` +
+	`|jekyll\s+serve\b` +
+	`)`)
+
+// foregroundServerRejection redirects a server start from run_command to
+// run_background before it executes.
+//
+// Observed on the first-contact path — an empty workspace, "create a simple
+// portfolio website": the model wrote three files, then ran
+// `python3 -m http.server 8000` in the foreground, waited out the full 30s
+// sandbox timeout, and only then reached for run_background. That is 30
+// seconds of a 3m39s run, every time, on the most common way anyone will
+// first try ATLAS.
+//
+// The guidance already says to use run_background for servers and the model
+// still does this, which is the usual result for an instruction. The harness
+// can see the command before it runs, so it stops being a suggestion.
+func foregroundServerRejection(cmd string) string {
+	if !reForegroundServer.MatchString(cmd) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"`%s` serves until it is killed, so run_command would sit on it until the timeout "+
+			"and report a failure that says nothing about your code. Start it with "+
+			"run_background instead — it returns a job_id immediately:\n"+
+			"  run_background {\"command\": %q}\n"+
+			"Then probe it with run_command (`curl -I http://localhost:<port>/`), and "+
+			"stop_background when you are done.",
+		truncateStr(cmd, 80), cmd)
+}
+
+// outOfTurnsSummary is what the user reads when the loop hits its turn cap.
+//
+// The cap used to end the turn with an `error` event and nothing else, so a
+// question whose recon ran long came back blank. A blank reply is the worst
+// outcome the harness can produce: the user cannot tell whether ATLAS is
+// broken, still thinking, or ignoring them. Say what happened, say what was
+// learned, and name the next move.
+func outOfTurnsSummary(ctx *AgentContext, wrote bool) string {
+	var sb strings.Builder
+	sb.WriteString("I ran out of turns for this request before finishing.")
+	if wrote {
+		sb.WriteString(" Changes were written to disk — check them before relying on them.")
+	} else {
+		sb.WriteString(" Nothing was written to disk.")
+	}
+	if files := ctx.SnapshotFilesRead(); len(files) > 0 {
+		names := make([]string, 0, len(files))
+		for p := range files {
+			if rel, err := filepath.Rel(ctx.WorkingDir, p); err == nil && rel != "" {
+				names = append(names, rel)
+			} else {
+				names = append(names, filepath.Base(p))
+			}
+		}
+		sort.Strings(names)
+		fmt.Fprintf(&sb, "\n\nI did get to look at: %s.", strings.Join(names, ", "))
+	}
+	sb.WriteString("\n\nAsk again and point me at the specific file or function you care " +
+		"about — a narrower request finishes inside the budget.")
+	return sb.String()
 }

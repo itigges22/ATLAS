@@ -204,7 +204,7 @@ Each `write_file`/`edit_file` call is classified independently:
 
 | Tier | Max Turns | Action |
 |------|-----------|--------|
-| T0 (Conversational) | 5 | Text response only |
+| T0 (Conversational) | 12 | Text response only |
 | T1 (Simple) | 0 (uncapped) | Direct write — no V3 overhead |
 | T2 (Feature) | 0 (uncapped) | V3 pipeline fires |
 | T3 (Hard) | 0 (uncapped) | V3 pipeline fires |

@@ -197,6 +197,34 @@ than adding another retry around it.
 
 **Fixed**
 
+- A turn that hits its cap no longer answers with nothing. That path streamed
+  an `error` event and returned, so a user whose request ran long got an empty
+  reply — no answer, no partial, no explanation. Observed on a fresh
+  workspace: "How does the contact form work?" spent its turns on recon, hit
+  the cap, and returned zero bytes. Every other loop exit authors a summary;
+  this one now says it ran out of turns, whether anything was written, which
+  files it managed to read, and to ask again more narrowly.
+- The conversational turn cap is 12, up from 5. A question *about* the code is
+  classified conversational and still has to read the code, and 5 did not
+  survive that: turn 0 went to a bounced text exit, turns 1-3 to searches with
+  the wrong glob, turn 4 reached the right file, and the cap fired. The cap is
+  there to stop conversational input looping, which 12 still does.
+- The announcement detector missed "look into". `text` is a terminal exit, so
+  an announcement that slips the intent gate ends the turn with a promise
+  instead of an answer — observed verbatim: *"I'll look into the contact
+  form's implementation to see how it handles submissions and where the data
+  is sent."*, then done, no tool calls, no answer. Added "look into", "look
+  through", "look over", "take a look", "investigate", "dig into", "trace
+  through" and "review the", with tests pinning that real answers mentioning
+  those words still pass through.
+- A server started in the foreground is redirected before it runs. Observed on
+  the first-contact path — empty workspace, "create a simple portfolio
+  website" — the model wrote three files then ran `python3 -m http.server
+  8000` with `run_command`, waited out the full 30s sandbox timeout, and only
+  then reached for `run_background`: 30 seconds of a 3m39s run, on the most
+  common way anyone will first try ATLAS. `run_command` now returns the exact
+  `run_background` call instead. Deliberately narrow — `python app.py` is left
+  alone, since it is as likely a script that exits.
 - `insert_after` and `replace_lines` now go through the V3 pipeline. They were
   added as harness-level tools and never wired to tier classification or
   candidate generation, so their edits got a single greedy sample — no

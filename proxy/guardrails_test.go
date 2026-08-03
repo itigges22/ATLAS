@@ -1576,3 +1576,101 @@ func TestThePlanGateStandsDownWhenThePlanIsNotEvidence(t *testing.T) {
 		t.Error("gated with no plan at all")
 	}
 }
+
+// Asked "how does the contact form work?" on a fresh workspace, the loop hit
+// its 5-turn conversational cap during recon and ended with an `error` event
+// and nothing else — no answer, no partial, zero bytes. A blank reply is the
+// worst thing the harness can produce: the user cannot tell whether ATLAS is
+// broken, still thinking, or ignoring them.
+func TestRunningOutOfTurnsStillSaysSomething(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier0Conversational)
+	ctx.RecordFileRead(filepath.Join(dir, "index.html"), "<html></html>")
+	ctx.RecordFileRead(filepath.Join(dir, "script.js"), "const f = 1;")
+
+	msg := outOfTurnsSummary(ctx, false)
+	for _, want := range []string{"ran out of turns", "Nothing was written", "index.html", "script.js", "narrower request"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("summary missing %q:\n%s", want, msg)
+		}
+	}
+	if wrote := outOfTurnsSummary(ctx, true); !strings.Contains(wrote, "written to disk") {
+		t.Errorf("a run that wrote must say so:\n%s", wrote)
+	}
+}
+
+// A server started in the foreground burns the whole sandbox timeout and then
+// reports a failure that says nothing about the code. Observed on the
+// first-contact path: `python3 -m http.server 8000` cost 30s of a 3m39s run
+// before the model reached for run_background on its own.
+func TestForegroundServerStartsAreRedirectedBeforeTheyRun(t *testing.T) {
+	for _, cmd := range []string{
+		"python3 -m http.server 8000",
+		"python -m http.server",
+		"npm run dev",
+		"npm start",
+		"flask run --port 5001",
+		"uvicorn main:app --reload",
+		"php -S localhost:8000",
+		"npx vite",
+		"cd site && python3 -m http.server 9000",
+	} {
+		if foregroundServerRejection(cmd) == "" {
+			t.Errorf("not redirected: %q", cmd)
+		}
+	}
+	// Narrow on purpose. These exit on their own, and refusing them would
+	// block a legitimate verification.
+	for _, cmd := range []string{
+		"python app.py", // just as likely a script that exits
+		"pytest tests/",
+		"curl -I http://localhost:8000",
+		"npm run build",
+		"npm test",
+		"go build ./...",
+		"ls -la",
+	} {
+		if r := foregroundServerRejection(cmd); r != "" {
+			t.Errorf("wrongly redirected %q:\n%s", cmd, r)
+		}
+	}
+	// The rejection has to carry the exact replacement call.
+	r := foregroundServerRejection("python3 -m http.server 8000")
+	for _, want := range []string{"run_background", "python3 -m http.server 8000", "curl", "stop_background"} {
+		if !strings.Contains(r, want) {
+			t.Errorf("rejection missing %q:\n%s", want, r)
+		}
+	}
+}
+
+// `text` is a terminal exit, so an announcement that slips this check ends the
+// turn and the user gets a promise instead of an answer. Observed on a fresh
+// workspace: "How does the contact form work?" came back as "I'll look into
+// the contact form's implementation to see how it handles submissions and
+// where the data is sent." — then done, with no tool calls and no answer.
+// "look at" was in the verb list; "look into" was not.
+func TestAnnouncementDetectorCoversTheWaysModelsStall(t *testing.T) {
+	for _, s := range []string{
+		"I'll look into the contact form's implementation to see how it handles submissions and where the data is sent.",
+		"Let me look through the source to find where that is set.",
+		"I'm going to investigate how routing works here.",
+		"I need to take a look at the config first.",
+		"First, I will read app.py to understand the structure.",
+		"I'll dig into the handler and report back.",
+	} {
+		if !announcesImminentToolUse(s) {
+			t.Errorf("announcement not detected: %q", s)
+		}
+	}
+	// Real answers that merely mention these words must pass through.
+	for _, s := range []string{
+		"The contact form does not send anything — script.js calls preventDefault and only shows a status message.",
+		"It reads the config at startup and caches it for the process lifetime.",
+		"I looked at both files: routing is handled by Flask's @app.route decorators.",
+		"Yes. The form posts to /contact, which is defined in app.py at line 42.",
+	} {
+		if announcesImminentToolUse(s) {
+			t.Errorf("real answer wrongly flagged as an announcement: %q", s)
+		}
+	}
+}

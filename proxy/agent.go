@@ -993,6 +993,23 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// today's "agent moved templates into venv mid-task" disaster.
 			// Yolo mode opts out of this for users who want the model to
 			// have free rein.
+			// The foreground-server redirect runs in EVERY mode. Yolo opts out
+			// of the shell-mutation and working-dir gates — those are
+			// permission questions, and yolo is the user saying don't ask.
+			// Starting a server in the foreground is not a permission
+			// question: it burns the sandbox timeout and reports a failure
+			// that says nothing about the code, whatever mode you are in.
+			if parsed.Name == "run_command" {
+				var rc RunCommandInput
+				if json.Unmarshal(parsed.Args, &rc) == nil {
+					if rejection := foregroundServerRejection(rc.Command); rejection != "" {
+						log.Printf("[agent] redirecting a foreground server start to run_background: %q",
+							truncateStr(rc.Command, 80))
+						st.bounceToolCall(ctx, "run_command", rejection)
+						continue
+					}
+				}
+			}
 			if parsed.Name == "run_command" && !ctx.YoloMode {
 				var rc RunCommandInput
 				if json.Unmarshal(parsed.Args, &rc) == nil {
@@ -1630,10 +1647,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		}
 	}
 
-	ctx.Stream("error", map[string]string{
-		"error": fmt.Sprintf("max turns (%d) exceeded for %s task", ctx.MaxTurns, ctx.Tier),
+	// Running out of turns is not a reason to say nothing. This path used to
+	// stream an `error` and return, so a user who asked a question and whose
+	// turn hit the cap saw an empty reply — no answer, no partial, no
+	// explanation. Observed on a fresh workspace with "how does the contact
+	// form work?": four searches, cap reached, zero bytes back. Every other
+	// loop exit authors a summary; this one has to as well.
+	log.Printf("[agent] max turns (%d) exceeded for %s — returning what the run found", ctx.MaxTurns, ctx.Tier)
+	ctx.Stream("done", map[string]string{
+		"summary": outOfTurnsSummary(ctx, st.madeProductiveChange) + liveBackgroundJobNote(ctx),
 	})
-	return fmt.Errorf("max turns exceeded (%d)", ctx.MaxTurns)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

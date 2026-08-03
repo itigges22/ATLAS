@@ -37,7 +37,15 @@ func TierMaxTurns(t Tier) int {
 	}
 	switch t {
 	case Tier0Conversational:
-		return 5
+		// 12, not the 5 this shipped with. A question about the code is
+		// classified conversational and still has to LOOK at the code, and 5
+		// turns does not survive that: observed on a fresh workspace, "how
+		// does the contact form work?" spent turn 0 on a bounced text exit,
+		// turns 1-3 on searches with the wrong glob, reached the right file
+		// on turn 4, and hit the cap — the user got no answer at all. The cap
+		// is here to stop a conversational request looping, and 12 still does
+		// that while leaving room to read a few files and reply.
+		return 12
 	case Tier1Simple, Tier2Medium, Tier3Hard:
 		return 0 // uncapped
 	}
